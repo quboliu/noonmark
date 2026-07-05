@@ -186,6 +186,15 @@ public struct SubtaskProgress: Equatable, Sendable {
     public let continued: Int
     public let abandoned: Int
 
+    public init(total: Int, completed: Int, pending: Int, unfinished: Int, continued: Int, abandoned: Int) {
+        self.total = total
+        self.completed = completed
+        self.pending = pending
+        self.unfinished = unfinished
+        self.continued = continued
+        self.abandoned = abandoned
+    }
+
     public var isPartiallyCompleted: Bool {
         let actionableTotal = total - abandoned
         return completed > 0 && completed < actionableTotal

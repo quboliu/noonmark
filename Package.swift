@@ -9,10 +9,15 @@ let package = Package(
     ],
     products: [
         .library(name: "SuntraceCore", targets: ["SuntraceCore"]),
+        .library(name: "SuntraceAI", targets: ["SuntraceAI"]),
         .library(name: "SuntraceStorage", targets: ["SuntraceStorage"])
     ],
     targets: [
         .target(name: "SuntraceCore"),
+        .target(
+            name: "SuntraceAI",
+            dependencies: ["SuntraceCore"]
+        ),
         .target(
             name: "SuntraceStorage",
             dependencies: ["SuntraceCore"]
@@ -20,7 +25,10 @@ let package = Package(
         .testTarget(
             name: "SuntraceCoreTests",
             dependencies: ["SuntraceCore"]
+        ),
+        .testTarget(
+            name: "SuntraceAITests",
+            dependencies: ["SuntraceAI", "SuntraceCore"]
         )
     ]
 )
-

@@ -12,6 +12,7 @@
 - 未来计划可以调整，因为它尚未形成当日承诺。
 - 第一阶段只支持有限撤销，不能用撤销抹掉历史事实。
 - 一期只做手动数据包导出 / 导入和同步端点入口占位。
+- 烛龙 AI 是可选 sidecar；没有 AI provider 时普通清单功能必须完整可用。
 
 ## 第一屏信息架构
 
@@ -23,11 +24,14 @@
   - 未来计划
   - 未完成池
   - 已完成池
+  - 烛龙 AI
   - 设置
 - 中央主区：
   - 当前选中视图的列表和主要操作。
 - 右侧或下方详情区：
   - 任务详情、子任务、变更记录、延续明细、每日复盘。
+- 烛龙 AI：
+  - provider 配置、复盘分析、任务拆解、排期建议、label 分类建议。
 
 UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 
@@ -422,6 +426,30 @@ func updateDailyReview(date: LocalDate, summary: String?, unfinishedReason: Stri
 - 手写复盘可补写。
 - 复盘不能改写任务事实。
 
+### ZhulongAIUseCase
+
+```swift
+func listAIProviders() -> [AIProvider]
+func saveAIProvider(_ provider: AIProviderDraft) throws
+func testAIProvider(providerId: AIProviderID) async throws -> AIProviderHealth
+func analyzeDailyReview(date: LocalDate, scope: AIScope) async throws -> AISuggestionDraft
+func analyzeHabits(range: DateRange, scope: AIScope) async throws -> HabitInsightDraft
+func decomposeTask(traceId: TraceID, scope: AIScope) async throws -> AISuggestionDraft
+func suggestSchedule(scope: AIScope) async throws -> AISuggestionDraft
+func suggestLabels(scope: AIScope, mode: LabelSuggestionMode) async throws -> AISuggestionDraft
+func applyAISuggestion(_ draftId: AISuggestionDraftID, selection: AIApplySelection) throws
+func discardAISuggestion(_ draftId: AISuggestionDraftID) throws
+```
+
+约束：
+
+- provider 必须支持自定义 endpoint、model 和安全凭证引用。
+- AI provider 未配置、不可用或被用户关闭时，普通清单功能不降级。
+- 烛龙 AI 只能生成建议草稿，不能直接写入历史事实。
+- `applyAISuggestion` 必须把建议转成普通领域操作，例如创建任务、添加子任务、排期、延续、写入 label 或保存复盘文本。
+- 每次发送到远程 provider 前，必须明确数据范围。
+- 详细规格见 `docs/product/zhulong-ai-agent.md`。
+
 ### DataPackageUseCase
 
 ```swift
@@ -461,6 +489,10 @@ func canUndoLastLocalAction() -> Bool
 - `task_definitions`
 - `day_traces`
 - `subtasks`
+- `labels`
+- `task_label_assignments`
+- `ai_providers`
+- `ai_suggestion_drafts`
 - `sync_settings`
 
 数据库约束建议：
@@ -470,6 +502,8 @@ func canUndoLastLocalAction() -> Bool
 - 同一任务链最多一个活跃日轨迹。
 - 历史日优先级不可修改。
 - 废弃任务链不可新增延续轨迹。
+- AI 建议草稿不是历史事实，可以丢弃。
+- label assignment 不改变任务状态，也不能改写日轨迹。
 
 查询视图建议：
 
@@ -481,10 +515,12 @@ func canUndoLastLocalAction() -> Bool
 - `completed_trajectory_detail_view`
 - `completed_subtask_trajectory_detail_view`
 - `day_todo_view`
+- `label_task_summary_view`
 
 可选：
 
 - `change_journal` 作为未来同步和诊断辅助流水，但不是事实来源。
+- `ai_request_diagnostics` 只记录 provider 健康、延迟和失败原因，不记录 API Key 或完整敏感 prompt。
 
 ## 验收标准
 
@@ -507,6 +543,11 @@ func canUndoLastLocalAction() -> Bool
 15. 每日复盘可补写，但不能改变统计事实。
 16. 数据包可导出并在空库导入后恢复核心数据。
 17. `Cmd+Z` 只能撤销当前日或计划草稿误操作，不能抹掉历史轨迹事实。
+18. 未配置 AI provider 时，Day Todo、任务池、未来计划、未完成池、已完成池和每日复盘仍完整可用。
+19. 烛龙 AI 可以生成复盘、任务拆解、排期和 label 建议草稿，但不能未经确认写入任务事实。
+20. 烛龙 AI 发送远程请求前，必须展示本次使用的数据范围。
+21. 烛龙 AI 的习惯画像必须带证据和置信度，且只表示时间窗口内的分析假设。
+22. 烛龙 AI 页面可展示《苦昼短》/ 衔烛龙意象作为完整 slogan 元素。
 
 ## 明确不做
 

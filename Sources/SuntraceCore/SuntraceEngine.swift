@@ -174,6 +174,9 @@ public final class SuntraceEngine {
         guard trace.status == .pending else {
             throw SuntraceError.invalidTransition("only pending traces can be completed")
         }
+        guard subtaskProgress(for: traceID).canCompleteParent else {
+            throw SuntraceError.invalidTransition("parent trace cannot complete while subtasks are still open")
+        }
 
         trace.status = .completed
         trace.completedAt = now
@@ -374,13 +377,48 @@ public final class SuntraceEngine {
         return subtask.id
     }
 
-    public func completeSubtask(_ subtaskID: SubtaskID, now: Date = Date()) throws {
+    public func completeSubtask(_ subtaskID: SubtaskID, today: LocalDate, now: Date = Date()) throws {
         guard var subtask = subtasks[subtaskID] else {
             throw SuntraceError.notFound("subtask")
         }
-        subtask.isDone = true
+        let trace = try trace(subtask.traceID)
+        guard trace.date == today, trace.status == .pending else {
+            throw SuntraceError.immutableHistory
+        }
+        guard subtask.status == .pending else {
+            throw SuntraceError.invalidTransition("only pending subtasks can be completed")
+        }
+        subtask.status = .completed
         subtask.completedAt = now
         subtasks[subtask.id] = subtask
+    }
+
+    public func abandonSubtask(_ subtaskID: SubtaskID, today: LocalDate, now: Date = Date()) throws {
+        guard var subtask = subtasks[subtaskID] else {
+            throw SuntraceError.notFound("subtask")
+        }
+        let trace = try trace(subtask.traceID)
+        guard trace.date == today, trace.status == .pending else {
+            throw SuntraceError.immutableHistory
+        }
+        guard subtask.status == .pending else {
+            throw SuntraceError.invalidTransition("only pending subtasks can be abandoned")
+        }
+        subtask.status = .abandoned
+        subtask.settledAt = now
+        subtasks[subtask.id] = subtask
+    }
+
+    public func subtaskProgress(for traceID: DayTraceID) -> SubtaskProgress {
+        let items = subtasks.values.filter { $0.traceID == traceID }
+        return SubtaskProgress(
+            total: items.count,
+            completed: items.filter { $0.status == .completed }.count,
+            pending: items.filter { $0.status == .pending }.count,
+            unfinished: items.filter { $0.status == .unfinished }.count,
+            continued: items.filter { $0.status == .continued }.count,
+            abandoned: items.filter { $0.status == .abandoned }.count
+        )
     }
 
     public func updatePriority(traceID: DayTraceID, newPriority: Int, today: LocalDate) throws {
@@ -406,6 +444,7 @@ public final class SuntraceEngine {
                 settled.status = .unfinished
                 settled.settledAt = now
                 traces[settled.id] = settled
+                settleOpenSubtasks(on: settled.id, now: now)
             }
 
             days[date]?.lockedAt = now
@@ -548,8 +587,45 @@ private extension SuntraceEngine {
                     .map(\.date)
             ),
             completedDate: completedTrace.date,
-            traces: chainTraces
+            traces: chainTraces,
+            subtaskTrajectories: completedSubtaskTrajectories(for: chainTraces)
         )
+    }
+
+    func completedSubtaskTrajectories(for chainTraces: [DayTrace]) -> [SubtaskTrajectory] {
+        let traceByID = Dictionary(uniqueKeysWithValues: chainTraces.map { ($0.id, $0) })
+        let traceIDs = Set(traceByID.keys)
+        let groupedSubtasks = Dictionary(grouping: subtasks.values.filter { traceIDs.contains($0.traceID) }) {
+            $0.lineageID
+        }
+
+        return groupedSubtasks.map { lineageID, items in
+            let records = items
+                .compactMap { subtask -> SubtaskTrajectoryRecord? in
+                    guard let trace = traceByID[subtask.traceID] else { return nil }
+                    return SubtaskTrajectoryRecord(subtask: subtask, date: trace.date)
+                }
+                .sorted(by: subtaskRecordChronology)
+
+            return SubtaskTrajectory(
+                lineageID: lineageID,
+                title: records.first?.subtask.title ?? "",
+                startDate: records.first?.date ?? LocalDate("0001-01-01"),
+                continuedDates: uniqueDates(
+                    records
+                        .filter { $0.subtask.continuedFromSubtaskID != nil }
+                        .map(\.date)
+                ),
+                completedDate: records.first(where: { $0.subtask.status == .completed })?.date,
+                records: records
+            )
+        }
+        .sorted {
+            if $0.startDate != $1.startDate {
+                return $0.startDate < $1.startDate
+            }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
     }
 
     func traceChronology(_ lhs: DayTrace, _ rhs: DayTrace) -> Bool {
@@ -565,6 +641,16 @@ private extension SuntraceEngine {
         return lhs.createdAt < rhs.createdAt
     }
 
+    func subtaskRecordChronology(_ lhs: SubtaskTrajectoryRecord, _ rhs: SubtaskTrajectoryRecord) -> Bool {
+        if lhs.date != rhs.date {
+            return lhs.date < rhs.date
+        }
+        if lhs.subtask.position != rhs.subtask.position {
+            return lhs.subtask.position < rhs.subtask.position
+        }
+        return lhs.subtask.createdAt < rhs.subtask.createdAt
+    }
+
     func uniqueDates(_ dates: [LocalDate]) -> [LocalDate] {
         var seen = Set<LocalDate>()
         var result: [LocalDate] = []
@@ -578,17 +664,33 @@ private extension SuntraceEngine {
 
     func copyOpenSubtasks(from sourceTraceID: DayTraceID, to targetTraceID: DayTraceID, now: Date) {
         let openSubtasks = subtasks.values
-            .filter { $0.traceID == sourceTraceID && $0.isDone == false }
+            .filter { $0.traceID == sourceTraceID && ($0.status == .pending || $0.status == .unfinished) }
             .sorted { $0.position < $1.position }
 
         for (index, oldSubtask) in openSubtasks.enumerated() {
+            var continuedSubtask = oldSubtask
+            continuedSubtask.status = .continued
+            continuedSubtask.settledAt = now
+            subtasks[continuedSubtask.id] = continuedSubtask
+
             let newSubtask = Subtask(
+                lineageID: oldSubtask.lineageID,
                 traceID: targetTraceID,
                 title: oldSubtask.title,
                 position: index + 1,
+                continuedFromSubtaskID: oldSubtask.id,
                 now: now
             )
             subtasks[newSubtask.id] = newSubtask
+        }
+    }
+
+    func settleOpenSubtasks(on traceID: DayTraceID, now: Date) {
+        for subtask in subtasks.values where subtask.traceID == traceID && subtask.status == .pending {
+            var settled = subtask
+            settled.status = .unfinished
+            settled.settledAt = now
+            subtasks[settled.id] = settled
         }
     }
 }

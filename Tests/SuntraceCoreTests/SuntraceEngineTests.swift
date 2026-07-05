@@ -148,12 +148,67 @@ final class SuntraceEngineTests: XCTestCase {
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
         let doneSubtaskID = try engine.addSubtask(traceID: traceID, title: "已完成子任务", now: now)
         _ = try engine.addSubtask(traceID: traceID, title: "未完成子任务", now: now)
-        try engine.completeSubtask(doneSubtaskID, now: now)
+        try engine.completeSubtask(doneSubtaskID, today: day1, now: now)
         engine.settleDays(upTo: day2, now: now)
 
         let continuedID = try engine.continueTrace(traceID: traceID, targetDate: day2, today: day2, now: now)
         let copied = engine.subtasks.values.filter { $0.traceID == continuedID }
 
         XCTAssertEqual(copied.map(\.title), ["未完成子任务"])
+    }
+
+    func testParentTraceCannotCompleteWithOpenSubtasksAndShowsPartialProgress() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "大任务", now: now)
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        let completedSubtaskID = try engine.addSubtask(traceID: traceID, title: "已做部分", now: now)
+        let openSubtaskID = try engine.addSubtask(traceID: traceID, title: "未做部分", now: now)
+
+        try engine.completeSubtask(completedSubtaskID, today: day1, now: now)
+
+        let progress = engine.subtaskProgress(for: traceID)
+        XCTAssertEqual(progress.total, 2)
+        XCTAssertEqual(progress.completed, 1)
+        XCTAssertEqual(progress.pending, 1)
+        XCTAssertTrue(progress.isPartiallyCompleted)
+        XCTAssertThrowsError(try engine.markCompleted(traceID: traceID, today: day1, now: now))
+
+        try engine.abandonSubtask(openSubtaskID, today: day1, now: now)
+        try engine.markCompleted(traceID: traceID, today: day1, now: now)
+
+        XCTAssertEqual(engine.traces[traceID]?.status, .completed)
+    }
+
+    func testCompletedPoolShowsSubtaskTrajectoriesAcrossDays() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "跨日大任务", now: now)
+        let day1TraceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        let designSubtaskID = try engine.addSubtask(traceID: day1TraceID, title: "设计登录态", now: now)
+        let ssoSubtaskID = try engine.addSubtask(traceID: day1TraceID, title: "接入 SSO", now: now)
+
+        try engine.completeSubtask(designSubtaskID, today: day1, now: now)
+        engine.settleDays(upTo: day2, now: now)
+        let day2TraceID = try engine.continueTrace(traceID: day1TraceID, targetDate: day2, today: day2, now: now)
+        let copiedSSO = try XCTUnwrap(engine.subtasks.values.first { $0.traceID == day2TraceID })
+
+        try engine.completeSubtask(copiedSSO.id, today: day2, now: now)
+        try engine.markCompleted(traceID: day2TraceID, today: day2, now: now)
+
+        XCTAssertEqual(engine.subtasks[ssoSubtaskID]?.status, .continued)
+        XCTAssertEqual(copiedSSO.lineageID, engine.subtasks[ssoSubtaskID]?.lineageID)
+        XCTAssertEqual(copiedSSO.continuedFromSubtaskID, ssoSubtaskID)
+
+        let completedItem = try XCTUnwrap(engine.completedPool().first)
+        let subtaskTrajectories = completedItem.trajectory.subtaskTrajectories
+        let designTrajectory = try XCTUnwrap(subtaskTrajectories.first { $0.title == "设计登录态" })
+        let ssoTrajectory = try XCTUnwrap(subtaskTrajectories.first { $0.title == "接入 SSO" })
+
+        XCTAssertEqual(designTrajectory.startDate, day1)
+        XCTAssertEqual(designTrajectory.continuedDates, [])
+        XCTAssertEqual(designTrajectory.completedDate, day1)
+        XCTAssertEqual(ssoTrajectory.startDate, day1)
+        XCTAssertEqual(ssoTrajectory.continuedDates, [day2])
+        XCTAssertEqual(ssoTrajectory.completedDate, day2)
+        XCTAssertEqual(ssoTrajectory.records.map(\.date), [day1, day2])
     }
 }

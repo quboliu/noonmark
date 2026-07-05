@@ -15,6 +15,14 @@ public enum TraceStatus: String, Codable, Hashable, Sendable {
     case abandoned
 }
 
+public enum SubtaskStatus: String, Codable, Hashable, Sendable {
+    case pending
+    case completed
+    case unfinished
+    case continued
+    case abandoned
+}
+
 public enum NewTaskTarget: Equatable, Sendable {
     case taskPool
     case date(LocalDate)
@@ -133,22 +141,73 @@ public struct DayTrace: Codable, Equatable, Sendable {
 
 public struct Subtask: Codable, Equatable, Sendable {
     public var id: SubtaskID
+    public var lineageID: SubtaskLineageID
     public var traceID: DayTraceID
     public var title: String
-    public var isDone: Bool
+    public var status: SubtaskStatus
     public var position: Int
+    public var continuedFromSubtaskID: SubtaskID?
     public var createdAt: Date
     public var completedAt: Date?
+    public var settledAt: Date?
 
-    public init(id: SubtaskID = SubtaskID(), traceID: DayTraceID, title: String, position: Int, now: Date) {
+    public var isDone: Bool {
+        status == .completed
+    }
+
+    public init(
+        id: SubtaskID = SubtaskID(),
+        lineageID: SubtaskLineageID = SubtaskLineageID(),
+        traceID: DayTraceID,
+        title: String,
+        status: SubtaskStatus = .pending,
+        position: Int,
+        continuedFromSubtaskID: SubtaskID? = nil,
+        now: Date
+    ) {
         self.id = id
+        self.lineageID = lineageID
         self.traceID = traceID
         self.title = title
-        self.isDone = false
+        self.status = status
         self.position = position
+        self.continuedFromSubtaskID = continuedFromSubtaskID
         self.createdAt = now
         self.completedAt = nil
+        self.settledAt = nil
     }
+}
+
+public struct SubtaskProgress: Equatable, Sendable {
+    public let total: Int
+    public let completed: Int
+    public let pending: Int
+    public let unfinished: Int
+    public let continued: Int
+    public let abandoned: Int
+
+    public var isPartiallyCompleted: Bool {
+        let actionableTotal = total - abandoned
+        return completed > 0 && completed < actionableTotal
+    }
+
+    public var canCompleteParent: Bool {
+        pending == 0 && unfinished == 0
+    }
+}
+
+public struct SubtaskTrajectoryRecord: Equatable, Sendable {
+    public let subtask: Subtask
+    public let date: LocalDate
+}
+
+public struct SubtaskTrajectory: Equatable, Sendable {
+    public let lineageID: SubtaskLineageID
+    public let title: String
+    public let startDate: LocalDate
+    public let continuedDates: [LocalDate]
+    public let completedDate: LocalDate?
+    public let records: [SubtaskTrajectoryRecord]
 }
 
 public struct PoolTask: Equatable, Sendable {
@@ -182,6 +241,7 @@ public struct CompletedTaskTrajectory: Equatable, Sendable {
     public let continuedDates: [LocalDate]
     public let completedDate: LocalDate
     public let traces: [DayTrace]
+    public let subtaskTrajectories: [SubtaskTrajectory]
 }
 
 public struct CompletedPoolItem: Equatable, Sendable {

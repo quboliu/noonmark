@@ -149,19 +149,27 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 关键字段：
 
 - `id`
+- `lineageId`
 - `traceId`
 - `title`
-- `isDone`
+- `status`
 - `position`
+- `continuedFromSubtaskId`
 - `createdAt`
 - `completedAt`
+- `settledAt`
 
 规则：
 
 - 子任务不独立形成任务链或日轨迹。
 - 子任务用于补充任务定义，不用于覆盖任务定义。
+- 子任务状态包括 `pending`、`completed`、`unfinished`、`continued`、`abandoned`。
+- `lineageId` 用于串联同一个子任务跨日期延续后的多个子任务记录，但它不是独立任务链。
 - 延续复制默认只复制未完成子任务到新日轨迹。
+- 被复制的原日期子任务进入 `continued`，目标日期新子任务继承同一个 `lineageId`。
 - 已完成子任务留在历史日轨迹中。
+- 父级日轨迹仍存在 `pending` 或 `unfinished` 子任务时，父任务不能标记完成。
+- 部分完成是根据子任务统计派生的展示标签，不是父任务正式状态。
 
 ## 视图定义
 
@@ -250,12 +258,14 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 任务链开始日期。
 - 延续到的日期列表。
 - 完成日期。
+- 子任务轨迹摘要，包括每条子任务的开始日期、延续日期列表、完成日期或废弃记录。
 
 规则：
 
 - 开始日期、延续日期和完成日期从同一任务链的日轨迹派生，不允许用户手工编辑。
 - 没有发生延续复制的任务，延续日期列表为空。
 - 通过延续复制完成的任务，完成日期也应出现在延续日期列表中，用于表达“延续到了完成日”。
+- 子任务轨迹摘要从 `lineageId` 和日轨迹日期派生，不允许用户手工编辑。
 
 支持操作：
 
@@ -367,6 +377,22 @@ func listCompletedPool() -> [CompletedPoolItem]
 - `UnfinishedPoolItem` 按任务链去重，并包含未完成或已延续明细。
 - `CompletedPoolItem` 按完成日轨迹逐条返回，不按任务链去重。
 - `CompletedPoolItem` 必须包含 `CompletedTaskTrajectory`，展示开始日期、延续日期列表和完成日期。
+- `CompletedTaskTrajectory` 必须包含子任务轨迹摘要。
+
+### SubtaskUseCase
+
+```swift
+func addSubtask(traceId: TraceID, title: String, now: Instant) throws -> SubtaskID
+func completeSubtask(subtaskId: SubtaskID, now: Instant) throws
+func abandonSubtask(subtaskId: SubtaskID, now: Instant) throws
+func getSubtaskProgress(traceId: TraceID) -> SubtaskProgress
+```
+
+约束：
+
+- 只能在当前日期的待完成日轨迹中完成或废弃子任务。
+- 有未完成子任务时，父级日轨迹不能标记完成。
+- 子任务延续由父任务延续复制触发，用户不能把子任务单独移动到另一天。
 
 ### FuturePlanUseCase
 
@@ -453,6 +479,7 @@ func canUndoLastLocalAction() -> Bool
 - `unfinished_detail_view`
 - `completed_pool_view`
 - `completed_trajectory_detail_view`
+- `completed_subtask_trajectory_detail_view`
 - `day_todo_view`
 
 可选：
@@ -474,9 +501,12 @@ func canUndoLastLocalAction() -> Bool
 9. 未来计划到期后自动进入当天 Day Todo。
 10. 未完成池按任务链去重，明细显示每个未完成或已延续日期。
 11. 已完成池按完成日轨迹逐条显示，并展示每条任务链的开始日期、延续日期列表和完成日期。
-12. 每日复盘可补写，但不能改变统计事实。
-13. 数据包可导出并在空库导入后恢复核心数据。
-14. `Cmd+Z` 只能撤销当前日或计划草稿误操作，不能抹掉历史轨迹事实。
+12. 父任务存在未完成子任务时不能完成，只能展示部分完成进度。
+13. 未完成子任务随父任务延续复制到目标日期，并保留同一条子任务轨迹线。
+14. 已完成池的任务轨迹可展开查看每条子任务的开始日期、延续日期和完成日期。
+15. 每日复盘可补写，但不能改变统计事实。
+16. 数据包可导出并在空库导入后恢复核心数据。
+17. `Cmd+Z` 只能撤销当前日或计划草稿误操作，不能抹掉历史轨迹事实。
 
 ## 明确不做
 

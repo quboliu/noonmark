@@ -83,13 +83,32 @@ public enum SQLiteSchema {
         """
         CREATE TABLE IF NOT EXISTS subtasks (
             id TEXT PRIMARY KEY NOT NULL,
+            lineage_id TEXT NOT NULL,
             trace_id TEXT NOT NULL REFERENCES day_traces(id),
             title TEXT NOT NULL CHECK (length(trim(title)) > 0),
-            is_done INTEGER NOT NULL CHECK (is_done IN (0, 1)),
+            status TEXT NOT NULL CHECK (
+                status IN (
+                    'pending',
+                    'completed',
+                    'unfinished',
+                    'continued',
+                    'abandoned'
+                )
+            ),
             position INTEGER NOT NULL,
+            continued_from_subtask_id TEXT REFERENCES subtasks(id),
             created_at TEXT NOT NULL,
-            completed_at TEXT
+            completed_at TEXT,
+            settled_at TEXT
         )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_subtasks_trace_position
+        ON subtasks(trace_id, position)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_subtasks_lineage
+        ON subtasks(lineage_id)
         """,
         """
         CREATE TABLE IF NOT EXISTS sync_settings (
@@ -201,6 +220,26 @@ public enum SQLiteSchema {
             history.settled_at
         FROM day_traces done
         JOIN day_traces history ON history.chain_id = done.chain_id
+        WHERE done.status = 'completed'
+        """,
+        """
+        CREATE VIEW IF NOT EXISTS completed_subtask_trajectory_detail_view AS
+        SELECT
+            done.id AS completed_trace_id,
+            s.id AS subtask_id,
+            s.lineage_id,
+            s.trace_id,
+            t.date,
+            s.title,
+            s.status,
+            s.position,
+            s.continued_from_subtask_id,
+            s.created_at,
+            s.completed_at,
+            s.settled_at
+        FROM day_traces done
+        JOIN day_traces t ON t.chain_id = done.chain_id
+        JOIN subtasks s ON s.trace_id = t.id
         WHERE done.status = 'completed'
         """,
         """

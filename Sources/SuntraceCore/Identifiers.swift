@@ -50,3 +50,12 @@ public struct SubtaskID: Codable, Hashable, Sendable, CustomStringConvertible {
     public var description: String { rawValue.uuidString }
 }
 
+public struct SubtaskLineageID: Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue.uuidString }
+}

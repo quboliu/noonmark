@@ -92,4 +92,31 @@ final class ZhulongAgentTests: XCTestCase {
             XCTAssertEqual(error, .providerDisabled(providerID))
         }
     }
+
+    func testDelegationPolicyAllowsOnlyPermittedOperationsBeforeExpiration() throws {
+        let traceID = DayTraceID()
+        let policy = AIDelegationPolicy.delegatedHousekeeper(
+            allowedOperations: [.addSubtask],
+            maxOperationsPerRun: 3,
+            expiresAt: now.addingTimeInterval(60)
+        )
+
+        XCTAssertTrue(
+            policy.allowsAutomaticExecution(of: .addSubtask(traceID: traceID, title: "补充验收"), at: now)
+        )
+        XCTAssertFalse(
+            policy.allowsAutomaticExecution(of: .updateDailyReview(date: day1, summary: "复盘", unfinishedReason: nil, tomorrowNote: nil), at: now)
+        )
+        XCTAssertFalse(
+            policy.allowsAutomaticExecution(of: .addSubtask(traceID: traceID, title: "补充验收"), at: now.addingTimeInterval(61))
+        )
+    }
+
+    func testConfirmEachOperationPolicyNeverAutoExecutes() throws {
+        let policy = AIDelegationPolicy.confirmEachOperation
+
+        XCTAssertFalse(
+            policy.allowsAutomaticExecution(of: .createPoolTask(title: "整理任务池", notes: nil), at: now)
+        )
+    }
 }

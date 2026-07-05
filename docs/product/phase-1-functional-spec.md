@@ -163,6 +163,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - `traceId`
 - `title`
 - `status`
+- `difficulty`
 - `position`
 - `continuedFromSubtaskId`
 - `createdAt`
@@ -174,6 +175,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 子任务不独立形成任务链或日轨迹。
 - 子任务用于补充任务定义，不用于覆盖任务定义。
 - 子任务状态包括 `pending`、`completed`、`unfinished`、`continued`、`abandoned`。
+- 子任务难度包括 `easy`、`medium`、`hard`，用于加权计算父任务完成进度。
 - `lineageId` 用于串联同一个子任务跨日期延续后的多个子任务记录，但它不是独立任务链。
 - 延续复制默认只复制未完成子任务到新日轨迹。
 - 被复制的原日期子任务进入 `continued`，目标日期新子任务继承同一个 `lineageId`。
@@ -386,6 +388,7 @@ func getTraceProgress(traceId: TraceID) -> TraceProgress
 ```swift
 func listUnfinishedPool() -> [UnfinishedPoolItem]
 func listCompletedPool() -> [CompletedPoolItem]
+func listCompletedSubtaskRecords() -> [CompletedSubtaskRecord]
 ```
 
 约束：
@@ -394,6 +397,22 @@ func listCompletedPool() -> [CompletedPoolItem]
 - `CompletedPoolItem` 按完成日轨迹逐条返回，不按任务链去重。
 - `CompletedPoolItem` 必须包含 `CompletedTaskTrajectory`，展示开始日期、延续日期列表和完成日期。
 - `CompletedTaskTrajectory` 必须包含子任务轨迹摘要。
+- `CompletedSubtaskRecord` 按完成日期展示已完成子任务，并标注父任务。
+
+### SettingsUseCase
+
+```swift
+func getPreferences() -> AppPreferences
+func updateTheme(theme: AppTheme)
+func updateLanguage(language: AppLanguage)
+func listSyncEndpointOptions() -> [SyncEndpointOption]
+```
+
+约束：
+
+- 第一期外观主题为冷灰和微暖纸感。
+- 第一期界面语言为中文和 English。
+- 自定义同步端点和 iCloud 云同步是规划中入口，不能表现为已可用同步。
 
 ### SubtaskUseCase
 
@@ -507,6 +526,7 @@ func canUndoLastLocalAction() -> Bool
 - `task_label_assignments`
 - `ai_providers`
 - `ai_suggestion_drafts`
+- `app_preferences`
 - `sync_settings`
 
 数据库约束建议：
@@ -526,9 +546,11 @@ func canUndoLastLocalAction() -> Bool
 - `unfinished_pool_view`
 - `unfinished_detail_view`
 - `completed_pool_view`
+- `completed_subtask_record_view`
 - `completed_trajectory_detail_view`
 - `completed_subtask_trajectory_detail_view`
 - `day_todo_view`
+- `sync_endpoint_options_view`
 - `label_task_summary_view`
 
 可选：

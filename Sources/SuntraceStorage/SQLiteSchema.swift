@@ -126,6 +126,14 @@ public enum SQLiteSchema {
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS app_preferences (
+            id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+            theme TEXT NOT NULL CHECK (theme IN ('coolGray', 'warmPaper')),
+            language TEXT NOT NULL CHECK (language IN ('chinese', 'english')),
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TRIGGER IF NOT EXISTS prevent_day_trace_delete
         BEFORE DELETE ON day_traces
         BEGIN
@@ -146,7 +154,8 @@ public enum SQLiteSchema {
         JOIN task_definitions d ON d.chain_id = c.id AND d.superseded_at IS NULL
         WHERE c.state = 'active'
           AND NOT EXISTS (
-              SELECT 1 FROM day_traces t WHERE t.chain_id = c.id
+              SELECT 1 FROM day_traces t
+              WHERE t.chain_id = c.id AND t.status != 'returnedToPool'
           )
         """,
         """
@@ -255,6 +264,44 @@ public enum SQLiteSchema {
         JOIN day_traces t ON t.chain_id = done.chain_id
         JOIN subtasks s ON s.trace_id = t.id
         WHERE done.status = 'completed'
+        """,
+        """
+        CREATE VIEW IF NOT EXISTS completed_subtask_record_view AS
+        SELECT
+            t.date,
+            s.id AS subtask_id,
+            s.lineage_id,
+            s.trace_id,
+            s.title,
+            s.status,
+            s.difficulty,
+            s.position,
+            s.continued_from_subtask_id,
+            s.created_at,
+            s.completed_at,
+            s.settled_at,
+            t.id AS parent_trace_id,
+            t.chain_id AS parent_chain_id,
+            d.id AS parent_definition_id,
+            d.title AS parent_title
+        FROM subtasks s
+        JOIN day_traces t ON t.id = s.trace_id
+        JOIN task_definitions d ON d.id = t.definition_id
+        WHERE s.status = 'completed'
+        """,
+        """
+        CREATE VIEW IF NOT EXISTS sync_endpoint_options_view AS
+        SELECT
+            'customEndpoint' AS kind,
+            '自定义同步端点' AS title,
+            '连接自有服务端' AS description,
+            'planned' AS availability
+        UNION ALL
+        SELECT
+            'iCloud' AS kind,
+            'iCloud 云同步' AS title,
+            '原生云同步' AS description,
+            'planned' AS availability
         """,
         """
         CREATE VIEW IF NOT EXISTS day_todo_view AS

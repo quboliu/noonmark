@@ -35,6 +35,10 @@ let package = Package(
         .testTarget(
             name: "SuntraceMacUIContractTests",
             dependencies: ["SuntraceMacUIContract"]
+        ),
+        .testTarget(
+            name: "SuntraceStorageTests",
+            dependencies: ["SuntraceStorage"]
         )
     ]
 )

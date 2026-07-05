@@ -56,6 +56,70 @@ public enum ViewSort: String, Codable, Hashable, Sendable {
     case title
 }
 
+public enum AppTheme: String, Codable, Hashable, Sendable, CaseIterable {
+    case coolGray
+    case warmPaper
+}
+
+public enum AppLanguage: String, Codable, Hashable, Sendable, CaseIterable {
+    case chinese
+    case english
+}
+
+public enum SyncEndpointKind: String, Codable, Hashable, Sendable, CaseIterable {
+    case customEndpoint
+    case iCloud
+}
+
+public enum SyncEndpointAvailability: String, Codable, Hashable, Sendable {
+    case planned
+}
+
+public struct SyncEndpointOption: Codable, Equatable, Sendable {
+    public let kind: SyncEndpointKind
+    public let title: String
+    public let description: String
+    public let availability: SyncEndpointAvailability
+
+    public init(kind: SyncEndpointKind, title: String, description: String, availability: SyncEndpointAvailability) {
+        self.kind = kind
+        self.title = title
+        self.description = description
+        self.availability = availability
+    }
+}
+
+public struct AppPreferences: Codable, Equatable, Sendable {
+    public var theme: AppTheme
+    public var language: AppLanguage
+    public var syncEndpointOptions: [SyncEndpointOption]
+
+    public init(
+        theme: AppTheme = .coolGray,
+        language: AppLanguage = .chinese,
+        syncEndpointOptions: [SyncEndpointOption] = AppPreferences.defaultSyncEndpointOptions
+    ) {
+        self.theme = theme
+        self.language = language
+        self.syncEndpointOptions = syncEndpointOptions
+    }
+
+    public static let defaultSyncEndpointOptions: [SyncEndpointOption] = [
+        SyncEndpointOption(
+            kind: .customEndpoint,
+            title: "自定义同步端点",
+            description: "连接自有服务端",
+            availability: .planned
+        ),
+        SyncEndpointOption(
+            kind: .iCloud,
+            title: "iCloud 云同步",
+            description: "原生云同步",
+            availability: .planned
+        )
+    ]
+}
+
 public struct Day: Codable, Equatable, Sendable {
     public var id: DayID
     public var date: LocalDate
@@ -334,6 +398,13 @@ public struct CompletedPoolItem: Equatable, Sendable {
     public let trace: DayTrace
     public let definition: TaskDefinition
     public let trajectory: CompletedTaskTrajectory
+}
+
+public struct CompletedSubtaskRecord: Equatable, Sendable {
+    public let date: LocalDate
+    public let subtask: Subtask
+    public let parentTrace: DayTrace
+    public let parentDefinition: TaskDefinition
 }
 
 public struct DailyReviewStats: Equatable, Sendable {

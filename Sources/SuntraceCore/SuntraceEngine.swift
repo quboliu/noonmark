@@ -6,6 +6,7 @@ public final class SuntraceEngine {
     public private(set) var definitions: [TaskDefinitionID: TaskDefinition]
     public private(set) var traces: [DayTraceID: DayTrace]
     public private(set) var subtasks: [SubtaskID: Subtask]
+    public private(set) var preferences: AppPreferences
 
     public init() {
         self.days = [:]
@@ -13,6 +14,7 @@ public final class SuntraceEngine {
         self.definitions = [:]
         self.traces = [:]
         self.subtasks = [:]
+        self.preferences = AppPreferences()
     }
 
     @discardableResult
@@ -177,6 +179,34 @@ public final class SuntraceEngine {
                     return ($0.trace.completedAt ?? $0.trace.createdAt) > ($1.trace.completedAt ?? $1.trace.createdAt)
                 }
                 return $0.trace.date > $1.trace.date
+            }
+    }
+
+    public func completedSubtaskRecords() -> [CompletedSubtaskRecord] {
+        subtasks.values
+            .filter { $0.status == .completed }
+            .compactMap { subtask -> CompletedSubtaskRecord? in
+                guard
+                    let trace = traces[subtask.traceID],
+                    let definition = definitions[trace.definitionID]
+                else {
+                    return nil
+                }
+                return CompletedSubtaskRecord(
+                    date: trace.date,
+                    subtask: subtask,
+                    parentTrace: trace,
+                    parentDefinition: definition
+                )
+            }
+            .sorted {
+                if $0.date != $1.date {
+                    return $0.date > $1.date
+                }
+                if $0.subtask.position != $1.subtask.position {
+                    return $0.subtask.position < $1.subtask.position
+                }
+                return $0.subtask.createdAt < $1.subtask.createdAt
             }
     }
 
@@ -595,6 +625,18 @@ public final class SuntraceEngine {
         days[date]?.reviewUnfinishedReason = unfinishedReason
         days[date]?.reviewTomorrowNote = tomorrowNote
         days[date]?.updatedAt = now
+    }
+
+    public func updateTheme(_ theme: AppTheme) {
+        preferences.theme = theme
+    }
+
+    public func updateLanguage(_ language: AppLanguage) {
+        preferences.language = language
+    }
+
+    public func syncEndpointOptions() -> [SyncEndpointOption] {
+        preferences.syncEndpointOptions
     }
 }
 

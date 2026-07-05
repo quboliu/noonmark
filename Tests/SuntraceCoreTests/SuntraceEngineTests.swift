@@ -213,6 +213,22 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(ssoTrajectory.records.map(\.date), [day1, day2])
     }
 
+    func testCompletedSubtaskRecordsExposePrototypeCompletedPoolItems() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "审阅 onboarding 三屏文案", now: now)
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        let subtaskID = try engine.addSubtask(traceID: traceID, title: "首屏标题与副标题", difficulty: .medium, now: now)
+
+        try engine.completeSubtask(subtaskID, today: day1, now: now)
+
+        let record = try XCTUnwrap(engine.completedSubtaskRecords().first)
+        XCTAssertEqual(record.date, day1)
+        XCTAssertEqual(record.subtask.id, subtaskID)
+        XCTAssertEqual(record.subtask.difficulty, .medium)
+        XCTAssertEqual(record.parentTrace.id, traceID)
+        XCTAssertEqual(record.parentDefinition.title, "审阅 onboarding 三屏文案")
+    }
+
     func testTraceDescriptionAndNoteAreEditableOnlyBeforeHistoryLocks() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(
@@ -287,5 +303,20 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(summary.completed, 1)
         XCTAssertEqual(summary.pending, 1)
         XCTAssertEqual(summary.heatLevel, 1)
+    }
+
+    func testSettingsPreferencesMirrorPrototypeSettingsPanel() throws {
+        let engine = SuntraceEngine()
+
+        XCTAssertEqual(engine.preferences.theme, .coolGray)
+        XCTAssertEqual(engine.preferences.language, .chinese)
+        XCTAssertEqual(engine.syncEndpointOptions().map(\.kind), [.customEndpoint, .iCloud])
+        XCTAssertTrue(engine.syncEndpointOptions().allSatisfy { $0.availability == .planned })
+
+        engine.updateTheme(.warmPaper)
+        engine.updateLanguage(.english)
+
+        XCTAssertEqual(engine.preferences.theme, .warmPaper)
+        XCTAssertEqual(engine.preferences.language, .english)
     }
 }

@@ -17,7 +17,7 @@ final class ZhulongAgentTests: XCTestCase {
         let provider = MockAIProvider(
             response: AIProviderResponse(
                 text: "事实：当前任务已有一个子任务。建议：补充验收子任务。",
-                proposedOperations: [.addSubtask(traceID: traceID, title: "补充验收")],
+                proposedOperations: [.addSubtask(traceID: traceID, title: "补充验收", difficulty: .simple)],
                 confidence: 0.72
             )
         )
@@ -27,7 +27,7 @@ final class ZhulongAgentTests: XCTestCase {
         let draft = try await agent.generateDraft(task: .taskDecomposition, scope: scope, now: now)
 
         XCTAssertEqual(draft.kind, .taskDecomposition)
-        XCTAssertEqual(draft.proposedOperations, [.addSubtask(traceID: traceID, title: "补充验收")])
+        XCTAssertEqual(draft.proposedOperations, [.addSubtask(traceID: traceID, title: "补充验收", difficulty: .simple)])
         XCTAssertEqual(draft.confidence, 0.72)
         XCTAssertEqual(engine.subtasks.values.filter { $0.traceID == traceID }.count, 1)
         XCTAssertEqual(engine.traces[traceID]?.status, .pending)
@@ -102,13 +102,13 @@ final class ZhulongAgentTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            policy.allowsAutomaticExecution(of: .addSubtask(traceID: traceID, title: "补充验收"), at: now)
+            policy.allowsAutomaticExecution(of: .addSubtask(traceID: traceID, title: "补充验收", difficulty: .simple), at: now)
         )
         XCTAssertFalse(
             policy.allowsAutomaticExecution(of: .updateDailyReview(date: day1, summary: "复盘", unfinishedReason: nil, tomorrowNote: nil), at: now)
         )
         XCTAssertFalse(
-            policy.allowsAutomaticExecution(of: .addSubtask(traceID: traceID, title: "补充验收"), at: now.addingTimeInterval(61))
+            policy.allowsAutomaticExecution(of: .addSubtask(traceID: traceID, title: "补充验收", difficulty: .simple), at: now.addingTimeInterval(61))
         )
     }
 
@@ -116,7 +116,7 @@ final class ZhulongAgentTests: XCTestCase {
         let policy = AIDelegationPolicy.confirmEachOperation
 
         XCTAssertFalse(
-            policy.allowsAutomaticExecution(of: .createPoolTask(title: "整理任务池", notes: nil), at: now)
+            policy.allowsAutomaticExecution(of: .createPoolTask(title: "整理任务池", descriptionText: nil, note: nil), at: now)
         )
     }
 }

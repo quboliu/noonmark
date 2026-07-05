@@ -20,8 +20,8 @@ public enum AISuggestionKind: String, Codable, Hashable, Sendable {
 }
 
 public enum AIProposedOperation: Equatable, Sendable {
-    case createPoolTask(title: String, notes: String?)
-    case addSubtask(traceID: DayTraceID, title: String)
+    case createPoolTask(title: String, descriptionText: String?, note: String?)
+    case addSubtask(traceID: DayTraceID, title: String, difficulty: SubtaskDifficulty)
     case scheduleFromPool(chainID: TaskChainID, targetDate: LocalDate)
     case continueTrace(traceID: DayTraceID, targetDate: LocalDate)
     case abandonChain(traceID: DayTraceID)

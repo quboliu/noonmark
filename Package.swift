@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .library(name: "SuntraceCore", targets: ["SuntraceCore"]),
         .library(name: "SuntraceAI", targets: ["SuntraceAI"]),
+        .library(name: "SuntraceMacUIContract", targets: ["SuntraceMacUIContract"]),
         .library(name: "SuntraceStorage", targets: ["SuntraceStorage"])
     ],
     targets: [
@@ -18,6 +19,7 @@ let package = Package(
             name: "SuntraceAI",
             dependencies: ["SuntraceCore"]
         ),
+        .target(name: "SuntraceMacUIContract"),
         .target(
             name: "SuntraceStorage",
             dependencies: ["SuntraceCore"]
@@ -29,6 +31,10 @@ let package = Package(
         .testTarget(
             name: "SuntraceAITests",
             dependencies: ["SuntraceAI", "SuntraceCore"]
+        ),
+        .testTarget(
+            name: "SuntraceMacUIContractTests",
+            dependencies: ["SuntraceMacUIContract"]
         )
     ]
 )

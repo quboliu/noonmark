@@ -115,16 +115,23 @@ public struct AIPromptBuilder: Sendable {
             "日期 \(trace.date)",
             "状态 \(trace.status.rawValue)",
             "延续次数 \(trace.continuationSeq)",
+            "进度 \(trace.manualProgressPercent.map { String($0) + "%" } ?? "自动/未设置")",
             "子任务 \(snapshot.subtaskProgress.completed)/\(snapshot.subtaskProgress.total) 已完成"
         ]
 
-        if let notes = guardrail.sanitizeUserText(snapshot.definition.notes), notes.isEmpty == false {
-            parts.append("备注 \(notes)")
+        let descriptionText = trace.descriptionText ?? snapshot.definition.descriptionText
+        if let descriptionText = guardrail.sanitizeUserText(descriptionText), descriptionText.isEmpty == false {
+            parts.append("描述 \(descriptionText)")
+        }
+
+        let note = trace.note ?? snapshot.definition.note
+        if let note = guardrail.sanitizeUserText(note), note.isEmpty == false {
+            parts.append("附言 \(note)")
         }
 
         if snapshot.subtasks.isEmpty == false {
             let subtasks = snapshot.subtasks.map { subtask in
-                "\(guardrail.sanitizeUserText(subtask.title) ?? "")[\(subtask.status.rawValue)]"
+                "\(guardrail.sanitizeUserText(subtask.title) ?? "")[\(subtask.status.rawValue),\(subtask.difficulty.label)]"
             }.joined(separator: "；")
             parts.append("子任务明细 \(subtasks)")
         }
@@ -134,11 +141,14 @@ public struct AIPromptBuilder: Sendable {
 
     private func renderPoolTask(_ task: PoolTask) -> String {
         let title = guardrail.sanitizeUserText(task.definition.title) ?? ""
-        let notes = guardrail.sanitizeUserText(task.definition.notes)
-        if let notes, notes.isEmpty == false {
-            return "- \(title)：\(notes)"
+        var parts = ["- \(title)"]
+        if let descriptionText = guardrail.sanitizeUserText(task.definition.descriptionText), descriptionText.isEmpty == false {
+            parts.append("描述：\(descriptionText)")
         }
-        return "- \(title)"
+        if let note = guardrail.sanitizeUserText(task.definition.note), note.isEmpty == false {
+            parts.append("附言：\(note)")
+        }
+        return parts.joined(separator: "；")
     }
 
     private func renderUnfinishedPoolItem(_ item: AIUnfinishedPoolSnapshot) -> String {

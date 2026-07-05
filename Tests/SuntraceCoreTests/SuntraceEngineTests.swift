@@ -104,11 +104,12 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(engine.traces[oldTraceID]?.status, .changed)
         XCTAssertEqual(engine.traces[oldTraceID]?.changedToTraceID, newTraceID)
         XCTAssertEqual(engine.traces[newTraceID]?.status, .pending)
-        XCTAssertEqual(engine.traces[newTraceID]?.chainID, chainID)
+        XCTAssertNotEqual(engine.traces[newTraceID]?.chainID, chainID)
         XCTAssertEqual(engine.getDayTodo(date: day1).traces.count, 2)
 
         let newDefinitionID = try XCTUnwrap(engine.traces[newTraceID]?.definitionID)
         XCTAssertEqual(engine.definitions[newDefinitionID]?.title, "写调研并输出架构")
+        XCTAssertEqual(engine.definitions[newDefinitionID]?.sequence, 1)
     }
 
     func testCurrentReturnToPoolLeavesTraceAndMakesChainSchedulableAgain() throws {
@@ -210,5 +211,81 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(ssoTrajectory.continuedDates, [day2])
         XCTAssertEqual(ssoTrajectory.completedDate, day2)
         XCTAssertEqual(ssoTrajectory.records.map(\.date), [day1, day2])
+    }
+
+    func testTraceDescriptionAndNoteAreEditableOnlyBeforeHistoryLocks() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(
+            title: "整理 OKR",
+            descriptionText: "汇总目标",
+            note: "等数据看板",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+
+        XCTAssertEqual(engine.traces[traceID]?.descriptionText, "汇总目标")
+        XCTAssertEqual(engine.traces[traceID]?.note, "等数据看板")
+
+        try engine.updateTraceText(traceID: traceID, descriptionText: "收敛成 3 个 O", note: "下午确认 KR", today: day1)
+        XCTAssertEqual(engine.traces[traceID]?.descriptionText, "收敛成 3 个 O")
+        XCTAssertEqual(engine.definitions[engine.traces[traceID]!.definitionID]?.descriptionText, "汇总目标")
+
+        engine.settleDays(upTo: day2, now: now)
+        XCTAssertThrowsError(
+            try engine.updateTraceText(traceID: traceID, descriptionText: "历史改写", note: nil, today: day2)
+        )
+    }
+
+    func testManualProgressCarriesForwardAndCannotRegressAfterContinuation() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "整理 Q3 OKR 草案", now: now)
+        let day1TraceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+
+        try engine.setManualProgress(traceID: day1TraceID, percent: 35, today: day1)
+        engine.settleDays(upTo: day2, now: now)
+        let day2TraceID = try engine.continueTrace(traceID: day1TraceID, targetDate: day2, today: day2, now: now)
+
+        XCTAssertEqual(engine.traceProgress(for: day2TraceID).floorPercent, 35)
+        XCTAssertEqual(engine.traceProgress(for: day2TraceID).percent, 35)
+
+        try engine.setManualProgress(traceID: day2TraceID, percent: 10, today: day2)
+        XCTAssertEqual(engine.traceProgress(for: day2TraceID).percent, 35)
+
+        try engine.setManualProgress(traceID: day2TraceID, percent: 60, today: day2)
+        XCTAssertEqual(engine.traceProgress(for: day2TraceID).percent, 60)
+    }
+
+    func testWeightedSubtaskProgressUsesDifficultyAndBlocksManualProgress() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "制作发布会主视觉", now: now)
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        let simpleID = try engine.addSubtask(traceID: traceID, title: "收集视觉参考", difficulty: .simple, now: now)
+        _ = try engine.addSubtask(traceID: traceID, title: "出 3 版草图", difficulty: .hard, now: now)
+
+        XCTAssertThrowsError(try engine.setManualProgress(traceID: traceID, percent: 50, today: day1))
+
+        try engine.completeSubtask(simpleID, today: day1, now: now)
+
+        let progress = engine.traceProgress(for: traceID)
+        XCTAssertEqual(progress.mode, .weightedSubtasks)
+        XCTAssertEqual(progress.completedWeight, 1)
+        XCTAssertEqual(progress.totalWeight, 4)
+        XCTAssertEqual(progress.percent, 25)
+    }
+
+    func testCalendarSummaryMatchesPrototypeHeatNeeds() throws {
+        let engine = SuntraceEngine()
+        let first = try engine.createPoolTask(title: "完成项", now: now)
+        let second = try engine.createPoolTask(title: "待办项", now: now)
+        let doneTrace = try engine.scheduleFromPool(chainID: first, date: day1, today: day1, now: now)
+        _ = try engine.scheduleFromPool(chainID: second, date: day1, today: day1, now: now)
+
+        try engine.markCompleted(traceID: doneTrace, today: day1, now: now)
+
+        let summary = engine.calendarSummary(for: day1)
+        XCTAssertEqual(summary.total, 2)
+        XCTAssertEqual(summary.completed, 1)
+        XCTAssertEqual(summary.pending, 1)
+        XCTAssertEqual(summary.heatLevel, 1)
     }
 }

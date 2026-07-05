@@ -2,7 +2,7 @@ import Foundation
 import SuntraceCore
 
 public enum SQLiteSchema {
-    public static let version = 1
+    public static let version = 2
 
     public static let statements: [String] = [
         """
@@ -33,7 +33,8 @@ public enum SQLiteSchema {
             chain_id TEXT NOT NULL REFERENCES task_chains(id),
             sequence INTEGER NOT NULL,
             title TEXT NOT NULL CHECK (length(trim(title)) > 0),
-            notes TEXT,
+            description_text TEXT,
+            note TEXT,
             created_at TEXT NOT NULL,
             superseded_at TEXT,
             superseded_by_definition_id TEXT REFERENCES task_definitions(id),
@@ -64,6 +65,12 @@ public enum SQLiteSchema {
             ),
             priority INTEGER NOT NULL,
             continuation_seq INTEGER NOT NULL DEFAULT 0,
+            description_text TEXT,
+            note TEXT,
+            manual_progress_percent INTEGER CHECK (
+                manual_progress_percent IS NULL
+                OR (manual_progress_percent >= 0 AND manual_progress_percent <= 100)
+            ),
             continued_from_trace_id TEXT REFERENCES day_traces(id),
             changed_to_trace_id TEXT REFERENCES day_traces(id),
             created_at TEXT NOT NULL,
@@ -95,6 +102,7 @@ public enum SQLiteSchema {
                     'abandoned'
                 )
             ),
+            difficulty INTEGER NOT NULL DEFAULT 1 CHECK (difficulty IN (1, 2, 3)),
             position INTEGER NOT NULL,
             continued_from_subtask_id TEXT REFERENCES subtasks(id),
             created_at TEXT NOT NULL,
@@ -130,7 +138,8 @@ public enum SQLiteSchema {
             c.id AS chain_id,
             d.id AS definition_id,
             d.title,
-            d.notes,
+            d.description_text,
+            d.note,
             c.created_at,
             c.updated_at
         FROM task_chains c
@@ -145,7 +154,8 @@ public enum SQLiteSchema {
         SELECT
             t.*,
             d.title,
-            d.notes
+            d.description_text AS definition_description_text,
+            d.note AS definition_note
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         WHERE t.status = 'pending'
@@ -155,7 +165,8 @@ public enum SQLiteSchema {
         SELECT
             t.*,
             d.title,
-            d.notes
+            d.description_text AS definition_description_text,
+            d.note AS definition_note
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         WHERE t.status IN ('unfinished', 'continued')
@@ -166,7 +177,8 @@ public enum SQLiteSchema {
             c.id AS chain_id,
             d.id AS definition_id,
             d.title,
-            d.notes,
+            d.description_text,
+            d.note,
             COUNT(u.id) AS unfinished_count,
             MAX(u.date) AS latest_unfinished_date,
             MAX(u.continuation_seq) AS max_continuation_seq,
@@ -181,14 +193,15 @@ public enum SQLiteSchema {
               SELECT 1 FROM day_traces done
               WHERE done.chain_id = c.id AND done.status = 'completed'
           )
-        GROUP BY c.id, d.id, d.title, d.notes, active.id, active.date
+        GROUP BY c.id, d.id, d.title, d.description_text, d.note, active.id, active.date
         """,
         """
         CREATE VIEW IF NOT EXISTS completed_pool_view AS
         SELECT
             t.*,
             d.title,
-            d.notes,
+            d.description_text AS definition_description_text,
+            d.note AS definition_note,
             first_trace.date AS trajectory_start_date,
             t.date AS trajectory_completed_date
         FROM day_traces t
@@ -232,6 +245,7 @@ public enum SQLiteSchema {
             t.date,
             s.title,
             s.status,
+            s.difficulty,
             s.position,
             s.continued_from_subtask_id,
             s.created_at,
@@ -247,7 +261,8 @@ public enum SQLiteSchema {
         SELECT
             t.*,
             d.title,
-            d.notes
+            d.description_text AS definition_description_text,
+            d.note AS definition_note
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         """

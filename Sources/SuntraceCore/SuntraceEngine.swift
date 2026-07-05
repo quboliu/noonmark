@@ -16,13 +16,21 @@ public final class SuntraceEngine {
     }
 
     @discardableResult
-    public func createPoolTask(title: String, notes: String? = nil, now: Date = Date()) throws -> TaskChainID {
+    public func createPoolTask(
+        title: String,
+        descriptionText: String? = nil,
+        note: String? = nil,
+        notes: String? = nil,
+        now: Date = Date()
+    ) throws -> TaskChainID {
         let normalizedTitle = try normalizeTitle(title)
         let chain = TaskChain(now: now)
         let definition = TaskDefinition(
             chainID: chain.id,
             sequence: 1,
             title: normalizedTitle,
+            descriptionText: descriptionText,
+            note: note,
             notes: notes,
             now: now
         )
@@ -32,7 +40,13 @@ public final class SuntraceEngine {
         return chain.id
     }
 
-    public func updatePoolTask(chainID: TaskChainID, title: String, notes: String? = nil) throws {
+    public func updatePoolTask(
+        chainID: TaskChainID,
+        title: String,
+        descriptionText: String? = nil,
+        note: String? = nil,
+        notes: String? = nil
+    ) throws {
         let normalizedTitle = try normalizeTitle(title)
         let definition = try currentDefinition(for: chainID)
         guard traces.values.contains(where: { $0.chainID == chainID }) == false else {
@@ -40,7 +54,8 @@ public final class SuntraceEngine {
         }
 
         definitions[definition.id]?.title = normalizedTitle
-        definitions[definition.id]?.notes = notes
+        definitions[definition.id]?.descriptionText = descriptionText ?? notes
+        definitions[definition.id]?.note = note
     }
 
     @discardableResult
@@ -61,6 +76,8 @@ public final class SuntraceEngine {
             definitionID: definition.id,
             date: date,
             priority: nextPriority(on: date),
+            descriptionText: definition.descriptionText,
+            note: definition.note,
             now: now
         )
         traces[trace.id] = trace
@@ -264,6 +281,9 @@ public final class SuntraceEngine {
             date: targetDate,
             priority: nextPriority(on: targetDate),
             continuationSeq: source.continuationSeq + 1,
+            descriptionText: source.descriptionText,
+            note: source.note,
+            manualProgressPercent: traceProgress(for: source.id).percent,
             continuedFromTraceID: source.id,
             now: now
         )
@@ -283,6 +303,8 @@ public final class SuntraceEngine {
     public func changeTrace(
         traceID: DayTraceID,
         newTitle: String,
+        newDescriptionText: String? = nil,
+        newNote: String? = nil,
         newNotes: String? = nil,
         today: LocalDate,
         now: Date = Date()
@@ -294,23 +316,24 @@ public final class SuntraceEngine {
             throw SuntraceError.invalidTransition("only pending current-day traces can change definition")
         }
 
-        var oldDefinition = try currentDefinition(for: oldTrace.chainID)
+        let newChain = TaskChain(now: now)
         let newDefinition = TaskDefinition(
-            chainID: oldTrace.chainID,
-            sequence: oldDefinition.sequence + 1,
+            chainID: newChain.id,
+            sequence: 1,
             title: normalizedTitle,
+            descriptionText: newDescriptionText,
+            note: newNote,
             notes: newNotes,
             now: now
         )
-        oldDefinition.supersededAt = now
-        oldDefinition.supersededByDefinitionID = newDefinition.id
 
         let newTrace = DayTrace(
-            chainID: oldTrace.chainID,
+            chainID: newChain.id,
             definitionID: newDefinition.id,
             date: today,
             priority: oldTrace.priority + 1,
-            continuationSeq: oldTrace.continuationSeq,
+            descriptionText: newDefinition.descriptionText,
+            note: newDefinition.note,
             now: now
         )
 
@@ -318,7 +341,7 @@ public final class SuntraceEngine {
         oldTrace.changedToTraceID = newTrace.id
         oldTrace.settledAt = now
 
-        definitions[oldDefinition.id] = oldDefinition
+        chains[newChain.id] = newChain
         definitions[newDefinition.id] = newDefinition
         traces[oldTrace.id] = oldTrace
         traces[newTrace.id] = newTrace
@@ -354,7 +377,12 @@ public final class SuntraceEngine {
     ) throws -> TaskChainID {
         let source = try trace(traceID)
         let sourceDefinition = try definition(source.definitionID)
-        let newChainID = try createPoolTask(title: sourceDefinition.title, notes: sourceDefinition.notes, now: now)
+        let newChainID = try createPoolTask(
+            title: sourceDefinition.title,
+            descriptionText: source.descriptionText ?? sourceDefinition.descriptionText,
+            note: source.note ?? sourceDefinition.note,
+            now: now
+        )
 
         if case let .date(date) = target {
             _ = try scheduleFromPool(chainID: newChainID, date: date, today: today, now: now)
@@ -364,7 +392,12 @@ public final class SuntraceEngine {
     }
 
     @discardableResult
-    public func addSubtask(traceID: DayTraceID, title: String, now: Date = Date()) throws -> SubtaskID {
+    public func addSubtask(
+        traceID: DayTraceID,
+        title: String,
+        difficulty: SubtaskDifficulty = .simple,
+        now: Date = Date()
+    ) throws -> SubtaskID {
         let normalizedTitle = try normalizeTitle(title)
         let trace = try trace(traceID)
         guard trace.status == .pending else {
@@ -372,7 +405,13 @@ public final class SuntraceEngine {
         }
 
         let position = subtasks.values.filter { $0.traceID == traceID }.count + 1
-        let subtask = Subtask(traceID: trace.id, title: normalizedTitle, position: position, now: now)
+        let subtask = Subtask(
+            traceID: trace.id,
+            title: normalizedTitle,
+            difficulty: difficulty,
+            position: position,
+            now: now
+        )
         subtasks[subtask.id] = subtask
         return subtask.id
     }
@@ -409,6 +448,53 @@ public final class SuntraceEngine {
         subtasks[subtask.id] = subtask
     }
 
+    public func updateSubtaskDifficulty(_ subtaskID: SubtaskID, difficulty: SubtaskDifficulty, today: LocalDate) throws {
+        guard var subtask = subtasks[subtaskID] else {
+            throw SuntraceError.notFound("subtask")
+        }
+        let trace = try trace(subtask.traceID)
+        guard trace.date == today, trace.status == .pending else {
+            throw SuntraceError.immutableHistory
+        }
+
+        subtask.difficulty = difficulty
+        subtasks[subtask.id] = subtask
+    }
+
+    public func updateTraceText(
+        traceID: DayTraceID,
+        descriptionText: String?,
+        note: String?,
+        today: LocalDate
+    ) throws {
+        var trace = try trace(traceID)
+        guard trace.status == .pending else {
+            throw SuntraceError.invalidTransition("only pending traces can update descriptive text")
+        }
+        guard trace.date >= today else {
+            throw SuntraceError.immutableHistory
+        }
+
+        trace.descriptionText = normalizedOptionalText(descriptionText)
+        trace.note = normalizedOptionalText(note)
+        traces[trace.id] = trace
+    }
+
+    public func setManualProgress(traceID: DayTraceID, percent: Int, today: LocalDate) throws {
+        var trace = try trace(traceID)
+        guard trace.date == today, trace.status == .pending else {
+            throw SuntraceError.immutableHistory
+        }
+        guard hasSubtasks(in: trace.chainID) == false else {
+            throw SuntraceError.invalidTransition("manual progress is unavailable when subtasks define weighted progress")
+        }
+
+        let clamped = min(100, max(0, percent))
+        let floor = progressFloor(for: trace)
+        trace.manualProgressPercent = max(floor, clamped)
+        traces[trace.id] = trace
+    }
+
     public func subtaskProgress(for traceID: DayTraceID) -> SubtaskProgress {
         let items = subtasks.values.filter { $0.traceID == traceID }
         return SubtaskProgress(
@@ -418,6 +504,38 @@ public final class SuntraceEngine {
             unfinished: items.filter { $0.status == .unfinished }.count,
             continued: items.filter { $0.status == .continued }.count,
             abandoned: items.filter { $0.status == .abandoned }.count
+        )
+    }
+
+    public func traceProgress(for traceID: DayTraceID) -> TraceProgress {
+        guard let trace = traces[traceID] else {
+            return TraceProgress(mode: .manual, percent: 0, floorPercent: 0, completedWeight: 0, totalWeight: 0)
+        }
+
+        let chainTraces = traces.values
+            .filter { $0.chainID == trace.chainID }
+            .sorted(by: traceChronology)
+        let raw = rawProgress(for: trace, chainTraces: chainTraces)
+        let floor = progressFloor(for: trace, chainTraces: chainTraces)
+        return TraceProgress(
+            mode: raw.mode,
+            percent: max(raw.percent, floor),
+            floorPercent: floor,
+            completedWeight: raw.completedWeight,
+            totalWeight: raw.totalWeight
+        )
+    }
+
+    public func calendarSummary(for date: LocalDate) -> CalendarDaySummary {
+        let items = traces.values.filter { $0.date == date }
+        let completed = items.filter { $0.status == .completed }.count
+        return CalendarDaySummary(
+            date: date,
+            total: items.count,
+            completed: completed,
+            pending: items.filter { $0.status == .pending }.count,
+            unfinished: items.filter { $0.status == .unfinished }.count,
+            heatLevel: min(completed, 4)
         )
     }
 
@@ -487,6 +605,11 @@ private extension SuntraceEngine {
             throw SuntraceError.invalidTitle
         }
         return trimmed
+    }
+
+    func normalizedOptionalText(_ text: String?) -> String? {
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == true ? nil : trimmed
     }
 
     func sorted(_ traces: [DayTrace], by sort: ViewSort) -> [DayTrace] {
@@ -572,6 +695,76 @@ private extension SuntraceEngine {
 
     func hasCompletedTrace(_ chainID: TaskChainID) -> Bool {
         traces.values.contains { $0.chainID == chainID && $0.status == .completed }
+    }
+
+    func hasSubtasks(in chainID: TaskChainID) -> Bool {
+        let traceIDs = Set(traces.values.filter { $0.chainID == chainID }.map(\.id))
+        return subtasks.values.contains { traceIDs.contains($0.traceID) }
+    }
+
+    func rawProgress(for trace: DayTrace, chainTraces: [DayTrace]) -> TraceProgress {
+        if trace.status == .completed {
+            return TraceProgress(mode: .manual, percent: 100, floorPercent: 0, completedWeight: 1, totalWeight: 1)
+        }
+
+        let traceByID = Dictionary(uniqueKeysWithValues: chainTraces.map { ($0.id, $0) })
+        let lineageRecords = Dictionary(grouping: subtasks.values.compactMap { subtask -> (SubtaskLineageID, Subtask, DayTrace)? in
+            guard let subtaskTrace = traceByID[subtask.traceID], subtaskTrace.date <= trace.date else {
+                return nil
+            }
+            return (subtask.lineageID, subtask, subtaskTrace)
+        }) { $0.0 }
+
+        if lineageRecords.isEmpty == false {
+            var totalWeight = 0
+            var completedWeight = 0
+
+            for (_, records) in lineageRecords {
+                let sortedRecords = records.sorted {
+                    if $0.2.date != $1.2.date {
+                        return $0.2.date < $1.2.date
+                    }
+                    return $0.1.createdAt < $1.1.createdAt
+                }
+                let weight = sortedRecords.map { $0.1.difficulty.rawValue }.max() ?? SubtaskDifficulty.simple.rawValue
+                totalWeight += weight
+
+                if sortedRecords.contains(where: { $0.1.status == .completed && $0.2.date <= trace.date }) {
+                    completedWeight += weight
+                }
+            }
+
+            let percent = totalWeight == 0 ? 0 : Int((Double(completedWeight) / Double(totalWeight) * 100).rounded())
+            return TraceProgress(
+                mode: .weightedSubtasks,
+                percent: percent,
+                floorPercent: 0,
+                completedWeight: completedWeight,
+                totalWeight: totalWeight
+            )
+        }
+
+        return TraceProgress(
+            mode: .manual,
+            percent: trace.manualProgressPercent ?? 0,
+            floorPercent: 0,
+            completedWeight: trace.manualProgressPercent ?? 0,
+            totalWeight: 100
+        )
+    }
+
+    func progressFloor(for trace: DayTrace) -> Int {
+        let chainTraces = traces.values
+            .filter { $0.chainID == trace.chainID }
+            .sorted(by: traceChronology)
+        return progressFloor(for: trace, chainTraces: chainTraces)
+    }
+
+    func progressFloor(for trace: DayTrace, chainTraces: [DayTrace]) -> Int {
+        chainTraces
+            .filter { $0.date < trace.date || ($0.date == trace.date && $0.continuationSeq < trace.continuationSeq) }
+            .map { rawProgress(for: $0, chainTraces: chainTraces).percent }
+            .max() ?? 0
     }
 
     func completedTrajectory(for completedTrace: DayTrace) -> CompletedTaskTrajectory {
@@ -677,6 +870,7 @@ private extension SuntraceEngine {
                 lineageID: oldSubtask.lineageID,
                 traceID: targetTraceID,
                 title: oldSubtask.title,
+                difficulty: oldSubtask.difficulty,
                 position: index + 1,
                 continuedFromSubtaskID: oldSubtask.id,
                 now: now

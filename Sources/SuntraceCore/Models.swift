@@ -23,6 +23,28 @@ public enum SubtaskStatus: String, Codable, Hashable, Sendable {
     case abandoned
 }
 
+public enum SubtaskDifficulty: Int, Codable, Hashable, Sendable, CaseIterable {
+    case simple = 1
+    case medium = 2
+    case hard = 3
+
+    public var label: String {
+        switch self {
+        case .simple:
+            return "简"
+        case .medium:
+            return "中"
+        case .hard:
+            return "难"
+        }
+    }
+}
+
+public enum TraceProgressMode: String, Codable, Hashable, Sendable {
+    case manual
+    case weightedSubtasks
+}
+
 public enum NewTaskTarget: Equatable, Sendable {
     case taskPool
     case date(LocalDate)
@@ -75,24 +97,33 @@ public struct TaskDefinition: Codable, Equatable, Sendable {
     public var chainID: TaskChainID
     public var sequence: Int
     public var title: String
-    public var notes: String?
+    public var descriptionText: String?
+    public var note: String?
     public var createdAt: Date
     public var supersededAt: Date?
     public var supersededByDefinitionID: TaskDefinitionID?
+
+    public var notes: String? {
+        get { descriptionText }
+        set { descriptionText = newValue }
+    }
 
     public init(
         id: TaskDefinitionID = TaskDefinitionID(),
         chainID: TaskChainID,
         sequence: Int,
         title: String,
-        notes: String?,
+        descriptionText: String? = nil,
+        note: String? = nil,
+        notes: String? = nil,
         now: Date
     ) {
         self.id = id
         self.chainID = chainID
         self.sequence = sequence
         self.title = title
-        self.notes = notes
+        self.descriptionText = descriptionText ?? notes
+        self.note = note
         self.createdAt = now
         self.supersededAt = nil
         self.supersededByDefinitionID = nil
@@ -107,6 +138,9 @@ public struct DayTrace: Codable, Equatable, Sendable {
     public var status: TraceStatus
     public var priority: Int
     public var continuationSeq: Int
+    public var descriptionText: String?
+    public var note: String?
+    public var manualProgressPercent: Int?
     public var continuedFromTraceID: DayTraceID?
     public var changedToTraceID: DayTraceID?
     public var createdAt: Date
@@ -121,6 +155,9 @@ public struct DayTrace: Codable, Equatable, Sendable {
         status: TraceStatus = .pending,
         priority: Int,
         continuationSeq: Int = 0,
+        descriptionText: String? = nil,
+        note: String? = nil,
+        manualProgressPercent: Int? = nil,
         continuedFromTraceID: DayTraceID? = nil,
         now: Date
     ) {
@@ -131,6 +168,9 @@ public struct DayTrace: Codable, Equatable, Sendable {
         self.status = status
         self.priority = priority
         self.continuationSeq = continuationSeq
+        self.descriptionText = descriptionText
+        self.note = note
+        self.manualProgressPercent = manualProgressPercent
         self.continuedFromTraceID = continuedFromTraceID
         self.changedToTraceID = nil
         self.createdAt = now
@@ -145,6 +185,7 @@ public struct Subtask: Codable, Equatable, Sendable {
     public var traceID: DayTraceID
     public var title: String
     public var status: SubtaskStatus
+    public var difficulty: SubtaskDifficulty
     public var position: Int
     public var continuedFromSubtaskID: SubtaskID?
     public var createdAt: Date
@@ -161,6 +202,7 @@ public struct Subtask: Codable, Equatable, Sendable {
         traceID: DayTraceID,
         title: String,
         status: SubtaskStatus = .pending,
+        difficulty: SubtaskDifficulty = .simple,
         position: Int,
         continuedFromSubtaskID: SubtaskID? = nil,
         now: Date
@@ -170,6 +212,7 @@ public struct Subtask: Codable, Equatable, Sendable {
         self.traceID = traceID
         self.title = title
         self.status = status
+        self.difficulty = difficulty
         self.position = position
         self.continuedFromSubtaskID = continuedFromSubtaskID
         self.createdAt = now
@@ -202,6 +245,40 @@ public struct SubtaskProgress: Equatable, Sendable {
 
     public var canCompleteParent: Bool {
         pending == 0 && unfinished == 0
+    }
+}
+
+public struct TraceProgress: Equatable, Sendable {
+    public let mode: TraceProgressMode
+    public let percent: Int
+    public let floorPercent: Int
+    public let completedWeight: Int
+    public let totalWeight: Int
+
+    public init(mode: TraceProgressMode, percent: Int, floorPercent: Int, completedWeight: Int, totalWeight: Int) {
+        self.mode = mode
+        self.percent = percent
+        self.floorPercent = floorPercent
+        self.completedWeight = completedWeight
+        self.totalWeight = totalWeight
+    }
+}
+
+public struct CalendarDaySummary: Equatable, Sendable {
+    public let date: LocalDate
+    public let total: Int
+    public let completed: Int
+    public let pending: Int
+    public let unfinished: Int
+    public let heatLevel: Int
+
+    public init(date: LocalDate, total: Int, completed: Int, pending: Int, unfinished: Int, heatLevel: Int) {
+        self.date = date
+        self.total = total
+        self.completed = completed
+        self.pending = pending
+        self.unfinished = unfinished
+        self.heatLevel = heatLevel
     }
 }
 

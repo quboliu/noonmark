@@ -84,7 +84,8 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - `chainId`
 - `sequence`
 - `title`
-- `notes`
+- `descriptionText`
+- `note`
 - `createdAt`
 - `supersededAt`
 - `supersededByDefinitionId`
@@ -92,8 +93,10 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 规则：
 
 - 已产生日轨迹的任务定义不允许覆盖式编辑。
-- 需要改变任务定义时，必须走变更：旧任务标注已变更，新任务继承任务链并拥有新定义。
+- 需要改变任务定义时，必须走变更：旧任务标注已变更，新任务开启新的任务链并拥有新定义。
 - 用户要补充任务边界时，优先添加子任务，而不是覆盖原定义。
+- `descriptionText` 表达任务背景、目标或范围；进入 Day Todo 后成为日轨迹快照。
+- `note` 表达临时想法、提醒或补充说明；进入 Day Todo 后成为日轨迹快照。
 
 ### DayTrace
 
@@ -108,6 +111,9 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - `status`
 - `priority`
 - `continuationSeq`
+- `descriptionText`
+- `note`
+- `manualProgressPercent`
 - `continuedFromTraceId`
 - `changedToTraceId`
 - `createdAt`
@@ -337,8 +343,8 @@ func updatePriority(traceId: TraceID, newPriority: Int) throws
 ### TaskPoolUseCase
 
 ```swift
-func createPoolTask(title: String, notes: String?) throws -> TaskChainID
-func updatePoolTask(chainId: TaskChainID, title: String, notes: String?) throws
+func createPoolTask(title: String, descriptionText: String?, note: String?) throws -> TaskChainID
+func updatePoolTask(chainId: TaskChainID, title: String, descriptionText: String?, note: String?) throws
 func scheduleFromPool(chainId: TaskChainID, date: LocalDate) throws -> TraceID
 func deleteUnscheduledTask(chainId: TaskChainID) throws
 ```
@@ -356,9 +362,12 @@ func markCompleted(traceId: TraceID, now: Instant) throws
 func undoCompleted(traceId: TraceID, now: Instant) throws
 func returnToPool(traceId: TraceID, now: Instant) throws
 func continueTrace(traceId: TraceID, targetDate: LocalDate, now: Instant) throws -> TraceID
-func changeTrace(traceId: TraceID, newTitle: String, newNotes: String?, now: Instant) throws -> TraceID
+func changeTrace(traceId: TraceID, newTitle: String, newDescriptionText: String?, newNote: String?, now: Instant) throws -> TraceID
 func abandonChain(from traceId: TraceID, now: Instant) throws
 func copyAsNewTask(from traceId: TraceID, target: NewTaskTarget) throws -> TaskChainID
+func updateTraceText(traceId: TraceID, descriptionText: String?, note: String?) throws
+func setManualProgress(traceId: TraceID, percent: Int) throws
+func getTraceProgress(traceId: TraceID) -> TraceProgress
 ```
 
 约束：
@@ -366,8 +375,11 @@ func copyAsNewTask(from traceId: TraceID, target: NewTaskTarget) throws -> TaskC
 - `undoCompleted` 只允许当前日期。
 - `returnToPool` 只允许当前日期的活跃日轨迹。
 - `continueTrace` 只允许历史未完成或当前待完成，且任务链没有其他活跃日轨迹。
-- `changeTrace` 会生成同任务链的新定义和新日轨迹。
+- `changeTrace` 会生成新任务链、新定义和同日新日轨迹，旧日轨迹保留并指向新日轨迹。
 - `copyAsNewTask` 创建新任务链，不继承延续次数。
+- `updateTraceText` 只允许当前日或未来日的待完成日轨迹，历史日只读。
+- `setManualProgress` 只允许没有子任务的当前日待完成日轨迹，并且不能低于进度下限。
+- 有子任务的日轨迹进度由子任务难度权重自动计算。
 
 ### AggregatePoolUseCase
 
@@ -386,15 +398,17 @@ func listCompletedPool() -> [CompletedPoolItem]
 ### SubtaskUseCase
 
 ```swift
-func addSubtask(traceId: TraceID, title: String, now: Instant) throws -> SubtaskID
+func addSubtask(traceId: TraceID, title: String, difficulty: SubtaskDifficulty, now: Instant) throws -> SubtaskID
 func completeSubtask(subtaskId: SubtaskID, now: Instant) throws
 func abandonSubtask(subtaskId: SubtaskID, now: Instant) throws
+func updateSubtaskDifficulty(subtaskId: SubtaskID, difficulty: SubtaskDifficulty) throws
 func getSubtaskProgress(traceId: TraceID) -> SubtaskProgress
 ```
 
 约束：
 
 - 只能在当前日期的待完成日轨迹中完成或废弃子任务。
+- 只能在当前日期的待完成日轨迹中修改子任务难度权重。
 - 有未完成子任务时，父级日轨迹不能标记完成。
 - 子任务延续由父任务延续复制触发，用户不能把子任务单独移动到另一天。
 

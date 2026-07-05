@@ -177,9 +177,17 @@ public struct UnfinishedPoolItem: Equatable, Sendable {
     }
 }
 
+public struct CompletedTaskTrajectory: Equatable, Sendable {
+    public let startDate: LocalDate
+    public let continuedDates: [LocalDate]
+    public let completedDate: LocalDate
+    public let traces: [DayTrace]
+}
+
 public struct CompletedPoolItem: Equatable, Sendable {
     public let trace: DayTrace
     public let definition: TaskDefinition
+    public let trajectory: CompletedTaskTrajectory
 }
 
 public struct DailyReviewStats: Equatable, Sendable {
@@ -191,4 +199,3 @@ public struct DailyReviewStats: Equatable, Sendable {
     public var returnedToPool: Int
     public var abandoned: Int
 }
-

@@ -169,10 +169,39 @@ public enum SQLiteSchema {
         SELECT
             t.*,
             d.title,
-            d.notes
+            d.notes,
+            first_trace.date AS trajectory_start_date,
+            t.date AS trajectory_completed_date
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
+        JOIN day_traces first_trace ON first_trace.id = (
+            SELECT first.id
+            FROM day_traces first
+            WHERE first.chain_id = t.chain_id
+            ORDER BY first.date, first.continuation_seq, first.priority, first.created_at
+            LIMIT 1
+        )
         WHERE t.status = 'completed'
+        """,
+        """
+        CREATE VIEW IF NOT EXISTS completed_trajectory_detail_view AS
+        SELECT
+            done.id AS completed_trace_id,
+            history.id AS trace_id,
+            history.chain_id,
+            history.definition_id,
+            history.date,
+            history.status,
+            history.priority,
+            history.continuation_seq,
+            history.continued_from_trace_id,
+            history.changed_to_trace_id,
+            history.created_at,
+            history.completed_at,
+            history.settled_at
+        FROM day_traces done
+        JOIN day_traces history ON history.chain_id = done.chain_id
+        WHERE done.status = 'completed'
         """,
         """
         CREATE VIEW IF NOT EXISTS day_todo_view AS

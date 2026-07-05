@@ -243,6 +243,20 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 
 按完成日轨迹逐条展示，不按任务链去重。
 
+必须展示：
+
+- 任务当前定义。
+- 完成日轨迹。
+- 任务链开始日期。
+- 延续到的日期列表。
+- 完成日期。
+
+规则：
+
+- 开始日期、延续日期和完成日期从同一任务链的日轨迹派生，不允许用户手工编辑。
+- 没有发生延续复制的任务，延续日期列表为空。
+- 通过延续复制完成的任务，完成日期也应出现在延续日期列表中，用于表达“延续到了完成日”。
+
 支持操作：
 
 - 查看完成记录。
@@ -341,6 +355,19 @@ func copyAsNewTask(from traceId: TraceID, target: NewTaskTarget) throws -> TaskC
 - `changeTrace` 会生成同任务链的新定义和新日轨迹。
 - `copyAsNewTask` 创建新任务链，不继承延续次数。
 
+### AggregatePoolUseCase
+
+```swift
+func listUnfinishedPool() -> [UnfinishedPoolItem]
+func listCompletedPool() -> [CompletedPoolItem]
+```
+
+约束：
+
+- `UnfinishedPoolItem` 按任务链去重，并包含未完成或已延续明细。
+- `CompletedPoolItem` 按完成日轨迹逐条返回，不按任务链去重。
+- `CompletedPoolItem` 必须包含 `CompletedTaskTrajectory`，展示开始日期、延续日期列表和完成日期。
+
 ### FuturePlanUseCase
 
 ```swift
@@ -425,6 +452,7 @@ func canUndoLastLocalAction() -> Bool
 - `unfinished_pool_view`
 - `unfinished_detail_view`
 - `completed_pool_view`
+- `completed_trajectory_detail_view`
 - `day_todo_view`
 
 可选：
@@ -445,7 +473,7 @@ func canUndoLastLocalAction() -> Bool
 8. 未来计划可换未来日期，可回任务池，但不能完成。
 9. 未来计划到期后自动进入当天 Day Todo。
 10. 未完成池按任务链去重，明细显示每个未完成或已延续日期。
-11. 已完成池按完成日轨迹逐条显示。
+11. 已完成池按完成日轨迹逐条显示，并展示每条任务链的开始日期、延续日期列表和完成日期。
 12. 每日复盘可补写，但不能改变统计事实。
 13. 数据包可导出并在空库导入后恢复核心数据。
 14. `Cmd+Z` 只能撤销当前日或计划草稿误操作，不能抹掉历史轨迹事实。

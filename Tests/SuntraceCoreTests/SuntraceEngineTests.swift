@@ -69,17 +69,24 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertThrowsError(try engine.continueTrace(traceID: traceID, targetDate: day3, today: day2, now: now))
     }
 
-    func testCompletedContinuationRemovesChainFromUnfinishedPool() throws {
+    func testCompletedContinuationRemovesChainFromUnfinishedPoolAndShowsTrajectory() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "完成后移出未完成池", now: now)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
         engine.settleDays(upTo: day2, now: now)
-        let continuedID = try engine.continueTrace(traceID: traceID, targetDate: day2, today: day2, now: now)
+        let day2TraceID = try engine.continueTrace(traceID: traceID, targetDate: day2, today: day2, now: now)
+        engine.settleDays(upTo: day3, now: now)
+        let completedTraceID = try engine.continueTrace(traceID: day2TraceID, targetDate: day3, today: day3, now: now)
 
-        try engine.markCompleted(traceID: continuedID, today: day2, now: now)
+        try engine.markCompleted(traceID: completedTraceID, today: day3, now: now)
 
         XCTAssertTrue(engine.unfinishedPool().isEmpty)
-        XCTAssertEqual(engine.completedPool().map(\.trace.id), [continuedID])
+        let completedItem = try XCTUnwrap(engine.completedPool().first)
+        XCTAssertEqual(completedItem.trace.id, completedTraceID)
+        XCTAssertEqual(completedItem.trajectory.startDate, day1)
+        XCTAssertEqual(completedItem.trajectory.continuedDates, [day2, day3])
+        XCTAssertEqual(completedItem.trajectory.completedDate, day3)
+        XCTAssertEqual(completedItem.trajectory.traces.map(\.id), [traceID, day2TraceID, completedTraceID])
     }
 
     func testChangingCurrentTracePreservesOldAndCreatesNewDefinitionInSameDay() throws {
@@ -150,4 +157,3 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(copied.map(\.title), ["未完成子任务"])
     }
 }
-

@@ -149,7 +149,11 @@ public final class SuntraceEngine {
             .filter { $0.status == .completed }
             .compactMap { trace in
                 guard let definition = definitions[trace.definitionID] else { return nil }
-                return CompletedPoolItem(trace: trace, definition: definition)
+                return CompletedPoolItem(
+                    trace: trace,
+                    definition: definition,
+                    trajectory: completedTrajectory(for: trace)
+                )
             }
             .sorted {
                 if $0.trace.date == $1.trace.date {
@@ -529,6 +533,47 @@ private extension SuntraceEngine {
 
     func hasCompletedTrace(_ chainID: TaskChainID) -> Bool {
         traces.values.contains { $0.chainID == chainID && $0.status == .completed }
+    }
+
+    func completedTrajectory(for completedTrace: DayTrace) -> CompletedTaskTrajectory {
+        let chainTraces = traces.values
+            .filter { $0.chainID == completedTrace.chainID }
+            .sorted(by: traceChronology)
+
+        return CompletedTaskTrajectory(
+            startDate: chainTraces.first?.date ?? completedTrace.date,
+            continuedDates: uniqueDates(
+                chainTraces
+                    .filter { $0.continuationSeq > 0 }
+                    .map(\.date)
+            ),
+            completedDate: completedTrace.date,
+            traces: chainTraces
+        )
+    }
+
+    func traceChronology(_ lhs: DayTrace, _ rhs: DayTrace) -> Bool {
+        if lhs.date != rhs.date {
+            return lhs.date < rhs.date
+        }
+        if lhs.continuationSeq != rhs.continuationSeq {
+            return lhs.continuationSeq < rhs.continuationSeq
+        }
+        if lhs.priority != rhs.priority {
+            return lhs.priority < rhs.priority
+        }
+        return lhs.createdAt < rhs.createdAt
+    }
+
+    func uniqueDates(_ dates: [LocalDate]) -> [LocalDate] {
+        var seen = Set<LocalDate>()
+        var result: [LocalDate] = []
+
+        for date in dates where seen.insert(date).inserted {
+            result.append(date)
+        }
+
+        return result
     }
 
     func copyOpenSubtasks(from sourceTraceID: DayTraceID, to targetTraceID: DayTraceID, now: Date) {

@@ -701,7 +701,35 @@ final class SuntraceStore: ObservableObject {
     }
 
     var windowTitle: String {
-        "\(copy.appName) — \(Self.displayDate(selectedDate))"
+        switch page {
+        case .day:
+            return "\(copy.appName) · \(copy.navDay) — \(Self.displayDate(selectedDate))"
+        case .calendar:
+            return "\(copy.appName) · \(copy.navCalendar) — \(Self.displayDate(selectedCalendarDate))"
+        default:
+            return "\(copy.appName) · \(windowPageTitle)"
+        }
+    }
+
+    private var windowPageTitle: String {
+        switch page {
+        case .day:
+            return copy.navDay
+        case .pool:
+            return copy.navPool
+        case .future:
+            return copy.navFuture
+        case .unfinished:
+            return copy.navUnfinished
+        case .completed:
+            return copy.navCompleted
+        case .calendar:
+            return copy.navCalendar
+        case .zhulong:
+            return copy.navZhulong
+        case .settings:
+            return copy.navSettings
+        }
     }
 
     func definition(for trace: DayTrace) -> TaskDefinition? {
@@ -1738,6 +1766,7 @@ struct AppCopy {
     var navUnfinished: String { language == .chinese ? "未完成" : "Unfinished" }
     var navCompleted: String { language == .chinese ? "已完成" : "Completed" }
     var navCalendar: String { language == .chinese ? "日历" : "Calendar" }
+    var navZhulong: String { language == .chinese ? "烛龙 AI" : "Zhulong AI" }
     var navSettings: String { language == .chinese ? "设置" : "Settings" }
     var today: String { language == .chinese ? "今天" : "Today" }
     var chooseDate: String { language == .chinese ? "选日期" : "Choose date" }

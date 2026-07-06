@@ -1354,6 +1354,14 @@ final class SuntraceStore: ObservableObject {
         "\(date.month) 月 \(date.day) 日"
     }
 
+    static func displayTime(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
     static func weekday(_ date: LocalDate) -> String {
         let names = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
         var components = DateComponents()
@@ -2498,32 +2506,42 @@ struct CompletedRow: View {
     let item: CompletedPoolItem
 
     var body: some View {
-        HStack(spacing: 10) {
-            StatusGlyph(status: .completed)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.definition.title)
-                    .font(.system(size: 13, weight: .semibold))
-                HStack(spacing: 4) {
-                    Text("始于 \(SuntraceStore.displayDate(item.trajectory.startDate))")
-                    Text("·")
-                    Text("延续 \(item.trajectory.continuedDates.count) 天")
-                    Text("·")
-                    Text("完成于 \(SuntraceStore.displayDate(item.trajectory.completedDate))")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                StatusGlyph(status: .completed)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.definition.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                    Text("始于 \(SuntraceStore.displayDate(item.trajectory.startDate)) · 延续 \(item.trajectory.continuedDates.count) 天 · 完成于 \(SuntraceStore.displayDate(item.trajectory.completedDate))")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.text3)
+                        .lineLimit(1)
                 }
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.text3)
+                Spacer()
+                if let time = SuntraceStore.displayTime(item.trace.completedAt) {
+                    Text(time)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                        .monospacedDigit()
+                }
             }
-            Spacer()
-            SmallActionButton("跳转当天") {
-                store.selectedDate = item.trace.date
-                store.page = .day
-                store.selectTrace(item.trace.id)
+            HStack(alignment: .center, spacing: 8) {
+                CompletedTrajectoryNodes(nodes: item.trajectory.traces.map(CompletedTrajectoryNode.init(trace:)))
+                    .padding(.leading, 28)
+                Spacer()
+                SmallActionButton("跳转当天") {
+                    store.selectedDate = item.trace.date
+                    store.page = .day
+                    store.selectTrace(item.trace.id)
+                }
+                SmallActionButton("复制为新任务") { store.copyAsNewTask(item.trace.id) }
             }
-            SmallActionButton("复制为新任务") { store.copyAsNewTask(item.trace.id) }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedCompletedTraceID == item.trace.id ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedCompletedTraceID == item.trace.id ? Theme.accent : Theme.line))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 9).fill(store.selectedCompletedTraceID == item.trace.id ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(store.selectedCompletedTraceID == item.trace.id ? Theme.accent : Theme.line))
         .onTapGesture { store.selectCompleted(item.trace.id) }
     }
 }
@@ -2533,30 +2551,94 @@ struct CompletedSubtaskRow: View {
     let record: CompletedSubtaskRecord
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text("子")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Theme.ok)
-                .frame(width: 18, height: 18)
-                .background(Circle().fill(Theme.okSoft))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(record.subtask.title)
-                    .font(.system(size: 13, weight: .semibold))
-                Text("属于「\(record.parentDefinition.title)」")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.text3)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                StatusGlyph(status: .completed)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(record.subtask.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                    Text("属于「\(record.parentDefinition.title)」")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.text3)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Text("子任务")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Theme.accentSoft))
             }
-            Spacer()
-            SmallActionButton("跳转当天") {
-                store.selectedDate = record.date
-                store.page = .day
-                store.selectTrace(record.parentTrace.id)
+            HStack(alignment: .center, spacing: 8) {
+                CompletedTrajectoryNodes(nodes: [CompletedTrajectoryNode(subtask: record.subtask, date: record.date)])
+                    .padding(.leading, 28)
+                Spacer()
+                SmallActionButton("跳转当天") {
+                    store.selectedDate = record.date
+                    store.page = .day
+                    store.selectTrace(record.parentTrace.id)
+                }
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedCompletedSubtaskID == record.subtask.id ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedCompletedSubtaskID == record.subtask.id ? Theme.accent : Theme.line))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 9).fill(store.selectedCompletedSubtaskID == record.subtask.id ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(store.selectedCompletedSubtaskID == record.subtask.id ? Theme.accent : Theme.line))
         .onTapGesture { store.selectCompletedSubtask(record.subtask.id) }
+    }
+}
+
+struct CompletedTrajectoryNode: Identifiable {
+    let id: String
+    let date: LocalDate
+    let glyph: String
+    let foreground: Color
+    let background: Color
+
+    init(trace: DayTrace) {
+        id = trace.id.rawValue.uuidString
+        date = trace.date
+        glyph = trace.status.uiStyle.glyph.isEmpty ? "•" : trace.status.uiStyle.glyph
+        foreground = trace.status == .completed ? .white : trace.status.uiStyle.glyphForeground
+        background = trace.status == .completed ? Theme.ok : trace.status.uiStyle.glyphBackground
+    }
+
+    init(subtask: Subtask, date: LocalDate) {
+        id = subtask.id.rawValue.uuidString
+        self.date = date
+        glyph = "✓"
+        foreground = .white
+        background = Theme.ok
+    }
+}
+
+struct CompletedTrajectoryNodes: View {
+    let nodes: [CompletedTrajectoryNode]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(nodes.enumerated()), id: \.element.id) { index, node in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Theme.line2)
+                        .frame(width: 14, height: 1.5)
+                }
+                HStack(spacing: 4) {
+                    Text(node.glyph)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(node.foreground)
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(node.background))
+                    Text(SuntraceStore.displayDate(node.date))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.text3)
+                        .monospacedDigit()
+                }
+                .padding(.trailing, 2)
+            }
+        }
     }
 }
 

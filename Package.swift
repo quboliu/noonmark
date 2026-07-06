@@ -8,12 +8,18 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .executable(name: "SuntraceMacApp", targets: ["SuntraceMacApp"]),
         .library(name: "SuntraceCore", targets: ["SuntraceCore"]),
         .library(name: "SuntraceAI", targets: ["SuntraceAI"]),
         .library(name: "SuntraceMacUIContract", targets: ["SuntraceMacUIContract"]),
         .library(name: "SuntraceStorage", targets: ["SuntraceStorage"])
     ],
     targets: [
+        .executableTarget(
+            name: "SuntraceMacApp",
+            dependencies: ["SuntraceCore", "SuntraceAI", "SuntraceMacUIContract"],
+            path: "App/SuntraceMacApp"
+        ),
         .target(name: "SuntraceCore"),
         .target(
             name: "SuntraceAI",

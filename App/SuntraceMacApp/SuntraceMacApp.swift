@@ -1,0 +1,2450 @@
+import AppKit
+import SwiftUI
+import SuntraceCore
+
+@main
+struct SuntraceMacApp: App {
+    @StateObject private var store = SuntraceStore()
+
+    var body: some Scene {
+        WindowGroup {
+            SuntraceRootView()
+                .environmentObject(store)
+                .frame(minWidth: 1180, minHeight: 760)
+                .preferredColorScheme(.light)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(replacing: .undoRedo) {
+                Button("撤销") {
+                    store.undo()
+                }
+                .keyboardShortcut("z", modifiers: .command)
+            }
+        }
+    }
+}
+
+@MainActor
+final class SuntraceStore: ObservableObject {
+    enum Page: String, CaseIterable, Identifiable {
+        case day
+        case pool
+        case future
+        case unfinished
+        case completed
+        case calendar
+        case zhulong
+        case settings
+
+        var id: String { rawValue }
+    }
+
+    enum DatePickerPurpose {
+        case gotoDay
+        case schedulePool(TaskChainID)
+        case scheduleSelectedPool
+        case continueTrace(DayTraceID)
+        case reschedule(DayTraceID)
+
+        var title: String {
+            switch self {
+            case .gotoDay:
+                return "跳转到日期"
+            case .schedulePool, .scheduleSelectedPool:
+                return "排期到哪一天？"
+            case .continueTrace:
+                return "延续到哪一天？"
+            case .reschedule:
+                return "改到哪个未来日期？"
+            }
+        }
+    }
+
+    struct DateChoice: Identifiable {
+        let id = UUID()
+        let date: LocalDate
+        let label: String
+        let subtitle: String
+    }
+
+    @Published var engine = SuntraceEngine()
+    @Published var page: Page = .day
+    @Published var selectedDate = LocalDate("2026-07-05")
+    @Published var selectedCalendarDate = LocalDate("2026-07-05")
+    @Published var selectedTraceID: DayTraceID?
+    @Published var selectedPoolChainID: TaskChainID?
+    @Published var selectedUnfinishedChainID: TaskChainID?
+    @Published var selectedCompletedTraceID: DayTraceID?
+    @Published var selectedCompletedSubtaskID: SubtaskID?
+    @Published var expandedTraceIDs: Set<DayTraceID> = []
+    @Published var expandedUnfinishedChainIDs: Set<TaskChainID> = []
+    @Published var quickText = ""
+    @Published var poolText = ""
+    @Published var showingPicker: DatePickerPurpose?
+    @Published var showingFromPoolPicker = false
+    @Published var showingChangeDialog = false
+    @Published var changeText = ""
+    @Published var toast: String?
+
+    let today = LocalDate("2026-07-05")
+    private var toastTask: Task<Void, Never>?
+    private var undoStack: [() -> Void] = []
+
+    init() {
+        seed()
+    }
+
+    var isHistory: Bool {
+        selectedDate < today
+    }
+
+    var isFuture: Bool {
+        selectedDate > today
+    }
+
+    var selectedTrace: DayTrace? {
+        guard let selectedTraceID else { return nil }
+        return engine.traces[selectedTraceID]
+    }
+
+    var selectedDefinition: TaskDefinition? {
+        guard let selectedTrace else { return nil }
+        return engine.definitions[selectedTrace.definitionID]
+    }
+
+    var selectedPoolTask: PoolTask? {
+        guard let selectedPoolChainID else { return nil }
+        return engine.taskPool().first { $0.chain.id == selectedPoolChainID }
+    }
+
+    var selectedCompletedItem: CompletedPoolItem? {
+        guard let selectedCompletedTraceID else { return nil }
+        return engine.completedPool().first { $0.trace.id == selectedCompletedTraceID }
+    }
+
+    var selectedCompletedSubtaskRecord: CompletedSubtaskRecord? {
+        guard let selectedCompletedSubtaskID else { return nil }
+        return engine.completedSubtaskRecords().first { $0.subtask.id == selectedCompletedSubtaskID }
+    }
+
+    var selectedUnfinishedItem: UnfinishedPoolItem? {
+        guard let selectedUnfinishedChainID else { return nil }
+        return engine.unfinishedPool().first { $0.chain.id == selectedUnfinishedChainID }
+    }
+
+    func definition(for trace: DayTrace) -> TaskDefinition? {
+        engine.definitions[trace.definitionID]
+    }
+
+    func subtasks(for traceID: DayTraceID) -> [Subtask] {
+        engine.subtasks.values
+            .filter { $0.traceID == traceID }
+            .sorted { $0.position < $1.position }
+    }
+
+    func dateChoices(allowPast: Bool = false, futureOnly: Bool = false) -> [DateChoice] {
+        (-7...21).compactMap { offset in
+            let date = Self.offset(today, by: offset)
+            if futureOnly, date <= today { return nil }
+            if allowPast == false, date < today { return nil }
+            return DateChoice(date: date, label: Self.displayDate(date), subtitle: Self.weekday(date))
+        }
+    }
+
+    func selectPage(_ next: Page) {
+        page = next
+        clearSelection()
+    }
+
+    func selectTrace(_ traceID: DayTraceID) {
+        selectedTraceID = traceID
+        selectedPoolChainID = nil
+        selectedUnfinishedChainID = nil
+        selectedCompletedTraceID = nil
+        selectedCompletedSubtaskID = nil
+    }
+
+    func selectPool(_ chainID: TaskChainID) {
+        selectedPoolChainID = chainID
+        selectedTraceID = nil
+        selectedUnfinishedChainID = nil
+        selectedCompletedTraceID = nil
+        selectedCompletedSubtaskID = nil
+    }
+
+    func selectUnfinished(_ chainID: TaskChainID) {
+        selectedUnfinishedChainID = chainID
+        selectedTraceID = nil
+        selectedPoolChainID = nil
+        selectedCompletedTraceID = nil
+        selectedCompletedSubtaskID = nil
+    }
+
+    func selectCompleted(_ traceID: DayTraceID) {
+        selectedCompletedTraceID = traceID
+        selectedCompletedSubtaskID = nil
+        selectedTraceID = traceID
+        selectedPoolChainID = nil
+        selectedUnfinishedChainID = nil
+    }
+
+    func selectCompletedSubtask(_ subtaskID: SubtaskID) {
+        selectedCompletedSubtaskID = subtaskID
+        selectedCompletedTraceID = nil
+        if let record = selectedCompletedSubtaskRecord {
+            selectedTraceID = record.parentTrace.id
+        }
+    }
+
+    func clearSelection() {
+        selectedTraceID = nil
+        selectedPoolChainID = nil
+        selectedUnfinishedChainID = nil
+        selectedCompletedTraceID = nil
+        selectedCompletedSubtaskID = nil
+    }
+
+    func addQuickTask() {
+        let title = quickText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title.isEmpty == false else { return }
+        do {
+            let chainID = try engine.createPoolTask(title: title, descriptionText: "快速记录自 Day Todo。", now: Date())
+            _ = try engine.scheduleFromPool(chainID: chainID, date: selectedDate, today: today)
+            quickText = ""
+            showToast("已添加「\(title)」")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func addPoolTask() {
+        let title = poolText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title.isEmpty == false else { return }
+        do {
+            let chainID = try engine.createPoolTask(title: title, descriptionText: "任务池中的待排期任务。", note: "可以排期到今天、明天或指定日期。")
+            selectedPoolChainID = chainID
+            poolText = ""
+            showToast("已加入任务池")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func schedulePoolTask(_ chainID: TaskChainID, date: LocalDate) {
+        do {
+            let traceID = try engine.scheduleFromPool(chainID: chainID, date: date, today: today)
+            selectedDate = date
+            page = .day
+            selectTrace(traceID)
+            showToast("已排期到 \(Self.displayDate(date))")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func toggleComplete(_ traceID: DayTraceID) {
+        guard let trace = engine.traces[traceID] else { return }
+        do {
+            if trace.status == .completed {
+                try engine.undoCompleted(traceID: traceID, today: today)
+                showToast("已撤销完成")
+            } else {
+                try engine.markCompleted(traceID: traceID, today: today)
+                showToast("已完成")
+            }
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func toggleSubtask(_ subtaskID: SubtaskID) {
+        guard let subtask = engine.subtasks[subtaskID] else { return }
+        do {
+            if subtask.status == .pending {
+                try engine.completeSubtask(subtaskID, today: today)
+                showToast("子任务已完成")
+            } else {
+                showToast("历史子任务不可改写")
+            }
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func cycleSubtaskDifficulty(_ subtaskID: SubtaskID) {
+        guard let current = engine.subtasks[subtaskID]?.difficulty else { return }
+        let next: SubtaskDifficulty = switch current {
+        case .simple: .medium
+        case .medium: .hard
+        case .hard: .simple
+        }
+        do {
+            try engine.updateSubtaskDifficulty(subtaskID, difficulty: next, today: today)
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func continueTrace(_ traceID: DayTraceID, to date: LocalDate) {
+        do {
+            let nextID = try engine.continueTrace(traceID: traceID, targetDate: date, today: today)
+            selectedDate = date
+            page = .day
+            selectTrace(nextID)
+            showToast("已延续到 \(Self.displayDate(date))")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func returnToPool(_ traceID: DayTraceID) {
+        do {
+            try engine.returnToPool(traceID: traceID, today: today)
+            page = .pool
+            clearSelection()
+            showToast("已回池，轨迹保留在当天")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func abandon(_ traceID: DayTraceID) {
+        do {
+            try engine.abandonChain(from: traceID)
+            showToast("任务链已废弃")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func copyAsNewTask(_ traceID: DayTraceID) {
+        do {
+            _ = try engine.copyAsNewTask(from: traceID, target: .taskPool, today: today)
+            page = .pool
+            showToast("已复制为新任务，放入任务池")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func reschedule(_ traceID: DayTraceID, to date: LocalDate) {
+        do {
+            try engine.rescheduleFuturePlan(traceID: traceID, targetDate: date, today: today)
+            selectedDate = date
+            showToast("已改期到 \(Self.displayDate(date))")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func changeSelectedTrace() {
+        guard let selectedTraceID else { return }
+        let title = changeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title.isEmpty == false else { return }
+        do {
+            let newID = try engine.changeTrace(traceID: selectedTraceID, newTitle: title, today: today)
+            showingChangeDialog = false
+            changeText = ""
+            selectTrace(newID)
+            showToast("已变更，新任务已加入当天")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func movePriority(_ traceID: DayTraceID, delta: Int) {
+        guard let trace = engine.traces[traceID] else { return }
+        do {
+            try engine.updatePriority(traceID: traceID, newPriority: max(1, trace.priority + delta), today: today)
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func updateReview(summary: String? = nil, reason: String? = nil, tomorrow: String? = nil) {
+        let existing = engine.days[selectedDate]
+        engine.updateDailyReview(
+            date: selectedDate,
+            summary: summary ?? existing?.reviewSummary,
+            unfinishedReason: reason ?? existing?.reviewUnfinishedReason,
+            tomorrowNote: tomorrow ?? existing?.reviewTomorrowNote
+        )
+    }
+
+    func setTheme(_ theme: AppTheme) {
+        engine.updateTheme(theme)
+    }
+
+    func setLanguage(_ language: AppLanguage) {
+        engine.updateLanguage(language)
+    }
+
+    func performDateChoice(_ date: LocalDate) {
+        guard let showingPicker else { return }
+        switch showingPicker {
+        case .gotoDay:
+            selectedDate = date
+            selectedCalendarDate = date
+            page = .day
+        case let .schedulePool(chainID):
+            schedulePoolTask(chainID, date: date)
+        case .scheduleSelectedPool:
+            if let selectedPoolChainID {
+                schedulePoolTask(selectedPoolChainID, date: date)
+            }
+        case let .continueTrace(traceID):
+            continueTrace(traceID, to: date)
+        case let .reschedule(traceID):
+            reschedule(traceID, to: date)
+        }
+        self.showingPicker = nil
+    }
+
+    func undo() {
+        showToast("没有可撤销的操作")
+    }
+
+    func showToast(_ message: String) {
+        toastTask?.cancel()
+        toast = message
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            await MainActor.run {
+                self?.toast = nil
+            }
+        }
+    }
+
+    static func offset(_ date: LocalDate, by days: Int) -> LocalDate {
+        var components = DateComponents()
+        components.year = date.year
+        components.month = date.month
+        components.day = date.day
+        let base = Calendar(identifier: .gregorian).date(from: components) ?? Date()
+        let next = Calendar(identifier: .gregorian).date(byAdding: .day, value: days, to: base) ?? base
+        let result = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: next)
+        return LocalDate(year: result.year ?? date.year, month: result.month ?? date.month, day: result.day ?? date.day)
+    }
+
+    static func displayDate(_ date: LocalDate) -> String {
+        "\(date.month) 月 \(date.day) 日"
+    }
+
+    static func weekday(_ date: LocalDate) -> String {
+        let names = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
+        var components = DateComponents()
+        components.year = date.year
+        components.month = date.month
+        components.day = date.day
+        let d = Calendar(identifier: .gregorian).date(from: components) ?? Date()
+        let index = Calendar(identifier: .gregorian).component(.weekday, from: d) - 1
+        return names[max(0, min(index, names.count - 1))]
+    }
+
+    private func seed() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let day1 = LocalDate("2026-07-03")
+        let day2 = LocalDate("2026-07-04")
+        let day3 = today
+        let day4 = LocalDate("2026-07-06")
+        let day7 = LocalDate("2026-07-09")
+
+        do {
+            let research = try engine.createPoolTask(
+                title: "整理 Day Todo 信息架构",
+                descriptionText: "把每日任务轨迹、任务池、未完成池与复盘串成一个主窗口。",
+                note: "优先保证轨迹不可删除和跨日延续语义。",
+                now: now
+            )
+            let researchDay1 = try engine.scheduleFromPool(chainID: research, date: day1, today: day3, now: now)
+            _ = try engine.addSubtask(traceID: researchDay1, title: "拆导航结构", difficulty: .simple, now: now)
+            let modelSubtask = try engine.addSubtask(traceID: researchDay1, title: "补领域模型字段", difficulty: .hard, now: now)
+            try engine.completeSubtask(modelSubtask, today: day1, now: now)
+            engine.settleDays(upTo: day2, now: now)
+            let researchDay2 = try engine.continueTrace(traceID: researchDay1, targetDate: day2, today: day2, now: now)
+            engine.settleDays(upTo: day3, now: now)
+            let researchToday = try engine.continueTrace(traceID: researchDay2, targetDate: day3, today: day3, now: now)
+            _ = try engine.addSubtask(traceID: researchToday, title: "SwiftUI 还原原型", difficulty: .hard, now: now)
+            try engine.setManualProgress(traceID: researchToday, percent: 72, today: day3)
+
+            let review = try engine.createPoolTask(
+                title: "补齐每日复盘写作",
+                descriptionText: "完成今天的推进总结、未完成原因和明日注意事项。",
+                note: "复盘可补写，但任务事实不能被历史改写。",
+                now: now
+            )
+            let reviewTrace = try engine.scheduleFromPool(chainID: review, date: day3, today: day3, now: now)
+            try engine.setManualProgress(traceID: reviewTrace, percent: 35, today: day3)
+
+            let done = try engine.createPoolTask(title: "归档 Claude Mac UI 原型", descriptionText: "把原型文件和实现契约落到 docs。", now: now)
+            let doneTrace = try engine.scheduleFromPool(chainID: done, date: day3, today: day3, now: now)
+            try engine.markCompleted(traceID: doneTrace, today: day3, now: now)
+
+            let changed = try engine.createPoolTask(title: "写普通 Todo 页面", descriptionText: "旧方向，已被晷迹轨迹模型替代。", now: now)
+            let changedTrace = try engine.scheduleFromPool(chainID: changed, date: day3, today: day3, now: now)
+            _ = try engine.changeTrace(traceID: changedTrace, newTitle: "写晷迹 Day Todo 页面", today: day3, now: now)
+
+            let poolA = try engine.createPoolTask(title: "设计数据包导出格式", descriptionText: "平台无关状态快照，后续用于手动导出/导入。", now: now)
+            _ = poolA
+            let poolB = try engine.createPoolTask(title: "评估 GRDB 持久化边界", descriptionText: "SQLite schema 已有，下一步接存储仓库。", note: "不要提前引入账号系统。", now: now)
+            _ = poolB
+
+            let futureA = try engine.createPoolTask(title: "接入真实 SQLite Repository", descriptionText: "把内存 engine 状态落到本地数据库。", now: now)
+            _ = try engine.scheduleFromPool(chainID: futureA, date: day4, today: day3, now: now)
+            let futureB = try engine.createPoolTask(title: "完善烛龙 AI provider 配置", descriptionText: "OpenAI-compatible endpoint，自定义模型与健康检查。", now: now)
+            let futureTrace = try engine.scheduleFromPool(chainID: futureB, date: day7, today: day3, now: now)
+            _ = try engine.addSubtask(traceID: futureTrace, title: "Provider Registry UI", difficulty: .medium, now: now)
+
+            engine.updateDailyReview(
+                date: day3,
+                summary: "今天完成了 Xcode 工具链、SwiftPM 测试和 Mac UI 契约复核，开始进入 SwiftUI 实现。",
+                unfinishedReason: "真实 App target 仍在搭建，持久化接入尚未完成。",
+                tomorrowNote: "优先验证主窗口交互，再补 SQLite repository。"
+            )
+        } catch {
+            assertionFailure("Seed data failed: \(error)")
+        }
+    }
+}
+
+struct SuntraceRootView: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        ZStack {
+            Theme.desk
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                WindowChrome()
+                HStack(spacing: 0) {
+                    Sidebar()
+                    MainSurface()
+                }
+            }
+            .background(Theme.background)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(.black.opacity(0.12), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.18), radius: 34, x: 0, y: 24)
+            .padding(18)
+
+            if let toast = store.toast {
+                VStack {
+                    Spacer()
+                    Text(toast)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.background)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Theme.text1))
+                        .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(.bottom, 30)
+                }
+            }
+        }
+        .sheet(item: Binding(
+            get: { store.showingPicker.map(PickerSheetState.init(purpose:)) },
+            set: { if $0 == nil { store.showingPicker = nil } }
+        )) { state in
+            DatePickerSheet(state: state)
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $store.showingFromPoolPicker) {
+            FromPoolSheet()
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $store.showingChangeDialog) {
+            ChangeTaskSheet()
+                .environmentObject(store)
+        }
+    }
+}
+
+struct PickerSheetState: Identifiable {
+    let id = UUID()
+    let purpose: SuntraceStore.DatePickerPurpose
+}
+
+enum Theme {
+    static let desk = Color(red: 0.898, green: 0.902, blue: 0.914)
+    static let background = Color(red: 0.962, green: 0.962, blue: 0.968)
+    static let panel = Color.white
+    static let panel2 = Color(red: 0.982, green: 0.982, blue: 0.987)
+    static let line = Color(red: 0.91, green: 0.91, blue: 0.925)
+    static let line2 = Color(red: 0.82, green: 0.82, blue: 0.85)
+    static let text1 = Color(red: 0.11, green: 0.11, blue: 0.12)
+    static let text2 = Color(red: 0.42, green: 0.42, blue: 0.46)
+    static let text3 = Color(red: 0.63, green: 0.63, blue: 0.67)
+    static let chip = Color(red: 0.946, green: 0.946, blue: 0.956)
+    static let accent = Color(red: 0.16, green: 0.38, blue: 0.78)
+    static let accentSoft = Color(red: 0.93, green: 0.955, blue: 1.0)
+    static let ok = Color(red: 0.08, green: 0.55, blue: 0.38)
+    static let okSoft = Color(red: 0.91, green: 0.98, blue: 0.95)
+    static let warn = Color(red: 0.82, green: 0.36, blue: 0.12)
+    static let warnSoft = Color(red: 1.0, green: 0.945, blue: 0.9)
+}
+
+struct WindowChrome: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(Color(red: 1, green: 0.36, blue: 0.32)).frame(width: 12, height: 12)
+            Circle().fill(Color(red: 1, green: 0.76, blue: 0.25)).frame(width: 12, height: 12)
+            Circle().fill(Color(red: 0.23, green: 0.78, blue: 0.34)).frame(width: 12, height: 12)
+            Spacer()
+            Text("晷迹 · suntrace")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(Theme.text2)
+            Spacer()
+            Color.clear.frame(width: 56, height: 1)
+        }
+        .frame(height: 42)
+        .padding(.horizontal, 14)
+        .background(Theme.panel)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.line).frame(height: 1)
+        }
+    }
+}
+
+struct Sidebar: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                ClockLogo()
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("晷迹")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("suntrace")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
+
+            NavGroupTitle("计划")
+            NavItem(page: .day, label: "Day Todo", icon: "checklist", count: store.engine.getDayTodo(date: store.today).traces.count)
+            NavItem(page: .pool, label: "任务池", icon: "tray", count: store.engine.taskPool().count)
+            NavItem(page: .future, label: "未来计划", icon: "calendar.badge.clock", count: store.engine.futurePlans(today: store.today).count)
+
+            NavGroupTitle("轨迹")
+                .padding(.top, 12)
+            NavItem(page: .unfinished, label: "未完成", icon: "exclamationmark.circle", count: store.engine.unfinishedPool().count)
+            NavItem(page: .completed, label: "已完成", icon: "checkmark.seal", count: store.engine.completedPool().count + store.engine.completedSubtaskRecords().count)
+            NavItem(page: .calendar, label: "日历", icon: "calendar", count: 0)
+            NavItem(page: .zhulong, label: "烛龙 AI", icon: "sparkles", count: 0)
+
+            Spacer()
+            NavItem(page: .settings, label: "设置", icon: "gearshape", count: 0)
+        }
+        .frame(width: 204)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+        .background(Theme.panel2)
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(Theme.line).frame(width: 1)
+        }
+    }
+}
+
+struct ClockLogo: View {
+    var body: some View {
+        ZStack {
+            Circle().stroke(Theme.accent, lineWidth: 1.5)
+            Rectangle()
+                .fill(Theme.accent)
+                .frame(width: 1.5, height: 7)
+                .offset(y: -3)
+            Circle().fill(Theme.accent).frame(width: 4, height: 4)
+        }
+        .frame(width: 22, height: 22)
+    }
+}
+
+struct NavGroupTitle: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(Theme.text3)
+            .tracking(0.8)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 4)
+    }
+}
+
+struct NavItem: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let page: SuntraceStore.Page
+    let label: String
+    let icon: String
+    let count: Int
+
+    var active: Bool { store.page == page }
+
+    var body: some View {
+        Button {
+            store.selectPage(page)
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: icon)
+                    .frame(width: 17)
+                Text(label)
+                    .font(.system(size: 12.5, weight: active ? .semibold : .medium))
+                Spacer()
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.text2)
+                        .padding(.horizontal, 6)
+                        .frame(minWidth: 18, minHeight: 16)
+                        .background(Capsule().fill(Theme.chip))
+                }
+            }
+            .foregroundStyle(active ? Theme.accent : Theme.text2)
+            .frame(height: 29)
+            .padding(.leading, 12)
+            .padding(.trailing, 10)
+            .background(active ? Theme.accentSoft : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 99)
+                    .fill(active ? Theme.accent : .clear)
+                    .frame(width: 2.5, height: 13)
+                    .padding(.leading, 3)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 1)
+    }
+}
+
+struct MainSurface: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Group {
+                switch store.page {
+                case .day:
+                    DayTodoPage()
+                case .pool:
+                    TaskPoolPage()
+                case .future:
+                    FuturePlansPage()
+                case .unfinished:
+                    UnfinishedPoolPage()
+                case .completed:
+                    CompletedPoolPage()
+                case .calendar:
+                    CalendarPage()
+                case .zhulong:
+                    ZhulongPage()
+                case .settings:
+                    SettingsPage()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if store.page != .calendar && store.page != .settings {
+                DetailRail()
+                    .frame(width: 320)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(Theme.line).frame(width: 1)
+                    }
+            }
+        }
+        .background(Theme.background)
+    }
+}
+
+struct DayTodoPage: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var traces: [DayTrace] {
+        store.engine.getDayTodo(date: store.selectedDate).traces
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PageHeader(
+                title: SuntraceStore.displayDate(store.selectedDate),
+                subtitle: SuntraceStore.weekday(store.selectedDate),
+                badge: dayBadge,
+                badgeColor: badgeColor
+            ) {
+                HeaderButton("‹") { store.selectedDate = SuntraceStore.offset(store.selectedDate, by: -1) }
+                HeaderButton("今天") { store.selectedDate = store.today }
+                HeaderButton("›") { store.selectedDate = SuntraceStore.offset(store.selectedDate, by: 1) }
+                HeaderButton("选日期") { store.showingPicker = .gotoDay }
+            }
+
+            DateStrip()
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+
+            if store.isHistory {
+                Notice(text: "历史日已锁定：任务事实不可改写，可补写复盘。未完成任务可延续或废弃。", tone: .locked)
+                    .padding(.horizontal, 20)
+            } else if store.isFuture {
+                Notice(text: "未来日：可排期与调整顺序，不能提前完成或生成复盘。", tone: .future)
+                    .padding(.horizontal, 20)
+            }
+
+            if store.isHistory == false {
+                HStack(spacing: 8) {
+                    TextField(store.isFuture ? "为这一天排期任务，回车确认" : "添加今日任务，回车确认", text: $store.quickText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .padding(.horizontal, 12)
+                        .frame(height: 32)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                        .onSubmit { store.addQuickTask() }
+                    HeaderButton("从任务池排期…") { store.showingFromPoolPicker = true }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+            }
+
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(traces, id: \.id) { trace in
+                        TaskRow(trace: trace)
+                    }
+
+                    if traces.isEmpty {
+                        EmptyState(text: "这一天没有留下任务。")
+                            .padding(.top, 40)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+
+    private var dayBadge: String {
+        if store.selectedDate == store.today { return "今日" }
+        if store.isHistory { return "历史已锁定" }
+        return "未来"
+    }
+
+    private var badgeColor: Color {
+        if store.selectedDate == store.today { return Theme.accent }
+        if store.isHistory { return Theme.text2 }
+        return Theme.accent
+    }
+}
+
+struct DateStrip: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var dates: [LocalDate] {
+        (-7...6).map { SuntraceStore.offset(store.today, by: $0) }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(dates, id: \.self) { date in
+                let selected = date == store.selectedDate
+                let today = date == store.today
+                let count = store.engine.getDayTodo(date: date).traces.count
+                Button {
+                    withAnimation(.spring(response: 0.24, dampingFraction: 0.75)) {
+                        store.selectedDate = date
+                    }
+                } label: {
+                    VStack(spacing: 4) {
+                        Text(SuntraceStore.weekday(date).replacingOccurrences(of: "周", with: ""))
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(Theme.text3)
+                        Text("\(date.day)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(selected ? .white : today ? Theme.accent : Theme.text1)
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(selected ? Theme.accent : .clear))
+                            .overlay(Circle().stroke(today && !selected ? Theme.accent : .clear, lineWidth: 1.5))
+                        Circle()
+                            .fill(count > 0 ? (selected ? .white.opacity(0.9) : Theme.accent) : .clear)
+                            .frame(width: 4, height: 4)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 2)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.line).frame(height: 1)
+        }
+    }
+}
+
+struct TaskRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let trace: DayTrace
+
+    var definition: TaskDefinition? { store.definition(for: trace) }
+    var progress: TraceProgress { store.engine.traceProgress(for: trace.id) }
+    var subtasks: [Subtask] { store.subtasks(for: trace.id) }
+    var selected: Bool { store.selectedTraceID == trace.id }
+    var expanded: Bool { store.expandedTraceIDs.contains(trace.id) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                Button {
+                    store.toggleComplete(trace.id)
+                } label: {
+                    StatusGlyph(status: trace.status)
+                }
+                .buttonStyle(.plain)
+                .disabled(trace.status != .pending && trace.status != .completed)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(definition?.title ?? "未命名任务")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(trace.status == .completed ? Theme.text2 : Theme.text1)
+                        .strikethrough(trace.status == .abandoned)
+
+                    HStack(spacing: 6) {
+                        ProgressView(value: Double(progress.percent), total: 100)
+                            .progressViewStyle(.linear)
+                            .tint(progress.percent == 100 ? Theme.ok : Theme.accent)
+                            .frame(width: 150)
+                        Text("\(progress.percent)%")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
+
+                    Text(metaText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                }
+
+                Spacer()
+
+                if subtasks.isEmpty == false {
+                    Button(expanded ? "▾" : "▸") {
+                        if expanded {
+                            store.expandedTraceIDs.remove(trace.id)
+                        } else {
+                            store.expandedTraceIDs.insert(trace.id)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                }
+
+                StatusChip(status: trace.status)
+
+                VStack(spacing: 1) {
+                    Button("▲") { store.movePriority(trace.id, delta: -1) }
+                    Button("▼") { store.movePriority(trace.id, delta: 1) }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 9))
+                .foregroundStyle(Theme.text3)
+            }
+            .padding(11)
+
+            if expanded {
+                VStack(spacing: 6) {
+                    ForEach(subtasks, id: \.id) { subtask in
+                        SubtaskRow(subtask: subtask)
+                    }
+                }
+                .padding(.leading, 40)
+                .padding(.trailing, 12)
+                .padding(.bottom, 10)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Theme.accent : Theme.line))
+        .contentShape(Rectangle())
+        .onTapGesture { store.selectTrace(trace.id) }
+        .contextMenu {
+            TaskContextMenu(trace: trace)
+        }
+    }
+
+    var metaText: String {
+        var parts: [String] = []
+        if trace.continuationSeq > 0 { parts.append("第 \(trace.continuationSeq) 次延续") }
+        if trace.changedToTraceID != nil { parts.append("被变更为新任务") }
+        if trace.status == .returnedToPool { parts.append("当天已回池") }
+        if progress.floorPercent > 0 { parts.append("进度下限 \(progress.floorPercent)%") }
+        return parts.isEmpty ? "当日优先级 \(trace.priority)" : parts.joined(separator: " · ")
+    }
+}
+
+struct SubtaskRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let subtask: Subtask
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                store.toggleSubtask(subtask.id)
+            } label: {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(subtask.status == .completed ? Theme.ok : Theme.panel)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(subtask.status == .completed ? Theme.ok : Theme.line2, lineWidth: 1.5))
+                    .overlay(Text(subtask.status == .completed ? "✓" : "").font(.system(size: 9)).foregroundStyle(.white))
+                    .frame(width: 15, height: 15)
+            }
+            .buttonStyle(.plain)
+
+            Text(subtask.title)
+                .font(.system(size: 12))
+                .foregroundStyle(subtask.status == .completed ? Theme.text3 : Theme.text1)
+                .strikethrough(subtask.status == .completed)
+
+            Spacer()
+
+            if subtask.completedAt != nil {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.text3)
+            }
+
+            Button(subtask.difficulty.label) {
+                store.cycleSubtaskDifficulty(subtask.id)
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(subtask.difficulty == .hard ? Theme.warn : Theme.text2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(subtask.difficulty == .hard ? Theme.warnSoft : Theme.chip))
+        }
+    }
+}
+
+struct TaskContextMenu: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let trace: DayTrace
+
+    var body: some View {
+        if trace.status == .pending {
+            Button("标记完成") { store.toggleComplete(trace.id) }
+        }
+        if trace.status == .completed {
+            Button("撤销完成") { store.toggleComplete(trace.id) }
+        }
+        Button("延续到…") { store.showingPicker = .continueTrace(trace.id) }
+        Button("变更为新任务…") {
+            store.selectTrace(trace.id)
+            store.changeText = store.definition(for: trace)?.title ?? ""
+            store.showingChangeDialog = true
+        }
+        Button("回到任务池（留下轨迹）") { store.returnToPool(trace.id) }
+        Button("改期…") { store.showingPicker = .reschedule(trace.id) }
+        Button("复制为新任务") { store.copyAsNewTask(trace.id) }
+        Button("废弃任务链", role: .destructive) { store.abandon(trace.id) }
+    }
+}
+
+struct TaskPoolPage: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var tasks: [PoolTask] { store.engine.taskPool() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PageHeader(title: "任务池", subtitle: "尚未安排日期的任务。排期后会出现在对应的 Day Todo。")
+            TextField("新建任务到任务池，回车确认", text: $store.poolText)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+                .onSubmit { store.addPoolTask() }
+
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(tasks, id: \.chain.id) { task in
+                        PoolTaskRow(task: task)
+                    }
+                    if tasks.isEmpty {
+                        EmptyState(text: "任务池是空的。")
+                            .padding(.top, 40)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
+    }
+}
+
+struct PoolTaskRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let task: PoolTask
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .stroke(Theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.definition.title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(task.definition.descriptionText ?? "尚未安排日期")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+                    .lineLimit(1)
+            }
+            Spacer()
+            SmallActionButton("排期到今天", tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
+            SmallActionButton("排期到明天") { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
+            SmallActionButton("选日期…") { store.showingPicker = .schedulePool(task.chain.id) }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedPoolChainID == task.chain.id ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedPoolChainID == task.chain.id ? Theme.accent : Theme.line))
+        .onTapGesture { store.selectPool(task.chain.id) }
+    }
+}
+
+struct FuturePlansPage: View {
+    @EnvironmentObject private var store: SuntraceStore
+    var plans: [FuturePlanItem] { store.engine.futurePlans(today: store.today) }
+    var grouped: [(LocalDate, [FuturePlanItem])] {
+        Dictionary(grouping: plans) { $0.trace.date }
+            .map { ($0.key, $0.value.sorted { $0.trace.priority < $1.trace.priority }) }
+            .sorted { $0.0 < $1.0 }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PageHeader(title: "未来计划", subtitle: "已排到未来日期的计划草稿，可改期或回到任务池。")
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(grouped, id: \.0) { date, items in
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack {
+                                Text("\(SuntraceStore.displayDate(date)) · \(SuntraceStore.weekday(date))")
+                                    .font(.system(size: 12, weight: .semibold))
+                                Spacer()
+                                Button("查看当天 →") {
+                                    store.selectedDate = date
+                                    store.page = .day
+                                }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Theme.accent)
+                            }
+                            ForEach(items, id: \.trace.id) { item in
+                                FuturePlanRow(item: item)
+                            }
+                        }
+                    }
+                    if plans.isEmpty {
+                        EmptyState(text: "还没有未来计划。")
+                            .padding(.top, 40)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+}
+
+struct FuturePlanRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let item: FuturePlanItem
+
+    var body: some View {
+        HStack(spacing: 10) {
+            StatusGlyph(status: item.trace.status)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.definition.title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text("计划草稿 · 当日优先级 \(item.trace.priority)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+            Spacer()
+            StatusChip(status: item.trace.status)
+            VStack(spacing: 1) {
+                Button("▲") { store.movePriority(item.trace.id, delta: -1) }
+                Button("▼") { store.movePriority(item.trace.id, delta: 1) }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 9))
+            .foregroundStyle(Theme.text3)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedTraceID == item.trace.id ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedTraceID == item.trace.id ? Theme.accent : Theme.line))
+        .onTapGesture { store.selectTrace(item.trace.id) }
+        .contextMenu {
+            Button("查看详情") { store.selectTrace(item.trace.id) }
+            Button("改期…") { store.showingPicker = .reschedule(item.trace.id) }
+            Button("回到任务池") { store.returnToPool(item.trace.id) }
+        }
+    }
+}
+
+struct UnfinishedPoolPage: View {
+    @EnvironmentObject private var store: SuntraceStore
+    var items: [UnfinishedPoolItem] { store.engine.unfinishedPool() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PageHeader(title: "未完成", subtitle: "按任务链去重的未完成轨迹。延续它，或明确废弃。")
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(items, id: \.chain.id) { item in
+                        UnfinishedRow(item: item)
+                    }
+                    if items.isEmpty {
+                        EmptyState(text: "没有待处理的未完成任务。")
+                            .padding(.top, 40)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+}
+
+struct UnfinishedRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let item: UnfinishedPoolItem
+
+    var expanded: Bool { store.expandedUnfinishedChainIDs.contains(item.chain.id) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("✕")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Theme.warn)
+                    .frame(width: 18, height: 18)
+                    .background(Circle().fill(Theme.warnSoft))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.definition.title)
+                        .font(.system(size: 13, weight: .semibold))
+                    HStack(spacing: 7) {
+                        Text("\(item.unfinishedTraces.count) 次未完成").foregroundStyle(Theme.warn)
+                        Text("·")
+                        Text("\(item.unfinishedTraces.last?.continuationSeq ?? 0) 次延续")
+                        Text("·")
+                        Text("最近未完成 \(SuntraceStore.displayDate(item.unfinishedTraces.last?.date ?? store.today))")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+                }
+                Spacer()
+                if let active = item.activeTrace {
+                    Button("已延续到 \(SuntraceStore.displayDate(active.date))，当前待完成 跳转 →") {
+                        store.selectedDate = active.date
+                        store.page = .day
+                        store.selectTrace(active.id)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Theme.accentSoft))
+                } else if let source = item.unfinishedTraces.last {
+                    SmallActionButton("延续到…", tone: .accent) { store.showingPicker = .continueTrace(source.id) }
+                    SmallActionButton("废弃任务链", tone: .warn) { store.abandon(source.id) }
+                }
+                Button(expanded ? "▾ 明细" : "▸ 明细") {
+                    if expanded {
+                        store.expandedUnfinishedChainIDs.remove(item.chain.id)
+                    } else {
+                        store.expandedUnfinishedChainIDs.insert(item.chain.id)
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text2)
+            }
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(item.unfinishedTraces, id: \.id) { trace in
+                        HStack(spacing: 8) {
+                            Text(SuntraceStore.displayDate(trace.date))
+                                .frame(width: 84, alignment: .leading)
+                            Text(trace.status == .continued ? "→ 已延续" : "✕ 未完成")
+                                .fontWeight(.semibold)
+                                .foregroundStyle(trace.status == .continued ? Theme.text2 : Theme.warn)
+                            Text("第 \(trace.continuationSeq) 次延续")
+                            Spacer()
+                        }
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                    }
+                }
+                .padding(.leading, 30)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+        .onTapGesture { store.selectUnfinished(item.chain.id) }
+    }
+}
+
+struct CompletedPoolPage: View {
+    @EnvironmentObject private var store: SuntraceStore
+    var items: [CompletedPoolItem] { store.engine.completedPool() }
+    var subtaskRecords: [CompletedSubtaskRecord] { store.engine.completedSubtaskRecords() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PageHeader(title: "已完成", subtitle: "按完成记录逐条展示，并附带每条的任务轨迹。")
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(groupedDates, id: \.self) { date in
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text(SuntraceStore.displayDate(date))
+                                .font(.system(size: 12, weight: .semibold))
+                            ForEach(items.filter { $0.trace.date == date }, id: \.trace.id) { item in
+                                CompletedRow(item: item)
+                            }
+                            ForEach(subtaskRecords.filter { $0.date == date }, id: \.subtask.id) { record in
+                                CompletedSubtaskRow(record: record)
+                            }
+                        }
+                    }
+                    if items.isEmpty && subtaskRecords.isEmpty {
+                        EmptyState(text: "还没有完成记录。")
+                            .padding(.top, 40)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+
+    var groupedDates: [LocalDate] {
+        Array(Set(items.map { $0.trace.date } + subtaskRecords.map(\.date))).sorted(by: >)
+    }
+}
+
+struct CompletedRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let item: CompletedPoolItem
+
+    var body: some View {
+        HStack(spacing: 10) {
+            StatusGlyph(status: .completed)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.definition.title)
+                    .font(.system(size: 13, weight: .semibold))
+                HStack(spacing: 4) {
+                    Text("始于 \(SuntraceStore.displayDate(item.trajectory.startDate))")
+                    Text("·")
+                    Text("延续 \(item.trajectory.continuedDates.count) 天")
+                    Text("·")
+                    Text("完成于 \(SuntraceStore.displayDate(item.trajectory.completedDate))")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text3)
+            }
+            Spacer()
+            SmallActionButton("跳转当天") {
+                store.selectedDate = item.trace.date
+                store.page = .day
+                store.selectTrace(item.trace.id)
+            }
+            SmallActionButton("复制为新任务") { store.copyAsNewTask(item.trace.id) }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedCompletedTraceID == item.trace.id ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedCompletedTraceID == item.trace.id ? Theme.accent : Theme.line))
+        .onTapGesture { store.selectCompleted(item.trace.id) }
+    }
+}
+
+struct CompletedSubtaskRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let record: CompletedSubtaskRecord
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("子")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Theme.ok)
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(Theme.okSoft))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(record.subtask.title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text("属于「\(record.parentDefinition.title)」")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+            Spacer()
+            SmallActionButton("跳转当天") {
+                store.selectedDate = record.date
+                store.page = .day
+                store.selectTrace(record.parentTrace.id)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedCompletedSubtaskID == record.subtask.id ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedCompletedSubtaskID == record.subtask.id ? Theme.accent : Theme.line))
+        .onTapGesture { store.selectCompletedSubtask(record.subtask.id) }
+    }
+}
+
+struct CalendarPage: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var days: [LocalDate] {
+        let first = LocalDate(year: store.selectedCalendarDate.year, month: store.selectedCalendarDate.month, day: 1)
+        return (0..<35).map { SuntraceStore.offset(first, by: $0) }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                PageHeader(title: "\(store.selectedCalendarDate.year) 年 \(store.selectedCalendarDate.month) 月", subtitle: "整月轨迹总览。点选任一天，右侧查看当天详情。") {
+                    HeaderButton("上一月") { store.selectedCalendarDate = LocalDate(year: store.selectedCalendarDate.year, month: max(1, store.selectedCalendarDate.month - 1), day: 1) }
+                    HeaderButton("今天") { store.selectedCalendarDate = store.today }
+                    HeaderButton("下一月") { store.selectedCalendarDate = LocalDate(year: store.selectedCalendarDate.year, month: min(12, store.selectedCalendarDate.month + 1), day: 1) }
+                }
+                HStack {
+                    ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) {
+                        Text($0).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3).frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 7), spacing: 8) {
+                    ForEach(days, id: \.self) { date in
+                        CalendarCell(date: date)
+                    }
+                }
+                .padding(.horizontal, 20)
+                Spacer()
+            }
+            CalendarDetailPanel()
+                .frame(width: 320)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(Theme.line).frame(width: 1)
+                }
+        }
+    }
+}
+
+struct CalendarCell: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let date: LocalDate
+    var summary: CalendarDaySummary { store.engine.calendarSummary(for: date) }
+    var traces: [DayTrace] { store.engine.getDayTodo(date: date).traces }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text("\(date.day)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(date == store.today ? Theme.accent : Theme.text1)
+                Spacer()
+                if date == store.today {
+                    Circle().fill(Theme.accent).frame(width: 5, height: 5)
+                }
+            }
+            if summary.total > 0 {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(heatColor)
+                    .frame(height: 8)
+            } else {
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(Theme.line2)
+                    .frame(height: 8)
+            }
+            ForEach(traces.prefix(6), id: \.id) { trace in
+                HStack(spacing: 4) {
+                    Circle().fill(color(for: trace.status)).frame(width: 5, height: 5)
+                    Text(store.definition(for: trace)?.title ?? "")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(trace.status == .completed || trace.status == .abandoned ? Theme.text3 : Theme.text2)
+                        .strikethrough(trace.status == .completed || trace.status == .abandoned)
+                        .lineLimit(1)
+                }
+            }
+            if traces.count > 6 {
+                Text("+\(traces.count - 6) 更多")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.text3)
+            }
+            Spacer()
+        }
+        .padding(9)
+        .frame(height: 112)
+        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedCalendarDate == date ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedCalendarDate == date || date == store.today ? Theme.accent : Theme.line))
+        .onTapGesture { store.selectedCalendarDate = date }
+    }
+
+    var heatColor: Color {
+        switch summary.heatLevel {
+        case 0: Theme.line2
+        case 1: Theme.ok.opacity(0.25)
+        case 2: Theme.ok.opacity(0.45)
+        case 3: Theme.ok.opacity(0.65)
+        default: Theme.ok
+        }
+    }
+
+    func color(for status: TraceStatus) -> Color {
+        switch status {
+        case .completed: Theme.ok
+        case .pending: Theme.accent
+        case .unfinished: Theme.warn
+        default: Theme.text3
+        }
+    }
+}
+
+struct CalendarDetailPanel: View {
+    @EnvironmentObject private var store: SuntraceStore
+    var traces: [DayTrace] { store.engine.getDayTodo(date: store.selectedCalendarDate).traces }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(SuntraceStore.displayDate(store.selectedCalendarDate))
+                        .font(.system(size: 18, weight: .semibold))
+                    Text(SuntraceStore.weekday(store.selectedCalendarDate))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text3)
+                }
+                Spacer()
+                StatusPill(text: store.selectedCalendarDate == store.today ? "今日" : store.selectedCalendarDate < store.today ? "历史" : "未来", color: Theme.accent)
+            }
+            Text("\(traces.count) 项任务")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+            Button("在 Day Todo 打开这一天 →") {
+                store.selectedDate = store.selectedCalendarDate
+                store.page = .day
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(traces, id: \.id) { trace in
+                    HStack(spacing: 8) {
+                        StatusGlyph(status: trace.status)
+                        Text(store.definition(for: trace)?.title ?? "")
+                            .font(.system(size: 12))
+                    }
+                }
+                if traces.isEmpty {
+                    EmptyState(text: "这一天没有留下任务。")
+                        .padding(.top, 20)
+                }
+            }
+            Spacer()
+        }
+        .padding(20)
+        .background(Theme.panel)
+    }
+}
+
+struct SettingsPage: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PageHeader(title: "设置", subtitle: "外观、语言、数据包与同步端点入口。")
+            VStack(alignment: .leading, spacing: 18) {
+                SettingSection(title: "外观") {
+                    SegmentedPair(
+                        left: "冷灰",
+                        right: "微暖纸感",
+                        leftSelected: store.engine.preferences.theme == .coolGray,
+                        leftAction: { store.setTheme(.coolGray) },
+                        rightAction: { store.setTheme(.warmPaper) }
+                    )
+                }
+                SettingSection(title: "语言") {
+                    SegmentedPair(
+                        left: "中文",
+                        right: "English",
+                        leftSelected: store.engine.preferences.language == .chinese,
+                        leftAction: { store.setLanguage(.chinese) },
+                        rightAction: { store.setLanguage(.english) }
+                    )
+                }
+                SettingSection(title: "数据") {
+                    HStack {
+                        SmallActionButton("导出数据 (JSON)", tone: .accent) { store.showToast("已导出 suntrace-backup.json（示意）") }
+                        SmallActionButton("导入数据…") { store.showToast("导入为第一期占位入口（示意）") }
+                    }
+                }
+                SettingSection(title: "同步") {
+                    ForEach(store.engine.syncEndpointOptions(), id: \.kind) { option in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(option.title)
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text(option.description)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.text3)
+                            }
+                            Spacer()
+                            StatusPill(text: "规划中", color: Theme.text2)
+                        }
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+}
+
+struct ZhulongPage: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PageHeader(title: "烛龙 AI", subtitle: "可选 sidecar：复盘分析、任务拆解、排期建议和 label 分类建议。")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("衔烛龙，照苦昼短。")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text("未配置 AI Provider 时，Day Todo、任务池、未来计划、未完成池、已完成池和每日复盘保持完整可用。AI 只生成建议草稿，确认后才通过普通领域接口写入。")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.text2)
+                        .lineSpacing(4)
+                    ForEach(["Provider 配置", "复盘分析", "任务拆解", "排期建议", "Label 分类建议"], id: \.self) { item in
+                        HStack {
+                            Image(systemName: "sparkles")
+                                .foregroundStyle(Theme.accent)
+                            Text(item)
+                                .font(.system(size: 13, weight: .semibold))
+                            Spacer()
+                            StatusPill(text: "建议草稿", color: Theme.accent)
+                        }
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                    }
+                }
+                .padding(20)
+            }
+        }
+    }
+}
+
+struct DetailRail: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if let trace = store.selectedTrace, let definition = store.selectedDefinition {
+                    TaskDetail(trace: trace, definition: definition)
+                } else if let task = store.selectedPoolTask {
+                    PoolDetail(task: task)
+                } else if let item = store.selectedUnfinishedItem {
+                    UnfinishedDetail(item: item)
+                } else if store.page == .day {
+                    ReviewRail()
+                } else {
+                    Text(hint)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text3)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
+                }
+            }
+            .padding(20)
+        }
+        .background(Theme.panel)
+    }
+
+    var hint: String {
+        switch store.page {
+        case .pool: "选中任务查看详情与排期操作。"
+        case .future: "选中计划查看详情，可改期或回池。"
+        case .unfinished: "选中任务链查看未完成明细。"
+        case .completed: "选中记录可跳转当天或复制为新任务。"
+        case .zhulong: "选择建议草稿后在这里查看证据和待执行操作。"
+        default: ""
+        }
+    }
+}
+
+struct TaskDetail: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let trace: DayTrace
+    let definition: TaskDefinition
+
+    var progress: TraceProgress { store.engine.traceProgress(for: trace.id) }
+    var subtasks: [Subtask] { store.subtasks(for: trace.id) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("任务详情")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Spacer()
+                Button("×") { store.clearSelection() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.text3)
+            }
+            HStack(alignment: .top) {
+                Text(definition.title)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                Spacer()
+                Menu("•••") {
+                    TaskContextMenu(trace: trace)
+                }
+                .menuStyle(.borderlessButton)
+            }
+            HStack {
+                StatusChip(status: trace.status)
+                Text(trace.date.description)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+            MetadataCard(trace: trace)
+            if trace.date < store.today {
+                Notice(text: "历史只读：任务事实不可改写。", tone: .locked)
+            }
+            DetailSection("完成进度") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: Double(progress.percent), total: 100)
+                        .tint(progress.percent == 100 ? Theme.ok : Theme.accent)
+                    Text("\(progress.percent)% · \(progress.mode == .weightedSubtasks ? "加权子任务进度" : "手动完成进度")")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                }
+            }
+            DetailSection("描述") {
+                Text(trace.descriptionText ?? definition.descriptionText ?? "暂无描述")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text2)
+            }
+            DetailSection("附言") {
+                Text(trace.note ?? definition.note ?? "暂无附言")
+                    .font(.system(size: 12))
+                    .italic()
+                    .foregroundStyle(Theme.warn)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.warnSoft.opacity(0.45)))
+            }
+            DetailSection("子任务") {
+                VStack(spacing: 6) {
+                    ForEach(subtasks, id: \.id) { subtask in
+                        SubtaskRow(subtask: subtask)
+                    }
+                    if subtasks.isEmpty {
+                        Text("暂无子任务")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.text3)
+                    }
+                }
+            }
+            DetailSection("任务轨迹时间线") {
+                Timeline(trace: trace)
+            }
+        }
+    }
+}
+
+struct MetadataCard: View {
+    let trace: DayTrace
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("当日优先级 \(trace.priority)")
+            Text("延续次数 \(trace.continuationSeq)")
+            if trace.changedToTraceID != nil {
+                Text("被变更为新任务")
+            }
+            if trace.status == .returnedToPool {
+                Text("当天已回池")
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(Theme.text2)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+    }
+}
+
+struct Timeline: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let trace: DayTrace
+
+    var body: some View {
+        let chainTraces = store.engine.traces.values
+            .filter { $0.chainID == trace.chainID }
+            .sorted { $0.date < $1.date }
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(chainTraces, id: \.id) { item in
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(spacing: 0) {
+                        StatusGlyph(status: item.status)
+                        Rectangle().fill(Theme.line2).frame(width: 1, height: 22)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(label(for: item.status))
+                                .font(.system(size: 11, weight: .semibold))
+                            if item.id == trace.id {
+                                StatusPill(text: "当前", color: Theme.accent)
+                            }
+                        }
+                        Text("\(SuntraceStore.displayDate(item.date)) \(SuntraceStore.weekday(item.date))")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.text3)
+                    }
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    func label(for status: TraceStatus) -> String {
+        switch status {
+        case .pending: "待完成"
+        case .completed: "已完成"
+        case .unfinished: "未完成"
+        case .continued: "已延续"
+        case .changed: "已变更"
+        case .returnedToPool: "已回池"
+        case .abandoned: "已废弃"
+        }
+    }
+}
+
+struct PoolDetail: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let task: PoolTask
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("任务池")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+            Text(task.definition.title)
+                .font(.system(size: 18, weight: .semibold))
+            Text(task.definition.descriptionText ?? "暂无描述")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+            SmallActionButton("排期到今天", tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
+            SmallActionButton("排期到明天") { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
+            SmallActionButton("选日期…") { store.showingPicker = .schedulePool(task.chain.id) }
+        }
+    }
+}
+
+struct UnfinishedDetail: View {
+    let item: UnfinishedPoolItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("未完成明细")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+            Text(item.definition.title)
+                .font(.system(size: 18, weight: .semibold))
+            ForEach(item.unfinishedTraces, id: \.id) { trace in
+                HStack {
+                    Text(SuntraceStore.displayDate(trace.date))
+                    Spacer()
+                    StatusChip(status: trace.status)
+                }
+                .font(.system(size: 12))
+            }
+        }
+    }
+}
+
+struct ReviewRail: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var day: Day? { store.engine.days[store.selectedDate] }
+    var stats: DailyReviewStats { store.engine.dailyReviewStats(date: store.selectedDate) }
+    var noReview: Bool { store.isFuture }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("每日复盘")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Spacer()
+                Text(store.selectedDate.description)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+            if store.isHistory {
+                Text("历史日复盘可随时补写")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.accent)
+            }
+            if noReview {
+                Text("未来日还没有复盘。到了这一天，复盘会在这里生成。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text3)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 24)
+            } else {
+                ReviewStatsCard(stats: stats)
+                ReviewEditor(
+                    title: "今日总结",
+                    placeholder: "今天整体推进如何？",
+                    text: Binding(
+                        get: { day?.reviewSummary ?? "" },
+                        set: { store.updateReview(summary: $0) }
+                    )
+                )
+                ReviewEditor(
+                    title: "未完成原因",
+                    placeholder: "哪些没完成，真实原因是什么？",
+                    text: Binding(
+                        get: { day?.reviewUnfinishedReason ?? "" },
+                        set: { store.updateReview(reason: $0) }
+                    )
+                )
+                ReviewEditor(
+                    title: "明日注意事项",
+                    placeholder: "明天开始前想提醒自己什么？",
+                    text: Binding(
+                        get: { day?.reviewTomorrowNote ?? "" },
+                        set: { store.updateReview(tomorrow: $0) }
+                    )
+                )
+            }
+        }
+    }
+}
+
+struct ReviewStatsCard: View {
+    let stats: DailyReviewStats
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text("总任务")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                Spacer()
+                Text("\(stats.total)")
+                    .font(.system(size: 22, weight: .semibold))
+            }
+            GeometryReader { proxy in
+                HStack(spacing: 1.5) {
+                    segment(stats.completed, total: stats.total, color: Theme.ok, width: proxy.size.width)
+                    segment(max(0, stats.total - stats.completed - stats.unfinished), total: stats.total, color: Theme.accent, width: proxy.size.width)
+                    segment(stats.unfinished, total: stats.total, color: Theme.warn, width: proxy.size.width)
+                }
+            }
+            .frame(height: 7)
+            .clipShape(Capsule())
+            legend("已完成", stats.completed, Theme.ok)
+            legend("未完成", stats.unfinished, Theme.warn)
+            legend("已延续", stats.continued, Theme.text2)
+            legend("已变更", stats.changed, Theme.text2)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+    }
+
+    func segment(_ value: Int, total: Int, color: Color, width: CGFloat) -> some View {
+        Rectangle()
+            .fill(value == 0 ? Color.clear : color)
+            .frame(width: total == 0 ? 0 : max(2, width * CGFloat(value) / CGFloat(total)))
+    }
+
+    func legend(_ label: String, _ value: Int, _ color: Color) -> some View {
+        HStack {
+            Circle().fill(value == 0 ? Theme.line2 : color).frame(width: 6, height: 6)
+            Text(label)
+            Spacer()
+            Text("\(value)")
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(value == 0 ? Theme.text3 : Theme.text2)
+    }
+}
+
+struct ReviewEditor: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(Theme.text2)
+            TextEditor(text: $text)
+                .font(.system(size: 12))
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .frame(height: 76)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text(placeholder)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.text3)
+                            .padding(12)
+                            .allowsHitTesting(false)
+                    }
+                }
+        }
+    }
+}
+
+struct DatePickerSheet: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let state: PickerSheetState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(state.purpose.title)
+                .font(.system(size: 14, weight: .semibold))
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(store.dateChoices(allowPast: true, futureOnly: futureOnly)) { choice in
+                        Button {
+                            store.performDateChoice(choice.date)
+                        } label: {
+                            HStack {
+                                Text(choice.label)
+                                    .font(.system(size: 12.5))
+                                Spacer()
+                                Text(choice.subtitle)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.text3)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            Button("取消") { store.showingPicker = nil }
+                .frame(maxWidth: .infinity)
+        }
+        .padding(14)
+        .frame(width: 300, height: 440)
+    }
+
+    var futureOnly: Bool {
+        if case .reschedule = state.purpose { return true }
+        return false
+    }
+}
+
+struct FromPoolSheet: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("从任务池排期到这一天")
+                .font(.system(size: 14, weight: .semibold))
+            ForEach(store.engine.taskPool(), id: \.chain.id) { task in
+                Button {
+                    store.schedulePoolTask(task.chain.id, date: store.selectedDate)
+                    store.showingFromPoolPicker = false
+                } label: {
+                    HStack {
+                        Text(task.definition.title)
+                        Spacer()
+                        Text("排期")
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+                }
+                .buttonStyle(.plain)
+            }
+            if store.engine.taskPool().isEmpty {
+                EmptyState(text: "任务池是空的。")
+            }
+            Button("取消") { store.showingFromPoolPicker = false }
+                .frame(maxWidth: .infinity)
+        }
+        .padding(16)
+        .frame(width: 360)
+    }
+}
+
+struct ChangeTaskSheet: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var oldTitle: String {
+        guard let trace = store.selectedTrace else { return "" }
+        return store.definition(for: trace)?.title ?? ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("变更为新任务")
+                .font(.system(size: 14, weight: .semibold))
+            Text("旧任务会保留在当天并标注已变更，新任务开启新的任务链。")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+            Text(oldTitle)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text3)
+                .strikethrough()
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            TextField("新的任务标题", text: $store.changeText)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent))
+            HStack {
+                Spacer()
+                Button("取消") { store.showingChangeDialog = false }
+                Button("确认变更") { store.changeSelectedTrace() }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(16)
+        .frame(width: 360)
+    }
+}
+
+struct SettingSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .tracking(0.6)
+            content
+        }
+    }
+}
+
+struct SegmentedPair: View {
+    let left: String
+    let right: String
+    let leftSelected: Bool
+    let leftAction: () -> Void
+    let rightAction: () -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            segment(left, selected: leftSelected, action: leftAction)
+            segment(right, selected: !leftSelected, action: rightAction)
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.chip))
+        .frame(width: 260)
+    }
+
+    func segment(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                .frame(maxWidth: .infinity)
+                .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Theme.panel : .clear))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct PageHeader<Trailing: View>: View {
+    let title: String
+    let subtitle: String?
+    let badge: String?
+    let badgeColor: Color
+    let trailing: Trailing
+
+    init(title: String, subtitle: String? = nil, badge: String? = nil, badgeColor: Color = Theme.accent, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+        self.title = title
+        self.subtitle = subtitle
+        self.badge = badge
+        self.badgeColor = badgeColor
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(size: 22, weight: .semibold))
+                    if let badge {
+                        StatusPill(text: badge, color: badgeColor)
+                    }
+                }
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text3)
+                }
+            }
+            Spacer()
+            trailing
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+    }
+}
+
+struct HeaderButton: View {
+    let title: String
+    let action: () -> Void
+
+    init(_ title: String, action: @escaping () -> Void) {
+        self.title = title
+        self.action = action
+    }
+
+    var body: some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.text2)
+            .padding(.horizontal, title.count == 1 ? 8 : 10)
+            .frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+    }
+}
+
+struct SmallActionButton: View {
+    enum Tone { case normal, accent, warn }
+    let title: String
+    let tone: Tone
+    let action: () -> Void
+
+    init(_ title: String, tone: Tone = .normal, action: @escaping () -> Void) {
+        self.title = title
+        self.tone = tone
+        self.action = action
+    }
+
+    var color: Color {
+        switch tone {
+        case .normal: Theme.text2
+        case .accent: Theme.accent
+        case .warn: Theme.warn
+        }
+    }
+
+    var body: some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11.5))
+            .foregroundStyle(color)
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line))
+    }
+}
+
+struct StatusPill: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(color.opacity(0.12)))
+    }
+}
+
+struct StatusGlyph: View {
+    let status: TraceStatus
+
+    var body: some View {
+        Text(glyph)
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(foreground)
+            .frame(width: 18, height: 18)
+            .background(Circle().fill(background))
+            .overlay(Circle().stroke(border, lineWidth: 1.5))
+    }
+
+    var glyph: String {
+        switch status {
+        case .pending: ""
+        case .completed: "✓"
+        case .unfinished: "✕"
+        case .continued: "→"
+        case .changed: "⇄"
+        case .returnedToPool: "↩"
+        case .abandoned: "—"
+        }
+    }
+
+    var foreground: Color {
+        switch status {
+        case .completed: .white
+        case .unfinished: Theme.warn
+        case .pending: Theme.accent
+        default: Theme.text2
+        }
+    }
+
+    var background: Color {
+        switch status {
+        case .completed: Theme.ok
+        case .unfinished: Theme.warnSoft
+        case .pending: Theme.panel
+        default: Theme.chip
+        }
+    }
+
+    var border: Color {
+        status == .pending ? Theme.line2 : .clear
+    }
+}
+
+struct StatusChip: View {
+    let status: TraceStatus
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 5, height: 5)
+            Text(label)
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(color.opacity(0.12)))
+    }
+
+    var label: String {
+        switch status {
+        case .pending: "待完成"
+        case .completed: "已完成"
+        case .unfinished: "未完成"
+        case .continued: "已延续"
+        case .changed: "已变更"
+        case .returnedToPool: "已回池"
+        case .abandoned: "已废弃"
+        }
+    }
+
+    var color: Color {
+        switch status {
+        case .completed: Theme.ok
+        case .unfinished: Theme.warn
+        case .pending: Theme.accent
+        default: Theme.text2
+        }
+    }
+}
+
+struct Notice: View {
+    enum Tone { case locked, future }
+    let text: String
+    let tone: Tone
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: tone == .locked ? "lock.fill" : "calendar.badge.clock")
+            Text(text)
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(tone == .locked ? Theme.text2 : Theme.accent)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(tone == .locked ? Theme.chip : Theme.accentSoft))
+    }
+}
+
+struct EmptyState: View {
+    let text: String
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle().stroke(Theme.line2, lineWidth: 1.5).frame(width: 24, height: 24)
+                Rectangle().fill(Theme.line2).frame(width: 1.5, height: 12).offset(y: -4)
+                Circle().fill(Theme.line2).frame(width: 3, height: 3)
+            }
+            .frame(width: 64, height: 48)
+            Text(text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.text3)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct DetailSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .tracking(0.6)
+            content
+        }
+    }
+}

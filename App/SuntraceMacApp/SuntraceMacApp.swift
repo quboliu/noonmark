@@ -2298,6 +2298,27 @@ struct AppCopy {
     }
 
     var emptyUnfinished: String { language == .chinese ? "没有待处理的未完成任务。" : "Nothing unfinished to handle." }
+    func unfinishedMissedCount(_ count: Int) -> String {
+        switch language {
+        case .chinese: "\(count) 次未完成"
+        case .english: count == 1 ? "1 missed" : "\(count) missed"
+        }
+    }
+
+    func unfinishedContinuationCount(_ count: Int) -> String {
+        switch language {
+        case .chinese: "\(count) 次延续"
+        case .english: count == 1 ? "1 continued" : "\(count) continued"
+        }
+    }
+
+    func lastMissedDate(_ dateLabel: String) -> String {
+        switch language {
+        case .chinese: "最近未完成 · \(dateLabel)"
+        case .english: "Last missed · \(dateLabel)"
+        }
+    }
+
     var completedSubtitle: String {
         language == .chinese ? "按完成记录逐条展示，并附带每条的任务轨迹。" : "Completed records with their task trajectories."
     }
@@ -3386,6 +3407,19 @@ struct UnfinishedPoolPage: View {
     }
 }
 
+private extension UnfinishedPoolItem {
+    var latestUnfinishedTrace: DayTrace? {
+        unfinishedTraces.last
+    }
+
+    var continuationCount: Int {
+        let activeTraces = activeTrace.map { [$0] } ?? []
+        let chainTraces = unfinishedTraces + activeTraces
+        let latestSequence = chainTraces.map(\.continuationSeq).max() ?? 1
+        return max(0, latestSequence - 1)
+    }
+}
+
 struct UnfinishedRow: View {
     @EnvironmentObject private var store: SuntraceStore
     let item: UnfinishedPoolItem
@@ -3407,14 +3441,23 @@ struct UnfinishedRow: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.text1)
                         .lineLimit(1)
-                    HStack(spacing: 6) {
-                        PlanMetaPill(text: "\(item.unfinishedTraces.count) 次未完成", color: Theme.warn)
-                        Text("\(item.unfinishedTraces.last?.continuationSeq ?? 0) 次延续")
+                    HStack(spacing: 8) {
+                        Text(store.copy.unfinishedMissedCount(item.unfinishedTraces.count))
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.warn)
+                            .monospacedDigit()
+                        UnfinishedMetaSeparator()
+                        Text(store.copy.unfinishedContinuationCount(item.continuationCount))
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.text3)
-                        Text("最近 \(SuntraceStore.displayDate(item.unfinishedTraces.last?.date ?? store.today))")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.text3)
+                            .monospacedDigit()
+                        if let latestUnfinished = item.latestUnfinishedTrace {
+                            UnfinishedMetaSeparator()
+                            Text(store.copy.lastMissedDate(SuntraceStore.displayDate(latestUnfinished.date)))
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.text3)
+                                .monospacedDigit()
+                        }
                         if let active = item.activeTrace {
                             Button("已延续到 \(activeDateLabel)，当前待完成 跳转 →") {
                                 store.selectedDate = active.date
@@ -3464,6 +3507,14 @@ struct UnfinishedRow: View {
         .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.warnSoft.opacity(0.55) : Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.warn : Theme.line, lineWidth: selected ? 1.3 : 1))
         .onTapGesture { store.selectUnfinished(item.chain.id) }
+    }
+}
+
+struct UnfinishedMetaSeparator: View {
+    var body: some View {
+        Text("·")
+            .font(.system(size: 11))
+            .foregroundStyle(Theme.text3)
     }
 }
 
@@ -5681,8 +5732,7 @@ struct UnfinishedDetail: View {
     @EnvironmentObject private var store: SuntraceStore
     let item: UnfinishedPoolItem
 
-    var latestUnfinished: DayTrace? { item.unfinishedTraces.last }
-    var latestContinuation: Int { latestUnfinished?.continuationSeq ?? 0 }
+    var latestUnfinished: DayTrace? { item.latestUnfinishedTrace }
     var activeDateLabel: String {
         guard let active = item.activeTrace else { return "" }
         return active.date == store.today ? "今天" : SuntraceStore.displayDate(active.date)
@@ -5695,8 +5745,8 @@ struct UnfinishedDetail: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.text1)
             HStack(spacing: 8) {
-                PlanMetaPill(text: "\(item.unfinishedTraces.count) 次未完成", color: Theme.warn)
-                PlanMetaPill(text: "\(latestContinuation) 次延续", color: Theme.text2)
+                PlanMetaPill(text: store.copy.unfinishedMissedCount(item.unfinishedTraces.count), color: Theme.warn)
+                PlanMetaPill(text: store.copy.unfinishedContinuationCount(item.continuationCount), color: Theme.text2)
             }
             UnfinishedSummaryCard(item: item)
             DetailSection("处理") {
@@ -5755,14 +5805,14 @@ struct UnfinishedDetail: View {
 struct UnfinishedSummaryCard: View {
     let item: UnfinishedPoolItem
 
-    var latestUnfinished: DayTrace? { item.unfinishedTraces.last }
+    var latestUnfinished: DayTrace? { item.latestUnfinishedTrace }
 
     var body: some View {
         VStack(spacing: 7) {
             if let latestUnfinished {
                 summaryRow("最近", "\(SuntraceStore.displayDate(latestUnfinished.date)) \(SuntraceStore.weekday(latestUnfinished.date))", Theme.warn)
                 summaryRow("优先级", "\(latestUnfinished.priority)", Theme.text2)
-                summaryRow("延续", "第 \(latestUnfinished.continuationSeq) 次", Theme.text2)
+                summaryRow("延续", "\(item.continuationCount) 次", Theme.text2)
             }
             if let active = item.activeTrace {
                 summaryRow("当前", "\(SuntraceStore.displayDate(active.date)) \(SuntraceStore.weekday(active.date)) 待完成", Theme.accent)

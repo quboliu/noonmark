@@ -2895,12 +2895,6 @@ struct CompletedPoolPage: View {
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .monospacedDigit()
-                                Text(store.copy.recordCount(dayItems.count + daySubtasks.count))
-                                    .font(.system(size: 10.5, weight: .semibold))
-                                    .foregroundStyle(Theme.ok)
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 1)
-                                    .background(Capsule().fill(Theme.okSoft))
                             }
                             .padding(.top, 2)
 
@@ -2943,17 +2937,10 @@ struct CompletedRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 StatusGlyph(status: .completed)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(item.definition.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
-                    Text("始于 \(SuntraceStore.displayDate(item.trajectory.startDate)) · 延续 \(item.trajectory.continuedDates.count) 天 · 完成于 \(SuntraceStore.displayDate(item.trajectory.completedDate))")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.text3)
-                        .lineLimit(1)
-                }
+                Text(item.definition.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
                 Spacer()
-                CompletionKindPill(text: "完成记录", color: Theme.ok)
                 CompletionTimeText(time: SuntraceStore.displayTime(item.trace.completedAt))
             }
             HStack(alignment: .center, spacing: 8) {
@@ -2968,6 +2955,7 @@ struct CompletedRow: View {
                 SmallActionButton(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
             }
         }
+        .frame(minHeight: 52, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 9).fill(isSelected ? Theme.okSoft.opacity(0.78) : Theme.panel))
@@ -3010,6 +2998,7 @@ struct CompletedSubtaskRow: View {
                 SmallActionButton(store.copy.copyAsNewTask) { store.copyAsNewTask(record.parentTrace.id) }
             }
         }
+        .frame(minHeight: 66, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 9).fill(isSelected ? Theme.okSoft.opacity(0.78) : Theme.panel))

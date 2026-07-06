@@ -3,7 +3,12 @@ set -euo pipefail
 
 configuration="${1:-debug}"
 product="SuntraceMacApp"
-bundle_dir="dist/${product}.app"
+bundle_name="${SUNTRACE_APP_BUNDLE_NAME:-$product}"
+executable_name="${SUNTRACE_APP_EXECUTABLE_NAME:-$product}"
+bundle_identifier="${SUNTRACE_BUNDLE_IDENTIFIER:-app.suntrace.mac}"
+bundle_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
+bundle_short_name="${SUNTRACE_APP_SHORT_NAME:-Suntrace}"
+bundle_dir="dist/${bundle_name}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
@@ -18,10 +23,10 @@ if [[ ! -x "$binary_path" ]]; then
   binary_path=".build/${configuration}/${product}"
 fi
 
-cp "$binary_path" "${macos_dir}/${product}"
-chmod +x "${macos_dir}/${product}"
+cp "$binary_path" "${macos_dir}/${executable_name}"
+chmod +x "${macos_dir}/${executable_name}"
 
-cat > "${contents_dir}/Info.plist" <<'PLIST'
+cat > "${contents_dir}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -29,15 +34,15 @@ cat > "${contents_dir}/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key>
   <string>zh_CN</string>
   <key>CFBundleDisplayName</key>
-  <string>晷迹</string>
+  <string>${bundle_display_name}</string>
   <key>CFBundleExecutable</key>
-  <string>SuntraceMacApp</string>
+  <string>${executable_name}</string>
   <key>CFBundleIdentifier</key>
-  <string>app.suntrace.mac</string>
+  <string>${bundle_identifier}</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Suntrace</string>
+  <string>${bundle_short_name}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

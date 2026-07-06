@@ -31,8 +31,8 @@ Neon 的可借鉴点：
 - IT：跨模块集成测试，当前入口为 `scripts/test-integration`，覆盖 Storage schema、Core 类型契约和 SQLite repository 核心状态 round-trip。
 - 数据包测试：随 Storage IT 运行，覆盖 `SuntraceDataPackage` JSON round-trip、重复键拒绝和断裂引用拒绝。
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
-- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，会打包 `.app`、打开真实窗口并抓截图。
-  当前覆盖 `day`、`day-detail`、`day-manual-detail`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 14 个场景。UI 调试时可用 `SUNTRACE_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `SUNTRACE_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。
+- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，默认会打包并打开隔离测试副本 `dist/SuntraceMacAppE2E.app`，只清理 `SuntraceMacAppE2E` 进程，避免打断 `dist/SuntraceMacApp.app` 的手动体验窗口。
+  当前覆盖 `day`、`day-detail`、`day-manual-detail`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 14 个场景。UI 调试时可用 `SUNTRACE_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `SUNTRACE_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。如需覆盖测试副本名称，可设置 `SUNTRACE_E2E_APP_BUNDLE_NAME`、`SUNTRACE_E2E_APP_EXECUTABLE_NAME`、`SUNTRACE_E2E_BUNDLE_IDENTIFIER` 和 `SUNTRACE_E2E_APP_DISPLAY_NAME`。
 - Prototype render：当前入口为 `scripts/render-prototype-screenshots`，使用 Chrome headless 从归档 HTML 原型生成 `day`、`pool`、`future`、`unfinished`、`completed`、`calendar`、`settings` 共 7 个 1440x900 参考图；默认渲染超时为 90 秒，可用 `SUNTRACE_PROTOTYPE_RENDER_TIMEOUT` 覆盖；每页默认最多渲染 3 次，可用 `SUNTRACE_PROTOTYPE_RENDER_ATTEMPTS` 覆盖；脚本会校验截图尺寸和非空白像素，防止 Chrome 超时留下全白参考图；烛龙 AI 是 SwiftUI 新增实现面，当前没有对应 HTML 原型页，只由 E2E 和契约测试覆盖。
 - Visual regression：当前入口为 `scripts/test-visual-regression`，默认先刷新真实 E2E 截图；设置 `SUNTRACE_VISUAL_REUSE_SCREENSHOTS=1` 时复用已有 E2E 截图。脚本会自动生成本次比较页面的原型参考图，并逐页输出 normalized actual、diff 和 report 到 `artifacts/visual-regression/<page>/`。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
@@ -112,7 +112,7 @@ Release：
 
 - 2026-07-06：`scripts/test-e2e` 通过，14 个演示数据真实 Mac app 截图生成于 `artifacts/e2e/`，6 个新用户空数据截图生成于 `artifacts/e2e-blank/`，窗口尺寸为 2880x1800，对应原型 1440x900 Retina 截图基线。
 - 2026-07-06：`scripts/test-visual-regression` 已升级为多页面原型量化对比，覆盖 `day`、`pool`、`future`、`unfinished`、`completed`、`calendar`、`settings`，输出归一化截图、差异图和指标报告到 `artifacts/visual-regression/<page>/`，汇总在 `artifacts/visual-regression/summary.txt`。
-- 2026-07-06：当前多页面视觉指标为：day `changed_ratio=0.131998`，pool `0.052632`，future `0.078638`，unfinished `0.098998`，completed `0.111986`，calendar `0.075295`，settings `0.061362`；settings 页已回到 HTML 原型的单栏信息架构，同时把烛龙 Provider 保留为同步区后的紧凑折叠入口，阈值收紧为 `0.12`；pool 页列表已回到原型单行密度，阈值收紧为 `0.07`；future 页列表已移除首屏计数和行内操作噪声，阈值收紧为 `0.09`；unfinished 页行密度和状态图标已向原型收敛，阈值收紧为 `0.105`。后续视觉收紧以真实可用性、信息层级和明显偏差为准，不追求演示数据条数逐项一致。
+- 2026-07-06：当前多页面视觉指标为：day `changed_ratio=0.131973`，pool `0.052632`，future `0.078638`，unfinished `0.098998`，completed `0.129740`，calendar `0.075226`，settings `0.061362`；settings 页已回到 HTML 原型的单栏信息架构，同时把烛龙 Provider 保留为同步区后的紧凑折叠入口，阈值收紧为 `0.12`；pool 页列表已回到原型单行密度，阈值收紧为 `0.07`；future 页列表已移除首屏计数和行内操作噪声，阈值收紧为 `0.09`；unfinished 页行密度和状态图标已向原型收敛，阈值收紧为 `0.105`；completed 页移除额外计数和主任务完成标签，并以稳定行高保持原型卡片节奏，阈值收紧为 `0.14`。后续视觉收紧以真实可用性、信息层级和明显偏差为准，不追求演示数据条数逐项一致。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 新用户空数据截图探针和正常模式持久化探针，使用 `artifacts/e2e-blank/Suntrace.sqlite` 与 `artifacts/e2e-persistence/Suntrace.sqlite` 验证空库初始化、页面浏览和保存均不灌入演示任务。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App lifecycle workflow 探针，验证任务变更保留旧轨迹并创建新任务、回池保留日轨迹、废弃同步终止任务链。

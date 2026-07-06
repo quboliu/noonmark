@@ -194,7 +194,7 @@ default_changed_ratios = {
     "pool": "0.07",
     "future": "0.09",
     "unfinished": "0.105",
-    "completed": "0.18",
+    "completed": "0.14",
     "calendar": "0.12",
     "settings": "0.12",
 }

@@ -7,6 +7,15 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   exit 1
 fi
 
+app_bundle_name="${SUNTRACE_E2E_APP_BUNDLE_NAME:-SuntraceMacAppE2E}"
+app_executable_name="${SUNTRACE_E2E_APP_EXECUTABLE_NAME:-$app_bundle_name}"
+app_bundle_identifier="${SUNTRACE_E2E_BUNDLE_IDENTIFIER:-app.suntrace.mac.e2e}"
+app_display_name="${SUNTRACE_E2E_APP_DISPLAY_NAME:-晷迹 E2E}"
+app_short_name="${SUNTRACE_E2E_APP_SHORT_NAME:-Suntrace E2E}"
+app_path="dist/${app_bundle_name}.app"
+export SUNTRACE_E2E_APP_EXECUTABLE_NAME="$app_executable_name"
+export SUNTRACE_E2E_APP_DISPLAY_NAME="$app_display_name"
+
 scenarios=(
   "day|day|"
   "day-detail|day|--select first"
@@ -44,22 +53,35 @@ if [[ -n "$requested_scenarios" ]]; then
   scenarios=("${filtered_scenarios[@]}")
 fi
 
-scripts/build-mac-app "$configuration"
+SUNTRACE_APP_BUNDLE_NAME="$app_bundle_name" \
+  SUNTRACE_APP_EXECUTABLE_NAME="$app_executable_name" \
+  SUNTRACE_BUNDLE_IDENTIFIER="$app_bundle_identifier" \
+  SUNTRACE_APP_DISPLAY_NAME="$app_display_name" \
+  SUNTRACE_APP_SHORT_NAME="$app_short_name" \
+  scripts/build-mac-app "$configuration"
 
 mkdir -p artifacts/e2e
-pkill -x SuntraceMacApp 2>/dev/null || true
-trap 'pkill -x SuntraceMacApp 2>/dev/null || true' EXIT
+pkill -x "$app_executable_name" 2>/dev/null || true
+trap 'pkill -x "$app_executable_name" 2>/dev/null || true' EXIT
 
 find_window_id() {
   swift -e '
 import CoreGraphics
 import Darwin
+import Foundation
+
+let expectedOwner = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_EXECUTABLE_NAME"] ?? "SuntraceMacAppE2E"
+let expectedDisplayName = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
 
 if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
     for window in list {
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         let name = window[kCGWindowName as String] as? String ?? ""
-        if (owner == "晷迹" || owner == "SuntraceMacApp") && name == "晷迹 · suntrace" {
+        var allowedOwners = [expectedOwner, expectedDisplayName]
+        if expectedOwner == "SuntraceMacApp" {
+            allowedOwners.append(contentsOf: ["晷迹", "SuntraceMacApp"])
+        }
+        if allowedOwners.contains(owner) && name == "晷迹 · suntrace" {
             if let number = window[kCGWindowNumber as String] {
                 print(number)
                 exit(0)
@@ -77,8 +99,8 @@ capture_app_screenshot() {
   local page="$3"
   shift 3
 
-  pkill -x SuntraceMacApp 2>/dev/null || true
-  open -n dist/SuntraceMacApp.app --args "$@" --page "$page"
+  pkill -x "$app_executable_name" 2>/dev/null || true
+  open -n "$app_path" --args "$@" --page "$page"
   sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
 
   window_id=""
@@ -119,12 +141,12 @@ for scenario in "${scenarios[@]}"; do
 done
 
 if [[ "${SUNTRACE_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
-  pkill -x SuntraceMacApp 2>/dev/null || true
+  pkill -x "$app_executable_name" 2>/dev/null || true
   echo "E2E screenshot-only scenarios: ${SUNTRACE_E2E_SCENARIOS:-all}"
   exit 0
 fi
 
-pkill -x SuntraceMacApp 2>/dev/null || true
+pkill -x "$app_executable_name" 2>/dev/null || true
 
 blank_dir="artifacts/e2e-blank"
 blank_db="${blank_dir}/Suntrace.sqlite"
@@ -136,7 +158,7 @@ for page in "${blank_pages[@]}"; do
   capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$PWD/$blank_db"
 done
 
-pkill -x SuntraceMacApp 2>/dev/null || true
+pkill -x "$app_executable_name" 2>/dev/null || true
 
 read -r blank_days blank_chains blank_definitions blank_traces blank_subtasks blank_preferences < <(
   sqlite3 -separator " " "$blank_db" "
@@ -162,9 +184,9 @@ persistence_db="${persistence_dir}/Suntrace.sqlite"
 rm -rf "$persistence_dir"
 mkdir -p "$persistence_dir"
 
-open -n dist/SuntraceMacApp.app --args --data-url "$PWD/$persistence_db" --page day
+open -n "$app_path" --args --data-url "$PWD/$persistence_db" --page day
 sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
-pkill -x SuntraceMacApp 2>/dev/null || true
+pkill -x "$app_executable_name" 2>/dev/null || true
 
 if [[ ! -f "$persistence_db" ]]; then
   echo "persistence database was not created: $persistence_db" >&2
@@ -196,7 +218,7 @@ interaction_title="E2E 快速新增任务"
 rm -rf "$interaction_dir"
 mkdir -p "$interaction_dir"
 
-open -W -n dist/SuntraceMacApp.app --args \
+open -W -n "$app_path" --args \
   --data-url "$PWD/$interaction_db" \
   --page day \
   --e2e-add-quick-task "$interaction_title" \
@@ -234,7 +256,7 @@ zhulong_db="${zhulong_dir}/Suntrace.sqlite"
 rm -rf "$zhulong_dir"
 mkdir -p "$zhulong_dir"
 
-open -W -n dist/SuntraceMacApp.app --args \
+open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_db" \
   --page zhulong \
   --e2e-generate-zhulong-draft dailyReview \
@@ -271,7 +293,7 @@ provider_api_key="suntrace-e2e-dummy-key"
 rm -rf "$provider_dir"
 mkdir -p "$provider_dir"
 
-open -W -n dist/SuntraceMacApp.app --args \
+open -W -n "$app_path" --args \
   --page zhulong \
   --e2e-configure-provider \
   --e2e-provider-name "$provider_name" \
@@ -280,7 +302,7 @@ open -W -n dist/SuntraceMacApp.app --args \
   --e2e-provider-api-key "$provider_api_key" \
   --e2e-quit-after-automation
 
-open -W -n dist/SuntraceMacApp.app --args \
+open -W -n "$app_path" --args \
   --page zhulong \
   --e2e-verify-provider \
   --e2e-provider-name "$provider_name" \
@@ -309,7 +331,7 @@ workflow_title="E2E 排期延续复盘"
 rm -rf "$workflow_dir"
 mkdir -p "$workflow_dir"
 
-open -W -n dist/SuntraceMacApp.app --args \
+open -W -n "$app_path" --args \
   --data-url "$PWD/$workflow_db" \
   --page pool \
   --e2e-domain-workflow \
@@ -365,7 +387,7 @@ lifecycle_result="${lifecycle_dir}/lifecycle-result.txt"
 rm -rf "$lifecycle_dir"
 mkdir -p "$lifecycle_dir"
 
-open -W -n dist/SuntraceMacApp.app --args \
+open -W -n "$app_path" --args \
   --data-url "$PWD/$lifecycle_db" \
   --page day \
   --e2e-lifecycle-workflow \
@@ -429,7 +451,7 @@ data_package_result="${data_package_dir}/data-package-result.txt"
 rm -rf "$data_package_dir"
 mkdir -p "$data_package_dir"
 
-open -W -n dist/SuntraceMacApp.app --args \
+open -W -n "$app_path" --args \
   --data-url "$PWD/$data_package_db" \
   --page settings \
   --e2e-data-package-workflow \

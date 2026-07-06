@@ -3310,7 +3310,7 @@ struct CalendarDetailPanel: View {
 
     var dayKind: (text: String, background: Color, foreground: Color) {
         if store.selectedCalendarDate == store.today {
-            return ("今日", Theme.accent, .white)
+            return ("今天", Theme.accent, .white)
         }
         if store.selectedCalendarDate < store.today {
             return ("历史", Theme.chip, Theme.text2)
@@ -3338,7 +3338,7 @@ struct CalendarDetailPanel: View {
                         .padding(.horizontal, 9)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(dayKind.background))
-                    Text(store.copy.itemCount(traces.count))
+                    Text("\(traces.count) 项任务")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.text3)
                         .monospacedDigit()

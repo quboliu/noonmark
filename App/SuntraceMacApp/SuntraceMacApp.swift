@@ -5082,12 +5082,11 @@ struct CompletedRecordDetail: View {
     @EnvironmentObject private var store: SuntraceStore
     let item: CompletedPoolItem
 
-    var subtasks: [Subtask] { store.subtasks(for: item.trace.id) }
-    var completedAt: String { SuntraceStore.displayTime(item.trace.completedAt) ?? "未记录" }
+    var editableText: Bool { item.trace.date >= store.today }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("完成记录", onClose: { store.clearSelection() }, trailing: {
+            DetailHeader("任务详情", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
                     Button(store.copy.openDay) { openDay() }
                     Button(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
@@ -5096,7 +5095,8 @@ struct CompletedRecordDetail: View {
 
             Text(item.definition.title)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.text1)
+                .foregroundStyle(Theme.text2)
+                .strikethrough()
                 .lineLimit(3)
 
             HStack(spacing: 8) {
@@ -5106,24 +5106,22 @@ struct CompletedRecordDetail: View {
                     .foregroundStyle(Theme.text3)
             }
 
-            CompletionSummaryCard(items: [
-                CompletionSummaryItem(label: "开始", value: SuntraceStore.displayDate(item.trajectory.startDate), color: Theme.text2),
-                CompletionSummaryItem(label: "延续", value: "\(item.trajectory.continuedDates.count) 天", color: Theme.text2),
-                CompletionSummaryItem(label: "完成", value: SuntraceStore.displayDate(item.trajectory.completedDate), color: Theme.ok),
-                CompletionSummaryItem(label: "时间", value: completedAt, color: Theme.text2)
-            ])
-
-            Notice(text: "已完成记录来自历史轨迹，只能回看或复制为新任务。", tone: .locked)
-
-            DetailSection("任务轨迹") {
-                CompletedTrajectoryPanel(nodes: item.trajectory.traces.map(CompletedTrajectoryNode.init(trace:)))
+            DetailSection("完成进度") {
+                DetailProgressControl(
+                    traceID: item.trace.id,
+                    progress: store.engine.traceProgress(for: item.trace.id),
+                    editable: false
+                )
             }
 
             DetailSection("描述") {
                 EditableDetailText(
-                    text: .constant(item.trace.descriptionText ?? item.definition.descriptionText ?? ""),
-                    placeholder: "",
-                    editable: false,
+                    text: Binding(
+                        get: { item.trace.descriptionText ?? item.definition.descriptionText ?? "" },
+                        set: { store.updateTraceText(traceID: item.trace.id, descriptionText: $0) }
+                    ),
+                    placeholder: "补充这个任务的背景、目标或范围…",
+                    editable: editableText,
                     warm: false,
                     fallback: "未填写描述"
                 )
@@ -5131,32 +5129,18 @@ struct CompletedRecordDetail: View {
 
             DetailSection("附言") {
                 EditableDetailText(
-                    text: .constant(item.trace.note ?? item.definition.note ?? ""),
-                    placeholder: "",
-                    editable: false,
+                    text: Binding(
+                        get: { item.trace.note ?? item.definition.note ?? "" },
+                        set: { store.updateTraceText(traceID: item.trace.id, note: $0) }
+                    ),
+                    placeholder: "临时想法、提醒或补充说明…",
+                    editable: editableText,
                     warm: true,
                     fallback: "无附言"
                 )
             }
 
-            DetailSection("子任务快照") {
-                VStack(spacing: 7) {
-                    if subtasks.isEmpty {
-                        Text("暂无子任务")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.text3)
-                    } else {
-                        ForEach(subtasks, id: \.id) { subtask in
-                            CompletedSubtaskMiniRow(subtask: subtask)
-                        }
-                    }
-                }
-            }
-
-            HStack(spacing: 8) {
-                SmallActionButton(store.copy.openDay, tone: .accent) { openDay() }
-                SmallActionButton(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
-            }
+            CompletedTimelineSection(item: item)
         }
     }
 
@@ -5164,6 +5148,45 @@ struct CompletedRecordDetail: View {
         store.selectedDate = item.trace.date
         store.page = .day
         store.selectTrace(item.trace.id)
+    }
+}
+
+struct CompletedTimelineSection: View {
+    let item: CompletedPoolItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text("任务轨迹")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.6)
+                Spacer()
+                Text("持续 \(durationDays) 天")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text2)
+                    .monospacedDigit()
+                StatusPill(text: "完成", color: Theme.ok)
+            }
+
+            Timeline(trace: item.trace)
+        }
+    }
+
+    var durationDays: Int {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = date(from: item.trajectory.startDate)
+        let end = date(from: item.trajectory.completedDate)
+        return (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1
+    }
+
+    private func date(from localDate: LocalDate) -> Date {
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.year = localDate.year
+        components.month = localDate.month
+        components.day = localDate.day
+        return components.date ?? Date(timeIntervalSince1970: 0)
     }
 }
 
@@ -5281,34 +5304,6 @@ struct CompletedTrajectoryPanel: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
-    }
-}
-
-struct CompletedSubtaskMiniRow: View {
-    let subtask: Subtask
-
-    var body: some View {
-        HStack(spacing: 8) {
-            StatusGlyph(status: subtask.status == .completed ? .completed : .pending)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(subtask.title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(subtask.status == .completed ? Theme.text3 : Theme.text1)
-                    .strikethrough(subtask.status == .completed)
-                    .lineLimit(1)
-                Text(subtask.difficulty.label)
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.text3)
-            }
-            Spacer()
-            if subtask.status == .completed {
-                CompletionKindPill(text: "已完成", color: Theme.ok)
-            }
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
     }
 }
 

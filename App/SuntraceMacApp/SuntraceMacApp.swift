@@ -2059,32 +2059,279 @@ struct SyncOptionsCard: View {
 }
 
 struct ZhulongPage: View {
+    @EnvironmentObject private var store: SuntraceStore
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: "烛龙 AI", subtitle: "可选 sidecar：复盘分析、任务拆解、排期建议和 label 分类建议。")
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("衔烛龙，照苦昼短。")
-                        .font(.system(size: 22, weight: .semibold))
-                    Text("未配置 AI Provider 时，Day Todo、任务池、未来计划、未完成池、已完成池和每日复盘保持完整可用。AI 只生成建议草稿，确认后才通过普通领域接口写入。")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.text2)
-                        .lineSpacing(4)
-                    ForEach(["Provider 配置", "复盘分析", "任务拆解", "排期建议", "Label 分类建议"], id: \.self) { item in
-                        HStack {
-                            Image(systemName: "sparkles")
-                                .foregroundStyle(Theme.accent)
-                            Text(item)
-                                .font(.system(size: 13, weight: .semibold))
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("衔烛龙，照苦昼短。")
+                                .font(.system(size: 22, weight: .semibold))
                             Spacer()
-                            StatusPill(text: "建议草稿", color: Theme.accent)
+                            StatusPill(text: "Provider 未配置", color: Theme.warn)
                         }
-                        .padding(12)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                        Text("AI 只生成建议草稿。任何创建、排期、变更、延续、废弃或 label 写入，都必须由用户确认后再走普通领域接口。")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.text2)
+                            .lineSpacing(4)
                     }
+
+                    ZhulongProviderCard()
+                    ZhulongScopeCard()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("建议入口")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.text3)
+                            .tracking(0.6)
+                        ForEach(zhulongCapabilities, id: \.title) { capability in
+                            ZhulongCapabilityRow(capability: capability)
+                        }
+                    }
+
+                    ZhulongPoemCard()
                 }
                 .padding(20)
+            }
+        }
+    }
+
+    var zhulongCapabilities: [ZhulongCapability] {
+        [
+            ZhulongCapability(title: "复盘分析", scope: "当前 Day Todo + 每日复盘", evidence: "\(store.engine.dailyReviewStats(date: store.today).total) 项今日任务"),
+            ZhulongCapability(title: "任务拆解", scope: "用户选中的任务链", evidence: "生成子任务草稿，用户确认后添加"),
+            ZhulongCapability(title: "排期建议", scope: "任务池 + 未来计划 + 未完成池", evidence: "\(store.engine.taskPool().count) 项未排期任务"),
+            ZhulongCapability(title: "Label 分类建议", scope: "任务标题、状态和轨迹摘要", evidence: "只生成候选 label，不自动写入")
+        ]
+    }
+}
+
+struct ZhulongProviderCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Provider 配置", systemImage: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                Spacer()
+                StatusPill(text: "未启用", color: Theme.warn)
+            }
+            VStack(spacing: 0) {
+                ZhulongProviderField(label: "类型", value: "OpenAI-compatible / 本地模型 / 自定义 HTTP")
+                ZhulongProviderField(label: "Base URL", value: "https://api.example.com/v1")
+                ZhulongProviderField(label: "模型", value: "自定义 model 名称")
+                ZhulongProviderField(label: "API Key", value: "只进入 Keychain，不写入配置、日志或导出包", last: true)
+            }
+            HStack(spacing: 8) {
+                SmallActionButton("配置 Provider", tone: .accent) { store.showToast("Provider 配置入口已预留") }
+                SmallActionButton("测试连接") { store.showToast("未配置 Provider，普通清单不受影响") }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct ZhulongProviderField: View {
+    let label: String
+    let value: String
+    var last = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.text3)
+                .frame(width: 74, alignment: .leading)
+            Text(value)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+            Spacer()
+        }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            if last == false {
+                Rectangle().fill(Theme.line).frame(height: 1)
+            }
+        }
+    }
+}
+
+struct ZhulongScopeCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("发送前数据边界")
+                .font(.system(size: 13, weight: .semibold))
+            Text("每次远程请求前必须展示授权范围；不得发送数据库文件、内部 ID、Keychain 值或同步端点配置。")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+                .lineSpacing(3)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ZhulongScopeChip(title: "当前 Day Todo", value: "\(store.engine.getDayTodo(date: store.today).traces.count) 项")
+                ZhulongScopeChip(title: "任务池", value: "\(store.engine.taskPool().count) 项")
+                ZhulongScopeChip(title: "未完成池", value: "\(store.engine.unfinishedPool().count) 条链")
+                ZhulongScopeChip(title: "已完成池", value: "\(store.engine.completedPool().count) 条记录")
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct ZhulongScopeChip: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Theme.text2)
+            Spacer()
+            Text(value)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+    }
+}
+
+struct ZhulongCapability {
+    let title: String
+    let scope: String
+    let evidence: String
+}
+
+struct ZhulongCapabilityRow: View {
+    let capability: ZhulongCapability
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(Theme.accent)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(capability.title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(capability.scope)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.text3)
+            }
+            Spacer()
+            Text(capability.evidence)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text2)
+                .lineLimit(1)
+            StatusPill(text: "建议草稿", color: Theme.accent)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct ZhulongPoemCard: View {
+    private let lines = [
+        "飞光，飞光，劝尔一杯酒。",
+        "吾不识青天高、黄地厚，",
+        "唯见月寒日暖，来煎人寿。",
+        "食熊则肥，食蛙则瘦。",
+        "神君何在？太一安有？",
+        "天东有若木，下置衔烛龙。",
+        "吾将斩龙足、嚼龙肉，",
+        "使之朝不得回、夜不得伏。",
+        "自然老者不死、少者不哭。",
+        "何为服黄金、吞白玉？",
+        "谁似任公子，云中骑碧驴？"
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("《苦昼短》意象")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text("可展开阅读")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+            Text(lines.joined(separator: "\n"))
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+                .lineSpacing(5)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct ZhulongRail: View {
+    private let lines = [
+        "飞光，飞光，劝尔一杯酒。",
+        "吾不识青天高、黄地厚，",
+        "唯见月寒日暖，来煎人寿。",
+        "天东有若木，下置衔烛龙。",
+        "谁似任公子，云中骑碧驴？"
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("烛龙边界")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .tracking(0.8)
+            Text("照见轨迹，不替你抹改事实。")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.text1)
+            Text(lines.joined(separator: "\n"))
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+                .lineSpacing(5)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+
+            DetailSection("权限模式") {
+                VStack(alignment: .leading, spacing: 7) {
+                    StatusPill(text: "建议模式", color: Theme.accent)
+                    Text("当前只生成建议草稿；逐条确认和全权管家会在限定范围、次数和有效期内单独授权。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text2)
+                        .lineSpacing(3)
+                }
+            }
+
+            DetailSection("写入护栏") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("不自动改写历史日。")
+                    Text("不发送数据库文件、内部 ID 或 Keychain 值。")
+                    Text("Provider 失败不影响普通清单。")
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
             }
         }
     }
@@ -2102,6 +2349,8 @@ struct DetailRail: View {
                     PoolDetail(task: task)
                 } else if let item = store.selectedUnfinishedItem {
                     UnfinishedDetail(item: item)
+                } else if store.page == .zhulong {
+                    ZhulongRail()
                 } else if store.page == .day {
                     ReviewRail()
                 } else {

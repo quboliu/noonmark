@@ -1202,6 +1202,19 @@ final class SuntraceStore: ObservableObject {
         dateStripDates().firstIndex(of: selectedDate)
     }
 
+    func continuationDurationDays(for trace: DayTrace) -> Int {
+        let chainDates = engine.traces.values
+            .filter { $0.chainID == trace.chainID }
+            .map(\.date)
+        guard let startDate = chainDates.min() else { return 1 }
+        let days = Calendar.current.dateComponents(
+            [.day],
+            from: Self.gregorianDate(startDate),
+            to: Self.gregorianDate(trace.date)
+        ).day ?? 0
+        return max(1, days + 1)
+    }
+
     func selectPage(_ next: Page) {
         page = next
         clearSelection()
@@ -3052,24 +3065,11 @@ struct TaskRow: View {
     var metaText: String {
         var parts: [String] = []
         if trace.continuationSeq > 0 {
-            parts.append("第 \(trace.continuationSeq) 次延续 · 持续 \(continuationDurationDays) 天")
+            parts.append("第 \(trace.continuationSeq) 次延续 · 持续 \(store.continuationDurationDays(for: trace)) 天")
         }
         if trace.changedToTraceID != nil { parts.append("被变更为新任务") }
         if trace.status == .returnedToPool { parts.append("当天已回池") }
         return parts.joined(separator: " · ")
-    }
-
-    var continuationDurationDays: Int {
-        let chainDates = store.engine.traces.values
-            .filter { $0.chainID == trace.chainID }
-            .map(\.date)
-        guard let startDate = chainDates.min() else { return 1 }
-        let days = Calendar.current.dateComponents(
-            [.day],
-            from: SuntraceStore.gregorianDate(startDate),
-            to: SuntraceStore.gregorianDate(trace.date)
-        ).day ?? 0
-        return max(1, days + 1)
     }
 
     var showsProgress: Bool {
@@ -4061,7 +4061,7 @@ struct CalendarDetailRow: View {
     var metaText: String {
         var parts: [String] = []
         if trace.continuationSeq > 0 {
-            parts.append("第 \(trace.continuationSeq) 次延续")
+            parts.append("第 \(trace.continuationSeq) 次延续 · 持续 \(store.continuationDurationDays(for: trace)) 天")
         }
         if trace.changedToTraceID != nil {
             parts.append("被变更为新任务")

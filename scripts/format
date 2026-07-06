@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode="${1:-}"
+paths=(Package.swift Sources Tests)
+
+if [[ -d App ]]; then
+  paths+=(App)
+fi
+
+if [[ "$mode" == "--lint" ]]; then
+  swiftformat "${paths[@]}" --lint
+elif [[ "$mode" == "" ]]; then
+  swiftformat "${paths[@]}"
+else
+  echo "usage: scripts/format [--lint]" >&2
+  exit 2
+fi

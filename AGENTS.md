@@ -12,8 +12,41 @@
 ## 当前仓库基线
 
 - 初始化日期：2026-07-05
-- 当前目录在初始化时为空，且尚未检测到 `.git` 目录。
-- 当前只落盘项目级 agent 规则；具体技术栈、目录结构、运行方式和部署方式以后续源码为准。
+- 最新确认日期：2026-07-05
+- 当前仓库已经初始化 Git，主分支为 `main`，并已关联 `origin/main`。
+- 当前技术栈为 Swift Package Manager 项目，`Package.swift` 使用 `swift-tools-version: 6.0`，目标平台为 macOS 14。
+- 当前源码模块：
+  - `SuntraceCore`：Day Todo、任务链、日轨迹、子任务、池化视图等核心领域引擎。
+  - `SuntraceAI`：烛龙 AI provider、scope、prompt、local insight、建议草稿和授权模型。
+  - `SuntraceStorage`：SQLite schema 与领域持久化结构。
+  - `SuntraceMacUIContract`：Mac UI 设计契约的代码化约束。
+- 当前测试模块：
+  - `SuntraceCoreTests`
+  - `SuntraceAITests`
+  - `SuntraceStorageTests`
+  - `SuntraceMacUIContractTests`
+- 当前文档已包含产品范围、功能规格、烛龙 AI、ADR、研究资料和 Mac UI 设计契约；领域术语以 `CONTEXT.md` 为准。
+- 当前尚未发现可运行的正式 Mac App target、后端服务、容器部署配置或生产 deployed endpoint；验证应优先覆盖 Swift Package 的 build/test，并在新增可运行界面或服务后补齐真实用户路径验证。
+
+## 当前开发入口
+
+- 基础环境：macOS，完整 Xcode 或能提供 XCTest 的有效 Apple developer toolchain。
+- 本机已确认 `xcode-select -p` 指向 `/Applications/Xcode-26.2.0.app/Contents/Developer`。
+- 本机已确认 `xcodebuild -version` 输出 Xcode 26.2，`swift --version` 输出 Apple Swift 6.2.3；项目声明仍以 `Package.swift` 的 Swift tools 6.0 为准。
+- 本机已确认 `xcrun --find xctest` 和 `xcrun --find simctl` 可用。
+- 基础命令：
+  - `swift build`
+  - `swift test`
+- 当前环境取证：
+  - `swift build` 通过。
+  - `swift test` 通过，当前 29 个 XCTest 全绿。
+  - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`。
+- 项目级工具入口：
+  - `make build`
+  - `make test`
+  - `make lint`
+  - `make format-check`
+  - `make check`
 
 ## 强制工作流
 
@@ -58,11 +91,11 @@
 
 ## 验证
 
-- 验证必须打真实 deployed endpoint，并走用户实际路径；禁止用模拟路径或手工补数据自欺。
-- 前端一律走 frontend-verify skill：Puppeteer/Playwright 截图、DOM 度量、console error 门禁都必须覆盖。若当前环境未提供该 skill，必须明确说明，并用等价的浏览器自动化证据补齐。
+- 有 deployed endpoint 或可运行应用时，验证必须打真实 deployed endpoint 或真实应用入口，并走用户实际路径；禁止用模拟路径或手工补数据自欺。
+- 当前仓库尚无正式前端或 Mac App target；涉及现有 HTML 原型或未来前端时，一律走 frontend-verify skill：Puppeteer/Playwright 截图、DOM 度量、console error 门禁都必须覆盖。若当前环境未提供该 skill，必须明确说明，并用等价的浏览器自动化证据补齐。
 - 悬浮或 fixed UI 验收必须使用长滚动页面，短页面不能作为充分证据。
 - 隔离前端栈中，`NEXT_PUBLIC_API_URL` 必须烤进镜像；`curl` 后端 200 不等于浏览器实际走了那个后端。
-- 每次改完代码后，主动部署到容器验证；不要等用户提醒。
+- 若存在容器化部署配置，每次改完代码后主动部署到隔离容器验证；若当前没有容器或部署入口，必须明确说明，并用当前最高强度的本地运行产物验证补齐。
 
 ## 测试三铁律
 
@@ -99,7 +132,8 @@
 - 临时容器必须使用 `--rm`。
 - 不许执行 `docker prune --volumes`，避免误删数据。
 - `AutoMigrate` 卡死且无日志时，优先检查 `pg_stat_activity` 并杀僵尸事务，不要先 restart 容器。
-- 每次改完代码主动部署到容器验证。
+- 当前仓库尚未发现 Dockerfile、compose 或部署脚本；在部署入口出现前，不得臆造容器验证结论。
+- 一旦新增容器化运行面，每次改完相关代码都要主动部署到隔离容器验证。
 
 ## UI 基调
 
@@ -112,4 +146,3 @@
 - 结论必须来自源码或运行产物，不轻信文档或 probe。
 - 证据强度从低到高：静态读 < 结构推理 < 运行产物。
 - 安全、并发、数据一致性相关结论必须达到运行产物证据档。
-

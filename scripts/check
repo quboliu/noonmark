@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+required_tools=(swift xcodebuild xcrun swiftlint swiftformat)
+
+for tool in "${required_tools[@]}"; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "missing required tool: $tool" >&2
+    exit 1
+  fi
+done
+
+echo "==> Xcode"
+xcodebuild -version
+xcrun --find xctest >/dev/null
+
+echo "==> Swift build"
+swift build
+
+echo "==> Swift tests"
+swift test
+
+echo "==> SwiftLint"
+swiftlint lint --quiet
+
+echo "==> SwiftFormat lint"
+scripts/format --lint

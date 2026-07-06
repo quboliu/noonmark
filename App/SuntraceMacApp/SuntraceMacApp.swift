@@ -2411,40 +2411,192 @@ struct PoolDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("任务池")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.text3)
+            HStack {
+                Text("任务池")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Spacer()
+                Button("×") { store.clearSelection() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.text3)
+            }
             Text(task.definition.title)
                 .font(.system(size: 14, weight: .semibold))
-            Text(task.definition.descriptionText ?? "暂无描述")
+                .foregroundStyle(Theme.text1)
+            HStack {
+                StatusPill(text: "未排期", color: Theme.accent)
+                Text("任务链仍在任务池")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+            DetailSection("状态") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("尚未进入任何 Day Todo。排期后会生成对应日期的日轨迹。")
+                    Text(task.chain.state == .active ? "任务链状态：活跃" : "任务链状态：已关闭")
+                }
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text2)
-            SmallActionButton("排期到今天", tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
-            SmallActionButton("排期到明天") { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
-            SmallActionButton("选日期…") { store.showingPicker = .schedulePool(task.chain.id) }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            }
+            DetailSection("描述") {
+                EditableDetailText(
+                    text: .constant(task.definition.descriptionText ?? ""),
+                    placeholder: "",
+                    editable: false,
+                    warm: false,
+                    fallback: "未填写描述"
+                )
+            }
+            DetailSection("附言") {
+                EditableDetailText(
+                    text: .constant(task.definition.note ?? ""),
+                    placeholder: "",
+                    editable: false,
+                    warm: true,
+                    fallback: "无附言"
+                )
+            }
+            DetailSection("排期") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        SmallActionButton("排期到今天", tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
+                        SmallActionButton("排期到明天") { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
+                    }
+                    SmallActionButton("排期到指定日期…") { store.showingPicker = .schedulePool(task.chain.id) }
+                }
+            }
         }
     }
 }
 
 struct UnfinishedDetail: View {
+    @EnvironmentObject private var store: SuntraceStore
     let item: UnfinishedPoolItem
 
+    var latestUnfinished: DayTrace? { item.unfinishedTraces.last }
+    var latestContinuation: Int { latestUnfinished?.continuationSeq ?? 0 }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("未完成明细")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.text3)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("未完成明细")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Spacer()
+                Button("×") { store.clearSelection() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.text3)
+            }
             Text(item.definition.title)
                 .font(.system(size: 14, weight: .semibold))
-            ForEach(item.unfinishedTraces, id: \.id) { trace in
-                HStack {
-                    Text(SuntraceStore.displayDate(trace.date))
-                    Spacer()
-                    StatusChip(status: trace.status)
+                .foregroundStyle(Theme.text1)
+            HStack(spacing: 8) {
+                StatusPill(text: "\(item.unfinishedTraces.count) 次未完成", color: Theme.warn)
+                StatusPill(text: "\(latestContinuation) 次延续", color: Theme.text2)
+            }
+            DetailSection("处理") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let active = item.activeTrace {
+                        Notice(text: "已延续到 \(SuntraceStore.displayDate(active.date))，当前仍待完成。", tone: .future)
+                        SmallActionButton("跳转到当前待完成", tone: .accent) {
+                            store.selectedDate = active.date
+                            store.page = .day
+                            store.selectTrace(active.id)
+                        }
+                    } else if let source = latestUnfinished {
+                        HStack(spacing: 8) {
+                            SmallActionButton("延续到…", tone: .accent) { store.showingPicker = .continueTrace(source.id) }
+                            SmallActionButton("废弃任务链", tone: .warn) { store.abandon(source.id) }
+                        }
+                    } else {
+                        Text("没有需要处理的未完成轨迹。")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.text3)
+                    }
+                }
+            }
+            DetailSection("最近状态") {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let latestUnfinished {
+                        Text("最近未完成：\(SuntraceStore.displayDate(latestUnfinished.date)) \(SuntraceStore.weekday(latestUnfinished.date))")
+                        Text("当日优先级 \(latestUnfinished.priority) · 第 \(latestUnfinished.continuationSeq) 次延续")
+                    }
+                    if let active = item.activeTrace {
+                        Text("当前待完成：\(SuntraceStore.displayDate(active.date)) \(SuntraceStore.weekday(active.date))")
+                    }
                 }
                 .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            }
+            DetailSection("描述") {
+                EditableDetailText(
+                    text: .constant(item.definition.descriptionText ?? ""),
+                    placeholder: "",
+                    editable: false,
+                    warm: false,
+                    fallback: "未填写描述"
+                )
+            }
+            DetailSection("附言") {
+                EditableDetailText(
+                    text: .constant(item.definition.note ?? ""),
+                    placeholder: "",
+                    editable: false,
+                    warm: true,
+                    fallback: "无附言"
+                )
+            }
+            DetailSection("任务链轨迹") {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(item.unfinishedTraces, id: \.id) { trace in
+                        UnfinishedTraceLine(trace: trace, current: false)
+                    }
+                    if let active = item.activeTrace {
+                        UnfinishedTraceLine(trace: active, current: true)
+                    }
+                }
             }
         }
+    }
+}
+
+struct UnfinishedTraceLine: View {
+    let trace: DayTrace
+    let current: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(spacing: 0) {
+                StatusGlyph(status: trace.status)
+                Rectangle().fill(Theme.line2).frame(width: 1, height: 20)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
+                        .font(.system(size: 11, weight: .semibold))
+                    if current {
+                        StatusPill(text: "当前", color: Theme.accent)
+                    }
+                }
+                Text("当日优先级 \(trace.priority) · 第 \(trace.continuationSeq) 次延续")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.text3)
+            }
+            Spacer()
+            StatusChip(status: trace.status)
+        }
+        .padding(.vertical, 3)
     }
 }
 

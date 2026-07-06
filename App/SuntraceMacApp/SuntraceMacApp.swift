@@ -3520,6 +3520,77 @@ struct RailHint: View {
     }
 }
 
+struct DetailHeader<Trailing: View>: View {
+    let title: String
+    let onClose: () -> Void
+    @ViewBuilder let trailing: Trailing
+
+    init(
+        _ title: String,
+        onClose: @escaping () -> Void,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.title = title
+        self.onClose = onClose
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .tracking(0.8)
+            Spacer()
+            trailing
+            IconButton(systemName: "xmark", action: onClose)
+        }
+    }
+}
+
+extension DetailHeader where Trailing == EmptyView {
+    init(_ title: String, onClose: @escaping () -> Void) {
+        self.init(title, onClose: onClose) {
+            EmptyView()
+        }
+    }
+}
+
+struct IconButton: View {
+    let systemName: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Theme.text3)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.clear))
+    }
+}
+
+struct IconMenuButton<Content: View>: View {
+    @ViewBuilder let menuContent: Content
+
+    var body: some View {
+        Menu {
+            menuContent
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .foregroundStyle(Theme.text3)
+    }
+}
+
 struct TaskDetail: View {
     @EnvironmentObject private var store: SuntraceStore
     let trace: DayTrace
@@ -3533,25 +3604,16 @@ struct TaskDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("任务详情")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.8)
-                Spacer()
-                Button("×") { store.clearSelection() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.text3)
-            }
-            HStack(alignment: .top) {
+            DetailHeader("任务详情", onClose: { store.clearSelection() }, trailing: {
+                IconMenuButton(menuContent: {
+                    TaskContextMenu(trace: trace)
+                })
+            })
+            HStack(alignment: .top, spacing: 8) {
                 Text(definition.title)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.text1)
-                Spacer()
-                Menu("•••") {
-                    TaskContextMenu(trace: trace)
-                }
-                .menuStyle(.borderlessButton)
+                    .lineLimit(3)
             }
             HStack {
                 StatusChip(status: trace.status)
@@ -3783,16 +3845,7 @@ struct PoolDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("任务池")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.8)
-                Spacer()
-                Button("×") { store.clearSelection() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.text3)
-            }
+            DetailHeader("任务池", onClose: { store.clearSelection() })
             Text(task.definition.title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.text1)
@@ -3855,16 +3908,7 @@ struct UnfinishedDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("未完成明细")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.8)
-                Spacer()
-                Button("×") { store.clearSelection() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.text3)
-            }
+            DetailHeader("未完成明细", onClose: { store.clearSelection() })
             Text(item.definition.title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.text1)

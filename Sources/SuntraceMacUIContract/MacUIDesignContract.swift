@@ -208,6 +208,7 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case closeButton
     case taskTitle
     case overflowMenu
+    case iconOnlyOverflowMenu
     case statusChip
     case dateOrPoolLocation
     case traceMetadataCard

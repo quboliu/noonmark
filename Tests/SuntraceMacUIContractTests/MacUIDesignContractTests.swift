@@ -134,6 +134,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.detailElements.contains(.calendarOwnDetailPanel))
         XCTAssertTrue(contract.detailElements.contains(.settingsNoDetailRail))
         XCTAssertTrue(contract.detailElements.contains(.detailPanelTitle))
+        XCTAssertTrue(contract.detailElements.contains(.iconOnlyOverflowMenu))
         XCTAssertTrue(contract.detailElements.contains(.progressSection))
         XCTAssertTrue(contract.detailElements.contains(.descriptionSection))
         XCTAssertTrue(contract.detailElements.contains(.noteSection))

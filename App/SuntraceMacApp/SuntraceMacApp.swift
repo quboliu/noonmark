@@ -2592,14 +2592,11 @@ struct CalendarPage: View {
                         store.selectedCalendarDate = SuntraceStore.shiftedMonth(from: store.selectedCalendarDate, by: 1)
                     }
                 }
-                .padding(.top, 16)
-                .padding(.horizontal, 18)
 
                 Text("整月轨迹总览。点选任一天，右侧查看当天详情。")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.text3)
                     .padding(.top, 4)
-                    .padding(.horizontal, 18)
 
                 HStack {
                     ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) {
@@ -2611,7 +2608,6 @@ struct CalendarPage: View {
                     }
                 }
                 .padding(.top, 14)
-                .padding(.horizontal, 18)
 
                 GeometryReader { proxy in
                     let rows = max(5, Int(ceil(Double(calendarCells.count) / 7.0)))
@@ -2632,10 +2628,11 @@ struct CalendarPage: View {
                     }
                     .frame(maxHeight: .infinity, alignment: .top)
                 }
-                .padding(.top, 2)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 18)
+                .padding(.top, 14)
             }
+            .padding(.top, 16)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
             CalendarDetailPanel()
                 .frame(width: 264)
                 .overlay(alignment: .leading) {
@@ -2836,8 +2833,7 @@ struct CalendarDetailRow: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            StatusGlyph(status: trace.status)
-                .frame(width: 16, height: 16)
+            StatusGlyph(status: trace.status, scale: .compact)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(store.definition(for: trace)?.title ?? "")
@@ -2854,7 +2850,7 @@ struct CalendarDetailRow: View {
             }
 
             Spacer()
-            StatusChip(status: trace.status)
+            StatusChip(status: trace.status, scale: .compact)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -4596,31 +4592,50 @@ extension TraceStatus {
 }
 
 struct StatusGlyph: View {
+    enum Scale { case standard, compact }
+
     let status: TraceStatus
+    let scale: Scale
     var style: TraceStatusStyle { status.uiStyle }
+
+    init(status: TraceStatus, scale: Scale = .standard) {
+        self.status = status
+        self.scale = scale
+    }
 
     var body: some View {
         Text(style.glyph)
-            .font(.system(size: 11, weight: .bold))
+            .font(.system(size: scale == .compact ? 10 : 11, weight: .bold))
             .foregroundStyle(style.glyphForeground)
-            .frame(width: 18, height: 18)
+            .frame(width: scale == .compact ? 16 : 18, height: scale == .compact ? 16 : 18)
             .background(Circle().fill(style.glyphBackground))
             .overlay(Circle().stroke(style.glyphBorder, lineWidth: 1.5))
     }
 }
 
 struct StatusChip: View {
+    enum Scale { case standard, compact }
+
     let status: TraceStatus
+    let scale: Scale
     var style: TraceStatusStyle { status.uiStyle }
 
+    init(status: TraceStatus, scale: Scale = .standard) {
+        self.status = status
+        self.scale = scale
+    }
+
     var body: some View {
-        HStack(spacing: 5) {
-            Circle().fill(style.dotColor).frame(width: 5, height: 5)
+        HStack(spacing: scale == .compact ? 4 : 5) {
+            Circle()
+                .fill(style.dotColor)
+                .frame(width: scale == .compact ? 4 : 5, height: scale == .compact ? 4 : 5)
             Text(style.label)
         }
-        .font(.system(size: 11, weight: .medium))
+        .font(.system(size: scale == .compact ? 10.5 : 11, weight: .medium))
         .foregroundStyle(style.foreground)
-        .padding(.horizontal, 8)
+        .padding(.leading, scale == .compact ? 6 : 8)
+        .padding(.trailing, scale == .compact ? 7 : 8)
         .padding(.vertical, 2)
         .background(Capsule().fill(style.softBackground))
     }

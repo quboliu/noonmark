@@ -106,6 +106,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.completedPoolElements.contains(.subtaskCompletionRecord))
         XCTAssertTrue(contract.calendarElements.contains(.completionHeatBlock))
         XCTAssertTrue(contract.calendarElements.contains(.selectedDayDetail))
+        XCTAssertTrue(contract.calendarElements.contains(.compactSelectedDayTaskRows))
         XCTAssertTrue(contract.settingsElements.contains(.customSyncEndpoint))
         XCTAssertTrue(contract.settingsElements.contains(.iCloudSync))
         XCTAssertTrue(contract.emptyStateElements.contains(.illustration))

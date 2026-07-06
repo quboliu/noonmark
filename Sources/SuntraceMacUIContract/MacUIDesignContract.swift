@@ -194,6 +194,7 @@ public enum MacUICalendarElement: String, CaseIterable, Sendable {
     case selectedDayTaskCount
     case openDayTodoLink
     case selectedDayTaskList
+    case compactSelectedDayTaskRows
     case emptyState
 }
 

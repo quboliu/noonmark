@@ -3647,7 +3647,6 @@ struct CompletedSubtaskRow: View {
                 }
                 Spacer()
                 CompletionKindPill(text: "子任务", color: Theme.accent)
-                CompletionTimeText(time: SuntraceStore.displayTime(record.subtask.completedAt))
             }
             HStack(alignment: .center, spacing: 8) {
                 CompletedTrajectoryNodes(nodes: [CompletedTrajectoryNode(subtask: record.subtask, date: record.date)])

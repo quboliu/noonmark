@@ -2601,30 +2601,19 @@ struct PoolTaskRow: View {
 
     var body: some View {
         let selected = store.selectedPoolChainID == task.chain.id
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                PlanningGlyph(systemName: "tray", color: Theme.navPool)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(task.definition.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        PlanMetaPill(text: "待排期", color: Theme.navPool)
-                        Text(task.definition.descriptionText ?? "尚未安排日期")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.text3)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer()
-                SmallActionButton(store.copy.scheduleToday, tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
-                SmallActionButton(store.copy.scheduleTomorrow) { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
-                SmallActionButton(store.copy.schedulePickDate) { store.showingPicker = .schedulePool(task.chain.id) }
-            }
+        HStack(spacing: 10) {
+            PlanningGlyph(systemName: "tray", color: Theme.navPool)
+            Text(task.definition.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.text1)
+                .lineLimit(1)
+            Spacer()
+            SmallActionButton(store.copy.scheduleToday, tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
+            SmallActionButton(store.copy.scheduleTomorrow) { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
+            SmallActionButton(store.copy.schedulePickDate) { store.showingPicker = .schedulePool(task.chain.id) }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.navPool.opacity(0.10) : Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.navPool : Theme.line, lineWidth: selected ? 1.3 : 1))
         .onTapGesture { store.selectPool(task.chain.id) }

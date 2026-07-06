@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-scripts/build-mac-app "${1:-debug}"
+configuration="${1:-debug}"
+pages=(
+  day
+  pool
+  future
+  unfinished
+  completed
+  calendar
+  zhulong
+  settings
+)
+
+scripts/build-mac-app "$configuration"
 
 mkdir -p artifacts/e2e
 pkill -x SuntraceMacApp 2>/dev/null || true
 trap 'pkill -x SuntraceMacApp 2>/dev/null || true' EXIT
 
-open -n dist/SuntraceMacApp.app --args --page calendar
-sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
-
-window_id="$(
+find_window_id() {
   swift -e '
 import CoreGraphics
 import Darwin
@@ -29,16 +38,25 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
 }
 exit(1)
 '
-)"
+}
 
-screencapture -x -l "$window_id" artifacts/e2e/calendar.png
-width="$(sips -g pixelWidth artifacts/e2e/calendar.png | awk '/pixelWidth/ {print $2}')"
-height="$(sips -g pixelHeight artifacts/e2e/calendar.png | awk '/pixelHeight/ {print $2}')"
+for page in "${pages[@]}"; do
+  pkill -x SuntraceMacApp 2>/dev/null || true
+  open -n dist/SuntraceMacApp.app --args --page "$page"
+  sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
 
-if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 ]]; then
-  echo "invalid e2e screenshot size: ${width:-unknown}x${height:-unknown}" >&2
-  exit 1
-fi
+  window_id="$(find_window_id)"
+  screenshot="artifacts/e2e/${page}.png"
+  screencapture -x -l "$window_id" "$screenshot"
+  width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
+  height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
 
-echo "E2E calendar screenshot: artifacts/e2e/calendar.png (${width}x${height})"
+  if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 ]]; then
+    echo "invalid e2e screenshot size for ${page}: ${width:-unknown}x${height:-unknown}" >&2
+    exit 1
+  fi
+
+  echo "E2E ${page} screenshot: ${screenshot} (${width}x${height})"
+done
+
 pkill -x SuntraceMacApp 2>/dev/null || true

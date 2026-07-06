@@ -14,8 +14,9 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
         let delegate = SuntraceMacApp()
         if CommandLine.arguments.contains("--page"), let index = CommandLine.arguments.firstIndex(of: "--page") {
             let valueIndex = CommandLine.arguments.index(after: index)
-            if CommandLine.arguments.indices.contains(valueIndex), CommandLine.arguments[valueIndex] == "calendar" {
-                delegate.store.page = .calendar
+            let pageName = CommandLine.arguments.indices.contains(valueIndex) ? CommandLine.arguments[valueIndex] : ""
+            if let page = SuntraceStore.Page(commandLineValue: pageName) {
+                delegate.store.page = page
             }
         }
         retainedDelegate = delegate
@@ -93,6 +94,29 @@ final class SuntraceStore: ObservableObject {
         case settings
 
         var id: String { rawValue }
+
+        init?(commandLineValue: String) {
+            switch commandLineValue {
+            case "day", "dayTodo":
+                self = .day
+            case "pool", "taskPool":
+                self = .pool
+            case "future", "futurePlans":
+                self = .future
+            case "unfinished", "unfinishedPool":
+                self = .unfinished
+            case "completed", "completedPool":
+                self = .completed
+            case "calendar":
+                self = .calendar
+            case "zhulong", "ai":
+                self = .zhulong
+            case "settings":
+                self = .settings
+            default:
+                return nil
+            }
+        }
     }
 
     enum DatePickerPurpose {
@@ -928,7 +952,7 @@ struct DayTodoPage: View {
                     }
 
                     if traces.isEmpty {
-                        EmptyState(text: "这一天没有留下任务。")
+                        EmptyState(kind: .dayTodo, text: "这一天没有留下任务。")
                             .padding(.top, 40)
                     }
                 }
@@ -1187,7 +1211,7 @@ struct TaskPoolPage: View {
                         PoolTaskRow(task: task)
                     }
                     if tasks.isEmpty {
-                        EmptyState(text: "任务池是空的。")
+                        EmptyState(kind: .taskPool, text: "任务池是空的。")
                             .padding(.top, 40)
                     }
                 }
@@ -1261,7 +1285,7 @@ struct FuturePlansPage: View {
                         }
                     }
                     if plans.isEmpty {
-                        EmptyState(text: "还没有未来计划。")
+                        EmptyState(kind: .futurePlans, text: "还没有未来计划。")
                             .padding(.top, 40)
                     }
                 }
@@ -1322,7 +1346,7 @@ struct UnfinishedPoolPage: View {
                         UnfinishedRow(item: item)
                     }
                     if items.isEmpty {
-                        EmptyState(text: "没有待处理的未完成任务。")
+                        EmptyState(kind: .unfinishedPool, text: "没有待处理的未完成任务。")
                             .padding(.top, 40)
                     }
                 }
@@ -1437,7 +1461,7 @@ struct CompletedPoolPage: View {
                         }
                     }
                     if items.isEmpty && subtaskRecords.isEmpty {
-                        EmptyState(text: "还没有完成记录。")
+                        EmptyState(kind: .completedPool, text: "还没有完成记录。")
                             .padding(.top, 40)
                     }
                 }
@@ -1789,13 +1813,8 @@ struct CalendarDetailPanel: View {
                         CalendarDetailRow(trace: trace)
                     }
                     if traces.isEmpty {
-                        Text("这一天没有留下任务。")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.text3)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(4)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 48)
+                        EmptyState(kind: .calendar, text: "这一天没有留下任务。")
+                            .padding(.vertical, 36)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -1964,12 +1983,7 @@ struct DetailRail: View {
                 } else if store.page == .day {
                     ReviewRail()
                 } else {
-                    Text(hint)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.text3)
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(4)
-                        .frame(maxWidth: .infinity)
+                    EmptyState(kind: hintKind, text: hint)
                         .padding(.top, 40)
                 }
             }
@@ -1986,6 +2000,16 @@ struct DetailRail: View {
         case .completed: "选中记录可跳转当天或复制为新任务。"
         case .zhulong: "选择建议草稿后在这里查看证据和待执行操作。"
         default: ""
+        }
+    }
+
+    var hintKind: EmptyStateKind {
+        switch store.page {
+        case .pool: .taskPool
+        case .future: .futurePlans
+        case .unfinished: .unfinishedPool
+        case .completed: .completedPool
+        default: .dayTodo
         }
     }
 }
@@ -2199,9 +2223,13 @@ struct ReviewRail: View {
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
                 Spacer()
-                Text(store.selectedDate.description)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.text3)
+                if noReview {
+                    Text(store.selectedDate.description)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                } else {
+                    StatusPill(text: "自动保存", color: Theme.ok)
+                }
             }
             if store.isHistory {
                 Text("历史日复盘可随时补写")
@@ -2392,7 +2420,7 @@ struct FromPoolSheet: View {
                 .buttonStyle(.plain)
             }
             if store.engine.taskPool().isEmpty {
-                EmptyState(text: "任务池是空的。")
+                EmptyState(kind: .taskPool, text: "任务池是空的。")
             }
             Button("取消") { store.showingFromPoolPicker = false }
                 .frame(maxWidth: .infinity)
@@ -2695,20 +2723,62 @@ struct Notice: View {
     }
 }
 
+enum EmptyStateKind {
+    case dayTodo
+    case taskPool
+    case futurePlans
+    case unfinishedPool
+    case completedPool
+    case calendar
+
+    var systemImage: String {
+        switch self {
+        case .dayTodo: "checklist"
+        case .taskPool: "tray"
+        case .futurePlans: "calendar.badge.clock"
+        case .unfinishedPool: "exclamationmark.circle"
+        case .completedPool: "checkmark.seal"
+        case .calendar: "calendar"
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .dayTodo, .futurePlans, .calendar:
+            Theme.accent
+        case .taskPool:
+            Theme.text2
+        case .unfinishedPool:
+            Theme.warn
+        case .completedPool:
+            Theme.ok
+        }
+    }
+}
+
 struct EmptyState: View {
+    let kind: EmptyStateKind
     let text: String
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 12) {
             ZStack {
-                Circle().stroke(Theme.line2, lineWidth: 1.5).frame(width: 24, height: 24)
-                Rectangle().fill(Theme.line2).frame(width: 1.5, height: 12).offset(y: -4)
-                Circle().fill(Theme.line2).frame(width: 3, height: 3)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(kind.accent.opacity(0.08))
+                    .frame(width: 62, height: 48)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(kind.accent.opacity(0.18), lineWidth: 1)
+                    )
+                Image(systemName: kind.systemImage)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(kind.accent)
             }
-            .frame(width: 64, height: 48)
             Text(text)
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.text3)
+                .multilineTextAlignment(.center)
+                .lineSpacing(4)
         }
         .frame(maxWidth: .infinity)
     }

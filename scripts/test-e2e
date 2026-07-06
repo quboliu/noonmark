@@ -291,3 +291,66 @@ if [[ "$workflow_continued" -ne 1 || "$workflow_pending" -ne 1 || "$workflow_rev
 fi
 
 echo "E2E domain workflow: $workflow_db (continued=$workflow_continued pending=$workflow_pending review=$workflow_review)"
+
+lifecycle_dir="artifacts/e2e-lifecycle"
+lifecycle_db="${lifecycle_dir}/Suntrace.sqlite"
+lifecycle_result="${lifecycle_dir}/lifecycle-result.txt"
+rm -rf "$lifecycle_dir"
+mkdir -p "$lifecycle_dir"
+
+open -W -n dist/SuntraceMacApp.app --args \
+  --data-url "$PWD/$lifecycle_db" \
+  --page day \
+  --e2e-lifecycle-workflow \
+  --e2e-lifecycle-result-url "$PWD/$lifecycle_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$lifecycle_result" ]]; then
+  echo "lifecycle e2e result was not created: $lifecycle_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$lifecycle_result")" != "ok" ]]; then
+  echo "lifecycle e2e failed: $(cat "$lifecycle_result")" >&2
+  exit 1
+fi
+
+read -r lifecycle_changed lifecycle_new lifecycle_returned lifecycle_abandoned < <(
+  sqlite3 -separator " " "$lifecycle_db" "
+    SELECT
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 变更旧任务'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'changed'
+         AND day_traces.changed_to_trace_id IS NOT NULL),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 变更新任务'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'pending'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 回池任务'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'returnedToPool'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       JOIN task_chains ON task_chains.id = day_traces.chain_id
+       WHERE task_definitions.title = 'E2E 废弃任务'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'abandoned'
+         AND task_chains.state = 'abandoned');
+  "
+)
+
+if [[ "$lifecycle_changed" -ne 1 || "$lifecycle_new" -ne 1 || "$lifecycle_returned" -ne 1 || "$lifecycle_abandoned" -ne 1 ]]; then
+  echo "lifecycle e2e persistence failed: changed=$lifecycle_changed new=$lifecycle_new returned=$lifecycle_returned abandoned=$lifecycle_abandoned" >&2
+  exit 1
+fi
+
+echo "E2E lifecycle workflow: $lifecycle_db (changed=$lifecycle_changed new=$lifecycle_new returned=$lifecycle_returned abandoned=$lifecycle_abandoned)"

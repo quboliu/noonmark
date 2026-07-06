@@ -118,7 +118,13 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
         let zhulongTaskName = SuntraceStore.commandLineValue(after: "--e2e-generate-zhulong-draft")
         let providerAutomation = ProviderE2EAutomation.fromCommandLine()
         let workflowAutomation = WorkflowE2EAutomation.fromCommandLine()
-        guard quickTaskTitle?.isEmpty == false || zhulongTaskName != nil || providerAutomation != nil || workflowAutomation != nil else {
+        let lifecycleAutomation = LifecycleE2EAutomation.fromCommandLine()
+        guard quickTaskTitle?.isEmpty == false
+            || zhulongTaskName != nil
+            || providerAutomation != nil
+            || workflowAutomation != nil
+            || lifecycleAutomation != nil
+        else {
             return
         }
 
@@ -148,11 +154,73 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
                 workflowAutomation.run(on: store)
             }
 
+            if let lifecycleAutomation {
+                lifecycleAutomation.run(on: store)
+            }
+
             if CommandLine.arguments.contains("--e2e-quit-after-automation") {
                 store.persist()
                 NSApp.terminate(nil)
             }
         }
+    }
+}
+
+private struct LifecycleE2EAutomation {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> LifecycleE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-lifecycle-workflow") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-lifecycle-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return LifecycleE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            try runChangeFlow(on: store)
+            try runReturnToPoolFlow(on: store)
+            try runAbandonFlow(on: store)
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func runChangeFlow(on store: SuntraceStore) throws {
+        let oldTitle = "E2E 变更旧任务"
+        let newTitle = "E2E 变更新任务"
+        let chainID = try store.engine.createPoolTask(title: oldTitle, descriptionText: "E2E 变更路径。")
+        let traceID = try store.engine.scheduleFromPool(chainID: chainID, date: store.today, today: store.today)
+        store.selectTrace(traceID)
+        store.changeText = newTitle
+        store.changeSelectedTrace()
+    }
+
+    @MainActor
+    private func runReturnToPoolFlow(on store: SuntraceStore) throws {
+        let chainID = try store.engine.createPoolTask(title: "E2E 回池任务", descriptionText: "E2E 回池路径。")
+        let traceID = try store.engine.scheduleFromPool(chainID: chainID, date: store.today, today: store.today)
+        store.returnToPool(traceID)
+    }
+
+    @MainActor
+    private func runAbandonFlow(on store: SuntraceStore) throws {
+        let chainID = try store.engine.createPoolTask(title: "E2E 废弃任务", descriptionText: "E2E 废弃路径。")
+        let traceID = try store.engine.scheduleFromPool(chainID: chainID, date: store.today, today: store.today)
+        store.abandon(traceID)
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
     }
 }
 

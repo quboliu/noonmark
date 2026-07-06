@@ -2,7 +2,7 @@ import Foundation
 import SuntraceCore
 
 public enum SQLiteSchema {
-    public static let version = 2
+    public static let version = 3
 
     public static let statements: [String] = [
         """
@@ -10,6 +10,7 @@ public enum SQLiteSchema {
         """,
         """
         CREATE TABLE IF NOT EXISTS days (
+            id TEXT NOT NULL,
             date TEXT PRIMARY KEY NOT NULL,
             locked_at TEXT,
             review_summary TEXT,

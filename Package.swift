@@ -28,7 +28,10 @@ let package = Package(
         .target(name: "SuntraceMacUIContract"),
         .target(
             name: "SuntraceStorage",
-            dependencies: ["SuntraceCore"]
+            dependencies: ["SuntraceCore"],
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
         ),
         .testTarget(
             name: "SuntraceCoreTests",

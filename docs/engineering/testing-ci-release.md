@@ -27,7 +27,7 @@ Neon 的可借鉴点：
 ## 本仓库分层
 
 - UT：纯领域和纯函数测试，当前入口为 `scripts/test-unit`。
-- IT：跨模块集成测试，当前入口为 `scripts/test-integration`，先覆盖 Storage schema 与 Core 类型契约。
+- IT：跨模块集成测试，当前入口为 `scripts/test-integration`，覆盖 Storage schema、Core 类型契约和 SQLite repository 核心状态 round-trip。
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
 - E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，会打包 `.app`、打开真实窗口并抓截图。
   当前覆盖 `day`、`day-detail`、`day-manual-detail`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 14 个场景。
@@ -81,7 +81,7 @@ Release：
 
 ## 后续缺口
 
-- IT 需要在接入真实 SQLite repository 后升级为数据库读写 round-trip，而不是只检查 schema。
+- IT 已覆盖 SQLite repository 核心状态 round-trip；后续需要把 repository 接入真实 App 生命周期，验证重启后仍恢复用户数据。
 - E2E 已覆盖主要页面和关键详情栏选中态；后续需要补真实交互路径断言，例如新增任务、排期、变更、延续、复盘编辑、Provider 配置表单和 DMG 安装后启动。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
 - Release 后续需要补 Apple Developer ID 签名、notarization 和安装后首次启动验证；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成和校验安装包产物。

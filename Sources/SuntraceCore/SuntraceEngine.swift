@@ -17,6 +17,42 @@ public final class SuntraceEngine {
         self.preferences = AppPreferences()
     }
 
+    public convenience init(snapshot: SuntraceSnapshot) {
+        self.init()
+        days = Dictionary(uniqueKeysWithValues: snapshot.days.map { ($0.date, $0) })
+        chains = Dictionary(uniqueKeysWithValues: snapshot.chains.map { ($0.id, $0) })
+        definitions = Dictionary(uniqueKeysWithValues: snapshot.definitions.map { ($0.id, $0) })
+        traces = Dictionary(uniqueKeysWithValues: snapshot.traces.map { ($0.id, $0) })
+        subtasks = Dictionary(uniqueKeysWithValues: snapshot.subtasks.map { ($0.id, $0) })
+        preferences = snapshot.preferences
+    }
+
+    public func snapshot() -> SuntraceSnapshot {
+        SuntraceSnapshot(
+            days: days.values.sorted { $0.date < $1.date },
+            chains: chains.values.sorted {
+                if $0.createdAt == $1.createdAt {
+                    return $0.id.description < $1.id.description
+                }
+                return $0.createdAt < $1.createdAt
+            },
+            definitions: definitions.values.sorted {
+                if $0.chainID == $1.chainID {
+                    return $0.sequence < $1.sequence
+                }
+                return $0.chainID.description < $1.chainID.description
+            },
+            traces: traces.values.sorted(by: traceChronology),
+            subtasks: subtasks.values.sorted {
+                if $0.traceID == $1.traceID {
+                    return $0.position < $1.position
+                }
+                return $0.createdAt < $1.createdAt
+            },
+            preferences: preferences
+        )
+    }
+
     @discardableResult
     public func createPoolTask(
         title: String,

@@ -3265,12 +3265,11 @@ struct FuturePlansPage: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(grouped, id: \.0) { date, items in
                         VStack(alignment: .leading, spacing: 7) {
-                            HStack(spacing: 8) {
+                            HStack(spacing: 10) {
                                 Text("\(SuntraceStore.displayDate(date)) · \(SuntraceStore.weekday(date))")
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .monospacedDigit()
-                                Spacer()
                                 Button(store.copy.openDay) {
                                     store.selectedDate = date
                                     store.page = .day

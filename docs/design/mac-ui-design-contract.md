@@ -78,6 +78,7 @@
 
 - 按日期分组展示未来计划。
 - 每个日期组可跳转到对应 Day Todo。
+- 日期组标题中的“查看当天”链接必须紧跟日期标题，使用原型的 10px 左右间距；不得使用 spacer 推到分组行最右侧。
 - 未来计划任务可选中、右键、查看详情、改期、回到任务池、调整顺序。
 - 未来计划任务的选中、右键和查看详情必须作为独立交互契约点保留。
 - 未来计划任务的调整顺序必须同时映射到 `MacUIFuturePlanElement.priorityStepper` 和行内入口 `MacUIFuturePlanElement.taskRowMoveButtons`；两者描述同一个排序能力的语义控件与视觉入口。

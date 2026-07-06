@@ -28,7 +28,7 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
     for window in list {
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         let name = window[kCGWindowName as String] as? String ?? ""
-        if owner == "晷迹" || owner.contains("Suntrace") || name.contains("suntrace") {
+        if (owner == "晷迹" || owner == "SuntraceMacApp") && name == "晷迹 · suntrace" {
             if let number = window[kCGWindowNumber as String] {
                 print(number)
                 exit(0)
@@ -45,13 +45,25 @@ for page in "${pages[@]}"; do
   open -n dist/SuntraceMacApp.app --args --page "$page"
   sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
 
-  window_id="$(find_window_id)"
+  window_id=""
+  for _ in {1..20}; do
+    if window_id="$(find_window_id 2>/dev/null)"; then
+      break
+    fi
+    sleep 0.25
+  done
+
+  if [[ -z "$window_id" ]]; then
+    echo "Suntrace app window not found for ${page}" >&2
+    exit 1
+  fi
+
   screenshot="artifacts/e2e/${page}.png"
   screencapture -x -l "$window_id" "$screenshot"
   width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
   height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
 
-  if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 ]]; then
+  if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 || "${width:-0}" -gt 3000 || "${height:-0}" -gt 2000 ]]; then
     echo "invalid e2e screenshot size for ${page}: ${width:-unknown}x${height:-unknown}" >&2
     exit 1
   fi

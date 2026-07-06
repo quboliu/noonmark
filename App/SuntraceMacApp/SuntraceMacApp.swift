@@ -886,7 +886,7 @@ struct MainSurface: View {
 
             if store.page != .calendar && store.page != .settings {
                 DetailRail()
-                    .frame(width: 320)
+                    .frame(width: 300)
                     .overlay(alignment: .leading) {
                         Rectangle().fill(Theme.line).frame(width: 1)
                     }
@@ -905,28 +905,18 @@ struct DayTodoPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(
-                title: SuntraceStore.displayDate(store.selectedDate),
-                subtitle: SuntraceStore.weekday(store.selectedDate),
-                badge: dayBadge,
-                badgeColor: badgeColor
-            ) {
-                HeaderButton("‹") { store.selectedDate = SuntraceStore.offset(store.selectedDate, by: -1) }
-                HeaderButton("今天") { store.selectedDate = store.today }
-                HeaderButton("›") { store.selectedDate = SuntraceStore.offset(store.selectedDate, by: 1) }
-                HeaderButton("选日期") { store.showingPicker = .gotoDay }
-            }
+            DayTodoHeader(dayBadge: dayBadge, badgeColor: badgeColor)
 
             DateStrip()
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 10)
 
             if store.isHistory {
                 Notice(text: "历史日已锁定：任务事实不可改写，可补写复盘。未完成任务可延续或废弃。", tone: .locked)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
             } else if store.isFuture {
                 Notice(text: "未来日：可排期与调整顺序，不能提前完成或生成复盘。", tone: .future)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
             }
 
             if store.isHistory == false {
@@ -941,7 +931,7 @@ struct DayTodoPage: View {
                         .onSubmit { store.addQuickTask() }
                     HeaderButton("从任务池排期…") { store.showingFromPoolPicker = true }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 12)
             }
 
@@ -956,7 +946,7 @@ struct DayTodoPage: View {
                             .padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 20)
             }
         }
@@ -972,6 +962,36 @@ struct DayTodoPage: View {
         if store.selectedDate == store.today { return Theme.accent }
         if store.isHistory { return Theme.text2 }
         return Theme.accent
+    }
+}
+
+struct DayTodoHeader: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let dayBadge: String
+    let badgeColor: Color
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text(SuntraceStore.displayDate(store.selectedDate))
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(Theme.text1)
+                .monospacedDigit()
+                .lineLimit(1)
+            Text(SuntraceStore.weekday(store.selectedDate))
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text3)
+                .lineLimit(1)
+            StatusPill(text: dayBadge, color: badgeColor)
+            Spacer(minLength: 8)
+            HStack(spacing: 6) {
+                HeaderButton("‹") { store.selectedDate = SuntraceStore.offset(store.selectedDate, by: -1) }
+                HeaderButton("今天") { store.selectedDate = store.today }
+                HeaderButton("›") { store.selectedDate = SuntraceStore.offset(store.selectedDate, by: 1) }
+                HeaderButton("选日期") { store.showingPicker = .gotoDay }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
     }
 }
 
@@ -1885,7 +1905,7 @@ struct SettingsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: "设置", subtitle: "外观、语言、数据包与同步端点入口。")
+            PageHeader(title: "设置")
             VStack(alignment: .leading, spacing: 18) {
                 SettingSection(title: "外观") {
                     SegmentedPair(
@@ -1912,27 +1932,47 @@ struct SettingsPage: View {
                     }
                 }
                 SettingSection(title: "同步") {
-                    ForEach(store.engine.syncEndpointOptions(), id: \.kind) { option in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(option.title)
-                                    .font(.system(size: 13, weight: .semibold))
-                                Text(option.description)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Theme.text3)
-                            }
-                            Spacer()
-                            StatusPill(text: "规划中", color: Theme.text2)
-                        }
-                        .padding(12)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-                    }
+                    SyncOptionsCard()
                 }
                 Spacer()
             }
-            .padding(.horizontal, 20)
+            .frame(maxWidth: 560, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.top, 0)
         }
+    }
+}
+
+struct SyncOptionsCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(store.engine.syncEndpointOptions().enumerated()), id: \.element.kind) { index, option in
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(option.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Theme.text1)
+                        Text(option.description)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.text3)
+                    }
+                    Spacer()
+                    StatusPill(text: "规划中", color: Theme.text3)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+
+                if index < store.engine.syncEndpointOptions().count - 1 {
+                    Rectangle()
+                        .fill(Theme.line)
+                        .frame(height: 1)
+                }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
     }
 }
 
@@ -1987,7 +2027,7 @@ struct DetailRail: View {
                         .padding(.top, 40)
                 }
             }
-            .padding(20)
+            .padding(16)
         }
         .background(Theme.panel)
     }
@@ -2036,7 +2076,7 @@ struct TaskDetail: View {
             }
             HStack(alignment: .top) {
                 Text(definition.title)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                 Spacer()
                 Menu("•••") {
@@ -2175,7 +2215,7 @@ struct PoolDetail: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
             Text(task.definition.title)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
             Text(task.definition.descriptionText ?? "暂无描述")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text2)
@@ -2195,7 +2235,7 @@ struct UnfinishedDetail: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
             Text(item.definition.title)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
             ForEach(item.unfinishedTraces, id: \.id) { trace in
                 HStack {
                     Text(SuntraceStore.displayDate(trace.date))
@@ -2222,14 +2262,13 @@ struct ReviewRail: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
-                Spacer()
-                if noReview {
-                    Text(store.selectedDate.description)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text3)
-                } else {
-                    StatusPill(text: "自动保存", color: Theme.ok)
+                if noReview == false {
+                    StatusPill(text: "已自动保存", color: Theme.ok)
                 }
+                Spacer()
+                Text(store.selectedDate.description)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
             }
             if store.isHistory {
                 Text("历史日复盘可随时补写")
@@ -2289,16 +2328,21 @@ struct ReviewStatsCard: View {
             GeometryReader { proxy in
                 HStack(spacing: 1.5) {
                     segment(stats.completed, total: stats.total, color: Theme.ok, width: proxy.size.width)
-                    segment(max(0, stats.total - stats.completed - stats.unfinished), total: stats.total, color: Theme.accent, width: proxy.size.width)
+                    segment(pendingCount, total: stats.total, color: Theme.accent, width: proxy.size.width)
                     segment(stats.unfinished, total: stats.total, color: Theme.warn, width: proxy.size.width)
                 }
             }
             .frame(height: 7)
             .clipShape(Capsule())
-            legend("已完成", stats.completed, Theme.ok)
-            legend("未完成", stats.unfinished, Theme.warn)
-            legend("已延续", stats.continued, Theme.text2)
-            legend("已变更", stats.changed, Theme.text2)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 5) {
+                legend("待完成", pendingCount, Theme.accent)
+                legend("已完成", stats.completed, Theme.ok)
+                legend("未完成", stats.unfinished, Theme.warn)
+                legend("已延续", stats.continued, Theme.text2)
+                legend("已变更", stats.changed, Theme.text2)
+                legend("已回池", stats.returnedToPool, Theme.text2)
+                legend("已废弃", stats.abandoned, Theme.text2)
+            }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
@@ -2309,6 +2353,19 @@ struct ReviewStatsCard: View {
         Rectangle()
             .fill(value == 0 ? Color.clear : color)
             .frame(width: total == 0 ? 0 : max(2, width * CGFloat(value) / CGFloat(total)))
+    }
+
+    var pendingCount: Int {
+        max(
+            0,
+            stats.total
+                - stats.completed
+                - stats.unfinished
+                - stats.continued
+                - stats.changed
+                - stats.returnedToPool
+                - stats.abandoned
+        )
     }
 
     func legend(_ label: String, _ value: Int, _ color: Color) -> some View {
@@ -2535,7 +2592,7 @@ struct PageHeader<Trailing: View>: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(title)
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 21, weight: .bold))
                     if let badge {
                         StatusPill(text: badge, color: badgeColor)
                     }
@@ -2549,7 +2606,7 @@ struct PageHeader<Trailing: View>: View {
             Spacer()
             trailing
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 24)
         .padding(.vertical, 16)
     }
 }

@@ -2445,11 +2445,25 @@ struct TaskRow: View {
 
     var metaText: String {
         var parts: [String] = []
-        if trace.continuationSeq > 0 { parts.append("第 \(trace.continuationSeq) 次延续") }
+        if trace.continuationSeq > 0 {
+            parts.append("第 \(trace.continuationSeq) 次延续 · 持续 \(continuationDurationDays) 天")
+        }
         if trace.changedToTraceID != nil { parts.append("被变更为新任务") }
         if trace.status == .returnedToPool { parts.append("当天已回池") }
-        if progress.floorPercent > 0 { parts.append("进度下限 \(progress.floorPercent)%") }
         return parts.joined(separator: " · ")
+    }
+
+    var continuationDurationDays: Int {
+        let chainDates = store.engine.traces.values
+            .filter { $0.chainID == trace.chainID }
+            .map(\.date)
+        guard let startDate = chainDates.min() else { return 1 }
+        let days = Calendar.current.dateComponents(
+            [.day],
+            from: SuntraceStore.gregorianDate(startDate),
+            to: SuntraceStore.gregorianDate(trace.date)
+        ).day ?? 0
+        return max(1, days + 1)
     }
 
     var showsProgress: Bool {

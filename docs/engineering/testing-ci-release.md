@@ -82,6 +82,7 @@ Release：
 ## 当前本地取证
 
 - 2026-07-06：`scripts/test-e2e` 通过，14 个真实 Mac app 截图均生成于 `artifacts/e2e/`，窗口尺寸为 2800x1760。
+- 2026-07-06：`scripts/test-e2e` 已包含真实 App 正常模式持久化探针，使用 `artifacts/e2e-persistence/Suntrace.sqlite` 验证空库初始化和保存。
 - 2026-07-06：`make package-dmg` 通过，生成 `dist/SuntraceMacApp.dmg` 与 `dist/SuntraceMacApp.dmg.sha256`，`shasum -a 256 -c dist/SuntraceMacApp.dmg.sha256` 通过。
 - 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，空库会初始化并写入 11 个 day、19 条 chain、19 条 definition、19 条 trace、6 个 subtask 和 1 条 preferences。
 

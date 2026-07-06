@@ -2,6 +2,11 @@
 set -euo pipefail
 
 configuration="${1:-debug}"
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "missing required tool: sqlite3" >&2
+  exit 1
+fi
+
 scenarios=(
   "day|day|"
   "day-detail|day|--select first"
@@ -84,3 +89,36 @@ for scenario in "${scenarios[@]}"; do
 done
 
 pkill -x SuntraceMacApp 2>/dev/null || true
+
+persistence_dir="artifacts/e2e-persistence"
+persistence_db="${persistence_dir}/Suntrace.sqlite"
+rm -rf "$persistence_dir"
+mkdir -p "$persistence_dir"
+
+open -n dist/SuntraceMacApp.app --args --data-url "$PWD/$persistence_db" --page day
+sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
+pkill -x SuntraceMacApp 2>/dev/null || true
+
+if [[ ! -f "$persistence_db" ]]; then
+  echo "persistence database was not created: $persistence_db" >&2
+  exit 1
+fi
+
+read -r days chains definitions traces subtasks preferences < <(
+  sqlite3 -separator " " "$persistence_db" "
+    SELECT
+      (SELECT count(*) FROM days),
+      (SELECT count(*) FROM task_chains),
+      (SELECT count(*) FROM task_definitions),
+      (SELECT count(*) FROM day_traces),
+      (SELECT count(*) FROM subtasks),
+      (SELECT count(*) FROM app_preferences);
+  "
+)
+
+if [[ "$days" -lt 1 || "$chains" -lt 1 || "$definitions" -lt 1 || "$traces" -lt 1 || "$preferences" -ne 1 ]]; then
+  echo "invalid persistence counts: days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences" >&2
+  exit 1
+fi
+
+echo "E2E persistence database: $persistence_db (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"

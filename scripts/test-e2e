@@ -324,6 +324,30 @@ fi
 
 echo "E2E review zhulong entry: $review_zhulong_result"
 
+context_menu_dir="artifacts/e2e-context-menu-actions"
+context_menu_result="${context_menu_dir}/context-menu-result.txt"
+rm -rf "$context_menu_dir"
+mkdir -p "$context_menu_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page day \
+  --e2e-context-menu-actions \
+  --e2e-context-menu-result-url "$PWD/$context_menu_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$context_menu_result" ]]; then
+  echo "context menu action result was not created: $context_menu_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$context_menu_result")" != "ok" ]]; then
+  echo "context menu action matrix failed: $(cat "$context_menu_result")" >&2
+  exit 1
+fi
+
+echo "E2E context menu action matrix: $context_menu_result"
+
 provider_dir="artifacts/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"
 provider_name="E2E Provider"

@@ -158,6 +158,7 @@ private struct LaunchAutomation {
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewZhulongEntryE2EAutomation.fromCommandLine(), to: &actions)
+        append(ContextMenuActionsE2EAutomation.fromCommandLine(), to: &actions)
 
         guard actions.isEmpty == false else { return nil }
         return LaunchAutomation(
@@ -246,6 +247,129 @@ private struct ReviewZhulongEntryE2EAutomation: LaunchAutomationRunnable {
             withIntermediateDirectories: true
         )
         try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> ContextMenuActionsE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-context-menu-actions") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-context-menu-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return ContextMenuActionsE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            store.engine = SuntraceEngine()
+            let today = store.today
+            let past = SuntraceStore.offset(today, by: -1)
+            let future = SuntraceStore.offset(today, by: 1)
+
+            let currentID = try makeTrace(title: "E2E 当前待完成", date: today, today: today, store: store)
+            try assertActions(
+                store.contextMenuActions(for: try trace(currentID, in: store)),
+                [.markComplete, .continueTo, .changeToNewTask, .returnToPool, .abandonChain],
+                "current pending"
+            )
+
+            let currentWithSubtasksID = try makeTrace(title: "E2E 当前带子任务", date: today, today: today, store: store)
+            _ = try store.engine.addSubtask(traceID: currentWithSubtasksID, title: "子任务")
+            try assertActions(
+                store.contextMenuActions(for: try trace(currentWithSubtasksID, in: store)),
+                [.continueTo, .changeToNewTask, .returnToPool, .abandonChain],
+                "current pending with subtasks"
+            )
+
+            let completedID = try makeTrace(title: "E2E 当前已完成", date: today, today: today, store: store)
+            try store.engine.markCompleted(traceID: completedID, today: today)
+            try assertActions(
+                store.contextMenuActions(for: try trace(completedID, in: store)),
+                [.undoComplete],
+                "current completed"
+            )
+
+            let historicalUnfinishedID = try makeTrace(title: "E2E 历史未完成", date: past, today: today, store: store)
+            store.engine.settleDays(upTo: today)
+            try assertActions(
+                store.contextMenuActions(for: try trace(historicalUnfinishedID, in: store)),
+                [.continueTo, .abandonChain],
+                "historical unfinished"
+            )
+
+            let historicalCompletedID = try makeTrace(title: "E2E 历史已完成", date: past, today: past, store: store)
+            try store.engine.markCompleted(traceID: historicalCompletedID, today: past)
+            try assertActions(
+                store.contextMenuActions(for: try trace(historicalCompletedID, in: store)),
+                [.copyAsNewTask],
+                "historical completed"
+            )
+
+            let futureID = try makeTrace(title: "E2E 未来待完成", date: future, today: today, store: store)
+            try assertActions(
+                store.contextMenuActions(for: try trace(futureID, in: store)),
+                [.reschedule, .returnToPool],
+                "future pending"
+            )
+
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error)")
+        }
+    }
+
+    @MainActor
+    private func makeTrace(title: String, date: LocalDate, today: LocalDate, store: SuntraceStore) throws -> DayTraceID {
+        let chainID = try store.engine.createPoolTask(title: title)
+        return try store.engine.scheduleFromPool(chainID: chainID, date: date, today: today)
+    }
+
+    @MainActor
+    private func trace(_ id: DayTraceID, in store: SuntraceStore) throws -> DayTrace {
+        guard let trace = store.engine.traces[id] else {
+            throw ContextMenuActionsE2EAutomationError.missingTrace
+        }
+        return trace
+    }
+
+    private func assertActions(
+        _ actual: [SuntraceStore.TraceContextAction],
+        _ expected: [SuntraceStore.TraceContextAction],
+        _ label: String
+    ) throws {
+        guard actual == expected else {
+            throw ContextMenuActionsE2EAutomationError.actionMismatch(
+                label: label,
+                expected: expected.map(\.rawValue),
+                actual: actual.map(\.rawValue)
+            )
+        }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum ContextMenuActionsE2EAutomationError: LocalizedError {
+    case missingTrace
+    case actionMismatch(label: String, expected: [String], actual: [String])
+
+    var errorDescription: String? {
+        switch self {
+        case .missingTrace:
+            return "missing trace"
+        case let .actionMismatch(label, expected, actual):
+            return "\(label) context actions mismatch: expected \(expected), got \(actual)"
+        }
     }
 }
 
@@ -544,6 +668,17 @@ final class SuntraceWindow: NSWindow {
 
 @MainActor
 final class SuntraceStore: ObservableObject {
+    enum TraceContextAction: String, Equatable {
+        case markComplete
+        case undoComplete
+        case continueTo
+        case changeToNewTask
+        case returnToPool
+        case reschedule
+        case copyAsNewTask
+        case abandonChain
+    }
+
     enum Page: String, CaseIterable, Identifiable {
         case day
         case pool
@@ -778,6 +913,52 @@ final class SuntraceStore: ObservableObject {
         engine.subtasks.values
             .filter { $0.traceID == traceID }
             .sorted { $0.position < $1.position }
+    }
+
+    func contextMenuActions(for trace: DayTrace) -> [TraceContextAction] {
+        if trace.date == today, trace.status == .pending {
+            var actions: [TraceContextAction] = []
+            if chainHasSubtasks(trace.chainID) == false {
+                actions.append(.markComplete)
+            }
+            actions.append(contentsOf: [.continueTo, .changeToNewTask, .returnToPool, .abandonChain])
+            return actions
+        }
+
+        if trace.date == today, trace.status == .completed {
+            return chainHasSubtasks(trace.chainID) ? [] : [.undoComplete]
+        }
+
+        let canContinueHistoricalUnfinished = trace.date < today
+            && trace.status == .unfinished
+            && chainIsActive(trace.chainID)
+            && activeTrace(for: trace.chainID) == nil
+        if canContinueHistoricalUnfinished {
+            return [.continueTo, .abandonChain]
+        }
+
+        if trace.date < today, trace.status == .completed {
+            return [.copyAsNewTask]
+        }
+
+        if trace.date > today, trace.status == .pending {
+            return [.reschedule, .returnToPool]
+        }
+
+        return []
+    }
+
+    private func chainHasSubtasks(_ chainID: TaskChainID) -> Bool {
+        let traceIDs = Set(engine.traces.values.filter { $0.chainID == chainID }.map(\.id))
+        return engine.subtasks.values.contains { traceIDs.contains($0.traceID) }
+    }
+
+    private func chainIsActive(_ chainID: TaskChainID) -> Bool {
+        engine.chains[chainID]?.state == .active
+    }
+
+    private func activeTrace(for chainID: TaskChainID) -> DayTrace? {
+        engine.traces.values.first { $0.chainID == chainID && $0.status == .pending }
     }
 
     func dateChoices(allowPast: Bool = false, futureOnly: Bool = false) -> [DateChoice] {
@@ -2674,24 +2855,33 @@ struct SubtaskRow: View {
 struct TaskContextMenu: View {
     @EnvironmentObject private var store: SuntraceStore
     let trace: DayTrace
+    var actions: [SuntraceStore.TraceContextAction] { store.contextMenuActions(for: trace) }
 
     var body: some View {
-        if trace.status == .pending {
-            Button(store.copy.markComplete) { store.toggleComplete(trace.id) }
+        ForEach(actions, id: \.self) { action in
+            switch action {
+            case .markComplete:
+                Button(store.copy.markComplete) { store.toggleComplete(trace.id) }
+            case .undoComplete:
+                Button(store.copy.undoComplete) { store.toggleComplete(trace.id) }
+            case .continueTo:
+                Button(store.copy.continueTo) { store.showingPicker = .continueTrace(trace.id) }
+            case .changeToNewTask:
+                Button(store.copy.changeToNewTask) {
+                    store.selectTrace(trace.id)
+                    store.changeText = store.definition(for: trace)?.title ?? ""
+                    store.showingChangeDialog = true
+                }
+            case .returnToPool:
+                Button(store.copy.returnToPoolWithTrace) { store.returnToPool(trace.id) }
+            case .reschedule:
+                Button(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
+            case .copyAsNewTask:
+                Button(store.copy.copyAsNewTask) { store.copyAsNewTask(trace.id) }
+            case .abandonChain:
+                Button(store.copy.abandonChain, role: .destructive) { store.abandon(trace.id) }
+            }
         }
-        if trace.status == .completed {
-            Button(store.copy.undoComplete) { store.toggleComplete(trace.id) }
-        }
-        Button(store.copy.continueTo) { store.showingPicker = .continueTrace(trace.id) }
-        Button(store.copy.changeToNewTask) {
-            store.selectTrace(trace.id)
-            store.changeText = store.definition(for: trace)?.title ?? ""
-            store.showingChangeDialog = true
-        }
-        Button(store.copy.returnToPoolWithTrace) { store.returnToPool(trace.id) }
-        Button(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
-        Button(store.copy.copyAsNewTask) { store.copyAsNewTask(trace.id) }
-        Button(store.copy.abandonChain, role: .destructive) { store.abandon(trace.id) }
     }
 }
 

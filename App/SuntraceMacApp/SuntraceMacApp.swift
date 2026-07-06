@@ -656,8 +656,12 @@ final class SuntraceStore: ObservableObject {
         return zhulongDrafts.first { $0.id == selectedZhulongDraftID }
     }
 
+    var copy: AppCopy {
+        AppCopy(language: engine.preferences.language)
+    }
+
     var windowTitle: String {
-        "晷迹 — \(Self.displayDate(selectedDate))"
+        "\(copy.appName) — \(Self.displayDate(selectedDate))"
     }
 
     func definition(for trace: DayTrace) -> TaskDefinition? {
@@ -1675,6 +1679,142 @@ struct PickerSheetState: Identifiable {
     let purpose: SuntraceStore.DatePickerPurpose
 }
 
+struct AppCopy {
+    let language: AppLanguage
+
+    var appName: String {
+        switch language {
+        case .chinese: "晷迹"
+        case .english: "Suntrace"
+        }
+    }
+
+    var planGroup: String { language == .chinese ? "计划" : "Plan" }
+    var traceGroup: String { language == .chinese ? "轨迹" : "Trace" }
+    var navDay: String { "Day Todo" }
+    var navPool: String { language == .chinese ? "任务池" : "Task Pool" }
+    var navFuture: String { language == .chinese ? "未来计划" : "Upcoming" }
+    var navUnfinished: String { language == .chinese ? "未完成" : "Unfinished" }
+    var navCompleted: String { language == .chinese ? "已完成" : "Completed" }
+    var navCalendar: String { language == .chinese ? "日历" : "Calendar" }
+    var navSettings: String { language == .chinese ? "设置" : "Settings" }
+
+    var settingsSubtitle: String {
+        language == .chinese
+            ? "偏好、数据包、同步占位和烛龙 Provider 的统一入口。"
+            : "Preferences, data packages, sync placeholders, and Zhulong Provider in one place."
+    }
+
+    var preferencesTitle: String { language == .chinese ? "偏好" : "Preferences" }
+    var preferencesSubtitle: String {
+        language == .chinese ? "影响本机显示，不改变任务事实。" : "Affects local display only; task facts stay unchanged."
+    }
+
+    var appearanceTitle: String { language == .chinese ? "外观" : "Appearance" }
+    var coolGray: String { language == .chinese ? "冷灰" : "Cool gray" }
+    var warmPaper: String { language == .chinese ? "微暖纸感" : "Warm paper" }
+    var languageTitle: String { language == .chinese ? "语言" : "Language" }
+
+    var dataPackageTitle: String { language == .chinese ? "数据包" : "Data Package" }
+    var dataPackageSubtitle: String {
+        language == .chinese
+            ? "本地优先。导入前会校验重复键和断裂引用。"
+            : "Local-first. Imports validate duplicate keys and broken references."
+    }
+
+    var exportJSON: String { language == .chinese ? "导出数据 (JSON)" : "Export JSON" }
+    var importData: String { language == .chinese ? "导入数据…" : "Import…" }
+    var todayTraceMetric: String { language == .chinese ? "今日轨迹" : "Today" }
+    var taskPoolMetric: String { navPool }
+    var unfinishedMetric: String { navUnfinished }
+    var completedMetric: String { navCompleted }
+    var syncTitle: String { language == .chinese ? "同步" : "Sync" }
+    var planned: String { language == .chinese ? "规划中" : "Planned" }
+
+    var providerTitle: String { language == .chinese ? "烛龙 Provider" : "Zhulong Provider" }
+    var providerSubtitle: String {
+        language == .chinese ? "AI 是可选 sidecar；普通清单不依赖 Provider。" : "AI is optional; normal lists do not depend on a Provider."
+    }
+
+    var providerConfigured: String { language == .chinese ? "Provider 已配置" : "Provider configured" }
+    var providerIncomplete: String { language == .chinese ? "配置不完整" : "Incomplete" }
+    var providerDisabled: String { language == .chinese ? "Provider 未启用" : "Provider disabled" }
+    var keychainStored: String { language == .chinese ? "Keychain 有凭证" : "Keychain credential" }
+    var keychainMissing: String { language == .chinese ? "未保存凭证" : "No credential" }
+    var providerType: String { language == .chinese ? "类型" : "Type" }
+    var providerName: String { language == .chinese ? "名称" : "Name" }
+    var providerModel: String { language == .chinese ? "模型" : "Model" }
+    var providerUnset: String { language == .chinese ? "未配置" : "Unset" }
+    var customProvider: String { language == .chinese ? "自定义 Provider" : "Custom Provider" }
+    var openZhulongConfig: String { language == .chinese ? "打开烛龙配置" : "Open Zhulong" }
+    var save: String { language == .chinese ? "保存" : "Save" }
+    var testConnection: String { language == .chinese ? "测试连接" : "Test" }
+    var clear: String { language == .chinese ? "清空" : "Clear" }
+
+    var privacyTitle: String { language == .chinese ? "写入与隐私边界" : "Write & Privacy Boundaries" }
+    var privacySubtitle: String {
+        language == .chinese ? "Provider 请求和 AI 建议必须 fail-closed。" : "Provider requests and AI suggestions must fail closed."
+    }
+
+    var privacyRows: [String] {
+        switch language {
+        case .chinese:
+            [
+                "发送远程请求前必须展示授权范围。",
+                "不发送数据库文件、内部 ID、Keychain 值或同步端点配置。",
+                "创建、排期、变更、延续、废弃或 label 写入都必须由用户确认。",
+                "Provider 失败不影响 Day Todo、任务池、日历和数据包。"
+            ]
+        case .english:
+            [
+                "Show the authorized scope before each remote request.",
+                "Never send database files, internal IDs, Keychain values, or sync endpoint config.",
+                "Creates, schedules, changes, continuations, drops, and label writes require confirmation.",
+                "Provider failures do not affect Day Todo, Task Pool, Calendar, or data packages."
+            ]
+        }
+    }
+
+    func itemCount(_ count: Int) -> String {
+        switch language {
+        case .chinese: "\(count) 项"
+        case .english: count == 1 ? "1 item" : "\(count) items"
+        }
+    }
+
+    func chainCount(_ count: Int) -> String {
+        switch language {
+        case .chinese: "\(count) 条链"
+        case .english: count == 1 ? "1 chain" : "\(count) chains"
+        }
+    }
+
+    func recordCount(_ count: Int) -> String {
+        switch language {
+        case .chinese: "\(count) 条记录"
+        case .english: count == 1 ? "1 record" : "\(count) records"
+        }
+    }
+
+    func syncTitle(for kind: SyncEndpointKind) -> String {
+        switch (language, kind) {
+        case (.chinese, .customEndpoint): "自定义同步端点"
+        case (.chinese, .iCloud): "iCloud 云同步"
+        case (.english, .customEndpoint): "Custom sync endpoint"
+        case (.english, .iCloud): "iCloud sync"
+        }
+    }
+
+    func syncDescription(for kind: SyncEndpointKind) -> String {
+        switch (language, kind) {
+        case (.chinese, .customEndpoint): "连接自有服务端"
+        case (.chinese, .iCloud): "原生云同步"
+        case (.english, .customEndpoint): "Connect your own server"
+        case (.english, .iCloud): "Native cloud sync"
+        }
+    }
+}
+
 enum Theme {
     struct Palette {
         let desk: Color
@@ -1799,42 +1939,42 @@ struct Sidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 9) {
                 ClockLogo()
-                Text("晷迹")
+                Text(store.copy.appName)
                     .font(.system(size: 16, weight: .bold))
                     .tracking(0.2)
             }
             .padding(.horizontal, 18)
             .padding(.bottom, 16)
 
-            NavGroupTitle("计划")
+            NavGroupTitle(store.copy.planGroup)
             NavItem(
                 page: .day,
-                label: "Day Todo",
+                label: store.copy.navDay,
                 count: store.engine.getDayTodo(date: store.today).traces.filter { $0.status == .pending }.count
             )
-            NavItem(page: .pool, label: "任务池", count: store.engine.taskPool().count)
+            NavItem(page: .pool, label: store.copy.navPool, count: store.engine.taskPool().count)
             NavItem(
                 page: .future,
-                label: "未来计划",
+                label: store.copy.navFuture,
                 count: store.engine.futurePlans(today: store.today).count
             )
 
-            NavGroupTitle("轨迹")
+            NavGroupTitle(store.copy.traceGroup)
                 .padding(.top, 12)
             NavItem(
                 page: .unfinished,
-                label: "未完成",
+                label: store.copy.navUnfinished,
                 count: store.engine.unfinishedPool().count
             )
             NavItem(
                 page: .completed,
-                label: "已完成",
+                label: store.copy.navCompleted,
                 count: store.engine.completedPool().count + store.engine.completedSubtaskRecords().count
             )
-            NavItem(page: .calendar, label: "日历", count: 0)
+            NavItem(page: .calendar, label: store.copy.navCalendar, count: 0)
 
             Spacer()
-            NavItem(page: .settings, label: "设置", count: 0)
+            NavItem(page: .settings, label: store.copy.navSettings, count: 0)
         }
         .frame(width: 204)
         .padding(.top, 14)
@@ -3259,13 +3399,13 @@ struct SettingsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: "设置", subtitle: "偏好、数据包、同步占位和烛龙 Provider 的统一入口。")
+            PageHeader(title: store.copy.navSettings, subtitle: store.copy.settingsSubtitle)
             ScrollView {
                 HStack(alignment: .top, spacing: 18) {
                     VStack(alignment: .leading, spacing: 14) {
                         SettingsPreferenceCard()
                         SettingsDataCard()
-                        SettingSection(title: "同步") {
+                        SettingSection(title: store.copy.syncTitle) {
                             SyncOptionsCard()
                         }
                     }
@@ -3290,18 +3430,18 @@ struct SettingsPreferenceCard: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        SettingsCard(systemImage: "slider.horizontal.3", title: "偏好", subtitle: "影响本机显示，不改变任务事实。") {
+        SettingsCard(systemImage: "slider.horizontal.3", title: store.copy.preferencesTitle, subtitle: store.copy.preferencesSubtitle) {
             VStack(alignment: .leading, spacing: 14) {
-                SettingSection(title: "外观") {
+                SettingSection(title: store.copy.appearanceTitle) {
                     SegmentedPair(
-                        left: "冷灰",
-                        right: "微暖纸感",
+                        left: store.copy.coolGray,
+                        right: store.copy.warmPaper,
                         leftSelected: store.engine.preferences.theme == .coolGray,
                         leftAction: { store.setTheme(.coolGray) },
                         rightAction: { store.setTheme(.warmPaper) }
                     )
                 }
-                SettingSection(title: "语言") {
+                SettingSection(title: store.copy.languageTitle) {
                     SegmentedPair(
                         left: "中文",
                         right: "English",
@@ -3319,17 +3459,21 @@ struct SettingsDataCard: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        SettingsCard(systemImage: "externaldrive", title: "数据包", subtitle: "本地优先。导入前会校验重复键和断裂引用。") {
+        SettingsCard(systemImage: "externaldrive", title: store.copy.dataPackageTitle, subtitle: store.copy.dataPackageSubtitle) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
-                    SmallActionButton("导出数据 (JSON)", tone: .accent) { store.exportDataPackage() }
-                    SmallActionButton("导入数据…") { store.importDataPackage() }
+                    SmallActionButton(store.copy.exportJSON, tone: .accent) { store.exportDataPackage() }
+                    SmallActionButton(store.copy.importData) { store.importDataPackage() }
                 }
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                    SettingsMetricPill(title: "今日轨迹", value: "\(store.engine.getDayTodo(date: store.today).traces.count) 项", color: Theme.navDay)
-                    SettingsMetricPill(title: "任务池", value: "\(store.engine.taskPool().count) 项", color: Theme.navPool)
-                    SettingsMetricPill(title: "未完成", value: "\(store.engine.unfinishedPool().count) 条链", color: Theme.warn)
-                    SettingsMetricPill(title: "已完成", value: "\(store.engine.completedPool().count) 条记录", color: Theme.ok)
+                    SettingsMetricPill(
+                        title: store.copy.todayTraceMetric,
+                        value: store.copy.itemCount(store.engine.getDayTodo(date: store.today).traces.count),
+                        color: Theme.navDay
+                    )
+                    SettingsMetricPill(title: store.copy.taskPoolMetric, value: store.copy.itemCount(store.engine.taskPool().count), color: Theme.navPool)
+                    SettingsMetricPill(title: store.copy.unfinishedMetric, value: store.copy.chainCount(store.engine.unfinishedPool().count), color: Theme.warn)
+                    SettingsMetricPill(title: store.copy.completedMetric, value: store.copy.recordCount(store.engine.completedPool().count), color: Theme.ok)
                 }
             }
         }
@@ -3344,15 +3488,15 @@ struct SyncOptionsCard: View {
             ForEach(Array(store.engine.syncEndpointOptions().enumerated()), id: \.element.kind) { index, option in
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(option.title)
+                        Text(store.copy.syncTitle(for: option.kind))
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(Theme.text1)
-                        Text(option.description)
+                        Text(store.copy.syncDescription(for: option.kind))
                             .font(.system(size: 11.5))
                             .foregroundStyle(Theme.text3)
                     }
                     Spacer()
-                    StatusPill(text: "规划中", color: Theme.text3)
+                    StatusPill(text: store.copy.planned, color: Theme.text3)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
@@ -3374,31 +3518,31 @@ struct SettingsProviderOverviewCard: View {
 
     var status: (text: String, color: Color) {
         if store.zhulongProviderDraft.isConfigured {
-            return ("Provider 已配置", Theme.ok)
+            return (store.copy.providerConfigured, Theme.ok)
         }
         if store.zhulongProviderDraft.enabled {
-            return ("配置不完整", Theme.warn)
+            return (store.copy.providerIncomplete, Theme.warn)
         }
-        return ("Provider 未启用", Theme.text3)
+        return (store.copy.providerDisabled, Theme.text3)
     }
 
     var body: some View {
-        SettingsCard(systemImage: "sparkles", title: "烛龙 Provider", subtitle: "AI 是可选 sidecar；普通清单不依赖 Provider。") {
+        SettingsCard(systemImage: "sparkles", title: store.copy.providerTitle, subtitle: store.copy.providerSubtitle) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     StatusPill(text: status.text, color: status.color)
                     Spacer()
                     StatusPill(
-                        text: store.zhulongProviderDraft.hasStoredAPIKey ? "Keychain 有凭证" : "未保存凭证",
+                        text: store.zhulongProviderDraft.hasStoredAPIKey ? store.copy.keychainStored : store.copy.keychainMissing,
                         color: store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3
                     )
                 }
 
                 VStack(spacing: 0) {
-                    SettingsInfoRow(label: "类型", value: providerKindLabel(store.zhulongProviderDraft.kind))
-                    SettingsInfoRow(label: "名称", value: store.zhulongProviderDraft.normalizedDisplayName)
-                    SettingsInfoRow(label: "Base URL", value: store.zhulongProviderDraft.normalizedBaseURL?.absoluteString ?? "未配置")
-                    SettingsInfoRow(label: "模型", value: store.zhulongProviderDraft.normalizedModel.isEmpty ? "未配置" : store.zhulongProviderDraft.normalizedModel, last: true)
+                    SettingsInfoRow(label: store.copy.providerType, value: providerKindLabel(store.zhulongProviderDraft.kind))
+                    SettingsInfoRow(label: store.copy.providerName, value: providerDisplayName)
+                    SettingsInfoRow(label: "Base URL", value: store.zhulongProviderDraft.normalizedBaseURL?.absoluteString ?? store.copy.providerUnset)
+                    SettingsInfoRow(label: store.copy.providerModel, value: store.zhulongProviderDraft.normalizedModel.isEmpty ? store.copy.providerUnset : store.zhulongProviderDraft.normalizedModel, last: true)
                 }
                 .padding(.horizontal, 10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
@@ -3410,13 +3554,18 @@ struct SettingsProviderOverviewCard: View {
                     .lineLimit(2)
 
                 HStack(spacing: 8) {
-                    SmallActionButton("打开烛龙配置", tone: .accent) { store.page = .zhulong }
-                    SmallActionButton("保存") { store.saveZhulongProvider() }
-                    SmallActionButton("测试连接") { store.testZhulongProvider() }
-                    SmallActionButton("清空", tone: .warn) { store.clearZhulongProvider() }
+                    SmallActionButton(store.copy.openZhulongConfig, tone: .accent) { store.page = .zhulong }
+                    SmallActionButton(store.copy.save) { store.saveZhulongProvider() }
+                    SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
+                    SmallActionButton(store.copy.clear, tone: .warn) { store.clearZhulongProvider() }
                 }
             }
         }
+    }
+
+    var providerDisplayName: String {
+        let trimmed = store.zhulongProviderDraft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? store.copy.customProvider : trimmed
     }
 
     func providerKindLabel(_ kind: AIProviderKind) -> String {
@@ -3434,13 +3583,15 @@ struct SettingsProviderOverviewCard: View {
 }
 
 struct SettingsPrivacyCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
     var body: some View {
-        SettingsCard(systemImage: "lock.shield", title: "写入与隐私边界", subtitle: "Provider 请求和 AI 建议必须 fail-closed。") {
+        SettingsCard(systemImage: "lock.shield", title: store.copy.privacyTitle, subtitle: store.copy.privacySubtitle) {
             VStack(alignment: .leading, spacing: 8) {
-                SettingsBoundaryRow(color: Theme.accent, text: "发送远程请求前必须展示授权范围。")
-                SettingsBoundaryRow(color: Theme.warn, text: "不发送数据库文件、内部 ID、Keychain 值或同步端点配置。")
-                SettingsBoundaryRow(color: Theme.ok, text: "创建、排期、变更、延续、废弃或 label 写入都必须由用户确认。")
-                SettingsBoundaryRow(color: Theme.text3, text: "Provider 失败不影响 Day Todo、任务池、日历和数据包。")
+                SettingsBoundaryRow(color: Theme.accent, text: store.copy.privacyRows[0])
+                SettingsBoundaryRow(color: Theme.warn, text: store.copy.privacyRows[1])
+                SettingsBoundaryRow(color: Theme.ok, text: store.copy.privacyRows[2])
+                SettingsBoundaryRow(color: Theme.text3, text: store.copy.privacyRows[3])
             }
         }
     }

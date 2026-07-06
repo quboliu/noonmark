@@ -33,8 +33,8 @@ Neon 的可借鉴点：
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
 - E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，会打包 `.app`、打开真实窗口并抓截图。
   当前覆盖 `day`、`day-detail`、`day-manual-detail`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 14 个场景。
-- Prototype render：当前入口为 `scripts/render-prototype-screenshots`，使用 Chrome headless 从归档 HTML 原型生成 `day`、`pool`、`future`、`unfinished`、`completed`、`calendar`、`settings` 共 7 个 1440x900 参考图；默认渲染超时为 45 秒，可用 `SUNTRACE_PROTOTYPE_RENDER_TIMEOUT` 覆盖；烛龙 AI 是 SwiftUI 新增实现面，当前没有对应 HTML 原型页，只由 E2E 和契约测试覆盖。
-- Visual regression：当前入口为 `scripts/test-visual-regression`，默认先刷新真实 E2E 截图；设置 `SUNTRACE_VISUAL_REUSE_SCREENSHOTS=1` 时复用已有 E2E 截图。脚本会自动生成原型参考图，并逐页输出 normalized actual、diff 和 report 到 `artifacts/visual-regression/<page>/`。
+- Prototype render：当前入口为 `scripts/render-prototype-screenshots`，使用 Chrome headless 从归档 HTML 原型生成 `day`、`pool`、`future`、`unfinished`、`completed`、`calendar`、`settings` 共 7 个 1440x900 参考图；默认渲染超时为 90 秒，可用 `SUNTRACE_PROTOTYPE_RENDER_TIMEOUT` 覆盖；烛龙 AI 是 SwiftUI 新增实现面，当前没有对应 HTML 原型页，只由 E2E 和契约测试覆盖。
+- Visual regression：当前入口为 `scripts/test-visual-regression`，默认先刷新真实 E2E 截图；设置 `SUNTRACE_VISUAL_REUSE_SCREENSHOTS=1` 时复用已有 E2E 截图。脚本会自动生成本次比较页面的原型参考图，并逐页输出 normalized actual、diff 和 report 到 `artifacts/visual-regression/<page>/`。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
 - Live AI Provider Smoke：真实 OpenAI-compatible provider 连通性测试，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，必须显式提供 `SUNTRACE_AI_BASE_URL`、`SUNTRACE_AI_MODEL` 和 `SUNTRACE_AI_API_KEY`；一旦手动启用，缺少 key 或 provider 不可达必须失败。
 
@@ -111,7 +111,7 @@ Release：
 
 - 2026-07-06：`scripts/test-e2e` 通过，14 个演示数据真实 Mac app 截图生成于 `artifacts/e2e/`，6 个新用户空数据截图生成于 `artifacts/e2e-blank/`，窗口尺寸为 2880x1800，对应原型 1440x900 Retina 截图基线。
 - 2026-07-06：`scripts/test-visual-regression` 已升级为多页面原型量化对比，覆盖 `day`、`pool`、`future`、`unfinished`、`completed`、`calendar`、`settings`，输出归一化截图、差异图和指标报告到 `artifacts/visual-regression/<page>/`，汇总在 `artifacts/visual-regression/summary.txt`。
-- 2026-07-06：当前多页面视觉指标为：day `changed_ratio=0.131162`，pool `0.065576`，future `0.052623`，unfinished `0.095252`，completed `0.162719`，calendar `0.075295`，settings `0.048817`；后续视觉收紧以真实可用性、信息层级和明显偏差为准，不追求演示数据条数逐项一致。
+- 2026-07-06：当前多页面视觉指标为：day `changed_ratio=0.131164`，pool `0.065556`，future `0.052623`，unfinished `0.095252`，completed `0.111861`，calendar `0.075295`，settings `0.048817`；后续视觉收紧以真实可用性、信息层级和明显偏差为准，不追求演示数据条数逐项一致。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 新用户空数据截图探针和正常模式持久化探针，使用 `artifacts/e2e-blank/Suntrace.sqlite` 与 `artifacts/e2e-persistence/Suntrace.sqlite` 验证空库初始化、页面浏览和保存均不灌入演示任务。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App lifecycle workflow 探针，验证任务变更保留旧轨迹并创建新任务、回池保留日轨迹、废弃同步终止任务链。

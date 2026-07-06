@@ -22,7 +22,7 @@ if [[ -n "$single_reference" || -n "$single_actual" ]]; then
   reference_dir=""
   actual_dir=""
 else
-  SUNTRACE_PROTOTYPE_OUT_DIR="$reference_dir" scripts/render-prototype-screenshots
+  SUNTRACE_PROTOTYPE_OUT_DIR="$reference_dir" SUNTRACE_PROTOTYPE_PAGES="${pages[*]}" scripts/render-prototype-screenshots
 fi
 
 rm -rf "$out_dir"

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dmg_path="${1:-dist/SuntraceMacApp.dmg}"
+app_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
+mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/suntrace-dmg.XXXXXX")"
+
+cleanup() {
+  hdiutil detach "$mountpoint" -quiet >/dev/null 2>&1 || true
+  rmdir "$mountpoint" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+if [[ ! -f "$dmg_path" ]]; then
+  echo "missing DMG: $dmg_path" >&2
+  exit 1
+fi
+
+if [[ ! -f "${dmg_path}.sha256" ]]; then
+  echo "missing checksum: ${dmg_path}.sha256" >&2
+  exit 1
+fi
+
+shasum -a 256 -c "${dmg_path}.sha256"
+hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$mountpoint" -quiet
+
+app_path="${mountpoint}/${app_display_name}.app"
+binary_path="${app_path}/Contents/MacOS/SuntraceMacApp"
+plist_path="${app_path}/Contents/Info.plist"
+
+if [[ ! -d "$app_path" ]]; then
+  echo "DMG missing app bundle: ${app_display_name}.app" >&2
+  exit 1
+fi
+
+if [[ ! -x "$binary_path" ]]; then
+  echo "DMG app binary is not executable: $binary_path" >&2
+  exit 1
+fi
+
+if [[ ! -f "$plist_path" ]]; then
+  echo "DMG app missing Info.plist" >&2
+  exit 1
+fi
+
+if [[ ! -L "${mountpoint}/Applications" ]]; then
+  echo "DMG missing Applications shortcut" >&2
+  exit 1
+fi
+
+if find "$app_path" \( \
+  -name ".github" -o \
+  -name "Tests" -o \
+  -name "artifacts" -o \
+  -name "Package.swift" -o \
+  -name "*.xctest" \
+\) -print -quit | grep -q .; then
+  echo "DMG app contains development or test artifacts" >&2
+  exit 1
+fi
+
+echo "Verified $dmg_path"

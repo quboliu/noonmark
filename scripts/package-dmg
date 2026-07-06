@@ -26,4 +26,5 @@ hdiutil create \
   "$dmg_path" >/dev/null
 
 shasum -a 256 "$dmg_path" > "${dmg_path}.sha256"
+scripts/verify-dmg "$dmg_path" >/dev/null
 echo "$dmg_path"

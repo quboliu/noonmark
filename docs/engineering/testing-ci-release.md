@@ -15,13 +15,14 @@ Flintmark 的可借鉴点：
 - 重任务不挤在每次 push：deep fuzz 和 mutation testing 放到 scheduled / manual workflow。
 - 测试报告不是只看 exit code：各层输出 metrics artifact，最后合并进 GitHub job summary。
 - release 只接受自动化路径：tag 触发后重新验证、干净打包、校验产物内容、生成 GitHub Release，再按 token 发布。
+- 产物必须做正反向校验：正向确认运行时文件存在，反向确认测试/开发产物没有混入发布包。
 
 Neon 的可借鉴点：
 
 - 大仓库 CI 使用路径过滤、矩阵和可复用 workflow，把成本和反馈时间压住。
 - random ops 测试把随机 seed 写入日志，失败可用同一个 seed 重放。
-- walproposer 仿真使用虚拟 world/clock，通过 `world.step()` 推进调度，而不是依赖真实时间。
-- 仿真测试不只断言结果，还从事件日志重放全局状态并检查不变量。
+- 随机读路径和 compaction simulator 都会把 seed / workload 写进输出，让失败样本可复现。
+- 仿真测试不只断言结果，还用内存模型或 mock timeline 对账真实实现。
 - failpoint / chaos injector 用来强制触发暂停、延迟、退出和故障路径。
 
 ## 本仓库分层
@@ -43,6 +44,7 @@ make test-deterministic-sim
 make test-e2e
 make test-all
 make package-dmg
+make verify-dmg
 make check
 ```
 
@@ -70,18 +72,21 @@ Release：
 
 - 只通过 `v*` tag 触发。
 - 重新跑 `scripts/check`。
+- 重新跑 `scripts/test-e2e`，确认真实 Mac app 启动路径仍可用。
 - 用 release 配置打包 `.app`。
 - 生成可直接下载安装的 DMG、zip 与 SHA256。
+- 校验 DMG checksum、挂载内容、`.app` bundle、可执行文件、`Info.plist` 和 Applications shortcut。
+- 校验 zip checksum。
 - 创建或更新 GitHub Release 并上传产物。
 
 ## 当前本地取证
 
 - 2026-07-06：`scripts/test-e2e` 通过，14 个真实 Mac app 截图均生成于 `artifacts/e2e/`，窗口尺寸为 2800x1760。
 - 2026-07-06：`make package-dmg` 通过，生成 `dist/SuntraceMacApp.dmg` 与 `dist/SuntraceMacApp.dmg.sha256`，`shasum -a 256 -c dist/SuntraceMacApp.dmg.sha256` 通过。
+- 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，空库会初始化并写入 11 个 day、19 条 chain、19 条 definition、19 条 trace、6 个 subtask 和 1 条 preferences。
 
 ## 后续缺口
 
-- IT 已覆盖 SQLite repository 核心状态 round-trip；后续需要把 repository 接入真实 App 生命周期，验证重启后仍恢复用户数据。
 - E2E 已覆盖主要页面和关键详情栏选中态；后续需要补真实交互路径断言，例如新增任务、排期、变更、延续、复盘编辑、Provider 配置表单和 DMG 安装后启动。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
 - Release 后续需要补 Apple Developer ID 签名、notarization 和安装后首次启动验证；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成和校验安装包产物。

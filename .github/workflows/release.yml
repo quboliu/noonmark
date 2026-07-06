@@ -27,11 +27,15 @@ jobs:
           brew install swiftlint swiftformat
       - name: Verify
         run: scripts/check
+      - name: App E2E
+        run: scripts/test-e2e
       - name: Package artifact
         run: |
           scripts/package-dmg release
+          scripts/verify-dmg dist/SuntraceMacApp.dmg
           ditto -c -k --keepParent dist/SuntraceMacApp.app dist/SuntraceMacApp.zip
           shasum -a 256 dist/SuntraceMacApp.zip > dist/SuntraceMacApp.zip.sha256
+          shasum -a 256 -c dist/SuntraceMacApp.zip.sha256
       - name: Resolve release metadata
         id: meta
         run: |

@@ -1,4 +1,4 @@
-.PHONY: build build-app package-dmg test test-unit test-integration test-system test-deterministic-sim test-e2e test-all lint format format-check check
+.PHONY: build build-app package-dmg verify-dmg test test-unit test-integration test-system test-deterministic-sim test-e2e test-all lint format format-check check
 
 build:
 	swift build
@@ -8,6 +8,9 @@ build-app:
 
 package-dmg:
 	scripts/package-dmg
+
+verify-dmg:
+	scripts/verify-dmg
 
 test:
 	swift test

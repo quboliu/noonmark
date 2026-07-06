@@ -5567,6 +5567,7 @@ struct Timeline: View {
             .sorted { $0.date < $1.date }
         VStack(alignment: .leading, spacing: 0) {
             ForEach(chainTraces, id: \.id) { item in
+                let isCurrent = item.id == trace.id
                 HStack(alignment: .top, spacing: 8) {
                     VStack(spacing: 0) {
                         StatusGlyph(status: item.status)
@@ -5576,7 +5577,7 @@ struct Timeline: View {
                         HStack {
                             Text(item.status.uiStyle.label)
                                 .font(.system(size: 11, weight: .semibold))
-                            if item.id == trace.id {
+                            if isCurrent {
                                 StatusPill(text: "当前", color: Theme.accent)
                             }
                         }
@@ -5586,6 +5587,13 @@ struct Timeline: View {
                     }
                     Spacer()
                 }
+                .padding(.horizontal, isCurrent ? 8 : 0)
+                .padding(.vertical, isCurrent ? 4 : 0)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isCurrent ? Theme.accentSoft : Color.clear)
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }

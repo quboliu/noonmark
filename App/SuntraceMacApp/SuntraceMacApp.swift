@@ -5731,139 +5731,87 @@ struct UnfinishedDetail: View {
     let item: UnfinishedPoolItem
 
     var latestUnfinished: DayTrace? { item.latestUnfinishedTrace }
-    var activeDateLabel: String {
-        guard let active = item.activeTrace else { return "" }
-        return active.date == store.today ? "今天" : SuntraceStore.displayDate(active.date)
-    }
+    var detailTrace: DayTrace? { latestUnfinished ?? item.activeTrace }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("未完成明细", onClose: { store.clearSelection() })
-            Text(item.definition.title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.text1)
-            HStack(spacing: 8) {
-                PlanMetaPill(text: store.copy.unfinishedMissedCount(item.unfinishedTraces.count), color: Theme.warn)
-                PlanMetaPill(text: store.copy.unfinishedContinuationCount(item.continuationCount), color: Theme.text2)
-            }
-            UnfinishedSummaryCard(item: item)
-            DetailSection("处理") {
-                VStack(alignment: .leading, spacing: 8) {
-                    if let active = item.activeTrace {
-                        Notice(text: "已延续到 \(activeDateLabel)，当前仍待完成。", tone: .future)
-                        SmallActionButton(store.copy.openCurrentPending, tone: .accent) {
-                            store.selectedDate = active.date
-                            store.page = .day
-                            store.selectTrace(active.id)
-                        }
-                    } else if let source = latestUnfinished {
-                        HStack(spacing: 8) {
-                            SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
-                            SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
-                        }
-                    } else {
-                        Text("没有需要处理的未完成轨迹。")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.text3)
-                    }
+        if let trace = detailTrace {
+            VStack(alignment: .leading, spacing: 14) {
+                DetailHeader("任务详情", onClose: { store.clearSelection() })
+                Text(item.definition.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                    .lineLimit(3)
+
+                HStack(spacing: 8) {
+                    StatusChip(status: trace.status)
+                    Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                }
+
+                UnfinishedTraceContextCard(item: item, trace: trace)
+                Notice(text: "历史事实只读，不可删除或改写。", tone: .locked)
+
+                DetailSection("完成进度") {
+                    DetailProgressControl(
+                        traceID: trace.id,
+                        progress: store.engine.traceProgress(for: trace.id),
+                        editable: false
+                    )
+                }
+
+                DetailSection("任务轨迹") {
+                    Timeline(trace: trace)
                 }
             }
-            DetailSection("描述") {
-                EditableDetailText(
-                    text: .constant(item.definition.descriptionText ?? ""),
-                    placeholder: "",
-                    editable: false,
-                    warm: false,
-                    fallback: "未填写描述"
-                )
-            }
-            DetailSection("附言") {
-                EditableDetailText(
-                    text: .constant(item.definition.note ?? ""),
-                    placeholder: "",
-                    editable: false,
-                    warm: true,
-                    fallback: "无附言"
-                )
-            }
-            DetailSection("任务链轨迹") {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(item.unfinishedTraces, id: \.id) { trace in
-                        UnfinishedTraceLine(trace: trace, current: false)
-                    }
-                    if let active = item.activeTrace {
-                        UnfinishedTraceLine(trace: active, current: true)
-                    }
-                }
-            }
+        } else {
+            RailHint(text: "没有需要处理的未完成轨迹。")
         }
     }
 }
 
-struct UnfinishedSummaryCard: View {
+struct UnfinishedTraceContextCard: View {
     let item: UnfinishedPoolItem
-
-    var latestUnfinished: DayTrace? { item.latestUnfinishedTrace }
+    let trace: DayTrace
 
     var body: some View {
-        VStack(spacing: 7) {
-            if let latestUnfinished {
-                summaryRow("最近", "\(SuntraceStore.displayDate(latestUnfinished.date)) \(SuntraceStore.weekday(latestUnfinished.date))", Theme.warn)
-                summaryRow("优先级", "\(latestUnfinished.priority)", Theme.text2)
-                summaryRow("延续", "\(item.continuationCount) 次", Theme.text2)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("第 \(trace.continuationSeq) 次延续")
+            Text("·")
+                .foregroundStyle(Theme.text3)
+            Text("持续 \(durationDays) 天")
             if let active = item.activeTrace {
-                summaryRow("当前", "\(SuntraceStore.displayDate(active.date)) \(SuntraceStore.weekday(active.date)) 待完成", Theme.accent)
-            } else {
-                summaryRow("当前", "暂无活跃日轨迹", Theme.text2)
+                Text("·")
+                    .foregroundStyle(Theme.text3)
+                Text("已延续到 \(SuntraceStore.displayDate(active.date))")
+                    .foregroundStyle(Theme.accent)
             }
+            Spacer(minLength: 0)
         }
+        .font(.system(size: 11))
+        .foregroundStyle(Theme.text2)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 9).fill(Theme.warnSoft.opacity(0.45)))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
     }
 
-    private func summaryRow(_ label: String, _ value: String, _ color: Color) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(label)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(Theme.text3)
-                .frame(width: 38, alignment: .leading)
-            Text(value)
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(color)
-            Spacer(minLength: 0)
-        }
+    var durationDays: Int {
+        let traces = (item.unfinishedTraces + [item.activeTrace].compactMap { $0 }).sorted { $0.date < $1.date }
+        guard let first = traces.first else { return 1 }
+        let calendar = Calendar(identifier: .gregorian)
+        let start = date(from: first.date)
+        let end = date(from: trace.date)
+        return max(1, (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1)
     }
-}
 
-struct UnfinishedTraceLine: View {
-    let trace: DayTrace
-    let current: Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(spacing: 0) {
-                StatusGlyph(status: trace.status)
-                Rectangle().fill(Theme.line2).frame(width: 1, height: 20)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
-                        .font(.system(size: 11, weight: .semibold))
-                    if current {
-                        StatusPill(text: "当前", color: Theme.accent)
-                    }
-                }
-                Text("当日优先级 \(trace.priority) · 第 \(trace.continuationSeq) 次延续")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.text3)
-            }
-            Spacer()
-            StatusChip(status: trace.status)
-        }
-        .padding(.vertical, 3)
+    private func date(from localDate: LocalDate) -> Date {
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.year = localDate.year
+        components.month = localDate.month
+        components.day = localDate.day
+        return components.date ?? Date(timeIntervalSince1970: 0)
     }
 }
 

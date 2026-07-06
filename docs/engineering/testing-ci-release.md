@@ -29,7 +29,8 @@ Neon 的可借鉴点：
 - UT：纯领域和纯函数测试，当前入口为 `scripts/test-unit`。
 - IT：跨模块集成测试，当前入口为 `scripts/test-integration`，先覆盖 Storage schema 与 Core 类型契约。
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
-- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，会打包 `.app`、打开日历页、抓真实窗口截图。
+- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，会打包 `.app`、打开真实窗口并抓截图。
+  当前覆盖 `day`、`day-detail`、`day-manual-detail`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 14 个场景。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
 
 ## 命令
@@ -73,8 +74,14 @@ Release：
 - 生成可直接下载安装的 DMG、zip 与 SHA256。
 - 创建或更新 GitHub Release 并上传产物。
 
+## 当前本地取证
+
+- 2026-07-06：`scripts/test-e2e` 通过，14 个真实 Mac app 截图均生成于 `artifacts/e2e/`，窗口尺寸为 2800x1760。
+- 2026-07-06：`make package-dmg` 通过，生成 `dist/SuntraceMacApp.dmg` 与 `dist/SuntraceMacApp.dmg.sha256`，`shasum -a 256 -c dist/SuntraceMacApp.dmg.sha256` 通过。
+
 ## 后续缺口
 
 - IT 需要在接入真实 SQLite repository 后升级为数据库读写 round-trip，而不是只检查 schema。
-- E2E 需要继续扩展到 Day Todo、任务池、未来计划、未完成、已完成、设置和烛龙 AI 全页面截图。
+- E2E 已覆盖主要页面和关键详情栏选中态；后续需要补真实交互路径断言，例如新增任务、排期、变更、延续、复盘编辑、Provider 配置表单和 DMG 安装后启动。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
+- Release 后续需要补 Apple Developer ID 签名、notarization 和安装后首次启动验证；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成和校验安装包产物。

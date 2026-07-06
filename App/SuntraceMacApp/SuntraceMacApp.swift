@@ -1470,6 +1470,11 @@ final class SuntraceStore: ObservableObject {
 
     private func seed() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var seedClock = 0
+        func seedNow() -> Date {
+            defer { seedClock += 1 }
+            return now.addingTimeInterval(TimeInterval(seedClock))
+        }
         let day0 = LocalDate("2026-07-01")
         let dayMinus3 = LocalDate("2026-07-02")
         let day1 = LocalDate("2026-07-03")
@@ -1483,22 +1488,22 @@ final class SuntraceStore: ObservableObject {
                 title: "整理 Q3 OKR 草案",
                 descriptionText: "汇总三条产品线负责人给的季度目标，收敛成不超过 3 个 O、每个 O 配 3 个可量化 KR。",
                 note: "等数据组下午的留存看板再定第 2 个 KR 的口径。",
-                now: now
+                now: seedNow()
             )
             let okrDay0 = try engine.scheduleFromPool(chainID: okr, date: day0, today: day0, now: now)
 
-            let launchScript = try engine.createPoolTask(title: "给发布会准备演示脚本", descriptionText: "准备发布会现场演示脚本。", now: now)
+            let launchScript = try engine.createPoolTask(title: "给发布会准备演示脚本", descriptionText: "准备发布会现场演示脚本。", now: seedNow())
             _ = try engine.scheduleFromPool(chainID: launchScript, date: dayMinus3, today: dayMinus3, now: now)
-            let physical = try engine.createPoolTask(title: "预约年度体检", descriptionText: "预约年度体检时间。", now: now)
+            let physical = try engine.createPoolTask(title: "预约年度体检", descriptionText: "预约年度体检时间。", now: seedNow())
             let physicalTrace = try engine.scheduleFromPool(chainID: physical, date: dayMinus3, today: dayMinus3, now: now)
             try engine.returnToPool(traceID: physicalTrace, today: dayMinus3, now: now)
-            let wireframe = try engine.createPoolTask(title: "画首页线框图", descriptionText: "日历完成样例任务。", now: now)
+            let wireframe = try engine.createPoolTask(title: "画首页线框图", descriptionText: "日历完成样例任务。", now: seedNow())
             let wireframeTrace = try engine.scheduleFromPool(chainID: wireframe, date: dayMinus3, today: dayMinus3, now: now)
             try engine.markCompleted(traceID: wireframeTrace, today: dayMinus3, now: now)
-            let repository = try engine.createPoolTask(title: "搭建项目仓库与 CI", descriptionText: "日历完成样例任务。", now: now)
+            let repository = try engine.createPoolTask(title: "搭建项目仓库与 CI", descriptionText: "日历完成样例任务。", now: seedNow())
             let repositoryTrace = try engine.scheduleFromPool(chainID: repository, date: day0, today: day0, now: now)
             try engine.markCompleted(traceID: repositoryTrace, today: day0, now: now)
-            let rust = try engine.createPoolTask(title: "学习 Rust 基础语法", descriptionText: "废弃样例任务。", now: now)
+            let rust = try engine.createPoolTask(title: "学习 Rust 基础语法", descriptionText: "废弃样例任务。", now: seedNow())
             let rustTrace = try engine.scheduleFromPool(chainID: rust, date: day0, today: day0, now: now)
             try engine.abandonChain(from: rustTrace, now: now)
 
@@ -1507,26 +1512,26 @@ final class SuntraceStore: ObservableObject {
             let okrToday = try engine.continueTrace(traceID: okrDay1, targetDate: day3, today: day1, now: now)
             try engine.setManualProgress(traceID: okrToday, percent: 30, today: day3)
 
-            let contract = try engine.createPoolTask(title: "回复设计合同邮件", descriptionText: "确认合同条款并回复对方。", now: now)
+            let contract = try engine.createPoolTask(title: "回复设计合同邮件", descriptionText: "确认合同条款并回复对方。", now: seedNow())
             let contractTrace = try engine.scheduleFromPool(chainID: contract, date: day1, today: day1, now: now)
             try engine.markCompleted(traceID: contractTrace, today: day1, now: now)
 
-            let iconExport = try engine.createPoolTask(title: "修复图标导出脚本", descriptionText: "修复图标资源导出脚本。", now: now)
+            let iconExport = try engine.createPoolTask(title: "修复图标导出脚本", descriptionText: "修复图标资源导出脚本。", now: seedNow())
             let iconDay2 = try engine.scheduleFromPool(chainID: iconExport, date: day2, today: day2, now: now)
             try engine.setManualProgress(traceID: iconDay2, percent: 45, today: day2)
             let iconToday = try engine.continueTrace(traceID: iconDay2, targetDate: day3, today: day2, now: now)
             try engine.setManualProgress(traceID: iconToday, percent: 45, today: day3)
 
-            let weeklyReport = try engine.createPoolTask(title: "写本周周报", descriptionText: "整理本周进展和风险。", now: now)
+            let weeklyReport = try engine.createPoolTask(title: "写本周周报", descriptionText: "整理本周进展和风险。", now: seedNow())
             let weeklyDay1 = try engine.scheduleFromPool(chainID: weeklyReport, date: day1, today: day1, now: now)
             let weeklyDay2 = try engine.continueTrace(traceID: weeklyDay1, targetDate: day2, today: day1, now: now)
             try engine.markCompleted(traceID: weeklyDay2, today: day2, now: now)
 
-            let pricing = try engine.createPoolTask(title: "调研竞品定价", descriptionText: "旧任务范围过大，需要变更为可交付对比表。", now: now)
+            let pricing = try engine.createPoolTask(title: "调研竞品定价", descriptionText: "旧任务范围过大，需要变更为可交付对比表。", now: seedNow())
             let pricingTrace = try engine.scheduleFromPool(chainID: pricing, date: day2, today: day2, now: now)
-            _ = try engine.changeTrace(traceID: pricingTrace, newTitle: "输出竞品定价对比表", today: day2, now: now)
+            _ = try engine.changeTrace(traceID: pricingTrace, newTitle: "输出竞品定价对比表", today: day2, now: seedNow())
 
-            let visual = try engine.createPoolTask(title: "制作发布会主视觉", descriptionText: "推进发布会主视觉定稿。", now: now)
+            let visual = try engine.createPoolTask(title: "制作发布会主视觉", descriptionText: "推进发布会主视觉定稿。", now: seedNow())
             let visualDay1 = try engine.scheduleFromPool(chainID: visual, date: day1, today: day1, now: now)
             let visualReference = try engine.addSubtask(traceID: visualDay1, title: "收集视觉参考", difficulty: .simple, now: now)
             _ = try engine.addSubtask(traceID: visualDay1, title: "出 3 版草图", difficulty: .hard, now: now)
@@ -1541,27 +1546,27 @@ final class SuntraceStore: ObservableObject {
                 _ = try engine.addSubtask(traceID: visualToday, title: "定稿并交付", difficulty: .medium, now: now)
             }
 
-            let onboarding = try engine.createPoolTask(title: "审阅 onboarding 三屏文案", descriptionText: "审阅 onboarding 三屏文案。", now: now)
+            let onboarding = try engine.createPoolTask(title: "审阅 onboarding 三屏文案", descriptionText: "审阅 onboarding 三屏文案。", now: seedNow())
             let onboardingTrace = try engine.scheduleFromPool(chainID: onboarding, date: day3, today: day3, now: now)
             let headline = try engine.addSubtask(traceID: onboardingTrace, title: "首屏标题与副标题", difficulty: .simple, now: now)
             _ = try engine.addSubtask(traceID: onboardingTrace, title: "通知权限请求文案", difficulty: .medium, now: now)
             try engine.completeSubtask(headline, today: day3, now: now)
 
-            let running = try engine.createPoolTask(title: "晨跑 5 公里", descriptionText: "完成晨跑。", now: now)
+            let running = try engine.createPoolTask(title: "晨跑 5 公里", descriptionText: "完成晨跑。", now: seedNow())
             let runningTrace = try engine.scheduleFromPool(chainID: running, date: day3, today: day3, now: now)
             try engine.markCompleted(traceID: runningTrace, today: day3, now: now)
 
-            let downloads = try engine.createPoolTask(title: "清理下载文件夹", descriptionText: "清理下载文件夹。", now: now)
+            let downloads = try engine.createPoolTask(title: "清理下载文件夹", descriptionText: "清理下载文件夹。", now: seedNow())
             _ = try engine.scheduleFromPool(chainID: downloads, date: day3, today: day3, now: now)
 
-            _ = try engine.createPoolTask(title: "读《卡片笔记写作法》第三章", descriptionText: "任务池样例任务。", now: now)
-            _ = try engine.createPoolTask(title: "调研 SwiftUI 动画 API", descriptionText: "任务池样例任务。", now: now)
+            _ = try engine.createPoolTask(title: "读《卡片笔记写作法》第三章", descriptionText: "任务池样例任务。", now: seedNow())
+            _ = try engine.createPoolTask(title: "调研 SwiftUI 动画 API", descriptionText: "任务池样例任务。", now: seedNow())
 
-            let standup = try engine.createPoolTask(title: "准备周一站会要点", descriptionText: "未来计划样例任务。", now: now)
+            let standup = try engine.createPoolTask(title: "准备周一站会要点", descriptionText: "未来计划样例任务。", now: seedNow())
             _ = try engine.scheduleFromPool(chainID: standup, date: day4, today: day3, now: now)
-            let invoice = try engine.createPoolTask(title: "整理六月发票报销", descriptionText: "未来计划样例任务。", now: now)
+            let invoice = try engine.createPoolTask(title: "整理六月发票报销", descriptionText: "未来计划样例任务。", now: seedNow())
             _ = try engine.scheduleFromPool(chainID: invoice, date: day5, today: day3, now: now)
-            let dinner = try engine.createPoolTask(title: "预订团队聚餐餐厅", descriptionText: "未来计划样例任务。", now: now)
+            let dinner = try engine.createPoolTask(title: "预订团队聚餐餐厅", descriptionText: "未来计划样例任务。", now: seedNow())
             _ = try engine.scheduleFromPool(chainID: dinner, date: day4, today: day3, now: now)
 
             engine.settleDays(upTo: day3, now: now)
@@ -2419,17 +2424,19 @@ struct UnfinishedRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.definition.title)
                         .font(.system(size: 13, weight: .semibold))
-                    HStack(spacing: 7) {
-                        Text("\(item.unfinishedTraces.count) 次未完成").foregroundStyle(Theme.warn)
-                        Text("·")
-                        Text("\(item.unfinishedTraces.last?.continuationSeq ?? 0) 次延续")
-                        Text("·")
-                        Text("最近未完成 \(SuntraceStore.displayDate(item.unfinishedTraces.last?.date ?? store.today))")
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.text3)
                 }
                 Spacer()
+                if item.activeTrace == nil, let source = item.unfinishedTraces.last {
+                    SmallActionButton("延续到…", tone: .accent) { store.showingPicker = .continueTrace(source.id) }
+                    SmallActionButton("废弃任务链", tone: .warn) { store.abandon(source.id) }
+                }
+            }
+            HStack(spacing: 8) {
+                Text("\(item.unfinishedTraces.count) 次未完成").foregroundStyle(Theme.warn)
+                Text("·")
+                Text("\(item.unfinishedTraces.last?.continuationSeq ?? 0) 次延续")
+                Text("·")
+                Text("最近未完成 \(SuntraceStore.displayDate(item.unfinishedTraces.last?.date ?? store.today))")
                 if let active = item.activeTrace {
                     Button("已延续到 \(SuntraceStore.displayDate(active.date))，当前待完成 跳转 →") {
                         store.selectedDate = active.date
@@ -2440,12 +2447,10 @@ struct UnfinishedRow: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.accent)
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 1)
                     .background(Capsule().fill(Theme.accentSoft))
-                } else if let source = item.unfinishedTraces.last {
-                    SmallActionButton("延续到…", tone: .accent) { store.showingPicker = .continueTrace(source.id) }
-                    SmallActionButton("废弃任务链", tone: .warn) { store.abandon(source.id) }
                 }
+                Spacer()
                 Button(expanded ? "▾ 明细" : "▸ 明细") {
                     if expanded {
                         store.expandedUnfinishedChainIDs.remove(item.chain.id)
@@ -2457,6 +2462,9 @@ struct UnfinishedRow: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.text2)
             }
+            .font(.system(size: 11))
+            .foregroundStyle(Theme.text3)
+            .padding(.leading, 28)
             if expanded {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(item.unfinishedTraces, id: \.id) { trace in

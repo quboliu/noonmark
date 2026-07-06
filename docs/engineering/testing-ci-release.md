@@ -111,7 +111,7 @@ Release：
 
 - 2026-07-06：`scripts/test-e2e` 通过，14 个演示数据真实 Mac app 截图生成于 `artifacts/e2e/`，6 个新用户空数据截图生成于 `artifacts/e2e-blank/`，窗口尺寸为 2880x1800，对应原型 1440x900 Retina 截图基线。
 - 2026-07-06：`scripts/test-visual-regression` 已升级为多页面原型量化对比，覆盖 `day`、`pool`、`future`、`unfinished`、`completed`、`calendar`、`settings`，输出归一化截图、差异图和指标报告到 `artifacts/visual-regression/<page>/`，汇总在 `artifacts/visual-regression/summary.txt`。
-- 2026-07-06：当前多页面视觉指标为：day `changed_ratio=0.164255`，pool `0.065810`，future `0.052623`，unfinished `0.115242`，completed `0.163654`，calendar `0.075295`，settings `0.048817`；Day Todo、未完成池和已完成池仍是下一轮 UI 收紧重点。
+- 2026-07-06：当前多页面视觉指标为：day `changed_ratio=0.164237`，pool `0.065556`，future `0.052623`，unfinished `0.095252`，completed `0.163654`，calendar `0.075295`，settings `0.048817`；Day Todo 和已完成池仍是下一轮 UI 收紧重点。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 新用户空数据截图探针和正常模式持久化探针，使用 `artifacts/e2e-blank/Suntrace.sqlite` 与 `artifacts/e2e-persistence/Suntrace.sqlite` 验证空库初始化、页面浏览和保存均不灌入演示任务。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App lifecycle workflow 探针，验证任务变更保留旧轨迹并创建新任务、回池保留日轨迹、废弃同步终止任务链。

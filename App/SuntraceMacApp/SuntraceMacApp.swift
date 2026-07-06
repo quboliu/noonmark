@@ -3231,7 +3231,7 @@ struct PoolTaskRow: View {
     var body: some View {
         let selected = store.selectedPoolChainID == task.chain.id
         HStack(spacing: 10) {
-            PlanningGlyph(systemName: "tray", color: Theme.navPool)
+            PoolTaskPlaceholderGlyph()
             Text(task.definition.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.text1)
@@ -3246,6 +3246,14 @@ struct PoolTaskRow: View {
         .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.navPool.opacity(0.10) : Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.navPool : Theme.line, lineWidth: selected ? 1.3 : 1))
         .onTapGesture { store.selectPool(task.chain.id) }
+    }
+}
+
+struct PoolTaskPlaceholderGlyph: View {
+    var body: some View {
+        Circle()
+            .stroke(Theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [2.4, 2]))
+            .frame(width: 18, height: 18)
     }
 }
 

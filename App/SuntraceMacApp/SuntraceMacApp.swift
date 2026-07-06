@@ -34,6 +34,7 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installMainMenu()
         openMainWindow()
     }
 
@@ -84,6 +85,28 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem(title: "晷迹", action: nil, keyEquivalent: "")
+        let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
+        mainMenu.addItem(appItem)
+        mainMenu.addItem(editItem)
+
+        let appMenu = NSMenu(title: "晷迹")
+        appItem.submenu = appMenu
+        appMenu.addItem(withTitle: "退出晷迹", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        let editMenu = NSMenu(title: "编辑")
+        editItem.submenu = editMenu
+        let undoItem = editMenu.addItem(withTitle: "撤销", action: #selector(undoAction(_:)), keyEquivalent: "z")
+        undoItem.target = self
+        NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func undoAction(_ sender: Any?) {
+        store.undo()
     }
 }
 
@@ -182,7 +205,7 @@ final class SuntraceStore: ObservableObject {
     let today = LocalDate("2026-07-05")
     private let repository: SQLiteEngineRepository?
     private var toastTask: Task<Void, Never>?
-    private var undoStack: [() -> Void] = []
+    private var undoStack: [SuntraceSnapshot] = []
 
     init() {
         if CommandLine.arguments.contains("--ephemeral") {
@@ -345,6 +368,7 @@ final class SuntraceStore: ObservableObject {
         let title = quickText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.isEmpty == false else { return }
         do {
+            pushUndoSnapshotIfAllowed(on: selectedDate)
             let chainID = try engine.createPoolTask(title: title, descriptionText: "快速记录自 Day Todo。", now: Date())
             _ = try engine.scheduleFromPool(chainID: chainID, date: selectedDate, today: today)
             quickText = ""
@@ -371,6 +395,7 @@ final class SuntraceStore: ObservableObject {
 
     func schedulePoolTask(_ chainID: TaskChainID, date: LocalDate) {
         do {
+            pushUndoSnapshotIfAllowed(on: date)
             let traceID = try engine.scheduleFromPool(chainID: chainID, date: date, today: today)
             selectedDate = date
             page = .day
@@ -385,6 +410,7 @@ final class SuntraceStore: ObservableObject {
     func toggleComplete(_ traceID: DayTraceID) {
         guard let trace = engine.traces[traceID] else { return }
         do {
+            pushUndoSnapshotIfAllowed(on: trace.date)
             if trace.status == .completed {
                 try engine.undoCompleted(traceID: traceID, today: today)
                 persist()
@@ -401,8 +427,10 @@ final class SuntraceStore: ObservableObject {
 
     func toggleSubtask(_ subtaskID: SubtaskID) {
         guard let subtask = engine.subtasks[subtaskID] else { return }
+        guard let trace = engine.traces[subtask.traceID] else { return }
         do {
             if subtask.status == .pending {
+                pushUndoSnapshotIfAllowed(on: trace.date)
                 try engine.completeSubtask(subtaskID, today: today)
                 persist()
                 showToast("子任务已完成")
@@ -416,12 +444,14 @@ final class SuntraceStore: ObservableObject {
 
     func cycleSubtaskDifficulty(_ subtaskID: SubtaskID) {
         guard let current = engine.subtasks[subtaskID]?.difficulty else { return }
+        guard let trace = engine.subtasks[subtaskID].flatMap({ engine.traces[$0.traceID] }) else { return }
         let next: SubtaskDifficulty = switch current {
         case .simple: .medium
         case .medium: .hard
         case .hard: .simple
         }
         do {
+            pushUndoSnapshotIfAllowed(on: trace.date)
             try engine.updateSubtaskDifficulty(subtaskID, difficulty: next, today: today)
             persist()
         } catch {
@@ -444,6 +474,9 @@ final class SuntraceStore: ObservableObject {
 
     func returnToPool(_ traceID: DayTraceID) {
         do {
+            if let trace = engine.traces[traceID] {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+            }
             try engine.returnToPool(traceID: traceID, today: today)
             page = .pool
             clearSelection()
@@ -477,6 +510,9 @@ final class SuntraceStore: ObservableObject {
 
     func reschedule(_ traceID: DayTraceID, to date: LocalDate) {
         do {
+            if let trace = engine.traces[traceID] {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+            }
             try engine.rescheduleFuturePlan(traceID: traceID, targetDate: date, today: today)
             selectedDate = date
             persist()
@@ -491,6 +527,9 @@ final class SuntraceStore: ObservableObject {
         let title = changeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.isEmpty == false else { return }
         do {
+            if let trace = engine.traces[selectedTraceID] {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+            }
             let newID = try engine.changeTrace(traceID: selectedTraceID, newTitle: title, today: today)
             showingChangeDialog = false
             changeText = ""
@@ -505,6 +544,7 @@ final class SuntraceStore: ObservableObject {
     func movePriority(_ traceID: DayTraceID, delta: Int) {
         guard let trace = engine.traces[traceID] else { return }
         do {
+            pushUndoSnapshotIfAllowed(on: trace.date)
             try engine.updatePriority(traceID: traceID, newPriority: max(1, trace.priority + delta), today: today)
             persist()
         } catch {
@@ -541,6 +581,9 @@ final class SuntraceStore: ObservableObject {
 
     func setManualProgress(traceID: DayTraceID, percent: Double) {
         do {
+            if let trace = engine.traces[traceID] {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+            }
             try engine.setManualProgress(traceID: traceID, percent: Int(percent.rounded()), today: today)
             objectWillChange.send()
             persist()
@@ -553,6 +596,9 @@ final class SuntraceStore: ObservableObject {
         let title = detailSubtaskText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.isEmpty == false else { return }
         do {
+            if let trace = engine.traces[traceID] {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+            }
             _ = try engine.addSubtask(traceID: traceID, title: title)
             detailSubtaskText = ""
             objectWillChange.send()
@@ -595,7 +641,14 @@ final class SuntraceStore: ObservableObject {
     }
 
     func undo() {
-        showToast("没有可撤销的操作")
+        guard let snapshot = undoStack.popLast() else {
+            showToast("没有可撤销的操作")
+            return
+        }
+        engine = SuntraceEngine(snapshot: snapshot)
+        normalizeSelection()
+        persist()
+        showToast("已撤销")
     }
 
     func showToast(_ message: String) {
@@ -714,6 +767,32 @@ final class SuntraceStore: ObservableObject {
         } catch {
             NSLog("Suntrace persistence save failed: %@", String(describing: error))
             showToast("保存失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func pushUndoSnapshotIfAllowed(on date: LocalDate) {
+        guard date >= today else { return }
+        undoStack.append(engine.snapshot())
+        if undoStack.count > 20 {
+            undoStack.removeFirst(undoStack.count - 20)
+        }
+    }
+
+    private func normalizeSelection() {
+        if let selectedTraceID, engine.traces[selectedTraceID] == nil {
+            self.selectedTraceID = nil
+        }
+        if let selectedPoolChainID, engine.chains[selectedPoolChainID] == nil {
+            self.selectedPoolChainID = nil
+        }
+        if let selectedUnfinishedChainID, engine.chains[selectedUnfinishedChainID] == nil {
+            self.selectedUnfinishedChainID = nil
+        }
+        if let selectedCompletedTraceID, engine.traces[selectedCompletedTraceID] == nil {
+            self.selectedCompletedTraceID = nil
+        }
+        if let selectedCompletedSubtaskID, engine.subtasks[selectedCompletedSubtaskID] == nil {
+            self.selectedCompletedSubtaskID = nil
         }
     }
 

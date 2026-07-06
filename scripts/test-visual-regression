@@ -190,12 +190,12 @@ changed_ratio = changed_pixels / total_pixels
 mean_delta = sum_delta / total_pixels
 page = os.environ.get("SUNTRACE_VISUAL_PAGE", "custom")
 default_changed_ratios = {
-    "day": "0.20",
+    "day": "0.15",
     "pool": "0.07",
     "future": "0.05",
     "unfinished": "0.10",
     "completed": "0.14",
-    "calendar": "0.12",
+    "calendar": "0.09",
     "settings": "0.08",
 }
 default_changed_ratio = default_changed_ratios.get(page, "0.12")

@@ -348,6 +348,30 @@ fi
 
 echo "E2E context menu action matrix: $context_menu_result"
 
+undo_dir="artifacts/e2e-undo"
+undo_result="${undo_dir}/undo-result.txt"
+rm -rf "$undo_dir"
+mkdir -p "$undo_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page day \
+  --e2e-undo-workflow \
+  --e2e-undo-result-url "$PWD/$undo_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$undo_result" ]]; then
+  echo "undo workflow result was not created: $undo_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$undo_result")" != "ok" ]]; then
+  echo "undo workflow failed: $(cat "$undo_result")" >&2
+  exit 1
+fi
+
+echo "E2E undo workflow: $undo_result"
+
 provider_dir="artifacts/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"
 provider_name="E2E Provider"

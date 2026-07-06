@@ -159,6 +159,7 @@ private struct LaunchAutomation {
         append(ReviewE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewZhulongEntryE2EAutomation.fromCommandLine(), to: &actions)
         append(ContextMenuActionsE2EAutomation.fromCommandLine(), to: &actions)
+        append(UndoE2EAutomation.fromCommandLine(), to: &actions)
 
         guard actions.isEmpty == false else { return nil }
         return LaunchAutomation(
@@ -369,6 +370,164 @@ private enum ContextMenuActionsE2EAutomationError: LocalizedError {
             return "missing trace"
         case let .actionMismatch(label, expected, actual):
             return "\(label) context actions mismatch: expected \(expected), got \(actual)"
+        }
+    }
+}
+
+private struct UndoE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> UndoE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-undo-workflow") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-undo-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return UndoE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            try verifyPoolAddUndo(on: store)
+            try verifyCurrentContinuationUndo(on: store)
+            try verifyCurrentAbandonUndo(on: store)
+            try verifyFutureRescheduleUndo(on: store)
+            try verifyCopyAsNewTaskUndo(on: store)
+            try verifyHistoricalAbandonIsNotUndoable(on: store)
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error)")
+        }
+    }
+
+    @MainActor
+    private func reset(_ store: SuntraceStore) {
+        store.engine = SuntraceEngine()
+        store.page = .day
+        store.selectedDate = store.today
+        store.selectedCalendarDate = store.today
+        store.clearSelection()
+        store.clearUndoHistory()
+    }
+
+    @MainActor
+    private func verifyPoolAddUndo(on store: SuntraceStore) throws {
+        reset(store)
+        store.poolText = "E2E 撤销任务池新增"
+        store.addPoolTask()
+        guard store.engine.taskPool().count == 1 else {
+            throw UndoE2EAutomationError.failed("pool add did not create one task")
+        }
+        store.undo()
+        guard store.engine.taskPool().isEmpty else {
+            throw UndoE2EAutomationError.failed("pool add undo did not restore empty pool")
+        }
+    }
+
+    @MainActor
+    private func verifyCurrentContinuationUndo(on store: SuntraceStore) throws {
+        reset(store)
+        let traceID = try makeTrace(title: "E2E 撤销当前延续", date: store.today, today: store.today, store: store)
+        let tomorrow = SuntraceStore.offset(store.today, by: 1)
+        store.continueTrace(traceID, to: tomorrow)
+        guard store.engine.traces.values.contains(where: { $0.date == tomorrow && $0.status == .pending }) else {
+            throw UndoE2EAutomationError.failed("continuation did not create tomorrow trace")
+        }
+        store.undo()
+        guard store.engine.traces.count == 1,
+              store.engine.traces[traceID]?.status == .pending
+        else {
+            throw UndoE2EAutomationError.failed("current continuation undo did not restore source trace")
+        }
+    }
+
+    @MainActor
+    private func verifyCurrentAbandonUndo(on store: SuntraceStore) throws {
+        reset(store)
+        let traceID = try makeTrace(title: "E2E 撤销当前废弃", date: store.today, today: store.today, store: store)
+        store.abandon(traceID)
+        guard store.engine.traces[traceID]?.status == .abandoned else {
+            throw UndoE2EAutomationError.failed("current abandon did not abandon trace")
+        }
+        store.undo()
+        guard store.engine.traces[traceID]?.status == .pending else {
+            throw UndoE2EAutomationError.failed("current abandon undo did not restore pending trace")
+        }
+    }
+
+    @MainActor
+    private func verifyFutureRescheduleUndo(on store: SuntraceStore) throws {
+        reset(store)
+        let tomorrow = SuntraceStore.offset(store.today, by: 1)
+        let nextWeek = SuntraceStore.offset(store.today, by: 7)
+        let traceID = try makeTrace(title: "E2E 撤销未来改期", date: tomorrow, today: store.today, store: store)
+        store.reschedule(traceID, to: nextWeek)
+        guard store.engine.traces[traceID]?.date == nextWeek else {
+            throw UndoE2EAutomationError.failed("future reschedule did not change date")
+        }
+        store.undo()
+        guard store.engine.traces[traceID]?.date == tomorrow else {
+            throw UndoE2EAutomationError.failed("future reschedule undo did not restore original date")
+        }
+    }
+
+    @MainActor
+    private func verifyCopyAsNewTaskUndo(on store: SuntraceStore) throws {
+        reset(store)
+        let past = SuntraceStore.offset(store.today, by: -1)
+        let traceID = try makeTrace(title: "E2E 撤销复制新任务", date: past, today: past, store: store)
+        try store.engine.markCompleted(traceID: traceID, today: past)
+        store.copyAsNewTask(traceID)
+        guard store.engine.taskPool().count == 1 else {
+            throw UndoE2EAutomationError.failed("copy as new task did not create pool task")
+        }
+        store.undo()
+        guard store.engine.taskPool().isEmpty,
+              store.engine.traces[traceID]?.status == .completed
+        else {
+            throw UndoE2EAutomationError.failed("copy as new task undo did not restore completed history")
+        }
+    }
+
+    @MainActor
+    private func verifyHistoricalAbandonIsNotUndoable(on store: SuntraceStore) throws {
+        reset(store)
+        let past = SuntraceStore.offset(store.today, by: -1)
+        let traceID = try makeTrace(title: "E2E 历史废弃不可撤销", date: past, today: store.today, store: store)
+        store.engine.settleDays(upTo: store.today)
+        store.abandon(traceID)
+        guard store.engine.traces[traceID]?.status == .abandoned else {
+            throw UndoE2EAutomationError.failed("historical abandon did not abandon trace")
+        }
+        store.undo()
+        guard store.engine.traces[traceID]?.status == .abandoned else {
+            throw UndoE2EAutomationError.failed("historical abandon unexpectedly became undoable")
+        }
+    }
+
+    @MainActor
+    private func makeTrace(title: String, date: LocalDate, today: LocalDate, store: SuntraceStore) throws -> DayTraceID {
+        let chainID = try store.engine.createPoolTask(title: title)
+        return try store.engine.scheduleFromPool(chainID: chainID, date: date, today: today)
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum UndoE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
         }
     }
 }
@@ -1099,6 +1258,7 @@ final class SuntraceStore: ObservableObject {
         let title = poolText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.isEmpty == false else { return }
         do {
+            pushUndoSnapshot()
             let chainID = try engine.createPoolTask(title: title, descriptionText: "任务池中的待排期任务。", note: "可以排期到今天、明天或指定日期。")
             selectedPoolChainID = chainID
             poolText = ""
@@ -1177,6 +1337,9 @@ final class SuntraceStore: ObservableObject {
 
     func continueTrace(_ traceID: DayTraceID, to date: LocalDate) {
         do {
+            if let trace = engine.traces[traceID] {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+            }
             let nextID = try engine.continueTrace(traceID: traceID, targetDate: date, today: today)
             selectedDate = date
             page = .day
@@ -1205,6 +1368,9 @@ final class SuntraceStore: ObservableObject {
 
     func abandon(_ traceID: DayTraceID) {
         do {
+            if let trace = engine.traces[traceID] {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+            }
             try engine.abandonChain(from: traceID)
             persist()
             showToast("任务链已废弃")
@@ -1215,6 +1381,7 @@ final class SuntraceStore: ObservableObject {
 
     func copyAsNewTask(_ traceID: DayTraceID) {
         do {
+            pushUndoSnapshot()
             _ = try engine.copyAsNewTask(from: traceID, target: .taskPool, today: today)
             page = .pool
             persist()
@@ -1283,6 +1450,7 @@ final class SuntraceStore: ObservableObject {
     func updateTraceText(traceID: DayTraceID, descriptionText: String? = nil, note: String? = nil) {
         guard let trace = engine.traces[traceID] else { return }
         do {
+            pushUndoSnapshotIfAllowed(on: trace.date)
             try engine.updateTraceText(
                 traceID: traceID,
                 descriptionText: descriptionText ?? trace.descriptionText,
@@ -1380,7 +1548,7 @@ final class SuntraceStore: ObservableObject {
     func importDataPackage(from url: URL) throws {
         let snapshot = try SuntraceDataPackage.read(from: url)
 
-        undoStack.append(engine.snapshot())
+        pushUndoSnapshot()
         engine = SuntraceEngine(snapshot: snapshot)
         Theme.apply(engine.preferences.theme)
         selectedDate = today
@@ -1614,6 +1782,10 @@ final class SuntraceStore: ObservableObject {
         showToast("已撤销")
     }
 
+    func clearUndoHistory() {
+        undoStack.removeAll()
+    }
+
     func showToast(_ message: String) {
         toastTask?.cancel()
         toast = message
@@ -1750,6 +1922,10 @@ final class SuntraceStore: ObservableObject {
 
     private func pushUndoSnapshotIfAllowed(on date: LocalDate) {
         guard date >= today else { return }
+        pushUndoSnapshot()
+    }
+
+    private func pushUndoSnapshot() {
         undoStack.append(engine.snapshot())
         if undoStack.count > 20 {
             undoStack.removeFirst(undoStack.count - 20)

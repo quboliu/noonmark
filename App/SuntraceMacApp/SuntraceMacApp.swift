@@ -1928,34 +1928,26 @@ struct DayTodoPage: View {
                     .padding(.horizontal, 24)
             }
 
-            if store.isHistory == false {
-                HStack(spacing: 8) {
-                    TextField(store.isFuture ? "为这一天排期任务，回车确认" : "添加今日任务，回车确认", text: $store.quickText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13))
-                        .padding(.horizontal, 12)
-                        .frame(height: 32)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-                        .onSubmit { store.addQuickTask() }
-                    HeaderButton("从任务池排期…") { store.showingFromPoolPicker = true }
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 12)
-            }
-
             ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(traces, id: \.id) { trace in
-                        TaskRow(trace: trace)
+                VStack(spacing: 0) {
+                    if store.isHistory == false {
+                        DayQuickAdd()
+                            .padding(.bottom, 12)
                     }
 
-                    if traces.isEmpty {
-                        EmptyState(kind: .dayTodo, text: "这一天没有留下任务。")
-                            .padding(.top, 40)
+                    LazyVStack(spacing: 6) {
+                        ForEach(traces, id: \.id) { trace in
+                            TaskRow(trace: trace)
+                        }
+
+                        if traces.isEmpty {
+                            EmptyState(kind: .dayTodo, text: "这一天没有留下任务。")
+                                .padding(.top, 40)
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
+                .padding(.top, store.isHistory ? 12 : 14)
                 .padding(.bottom, 20)
             }
         }
@@ -1990,7 +1982,7 @@ struct DayTodoHeader: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text3)
                 .lineLimit(1)
-            StatusPill(text: dayBadge, color: badgeColor)
+            DayStateBadge(text: dayBadge, color: badgeColor, filled: store.selectedDate == store.today)
             Spacer(minLength: 8)
             HStack(spacing: 6) {
                 HeaderButton("‹") { store.selectedDate = SuntraceStore.offset(store.selectedDate, by: -1) }
@@ -2001,6 +1993,39 @@ struct DayTodoHeader: View {
         }
         .padding(.horizontal, 24)
         .padding(.top, 16)
+    }
+}
+
+struct DayStateBadge: View {
+    let text: String
+    let color: Color
+    let filled: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(filled ? .white : color)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(filled ? color : color.opacity(0.12)))
+    }
+}
+
+struct DayQuickAdd: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField(store.isFuture ? "为这一天排期任务，回车确认" : "添加今日任务，回车确认", text: $store.quickText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                .onSubmit { store.addQuickTask() }
+            HeaderButton("从任务池排期…") { store.showingFromPoolPicker = true }
+        }
     }
 }
 

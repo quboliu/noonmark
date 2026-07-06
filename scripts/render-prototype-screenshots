@@ -4,7 +4,7 @@ set -euo pipefail
 prototype_dir="${SUNTRACE_PROTOTYPE_DIR:-docs/design/prototypes/claude-mac-ui-2026-07-05}"
 out_dir="${SUNTRACE_PROTOTYPE_OUT_DIR:-artifacts/prototype-screenshots}"
 window_size="${SUNTRACE_PROTOTYPE_WINDOW_SIZE:-1440,900}"
-render_timeout="${SUNTRACE_PROTOTYPE_RENDER_TIMEOUT:-15}"
+render_timeout="${SUNTRACE_PROTOTYPE_RENDER_TIMEOUT:-45}"
 pages=(${SUNTRACE_PROTOTYPE_PAGES:-day pool future unfinished completed calendar settings})
 
 chrome_binary="${SUNTRACE_CHROME_BINARY:-}"

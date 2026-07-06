@@ -6,7 +6,7 @@ out_dir="${SUNTRACE_PROTOTYPE_OUT_DIR:-artifacts/prototype-screenshots}"
 window_size="${SUNTRACE_PROTOTYPE_WINDOW_SIZE:-1440,900}"
 render_timeout="${SUNTRACE_PROTOTYPE_RENDER_TIMEOUT:-90}"
 render_attempts="${SUNTRACE_PROTOTYPE_RENDER_ATTEMPTS:-3}"
-pages=(${SUNTRACE_PROTOTYPE_PAGES:-day pool future unfinished completed calendar settings})
+pages=(${SUNTRACE_PROTOTYPE_PAGES:-day day-detail day-manual-detail day-review-saved pool pool-detail future future-detail unfinished unfinished-detail completed completed-detail calendar settings})
 
 chrome_binary="${SUNTRACE_CHROME_BINARY:-}"
 if [[ -z "$chrome_binary" ]]; then
@@ -32,12 +32,62 @@ rm -rf "$out_dir"
 mkdir -p "$out_dir"
 
 for page in "${pages[@]}"; do
+  prototype_page="$page"
+  prototype_date=""
+  prototype_selection=""
+  prototype_review_summary=""
+  case "$page" in
+    day-detail)
+      prototype_page="day"
+      prototype_selection="t3"
+      ;;
+    day-manual-detail)
+      prototype_page="day"
+      prototype_selection="t3"
+      ;;
+    day-review-saved)
+      prototype_page="day"
+      prototype_review_summary="E2E自动保存反馈"
+      ;;
+    pool-detail)
+      prototype_page="pool"
+      prototype_selection="t12"
+      ;;
+    future-detail)
+      prototype_page="future"
+      prototype_selection="t18"
+      ;;
+    unfinished-detail)
+      prototype_page="unfinished"
+      prototype_selection="t2"
+      ;;
+    completed-detail)
+      prototype_page="completed"
+      prototype_selection="t14"
+      ;;
+  esac
+
   work_dir="${out_dir}/.${page}-src"
   mkdir -p "$work_dir"
   cp -R "${prototype_dir}/." "$work_dir/"
 
   page_html="${work_dir}/suntrace-mac-prototype.dc.html"
-  perl -0pi -e "s/page:'day',date:/page:'${page}',date:/" "$page_html"
+  python3 - "$page_html" "$prototype_page" "$prototype_date" "$prototype_selection" "$prototype_review_summary" <<'PY'
+import sys
+
+path, page, date, selection, review_summary = sys.argv[1:6]
+with open(path, "r", encoding="utf-8") as file:
+    html = file.read()
+
+html = html.replace("page:'day',date:this.TODAY,sel:null", f"page:'{page}',date:this.TODAY,sel:{repr(selection) if selection else 'null'}")
+if date:
+    html = html.replace("date:this.TODAY", f"date:'{date}'", 1)
+if review_summary:
+    html = html.replace("'2026-07-05':{sum:'',why:'',nxt:''}", f"'2026-07-05':{{sum:{repr(review_summary)},why:'',nxt:''}}")
+
+with open(path, "w", encoding="utf-8") as file:
+    file.write(html)
+PY
 
   valid=0
   width=0

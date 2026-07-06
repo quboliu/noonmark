@@ -5,7 +5,7 @@ configuration="${1:-debug}"
 out_dir="${SUNTRACE_VISUAL_OUT_DIR:-artifacts/visual-regression}"
 reference_dir="${SUNTRACE_VISUAL_REFERENCE_DIR:-artifacts/prototype-screenshots}"
 actual_dir="${SUNTRACE_VISUAL_ACTUAL_DIR:-artifacts/e2e}"
-pages=(${SUNTRACE_VISUAL_PAGES:-day pool future unfinished completed calendar settings})
+pages=(${SUNTRACE_VISUAL_PAGES:-day day-detail day-manual-detail day-review-saved pool pool-detail future future-detail unfinished unfinished-detail completed completed-detail calendar settings})
 
 if [[ "${SUNTRACE_VISUAL_REUSE_SCREENSHOTS:-0}" != "1" ]]; then
   scripts/test-e2e "$configuration"
@@ -191,16 +191,29 @@ mean_delta = sum_delta / total_pixels
 page = os.environ.get("SUNTRACE_VISUAL_PAGE", "custom")
 default_changed_ratios = {
     "day": "0.15",
+    "day-detail": "0.17",
+    "day-manual-detail": "0.17",
+    "day-review-saved": "0.15",
     "pool": "0.07",
+    "pool-detail": "0.11",
     "future": "0.05",
+    "future-detail": "0.08",
     "unfinished": "0.10",
+    "unfinished-detail": "0.17",
     "completed": "0.14",
+    "completed-detail": "0.18",
     "calendar": "0.09",
     "settings": "0.08",
 }
+default_mean_deltas = {
+    "day-detail": "0.030",
+    "day-manual-detail": "0.030",
+    "completed-detail": "0.030",
+}
 default_changed_ratio = default_changed_ratios.get(page, "0.12")
+default_mean_delta = default_mean_deltas.get(page, "0.025")
 max_changed_ratio = float(os.environ.get(page_env_name("MAX_CHANGED_RATIO"), os.environ.get("SUNTRACE_VISUAL_MAX_CHANGED_RATIO", default_changed_ratio)))
-max_mean_delta = float(os.environ.get(page_env_name("MAX_MEAN_DELTA"), os.environ.get("SUNTRACE_VISUAL_MAX_MEAN_DELTA", "0.025")))
+max_mean_delta = float(os.environ.get(page_env_name("MAX_MEAN_DELTA"), os.environ.get("SUNTRACE_VISUAL_MAX_MEAN_DELTA", default_mean_delta)))
 enforce = os.environ.get("SUNTRACE_VISUAL_ENFORCE", "1") != "0"
 
 write_rgb_png(diff_path, ref_width, ref_height, diff_rows)

@@ -42,7 +42,8 @@
   - `swift test`
 - 当前环境取证：
   - `swift build` 通过。
-  - `swift test` 通过，当前 45 个 XCTest 全绿。
+  - `swift test` 通过，当前 46 个 XCTest 全绿。
+  - `scripts/test-visual-regression` 默认覆盖 14 个原型可比场景：7 个顶层页面、6 个详情态和 `day-review-saved`。
   - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`。
 - 项目级工具入口：
   - `make build`
@@ -51,6 +52,7 @@
   - `make format-check`
   - `make check`
   - `scripts/test-e2e`
+  - `scripts/test-visual-regression`
   - `scripts/test-ai-provider-live`：手动 live AI provider smoke；必须显式设置 `SUNTRACE_AI_BASE_URL`、`SUNTRACE_AI_MODEL` 和 `SUNTRACE_AI_API_KEY`，不进入默认 `make check`。
   - `scripts/package-dmg release`
   - `scripts/test-dmg-install dist/SuntraceMacApp.dmg`
@@ -99,7 +101,7 @@
 ## 验证
 
 - 有 deployed endpoint 或可运行应用时，验证必须打真实 deployed endpoint 或真实应用入口，并走用户实际路径；禁止用模拟路径或手工补数据自欺。
-- 当前仓库尚无正式前端或 Mac App target；涉及现有 HTML 原型或未来前端时，一律走 frontend-verify skill：Puppeteer/Playwright 截图、DOM 度量、console error 门禁都必须覆盖。若当前环境未提供该 skill，必须明确说明，并用等价的浏览器自动化证据补齐。
+- 当前仓库已有真实 Mac App target；涉及 Mac UI 时必须使用真实 `.app` E2E 截图、`scripts/test-visual-regression` 原型量化对比、console / 运行日志和持久化探针等证据补齐。若当前环境未提供 frontend-verify skill，必须明确说明，并用等价自动化证据补齐。
 - 悬浮或 fixed UI 验收必须使用长滚动页面，短页面不能作为充分证据。
 - 隔离前端栈中，`NEXT_PUBLIC_API_URL` 必须烤进镜像；`curl` 后端 200 不等于浏览器实际走了那个后端。
 - 若存在容器化部署配置，每次改完代码后主动部署到隔离容器验证；若当前没有容器或部署入口，必须明确说明，并用当前最高强度的本地运行产物验证补齐。

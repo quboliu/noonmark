@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SuntraceCore
+import SuntraceStorage
 
 @main
 @MainActor
@@ -34,6 +35,10 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         openMainWindow()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        store.persist()
     }
 
     func openMainWindow() {
@@ -175,11 +180,18 @@ final class SuntraceStore: ObservableObject {
     @Published var toast: String?
 
     let today = LocalDate("2026-07-05")
+    private let repository: SQLiteEngineRepository?
     private var toastTask: Task<Void, Never>?
     private var undoStack: [() -> Void] = []
 
     init() {
-        seed()
+        if CommandLine.arguments.contains("--ephemeral") {
+            repository = nil
+            seed()
+        } else {
+            repository = SQLiteEngineRepository(databaseURL: Self.configuredDatabaseURL())
+            loadOrSeed()
+        }
     }
 
     var isHistory: Bool {
@@ -336,6 +348,7 @@ final class SuntraceStore: ObservableObject {
             let chainID = try engine.createPoolTask(title: title, descriptionText: "快速记录自 Day Todo。", now: Date())
             _ = try engine.scheduleFromPool(chainID: chainID, date: selectedDate, today: today)
             quickText = ""
+            persist()
             showToast("已添加「\(title)」")
         } catch {
             showToast(error.localizedDescription)
@@ -349,6 +362,7 @@ final class SuntraceStore: ObservableObject {
             let chainID = try engine.createPoolTask(title: title, descriptionText: "任务池中的待排期任务。", note: "可以排期到今天、明天或指定日期。")
             selectedPoolChainID = chainID
             poolText = ""
+            persist()
             showToast("已加入任务池")
         } catch {
             showToast(error.localizedDescription)
@@ -361,6 +375,7 @@ final class SuntraceStore: ObservableObject {
             selectedDate = date
             page = .day
             selectTrace(traceID)
+            persist()
             showToast("已排期到 \(Self.displayDate(date))")
         } catch {
             showToast(error.localizedDescription)
@@ -372,9 +387,11 @@ final class SuntraceStore: ObservableObject {
         do {
             if trace.status == .completed {
                 try engine.undoCompleted(traceID: traceID, today: today)
+                persist()
                 showToast("已撤销完成")
             } else {
                 try engine.markCompleted(traceID: traceID, today: today)
+                persist()
                 showToast("已完成")
             }
         } catch {
@@ -387,6 +404,7 @@ final class SuntraceStore: ObservableObject {
         do {
             if subtask.status == .pending {
                 try engine.completeSubtask(subtaskID, today: today)
+                persist()
                 showToast("子任务已完成")
             } else {
                 showToast("历史子任务不可改写")
@@ -405,6 +423,7 @@ final class SuntraceStore: ObservableObject {
         }
         do {
             try engine.updateSubtaskDifficulty(subtaskID, difficulty: next, today: today)
+            persist()
         } catch {
             showToast(error.localizedDescription)
         }
@@ -416,6 +435,7 @@ final class SuntraceStore: ObservableObject {
             selectedDate = date
             page = .day
             selectTrace(nextID)
+            persist()
             showToast("已延续到 \(Self.displayDate(date))")
         } catch {
             showToast(error.localizedDescription)
@@ -427,6 +447,7 @@ final class SuntraceStore: ObservableObject {
             try engine.returnToPool(traceID: traceID, today: today)
             page = .pool
             clearSelection()
+            persist()
             showToast("已回池，轨迹保留在当天")
         } catch {
             showToast(error.localizedDescription)
@@ -436,6 +457,7 @@ final class SuntraceStore: ObservableObject {
     func abandon(_ traceID: DayTraceID) {
         do {
             try engine.abandonChain(from: traceID)
+            persist()
             showToast("任务链已废弃")
         } catch {
             showToast(error.localizedDescription)
@@ -446,6 +468,7 @@ final class SuntraceStore: ObservableObject {
         do {
             _ = try engine.copyAsNewTask(from: traceID, target: .taskPool, today: today)
             page = .pool
+            persist()
             showToast("已复制为新任务，放入任务池")
         } catch {
             showToast(error.localizedDescription)
@@ -456,6 +479,7 @@ final class SuntraceStore: ObservableObject {
         do {
             try engine.rescheduleFuturePlan(traceID: traceID, targetDate: date, today: today)
             selectedDate = date
+            persist()
             showToast("已改期到 \(Self.displayDate(date))")
         } catch {
             showToast(error.localizedDescription)
@@ -471,6 +495,7 @@ final class SuntraceStore: ObservableObject {
             showingChangeDialog = false
             changeText = ""
             selectTrace(newID)
+            persist()
             showToast("已变更，新任务已加入当天")
         } catch {
             showToast(error.localizedDescription)
@@ -481,6 +506,7 @@ final class SuntraceStore: ObservableObject {
         guard let trace = engine.traces[traceID] else { return }
         do {
             try engine.updatePriority(traceID: traceID, newPriority: max(1, trace.priority + delta), today: today)
+            persist()
         } catch {
             showToast(error.localizedDescription)
         }
@@ -494,6 +520,7 @@ final class SuntraceStore: ObservableObject {
             unfinishedReason: reason ?? existing?.reviewUnfinishedReason,
             tomorrowNote: tomorrow ?? existing?.reviewTomorrowNote
         )
+        persist()
     }
 
     func updateTraceText(traceID: DayTraceID, descriptionText: String? = nil, note: String? = nil) {
@@ -506,6 +533,7 @@ final class SuntraceStore: ObservableObject {
                 today: today
             )
             objectWillChange.send()
+            persist()
         } catch {
             showToast(error.localizedDescription)
         }
@@ -515,6 +543,7 @@ final class SuntraceStore: ObservableObject {
         do {
             try engine.setManualProgress(traceID: traceID, percent: Int(percent.rounded()), today: today)
             objectWillChange.send()
+            persist()
         } catch {
             showToast(error.localizedDescription)
         }
@@ -527,6 +556,7 @@ final class SuntraceStore: ObservableObject {
             _ = try engine.addSubtask(traceID: traceID, title: title)
             detailSubtaskText = ""
             objectWillChange.send()
+            persist()
             showToast("已添加子任务")
         } catch {
             showToast(error.localizedDescription)
@@ -535,10 +565,12 @@ final class SuntraceStore: ObservableObject {
 
     func setTheme(_ theme: AppTheme) {
         engine.updateTheme(theme)
+        persist()
     }
 
     func setLanguage(_ language: AppLanguage) {
         engine.updateLanguage(language)
+        persist()
     }
 
     func performDateChoice(_ date: LocalDate) {
@@ -627,6 +659,62 @@ final class SuntraceStore: ObservableObject {
         let shifted = Calendar(identifier: .gregorian).date(byAdding: .month, value: delta, to: first) ?? first
         let components = Calendar(identifier: .gregorian).dateComponents([.year, .month], from: shifted)
         return LocalDate(year: components.year ?? date.year, month: components.month ?? date.month, day: 1)
+    }
+
+    static func configuredDatabaseURL() -> URL {
+        if let path = commandLineValue(after: "--data-url"), path.isEmpty == false {
+            return URL(fileURLWithPath: path)
+        }
+        return defaultDatabaseURL()
+    }
+
+    static func defaultDatabaseURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        return base
+            .appendingPathComponent("suntrace", isDirectory: true)
+            .appendingPathComponent("Suntrace.sqlite")
+    }
+
+    static func commandLineValue(after flag: String) -> String? {
+        guard let index = CommandLine.arguments.firstIndex(of: flag) else { return nil }
+        let valueIndex = CommandLine.arguments.index(after: index)
+        guard CommandLine.arguments.indices.contains(valueIndex) else { return nil }
+        return CommandLine.arguments[valueIndex]
+    }
+
+    func loadOrSeed() {
+        guard let repository else {
+            seed()
+            return
+        }
+
+        do {
+            let loaded = try repository.load()
+            let snapshot = loaded.snapshot()
+            if snapshot.days.isEmpty && snapshot.chains.isEmpty && snapshot.traces.isEmpty {
+                seed()
+                persist()
+            } else {
+                engine = loaded
+            }
+        } catch {
+            seed()
+            NSLog("Suntrace persistence load failed: %@", String(describing: error))
+            toast = "无法读取本地数据库，已使用初始样例数据：\(error.localizedDescription)"
+        }
+    }
+
+    func persist() {
+        guard let repository else { return }
+
+        do {
+            try repository.save(engine)
+        } catch {
+            NSLog("Suntrace persistence save failed: %@", String(describing: error))
+            showToast("保存失败：\(error.localizedDescription)")
+        }
     }
 
     private func seed() {

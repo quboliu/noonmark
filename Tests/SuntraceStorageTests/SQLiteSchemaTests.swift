@@ -39,6 +39,9 @@ final class SQLiteSchemaTests: XCTestCase {
         let completedChainID = try engine.createPoolTask(title: "完成存储 schema", now: now)
         let completedTraceID = try engine.scheduleFromPool(chainID: completedChainID, date: day2, today: day2, now: now)
         try engine.markCompleted(traceID: completedTraceID, today: day2, now: now)
+        let changedChainID = try engine.createPoolTask(title: "写旧版任务标题", now: now)
+        let changedTraceID = try engine.scheduleFromPool(chainID: changedChainID, date: day2, today: day2, now: now)
+        _ = try engine.changeTrace(traceID: changedTraceID, newTitle: "写新版任务标题", today: day2, now: now)
         engine.updateDailyReview(
             date: day1,
             summary: "已完成 schema 与 repository 第一版。",
@@ -57,7 +60,7 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertEqual(restored.taskPool().count, 0)
         XCTAssertEqual(restored.unfinishedPool().count, 1)
         XCTAssertEqual(restored.completedPool().count, 1)
-        XCTAssertEqual(restored.getDayTodo(date: day2).traces.count, 2)
+        XCTAssertEqual(restored.getDayTodo(date: day2).traces.count, 4)
         XCTAssertEqual(restored.engineReviewSummary(for: day1), "已完成 schema 与 repository 第一版。")
         XCTAssertEqual(restored.preferences.theme, .warmPaper)
         XCTAssertEqual(restored.preferences.language, .english)

@@ -17,7 +17,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "SuntraceMacApp",
-            dependencies: ["SuntraceCore", "SuntraceAI", "SuntraceMacUIContract"],
+            dependencies: ["SuntraceCore", "SuntraceAI", "SuntraceMacUIContract", "SuntraceStorage"],
             path: "App/SuntraceMacApp"
         ),
         .target(name: "SuntraceCore"),

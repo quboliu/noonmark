@@ -58,6 +58,23 @@ public enum SQLiteRepositoryError: Error, Equatable {
     case invalidStoredValue(String)
 }
 
+extension SQLiteRepositoryError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case let .openFailed(message):
+            return "SQLite open failed: \(message)"
+        case let .prepareFailed(message):
+            return "SQLite prepare failed: \(message)"
+        case let .executeFailed(message):
+            return "SQLite execute failed: \(message)"
+        case let .stepFailed(message):
+            return "SQLite step failed: \(message)"
+        case let .invalidStoredValue(message):
+            return "SQLite stored value is invalid: \(message)"
+        }
+    }
+}
+
 private extension SQLiteEngineRepository {
     typealias Database = OpaquePointer
     typealias Statement = OpaquePointer
@@ -116,8 +133,18 @@ private extension SQLiteEngineRepository {
         defer { sqlite3_finalize(statement) }
         try bind(statement)
         guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw SQLiteRepositoryError.stepFailed(lastError(database))
+            throw SQLiteRepositoryError.stepFailed("\(lastError(database)) in \(sqlSummary(sql))")
         }
+    }
+
+    func sqlSummary(_ sql: String) -> String {
+        for line in sql.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty == false {
+                return trimmed
+            }
+        }
+        return "SQL statement"
     }
 
     func query<T>(_ sql: String, on database: Database?, row: (Statement?) throws -> T) throws -> [T] {
@@ -291,7 +318,19 @@ private extension SQLiteEngineRepository {
                 bind(definition.note, to: 6, in: statement)
                 bind(definition.createdAt, to: 7, in: statement)
                 bind(definition.supersededAt, to: 8, in: statement)
-                bind(definition.supersededByDefinitionID?.rawValue.uuidString, to: 9, in: statement)
+                bind(nil as String?, to: 9, in: statement)
+            }
+        }
+
+        let relationSQL = """
+        UPDATE task_definitions
+        SET superseded_by_definition_id = ?
+        WHERE id = ?
+        """
+        for definition in definitions {
+            try run(relationSQL, on: database) { statement in
+                bind(definition.supersededByDefinitionID?.rawValue.uuidString, to: 1, in: statement)
+                bind(definition.id.rawValue, to: 2, in: statement)
             }
         }
     }
@@ -332,10 +371,22 @@ private extension SQLiteEngineRepository {
                 bind(trace.note, to: 9, in: statement)
                 bind(trace.manualProgressPercent, to: 10, in: statement)
                 bind(trace.continuedFromTraceID?.rawValue.uuidString, to: 11, in: statement)
-                bind(trace.changedToTraceID?.rawValue.uuidString, to: 12, in: statement)
+                bind(nil as String?, to: 12, in: statement)
                 bind(trace.createdAt, to: 13, in: statement)
                 bind(trace.completedAt, to: 14, in: statement)
                 bind(trace.settledAt, to: 15, in: statement)
+            }
+        }
+
+        let relationSQL = """
+        UPDATE day_traces
+        SET changed_to_trace_id = ?
+        WHERE id = ?
+        """
+        for trace in traces {
+            try run(relationSQL, on: database) { statement in
+                bind(trace.changedToTraceID?.rawValue.uuidString, to: 1, in: statement)
+                bind(trace.id.rawValue, to: 2, in: statement)
             }
         }
     }
@@ -368,10 +419,22 @@ private extension SQLiteEngineRepository {
                 bind(subtask.status.rawValue, to: 5, in: statement)
                 bind(subtask.difficulty.rawValue, to: 6, in: statement)
                 bind(subtask.position, to: 7, in: statement)
-                bind(subtask.continuedFromSubtaskID?.rawValue.uuidString, to: 8, in: statement)
+                bind(nil as String?, to: 8, in: statement)
                 bind(subtask.createdAt, to: 9, in: statement)
                 bind(subtask.completedAt, to: 10, in: statement)
                 bind(subtask.settledAt, to: 11, in: statement)
+            }
+        }
+
+        let relationSQL = """
+        UPDATE subtasks
+        SET continued_from_subtask_id = ?
+        WHERE id = ?
+        """
+        for subtask in subtasks {
+            try run(relationSQL, on: database) { statement in
+                bind(subtask.continuedFromSubtaskID?.rawValue.uuidString, to: 1, in: statement)
+                bind(subtask.id.rawValue, to: 2, in: statement)
             }
         }
     }

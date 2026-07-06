@@ -51,9 +51,9 @@ for scenario in "${scenarios[@]}"; do
   pkill -x SuntraceMacApp 2>/dev/null || true
   if [[ -n "$extra_args" ]]; then
     # shellcheck disable=SC2086
-    open -n dist/SuntraceMacApp.app --args --page "$page" $extra_args
+    open -n dist/SuntraceMacApp.app --args --ephemeral --page "$page" $extra_args
   else
-    open -n dist/SuntraceMacApp.app --args --page "$page"
+    open -n dist/SuntraceMacApp.app --args --ephemeral --page "$page"
   fi
   sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
 

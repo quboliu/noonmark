@@ -372,31 +372,51 @@ final class SuntraceStore: ObservableObject {
     func selectItemForLaunch(_ selectionName: String) {
         switch page {
         case .day:
-            let traces = engine.getDayTodo(date: selectedDate).traces
-            let trace = selectionName == "manual"
-                ? traces.first { subtasks(for: $0.id).isEmpty && $0.status == .pending }
-                : traces.first
-            if let trace {
-                selectTrace(trace.id)
-            }
+            selectLaunchDayItem(selectionName)
         case .future:
-            if let trace = engine.futurePlans(today: today).first?.trace {
-                selectTrace(trace.id)
-            }
+            selectLaunchFutureItem()
         case .pool:
-            if let task = engine.taskPool().first {
-                selectPool(task.chain.id)
-            }
+            selectLaunchPoolItem()
         case .unfinished:
-            if let item = engine.unfinishedPool().first {
-                selectUnfinished(item.chain.id)
-            }
+            selectLaunchUnfinishedItem()
         case .completed:
-            if let item = engine.completedPool().first {
-                selectCompleted(item.trace.id)
-            }
+            selectLaunchCompletedItem()
         case .calendar, .zhulong, .settings:
             break
+        }
+    }
+
+    private func selectLaunchDayItem(_ selectionName: String) {
+        let traces = engine.getDayTodo(date: selectedDate).traces
+        let trace = selectionName == "manual"
+            ? traces.first { subtasks(for: $0.id).isEmpty && $0.status == .pending }
+            : traces.first
+        if let trace {
+            selectTrace(trace.id)
+        }
+    }
+
+    private func selectLaunchFutureItem() {
+        if let trace = engine.futurePlans(today: today).first?.trace {
+            selectTrace(trace.id)
+        }
+    }
+
+    private func selectLaunchPoolItem() {
+        if let task = engine.taskPool().first {
+            selectPool(task.chain.id)
+        }
+    }
+
+    private func selectLaunchUnfinishedItem() {
+        if let item = engine.unfinishedPool().first {
+            selectUnfinished(item.chain.id)
+        }
+    }
+
+    private func selectLaunchCompletedItem() {
+        if let item = engine.completedPool().first {
+            selectCompleted(item.trace.id)
         }
     }
 

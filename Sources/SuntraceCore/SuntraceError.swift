@@ -12,4 +12,3 @@ public enum SuntraceError: Error, Equatable, Sendable {
     case futurePlanCannotComplete
     case historicalCompletionCannotBeUndone
 }
-

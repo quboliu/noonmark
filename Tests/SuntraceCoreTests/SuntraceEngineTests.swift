@@ -1,5 +1,5 @@
-import XCTest
 @testable import SuntraceCore
+import XCTest
 
 final class SuntraceEngineTests: XCTestCase {
     private let day1 = LocalDate("2026-07-05")

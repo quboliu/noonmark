@@ -115,16 +115,15 @@ public struct LocalInsightAnalyzer: Sendable {
         var seen = Set<DayTraceID>()
         var traces: [AITraceSnapshot] = []
 
-        for trace in scope.dayTodos.flatMap(\.traces) {
-            if seen.insert(trace.trace.id).inserted {
-                traces.append(trace)
-            }
+        for trace in scope.dayTodos.flatMap(\.traces) where seen.insert(trace.trace.id).inserted {
+            traces.append(trace)
         }
 
-        for trace in scope.unfinishedPool.flatMap({ $0.unfinishedTraces + Array($0.activeTrace.map { [$0] } ?? []) }) {
-            if seen.insert(trace.trace.id).inserted {
-                traces.append(trace)
-            }
+        let unfinishedTraces = scope.unfinishedPool.flatMap { item in
+            item.unfinishedTraces + (item.activeTrace.map { [$0] } ?? [])
+        }
+        for trace in unfinishedTraces where seen.insert(trace.trace.id).inserted {
+            traces.append(trace)
         }
 
         for item in scope.completedPool {

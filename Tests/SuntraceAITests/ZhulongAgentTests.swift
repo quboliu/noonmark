@@ -1,6 +1,6 @@
-import XCTest
 @testable import SuntraceAI
 @testable import SuntraceCore
+import XCTest
 
 final class ZhulongAgentTests: XCTestCase {
     private let day1 = LocalDate("2026-07-05")

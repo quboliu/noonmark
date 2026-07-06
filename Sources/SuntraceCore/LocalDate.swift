@@ -31,4 +31,3 @@ public struct LocalDate: Codable, Hashable, Comparable, Sendable, CustomStringCo
         (lhs.year, lhs.month, lhs.day) < (rhs.year, rhs.month, rhs.day)
     }
 }
-

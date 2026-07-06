@@ -150,5 +150,6 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.reviewElements.contains(.summaryInput))
         XCTAssertTrue(contract.reviewElements.contains(.unfinishedReasonInput))
         XCTAssertTrue(contract.reviewElements.contains(.tomorrowNoteInput))
+        XCTAssertTrue(contract.reviewElements.contains(.autosavedIndicator))
     }
 }

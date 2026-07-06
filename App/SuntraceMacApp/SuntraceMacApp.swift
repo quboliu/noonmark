@@ -5531,14 +5531,13 @@ struct SegmentedPair: View {
         }
         .padding(3)
         .background(RoundedRectangle(cornerRadius: 9).fill(Theme.chip))
-        .frame(width: 260)
     }
 
     func segment(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: selected ? .semibold : .regular))
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 14)
                 .frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Theme.panel : .clear))
         }

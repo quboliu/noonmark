@@ -2146,15 +2146,12 @@ struct TaskRow: View {
                 StatusChip(status: trace.status)
 
                 if canReorder {
-                    VStack(spacing: 0) {
-                        Button("▲") { store.movePriority(trace.id, delta: -1) }
-                            .frame(height: 11)
-                        Button("▼") { store.movePriority(trace.id, delta: 1) }
-                            .frame(height: 11)
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 9))
-                    .foregroundStyle(Theme.text3)
+                    PriorityStepper(
+                        canMoveUp: canMoveUp,
+                        canMoveDown: canMoveDown,
+                        moveUp: { store.movePriority(trace.id, delta: -1) },
+                        moveDown: { store.movePriority(trace.id, delta: 1) }
+                    )
                 }
             }
             .padding(.horizontal, 12)
@@ -2201,6 +2198,21 @@ struct TaskRow: View {
 
     var canReorder: Bool {
         trace.status == .pending && (store.selectedDate == store.today || store.selectedDate > store.today)
+    }
+
+    var canMoveUp: Bool {
+        canReorder && trace.priority > (reorderablePriorities.min() ?? 1)
+    }
+
+    var canMoveDown: Bool {
+        guard let maxPriority = reorderablePriorities.max() else { return false }
+        return canReorder && trace.priority < maxPriority
+    }
+
+    var reorderablePriorities: [Int] {
+        store.engine.getDayTodo(date: trace.date).traces
+            .filter { $0.status == .pending }
+            .map(\.priority)
     }
 }
 
@@ -2430,13 +2442,12 @@ struct FuturePlanRow: View {
             Spacer()
             SmallActionButton("改期…") { store.showingPicker = .reschedule(item.trace.id) }
             SmallActionButton("回池") { store.returnToPool(item.trace.id) }
-            VStack(spacing: 1) {
-                Button("▲") { store.movePriority(item.trace.id, delta: -1) }
-                Button("▼") { store.movePriority(item.trace.id, delta: 1) }
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 9))
-            .foregroundStyle(Theme.text3)
+            PriorityStepper(
+                canMoveUp: canMoveUp,
+                canMoveDown: canMoveDown,
+                moveUp: { store.movePriority(item.trace.id, delta: -1) },
+                moveDown: { store.movePriority(item.trace.id, delta: 1) }
+            )
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -2448,6 +2459,21 @@ struct FuturePlanRow: View {
             Button("改期…") { store.showingPicker = .reschedule(item.trace.id) }
             Button("回到任务池") { store.returnToPool(item.trace.id) }
         }
+    }
+
+    var canMoveUp: Bool {
+        item.trace.priority > (futurePriorities.min() ?? 1)
+    }
+
+    var canMoveDown: Bool {
+        guard let maxPriority = futurePriorities.max() else { return false }
+        return item.trace.priority < maxPriority
+    }
+
+    var futurePriorities: [Int] {
+        store.engine.getDayTodo(date: item.trace.date).traces
+            .filter { $0.status == .pending && $0.date > store.today }
+            .map(\.priority)
     }
 }
 
@@ -5316,6 +5342,48 @@ struct SmallActionButton: View {
             .fixedSize(horizontal: true, vertical: false)
             .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line))
+    }
+}
+
+struct PriorityStepper: View {
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+
+    var body: some View {
+        VStack(spacing: 2) {
+            stepButton(
+                systemName: "chevron.up",
+                enabled: canMoveUp,
+                accessibilityLabel: "优先级上移",
+                action: moveUp
+            )
+            stepButton(
+                systemName: "chevron.down",
+                enabled: canMoveDown,
+                accessibilityLabel: "优先级下移",
+                action: moveDown
+            )
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 4)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+        .help("调整当日优先级")
+    }
+
+    func stepButton(systemName: String, enabled: Bool, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(enabled ? Theme.text2 : Theme.line2)
+                .frame(width: 18, height: 12)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(enabled == false)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 

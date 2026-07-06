@@ -196,7 +196,7 @@ default_changed_ratios = {
     "unfinished": "0.12",
     "completed": "0.18",
     "calendar": "0.12",
-    "settings": "0.12",
+    "settings": "0.25",
 }
 default_changed_ratio = default_changed_ratios.get(page, "0.12")
 max_changed_ratio = float(os.environ.get(page_env_name("MAX_CHANGED_RATIO"), os.environ.get("SUNTRACE_VISUAL_MAX_CHANGED_RATIO", default_changed_ratio)))

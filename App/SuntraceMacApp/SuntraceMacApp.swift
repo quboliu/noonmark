@@ -3141,8 +3141,39 @@ struct SettingsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: "设置")
-            VStack(alignment: .leading, spacing: 18) {
+            PageHeader(title: "设置", subtitle: "偏好、数据包、同步占位和烛龙 Provider 的统一入口。")
+            ScrollView {
+                HStack(alignment: .top, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        SettingsPreferenceCard()
+                        SettingsDataCard()
+                        SettingSection(title: "同步") {
+                            SyncOptionsCard()
+                        }
+                    }
+                    .frame(width: 440, alignment: .topLeading)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        SettingsProviderOverviewCard()
+                        SettingsPrivacyCard()
+                    }
+                    .frame(width: 460, alignment: .topLeading)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+            }
+        }
+    }
+}
+
+struct SettingsPreferenceCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        SettingsCard(systemImage: "slider.horizontal.3", title: "偏好", subtitle: "影响本机显示，不改变任务事实。") {
+            VStack(alignment: .leading, spacing: 14) {
                 SettingSection(title: "外观") {
                     SegmentedPair(
                         left: "冷灰",
@@ -3161,20 +3192,28 @@ struct SettingsPage: View {
                         rightAction: { store.setLanguage(.english) }
                     )
                 }
-                SettingSection(title: "数据") {
-                    HStack {
-                        SmallActionButton("导出数据 (JSON)", tone: .accent) { store.exportDataPackage() }
-                        SmallActionButton("导入数据…") { store.importDataPackage() }
-                    }
-                }
-                SettingSection(title: "同步") {
-                    SyncOptionsCard()
-                }
-                Spacer()
             }
-            .frame(maxWidth: 560, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.top, 0)
+        }
+    }
+}
+
+struct SettingsDataCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        SettingsCard(systemImage: "externaldrive", title: "数据包", subtitle: "本地优先。导入前会校验重复键和断裂引用。") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    SmallActionButton("导出数据 (JSON)", tone: .accent) { store.exportDataPackage() }
+                    SmallActionButton("导入数据…") { store.importDataPackage() }
+                }
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    SettingsMetricPill(title: "今日轨迹", value: "\(store.engine.getDayTodo(date: store.today).traces.count) 项", color: Theme.navDay)
+                    SettingsMetricPill(title: "任务池", value: "\(store.engine.taskPool().count) 项", color: Theme.navPool)
+                    SettingsMetricPill(title: "未完成", value: "\(store.engine.unfinishedPool().count) 条链", color: Theme.warn)
+                    SettingsMetricPill(title: "已完成", value: "\(store.engine.completedPool().count) 条记录", color: Theme.ok)
+                }
+            }
         }
     }
 }
@@ -3209,6 +3248,187 @@ struct SyncOptionsCard: View {
         }
         .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+    }
+}
+
+struct SettingsProviderOverviewCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var status: (text: String, color: Color) {
+        if store.zhulongProviderDraft.isConfigured {
+            return ("Provider 已配置", Theme.ok)
+        }
+        if store.zhulongProviderDraft.enabled {
+            return ("配置不完整", Theme.warn)
+        }
+        return ("Provider 未启用", Theme.text3)
+    }
+
+    var body: some View {
+        SettingsCard(systemImage: "sparkles", title: "烛龙 Provider", subtitle: "AI 是可选 sidecar；普通清单不依赖 Provider。") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    StatusPill(text: status.text, color: status.color)
+                    Spacer()
+                    StatusPill(
+                        text: store.zhulongProviderDraft.hasStoredAPIKey ? "Keychain 有凭证" : "未保存凭证",
+                        color: store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3
+                    )
+                }
+
+                VStack(spacing: 0) {
+                    SettingsInfoRow(label: "类型", value: providerKindLabel(store.zhulongProviderDraft.kind))
+                    SettingsInfoRow(label: "名称", value: store.zhulongProviderDraft.normalizedDisplayName)
+                    SettingsInfoRow(label: "Base URL", value: store.zhulongProviderDraft.normalizedBaseURL?.absoluteString ?? "未配置")
+                    SettingsInfoRow(label: "模型", value: store.zhulongProviderDraft.normalizedModel.isEmpty ? "未配置" : store.zhulongProviderDraft.normalizedModel, last: true)
+                }
+                .padding(.horizontal, 10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+
+                Text(store.zhulongProviderDraft.statusMessage)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.text3)
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    SmallActionButton("打开烛龙配置", tone: .accent) { store.page = .zhulong }
+                    SmallActionButton("保存") { store.saveZhulongProvider() }
+                    SmallActionButton("测试连接") { store.testZhulongProvider() }
+                    SmallActionButton("清空", tone: .warn) { store.clearZhulongProvider() }
+                }
+            }
+        }
+    }
+
+    func providerKindLabel(_ kind: AIProviderKind) -> String {
+        switch kind {
+        case .openAICompatible:
+            return "OpenAI-compatible"
+        case .localModel:
+            return "本地模型"
+        case .customHTTP:
+            return "自定义 HTTP"
+        case .mock:
+            return "Mock"
+        }
+    }
+}
+
+struct SettingsPrivacyCard: View {
+    var body: some View {
+        SettingsCard(systemImage: "lock.shield", title: "写入与隐私边界", subtitle: "Provider 请求和 AI 建议必须 fail-closed。") {
+            VStack(alignment: .leading, spacing: 8) {
+                SettingsBoundaryRow(color: Theme.accent, text: "发送远程请求前必须展示授权范围。")
+                SettingsBoundaryRow(color: Theme.warn, text: "不发送数据库文件、内部 ID、Keychain 值或同步端点配置。")
+                SettingsBoundaryRow(color: Theme.ok, text: "创建、排期、变更、延续、废弃或 label 写入都必须由用户确认。")
+                SettingsBoundaryRow(color: Theme.text3, text: "Provider 失败不影响 Day Todo、任务池、日历和数据包。")
+            }
+        }
+    }
+}
+
+struct SettingsCard<Content: View>: View {
+    let systemImage: String
+    let title: String
+    let subtitle: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.navSettings)
+                    .frame(width: 22, height: 22)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.chip))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.text1)
+                    Text(subtitle)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.text3)
+                        .lineLimit(2)
+                }
+                Spacer()
+            }
+            content
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct SettingsMetricPill: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(title)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Theme.text2)
+            Spacer()
+            Text(value)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(color)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+    }
+}
+
+struct SettingsInfoRow: View {
+    let label: String
+    let value: String
+    var last = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .frame(width: 62, alignment: .leading)
+            Text(value)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Theme.text2)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .frame(height: 30)
+        .overlay(alignment: .bottom) {
+            if last == false {
+                Rectangle().fill(Theme.line).frame(height: 1)
+            }
+        }
+    }
+}
+
+struct SettingsBoundaryRow: View {
+    let color: Color
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+                .padding(.top, 5)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+                .lineSpacing(3)
+            Spacer(minLength: 0)
+        }
     }
 }
 

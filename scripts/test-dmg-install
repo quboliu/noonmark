@@ -113,11 +113,11 @@ read -r days chains definitions traces subtasks preferences < <(
   "
 )
 
-if [[ "$days" -lt 1 || "$chains" -lt 1 || "$definitions" -lt 1 || "$traces" -lt 1 || "$preferences" -ne 1 ]]; then
+if [[ "$days" -ne 0 || "$chains" -ne 0 || "$definitions" -ne 0 || "$traces" -ne 0 || "$subtasks" -ne 0 || "$preferences" -ne 1 ]]; then
   echo "invalid installed app persistence counts: days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences" >&2
   exit 1
 fi
 
 echo "DMG install smoke: $installed_app"
 echo "Installed app screenshot: $screenshot_path (${width}x${height})"
-echo "Installed app persistence: $database_path (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"
+echo "Installed blank app persistence: $database_path (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"

@@ -69,6 +69,19 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertThrowsError(try engine.continueTrace(traceID: traceID, targetDate: day3, today: day2, now: now))
     }
 
+    func testCurrentPendingContinuationDoesNotEnterUnfinishedPool() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "主动延续当前任务", now: now)
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+
+        let continuedID = try engine.continueTrace(traceID: traceID, targetDate: day2, today: day1, now: now)
+
+        XCTAssertEqual(engine.traces[traceID]?.status, .continued)
+        XCTAssertNil(engine.traces[traceID]?.settledAt)
+        XCTAssertEqual(engine.traces[continuedID]?.status, .pending)
+        XCTAssertTrue(engine.unfinishedPool().isEmpty)
+    }
+
     func testCompletedContinuationRemovesChainFromUnfinishedPoolAndShowsTrajectory() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "完成后移出未完成池", now: now)

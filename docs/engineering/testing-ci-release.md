@@ -119,7 +119,7 @@ Release：
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App Provider 配置 round-trip 探针，验证非密配置经 UserDefaults 回读、dummy API Key 经 Keychain 回读，并在验证后清理。
 - 2026-07-06：`make package-dmg` 通过，生成 `dist/SuntraceMacApp.dmg` 与 `dist/SuntraceMacApp.dmg.sha256`，`shasum -a 256 -c dist/SuntraceMacApp.dmg.sha256` 通过。
 - 2026-07-06：`scripts/test-dmg-install dist/SuntraceMacApp.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
-- 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，空库会初始化并写入 11 个 day、19 条 chain、19 条 definition、19 条 trace、6 个 subtask 和 1 条 preferences。
+- 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，新用户空库只初始化并写入 1 条 preferences，不自动灌入演示任务；演示数据只在 `--ephemeral` 测试 / 截图路径使用。
 - 2026-07-06：设置页导出 / 导入已接入 `SuntraceDataPackage` JSON 数据包；`swift test --filter SuntraceStorageTests` 通过 5 个 Storage 测试。
 - 2026-07-06：`SuntraceAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 provider 验证入口为 `scripts/test-ai-provider-live`，缺少 `SUNTRACE_AI_API_KEY` 时 fail-closed。
 

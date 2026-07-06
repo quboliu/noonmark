@@ -116,12 +116,12 @@ read -r days chains definitions traces subtasks preferences < <(
   "
 )
 
-if [[ "$days" -lt 1 || "$chains" -lt 1 || "$definitions" -lt 1 || "$traces" -lt 1 || "$preferences" -ne 1 ]]; then
+if [[ "$days" -ne 0 || "$chains" -ne 0 || "$definitions" -ne 0 || "$traces" -ne 0 || "$subtasks" -ne 0 || "$preferences" -ne 1 ]]; then
   echo "invalid persistence counts: days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences" >&2
   exit 1
 fi
 
-echo "E2E persistence database: $persistence_db (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"
+echo "E2E blank persistence database: $persistence_db (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"
 
 interaction_dir="artifacts/e2e-interaction"
 interaction_db="${interaction_dir}/Suntrace.sqlite"

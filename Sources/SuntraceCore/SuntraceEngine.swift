@@ -169,12 +169,19 @@ public final class SuntraceEngine {
     }
 
     public func unfinishedPool() -> [UnfinishedPoolItem] {
-        let unresolvedHistoryByChain = Dictionary(grouping: traces.values.filter { $0.status == .unfinished || $0.status == .continued }) {
+        let unresolvedCandidatesByChain = Dictionary(grouping: traces.values.filter { $0.status == .unfinished || $0.status == .continued }) {
             $0.chainID
         }
 
-        return unresolvedHistoryByChain.compactMap { chainID, unfinishedTraces in
+        return unresolvedCandidatesByChain.compactMap { chainID, candidateTraces in
+            let continuedCount = candidateTraces.filter { $0.status == .continued }.count
+            let unfinishedTraces = candidateTraces.filter { trace in
+                trace.status == .unfinished
+                    || (trace.status == .continued && (trace.settledAt != nil || continuedCount > 1))
+            }
+
             guard
+                unfinishedTraces.isEmpty == false,
                 var chain = chains[chainID],
                 chain.state == .active,
                 let definition = try? currentDefinition(for: chainID),
@@ -193,9 +200,10 @@ public final class SuntraceEngine {
             )
         }
         .sorted { lhs, rhs in
-            let lhsDate = lhs.unfinishedTraces.last?.date ?? LocalDate("0001-01-01")
-            let rhsDate = rhs.unfinishedTraces.last?.date ?? LocalDate("0001-01-01")
-            return lhsDate > rhsDate
+            if lhs.chain.createdAt != rhs.chain.createdAt {
+                return lhs.chain.createdAt < rhs.chain.createdAt
+            }
+            return lhs.definition.title.localizedStandardCompare(rhs.definition.title) == .orderedAscending
         }
     }
 
@@ -359,8 +367,9 @@ public final class SuntraceEngine {
             now: now
         )
 
+        let sourceWasUnfinished = source.status == .unfinished
         source.status = .continued
-        source.settledAt = now
+        source.settledAt = sourceWasUnfinished ? (source.settledAt ?? now) : nil
         traces[source.id] = source
         traces[nextTrace.id] = nextTrace
 

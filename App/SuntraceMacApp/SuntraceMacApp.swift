@@ -1419,15 +1419,15 @@ final class SuntraceStore: ObservableObject {
             let loaded = try repository.load()
             let snapshot = loaded.snapshot()
             if snapshot.days.isEmpty && snapshot.chains.isEmpty && snapshot.traces.isEmpty {
-                seed()
+                engine = loaded
                 persist()
             } else {
                 engine = loaded
             }
         } catch {
-            seed()
+            engine = SuntraceEngine()
             NSLog("Suntrace persistence load failed: %@", String(describing: error))
-            toast = "无法读取本地数据库，已使用初始样例数据：\(error.localizedDescription)"
+            toast = "无法读取本地数据库，已使用空白数据：\(error.localizedDescription)"
         }
     }
 

@@ -12,6 +12,8 @@
 - 全局动效：日期 strip 选中态平滑移动、toast rise 动效、hover 高亮。
 - 全局颜色语义：accent、ok、warn、chip、panel、line、t1/t2/t3。
 - 状态样式必须使用共享映射：待完成使用 accent/accent-soft，已完成使用 ok/ok-soft，未完成使用 warn/warn-soft，已延续、已变更、已回池使用 chip/t2，已废弃使用 chip/t3；任务行、日历、详情栏和轨迹时间线不得各自定义状态颜色。未完成状态色必须对应原型 `--warn` / `--warn-soft`，不得混用侧栏未完成导航橙色。
+- 列表选中态必须使用 accent/accent-soft，不得被任务状态色覆盖；状态色只用于 glyph、chip、进度和轨迹节点。
+- 非编辑态完成进度必须使用确定性自绘进度条，100% 使用 ok 绿色，避免 macOS 系统 `ProgressView` 把完成态渲染成灰色。
 - 右键菜单、日期选择弹窗、变更任务弹窗、toast 都是必需交互。
 - 以上窗口尺寸、颜色语义和全局动效都必须进入 `SuntraceMacUIContract`，不能只停留在视觉说明里。
 

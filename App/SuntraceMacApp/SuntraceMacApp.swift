@@ -3625,8 +3625,8 @@ struct CompletedRow: View {
         .frame(minHeight: 52, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 9).fill(isSelected ? Theme.okSoft.opacity(0.78) : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isSelected ? Theme.ok : Theme.line, lineWidth: isSelected ? 1.3 : 1))
+        .background(RoundedRectangle(cornerRadius: 9).fill(isSelected ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isSelected ? Theme.accent : Theme.line, lineWidth: isSelected ? 1.3 : 1))
         .onTapGesture { store.selectCompleted(item.trace.id) }
     }
 }
@@ -3667,8 +3667,8 @@ struct CompletedSubtaskRow: View {
         .frame(minHeight: 66, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 9).fill(isSelected ? Theme.okSoft.opacity(0.78) : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isSelected ? Theme.ok : Theme.line, lineWidth: isSelected ? 1.3 : 1))
+        .background(RoundedRectangle(cornerRadius: 9).fill(isSelected ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isSelected ? Theme.accent : Theme.line, lineWidth: isSelected ? 1.3 : 1))
         .onTapGesture { store.selectCompletedSubtask(record.subtask.id) }
     }
 }
@@ -5430,11 +5430,33 @@ struct DetailProgressControl: View {
                         .foregroundStyle(Theme.text3)
                 }
             } else {
-                ProgressView(value: Double(progress.percent), total: 100)
-                    .progressViewStyle(.linear)
-                    .tint(progress.percent == 100 ? Theme.ok : Theme.accent)
+                StaticProgressBar(percent: progress.percent)
             }
         }
+    }
+}
+
+struct StaticProgressBar: View {
+    let percent: Int
+
+    var normalizedPercent: CGFloat {
+        CGFloat(min(max(percent, 0), 100)) / 100
+    }
+
+    var fillColor: Color {
+        percent >= 100 ? Theme.ok : Theme.accent
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.chip)
+                Capsule()
+                    .fill(fillColor)
+                    .frame(width: proxy.size.width * normalizedPercent)
+            }
+        }
+        .frame(height: 6)
     }
 }
 

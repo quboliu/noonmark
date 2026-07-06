@@ -5139,7 +5139,7 @@ struct CompletedRecordDetail: View {
                 )
             }
 
-            CompletedTimelineSection(item: item)
+            TraceTimelineSection(trace: item.trace)
         }
     }
 
@@ -5150,8 +5150,9 @@ struct CompletedRecordDetail: View {
     }
 }
 
-struct CompletedTimelineSection: View {
-    let item: CompletedPoolItem
+struct TraceTimelineSection: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let trace: DayTrace
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -5161,22 +5162,84 @@ struct CompletedTimelineSection: View {
                     .foregroundStyle(Theme.text3)
                     .tracking(0.6)
                 Spacer()
-                Text("持续 \(durationDays) 天")
+                Text(summaryText)
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text2)
                     .monospacedDigit()
-                StatusPill(text: "完成", color: Theme.ok)
+                    .lineLimit(1)
+                TraceEndBadge(text: endLabel, color: endColor)
             }
 
-            Timeline(trace: item.trace)
+            Timeline(trace: trace)
         }
+    }
+
+    var summaryText: String {
+        if continuationCount > 0 {
+            return "持续 \(durationDays) 天 · 延续 \(continuationCount) 次"
+        }
+        return "持续 \(durationDays) 天"
     }
 
     var durationDays: Int {
         let calendar = Calendar(identifier: .gregorian)
-        let start = localGregorianDate(from: item.trajectory.startDate)
-        let end = localGregorianDate(from: item.trajectory.completedDate)
+        guard let first = chainTraces.first else { return 1 }
+        guard let last = chainTraces.last else { return 1 }
+        let start = localGregorianDate(from: first.date)
+        let end = localGregorianDate(from: last.date)
         return (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1
+    }
+
+    var continuationCount: Int {
+        chainTraces.map(\.continuationSeq).max() ?? 0
+    }
+
+    var endLabel: String {
+        switch endStatus {
+        case .completed:
+            return "完成"
+        case .abandoned:
+            return "已废弃"
+        case .returnedToPool:
+            return "已回池"
+        default:
+            return "进行中"
+        }
+    }
+
+    var endColor: Color {
+        switch endStatus {
+        case .completed:
+            return Theme.ok
+        case .abandoned, .returnedToPool:
+            return Theme.text3
+        default:
+            return Theme.accent
+        }
+    }
+
+    var endStatus: TraceStatus {
+        chainTraces.last?.status ?? trace.status
+    }
+
+    var chainTraces: [DayTrace] {
+        store.engine.traces.values
+            .filter { $0.chainID == trace.chainID }
+            .sorted { $0.date < $1.date }
+    }
+}
+
+struct TraceEndBadge: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Theme.chip))
     }
 }
 
@@ -5643,7 +5706,7 @@ struct Timeline: View {
                             Text(item.status.uiStyle.label)
                                 .font(.system(size: 11, weight: .semibold))
                             if isCurrent {
-                                StatusPill(text: "当前", color: Theme.accent)
+                                TimelineCurrentBadge()
                             }
                         }
                         Text("\(SuntraceStore.displayDate(item.date)) \(SuntraceStore.weekday(item.date))")
@@ -5661,6 +5724,17 @@ struct Timeline: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+}
+
+struct TimelineCurrentBadge: View {
+    var body: some View {
+        Text("当前所在")
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .overlay(Capsule().stroke(Theme.accent, lineWidth: 1))
     }
 }
 

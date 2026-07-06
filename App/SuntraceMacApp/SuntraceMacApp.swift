@@ -5690,7 +5690,7 @@ struct PriorityStepper: View {
     let moveDown: () -> Void
 
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 1) {
             stepButton(
                 systemName: "chevron.up",
                 enabled: canMoveUp,
@@ -5704,19 +5704,16 @@ struct PriorityStepper: View {
                 action: moveDown
             )
         }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 4)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+        .frame(width: 14, height: 24)
         .help("调整当日优先级")
     }
 
     func stepButton(systemName: String, enabled: Bool, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(enabled ? Theme.text2 : Theme.line2)
-                .frame(width: 18, height: 12)
+                .frame(width: 14, height: 11)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

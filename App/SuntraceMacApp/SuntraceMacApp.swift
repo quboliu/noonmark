@@ -1727,7 +1727,7 @@ struct Sidebar: View {
             HStack(spacing: 9) {
                 ClockLogo()
                 Text("晷迹")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 16, weight: .bold))
                     .tracking(0.2)
             }
             .padding(.horizontal, 18)
@@ -1796,7 +1796,7 @@ struct NavGroupTitle: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(Theme.text3)
             .tracking(0.8)
             .padding(.horizontal, 18)
@@ -1818,22 +1818,23 @@ struct NavItem: View {
         } label: {
             HStack(spacing: 9) {
                 Image(systemName: page.navigationSystemImage)
-                    .frame(width: 17)
+                    .font(.system(size: 14.5, weight: .medium))
+                    .frame(width: 19)
                     .foregroundStyle(page.navigationIconColor)
                 Text(label)
-                    .font(.system(size: 12.5, weight: active ? .semibold : .medium))
+                    .font(.system(size: 13.5, weight: active ? .semibold : .medium))
                     .foregroundStyle(active ? Theme.accent : Theme.text2)
                 Spacer()
                 if count > 0 {
                     Text("\(count)")
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 11))
                         .foregroundStyle(Theme.text2)
                         .padding(.horizontal, 6)
-                        .frame(minWidth: 18, minHeight: 16)
+                        .frame(minWidth: 19, minHeight: 17)
                         .background(Capsule().fill(Theme.chip))
                 }
             }
-            .frame(height: 29)
+            .frame(height: 32)
             .padding(.leading, 12)
             .padding(.trailing, 10)
             .background(active ? Theme.accentSoft : .clear)
@@ -1841,7 +1842,7 @@ struct NavItem: View {
             .overlay(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 99)
                     .fill(active ? Theme.accent : .clear)
-                    .frame(width: 2.5, height: 13)
+                    .frame(width: 2.5, height: 15)
                     .padding(.leading, 3)
             }
         }
@@ -4764,30 +4765,6 @@ enum EmptyStateKind {
     case unfinishedPool
     case completedPool
     case calendar
-
-    var systemImage: String {
-        switch self {
-        case .dayTodo: "checklist"
-        case .taskPool: "tray"
-        case .futurePlans: "calendar.badge.clock"
-        case .unfinishedPool: "exclamationmark.circle"
-        case .completedPool: "checkmark.seal"
-        case .calendar: "calendar"
-        }
-    }
-
-    var accent: Color {
-        switch self {
-        case .dayTodo, .futurePlans, .calendar:
-            Theme.accent
-        case .taskPool:
-            Theme.text2
-        case .unfinishedPool:
-            Theme.warn
-        case .completedPool:
-            Theme.ok
-        }
-    }
 }
 
 struct EmptyState: View {
@@ -4795,19 +4772,8 @@ struct EmptyState: View {
     let text: String
 
     var body: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(kind.accent.opacity(0.08))
-                    .frame(width: 62, height: 48)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(kind.accent.opacity(0.18), lineWidth: 1)
-                    )
-                Image(systemName: kind.systemImage)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(kind.accent)
-            }
+        VStack(spacing: 14) {
+            EmptyStateIllustration()
             Text(text)
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.text3)
@@ -4815,6 +4781,34 @@ struct EmptyState: View {
                 .lineSpacing(4)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+struct EmptyStateIllustration: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Theme.line2, lineWidth: 1.5)
+                .frame(width: 24, height: 24)
+                .position(x: 32, y: 22)
+            Path { path in
+                path.move(to: CGPoint(x: 32, y: 22))
+                path.addLine(to: CGPoint(x: 32, y: 13))
+            }
+            .stroke(Theme.line2, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            Circle()
+                .fill(Theme.line2)
+                .frame(width: 3, height: 3)
+                .position(x: 32, y: 22)
+            Path { path in
+                path.move(to: CGPoint(x: 12, y: 40))
+                path.addLine(to: CGPoint(x: 52, y: 40))
+                path.move(to: CGPoint(x: 20, y: 44.5))
+                path.addLine(to: CGPoint(x: 44, y: 44.5))
+            }
+            .stroke(Theme.line, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+        }
+        .frame(width: 64, height: 48)
     }
 }
 

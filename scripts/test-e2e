@@ -51,15 +51,14 @@ exit(1)
 '
 }
 
-for scenario in "${scenarios[@]}"; do
-  IFS="|" read -r screenshot_name page extra_args <<< "$scenario"
+capture_app_screenshot() {
+  local out_dir="$1"
+  local screenshot_name="$2"
+  local page="$3"
+  shift 3
+
   pkill -x SuntraceMacApp 2>/dev/null || true
-  if [[ -n "$extra_args" ]]; then
-    # shellcheck disable=SC2086
-    open -n dist/SuntraceMacApp.app --args --ephemeral --page "$page" $extra_args
-  else
-    open -n dist/SuntraceMacApp.app --args --ephemeral --page "$page"
-  fi
+  open -n dist/SuntraceMacApp.app --args "$@" --page "$page"
   sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
 
   window_id=""
@@ -75,7 +74,8 @@ for scenario in "${scenarios[@]}"; do
     exit 1
   fi
 
-  screenshot="artifacts/e2e/${screenshot_name}.png"
+  mkdir -p "$out_dir"
+  screenshot="${out_dir}/${screenshot_name}.png"
   screencapture -x -l "$window_id" "$screenshot"
   width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
   height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
@@ -86,9 +86,50 @@ for scenario in "${scenarios[@]}"; do
   fi
 
   echo "E2E ${screenshot_name} screenshot: ${screenshot} (${width}x${height})"
+}
+
+for scenario in "${scenarios[@]}"; do
+  IFS="|" read -r screenshot_name page extra_args <<< "$scenario"
+  if [[ -n "$extra_args" ]]; then
+    # shellcheck disable=SC2086
+    capture_app_screenshot artifacts/e2e "$screenshot_name" "$page" --ephemeral $extra_args
+  else
+    capture_app_screenshot artifacts/e2e "$screenshot_name" "$page" --ephemeral
+  fi
 done
 
 pkill -x SuntraceMacApp 2>/dev/null || true
+
+blank_dir="artifacts/e2e-blank"
+blank_db="${blank_dir}/Suntrace.sqlite"
+blank_pages=(day pool future unfinished completed calendar)
+rm -rf "$blank_dir"
+mkdir -p "$blank_dir"
+
+for page in "${blank_pages[@]}"; do
+  capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$PWD/$blank_db"
+done
+
+pkill -x SuntraceMacApp 2>/dev/null || true
+
+read -r blank_days blank_chains blank_definitions blank_traces blank_subtasks blank_preferences < <(
+  sqlite3 -separator " " "$blank_db" "
+    SELECT
+      (SELECT count(*) FROM days),
+      (SELECT count(*) FROM task_chains),
+      (SELECT count(*) FROM task_definitions),
+      (SELECT count(*) FROM day_traces),
+      (SELECT count(*) FROM subtasks),
+      (SELECT count(*) FROM app_preferences);
+  "
+)
+
+if [[ "$blank_days" -ne 0 || "$blank_chains" -ne 0 || "$blank_definitions" -ne 0 || "$blank_traces" -ne 0 || "$blank_subtasks" -ne 0 || "$blank_preferences" -ne 1 ]]; then
+  echo "invalid blank user counts after page screenshots: days=$blank_days chains=$blank_chains definitions=$blank_definitions traces=$blank_traces subtasks=$blank_subtasks preferences=$blank_preferences" >&2
+  exit 1
+fi
+
+echo "E2E blank user screenshots: $blank_dir (days=$blank_days chains=$blank_chains definitions=$blank_definitions traces=$blank_traces subtasks=$blank_subtasks preferences=$blank_preferences)"
 
 persistence_dir="artifacts/e2e-persistence"
 persistence_db="${persistence_dir}/Suntrace.sqlite"

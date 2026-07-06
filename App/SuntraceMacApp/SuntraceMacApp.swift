@@ -5175,18 +5175,9 @@ struct CompletedTimelineSection: View {
 
     var durationDays: Int {
         let calendar = Calendar(identifier: .gregorian)
-        let start = date(from: item.trajectory.startDate)
-        let end = date(from: item.trajectory.completedDate)
+        let start = localGregorianDate(from: item.trajectory.startDate)
+        let end = localGregorianDate(from: item.trajectory.completedDate)
         return (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1
-    }
-
-    private func date(from localDate: LocalDate) -> Date {
-        var components = DateComponents()
-        components.calendar = Calendar(identifier: .gregorian)
-        components.year = localDate.year
-        components.month = localDate.month
-        components.day = localDate.day
-        return components.date ?? Date(timeIntervalSince1970: 0)
     }
 }
 
@@ -5333,11 +5324,11 @@ struct TaskDetail: View {
             }
             HStack {
                 StatusChip(status: trace.status)
-                Text(trace.date.description)
+                Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text3)
             }
-            MetadataCard(trace: trace)
+            TraceContextCard(trace: trace)
             if trace.date < store.today {
                 Notice(text: "历史只读：任务事实不可改写。", tone: .locked)
             }
@@ -5377,7 +5368,7 @@ struct TaskDetail: View {
                     ForEach(subtasks, id: \.id) { subtask in
                         SubtaskRow(subtask: subtask)
                     }
-                    if subtasks.isEmpty {
+                    if subtasks.isEmpty && !canAddSubtask {
                         Text("暂无子任务")
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.text3)
@@ -5394,7 +5385,7 @@ struct TaskDetail: View {
                     }
                 }
             }
-            DetailSection("任务轨迹时间线") {
+            DetailSection("任务轨迹") {
                 Timeline(trace: trace)
             }
         }
@@ -5498,19 +5489,27 @@ struct EditableDetailText: View {
     }
 }
 
-struct MetadataCard: View {
+struct TraceContextCard: View {
+    @EnvironmentObject private var store: SuntraceStore
     let trace: DayTrace
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("当日优先级 \(trace.priority)")
-            Text("延续次数 \(trace.continuationSeq)")
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(continuationText)
+            Text("·")
+                .foregroundStyle(Theme.text3)
+            Text("持续 \(durationDays) 天")
             if trace.changedToTraceID != nil {
+                Text("·")
+                    .foregroundStyle(Theme.text3)
                 Text("被变更为新任务")
             }
             if trace.status == .returnedToPool {
+                Text("·")
+                    .foregroundStyle(Theme.text3)
                 Text("当天已回池")
             }
+            Spacer(minLength: 0)
         }
         .font(.system(size: 11))
         .foregroundStyle(Theme.text2)
@@ -5518,6 +5517,21 @@ struct MetadataCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+    }
+
+    var continuationText: String {
+        trace.continuationSeq > 0 ? "第 \(trace.continuationSeq) 次延续" : "首次进入"
+    }
+
+    var durationDays: Int {
+        let traces = store.engine.traces.values
+            .filter { $0.chainID == trace.chainID && $0.date <= trace.date }
+            .sorted { $0.date < $1.date }
+        guard let first = traces.first else { return 1 }
+        let calendar = Calendar(identifier: .gregorian)
+        let start = localGregorianDate(from: first.date)
+        let end = localGregorianDate(from: trace.date)
+        return max(1, (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1)
     }
 }
 
@@ -5800,19 +5814,19 @@ struct UnfinishedTraceContextCard: View {
         let traces = (item.unfinishedTraces + [item.activeTrace].compactMap { $0 }).sorted { $0.date < $1.date }
         guard let first = traces.first else { return 1 }
         let calendar = Calendar(identifier: .gregorian)
-        let start = date(from: first.date)
-        let end = date(from: trace.date)
+        let start = localGregorianDate(from: first.date)
+        let end = localGregorianDate(from: trace.date)
         return max(1, (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1)
     }
+}
 
-    private func date(from localDate: LocalDate) -> Date {
-        var components = DateComponents()
-        components.calendar = Calendar(identifier: .gregorian)
-        components.year = localDate.year
-        components.month = localDate.month
-        components.day = localDate.day
-        return components.date ?? Date(timeIntervalSince1970: 0)
-    }
+private func localGregorianDate(from localDate: LocalDate) -> Date {
+    var components = DateComponents()
+    components.calendar = Calendar(identifier: .gregorian)
+    components.year = localDate.year
+    components.month = localDate.month
+    components.day = localDate.day
+    return components.date ?? Date(timeIntervalSince1970: 0)
 }
 
 struct ReviewRail: View {

@@ -33,6 +33,7 @@ jobs:
         run: |
           scripts/package-dmg release
           scripts/verify-dmg dist/SuntraceMacApp.dmg
+          scripts/test-dmg-install dist/SuntraceMacApp.dmg
           ditto -c -k --keepParent dist/SuntraceMacApp.app dist/SuntraceMacApp.zip
           shasum -a 256 dist/SuntraceMacApp.zip > dist/SuntraceMacApp.zip.sha256
           shasum -a 256 -c dist/SuntraceMacApp.zip.sha256

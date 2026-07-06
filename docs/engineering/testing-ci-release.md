@@ -45,6 +45,7 @@ make test-e2e
 make test-all
 make package-dmg
 make verify-dmg
+make test-dmg-install
 make check
 ```
 
@@ -76,6 +77,7 @@ Release：
 - 用 release 配置打包 `.app`。
 - 生成可直接下载安装的 DMG、zip 与 SHA256。
 - 校验 DMG checksum、挂载内容、`.app` bundle、可执行文件、`Info.plist` 和 Applications shortcut。
+- 挂载 DMG 后复制 `.app` 到临时 Applications 目录，从复制后的 App 启动、截图并验证正常模式 SQLite 持久化。
 - 校验 zip checksum。
 - 创建或更新 GitHub Release 并上传产物。
 
@@ -84,10 +86,11 @@ Release：
 - 2026-07-06：`scripts/test-e2e` 通过，14 个真实 Mac app 截图均生成于 `artifacts/e2e/`，窗口尺寸为 2800x1760。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 正常模式持久化探针，使用 `artifacts/e2e-persistence/Suntrace.sqlite` 验证空库初始化和保存。
 - 2026-07-06：`make package-dmg` 通过，生成 `dist/SuntraceMacApp.dmg` 与 `dist/SuntraceMacApp.dmg.sha256`，`shasum -a 256 -c dist/SuntraceMacApp.dmg.sha256` 通过。
+- 2026-07-06：`scripts/test-dmg-install dist/SuntraceMacApp.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
 - 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，空库会初始化并写入 11 个 day、19 条 chain、19 条 definition、19 条 trace、6 个 subtask 和 1 条 preferences。
 
 ## 后续缺口
 
-- E2E 已覆盖主要页面和关键详情栏选中态；后续需要补真实交互路径断言，例如新增任务、排期、变更、延续、复盘编辑、Provider 配置表单和 DMG 安装后启动。
+- E2E 已覆盖主要页面、关键详情栏选中态、正常模式持久化和 DMG 安装后启动；后续需要补真实交互路径断言，例如新增任务、排期、变更、延续、复盘编辑和 Provider 配置表单。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
-- Release 后续需要补 Apple Developer ID 签名、notarization 和安装后首次启动验证；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成和校验安装包产物。
+- Release 后续需要补 Apple Developer ID 签名、notarization；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成、校验和从本机复制安装后启动。

@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dmg_path="${1:-dist/SuntraceMacApp.dmg}"
+app_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
+work_dir="artifacts/dmg-install"
+install_dir="${work_dir}/Applications"
+database_path="${work_dir}/Suntrace.sqlite"
+screenshot_path="${work_dir}/installed-day.png"
+mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/suntrace-dmg-install.XXXXXX")"
+
+required_tools=(hdiutil ditto sqlite3 swift open screencapture sips)
+for tool in "${required_tools[@]}"; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "missing required tool: $tool" >&2
+    exit 1
+  fi
+done
+
+cleanup() {
+  pkill -x SuntraceMacApp >/dev/null 2>&1 || true
+  hdiutil detach "$mountpoint" -quiet >/dev/null 2>&1 || true
+  rmdir "$mountpoint" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+if [[ ! -f "$dmg_path" ]]; then
+  echo "missing DMG: $dmg_path" >&2
+  exit 1
+fi
+
+rm -rf "$work_dir"
+mkdir -p "$install_dir"
+
+hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$mountpoint" -quiet
+source_app="${mountpoint}/${app_display_name}.app"
+installed_app="${install_dir}/${app_display_name}.app"
+
+if [[ ! -d "$source_app" ]]; then
+  echo "DMG missing app bundle: $source_app" >&2
+  exit 1
+fi
+
+ditto "$source_app" "$installed_app"
+if [[ ! -x "${installed_app}/Contents/MacOS/SuntraceMacApp" ]]; then
+  echo "installed app binary is not executable" >&2
+  exit 1
+fi
+
+find_window_id() {
+  swift -e '
+import CoreGraphics
+import Darwin
+
+if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
+    for window in list {
+        let owner = window[kCGWindowOwnerName as String] as? String ?? ""
+        let name = window[kCGWindowName as String] as? String ?? ""
+        if (owner == "晷迹" || owner == "SuntraceMacApp") && name == "晷迹 · suntrace" {
+            if let number = window[kCGWindowNumber as String] {
+                print(number)
+                exit(0)
+            }
+        }
+    }
+}
+exit(1)
+'
+}
+
+pkill -x SuntraceMacApp >/dev/null 2>&1 || true
+open -n "$installed_app" --args --data-url "$PWD/$database_path" --page day
+sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
+
+window_id=""
+for _ in {1..20}; do
+  if window_id="$(find_window_id 2>/dev/null)"; then
+    break
+  fi
+  sleep 0.25
+done
+
+if [[ -z "$window_id" ]]; then
+  echo "installed Suntrace app window not found" >&2
+  exit 1
+fi
+
+screencapture -x -l "$window_id" "$screenshot_path"
+width="$(sips -g pixelWidth "$screenshot_path" | awk '/pixelWidth/ {print $2}')"
+height="$(sips -g pixelHeight "$screenshot_path" | awk '/pixelHeight/ {print $2}')"
+
+if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 || "${width:-0}" -gt 3000 || "${height:-0}" -gt 2000 ]]; then
+  echo "invalid installed app screenshot size: ${width:-unknown}x${height:-unknown}" >&2
+  exit 1
+fi
+
+pkill -x SuntraceMacApp >/dev/null 2>&1 || true
+
+if [[ ! -f "$database_path" ]]; then
+  echo "installed app did not create persistence database: $database_path" >&2
+  exit 1
+fi
+
+read -r days chains definitions traces subtasks preferences < <(
+  sqlite3 -separator " " "$database_path" "
+    SELECT
+      (SELECT count(*) FROM days),
+      (SELECT count(*) FROM task_chains),
+      (SELECT count(*) FROM task_definitions),
+      (SELECT count(*) FROM day_traces),
+      (SELECT count(*) FROM subtasks),
+      (SELECT count(*) FROM app_preferences);
+  "
+)
+
+if [[ "$days" -lt 1 || "$chains" -lt 1 || "$definitions" -lt 1 || "$traces" -lt 1 || "$preferences" -ne 1 ]]; then
+  echo "invalid installed app persistence counts: days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences" >&2
+  exit 1
+fi
+
+echo "DMG install smoke: $installed_app"
+echo "Installed app screenshot: $screenshot_path (${width}x${height})"
+echo "Installed app persistence: $database_path (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"

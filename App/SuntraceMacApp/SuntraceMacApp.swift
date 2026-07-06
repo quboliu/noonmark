@@ -1,7 +1,8 @@
 import AppKit
-import SwiftUI
+import SuntraceAI
 import SuntraceCore
 import SuntraceStorage
+import SwiftUI
 import UniformTypeIdentifiers
 
 @main
@@ -202,6 +203,7 @@ final class SuntraceStore: ObservableObject {
     @Published var changeText = ""
     @Published var detailSubtaskText = ""
     @Published var toast: String?
+    @Published var zhulongProviderDraft = ZhulongProviderSettingsStore.load()
 
     let today = LocalDate("2026-07-05")
     private let repository: SQLiteEngineRepository?
@@ -667,6 +669,41 @@ final class SuntraceStore: ObservableObject {
         selectedCalendarDate = today
         clearSelection()
         persist()
+    }
+
+    func saveZhulongProvider() {
+        do {
+            zhulongProviderDraft = try ZhulongProviderSettingsStore.save(zhulongProviderDraft)
+            showToast("Provider 配置已保存")
+        } catch {
+            showToast("Provider 保存失败：\(error.localizedDescription)")
+        }
+    }
+
+    func clearZhulongProvider() {
+        do {
+            zhulongProviderDraft = try ZhulongProviderSettingsStore.clear()
+            showToast("Provider 配置已清空")
+        } catch {
+            showToast("Provider 清空失败：\(error.localizedDescription)")
+        }
+    }
+
+    func testZhulongProvider() {
+        do {
+            _ = try ZhulongProviderSettingsStore.makeConfig(from: zhulongProviderDraft)
+            guard zhulongProviderDraft.enabled else {
+                showToast("Provider 已关闭，未发起连接测试")
+                return
+            }
+            if zhulongProviderDraft.hasStoredAPIKey {
+                showToast("Provider 本机配置完整，后续请求会使用 Keychain 凭证")
+            } else {
+                showToast("Provider 缺少 API Key；本地模型可忽略，远程 provider 需要补齐")
+            }
+        } catch {
+            showToast("Provider 配置无效：\(error.localizedDescription)")
+        }
     }
 
     func performDateChoice(_ date: LocalDate) {
@@ -2288,7 +2325,10 @@ struct ZhulongPage: View {
                             Text("衔烛龙，照苦昼短。")
                                 .font(.system(size: 22, weight: .semibold))
                             Spacer()
-                            StatusPill(text: "Provider 未配置", color: Theme.warn)
+                            StatusPill(
+                                text: store.zhulongProviderDraft.isConfigured ? "Provider 已配置" : "Provider 未配置",
+                                color: store.zhulongProviderDraft.isConfigured ? Theme.ok : Theme.warn
+                            )
                         }
                         Text("AI 只生成建议草稿。任何创建、排期、变更、延续、废弃或 label 写入，都必须由用户确认后再走普通领域接口。")
                             .font(.system(size: 13))
@@ -2336,22 +2376,128 @@ struct ZhulongProviderCard: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                 Spacer()
-                StatusPill(text: "未启用", color: Theme.warn)
+                StatusPill(
+                    text: store.zhulongProviderDraft.enabled ? "已启用" : "未启用",
+                    color: store.zhulongProviderDraft.enabled ? Theme.ok : Theme.warn
+                )
             }
-            VStack(spacing: 0) {
-                ZhulongProviderField(label: "类型", value: "OpenAI-compatible / 本地模型 / 自定义 HTTP")
-                ZhulongProviderField(label: "Base URL", value: "https://api.example.com/v1")
-                ZhulongProviderField(label: "模型", value: "自定义 model 名称")
-                ZhulongProviderField(label: "API Key", value: "只进入 Keychain，不写入配置、日志或导出包", last: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("启用 Provider", isOn: $store.zhulongProviderDraft.enabled)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12.5))
+
+                ZhulongProviderKindPicker(selection: $store.zhulongProviderDraft.kind)
+                ZhulongProviderTextField(label: "名称", text: $store.zhulongProviderDraft.displayName, placeholder: "自定义 Provider")
+                ZhulongProviderTextField(label: "Base URL", text: $store.zhulongProviderDraft.baseURL, placeholder: "https://api.example.com/v1")
+                ZhulongProviderTextField(label: "模型", text: $store.zhulongProviderDraft.model, placeholder: "gpt-4.1-mini / llama3.1")
+                ZhulongProviderSecureField(
+                    label: "API Key",
+                    text: $store.zhulongProviderDraft.apiKeyInput,
+                    placeholder: store.zhulongProviderDraft.hasStoredAPIKey ? "Keychain 中已有凭证，留空则保留" : "只保存到 Keychain"
+                )
             }
+
             HStack(spacing: 8) {
-                SmallActionButton("配置 Provider", tone: .accent) { store.showToast("Provider 配置入口已预留") }
-                SmallActionButton("测试连接") { store.showToast("未配置 Provider，普通清单不受影响") }
+                Image(systemName: store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
+                    .foregroundStyle(store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
+                Text(store.zhulongProviderDraft.statusMessage)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.text3)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+
+            HStack(spacing: 8) {
+                SmallActionButton("保存 Provider", tone: .accent) { store.saveZhulongProvider() }
+                SmallActionButton("测试连接") { store.testZhulongProvider() }
+                SmallActionButton("清空") { store.clearZhulongProvider() }
             }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct ZhulongProviderKindPicker: View {
+    @Binding var selection: AIProviderKind
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach([AIProviderKind.openAICompatible, .localModel, .customHTTP], id: \.self) { kind in
+                Button {
+                    selection = kind
+                } label: {
+                    Text(label(for: kind))
+                        .font(.system(size: 11.5, weight: selection == kind ? .semibold : .medium))
+                        .foregroundStyle(selection == kind ? Theme.accent : Theme.text2)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 28)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(selection == kind ? Theme.accentSoft : Theme.panel))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(selection == kind ? Theme.accent : Theme.line))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    func label(for kind: AIProviderKind) -> String {
+        switch kind {
+        case .openAICompatible:
+            return "OpenAI-compatible"
+        case .localModel:
+            return "本地模型"
+        case .customHTTP:
+            return "自定义 HTTP"
+        case .mock:
+            return "Mock"
+        }
+    }
+}
+
+struct ZhulongProviderTextField: View {
+    let label: String
+    @Binding var text: String
+    let placeholder: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+        }
+    }
+}
+
+struct ZhulongProviderSecureField: View {
+    let label: String
+    @Binding var text: String
+    let placeholder: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+            SecureField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+        }
     }
 }
 

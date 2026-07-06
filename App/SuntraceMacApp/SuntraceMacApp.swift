@@ -58,7 +58,7 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
             .preferredColorScheme(.light)
 
         let window = SuntraceWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1400, height: 880),
+            contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false

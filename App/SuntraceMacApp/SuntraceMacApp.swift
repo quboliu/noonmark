@@ -5095,8 +5095,7 @@ struct CompletedRecordDetail: View {
 
             Text(item.definition.title)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.text2)
-                .strikethrough()
+                .foregroundStyle(Theme.text1)
                 .lineLimit(3)
 
             HStack(spacing: 8) {
@@ -5400,13 +5399,7 @@ struct DetailProgressControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                Text(progress.mode == .weightedSubtasks ? "按子任务自动计算" : "手动完成进度")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.text3)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Theme.chip))
+            HStack {
                 Spacer()
                 Text("\(progress.percent)%")
                     .font(.system(size: 13, weight: .bold))
@@ -5430,6 +5423,9 @@ struct DetailProgressControl: View {
                 StaticProgressBar(percent: progress.percent)
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(progress.mode == .weightedSubtasks ? "按子任务自动计算的完成进度" : "手动完成进度")
+        .accessibilityValue("\(progress.percent)%")
     }
 }
 

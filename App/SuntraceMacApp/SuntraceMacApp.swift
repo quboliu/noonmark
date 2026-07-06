@@ -113,66 +113,105 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
     }
 
     private func runLaunchAutomationIfNeeded() {
+        guard let automation = LaunchAutomation.fromCommandLine() else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [store, automation] in
+            automation.run(on: store)
+        }
+    }
+}
+
+private struct LaunchAutomation {
+    var actions: [@MainActor (SuntraceStore) -> Void]
+    var quitsAfterAutomation: Bool
+
+    @MainActor
+    static func fromCommandLine() -> LaunchAutomation? {
+        var actions: [@MainActor (SuntraceStore) -> Void] = []
         let quickTaskTitle = SuntraceStore.commandLineValue(after: "--e2e-add-quick-task")?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let zhulongTaskName = SuntraceStore.commandLineValue(after: "--e2e-generate-zhulong-draft")
-        let providerAutomation = ProviderE2EAutomation.fromCommandLine()
-        let workflowAutomation = WorkflowE2EAutomation.fromCommandLine()
-        let lifecycleAutomation = LifecycleE2EAutomation.fromCommandLine()
-        let dataPackageAutomation = DataPackageE2EAutomation.fromCommandLine()
-        guard quickTaskTitle?.isEmpty == false
-            || zhulongTaskName != nil
-            || providerAutomation != nil
-            || workflowAutomation != nil
-            || lifecycleAutomation != nil
-            || dataPackageAutomation != nil
-        else {
-            return
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [store] in
-            if let quickTaskTitle, quickTaskTitle.isEmpty == false {
+        if let quickTaskTitle, quickTaskTitle.isEmpty == false {
+            actions.append { store in
                 store.page = .day
                 store.selectedDate = store.today
                 store.quickText = quickTaskTitle
                 store.addQuickTask()
             }
+        }
 
-            if let zhulongTaskName, let task = ZhulongTask(rawValue: zhulongTaskName) {
+        let zhulongTaskName = SuntraceStore.commandLineValue(after: "--e2e-generate-zhulong-draft")
+        if let zhulongTaskName, let task = ZhulongTask(rawValue: zhulongTaskName) {
+            let applyFirstOperation = CommandLine.arguments.contains("--e2e-apply-first-zhulong-operation")
+            actions.append { store in
                 store.page = .zhulong
                 store.generateZhulongDraft(task: task)
-                if CommandLine.arguments.contains("--e2e-apply-first-zhulong-operation") {
-                    if let draft = store.zhulongDrafts.first, draft.proposedOperations.isEmpty == false {
-                        store.applyZhulongOperation(draftID: draft.id, operationIndex: 0)
-                    }
-                }
+                guard applyFirstOperation else { return }
+                guard let draft = store.zhulongDrafts.first else { return }
+                guard draft.proposedOperations.isEmpty == false else { return }
+                store.applyZhulongOperation(draftID: draft.id, operationIndex: 0)
             }
+        }
 
-            if let providerAutomation {
-                providerAutomation.run(on: store)
-            }
+        append(ProviderE2EAutomation.fromCommandLine(), to: &actions)
+        append(WorkflowE2EAutomation.fromCommandLine(), to: &actions)
+        append(LifecycleE2EAutomation.fromCommandLine(), to: &actions)
+        append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
+        append(ReviewE2EAutomation.fromCommandLine(), to: &actions)
 
-            if let workflowAutomation {
-                workflowAutomation.run(on: store)
-            }
+        guard actions.isEmpty == false else { return nil }
+        return LaunchAutomation(
+            actions: actions,
+            quitsAfterAutomation: CommandLine.arguments.contains("--e2e-quit-after-automation")
+        )
+    }
 
-            if let lifecycleAutomation {
-                lifecycleAutomation.run(on: store)
-            }
+    @MainActor
+    func run(on store: SuntraceStore) {
+        actions.forEach { $0(store) }
 
-            if let dataPackageAutomation {
-                dataPackageAutomation.run(on: store)
-            }
+        if quitsAfterAutomation {
+            store.persist()
+            NSApp.terminate(nil)
+        }
+    }
 
-            if CommandLine.arguments.contains("--e2e-quit-after-automation") {
-                store.persist()
-                NSApp.terminate(nil)
-            }
+    @MainActor
+    private static func append(
+        _ automation: (some LaunchAutomationRunnable)?,
+        to actions: inout [@MainActor (SuntraceStore) -> Void]
+    ) {
+        guard let automation else { return }
+        actions.append { store in
+            automation.run(on: store)
         }
     }
 }
 
-private struct DataPackageE2EAutomation {
+private protocol LaunchAutomationRunnable {
+    @MainActor
+    func run(on store: SuntraceStore)
+}
+
+private struct ReviewE2EAutomation: LaunchAutomationRunnable {
+    var summary: String
+
+    @MainActor
+    static func fromCommandLine() -> ReviewE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-update-review") else { return nil }
+        return ReviewE2EAutomation(
+            summary: SuntraceStore.commandLineValue(after: "--e2e-review-summary") ?? "E2E 自动保存反馈"
+        )
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        store.page = .day
+        store.selectedDate = store.today
+        store.updateReview(summary: summary)
+    }
+}
+
+private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
     var exportURL: URL
     var resultURL: URL?
 
@@ -224,7 +263,7 @@ private struct DataPackageE2EAutomation {
     }
 }
 
-private struct LifecycleE2EAutomation {
+private struct LifecycleE2EAutomation: LaunchAutomationRunnable {
     var resultURL: URL?
 
     @MainActor
@@ -282,7 +321,7 @@ private struct LifecycleE2EAutomation {
     }
 }
 
-private struct WorkflowE2EAutomation {
+private struct WorkflowE2EAutomation: LaunchAutomationRunnable {
     var title: String
     var resultURL: URL?
 
@@ -351,7 +390,7 @@ private enum WorkflowE2EAutomationError: LocalizedError {
     }
 }
 
-private struct ProviderE2EAutomation {
+private struct ProviderE2EAutomation: LaunchAutomationRunnable {
     var expectedName: String
     var expectedBaseURL: String
     var expectedModel: String
@@ -596,6 +635,7 @@ final class SuntraceStore: ObservableObject {
     @Published var zhulongDrafts: [AISuggestionDraft] = []
     @Published var selectedZhulongDraftID: AISuggestionDraftID?
     @Published var appliedZhulongOperationKeys: Set<String> = []
+    @Published var reviewAutosaveMessage: String?
 
     let today = LocalDate("2026-07-05")
     private let repository: SQLiteEngineRepository?
@@ -990,6 +1030,7 @@ final class SuntraceStore: ObservableObject {
             tomorrowNote: tomorrow ?? existing?.reviewTomorrowNote
         )
         persist()
+        reviewAutosaveMessage = "已自动保存"
     }
 
     func updateTraceText(traceID: DayTraceID, descriptionText: String? = nil, note: String? = nil) {
@@ -5240,6 +5281,9 @@ struct ReviewRail: View {
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
                 Spacer()
+                if let message = store.reviewAutosaveMessage {
+                    StatusPill(text: message, color: Theme.ok)
+                }
                 Text("\(SuntraceStore.displayDate(store.selectedDate)) \(SuntraceStore.weekday(store.selectedDate))")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text3)

@@ -20,6 +20,7 @@ scenarios=(
   "day|day|"
   "day-detail|day|--select first"
   "day-manual-detail|day|--select manual"
+  "day-review-saved|day|--e2e-update-review --e2e-review-summary E2E自动保存反馈"
   "pool|pool|"
   "pool-detail|pool|--select first"
   "future|future|"

@@ -1857,6 +1857,12 @@ struct AppCopy {
         language == .chinese ? "AI 是可选 sidecar；普通清单不依赖 Provider。" : "AI is optional; normal lists do not depend on a Provider."
     }
 
+    var zhulongSubtitle: String {
+        language == .chinese
+            ? "可选 sidecar：复盘分析、任务拆解、排期建议和 label 分类建议。"
+            : "Optional sidecar for reviews, decomposition, scheduling, and label suggestions."
+    }
+
     var providerConfigured: String { language == .chinese ? "Provider 已配置" : "Provider configured" }
     var providerIncomplete: String { language == .chinese ? "配置不完整" : "Incomplete" }
     var providerDisabled: String { language == .chinese ? "Provider 未启用" : "Provider disabled" }
@@ -3501,7 +3507,7 @@ struct SettingsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navSettings)
+            PageHeader(title: store.copy.navSettings, subtitle: store.copy.settingsSubtitle)
             ScrollView {
                 HStack(alignment: .top, spacing: 0) {
                     VStack(alignment: .leading, spacing: 18) {
@@ -3824,7 +3830,7 @@ struct ZhulongPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: "烛龙 AI", subtitle: "可选 sidecar：复盘分析、任务拆解、排期建议和 label 分类建议。")
+            PageHeader(title: store.copy.navZhulong, subtitle: store.copy.zhulongSubtitle)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 8) {

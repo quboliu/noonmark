@@ -1698,6 +1698,55 @@ struct AppCopy {
     var navCompleted: String { language == .chinese ? "已完成" : "Completed" }
     var navCalendar: String { language == .chinese ? "日历" : "Calendar" }
     var navSettings: String { language == .chinese ? "设置" : "Settings" }
+    var today: String { language == .chinese ? "今天" : "Today" }
+    var chooseDate: String { language == .chinese ? "选日期" : "Choose date" }
+    var openDay: String { language == .chinese ? "查看当天 →" : "Open day →" }
+    var copyAsNewTask: String { language == .chinese ? "复制为新任务" : "Copy as new task" }
+    var reschedule: String { language == .chinese ? "改期…" : "Reschedule…" }
+    var returnToPool: String { language == .chinese ? "回池" : "Back to pool" }
+    var scheduleToday: String { language == .chinese ? "排期到今天" : "Schedule today" }
+    var scheduleTomorrow: String { language == .chinese ? "排期到明天" : "Schedule tomorrow" }
+    var schedulePickDate: String { language == .chinese ? "选日期…" : "Pick date…" }
+    var continueTo: String { language == .chinese ? "延续到…" : "Continue to…" }
+    var abandonChain: String { language == .chinese ? "废弃任务链" : "Drop chain" }
+
+    var lockedDayNotice: String {
+        language == .chinese
+            ? "历史日已锁定：任务事实不可改写，可补写复盘。未完成任务可延续或废弃。"
+            : "This day is locked: task facts cannot be rewritten. You can still write the review, continue unfinished tasks, or drop them."
+    }
+
+    var futureDayNotice: String {
+        language == .chinese
+            ? "未来日：可排期与调整顺序，不能提前完成或生成复盘。"
+            : "Future day: schedule and reorder only. Completion and review are not available yet."
+    }
+
+    var emptyDay: String { language == .chinese ? "这一天没有留下任务。" : "No tasks were left on this day." }
+    var scheduleFromPool: String { language == .chinese ? "从任务池排期…" : "Schedule from pool…" }
+    var poolSubtitle: String {
+        language == .chinese ? "尚未安排日期的任务。排期后会出现在对应的 Day Todo。" : "Unscheduled tasks. Schedule one and it appears on the matching Day Todo."
+    }
+
+    var emptyPool: String { language == .chinese ? "任务池是空的。" : "Task Pool is empty." }
+    var futureSubtitle: String {
+        language == .chinese ? "已排到未来日期的计划草稿，可改期或回到任务池。" : "Draft plans scheduled for future dates. Reschedule them or return them to the pool."
+    }
+
+    var emptyFuture: String { language == .chinese ? "还没有未来计划。" : "No upcoming plans yet." }
+    var unfinishedSubtitle: String {
+        language == .chinese ? "按任务链去重的未完成轨迹。延续它，或明确废弃。" : "Unfinished trails deduped by task chain. Continue them or drop them explicitly."
+    }
+
+    var emptyUnfinished: String { language == .chinese ? "没有待处理的未完成任务。" : "Nothing unfinished to handle." }
+    var completedSubtitle: String {
+        language == .chinese ? "按完成记录逐条展示，并附带每条的任务轨迹。" : "Completed records with their task trajectories."
+    }
+
+    var emptyCompleted: String { language == .chinese ? "还没有完成记录。" : "No completed records yet." }
+    var calendarSubtitle: String {
+        language == .chinese ? "整月轨迹总览。点选任一天，右侧查看当天详情。" : "A whole-month trace overview. Pick any day to inspect it on the right."
+    }
 
     var settingsSubtitle: String {
         language == .chinese
@@ -2128,10 +2177,10 @@ struct DayTodoPage: View {
                 .padding(.bottom, 10)
 
             if store.isHistory {
-                Notice(text: "历史日已锁定：任务事实不可改写，可补写复盘。未完成任务可延续或废弃。", tone: .locked)
+                Notice(text: store.copy.lockedDayNotice, tone: .locked)
                     .padding(.horizontal, 24)
             } else if store.isFuture {
-                Notice(text: "未来日：可排期与调整顺序，不能提前完成或生成复盘。", tone: .future)
+                Notice(text: store.copy.futureDayNotice, tone: .future)
                     .padding(.horizontal, 24)
             }
 
@@ -2148,7 +2197,7 @@ struct DayTodoPage: View {
                         }
 
                         if traces.isEmpty {
-                            EmptyState(kind: .dayTodo, text: "这一天没有留下任务。")
+                            EmptyState(kind: .dayTodo, text: store.copy.emptyDay)
                                 .padding(.top, 40)
                         }
                     }
@@ -2193,9 +2242,9 @@ struct DayTodoHeader: View {
             Spacer(minLength: 8)
             HStack(spacing: 6) {
                 HeaderButton("‹") { store.selectedDate = SuntraceStore.offset(store.selectedDate, by: -1) }
-                HeaderButton("今天") { store.selectedDate = store.today }
+                HeaderButton(store.copy.today) { store.selectedDate = store.today }
                 HeaderButton("›") { store.selectedDate = SuntraceStore.offset(store.selectedDate, by: 1) }
-                HeaderButton("选日期") { store.showingPicker = .gotoDay }
+                HeaderButton(store.copy.chooseDate) { store.showingPicker = .gotoDay }
             }
         }
         .padding(.horizontal, 24)
@@ -2231,7 +2280,7 @@ struct DayQuickAdd: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
                 .onSubmit { store.addQuickTask() }
-            HeaderButton("从任务池排期…") { store.showingFromPoolPicker = true }
+            HeaderButton(store.copy.scheduleFromPool) { store.showingFromPoolPicker = true }
         }
     }
 }
@@ -2505,7 +2554,7 @@ struct TaskPoolPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: "任务池", subtitle: "尚未安排日期的任务。排期后会出现在对应的 Day Todo。")
+            PageHeader(title: store.copy.navPool, subtitle: store.copy.poolSubtitle)
             ScrollView {
                 VStack(spacing: 0) {
                     PoolQuickAdd()
@@ -2516,7 +2565,7 @@ struct TaskPoolPage: View {
                             PoolTaskRow(task: task)
                         }
                         if tasks.isEmpty {
-                            EmptyState(kind: .taskPool, text: "任务池是空的。")
+                            EmptyState(kind: .taskPool, text: store.copy.emptyPool)
                                 .padding(.top, 40)
                         }
                     }
@@ -2567,9 +2616,9 @@ struct PoolTaskRow: View {
                     }
                 }
                 Spacer()
-                SmallActionButton("排期到今天", tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
-                SmallActionButton("排期到明天") { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
-                SmallActionButton("选日期…") { store.showingPicker = .schedulePool(task.chain.id) }
+                SmallActionButton(store.copy.scheduleToday, tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
+                SmallActionButton(store.copy.scheduleTomorrow) { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
+                SmallActionButton(store.copy.schedulePickDate) { store.showingPicker = .schedulePool(task.chain.id) }
             }
         }
         .padding(.horizontal, 12)
@@ -2591,7 +2640,7 @@ struct FuturePlansPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: "未来计划", subtitle: "已排到未来日期的计划草稿，可改期或回到任务池。")
+            PageHeader(title: store.copy.navFuture, subtitle: store.copy.futureSubtitle)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(grouped, id: \.0) { date, items in
@@ -2608,7 +2657,7 @@ struct FuturePlansPage: View {
                                     .padding(.vertical, 1)
                                     .background(Capsule().fill(Theme.navFuture.opacity(0.12)))
                                 Spacer()
-                                Button("查看当天 →") {
+                                Button(store.copy.openDay) {
                                     store.selectedDate = date
                                     store.page = .day
                                 }
@@ -2622,7 +2671,7 @@ struct FuturePlansPage: View {
                         }
                     }
                     if plans.isEmpty {
-                        EmptyState(kind: .futurePlans, text: "还没有未来计划。")
+                        EmptyState(kind: .futurePlans, text: store.copy.emptyFuture)
                             .padding(.top, 40)
                     }
                 }
@@ -2655,8 +2704,8 @@ struct FuturePlanRow: View {
                 }
             }
             Spacer()
-            SmallActionButton("改期…") { store.showingPicker = .reschedule(item.trace.id) }
-            SmallActionButton("回池") { store.returnToPool(item.trace.id) }
+            SmallActionButton(store.copy.reschedule) { store.showingPicker = .reschedule(item.trace.id) }
+            SmallActionButton(store.copy.returnToPool) { store.returnToPool(item.trace.id) }
             PriorityStepper(
                 canMoveUp: canMoveUp,
                 canMoveDown: canMoveDown,
@@ -2734,14 +2783,14 @@ struct UnfinishedPoolPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: "未完成", subtitle: "按任务链去重的未完成轨迹。延续它，或明确废弃。")
+            PageHeader(title: store.copy.navUnfinished, subtitle: store.copy.unfinishedSubtitle)
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(items, id: \.chain.id) { item in
                         UnfinishedRow(item: item)
                     }
                     if items.isEmpty {
-                        EmptyState(kind: .unfinishedPool, text: "没有待处理的未完成任务。")
+                        EmptyState(kind: .unfinishedPool, text: store.copy.emptyUnfinished)
                             .padding(.top, 40)
                     }
                 }
@@ -2781,8 +2830,8 @@ struct UnfinishedRow: View {
                 }
                 Spacer()
                 if item.activeTrace == nil, let source = item.unfinishedTraces.last {
-                    SmallActionButton("延续到…", tone: .accent) { store.showingPicker = .continueTrace(source.id) }
-                    SmallActionButton("废弃任务链", tone: .warn) { store.abandon(source.id) }
+                    SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
+                    SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
                 }
             }
             HStack(spacing: 8) {
@@ -2858,7 +2907,7 @@ struct CompletedPoolPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: "已完成", subtitle: "按完成记录逐条展示，并附带每条的任务轨迹。")
+            PageHeader(title: store.copy.navCompleted, subtitle: store.copy.completedSubtitle)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(groupedDates, id: \.self) { date in
@@ -2888,7 +2937,7 @@ struct CompletedPoolPage: View {
                         }
                     }
                     if items.isEmpty && subtaskRecords.isEmpty {
-                        EmptyState(kind: .completedPool, text: "还没有完成记录。")
+                        EmptyState(kind: .completedPool, text: store.copy.emptyCompleted)
                             .padding(.top, 40)
                     }
                 }
@@ -2935,12 +2984,12 @@ struct CompletedRow: View {
                 CompletedTrajectoryNodes(nodes: item.trajectory.traces.map(CompletedTrajectoryNode.init(trace:)))
                     .padding(.leading, 28)
                 Spacer()
-                SmallActionButton("查看当天 →") {
+                SmallActionButton(store.copy.openDay) {
                     store.selectedDate = item.trace.date
                     store.page = .day
                     store.selectTrace(item.trace.id)
                 }
-                SmallActionButton("复制为新任务") { store.copyAsNewTask(item.trace.id) }
+                SmallActionButton(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
             }
         }
         .padding(.horizontal, 12)
@@ -2977,12 +3026,12 @@ struct CompletedSubtaskRow: View {
                 CompletedTrajectoryNodes(nodes: [CompletedTrajectoryNode(subtask: record.subtask, date: record.date)])
                     .padding(.leading, 28)
                 Spacer()
-                SmallActionButton("查看当天 →") {
+                SmallActionButton(store.copy.openDay) {
                     store.selectedDate = record.date
                     store.page = .day
                     store.selectTrace(record.parentTrace.id)
                 }
-                SmallActionButton("复制为新任务") { store.copyAsNewTask(record.parentTrace.id) }
+                SmallActionButton(store.copy.copyAsNewTask) { store.copyAsNewTask(record.parentTrace.id) }
             }
         }
         .padding(.horizontal, 12)
@@ -3099,13 +3148,13 @@ struct CalendarPage: View {
                     HeaderButton("‹") {
                         store.selectedCalendarDate = SuntraceStore.shiftedMonth(from: store.selectedCalendarDate, by: -1)
                     }
-                    HeaderButton("今天") { store.selectedCalendarDate = store.today }
+                    HeaderButton(store.copy.today) { store.selectedCalendarDate = store.today }
                     HeaderButton("›") {
                         store.selectedCalendarDate = SuntraceStore.shiftedMonth(from: store.selectedCalendarDate, by: 1)
                     }
                 }
 
-                Text("整月轨迹总览。点选任一天，右侧查看当天详情。")
+                Text(store.copy.calendarSubtitle)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.text3)
                     .padding(.top, 4)
@@ -3335,7 +3384,7 @@ struct CalendarDetailPanel: View {
                         CalendarDetailRow(trace: trace)
                     }
                     if traces.isEmpty {
-                        EmptyState(kind: .calendar, text: "这一天没有留下任务。")
+                        EmptyState(kind: .calendar, text: store.copy.emptyDay)
                             .padding(.vertical, 36)
                     }
                 }

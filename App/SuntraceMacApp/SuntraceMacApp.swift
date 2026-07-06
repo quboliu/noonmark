@@ -656,24 +656,7 @@ final class SuntraceStore: ObservableObject {
     }
 
     var windowTitle: String {
-        switch page {
-        case .day:
-            return "晷迹 — \(selectedDate.month)月\(selectedDate.day)日"
-        case .pool:
-            return "晷迹 — 任务池"
-        case .future:
-            return "晷迹 — 未来计划"
-        case .unfinished:
-            return "晷迹 — 未完成"
-        case .completed:
-            return "晷迹 — 已完成"
-        case .calendar:
-            return "晷迹 — \(selectedCalendarDate.month)月\(selectedCalendarDate.day)日"
-        case .zhulong:
-            return "晷迹 — 烛龙 AI"
-        case .settings:
-            return "晷迹 — 设置"
-        }
+        "晷迹 — \(Self.displayDate(selectedDate))"
     }
 
     func definition(for trace: DayTrace) -> TaskDefinition? {
@@ -1351,7 +1334,11 @@ final class SuntraceStore: ObservableObject {
     }
 
     static func displayDate(_ date: LocalDate) -> String {
-        "\(date.month) 月 \(date.day) 日"
+        "\(date.month)月\(date.day)日"
+    }
+
+    static func displayFullDate(_ date: LocalDate) -> String {
+        "\(date.year)年\(displayDate(date))"
     }
 
     static func displayTime(_ date: Date?) -> String? {
@@ -1704,17 +1691,17 @@ struct WindowChrome: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle().fill(Color(red: 1, green: 0.36, blue: 0.32)).frame(width: 12, height: 12)
-            Circle().fill(Color(red: 1, green: 0.76, blue: 0.25)).frame(width: 12, height: 12)
-            Circle().fill(Color(red: 0.23, green: 0.78, blue: 0.34)).frame(width: 12, height: 12)
+        HStack(spacing: 9) {
+            trafficLight(color: Color(red: 1, green: 0.451, blue: 0.416))
+            trafficLight(color: Color(red: 0.996, green: 0.737, blue: 0.18))
+            trafficLight(color: Color(red: 0.098, green: 0.765, blue: 0.188))
             Spacer()
             Text(store.windowTitle)
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(Theme.text2)
                 .lineLimit(1)
             Spacer()
-            Color.clear.frame(width: 56, height: 1)
+            Color.clear.frame(width: 60, height: 1)
         }
         .frame(height: 42)
         .padding(.horizontal, 14)
@@ -1723,6 +1710,13 @@ struct WindowChrome: View {
             Rectangle().fill(Theme.line).frame(height: 1)
         }
     }
+
+    private func trafficLight(color: Color) -> some View {
+        Circle()
+            .fill(color)
+            .overlay(Circle().stroke(.black.opacity(0.1), lineWidth: 0.5))
+            .frame(width: 14, height: 14)
+    }
 }
 
 struct Sidebar: View {
@@ -1730,18 +1724,14 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 9) {
                 ClockLogo()
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("晷迹")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("suntrace")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text3)
-                }
+                Text("晷迹")
+                    .font(.system(size: 15, weight: .bold))
+                    .tracking(0.2)
             }
             .padding(.horizontal, 18)
-            .padding(.bottom, 18)
+            .padding(.bottom, 16)
 
             NavGroupTitle("计划")
             NavItem(
@@ -1769,7 +1759,6 @@ struct Sidebar: View {
                 count: store.engine.completedPool().count + store.engine.completedSubtaskRecords().count
             )
             NavItem(page: .calendar, label: "日历", count: 0)
-            NavItem(page: .zhulong, label: "烛龙 AI", count: 0)
 
             Spacer()
             NavItem(page: .settings, label: "设置", count: 0)
@@ -1977,7 +1966,7 @@ struct DayTodoHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            Text(SuntraceStore.displayDate(store.selectedDate))
+            Text(SuntraceStore.displayFullDate(store.selectedDate))
                 .font(.system(size: 21, weight: .bold))
                 .foregroundStyle(Theme.text1)
                 .monospacedDigit()
@@ -2004,7 +1993,7 @@ struct DateStrip: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var dates: [LocalDate] {
-        (-7...6).map { SuntraceStore.offset(store.today, by: $0) }
+        (-6...7).map { SuntraceStore.offset(store.today, by: $0) }
     }
 
     var body: some View {
@@ -2058,7 +2047,7 @@ struct TaskRow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 Button {
                     store.toggleComplete(trace.id)
                 } label: {
@@ -2067,25 +2056,36 @@ struct TaskRow: View {
                 .buttonStyle(.plain)
                 .disabled(trace.status != .pending && trace.status != .completed)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 0) {
                     Text(definition?.title ?? "未命名任务")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(trace.status.uiStyle.titleColor)
                         .strikethrough(trace.status.uiStyle.strikethrough)
 
-                    HStack(spacing: 6) {
-                        ProgressView(value: Double(progress.percent), total: 100)
-                            .progressViewStyle(.linear)
-                            .tint(progress.percent == 100 ? Theme.ok : Theme.accent)
-                            .frame(width: 150)
-                        Text("\(progress.percent)%")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Theme.accent)
+                    if showsProgress {
+                        HStack(spacing: 6) {
+                            GeometryReader { proxy in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(Theme.chip)
+                                    Capsule()
+                                        .fill(progress.percent == 100 ? Theme.ok : Theme.accent)
+                                        .frame(width: proxy.size.width * CGFloat(progress.percent) / 100)
+                                }
+                            }
+                            .frame(width: 150, height: 4)
+                            Text("\(progress.percent)%")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(progress.percent == 100 ? Theme.ok : Theme.accent)
+                        }
+                        .padding(.top, 5)
                     }
 
-                    Text(metaText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text3)
+                    if metaText.isEmpty == false {
+                        Text(metaText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                            .padding(.top, 2)
+                    }
                 }
 
                 Spacer()
@@ -2105,15 +2105,20 @@ struct TaskRow: View {
 
                 StatusChip(status: trace.status)
 
-                VStack(spacing: 1) {
-                    Button("▲") { store.movePriority(trace.id, delta: -1) }
-                    Button("▼") { store.movePriority(trace.id, delta: 1) }
+                if canReorder {
+                    VStack(spacing: 0) {
+                        Button("▲") { store.movePriority(trace.id, delta: -1) }
+                            .frame(height: 11)
+                        Button("▼") { store.movePriority(trace.id, delta: 1) }
+                            .frame(height: 11)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.text3)
                 }
-                .buttonStyle(.plain)
-                .font(.system(size: 9))
-                .foregroundStyle(Theme.text3)
             }
-            .padding(11)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
 
             if expanded {
                 VStack(spacing: 6) {
@@ -2141,7 +2146,21 @@ struct TaskRow: View {
         if trace.changedToTraceID != nil { parts.append("被变更为新任务") }
         if trace.status == .returnedToPool { parts.append("当天已回池") }
         if progress.floorPercent > 0 { parts.append("进度下限 \(progress.floorPercent)%") }
-        return parts.isEmpty ? "当日优先级 \(trace.priority)" : parts.joined(separator: " · ")
+        return parts.joined(separator: " · ")
+    }
+
+    var showsProgress: Bool {
+        guard progress.percent > 0, progress.percent < 100 else { return false }
+        switch trace.status {
+        case .pending, .continued, .unfinished:
+            return true
+        case .completed, .changed, .returnedToPool, .abandoned:
+            return false
+        }
+    }
+
+    var canReorder: Bool {
+        trace.status == .pending && (store.selectedDate == store.today || store.selectedDate > store.today)
     }
 }
 
@@ -2226,7 +2245,7 @@ struct TaskPoolPage: View {
                 .frame(height: 32)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 12)
                 .onSubmit { store.addPoolTask() }
 
@@ -2240,7 +2259,7 @@ struct TaskPoolPage: View {
                             .padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
             }
         }
     }
@@ -2314,7 +2333,7 @@ struct FuturePlansPage: View {
                             .padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 20)
             }
         }
@@ -2375,7 +2394,7 @@ struct UnfinishedPoolPage: View {
                             .padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 20)
             }
         }
@@ -4144,11 +4163,8 @@ struct ReviewRail: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
-                if noReview == false {
-                    StatusPill(text: "已自动保存", color: Theme.ok)
-                }
                 Spacer()
-                Text(store.selectedDate.description)
+                Text("\(SuntraceStore.displayDate(store.selectedDate)) \(SuntraceStore.weekday(store.selectedDate))")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text3)
             }

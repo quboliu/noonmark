@@ -610,6 +610,7 @@ final class SuntraceStore: ObservableObject {
             repository = SQLiteEngineRepository(databaseURL: Self.configuredDatabaseURL())
             loadOrSeed()
         }
+        Theme.apply(engine.preferences.theme)
     }
 
     var isHistory: Bool {
@@ -1034,11 +1035,14 @@ final class SuntraceStore: ObservableObject {
     }
 
     func setTheme(_ theme: AppTheme) {
+        objectWillChange.send()
         engine.updateTheme(theme)
+        Theme.apply(theme)
         persist()
     }
 
     func setLanguage(_ language: AppLanguage) {
+        objectWillChange.send()
         engine.updateLanguage(language)
         persist()
     }
@@ -1086,6 +1090,7 @@ final class SuntraceStore: ObservableObject {
 
         undoStack.append(engine.snapshot())
         engine = SuntraceEngine(snapshot: snapshot)
+        Theme.apply(engine.preferences.theme)
         selectedDate = today
         selectedCalendarDate = today
         clearSelection()
@@ -1306,6 +1311,7 @@ final class SuntraceStore: ObservableObject {
             return
         }
         engine = SuntraceEngine(snapshot: snapshot)
+        Theme.apply(engine.preferences.theme)
         normalizeSelection()
         persist()
         showToast("已撤销")
@@ -1420,12 +1426,15 @@ final class SuntraceStore: ObservableObject {
             let snapshot = loaded.snapshot()
             if snapshot.days.isEmpty && snapshot.chains.isEmpty && snapshot.traces.isEmpty {
                 engine = loaded
+                Theme.apply(engine.preferences.theme)
                 persist()
             } else {
                 engine = loaded
+                Theme.apply(engine.preferences.theme)
             }
         } catch {
             engine = SuntraceEngine()
+            Theme.apply(engine.preferences.theme)
             NSLog("Suntrace persistence load failed: %@", String(describing: error))
             toast = "无法读取本地数据库，已使用空白数据：\(error.localizedDescription)"
         }
@@ -1667,6 +1676,25 @@ struct PickerSheetState: Identifiable {
 }
 
 enum Theme {
+    struct Palette {
+        let desk: Color
+        let background: Color
+        let panel: Color
+        let panel2: Color
+        let line: Color
+        let line2: Color
+        let text1: Color
+        let text2: Color
+        let text3: Color
+        let chip: Color
+    }
+
+    private nonisolated(unsafe) static var activeTheme: AppTheme = .coolGray
+
+    static func apply(_ theme: AppTheme) {
+        activeTheme = theme
+    }
+
     static func hex(_ value: Int) -> Color {
         Color(
             red: Double((value >> 16) & 0xFF) / 255,
@@ -1675,16 +1703,47 @@ enum Theme {
         )
     }
 
-    static let desk = Color(red: 0.898, green: 0.902, blue: 0.914)
-    static let background = Color(red: 0.962, green: 0.962, blue: 0.968)
-    static let panel = Color.white
-    static let panel2 = Color(red: 0.982, green: 0.982, blue: 0.987)
-    static let line = Color(red: 0.91, green: 0.91, blue: 0.925)
-    static let line2 = Color(red: 0.82, green: 0.82, blue: 0.85)
-    static let text1 = Color(red: 0.11, green: 0.11, blue: 0.12)
-    static let text2 = Color(red: 0.42, green: 0.42, blue: 0.46)
-    static let text3 = Color(red: 0.63, green: 0.63, blue: 0.67)
-    static let chip = Color(red: 0.946, green: 0.946, blue: 0.956)
+    static var palette: Palette {
+        switch activeTheme {
+        case .coolGray:
+            return Palette(
+                desk: Color(red: 0.898, green: 0.902, blue: 0.914),
+                background: Color(red: 0.962, green: 0.962, blue: 0.968),
+                panel: .white,
+                panel2: Color(red: 0.982, green: 0.982, blue: 0.987),
+                line: Color(red: 0.91, green: 0.91, blue: 0.925),
+                line2: Color(red: 0.82, green: 0.82, blue: 0.85),
+                text1: Color(red: 0.11, green: 0.11, blue: 0.12),
+                text2: Color(red: 0.42, green: 0.42, blue: 0.46),
+                text3: Color(red: 0.63, green: 0.63, blue: 0.67),
+                chip: Color(red: 0.946, green: 0.946, blue: 0.956)
+            )
+        case .warmPaper:
+            return Palette(
+                desk: Color(red: 0.925, green: 0.905, blue: 0.865),
+                background: Color(red: 0.982, green: 0.969, blue: 0.942),
+                panel: Color(red: 1.0, green: 0.995, blue: 0.978),
+                panel2: Color(red: 0.988, green: 0.974, blue: 0.948),
+                line: Color(red: 0.91, green: 0.878, blue: 0.82),
+                line2: Color(red: 0.79, green: 0.725, blue: 0.64),
+                text1: Color(red: 0.13, green: 0.105, blue: 0.085),
+                text2: Color(red: 0.44, green: 0.385, blue: 0.32),
+                text3: Color(red: 0.64, green: 0.58, blue: 0.50),
+                chip: Color(red: 0.955, green: 0.936, blue: 0.902)
+            )
+        }
+    }
+
+    static var desk: Color { palette.desk }
+    static var background: Color { palette.background }
+    static var panel: Color { palette.panel }
+    static var panel2: Color { palette.panel2 }
+    static var line: Color { palette.line }
+    static var line2: Color { palette.line2 }
+    static var text1: Color { palette.text1 }
+    static var text2: Color { palette.text2 }
+    static var text3: Color { palette.text3 }
+    static var chip: Color { palette.chip }
     static let accent = Color(red: 0.16, green: 0.38, blue: 0.78)
     static let accentSoft = Color(red: 0.93, green: 0.955, blue: 1.0)
     static let ok = Color(red: 0.08, green: 0.55, blue: 0.38)

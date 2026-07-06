@@ -285,6 +285,30 @@ fi
 
 echo "E2E zhulong draft apply: $zhulong_db (review_count=$zhulong_review_count)"
 
+review_zhulong_dir="artifacts/e2e-review-zhulong-entry"
+review_zhulong_result="${review_zhulong_dir}/review-zhulong-result.txt"
+rm -rf "$review_zhulong_dir"
+mkdir -p "$review_zhulong_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page day \
+  --e2e-review-zhulong-entry \
+  --e2e-review-zhulong-result-url "$PWD/$review_zhulong_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$review_zhulong_result" ]]; then
+  echo "review zhulong entry result was not created: $review_zhulong_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$review_zhulong_result")" != "ok" ]]; then
+  echo "review zhulong entry failed: $(cat "$review_zhulong_result")" >&2
+  exit 1
+fi
+
+echo "E2E review zhulong entry: $review_zhulong_result"
+
 provider_dir="artifacts/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"
 provider_name="E2E Provider"

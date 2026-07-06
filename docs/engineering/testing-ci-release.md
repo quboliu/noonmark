@@ -114,7 +114,7 @@ Release：
 - 2026-07-06：`scripts/test-visual-regression` 已升级为多页面原型量化对比，覆盖 `day`、`pool`、`future`、`unfinished`、`completed`、`calendar`、`settings`，输出归一化截图、差异图和指标报告到 `artifacts/visual-regression/<page>/`，汇总在 `artifacts/visual-regression/summary.txt`。
 - 2026-07-06：当前多页面视觉指标为：day `changed_ratio=0.132592`，pool `0.052632`，future `0.040995`，unfinished `0.098914`，completed `0.129740`，calendar `0.075285`，settings `0.058780`；settings 页已回到 HTML 原型的单栏信息架构，分段控件已回到原型紧凑宽度，同时把烛龙 Provider 保留为同步区后的紧凑折叠入口，阈值收紧为 `0.08`；pool 页列表已回到原型单行密度，阈值收紧为 `0.07`；future 页列表已移除首屏计数和行内操作噪声，并通过共享排序控件外壳收敛把阈值收紧为 `0.05`；day 页行内轨迹元信息已恢复“延续次数 + 持续天数”的原型语义，阈值收紧为 `0.15`；unfinished 页行密度、状态图标和已延续到今天文案已向原型收敛，阈值收紧为 `0.10`；calendar 右栏当天 badge 和任务数量文案已按原型收敛，阈值收紧为 `0.09`；completed 页移除额外计数和主任务完成标签，并以稳定行高保持原型卡片节奏，阈值收紧为 `0.14`。后续视觉收紧以真实可用性、信息层级和明显偏差为准，不追求演示数据条数逐项一致。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 新用户空数据截图探针和正常模式持久化探针，使用 `artifacts/e2e-blank/Suntrace.sqlite` 与 `artifacts/e2e-persistence/Suntrace.sqlite` 验证空库初始化、页面浏览和保存均不灌入演示任务。
-- 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite。
+- 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite；同时包含 Day Todo 复盘区烛龙入口探针，验证入口会切到烛龙页并生成 dailyReview 建议草稿。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App lifecycle workflow 探针，验证任务变更保留旧轨迹并创建新任务、回池保留日轨迹、废弃同步终止任务链。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 数据包 round-trip 探针，验证设置页导出路径生成 JSON，随后通过导入路径恢复任务和复盘数据到 SQLite。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App Provider 配置 round-trip 探针，验证非密配置经 UserDefaults 回读、dummy API Key 经 Keychain 回读，并在验证后清理。
@@ -126,6 +126,6 @@ Release：
 
 ## 后续缺口
 
-- E2E 已覆盖主要页面、关键详情栏选中态、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、变更、回池、废弃、导入 / 导出、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
+- E2E 已覆盖主要页面、关键详情栏选中态、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、Day Todo 复盘区烛龙分析入口、变更、回池、废弃、导入 / 导出、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
 - Release 后续需要补 Apple Developer ID 签名、notarization；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成、校验和从本机复制安装后启动。

@@ -147,6 +147,7 @@ final class MacUIDesignContractTests: XCTestCase {
 
         XCTAssertTrue(contract.reviewElements.contains(.statsCard))
         XCTAssertTrue(contract.reviewElements.contains(.segmentedStatusBar))
+        XCTAssertTrue(contract.reviewElements.contains(.zhulongAnalysisButton))
         XCTAssertTrue(contract.reviewElements.contains(.summaryInput))
         XCTAssertTrue(contract.reviewElements.contains(.unfinishedReasonInput))
         XCTAssertTrue(contract.reviewElements.contains(.tomorrowNoteInput))

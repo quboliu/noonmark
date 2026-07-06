@@ -157,6 +157,7 @@ private struct LaunchAutomation {
         append(LifecycleE2EAutomation.fromCommandLine(), to: &actions)
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewE2EAutomation.fromCommandLine(), to: &actions)
+        append(ReviewZhulongEntryE2EAutomation.fromCommandLine(), to: &actions)
 
         guard actions.isEmpty == false else { return nil }
         return LaunchAutomation(
@@ -208,6 +209,43 @@ private struct ReviewE2EAutomation: LaunchAutomationRunnable {
         store.page = .day
         store.selectedDate = store.today
         store.updateReview(summary: summary)
+    }
+}
+
+private struct ReviewZhulongEntryE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> ReviewZhulongEntryE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-review-zhulong-entry") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-review-zhulong-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return ReviewZhulongEntryE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        store.page = .day
+        store.selectedDate = store.today
+        store.requestZhulongDailyReviewFromReviewRail()
+
+        guard store.page == .zhulong,
+              store.selectedZhulongDraft?.kind == .dailyReview
+        else {
+            try? writeResult("failed")
+            return
+        }
+
+        try? writeResult("ok")
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
     }
 }
 
@@ -1250,6 +1288,11 @@ final class SuntraceStore: ObservableObject {
         showToast("已生成建议草稿，等待用户确认")
     }
 
+    func requestZhulongDailyReviewFromReviewRail() {
+        page = .zhulong
+        generateZhulongDraft(task: .dailyReview)
+    }
+
     func applyZhulongOperation(draftID: AISuggestionDraftID, operationIndex: Int) {
         guard let draft = zhulongDrafts.first(where: { $0.id == draftID }),
               draft.proposedOperations.indices.contains(operationIndex)
@@ -1861,6 +1904,10 @@ struct AppCopy {
         language == .chinese
             ? "可选 sidecar：复盘分析、任务拆解、排期建议和 label 分类建议。"
             : "Optional sidecar for reviews, decomposition, scheduling, and label suggestions."
+    }
+
+    var analyzeTodayWithZhulong: String {
+        language == .chinese ? "让烛龙分析今日" : "Analyze today"
     }
 
     var providerConfigured: String { language == .chinese ? "Provider 已配置" : "Provider configured" }
@@ -5328,6 +5375,9 @@ struct ReviewRail: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.accent)
             }
+            if store.selectedDate == store.today {
+                ZhulongReviewEntryButton()
+            }
             if noReview {
                 Text("未来日还没有复盘。到了这一天，复盘会在这里生成。")
                     .font(.system(size: 12))
@@ -5362,6 +5412,37 @@ struct ReviewRail: View {
                 )
             }
         }
+    }
+}
+
+struct ZhulongReviewEntryButton: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        Button {
+            store.requestZhulongDailyReviewFromReviewRail()
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(store.copy.analyzeTodayWithZhulong)
+                    .font(.system(size: 11.5, weight: .semibold))
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .hoverSurface(
+                cornerRadius: 8,
+                idleFill: Theme.accentSoft,
+                hoverFill: Theme.accentSoft.opacity(0.72),
+                idleStroke: Theme.accent.opacity(0.18),
+                hoverStroke: Theme.accent.opacity(0.32)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

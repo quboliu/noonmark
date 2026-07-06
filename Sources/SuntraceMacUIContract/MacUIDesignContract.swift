@@ -226,6 +226,7 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
 
 public enum MacUIReviewElement: String, CaseIterable, Sendable {
     case reviewHeader
+    case zhulongAnalysisButton
     case autosavedIndicator
     case historyReviewNotice
     case futureNoReviewState

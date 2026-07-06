@@ -354,3 +354,58 @@ if [[ "$lifecycle_changed" -ne 1 || "$lifecycle_new" -ne 1 || "$lifecycle_return
 fi
 
 echo "E2E lifecycle workflow: $lifecycle_db (changed=$lifecycle_changed new=$lifecycle_new returned=$lifecycle_returned abandoned=$lifecycle_abandoned)"
+
+data_package_dir="artifacts/e2e-data-package"
+data_package_db="${data_package_dir}/Suntrace.sqlite"
+data_package_json="${data_package_dir}/suntrace-e2e-export.json"
+data_package_result="${data_package_dir}/data-package-result.txt"
+rm -rf "$data_package_dir"
+mkdir -p "$data_package_dir"
+
+open -W -n dist/SuntraceMacApp.app --args \
+  --data-url "$PWD/$data_package_db" \
+  --page settings \
+  --e2e-data-package-workflow \
+  --e2e-data-package-url "$PWD/$data_package_json" \
+  --e2e-data-package-result-url "$PWD/$data_package_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$data_package_result" ]]; then
+  echo "data package e2e result was not created: $data_package_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$data_package_result")" != "ok" ]]; then
+  echo "data package e2e failed: $(cat "$data_package_result")" >&2
+  exit 1
+fi
+
+if [[ ! -s "$data_package_json" ]]; then
+  echo "data package export was not created: $data_package_json" >&2
+  exit 1
+fi
+
+read -r data_package_task data_package_review < <(
+  sqlite3 -separator " " "$data_package_db" "
+    SELECT
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 数据包任务'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'pending'),
+      (SELECT count(*)
+       FROM days
+       WHERE date = '2026-07-05'
+         AND review_summary = 'E2E 数据包导出前复盘。'
+         AND review_unfinished_reason = '验证 App 导入导出。'
+         AND review_tomorrow_note = '导入后继续检查。');
+  "
+)
+
+if [[ "$data_package_task" -ne 1 || "$data_package_review" -ne 1 ]]; then
+  echo "data package e2e persistence failed: task=$data_package_task review=$data_package_review" >&2
+  exit 1
+fi
+
+echo "E2E data package round-trip: $data_package_json -> $data_package_db (task=$data_package_task review=$data_package_review)"

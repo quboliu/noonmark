@@ -100,6 +100,7 @@ Release：
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 正常模式持久化探针，使用 `artifacts/e2e-persistence/Suntrace.sqlite` 验证空库初始化和保存。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App lifecycle workflow 探针，验证任务变更保留旧轨迹并创建新任务、回池保留日轨迹、废弃同步终止任务链。
+- 2026-07-06：`scripts/test-e2e` 已包含真实 App 数据包 round-trip 探针，验证设置页导出路径生成 JSON，随后通过导入路径恢复任务和复盘数据到 SQLite。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App Provider 配置 round-trip 探针，验证非密配置经 UserDefaults 回读、dummy API Key 经 Keychain 回读，并在验证后清理。
 - 2026-07-06：`make package-dmg` 通过，生成 `dist/SuntraceMacApp.dmg` 与 `dist/SuntraceMacApp.dmg.sha256`，`shasum -a 256 -c dist/SuntraceMacApp.dmg.sha256` 通过。
 - 2026-07-06：`scripts/test-dmg-install dist/SuntraceMacApp.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
@@ -109,6 +110,6 @@ Release：
 
 ## 后续缺口
 
-- E2E 已覆盖主要页面、关键详情栏选中态、正常模式持久化、快速新增、任务池排期、延续、复盘编辑、变更、回池、废弃、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动；后续需要补更多真实交互路径断言，例如导入 / 导出。
+- E2E 已覆盖主要页面、关键详情栏选中态、正常模式持久化、快速新增、任务池排期、延续、复盘编辑、变更、回池、废弃、导入 / 导出、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
 - Release 后续需要补 Apple Developer ID 签名、notarization；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成、校验和从本机复制安装后启动。

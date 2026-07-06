@@ -119,11 +119,13 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
         let providerAutomation = ProviderE2EAutomation.fromCommandLine()
         let workflowAutomation = WorkflowE2EAutomation.fromCommandLine()
         let lifecycleAutomation = LifecycleE2EAutomation.fromCommandLine()
+        let dataPackageAutomation = DataPackageE2EAutomation.fromCommandLine()
         guard quickTaskTitle?.isEmpty == false
             || zhulongTaskName != nil
             || providerAutomation != nil
             || workflowAutomation != nil
             || lifecycleAutomation != nil
+            || dataPackageAutomation != nil
         else {
             return
         }
@@ -158,11 +160,67 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
                 lifecycleAutomation.run(on: store)
             }
 
+            if let dataPackageAutomation {
+                dataPackageAutomation.run(on: store)
+            }
+
             if CommandLine.arguments.contains("--e2e-quit-after-automation") {
                 store.persist()
                 NSApp.terminate(nil)
             }
         }
+    }
+}
+
+private struct DataPackageE2EAutomation {
+    var exportURL: URL
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> DataPackageE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-data-package-workflow"),
+              let exportPath = SuntraceStore.commandLineValue(after: "--e2e-data-package-url")
+        else {
+            return nil
+        }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-data-package-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return DataPackageE2EAutomation(
+            exportURL: URL(fileURLWithPath: exportPath),
+            resultURL: resultURL
+        )
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            let title = "E2E 数据包任务"
+            let chainID = try store.engine.createPoolTask(title: title, descriptionText: "E2E 数据包导出导入路径。")
+            _ = try store.engine.scheduleFromPool(chainID: chainID, date: store.today, today: store.today)
+            store.updateReview(
+                summary: "E2E 数据包导出前复盘。",
+                reason: "验证 App 导入导出。",
+                tomorrow: "导入后继续检查。"
+            )
+
+            try store.exportDataPackage(to: exportURL)
+
+            store.engine = SuntraceEngine()
+            try store.importDataPackage(from: exportURL)
+
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
     }
 }
 

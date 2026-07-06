@@ -2,15 +2,17 @@
 set -euo pipefail
 
 configuration="${1:-debug}"
-pages=(
-  day
-  pool
-  future
-  unfinished
-  completed
-  calendar
-  zhulong
-  settings
+scenarios=(
+  "day|day|"
+  "day-detail|day|--select first"
+  "day-manual-detail|day|--select manual"
+  "pool|pool|"
+  "future|future|"
+  "unfinished|unfinished|"
+  "completed|completed|"
+  "calendar|calendar|"
+  "zhulong|zhulong|"
+  "settings|settings|"
 )
 
 scripts/build-mac-app "$configuration"
@@ -40,9 +42,15 @@ exit(1)
 '
 }
 
-for page in "${pages[@]}"; do
+for scenario in "${scenarios[@]}"; do
+  IFS="|" read -r screenshot_name page extra_args <<< "$scenario"
   pkill -x SuntraceMacApp 2>/dev/null || true
-  open -n dist/SuntraceMacApp.app --args --page "$page"
+  if [[ -n "$extra_args" ]]; then
+    # shellcheck disable=SC2086
+    open -n dist/SuntraceMacApp.app --args --page "$page" $extra_args
+  else
+    open -n dist/SuntraceMacApp.app --args --page "$page"
+  fi
   sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
 
   window_id=""
@@ -58,17 +66,17 @@ for page in "${pages[@]}"; do
     exit 1
   fi
 
-  screenshot="artifacts/e2e/${page}.png"
+  screenshot="artifacts/e2e/${screenshot_name}.png"
   screencapture -x -l "$window_id" "$screenshot"
   width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
   height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
 
   if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 || "${width:-0}" -gt 3000 || "${height:-0}" -gt 2000 ]]; then
-    echo "invalid e2e screenshot size for ${page}: ${width:-unknown}x${height:-unknown}" >&2
+    echo "invalid e2e screenshot size for ${screenshot_name}: ${width:-unknown}x${height:-unknown}" >&2
     exit 1
   fi
 
-  echo "E2E ${page} screenshot: ${screenshot} (${width}x${height})"
+  echo "E2E ${screenshot_name} screenshot: ${screenshot} (${width}x${height})"
 done
 
 pkill -x SuntraceMacApp 2>/dev/null || true

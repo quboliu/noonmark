@@ -19,6 +19,13 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
                 delegate.store.page = page
             }
         }
+        if CommandLine.arguments.contains("--select"), let index = CommandLine.arguments.firstIndex(of: "--select") {
+            let valueIndex = CommandLine.arguments.index(after: index)
+            let selectionName = CommandLine.arguments.indices.contains(valueIndex) ? CommandLine.arguments[valueIndex] : ""
+            if selectionName == "first" || selectionName == "manual" {
+                delegate.store.selectItemForLaunch(selectionName)
+            }
+        }
         retainedDelegate = delegate
         app.delegate = delegate
         app.setActivationPolicy(.regular)
@@ -164,6 +171,7 @@ final class SuntraceStore: ObservableObject {
     @Published var showingFromPoolPicker = false
     @Published var showingChangeDialog = false
     @Published var changeText = ""
+    @Published var detailSubtaskText = ""
     @Published var toast: String?
 
     let today = LocalDate("2026-07-05")
@@ -242,6 +250,7 @@ final class SuntraceStore: ObservableObject {
         selectedUnfinishedChainID = nil
         selectedCompletedTraceID = nil
         selectedCompletedSubtaskID = nil
+        detailSubtaskText = ""
     }
 
     func selectPool(_ chainID: TaskChainID) {
@@ -250,6 +259,7 @@ final class SuntraceStore: ObservableObject {
         selectedUnfinishedChainID = nil
         selectedCompletedTraceID = nil
         selectedCompletedSubtaskID = nil
+        detailSubtaskText = ""
     }
 
     func selectUnfinished(_ chainID: TaskChainID) {
@@ -258,6 +268,7 @@ final class SuntraceStore: ObservableObject {
         selectedPoolChainID = nil
         selectedCompletedTraceID = nil
         selectedCompletedSubtaskID = nil
+        detailSubtaskText = ""
     }
 
     func selectCompleted(_ traceID: DayTraceID) {
@@ -266,13 +277,46 @@ final class SuntraceStore: ObservableObject {
         selectedTraceID = traceID
         selectedPoolChainID = nil
         selectedUnfinishedChainID = nil
+        detailSubtaskText = ""
     }
 
     func selectCompletedSubtask(_ subtaskID: SubtaskID) {
         selectedCompletedSubtaskID = subtaskID
         selectedCompletedTraceID = nil
+        detailSubtaskText = ""
         if let record = selectedCompletedSubtaskRecord {
             selectedTraceID = record.parentTrace.id
+        }
+    }
+
+    func selectItemForLaunch(_ selectionName: String) {
+        switch page {
+        case .day:
+            let traces = engine.getDayTodo(date: selectedDate).traces
+            let trace = selectionName == "manual"
+                ? traces.first { subtasks(for: $0.id).isEmpty && $0.status == .pending }
+                : traces.first
+            if let trace {
+                selectTrace(trace.id)
+            }
+        case .future:
+            if let trace = engine.futurePlans(today: today).first?.trace {
+                selectTrace(trace.id)
+            }
+        case .pool:
+            if let task = engine.taskPool().first {
+                selectPool(task.chain.id)
+            }
+        case .unfinished:
+            if let item = engine.unfinishedPool().first {
+                selectUnfinished(item.chain.id)
+            }
+        case .completed:
+            if let item = engine.completedPool().first {
+                selectCompleted(item.trace.id)
+            }
+        case .calendar, .zhulong, .settings:
+            break
         }
     }
 
@@ -282,6 +326,7 @@ final class SuntraceStore: ObservableObject {
         selectedUnfinishedChainID = nil
         selectedCompletedTraceID = nil
         selectedCompletedSubtaskID = nil
+        detailSubtaskText = ""
     }
 
     func addQuickTask() {
@@ -449,6 +494,43 @@ final class SuntraceStore: ObservableObject {
             unfinishedReason: reason ?? existing?.reviewUnfinishedReason,
             tomorrowNote: tomorrow ?? existing?.reviewTomorrowNote
         )
+    }
+
+    func updateTraceText(traceID: DayTraceID, descriptionText: String? = nil, note: String? = nil) {
+        guard let trace = engine.traces[traceID] else { return }
+        do {
+            try engine.updateTraceText(
+                traceID: traceID,
+                descriptionText: descriptionText ?? trace.descriptionText,
+                note: note ?? trace.note,
+                today: today
+            )
+            objectWillChange.send()
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func setManualProgress(traceID: DayTraceID, percent: Double) {
+        do {
+            try engine.setManualProgress(traceID: traceID, percent: Int(percent.rounded()), today: today)
+            objectWillChange.send()
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func addDetailSubtask(traceID: DayTraceID) {
+        let title = detailSubtaskText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title.isEmpty == false else { return }
+        do {
+            _ = try engine.addSubtask(traceID: traceID, title: title)
+            detailSubtaskText = ""
+            objectWillChange.send()
+            showToast("已添加子任务")
+        } catch {
+            showToast(error.localizedDescription)
+        }
     }
 
     func setTheme(_ theme: AppTheme) {
@@ -2061,6 +2143,9 @@ struct TaskDetail: View {
 
     var progress: TraceProgress { store.engine.traceProgress(for: trace.id) }
     var subtasks: [Subtask] { store.subtasks(for: trace.id) }
+    var canEditText: Bool { trace.status == .pending && trace.date >= store.today }
+    var canEditManualProgress: Bool { trace.status == .pending && trace.date == store.today && subtasks.isEmpty }
+    var canAddSubtask: Bool { trace.status == .pending && trace.date >= store.today }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -2095,27 +2180,35 @@ struct TaskDetail: View {
                 Notice(text: "历史只读：任务事实不可改写。", tone: .locked)
             }
             DetailSection("完成进度") {
-                VStack(alignment: .leading, spacing: 6) {
-                    ProgressView(value: Double(progress.percent), total: 100)
-                        .tint(progress.percent == 100 ? Theme.ok : Theme.accent)
-                    Text("\(progress.percent)% · \(progress.mode == .weightedSubtasks ? "加权子任务进度" : "手动完成进度")")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text3)
-                }
+                DetailProgressControl(
+                    traceID: trace.id,
+                    progress: progress,
+                    editable: canEditManualProgress
+                )
             }
             DetailSection("描述") {
-                Text(trace.descriptionText ?? definition.descriptionText ?? "暂无描述")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.text2)
+                EditableDetailText(
+                    text: Binding(
+                        get: { trace.descriptionText ?? definition.descriptionText ?? "" },
+                        set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
+                    ),
+                    placeholder: "补充这个任务的背景、目标或范围…",
+                    editable: canEditText,
+                    warm: false,
+                    fallback: "未填写描述"
+                )
             }
             DetailSection("附言") {
-                Text(trace.note ?? definition.note ?? "暂无附言")
-                    .font(.system(size: 12))
-                    .italic()
-                    .foregroundStyle(Theme.warn)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.warnSoft.opacity(0.45)))
+                EditableDetailText(
+                    text: Binding(
+                        get: { trace.note ?? definition.note ?? "" },
+                        set: { store.updateTraceText(traceID: trace.id, note: $0) }
+                    ),
+                    placeholder: "临时想法、提醒或补充说明…",
+                    editable: canEditText,
+                    warm: true,
+                    fallback: "无附言"
+                )
             }
             DetailSection("子任务") {
                 VStack(spacing: 6) {
@@ -2127,12 +2220,119 @@ struct TaskDetail: View {
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.text3)
                     }
+                    if canAddSubtask {
+                        TextField("添加子任务，回车确认", text: $store.detailSubtaskText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 10)
+                            .frame(height: 28)
+                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                            .onSubmit { store.addDetailSubtask(traceID: trace.id) }
+                    }
                 }
             }
             DetailSection("任务轨迹时间线") {
                 Timeline(trace: trace)
             }
         }
+    }
+}
+
+struct DetailProgressControl: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let traceID: DayTraceID
+    let progress: TraceProgress
+    let editable: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text(progress.mode == .weightedSubtasks ? "按子任务自动计算" : "手动完成进度")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.text3)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Theme.chip))
+                Spacer()
+                Text("\(progress.percent)%")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(progress.percent == 100 ? Theme.ok : Theme.accent)
+                    .monospacedDigit()
+            }
+
+            if editable {
+                Slider(
+                    value: Binding(
+                        get: { Double(progress.percent) },
+                        set: { store.setManualProgress(traceID: traceID, percent: $0) }
+                    ),
+                    in: Double(progress.floorPercent)...100,
+                    step: 5
+                )
+                .tint(Theme.accent)
+                if progress.floorPercent > 0 {
+                    Text("下限 \(progress.floorPercent)% · 延续后的进度不能回退")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.text3)
+                }
+            } else {
+                ProgressView(value: Double(progress.percent), total: 100)
+                    .progressViewStyle(.linear)
+                    .tint(progress.percent == 100 ? Theme.ok : Theme.accent)
+            }
+        }
+    }
+}
+
+struct EditableDetailText: View {
+    @Binding var text: String
+    let placeholder: String
+    let editable: Bool
+    let warm: Bool
+    let fallback: String
+
+    var body: some View {
+        if editable {
+            TextEditor(text: normalizedBinding)
+                .font(.system(size: 12))
+                .italic(warm)
+                .foregroundStyle(warm ? Theme.text2 : Theme.text1)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .frame(height: 66)
+                .background(RoundedRectangle(cornerRadius: 7).fill(warm ? Theme.warnSoft.opacity(0.45) : Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                .overlay(alignment: .topLeading) {
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(placeholder)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.text3)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 9)
+                            .allowsHitTesting(false)
+                    }
+                }
+        } else {
+            Text(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallback : text)
+                .font(.system(size: 12))
+                .italic(warm)
+                .foregroundStyle(warm ? Theme.text2 : Theme.text2)
+                .lineSpacing(3)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 7).fill(warm ? Theme.warnSoft.opacity(0.45) : Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+        }
+    }
+
+    private var normalizedBinding: Binding<String> {
+        Binding(
+            get: { text },
+            set: { text = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : $0 }
+        )
     }
 }
 

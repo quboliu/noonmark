@@ -2641,12 +2641,6 @@ struct FuturePlansPage: View {
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .monospacedDigit()
-                                Text(store.copy.itemCount(items.count))
-                                    .font(.system(size: 10.5, weight: .semibold))
-                                    .foregroundStyle(Theme.navFuture)
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 1)
-                                    .background(Capsule().fill(Theme.navFuture.opacity(0.12)))
                                 Spacer()
                                 Button(store.copy.openDay) {
                                     store.selectedDate = date
@@ -2682,21 +2676,12 @@ struct FuturePlanRow: View {
         let selected = store.selectedTraceID == item.trace.id
         HStack(spacing: 10) {
             PlanningGlyph(systemName: "calendar.badge.clock", color: Theme.navFuture)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.definition.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    PlanMetaPill(text: "计划草稿", color: Theme.navFuture)
-                    Text("当日优先级 \(item.trace.priority)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text3)
-                }
-            }
+            Text(item.definition.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.text1)
+                .lineLimit(1)
             Spacer()
-            SmallActionButton(store.copy.reschedule) { store.showingPicker = .reschedule(item.trace.id) }
-            SmallActionButton(store.copy.returnToPool) { store.returnToPool(item.trace.id) }
+            StatusChip(status: item.trace.status, scale: .compact)
             PriorityStepper(
                 canMoveUp: canMoveUp,
                 canMoveDown: canMoveDown,
@@ -2705,7 +2690,7 @@ struct FuturePlanRow: View {
             )
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
         .hoverSurface(
             active: selected,
             cornerRadius: 9,

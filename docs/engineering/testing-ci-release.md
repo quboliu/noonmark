@@ -112,7 +112,7 @@ Release：
 
 - 2026-07-06：`scripts/test-e2e` 通过，14 个演示数据真实 Mac app 截图生成于 `artifacts/e2e/`，6 个新用户空数据截图生成于 `artifacts/e2e-blank/`，窗口尺寸为 2880x1800，对应原型 1440x900 Retina 截图基线。
 - 2026-07-06：`scripts/test-visual-regression` 已升级为多页面原型量化对比，覆盖 `day`、`pool`、`future`、`unfinished`、`completed`、`calendar`、`settings`，输出归一化截图、差异图和指标报告到 `artifacts/visual-regression/<page>/`，汇总在 `artifacts/visual-regression/summary.txt`。
-- 2026-07-06：当前多页面视觉指标为：day `changed_ratio=0.131998`，pool `0.052632`，future `0.096563`，unfinished `0.098998`，completed `0.111986`，calendar `0.075295`，settings `0.061362`；settings 页已回到 HTML 原型的单栏信息架构，同时把烛龙 Provider 保留为同步区后的紧凑折叠入口，阈值收紧为 `0.12`；pool 页列表已回到原型单行密度，阈值收紧为 `0.07`；unfinished 页行密度和状态图标已向原型收敛，阈值收紧为 `0.105`。后续视觉收紧以真实可用性、信息层级和明显偏差为准，不追求演示数据条数逐项一致。
+- 2026-07-06：当前多页面视觉指标为：day `changed_ratio=0.131998`，pool `0.052632`，future `0.078638`，unfinished `0.098998`，completed `0.111986`，calendar `0.075295`，settings `0.061362`；settings 页已回到 HTML 原型的单栏信息架构，同时把烛龙 Provider 保留为同步区后的紧凑折叠入口，阈值收紧为 `0.12`；pool 页列表已回到原型单行密度，阈值收紧为 `0.07`；future 页列表已移除首屏计数和行内操作噪声，阈值收紧为 `0.09`；unfinished 页行密度和状态图标已向原型收敛，阈值收紧为 `0.105`。后续视觉收紧以真实可用性、信息层级和明显偏差为准，不追求演示数据条数逐项一致。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 新用户空数据截图探针和正常模式持久化探针，使用 `artifacts/e2e-blank/Suntrace.sqlite` 与 `artifacts/e2e-persistence/Suntrace.sqlite` 验证空库初始化、页面浏览和保存均不灌入演示任务。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App lifecycle workflow 探针，验证任务变更保留旧轨迹并创建新任务、回池保留日轨迹、废弃同步终止任务链。

@@ -479,6 +479,48 @@ final class SuntraceStore: ObservableObject {
 
         var id: String { rawValue }
 
+        var navigationSystemImage: String {
+            switch self {
+            case .day:
+                return "clock"
+            case .pool:
+                return "tray"
+            case .future:
+                return "calendar.badge.clock"
+            case .unfinished:
+                return "exclamationmark.circle"
+            case .completed:
+                return "checkmark.seal"
+            case .calendar:
+                return "calendar"
+            case .zhulong:
+                return "sparkles"
+            case .settings:
+                return "gearshape"
+            }
+        }
+
+        var navigationIconColor: Color {
+            switch self {
+            case .day:
+                return Theme.navDay
+            case .pool:
+                return Theme.navPool
+            case .future:
+                return Theme.navFuture
+            case .unfinished:
+                return Theme.navUnfinished
+            case .completed:
+                return Theme.navCompleted
+            case .calendar:
+                return Theme.navCalendar
+            case .zhulong:
+                return Theme.navZhulong
+            case .settings:
+                return Theme.navSettings
+            }
+        }
+
         init?(commandLineValue: String) {
             switch commandLineValue {
             case "day", "dayTodo":
@@ -611,6 +653,27 @@ final class SuntraceStore: ObservableObject {
     var selectedZhulongDraft: AISuggestionDraft? {
         guard let selectedZhulongDraftID else { return zhulongDrafts.first }
         return zhulongDrafts.first { $0.id == selectedZhulongDraftID }
+    }
+
+    var windowTitle: String {
+        switch page {
+        case .day:
+            return "晷迹 — \(selectedDate.month)月\(selectedDate.day)日"
+        case .pool:
+            return "晷迹 — 任务池"
+        case .future:
+            return "晷迹 — 未来计划"
+        case .unfinished:
+            return "晷迹 — 未完成"
+        case .completed:
+            return "晷迹 — 已完成"
+        case .calendar:
+            return "晷迹 — \(selectedCalendarDate.month)月\(selectedCalendarDate.day)日"
+        case .zhulong:
+            return "晷迹 — 烛龙 AI"
+        case .settings:
+            return "晷迹 — 设置"
+        }
     }
 
     func definition(for trace: DayTrace) -> TaskDefinition? {
@@ -1559,6 +1622,14 @@ struct PickerSheetState: Identifiable {
 }
 
 enum Theme {
+    static func hex(_ value: Int) -> Color {
+        Color(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
+    }
+
     static let desk = Color(red: 0.898, green: 0.902, blue: 0.914)
     static let background = Color(red: 0.962, green: 0.962, blue: 0.968)
     static let panel = Color.white
@@ -1575,18 +1646,29 @@ enum Theme {
     static let okSoft = Color(red: 0.91, green: 0.98, blue: 0.95)
     static let warn = Color(red: 0.82, green: 0.36, blue: 0.12)
     static let warnSoft = Color(red: 1.0, green: 0.945, blue: 0.9)
+    static let navDay = hex(0x2A6FDB)
+    static let navPool = hex(0x0E9488)
+    static let navFuture = hex(0x7C5CFF)
+    static let navUnfinished = hex(0xE0851B)
+    static let navCompleted = hex(0x1F8A5B)
+    static let navCalendar = hex(0xD1477A)
+    static let navZhulong = hex(0x7C5CFF)
+    static let navSettings = hex(0x64748B)
 }
 
 struct WindowChrome: View {
+    @EnvironmentObject private var store: SuntraceStore
+
     var body: some View {
         HStack(spacing: 8) {
             Circle().fill(Color(red: 1, green: 0.36, blue: 0.32)).frame(width: 12, height: 12)
             Circle().fill(Color(red: 1, green: 0.76, blue: 0.25)).frame(width: 12, height: 12)
             Circle().fill(Color(red: 0.23, green: 0.78, blue: 0.34)).frame(width: 12, height: 12)
             Spacer()
-            Text("晷迹 · suntrace")
+            Text(store.windowTitle)
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(Theme.text2)
+                .lineLimit(1)
             Spacer()
             Color.clear.frame(width: 56, height: 1)
         }
@@ -1618,19 +1700,35 @@ struct Sidebar: View {
             .padding(.bottom, 18)
 
             NavGroupTitle("计划")
-            NavItem(page: .day, label: "Day Todo", icon: "checklist", count: store.engine.getDayTodo(date: store.today).traces.count)
-            NavItem(page: .pool, label: "任务池", icon: "tray", count: store.engine.taskPool().count)
-            NavItem(page: .future, label: "未来计划", icon: "calendar.badge.clock", count: store.engine.futurePlans(today: store.today).count)
+            NavItem(
+                page: .day,
+                label: "Day Todo",
+                count: store.engine.getDayTodo(date: store.today).traces.count
+            )
+            NavItem(page: .pool, label: "任务池", count: store.engine.taskPool().count)
+            NavItem(
+                page: .future,
+                label: "未来计划",
+                count: store.engine.futurePlans(today: store.today).count
+            )
 
             NavGroupTitle("轨迹")
                 .padding(.top, 12)
-            NavItem(page: .unfinished, label: "未完成", icon: "exclamationmark.circle", count: store.engine.unfinishedPool().count)
-            NavItem(page: .completed, label: "已完成", icon: "checkmark.seal", count: store.engine.completedPool().count + store.engine.completedSubtaskRecords().count)
-            NavItem(page: .calendar, label: "日历", icon: "calendar", count: 0)
-            NavItem(page: .zhulong, label: "烛龙 AI", icon: "sparkles", count: 0)
+            NavItem(
+                page: .unfinished,
+                label: "未完成",
+                count: store.engine.unfinishedPool().count
+            )
+            NavItem(
+                page: .completed,
+                label: "已完成",
+                count: store.engine.completedPool().count + store.engine.completedSubtaskRecords().count
+            )
+            NavItem(page: .calendar, label: "日历", count: 0)
+            NavItem(page: .zhulong, label: "烛龙 AI", count: 0)
 
             Spacer()
-            NavItem(page: .settings, label: "设置", icon: "gearshape", count: 0)
+            NavItem(page: .settings, label: "设置", count: 0)
         }
         .frame(width: 204)
         .padding(.top, 14)
@@ -1677,7 +1775,6 @@ struct NavItem: View {
     @EnvironmentObject private var store: SuntraceStore
     let page: SuntraceStore.Page
     let label: String
-    let icon: String
     let count: Int
 
     var active: Bool { store.page == page }
@@ -1687,10 +1784,12 @@ struct NavItem: View {
             store.selectPage(page)
         } label: {
             HStack(spacing: 9) {
-                Image(systemName: icon)
+                Image(systemName: page.navigationSystemImage)
                     .frame(width: 17)
+                    .foregroundStyle(page.navigationIconColor)
                 Text(label)
                     .font(.system(size: 12.5, weight: active ? .semibold : .medium))
+                    .foregroundStyle(active ? Theme.accent : Theme.text2)
                 Spacer()
                 if count > 0 {
                     Text("\(count)")
@@ -1701,7 +1800,6 @@ struct NavItem: View {
                         .background(Capsule().fill(Theme.chip))
                 }
             }
-            .foregroundStyle(active ? Theme.accent : Theme.text2)
             .frame(height: 29)
             .padding(.leading, 12)
             .padding(.trailing, 10)
@@ -1928,8 +2026,8 @@ struct TaskRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(definition?.title ?? "未命名任务")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(trace.status == .completed ? Theme.text2 : Theme.text1)
-                        .strikethrough(trace.status == .abandoned)
+                        .foregroundStyle(trace.status.uiStyle.titleColor)
+                        .strikethrough(trace.status.uiStyle.strikethrough)
 
                     HStack(spacing: 6) {
                         ProgressView(value: Double(progress.percent), total: 100)
@@ -2611,23 +2709,11 @@ struct CalendarCell: View {
     }
 
     func dotColor(for status: TraceStatus) -> Color {
-        switch status {
-        case .completed: Theme.ok
-        case .pending: Theme.accent
-        case .unfinished: Theme.warn
-        default: Theme.text3
-        }
+        status.uiStyle.dotColor
     }
 
     func titleColor(for status: TraceStatus) -> Color {
-        switch status {
-        case .completed, .abandoned:
-            Theme.text3
-        case .pending:
-            Theme.text1
-        default:
-            Theme.text2
-        }
+        status.uiStyle.titleColor
     }
 }
 
@@ -2741,14 +2827,7 @@ struct CalendarDetailRow: View {
     }
 
     var titleColor: Color {
-        switch trace.status {
-        case .completed, .abandoned:
-            Theme.text3
-        case .pending:
-            Theme.text1
-        default:
-            Theme.text2
-        }
+        trace.status.uiStyle.titleColor
     }
 
     var metaText: String {
@@ -3405,7 +3484,7 @@ struct DetailRail: View {
                 } else if store.page == .day {
                     ReviewRail()
                 } else {
-                    EmptyState(kind: hintKind, text: hint)
+                    RailHint(text: hint)
                         .padding(.top, 40)
                 }
             }
@@ -3424,15 +3503,20 @@ struct DetailRail: View {
         default: ""
         }
     }
+}
 
-    var hintKind: EmptyStateKind {
-        switch store.page {
-        case .pool: .taskPool
-        case .future: .futurePlans
-        case .unfinished: .unfinishedPool
-        case .completed: .completedPool
-        default: .dayTodo
-        }
+struct RailHint: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.text3)
+            .multilineTextAlignment(.center)
+            .lineSpacing(4)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 24)
+            .frame(maxWidth: .infinity)
     }
 }
 
@@ -3676,7 +3760,7 @@ struct Timeline: View {
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            Text(label(for: item.status))
+                            Text(item.status.uiStyle.label)
                                 .font(.system(size: 11, weight: .semibold))
                             if item.id == trace.id {
                                 StatusPill(text: "当前", color: Theme.accent)
@@ -3689,18 +3773,6 @@ struct Timeline: View {
                     Spacer()
                 }
             }
-        }
-    }
-
-    func label(for status: TraceStatus) -> String {
-        switch status {
-        case .pending: "待完成"
-        case .completed: "已完成"
-        case .unfinished: "未完成"
-        case .continued: "已延续"
-        case .changed: "已变更"
-        case .returnedToPool: "已回池"
-        case .abandoned: "已废弃"
         }
     }
 }
@@ -4279,6 +4351,7 @@ struct HeaderButton: View {
             .foregroundStyle(Theme.text2)
             .padding(.horizontal, title.count == 1 ? 8 : 10)
             .frame(height: 26)
+            .fixedSize(horizontal: true, vertical: false)
             .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
             .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
     }
@@ -4311,6 +4384,7 @@ struct SmallActionButton: View {
             .foregroundStyle(color)
             .padding(.horizontal, 9)
             .frame(height: 24)
+            .fixedSize(horizontal: true, vertical: false)
             .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line))
     }
@@ -4330,87 +4404,145 @@ struct StatusPill: View {
     }
 }
 
+struct TraceStatusStyle {
+    let label: String
+    let glyph: String
+    let foreground: Color
+    let softBackground: Color
+    let glyphForeground: Color
+    let glyphBackground: Color
+    let glyphBorder: Color
+    let dotColor: Color
+    let titleColor: Color
+    let strikethrough: Bool
+}
+
+extension TraceStatus {
+    var uiStyle: TraceStatusStyle {
+        switch self {
+        case .pending:
+            TraceStatusStyle(
+                label: "待完成",
+                glyph: "",
+                foreground: Theme.accent,
+                softBackground: Theme.accentSoft,
+                glyphForeground: Theme.accent,
+                glyphBackground: Theme.panel,
+                glyphBorder: Theme.line2,
+                dotColor: Theme.accent,
+                titleColor: Theme.text1,
+                strikethrough: false
+            )
+        case .completed:
+            TraceStatusStyle(
+                label: "已完成",
+                glyph: "✓",
+                foreground: Theme.ok,
+                softBackground: Theme.okSoft,
+                glyphForeground: .white,
+                glyphBackground: Theme.ok,
+                glyphBorder: .clear,
+                dotColor: Theme.ok,
+                titleColor: Theme.text3,
+                strikethrough: true
+            )
+        case .unfinished:
+            TraceStatusStyle(
+                label: "未完成",
+                glyph: "✕",
+                foreground: Theme.warn,
+                softBackground: Theme.warnSoft,
+                glyphForeground: Theme.warn,
+                glyphBackground: Theme.warnSoft,
+                glyphBorder: .clear,
+                dotColor: Theme.warn,
+                titleColor: Theme.text2,
+                strikethrough: false
+            )
+        case .continued:
+            TraceStatusStyle(
+                label: "已延续",
+                glyph: "→",
+                foreground: Theme.text2,
+                softBackground: Theme.chip,
+                glyphForeground: Theme.text2,
+                glyphBackground: Theme.chip,
+                glyphBorder: .clear,
+                dotColor: Theme.text3,
+                titleColor: Theme.text2,
+                strikethrough: false
+            )
+        case .changed:
+            TraceStatusStyle(
+                label: "已变更",
+                glyph: "⇄",
+                foreground: Theme.text2,
+                softBackground: Theme.chip,
+                glyphForeground: Theme.text2,
+                glyphBackground: Theme.chip,
+                glyphBorder: .clear,
+                dotColor: Theme.text3,
+                titleColor: Theme.text2,
+                strikethrough: false
+            )
+        case .returnedToPool:
+            TraceStatusStyle(
+                label: "已回池",
+                glyph: "↩",
+                foreground: Theme.text2,
+                softBackground: Theme.chip,
+                glyphForeground: Theme.text2,
+                glyphBackground: Theme.chip,
+                glyphBorder: .clear,
+                dotColor: Theme.text3,
+                titleColor: Theme.text2,
+                strikethrough: false
+            )
+        case .abandoned:
+            TraceStatusStyle(
+                label: "已废弃",
+                glyph: "—",
+                foreground: Theme.text3,
+                softBackground: Theme.chip,
+                glyphForeground: Theme.text3,
+                glyphBackground: Theme.chip,
+                glyphBorder: .clear,
+                dotColor: Theme.text3,
+                titleColor: Theme.text3,
+                strikethrough: true
+            )
+        }
+    }
+}
+
 struct StatusGlyph: View {
     let status: TraceStatus
+    var style: TraceStatusStyle { status.uiStyle }
 
     var body: some View {
-        Text(glyph)
+        Text(style.glyph)
             .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(foreground)
+            .foregroundStyle(style.glyphForeground)
             .frame(width: 18, height: 18)
-            .background(Circle().fill(background))
-            .overlay(Circle().stroke(border, lineWidth: 1.5))
-    }
-
-    var glyph: String {
-        switch status {
-        case .pending: ""
-        case .completed: "✓"
-        case .unfinished: "✕"
-        case .continued: "→"
-        case .changed: "⇄"
-        case .returnedToPool: "↩"
-        case .abandoned: "—"
-        }
-    }
-
-    var foreground: Color {
-        switch status {
-        case .completed: .white
-        case .unfinished: Theme.warn
-        case .pending: Theme.accent
-        default: Theme.text2
-        }
-    }
-
-    var background: Color {
-        switch status {
-        case .completed: Theme.ok
-        case .unfinished: Theme.warnSoft
-        case .pending: Theme.panel
-        default: Theme.chip
-        }
-    }
-
-    var border: Color {
-        status == .pending ? Theme.line2 : .clear
+            .background(Circle().fill(style.glyphBackground))
+            .overlay(Circle().stroke(style.glyphBorder, lineWidth: 1.5))
     }
 }
 
 struct StatusChip: View {
     let status: TraceStatus
+    var style: TraceStatusStyle { status.uiStyle }
 
     var body: some View {
         HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 5, height: 5)
-            Text(label)
+            Circle().fill(style.dotColor).frame(width: 5, height: 5)
+            Text(style.label)
         }
         .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(color)
+        .foregroundStyle(style.foreground)
         .padding(.horizontal, 8)
         .padding(.vertical, 2)
-        .background(Capsule().fill(color.opacity(0.12)))
-    }
-
-    var label: String {
-        switch status {
-        case .pending: "待完成"
-        case .completed: "已完成"
-        case .unfinished: "未完成"
-        case .continued: "已延续"
-        case .changed: "已变更"
-        case .returnedToPool: "已回池"
-        case .abandoned: "已废弃"
-        }
-    }
-
-    var color: Color {
-        switch status {
-        case .completed: Theme.ok
-        case .unfinished: Theme.warn
-        case .pending: Theme.accent
-        default: Theme.text2
-        }
+        .background(Capsule().fill(style.softBackground))
     }
 }
 

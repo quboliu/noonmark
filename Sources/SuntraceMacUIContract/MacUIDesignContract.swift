@@ -8,6 +8,7 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case macWindowChrome
     case trafficLights
     case centeredWindowTitle
+    case pageDerivedWindowTitle
     case appClockLogo
     case lightDeskBackground
     case coolGrayTheme
@@ -17,6 +18,8 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case hoverFeedback
     case riseToastAnimation
     case dateStripSelectionAnimation
+    case semanticStatusStyles
+    case protectedActionButtonLabels
 }
 
 public enum MacUIWindowMetric: String, CaseIterable, Sendable {
@@ -40,10 +43,43 @@ public enum MacUINavigationElement: String, CaseIterable, Sendable {
     case planGroupHeader
     case traceGroupHeader
     case pageIcons
+    case semanticIconColors
     case selectedBackground
     case selectedLeadingBar
     case countBadges
     case settingsFooterItem
+}
+
+public enum MacUINavigationIconColorToken: CaseIterable, Sendable {
+    case dayTodo
+    case taskPool
+    case futurePlans
+    case unfinishedPool
+    case completedPool
+    case calendar
+    case zhulongAI
+    case settings
+
+    public var hexValue: String {
+        switch self {
+        case .dayTodo:
+            return "#2A6FDB"
+        case .taskPool:
+            return "#0E9488"
+        case .futurePlans:
+            return "#7C5CFF"
+        case .unfinishedPool:
+            return "#E0851B"
+        case .completedPool:
+            return "#1F8A5B"
+        case .calendar:
+            return "#D1477A"
+        case .zhulongAI:
+            return "#7C5CFF"
+        case .settings:
+            return "#64748B"
+        }
+    }
 }
 
 public enum MacUIPage: String, CaseIterable, Sendable {
@@ -164,6 +200,7 @@ public enum MacUICalendarElement: String, CaseIterable, Sendable {
 public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case unselectedDayReviewRail
     case unselectedPageHint
+    case unselectedRailHint
     case calendarNoGenericDetailRail
     case calendarOwnDetailPanel
     case settingsNoDetailRail
@@ -295,6 +332,7 @@ public struct MacUIDesignContract: Sendable {
     public let windowMetrics: [MacUIWindowMetric]
     public let colorTokens: [MacUIColorToken]
     public let navigationElements: [MacUINavigationElement]
+    public let navigationIconColorTokens: [MacUINavigationIconColorToken]
     public let pages: [MacUIPage]
     public let dayTodoElements: [MacUIDayTodoElement]
     public let taskPoolElements: [MacUITaskPoolElement]
@@ -316,6 +354,7 @@ public struct MacUIDesignContract: Sendable {
         windowMetrics: [MacUIWindowMetric] = MacUIWindowMetric.allCases,
         colorTokens: [MacUIColorToken] = MacUIColorToken.allCases,
         navigationElements: [MacUINavigationElement] = MacUINavigationElement.allCases,
+        navigationIconColorTokens: [MacUINavigationIconColorToken] = MacUINavigationIconColorToken.allCases,
         pages: [MacUIPage] = MacUIPage.allCases,
         dayTodoElements: [MacUIDayTodoElement] = MacUIDayTodoElement.allCases,
         taskPoolElements: [MacUITaskPoolElement] = MacUITaskPoolElement.allCases,
@@ -336,6 +375,7 @@ public struct MacUIDesignContract: Sendable {
         self.windowMetrics = windowMetrics
         self.colorTokens = colorTokens
         self.navigationElements = navigationElements
+        self.navigationIconColorTokens = navigationIconColorTokens
         self.pages = pages
         self.dayTodoElements = dayTodoElements
         self.taskPoolElements = taskPoolElements

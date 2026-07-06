@@ -55,8 +55,11 @@ final class MacUIDesignContractTests: XCTestCase {
         let contract = MacUIDesignContract.claudeMacPrototype20260705
 
         XCTAssertTrue(contract.globalElements.contains(.macWindowChrome))
+        XCTAssertTrue(contract.globalElements.contains(.pageDerivedWindowTitle))
         XCTAssertTrue(contract.globalElements.contains(.appClockLogo))
         XCTAssertTrue(contract.globalElements.contains(.dateStripSelectionAnimation))
+        XCTAssertTrue(contract.globalElements.contains(.semanticStatusStyles))
+        XCTAssertTrue(contract.globalElements.contains(.protectedActionButtonLabels))
         XCTAssertTrue(contract.windowMetrics.contains(.prototypePreview1440x900))
         XCTAssertTrue(contract.windowMetrics.contains(.maxContent1400x880))
         XCTAssertTrue(contract.colorTokens.contains(.accent))
@@ -68,7 +71,20 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.colorTokens.contains(.t1))
         XCTAssertTrue(contract.colorTokens.contains(.t2))
         XCTAssertTrue(contract.colorTokens.contains(.t3))
+        XCTAssertTrue(contract.navigationElements.contains(.semanticIconColors))
         XCTAssertTrue(contract.navigationElements.contains(.countBadges))
+        XCTAssertEqual(
+            Set(contract.navigationIconColorTokens),
+            Set(MacUINavigationIconColorToken.allCases)
+        )
+        XCTAssertEqual(MacUINavigationIconColorToken.dayTodo.hexValue, "#2A6FDB")
+        XCTAssertEqual(MacUINavigationIconColorToken.taskPool.hexValue, "#0E9488")
+        XCTAssertEqual(MacUINavigationIconColorToken.futurePlans.hexValue, "#7C5CFF")
+        XCTAssertEqual(MacUINavigationIconColorToken.unfinishedPool.hexValue, "#E0851B")
+        XCTAssertEqual(MacUINavigationIconColorToken.completedPool.hexValue, "#1F8A5B")
+        XCTAssertEqual(MacUINavigationIconColorToken.calendar.hexValue, "#D1477A")
+        XCTAssertEqual(MacUINavigationIconColorToken.zhulongAI.hexValue, "#7C5CFF")
+        XCTAssertEqual(MacUINavigationIconColorToken.settings.hexValue, "#64748B")
 
         XCTAssertTrue(contract.dayTodoElements.contains(.fourteenDayStrip))
         XCTAssertTrue(contract.dayTodoElements.contains(.dateStripSelectedPill))
@@ -113,6 +129,7 @@ final class MacUIDesignContractTests: XCTestCase {
 
         XCTAssertTrue(contract.detailElements.contains(.unselectedDayReviewRail))
         XCTAssertTrue(contract.detailElements.contains(.unselectedPageHint))
+        XCTAssertTrue(contract.detailElements.contains(.unselectedRailHint))
         XCTAssertTrue(contract.detailElements.contains(.calendarNoGenericDetailRail))
         XCTAssertTrue(contract.detailElements.contains(.calendarOwnDetailPanel))
         XCTAssertTrue(contract.detailElements.contains(.settingsNoDetailRail))

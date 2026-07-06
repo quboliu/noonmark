@@ -160,6 +160,7 @@ private struct LaunchAutomation {
         append(ReviewZhulongEntryE2EAutomation.fromCommandLine(), to: &actions)
         append(ContextMenuActionsE2EAutomation.fromCommandLine(), to: &actions)
         append(UndoE2EAutomation.fromCommandLine(), to: &actions)
+        append(DateStripE2EAutomation.fromCommandLine(), to: &actions)
 
         guard actions.isEmpty == false else { return nil }
         return LaunchAutomation(
@@ -522,6 +523,70 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
 }
 
 private enum UndoE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
+private struct DateStripE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> DateStripE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-date-strip-selection") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-date-strip-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return DateStripE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            store.page = .day
+            store.selectedDate = store.today
+            guard store.dateStripDates().count == 14,
+                  store.selectedDateStripIndex == 6
+            else {
+                throw DateStripE2EAutomationError.failed("today index did not match 14-day strip")
+            }
+
+            store.selectedDate = SuntraceStore.offset(store.today, by: 1)
+            guard store.selectedDateStripIndex == 7 else {
+                throw DateStripE2EAutomationError.failed("next-day index did not move by one cell")
+            }
+
+            store.selectedDate = SuntraceStore.offset(store.today, by: -6)
+            guard store.selectedDateStripIndex == 0 else {
+                throw DateStripE2EAutomationError.failed("leading strip date did not map to first cell")
+            }
+
+            store.selectedDate = SuntraceStore.offset(store.today, by: 8)
+            guard store.selectedDateStripIndex == nil else {
+                throw DateStripE2EAutomationError.failed("out-of-strip date unexpectedly had a selection index")
+            }
+
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error)")
+        }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum DateStripE2EAutomationError: LocalizedError {
     case failed(String)
 
     var errorDescription: String? {
@@ -1127,6 +1192,14 @@ final class SuntraceStore: ObservableObject {
             if allowPast == false, date < today { return nil }
             return DateChoice(date: date, label: Self.displayDate(date), subtitle: Self.weekday(date))
         }
+    }
+
+    func dateStripDates() -> [LocalDate] {
+        (-6...7).map { Self.offset(today, by: $0) }
+    }
+
+    var selectedDateStripIndex: Int? {
+        dateStripDates().firstIndex(of: selectedDate)
     }
 
     func selectPage(_ next: Page) {
@@ -2779,9 +2852,7 @@ struct DayQuickAdd: View {
 struct DateStrip: View {
     @EnvironmentObject private var store: SuntraceStore
 
-    var dates: [LocalDate] {
-        (-6...7).map { SuntraceStore.offset(store.today, by: $0) }
-    }
+    var dates: [LocalDate] { store.dateStripDates() }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -2790,7 +2861,7 @@ struct DateStrip: View {
                 let today = date == store.today
                 let count = store.engine.getDayTodo(date: date).traces.count
                 Button {
-                    withAnimation(.spring(response: 0.24, dampingFraction: 0.75)) {
+                    withAnimation(.spring(response: 0.24, dampingFraction: 0.74)) {
                         store.selectedDate = date
                     }
                 } label: {
@@ -2802,7 +2873,6 @@ struct DateStrip: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(selected ? .white : today ? Theme.accent : Theme.text1)
                             .frame(width: 24, height: 24)
-                            .background(Circle().fill(selected ? Theme.accent : .clear))
                             .overlay(Circle().stroke(today && !selected ? Theme.accent : .clear, lineWidth: 1.5))
                         Circle()
                             .fill(count > 0 ? (selected ? .white.opacity(0.9) : Theme.accent) : .clear)
@@ -2814,11 +2884,37 @@ struct DateStrip: View {
                 .buttonStyle(.plain)
             }
         }
+        .background(alignment: .topLeading) {
+            DateStripSelectionPill(selectedIndex: store.selectedDateStripIndex, cellCount: dates.count)
+        }
         .padding(.top, 14)
         .padding(.bottom, 10)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.line).frame(height: 1)
         }
+    }
+}
+
+struct DateStripSelectionPill: View {
+    let selectedIndex: Int?
+    let cellCount: Int
+
+    var body: some View {
+        GeometryReader { proxy in
+            if let selectedIndex, cellCount > 0 {
+                let cellWidth = proxy.size.width / CGFloat(cellCount)
+                Circle()
+                    .fill(Theme.accent)
+                    .frame(width: 24, height: 24)
+                    .shadow(color: Theme.accent.opacity(0.34), radius: 6, x: 0, y: 2)
+                    .offset(
+                        x: cellWidth * CGFloat(selectedIndex) + (cellWidth - 24) / 2,
+                        y: 17
+                    )
+                    .animation(.spring(response: 0.24, dampingFraction: 0.74), value: selectedIndex)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 

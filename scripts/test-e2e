@@ -372,6 +372,30 @@ fi
 
 echo "E2E undo workflow: $undo_result"
 
+date_strip_dir="artifacts/e2e-date-strip"
+date_strip_result="${date_strip_dir}/date-strip-result.txt"
+rm -rf "$date_strip_dir"
+mkdir -p "$date_strip_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page day \
+  --e2e-date-strip-selection \
+  --e2e-date-strip-result-url "$PWD/$date_strip_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$date_strip_result" ]]; then
+  echo "date strip result was not created: $date_strip_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$date_strip_result")" != "ok" ]]; then
+  echo "date strip selection failed: $(cat "$date_strip_result")" >&2
+  exit 1
+fi
+
+echo "E2E date strip selection: $date_strip_result"
+
 provider_dir="artifacts/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"
 provider_name="E2E Provider"

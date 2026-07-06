@@ -117,6 +117,7 @@ Release：
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite；同时包含 Day Todo 复盘区烛龙入口探针，验证入口会切到烛龙页并生成 dailyReview 建议草稿。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 右键菜单动作矩阵探针，验证当前待完成、带子任务待完成、当前已完成、历史未完成、历史已完成和未来待完成 trace 只暴露原型允许的上下文动作。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 有限撤销探针，验证任务池新增、当前日延续、当前日废弃、未来改期、复制为新任务可撤销，且历史废弃不可撤销。
+- 2026-07-06：`scripts/test-e2e` 已包含真实 App 日期 strip 选中探针，验证 14 天 strip、今天 index、相邻日期 index 平移和超出 strip 时无选中 pill 映射。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App lifecycle workflow 探针，验证任务变更保留旧轨迹并创建新任务、回池保留日轨迹、废弃同步终止任务链。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 数据包 round-trip 探针，验证设置页导出路径生成 JSON，随后通过导入路径恢复任务和复盘数据到 SQLite。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App Provider 配置 round-trip 探针，验证非密配置经 UserDefaults 回读、dummy API Key 经 Keychain 回读，并在验证后清理。
@@ -128,6 +129,6 @@ Release：
 
 ## 后续缺口
 
-- E2E 已覆盖主要页面、关键详情栏选中态、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、Day Todo 复盘区烛龙分析入口、右键菜单动作矩阵、有限撤销、变更、回池、废弃、导入 / 导出、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
+- E2E 已覆盖主要页面、关键详情栏选中态、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、Day Todo 复盘区烛龙分析入口、右键菜单动作矩阵、有限撤销、日期 strip 选中映射、变更、回池、废弃、导入 / 导出、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
 - Release 后续需要补 Apple Developer ID 签名、notarization；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成、校验和从本机复制安装后启动。

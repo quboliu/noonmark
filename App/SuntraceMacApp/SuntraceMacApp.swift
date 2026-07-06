@@ -2496,6 +2496,7 @@ struct UnfinishedPoolPage: View {
                     }
                 }
                 .padding(.horizontal, 24)
+                .padding(.top, 12)
                 .padding(.bottom, 20)
             }
         }
@@ -2509,16 +2510,24 @@ struct UnfinishedRow: View {
     var expanded: Bool { store.expandedUnfinishedChainIDs.contains(item.chain.id) }
 
     var body: some View {
+        let selected = store.selectedUnfinishedChainID == item.chain.id
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Text("✕")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Theme.warn)
-                    .frame(width: 18, height: 18)
-                    .background(Circle().fill(Theme.warnSoft))
-                VStack(alignment: .leading, spacing: 3) {
+                PlanningGlyph(systemName: "exclamationmark.circle", color: Theme.warn)
+                VStack(alignment: .leading, spacing: 4) {
                     Text(item.definition.title)
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.text1)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        PlanMetaPill(text: "\(item.unfinishedTraces.count) 次未完成", color: Theme.warn)
+                        Text("\(item.unfinishedTraces.last?.continuationSeq ?? 0) 次延续")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                        Text("最近 \(SuntraceStore.displayDate(item.unfinishedTraces.last?.date ?? store.today))")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                    }
                 }
                 Spacer()
                 if item.activeTrace == nil, let source = item.unfinishedTraces.last {
@@ -2527,11 +2536,6 @@ struct UnfinishedRow: View {
                 }
             }
             HStack(spacing: 8) {
-                Text("\(item.unfinishedTraces.count) 次未完成").foregroundStyle(Theme.warn)
-                Text("·")
-                Text("\(item.unfinishedTraces.last?.continuationSeq ?? 0) 次延续")
-                Text("·")
-                Text("最近未完成 \(SuntraceStore.displayDate(item.unfinishedTraces.last?.date ?? store.today))")
                 if let active = item.activeTrace {
                     Button("已延续到 \(SuntraceStore.displayDate(active.date))，当前待完成 跳转 →") {
                         store.selectedDate = active.date
@@ -2563,26 +2567,37 @@ struct UnfinishedRow: View {
             if expanded {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(item.unfinishedTraces, id: \.id) { trace in
-                        HStack(spacing: 8) {
-                            Text(SuntraceStore.displayDate(trace.date))
-                                .frame(width: 84, alignment: .leading)
-                            Text(trace.status == .continued ? "→ 已延续" : "✕ 未完成")
-                                .fontWeight(.semibold)
-                                .foregroundStyle(trace.status == .continued ? Theme.text2 : Theme.warn)
-                            Text("第 \(trace.continuationSeq) 次延续")
-                            Spacer()
-                        }
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text3)
+                        UnfinishedInlineTrace(trace: trace)
                     }
                 }
                 .padding(.leading, 30)
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.warnSoft.opacity(0.55) : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.warn : Theme.line, lineWidth: selected ? 1.3 : 1))
         .onTapGesture { store.selectUnfinished(item.chain.id) }
+    }
+}
+
+struct UnfinishedInlineTrace: View {
+    let trace: DayTrace
+
+    var body: some View {
+        HStack(spacing: 8) {
+            StatusGlyph(status: trace.status)
+            Text(SuntraceStore.displayDate(trace.date))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.text2)
+                .frame(width: 74, alignment: .leading)
+            Text(trace.status == .continued ? "已延续" : "未完成")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(trace.status == .continued ? Theme.text2 : Theme.warn)
+            Text("第 \(trace.continuationSeq) 次延续")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text3)
+            Spacer()
+        }
     }
 }
 
@@ -4545,9 +4560,10 @@ struct UnfinishedDetail: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.text1)
             HStack(spacing: 8) {
-                StatusPill(text: "\(item.unfinishedTraces.count) 次未完成", color: Theme.warn)
-                StatusPill(text: "\(latestContinuation) 次延续", color: Theme.text2)
+                PlanMetaPill(text: "\(item.unfinishedTraces.count) 次未完成", color: Theme.warn)
+                PlanMetaPill(text: "\(latestContinuation) 次延续", color: Theme.text2)
             }
+            UnfinishedSummaryCard(item: item)
             DetailSection("处理") {
                 VStack(alignment: .leading, spacing: 8) {
                     if let active = item.activeTrace {
@@ -4568,24 +4584,6 @@ struct UnfinishedDetail: View {
                             .foregroundStyle(Theme.text3)
                     }
                 }
-            }
-            DetailSection("最近状态") {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let latestUnfinished {
-                        Text("最近未完成：\(SuntraceStore.displayDate(latestUnfinished.date)) \(SuntraceStore.weekday(latestUnfinished.date))")
-                        Text("当日优先级 \(latestUnfinished.priority) · 第 \(latestUnfinished.continuationSeq) 次延续")
-                    }
-                    if let active = item.activeTrace {
-                        Text("当前待完成：\(SuntraceStore.displayDate(active.date)) \(SuntraceStore.weekday(active.date))")
-                    }
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text2)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
             }
             DetailSection("描述") {
                 EditableDetailText(
@@ -4615,6 +4613,44 @@ struct UnfinishedDetail: View {
                     }
                 }
             }
+        }
+    }
+}
+
+struct UnfinishedSummaryCard: View {
+    let item: UnfinishedPoolItem
+
+    var latestUnfinished: DayTrace? { item.unfinishedTraces.last }
+
+    var body: some View {
+        VStack(spacing: 7) {
+            if let latestUnfinished {
+                summaryRow("最近", "\(SuntraceStore.displayDate(latestUnfinished.date)) \(SuntraceStore.weekday(latestUnfinished.date))", Theme.warn)
+                summaryRow("优先级", "\(latestUnfinished.priority)", Theme.text2)
+                summaryRow("延续", "第 \(latestUnfinished.continuationSeq) 次", Theme.text2)
+            }
+            if let active = item.activeTrace {
+                summaryRow("当前", "\(SuntraceStore.displayDate(active.date)) \(SuntraceStore.weekday(active.date)) 待完成", Theme.accent)
+            } else {
+                summaryRow("当前", "暂无活跃日轨迹", Theme.text2)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.warnSoft.opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+    }
+
+    private func summaryRow(_ label: String, _ value: String, _ color: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .frame(width: 38, alignment: .leading)
+            Text(value)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(color)
+            Spacer(minLength: 0)
         }
     }
 }

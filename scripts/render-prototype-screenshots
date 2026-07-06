@@ -82,6 +82,84 @@ PY
     exit 1
   fi
 
+  python3 - "${out_dir}/${page}.png" "$page" <<'PY'
+import struct
+import sys
+import zlib
+
+
+def read_png(path):
+    with open(path, "rb") as file:
+        data = file.read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise SystemExit(f"{path} is not a PNG")
+
+    pos = 8
+    width = height = color_type = bit_depth = None
+    idat = bytearray()
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        kind = data[pos + 4:pos + 8]
+        payload = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b"IHDR":
+            width, height, bit_depth, color_type, _, _, _ = struct.unpack(">IIBBBBB", payload)
+        elif kind == b"IDAT":
+            idat.extend(payload)
+        elif kind == b"IEND":
+            break
+
+    if bit_depth != 8 or color_type not in (2, 6):
+        raise SystemExit(f"{path} must be 8-bit RGB or RGBA PNG, got bitDepth={bit_depth} colorType={color_type}")
+
+    channels = 4 if color_type == 6 else 3
+    stride = width * channels
+    raw = zlib.decompress(bytes(idat))
+    previous = [0] * stride
+    cursor = 0
+    non_white = 0
+    total = width * height
+    for _ in range(height):
+        filter_type = raw[cursor]
+        cursor += 1
+        scanline = list(raw[cursor:cursor + stride])
+        cursor += stride
+        reconstructed = [0] * stride
+        for index, value in enumerate(scanline):
+            left = reconstructed[index - channels] if index >= channels else 0
+            up = previous[index]
+            upper_left = previous[index - channels] if index >= channels else 0
+            if filter_type == 0:
+                predictor = 0
+            elif filter_type == 1:
+                predictor = left
+            elif filter_type == 2:
+                predictor = up
+            elif filter_type == 3:
+                predictor = (left + up) // 2
+            elif filter_type == 4:
+                p = left + up - upper_left
+                pa = abs(p - left)
+                pb = abs(p - up)
+                pc = abs(p - upper_left)
+                predictor = left if pa <= pb and pa <= pc else up if pb <= pc else upper_left
+            else:
+                raise SystemExit(f"{path} has unsupported PNG filter {filter_type}")
+            reconstructed[index] = (value + predictor) & 0xFF
+        previous = reconstructed
+        for pixel in range(0, stride, channels):
+            red, green, blue = reconstructed[pixel:pixel + 3]
+            if red < 245 or green < 245 or blue < 245:
+                non_white += 1
+
+    if non_white / total < 0.01:
+        page = sys.argv[2]
+        raise SystemExit(f"blank prototype screenshot for {page}: non_white_ratio={non_white / total:.6f}")
+
+
+read_png(sys.argv[1])
+PY
+
   rm -rf "$work_dir" "$user_data_dir"
   echo "Prototype ${page} screenshot: ${out_dir}/${page}.png (${width}x${height})"
 done

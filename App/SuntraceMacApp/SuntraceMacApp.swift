@@ -1772,13 +1772,7 @@ struct AppCopy {
     var warmPaper: String { language == .chinese ? "微暖纸感" : "Warm paper" }
     var languageTitle: String { language == .chinese ? "语言" : "Language" }
 
-    var dataPackageTitle: String { language == .chinese ? "数据包" : "Data Package" }
-    var dataPackageSubtitle: String {
-        language == .chinese
-            ? "本地优先。导入前会校验重复键和断裂引用。"
-            : "Local-first. Imports validate duplicate keys and broken references."
-    }
-
+    var dataSectionTitle: String { language == .chinese ? "数据" : "Data" }
     var exportJSON: String { language == .chinese ? "导出数据 (JSON)" : "Export JSON" }
     var importData: String { language == .chinese ? "导入数据…" : "Import…" }
     var todayTraceMetric: String { language == .chinese ? "今日轨迹" : "Today" }
@@ -3456,28 +3450,21 @@ struct SettingsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navSettings, subtitle: store.copy.settingsSubtitle)
+            PageHeader(title: store.copy.navSettings)
             ScrollView {
-                HStack(alignment: .top, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 18) {
                         SettingsPreferenceCard()
                         SettingsDataCard()
-                        SettingSection(title: store.copy.syncTitle) {
-                            SyncOptionsCard()
-                        }
-                    }
-                    .frame(width: 440, alignment: .topLeading)
-
-                    VStack(alignment: .leading, spacing: 14) {
+                        SettingSection(title: store.copy.syncTitle) { SyncOptionsCard() }
                         SettingsProviderOverviewCard()
-                        SettingsPrivacyCard()
                     }
-                    .frame(width: 460, alignment: .topLeading)
-
+                    .frame(width: 510, alignment: .topLeading)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 24)
-                .padding(.bottom, 24)
+                .padding(.top, 2)
+                .padding(.bottom, 28)
             }
         }
     }
@@ -3487,26 +3474,24 @@ struct SettingsPreferenceCard: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        SettingsCard(systemImage: "slider.horizontal.3", title: store.copy.preferencesTitle, subtitle: store.copy.preferencesSubtitle) {
-            VStack(alignment: .leading, spacing: 14) {
-                SettingSection(title: store.copy.appearanceTitle) {
-                    SegmentedPair(
-                        left: store.copy.coolGray,
-                        right: store.copy.warmPaper,
-                        leftSelected: store.engine.preferences.theme == .coolGray,
-                        leftAction: { store.setTheme(.coolGray) },
-                        rightAction: { store.setTheme(.warmPaper) }
-                    )
-                }
-                SettingSection(title: store.copy.languageTitle) {
-                    SegmentedPair(
-                        left: "中文",
-                        right: "English",
-                        leftSelected: store.engine.preferences.language == .chinese,
-                        leftAction: { store.setLanguage(.chinese) },
-                        rightAction: { store.setLanguage(.english) }
-                    )
-                }
+        VStack(alignment: .leading, spacing: 18) {
+            SettingSection(title: store.copy.appearanceTitle) {
+                SegmentedPair(
+                    left: store.copy.coolGray,
+                    right: store.copy.warmPaper,
+                    leftSelected: store.engine.preferences.theme == .coolGray,
+                    leftAction: { store.setTheme(.coolGray) },
+                    rightAction: { store.setTheme(.warmPaper) }
+                )
+            }
+            SettingSection(title: store.copy.languageTitle) {
+                SegmentedPair(
+                    left: "中文",
+                    right: "English",
+                    leftSelected: store.engine.preferences.language == .chinese,
+                    leftAction: { store.setLanguage(.chinese) },
+                    rightAction: { store.setLanguage(.english) }
+                )
             }
         }
     }
@@ -3516,22 +3501,10 @@ struct SettingsDataCard: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        SettingsCard(systemImage: "externaldrive", title: store.copy.dataPackageTitle, subtitle: store.copy.dataPackageSubtitle) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    SmallActionButton(store.copy.exportJSON, tone: .accent) { store.exportDataPackage() }
-                    SmallActionButton(store.copy.importData) { store.importDataPackage() }
-                }
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                    SettingsMetricPill(
-                        title: store.copy.todayTraceMetric,
-                        value: store.copy.itemCount(store.engine.getDayTodo(date: store.today).traces.count),
-                        color: Theme.navDay
-                    )
-                    SettingsMetricPill(title: store.copy.taskPoolMetric, value: store.copy.itemCount(store.engine.taskPool().count), color: Theme.navPool)
-                    SettingsMetricPill(title: store.copy.unfinishedMetric, value: store.copy.chainCount(store.engine.unfinishedPool().count), color: Theme.warn)
-                    SettingsMetricPill(title: store.copy.completedMetric, value: store.copy.recordCount(store.engine.completedPool().count), color: Theme.ok)
-                }
+        SettingSection(title: store.copy.dataSectionTitle) {
+            HStack(spacing: 8) {
+                SmallActionButton(store.copy.exportJSON, tone: .accent) { store.exportDataPackage() }
+                SmallActionButton(store.copy.importData) { store.importDataPackage() }
             }
         }
     }
@@ -3572,6 +3545,7 @@ struct SyncOptionsCard: View {
 
 struct SettingsProviderOverviewCard: View {
     @EnvironmentObject private var store: SuntraceStore
+    @State private var isExpanded = false
 
     var status: (text: String, color: Color) {
         if store.zhulongProviderDraft.isConfigured {
@@ -3584,40 +3558,76 @@ struct SettingsProviderOverviewCard: View {
     }
 
     var body: some View {
-        SettingsCard(systemImage: "sparkles", title: store.copy.providerTitle, subtitle: store.copy.providerSubtitle) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    StatusPill(text: status.text, color: status.color)
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.navSettings)
+                        .frame(width: 22, height: 22)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.chip))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(store.copy.providerTitle)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.text1)
+                        Text(store.copy.providerSubtitle)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.text3)
+                            .lineLimit(1)
+                    }
                     Spacer()
-                    StatusPill(
-                        text: store.zhulongProviderDraft.hasStoredAPIKey ? store.copy.keychainStored : store.copy.keychainMissing,
-                        color: store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3
-                    )
+                    StatusPill(text: status.text, color: status.color)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
                 }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
-                VStack(spacing: 0) {
-                    SettingsInfoRow(label: store.copy.providerType, value: providerKindLabel(store.zhulongProviderDraft.kind))
-                    SettingsInfoRow(label: store.copy.providerName, value: providerDisplayName)
-                    SettingsInfoRow(label: "Base URL", value: store.zhulongProviderDraft.normalizedBaseURL?.absoluteString ?? store.copy.providerUnset)
-                    SettingsInfoRow(label: store.copy.providerModel, value: store.zhulongProviderDraft.normalizedModel.isEmpty ? store.copy.providerUnset : store.zhulongProviderDraft.normalizedModel, last: true)
-                }
-                .padding(.horizontal, 10)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        StatusPill(
+                            text: store.zhulongProviderDraft.hasStoredAPIKey ? store.copy.keychainStored : store.copy.keychainMissing,
+                            color: store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3
+                        )
+                        Spacer()
+                    }
 
-                Text(store.zhulongProviderDraft.statusMessage)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.text3)
-                    .lineLimit(2)
+                    VStack(spacing: 0) {
+                        SettingsInfoRow(label: store.copy.providerType, value: providerKindLabel(store.zhulongProviderDraft.kind))
+                        SettingsInfoRow(label: store.copy.providerName, value: providerDisplayName)
+                        SettingsInfoRow(label: "Base URL", value: store.zhulongProviderDraft.normalizedBaseURL?.absoluteString ?? store.copy.providerUnset)
+                        SettingsInfoRow(label: store.copy.providerModel, value: store.zhulongProviderDraft.normalizedModel.isEmpty ? store.copy.providerUnset : store.zhulongProviderDraft.normalizedModel, last: true)
+                    }
+                    .padding(.horizontal, 10)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
 
-                HStack(spacing: 8) {
-                    SmallActionButton(store.copy.openZhulongConfig, tone: .accent) { store.page = .zhulong }
-                    SmallActionButton(store.copy.save) { store.saveZhulongProvider() }
-                    SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
-                    SmallActionButton(store.copy.clear, tone: .warn) { store.clearZhulongProvider() }
+                    Text(store.zhulongProviderDraft.statusMessage)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.text3)
+                        .lineLimit(2)
+
+                    HStack(spacing: 8) {
+                        SmallActionButton(store.copy.openZhulongConfig, tone: .accent) { store.page = .zhulong }
+                        SmallActionButton(store.copy.save) { store.saveZhulongProvider() }
+                        SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
+                        SmallActionButton(store.copy.clear, tone: .warn) { store.clearZhulongProvider() }
+                    }
+
+                    SettingsPrivacyCard()
                 }
             }
         }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
     }
 
     var providerDisplayName: String {

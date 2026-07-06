@@ -1709,6 +1709,14 @@ struct AppCopy {
     var schedulePickDate: String { language == .chinese ? "选日期…" : "Pick date…" }
     var continueTo: String { language == .chinese ? "延续到…" : "Continue to…" }
     var abandonChain: String { language == .chinese ? "废弃任务链" : "Drop chain" }
+    var markComplete: String { language == .chinese ? "标记完成" : "Mark complete" }
+    var undoComplete: String { language == .chinese ? "撤销完成" : "Undo complete" }
+    var changeToNewTask: String { language == .chinese ? "变更为新任务…" : "Change to new task…" }
+    var returnToPoolWithTrace: String { language == .chinese ? "回到任务池（留下轨迹）" : "Back to pool, keep trace" }
+    var schedulePickSpecificDate: String { language == .chinese ? "排期到指定日期…" : "Schedule to date…" }
+    var openCurrentPending: String { language == .chinese ? "跳转到当前待完成" : "Open current pending" }
+    var copyParentAsNewTask: String { language == .chinese ? "复制父任务为新任务" : "Copy parent as new task" }
+    var copyParentTask: String { language == .chinese ? "复制父任务" : "Copy parent task" }
 
     var lockedDayNotice: String {
         language == .chinese
@@ -2529,21 +2537,21 @@ struct TaskContextMenu: View {
 
     var body: some View {
         if trace.status == .pending {
-            Button("标记完成") { store.toggleComplete(trace.id) }
+            Button(store.copy.markComplete) { store.toggleComplete(trace.id) }
         }
         if trace.status == .completed {
-            Button("撤销完成") { store.toggleComplete(trace.id) }
+            Button(store.copy.undoComplete) { store.toggleComplete(trace.id) }
         }
-        Button("延续到…") { store.showingPicker = .continueTrace(trace.id) }
-        Button("变更为新任务…") {
+        Button(store.copy.continueTo) { store.showingPicker = .continueTrace(trace.id) }
+        Button(store.copy.changeToNewTask) {
             store.selectTrace(trace.id)
             store.changeText = store.definition(for: trace)?.title ?? ""
             store.showingChangeDialog = true
         }
-        Button("回到任务池（留下轨迹）") { store.returnToPool(trace.id) }
-        Button("改期…") { store.showingPicker = .reschedule(trace.id) }
-        Button("复制为新任务") { store.copyAsNewTask(trace.id) }
-        Button("废弃任务链", role: .destructive) { store.abandon(trace.id) }
+        Button(store.copy.returnToPoolWithTrace) { store.returnToPool(trace.id) }
+        Button(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
+        Button(store.copy.copyAsNewTask) { store.copyAsNewTask(trace.id) }
+        Button(store.copy.abandonChain, role: .destructive) { store.abandon(trace.id) }
     }
 }
 
@@ -2650,7 +2658,7 @@ struct FuturePlansPage: View {
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .monospacedDigit()
-                                Text("\(items.count) 项")
+                                Text(store.copy.itemCount(items.count))
                                     .font(.system(size: 10.5, weight: .semibold))
                                     .foregroundStyle(Theme.navFuture)
                                     .padding(.horizontal, 7)
@@ -2919,7 +2927,7 @@ struct CompletedPoolPage: View {
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .monospacedDigit()
-                                Text("\(dayItems.count + daySubtasks.count) 条")
+                                Text(store.copy.recordCount(dayItems.count + daySubtasks.count))
                                     .font(.system(size: 10.5, weight: .semibold))
                                     .foregroundStyle(Theme.ok)
                                     .padding(.horizontal, 7)
@@ -3355,7 +3363,7 @@ struct CalendarDetailPanel: View {
                         .padding(.horizontal, 9)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(dayKind.background))
-                    Text("\(traces.count) 项任务")
+                    Text(store.copy.itemCount(traces.count))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.text3)
                         .monospacedDigit()
@@ -4442,8 +4450,8 @@ struct CompletedRecordDetail: View {
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader("完成记录", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
-                    Button("查看当天") { openDay() }
-                    Button("复制为新任务") { store.copyAsNewTask(item.trace.id) }
+                    Button(store.copy.openDay) { openDay() }
+                    Button(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
                 })
             })
 
@@ -4507,8 +4515,8 @@ struct CompletedRecordDetail: View {
             }
 
             HStack(spacing: 8) {
-                SmallActionButton("查看当天 →", tone: .accent) { openDay() }
-                SmallActionButton("复制为新任务") { store.copyAsNewTask(item.trace.id) }
+                SmallActionButton(store.copy.openDay, tone: .accent) { openDay() }
+                SmallActionButton(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
             }
         }
     }
@@ -4530,8 +4538,8 @@ struct CompletedSubtaskDetail: View {
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader("子任务完成记录", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
-                    Button("查看当天") { openDay() }
-                    Button("复制父任务为新任务") { store.copyAsNewTask(record.parentTrace.id) }
+                    Button(store.copy.openDay) { openDay() }
+                    Button(store.copy.copyParentAsNewTask) { store.copyAsNewTask(record.parentTrace.id) }
                 })
             })
 
@@ -4566,7 +4574,7 @@ struct CompletedSubtaskDetail: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(3)
-                    SmallActionButton("查看当天 →", tone: .accent) { openDay() }
+                    SmallActionButton(store.copy.openDay, tone: .accent) { openDay() }
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -4579,8 +4587,8 @@ struct CompletedSubtaskDetail: View {
             }
 
             HStack(spacing: 8) {
-                SmallActionButton("查看当天 →", tone: .accent) { openDay() }
-                SmallActionButton("复制父任务") { store.copyAsNewTask(record.parentTrace.id) }
+                SmallActionButton(store.copy.openDay, tone: .accent) { openDay() }
+                SmallActionButton(store.copy.copyParentTask) { store.copyAsNewTask(record.parentTrace.id) }
             }
         }
     }
@@ -4963,10 +4971,10 @@ struct PoolDetail: View {
             DetailSection("排期") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        SmallActionButton("排期到今天", tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
-                        SmallActionButton("排期到明天") { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
+                        SmallActionButton(store.copy.scheduleToday, tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
+                        SmallActionButton(store.copy.scheduleTomorrow) { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
                     }
-                    SmallActionButton("排期到指定日期…") { store.showingPicker = .schedulePool(task.chain.id) }
+                    SmallActionButton(store.copy.schedulePickSpecificDate) { store.showingPicker = .schedulePool(task.chain.id) }
                 }
             }
         }
@@ -4982,9 +4990,9 @@ struct FuturePlanDetail: View {
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader("计划详情", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
-                    Button("查看当天") { openDay() }
-                    Button("改期…") { store.showingPicker = .reschedule(trace.id) }
-                    Button("回到任务池") { store.returnToPool(trace.id) }
+                    Button(store.copy.openDay) { openDay() }
+                    Button(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
+                    Button(store.copy.returnToPool) { store.returnToPool(trace.id) }
                 })
             })
 
@@ -5037,10 +5045,10 @@ struct FuturePlanDetail: View {
             DetailSection("计划操作") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        SmallActionButton("查看当天 →", tone: .accent) { openDay() }
-                        SmallActionButton("改期…") { store.showingPicker = .reschedule(trace.id) }
+                        SmallActionButton(store.copy.openDay, tone: .accent) { openDay() }
+                        SmallActionButton(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
                     }
-                    SmallActionButton("回到任务池") { store.returnToPool(trace.id) }
+                    SmallActionButton(store.copy.returnToPool) { store.returnToPool(trace.id) }
                 }
             }
         }
@@ -5106,15 +5114,15 @@ struct UnfinishedDetail: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if let active = item.activeTrace {
                         Notice(text: "已延续到 \(SuntraceStore.displayDate(active.date))，当前仍待完成。", tone: .future)
-                        SmallActionButton("跳转到当前待完成", tone: .accent) {
+                        SmallActionButton(store.copy.openCurrentPending, tone: .accent) {
                             store.selectedDate = active.date
                             store.page = .day
                             store.selectTrace(active.id)
                         }
                     } else if let source = latestUnfinished {
                         HStack(spacing: 8) {
-                            SmallActionButton("延续到…", tone: .accent) { store.showingPicker = .continueTrace(source.id) }
-                            SmallActionButton("废弃任务链", tone: .warn) { store.abandon(source.id) }
+                            SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
+                            SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
                         }
                     } else {
                         Text("没有需要处理的未完成轨迹。")

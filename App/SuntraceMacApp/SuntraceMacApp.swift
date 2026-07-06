@@ -1475,83 +1475,119 @@ final class SuntraceStore: ObservableObject {
 
     private func seed() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let day0 = LocalDate("2026-07-01")
+        let dayMinus3 = LocalDate("2026-07-02")
         let day1 = LocalDate("2026-07-03")
         let day2 = LocalDate("2026-07-04")
         let day3 = today
         let day4 = LocalDate("2026-07-06")
-        let day7 = LocalDate("2026-07-09")
+        let day5 = LocalDate("2026-07-07")
 
         do {
-            let research = try engine.createPoolTask(
-                title: "整理 Day Todo 信息架构",
-                descriptionText: "把每日任务轨迹、任务池、未完成池与复盘串成一个主窗口。",
-                note: "优先保证轨迹不可删除和跨日延续语义。",
+            let okr = try engine.createPoolTask(
+                title: "整理 Q3 OKR 草案",
+                descriptionText: "汇总三条产品线负责人给的季度目标，收敛成不超过 3 个 O、每个 O 配 3 个可量化 KR。",
+                note: "等数据组下午的留存看板再定第 2 个 KR 的口径。",
                 now: now
             )
-            let researchDay1 = try engine.scheduleFromPool(chainID: research, date: day1, today: day3, now: now)
-            _ = try engine.addSubtask(traceID: researchDay1, title: "拆导航结构", difficulty: .simple, now: now)
-            let modelSubtask = try engine.addSubtask(traceID: researchDay1, title: "补领域模型字段", difficulty: .hard, now: now)
-            try engine.completeSubtask(modelSubtask, today: day1, now: now)
-            engine.settleDays(upTo: day2, now: now)
-            let researchDay2 = try engine.continueTrace(traceID: researchDay1, targetDate: day2, today: day2, now: now)
-            engine.settleDays(upTo: day3, now: now)
-            let researchToday = try engine.continueTrace(traceID: researchDay2, targetDate: day3, today: day3, now: now)
-            _ = try engine.addSubtask(traceID: researchToday, title: "SwiftUI 还原原型", difficulty: .hard, now: now)
+            let okrDay0 = try engine.scheduleFromPool(chainID: okr, date: day0, today: day0, now: now)
 
-            let review = try engine.createPoolTask(
-                title: "补齐每日复盘写作",
-                descriptionText: "完成今天的推进总结、未完成原因和明日注意事项。",
-                note: "复盘可补写，但任务事实不能被历史改写。",
-                now: now
-            )
-            let reviewTrace = try engine.scheduleFromPool(chainID: review, date: day3, today: day3, now: now)
-            try engine.setManualProgress(traceID: reviewTrace, percent: 35, today: day3)
+            let launchScript = try engine.createPoolTask(title: "给发布会准备演示脚本", descriptionText: "准备发布会现场演示脚本。", now: now)
+            _ = try engine.scheduleFromPool(chainID: launchScript, date: dayMinus3, today: dayMinus3, now: now)
+            let physical = try engine.createPoolTask(title: "预约年度体检", descriptionText: "预约年度体检时间。", now: now)
+            let physicalTrace = try engine.scheduleFromPool(chainID: physical, date: dayMinus3, today: dayMinus3, now: now)
+            try engine.returnToPool(traceID: physicalTrace, today: dayMinus3, now: now)
+            let wireframe = try engine.createPoolTask(title: "画首页线框图", descriptionText: "日历完成样例任务。", now: now)
+            let wireframeTrace = try engine.scheduleFromPool(chainID: wireframe, date: dayMinus3, today: dayMinus3, now: now)
+            try engine.markCompleted(traceID: wireframeTrace, today: dayMinus3, now: now)
+            let repository = try engine.createPoolTask(title: "搭建项目仓库与 CI", descriptionText: "日历完成样例任务。", now: now)
+            let repositoryTrace = try engine.scheduleFromPool(chainID: repository, date: day0, today: day0, now: now)
+            try engine.markCompleted(traceID: repositoryTrace, today: day0, now: now)
+            let rust = try engine.createPoolTask(title: "学习 Rust 基础语法", descriptionText: "废弃样例任务。", now: now)
+            let rustTrace = try engine.scheduleFromPool(chainID: rust, date: day0, today: day0, now: now)
+            try engine.abandonChain(from: rustTrace, now: now)
 
-            let done = try engine.createPoolTask(title: "归档 Claude Mac UI 原型", descriptionText: "把原型文件和实现契约落到 docs。", now: now)
-            let doneTrace = try engine.scheduleFromPool(chainID: done, date: day3, today: day3, now: now)
-            try engine.markCompleted(traceID: doneTrace, today: day3, now: now)
+            engine.settleDays(upTo: day1, now: now)
+            let okrDay1 = try engine.continueTrace(traceID: okrDay0, targetDate: day1, today: day1, now: now)
+            let okrToday = try engine.continueTrace(traceID: okrDay1, targetDate: day3, today: day1, now: now)
+            try engine.setManualProgress(traceID: okrToday, percent: 30, today: day3)
 
-            let changed = try engine.createPoolTask(title: "写普通 Todo 页面", descriptionText: "旧方向，已被晷迹轨迹模型替代。", now: now)
-            let changedTrace = try engine.scheduleFromPool(chainID: changed, date: day3, today: day3, now: now)
-            _ = try engine.changeTrace(traceID: changedTrace, newTitle: "写晷迹 Day Todo 页面", today: day3, now: now)
+            let contract = try engine.createPoolTask(title: "回复设计合同邮件", descriptionText: "确认合同条款并回复对方。", now: now)
+            let contractTrace = try engine.scheduleFromPool(chainID: contract, date: day1, today: day1, now: now)
+            try engine.markCompleted(traceID: contractTrace, today: day1, now: now)
 
-            let poolA = try engine.createPoolTask(title: "设计数据包导出格式", descriptionText: "平台无关状态快照，后续用于手动导出/导入。", now: now)
-            _ = poolA
-            let poolB = try engine.createPoolTask(title: "评估 GRDB 持久化边界", descriptionText: "SQLite schema 已有，下一步接存储仓库。", note: "不要提前引入账号系统。", now: now)
-            _ = poolB
+            let iconExport = try engine.createPoolTask(title: "修复图标导出脚本", descriptionText: "修复图标资源导出脚本。", now: now)
+            let iconDay2 = try engine.scheduleFromPool(chainID: iconExport, date: day2, today: day2, now: now)
+            try engine.setManualProgress(traceID: iconDay2, percent: 45, today: day2)
+            let iconToday = try engine.continueTrace(traceID: iconDay2, targetDate: day3, today: day2, now: now)
+            try engine.setManualProgress(traceID: iconToday, percent: 45, today: day3)
 
-            let futureA = try engine.createPoolTask(title: "接入真实 SQLite Repository", descriptionText: "把内存 engine 状态落到本地数据库。", now: now)
-            _ = try engine.scheduleFromPool(chainID: futureA, date: day4, today: day3, now: now)
-            let futureB = try engine.createPoolTask(title: "完善烛龙 AI provider 配置", descriptionText: "OpenAI-compatible endpoint，自定义模型与健康检查。", now: now)
-            let futureTrace = try engine.scheduleFromPool(chainID: futureB, date: day7, today: day3, now: now)
-            _ = try engine.addSubtask(traceID: futureTrace, title: "Provider Registry UI", difficulty: .medium, now: now)
+            let weeklyReport = try engine.createPoolTask(title: "写本周周报", descriptionText: "整理本周进展和风险。", now: now)
+            let weeklyDay1 = try engine.scheduleFromPool(chainID: weeklyReport, date: day1, today: day1, now: now)
+            let weeklyDay2 = try engine.continueTrace(traceID: weeklyDay1, targetDate: day2, today: day1, now: now)
+            try engine.markCompleted(traceID: weeklyDay2, today: day2, now: now)
 
-            let calendarSamples: [(String, String, Bool)] = [
-                ("2026-07-01", "整理任务池命名", true),
-                ("2026-07-01", "补充已完成池轨迹文案", false),
-                ("2026-07-02", "复核未完成池明细", false),
-                ("2026-07-06", "设计 SQLite Repository", false),
-                ("2026-07-06", "补日历热度规则", false),
-                ("2026-07-07", "完善设置同步占位", false),
-                ("2026-07-08", "补烛龙 AI Provider UI", false),
-                ("2026-07-09", "验证整月日历截图", false),
-                ("2026-07-10", "复盘导出数据包格式", false),
-                ("2026-07-11", "整理人工测试清单", false)
-            ]
-            for sample in calendarSamples {
-                let chainID = try engine.createPoolTask(title: sample.1, descriptionText: "日历总览样例任务。", now: now)
-                let traceID = try engine.scheduleFromPool(chainID: chainID, date: LocalDate(sample.0), today: day3, now: now)
-                if sample.2, LocalDate(sample.0) == day3 {
-                    try engine.markCompleted(traceID: traceID, today: day3, now: now)
-                }
+            let pricing = try engine.createPoolTask(title: "调研竞品定价", descriptionText: "旧任务范围过大，需要变更为可交付对比表。", now: now)
+            let pricingTrace = try engine.scheduleFromPool(chainID: pricing, date: day2, today: day2, now: now)
+            _ = try engine.changeTrace(traceID: pricingTrace, newTitle: "输出竞品定价对比表", today: day2, now: now)
+
+            let visual = try engine.createPoolTask(title: "制作发布会主视觉", descriptionText: "推进发布会主视觉定稿。", now: now)
+            let visualDay1 = try engine.scheduleFromPool(chainID: visual, date: day1, today: day1, now: now)
+            let visualReference = try engine.addSubtask(traceID: visualDay1, title: "收集视觉参考", difficulty: .simple, now: now)
+            _ = try engine.addSubtask(traceID: visualDay1, title: "出 3 版草图", difficulty: .hard, now: now)
+            try engine.completeSubtask(visualReference, today: day1, now: now)
+            let visualDay2 = try engine.continueTrace(traceID: visualDay1, targetDate: day2, today: day1, now: now)
+            if let draftSubtask = engine.subtasks.values.first(where: { $0.traceID == visualDay2 && $0.title == "出 3 版草图" }) {
+                try engine.completeSubtask(draftSubtask.id, today: day2, now: now)
             }
+            _ = try engine.addSubtask(traceID: visualDay2, title: "定稿并交付", difficulty: .medium, now: now)
+            let visualToday = try engine.continueTrace(traceID: visualDay2, targetDate: day3, today: day2, now: now)
+            if engine.subtasks.values.contains(where: { $0.traceID == visualToday }) == false {
+                _ = try engine.addSubtask(traceID: visualToday, title: "定稿并交付", difficulty: .medium, now: now)
+            }
+
+            let onboarding = try engine.createPoolTask(title: "审阅 onboarding 三屏文案", descriptionText: "审阅 onboarding 三屏文案。", now: now)
+            let onboardingTrace = try engine.scheduleFromPool(chainID: onboarding, date: day3, today: day3, now: now)
+            let headline = try engine.addSubtask(traceID: onboardingTrace, title: "首屏标题与副标题", difficulty: .simple, now: now)
+            _ = try engine.addSubtask(traceID: onboardingTrace, title: "通知权限请求文案", difficulty: .medium, now: now)
+            try engine.completeSubtask(headline, today: day3, now: now)
+
+            let running = try engine.createPoolTask(title: "晨跑 5 公里", descriptionText: "完成晨跑。", now: now)
+            let runningTrace = try engine.scheduleFromPool(chainID: running, date: day3, today: day3, now: now)
+            try engine.markCompleted(traceID: runningTrace, today: day3, now: now)
+
+            let downloads = try engine.createPoolTask(title: "清理下载文件夹", descriptionText: "清理下载文件夹。", now: now)
+            _ = try engine.scheduleFromPool(chainID: downloads, date: day3, today: day3, now: now)
+
+            _ = try engine.createPoolTask(title: "读《卡片笔记写作法》第三章", descriptionText: "任务池样例任务。", now: now)
+            _ = try engine.createPoolTask(title: "调研 SwiftUI 动画 API", descriptionText: "任务池样例任务。", now: now)
+
+            let standup = try engine.createPoolTask(title: "准备周一站会要点", descriptionText: "未来计划样例任务。", now: now)
+            _ = try engine.scheduleFromPool(chainID: standup, date: day4, today: day3, now: now)
+            let invoice = try engine.createPoolTask(title: "整理六月发票报销", descriptionText: "未来计划样例任务。", now: now)
+            _ = try engine.scheduleFromPool(chainID: invoice, date: day5, today: day3, now: now)
+            let dinner = try engine.createPoolTask(title: "预订团队聚餐餐厅", descriptionText: "未来计划样例任务。", now: now)
+            _ = try engine.scheduleFromPool(chainID: dinner, date: day4, today: day3, now: now)
+
             engine.settleDays(upTo: day3, now: now)
 
             engine.updateDailyReview(
+                date: day1,
+                summary: "合同邮件处理完毕；OKR 草案低估了工作量，明天优先。",
+                unfinishedReason: "OKR 依赖的数据下午才拿到，被会议切碎。",
+                tomorrowNote: "上午先做 OKR，别先开邮箱。"
+            )
+            engine.updateDailyReview(
+                date: day2,
+                summary: "周报和图标脚本推进顺利；竞品调研范围太大，拆成了对比表任务。",
+                unfinishedReason: "竞品对比表低估了整理时间。",
+                tomorrowNote: "对比表先列框架再填数据。"
+            )
+            engine.updateDailyReview(
                 date: day3,
-                summary: "今天完成了 Xcode 工具链、SwiftPM 测试和 Mac UI 契约复核，开始进入 SwiftUI 实现。",
-                unfinishedReason: "真实 App target 仍在搭建，持久化接入尚未完成。",
-                tomorrowNote: "优先验证主窗口交互，再补 SQLite repository。"
+                summary: "",
+                unfinishedReason: "",
+                tomorrowNote: ""
             )
         } catch {
             assertionFailure("Seed data failed: \(error)")
@@ -1703,7 +1739,7 @@ struct Sidebar: View {
             NavItem(
                 page: .day,
                 label: "Day Todo",
-                count: store.engine.getDayTodo(date: store.today).traces.count
+                count: store.engine.getDayTodo(date: store.today).traces.filter { $0.status == .pending }.count
             )
             NavItem(page: .pool, label: "任务池", count: store.engine.taskPool().count)
             NavItem(

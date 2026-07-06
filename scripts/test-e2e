@@ -234,3 +234,60 @@ if [[ "$(cat "$provider_result")" != "ok" ]]; then
 fi
 
 echo "E2E provider config round-trip: $provider_result (name=$provider_name model=$provider_model)"
+
+workflow_dir="artifacts/e2e-workflow"
+workflow_db="${workflow_dir}/Suntrace.sqlite"
+workflow_result="${workflow_dir}/workflow-result.txt"
+workflow_title="E2E 排期延续复盘"
+rm -rf "$workflow_dir"
+mkdir -p "$workflow_dir"
+
+open -W -n dist/SuntraceMacApp.app --args \
+  --data-url "$PWD/$workflow_db" \
+  --page pool \
+  --e2e-domain-workflow \
+  --e2e-workflow-title "$workflow_title" \
+  --e2e-workflow-result-url "$PWD/$workflow_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$workflow_result" ]]; then
+  echo "workflow e2e result was not created: $workflow_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$workflow_result")" != "ok" ]]; then
+  echo "workflow e2e failed: $(cat "$workflow_result")" >&2
+  exit 1
+fi
+
+read -r workflow_continued workflow_pending workflow_review < <(
+  sqlite3 -separator " " "$workflow_db" "
+    SELECT
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = '$workflow_title'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'continued'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = '$workflow_title'
+         AND day_traces.date = '2026-07-06'
+         AND day_traces.status = 'pending'
+         AND day_traces.continuation_seq = 1),
+      (SELECT count(*)
+       FROM days
+       WHERE date = '2026-07-05'
+         AND review_summary = 'E2E 已完成排期、延续和复盘写入。'
+         AND review_unfinished_reason = '验证真实 App workflow 自动化。'
+         AND review_tomorrow_note = '明天检查延续任务。');
+  "
+)
+
+if [[ "$workflow_continued" -ne 1 || "$workflow_pending" -ne 1 || "$workflow_review" -ne 1 ]]; then
+  echo "workflow e2e persistence failed: continued=$workflow_continued pending=$workflow_pending review=$workflow_review" >&2
+  exit 1
+fi
+
+echo "E2E domain workflow: $workflow_db (continued=$workflow_continued pending=$workflow_pending review=$workflow_review)"

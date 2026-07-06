@@ -117,7 +117,8 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let zhulongTaskName = SuntraceStore.commandLineValue(after: "--e2e-generate-zhulong-draft")
         let providerAutomation = ProviderE2EAutomation.fromCommandLine()
-        guard quickTaskTitle?.isEmpty == false || zhulongTaskName != nil || providerAutomation != nil else {
+        let workflowAutomation = WorkflowE2EAutomation.fromCommandLine()
+        guard quickTaskTitle?.isEmpty == false || zhulongTaskName != nil || providerAutomation != nil || workflowAutomation != nil else {
             return
         }
 
@@ -143,10 +144,83 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
                 providerAutomation.run(on: store)
             }
 
+            if let workflowAutomation {
+                workflowAutomation.run(on: store)
+            }
+
             if CommandLine.arguments.contains("--e2e-quit-after-automation") {
                 store.persist()
                 NSApp.terminate(nil)
             }
+        }
+    }
+}
+
+private struct WorkflowE2EAutomation {
+    var title: String
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> WorkflowE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-domain-workflow") else { return nil }
+        let title = SuntraceStore.commandLineValue(after: "--e2e-workflow-title") ?? "E2E 排期延续复盘"
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-workflow-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return WorkflowE2EAutomation(title: title, resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            let tomorrow = SuntraceStore.offset(store.today, by: 1)
+
+            store.page = .pool
+            store.poolText = title
+            store.addPoolTask()
+            guard let chainID = store.selectedPoolChainID else {
+                throw WorkflowE2EAutomationError.missing("pool chain")
+            }
+
+            store.schedulePoolTask(chainID, date: store.today)
+            guard let todayTraceID = store.selectedTraceID else {
+                throw WorkflowE2EAutomationError.missing("scheduled trace")
+            }
+
+            store.continueTrace(todayTraceID, to: tomorrow)
+            guard store.selectedTraceID != todayTraceID else {
+                throw WorkflowE2EAutomationError.missing("continued trace")
+            }
+
+            store.selectedDate = store.today
+            store.updateReview(
+                summary: "E2E 已完成排期、延续和复盘写入。",
+                reason: "验证真实 App workflow 自动化。",
+                tomorrow: "明天检查延续任务。"
+            )
+
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum WorkflowE2EAutomationError: LocalizedError {
+    case missing(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .missing(value):
+            return "Workflow E2E missing: \(value)"
         }
     }
 }

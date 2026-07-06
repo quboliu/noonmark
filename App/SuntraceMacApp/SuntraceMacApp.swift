@@ -2279,29 +2279,41 @@ struct TaskPoolPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: "任务池", subtitle: "尚未安排日期的任务。排期后会出现在对应的 Day Todo。")
-            TextField("新建任务到任务池，回车确认", text: $store.poolText)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 12)
-                .frame(height: 32)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-                .padding(.horizontal, 24)
-                .padding(.bottom, 12)
-                .onSubmit { store.addPoolTask() }
-
             ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(tasks, id: \.chain.id) { task in
-                        PoolTaskRow(task: task)
-                    }
-                    if tasks.isEmpty {
-                        EmptyState(kind: .taskPool, text: "任务池是空的。")
-                            .padding(.top, 40)
+                VStack(spacing: 0) {
+                    PoolQuickAdd()
+                        .padding(.bottom, 12)
+
+                    LazyVStack(spacing: 8) {
+                        ForEach(tasks, id: \.chain.id) { task in
+                            PoolTaskRow(task: task)
+                        }
+                        if tasks.isEmpty {
+                            EmptyState(kind: .taskPool, text: "任务池是空的。")
+                                .padding(.top, 40)
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
+                .padding(.top, 12)
+                .padding(.bottom, 20)
             }
         }
+    }
+}
+
+struct PoolQuickAdd: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        TextField("新建任务到任务池，回车确认", text: $store.poolText)
+            .textFieldStyle(.plain)
+            .font(.system(size: 13))
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+            .onSubmit { store.addPoolTask() }
     }
 }
 
@@ -2310,27 +2322,33 @@ struct PoolTaskRow: View {
     let task: PoolTask
 
     var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .stroke(Theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                .frame(width: 18, height: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(task.definition.title)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(task.definition.descriptionText ?? "尚未安排日期")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.text3)
-                    .lineLimit(1)
+        let selected = store.selectedPoolChainID == task.chain.id
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                PlanningGlyph(systemName: "tray", color: Theme.navPool)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(task.definition.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.text1)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        PlanMetaPill(text: "待排期", color: Theme.navPool)
+                        Text(task.definition.descriptionText ?? "尚未安排日期")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                SmallActionButton("排期到今天", tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
+                SmallActionButton("排期到明天") { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
+                SmallActionButton("选日期…") { store.showingPicker = .schedulePool(task.chain.id) }
             }
-            Spacer()
-            SmallActionButton("排期到今天", tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
-            SmallActionButton("排期到明天") { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
-            SmallActionButton("选日期…") { store.showingPicker = .schedulePool(task.chain.id) }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedPoolChainID == task.chain.id ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedPoolChainID == task.chain.id ? Theme.accent : Theme.line))
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.navPool.opacity(0.10) : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.navPool : Theme.line, lineWidth: selected ? 1.3 : 1))
         .onTapGesture { store.selectPool(task.chain.id) }
     }
 }
@@ -2351,9 +2369,17 @@ struct FuturePlansPage: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(grouped, id: \.0) { date, items in
                         VStack(alignment: .leading, spacing: 7) {
-                            HStack {
+                            HStack(spacing: 8) {
                                 Text("\(SuntraceStore.displayDate(date)) · \(SuntraceStore.weekday(date))")
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Theme.text1)
+                                    .monospacedDigit()
+                                Text("\(items.count) 项")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                    .foregroundStyle(Theme.navFuture)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 1)
+                                    .background(Capsule().fill(Theme.navFuture.opacity(0.12)))
                                 Spacer()
                                 Button("查看当天 →") {
                                     store.selectedDate = date
@@ -2374,6 +2400,7 @@ struct FuturePlansPage: View {
                     }
                 }
                 .padding(.horizontal, 24)
+                .padding(.top, 12)
                 .padding(.bottom, 20)
             }
         }
@@ -2385,17 +2412,24 @@ struct FuturePlanRow: View {
     let item: FuturePlanItem
 
     var body: some View {
+        let selected = store.selectedTraceID == item.trace.id
         HStack(spacing: 10) {
-            StatusGlyph(status: item.trace.status)
-            VStack(alignment: .leading, spacing: 2) {
+            PlanningGlyph(systemName: "calendar.badge.clock", color: Theme.navFuture)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(item.definition.title)
                     .font(.system(size: 13, weight: .semibold))
-                Text("计划草稿 · 当日优先级 \(item.trace.priority)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.text3)
+                    .foregroundStyle(Theme.text1)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    PlanMetaPill(text: "计划草稿", color: Theme.navFuture)
+                    Text("当日优先级 \(item.trace.priority)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                }
             }
             Spacer()
-            StatusChip(status: item.trace.status)
+            SmallActionButton("改期…") { store.showingPicker = .reschedule(item.trace.id) }
+            SmallActionButton("回池") { store.returnToPool(item.trace.id) }
             VStack(spacing: 1) {
                 Button("▲") { store.movePriority(item.trace.id, delta: -1) }
                 Button("▼") { store.movePriority(item.trace.id, delta: 1) }
@@ -2405,15 +2439,42 @@ struct FuturePlanRow: View {
             .foregroundStyle(Theme.text3)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedTraceID == item.trace.id ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedTraceID == item.trace.id ? Theme.accent : Theme.line))
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.navFuture.opacity(0.10) : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.navFuture : Theme.line, lineWidth: selected ? 1.3 : 1))
         .onTapGesture { store.selectTrace(item.trace.id) }
         .contextMenu {
             Button("查看详情") { store.selectTrace(item.trace.id) }
             Button("改期…") { store.showingPicker = .reschedule(item.trace.id) }
             Button("回到任务池") { store.returnToPool(item.trace.id) }
         }
+    }
+}
+
+struct PlanningGlyph: View {
+    let systemName: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(color)
+            .frame(width: 20, height: 20)
+            .background(Circle().fill(color.opacity(0.12)))
+    }
+}
+
+struct PlanMetaPill: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(color.opacity(0.12)))
     }
 }
 
@@ -3696,6 +3757,8 @@ struct DetailRail: View {
                         CompletedSubtaskDetail(record: record)
                     } else if store.page == .completed, let item = store.selectedCompletedItem {
                         CompletedRecordDetail(item: item)
+                    } else if store.page == .future {
+                        FuturePlanDetail(trace: trace, definition: definition)
                     } else {
                         TaskDetail(trace: trace, definition: definition)
                     }
@@ -4354,6 +4417,117 @@ struct PoolDetail: View {
                 }
             }
         }
+    }
+}
+
+struct FuturePlanDetail: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let trace: DayTrace
+    let definition: TaskDefinition
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            DetailHeader("计划详情", onClose: { store.clearSelection() }, trailing: {
+                IconMenuButton(menuContent: {
+                    Button("查看当天") { openDay() }
+                    Button("改期…") { store.showingPicker = .reschedule(trace.id) }
+                    Button("回到任务池") { store.returnToPool(trace.id) }
+                })
+            })
+
+            Text(definition.title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.text1)
+                .lineLimit(3)
+
+            HStack(spacing: 8) {
+                PlanMetaPill(text: "计划草稿", color: Theme.navFuture)
+                Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+
+            PlanSummaryCard(items: [
+                PlanSummaryItem(label: "日期", value: SuntraceStore.displayDate(trace.date), color: Theme.navFuture),
+                PlanSummaryItem(label: "优先级", value: "\(trace.priority)", color: Theme.text2),
+                PlanSummaryItem(label: "状态", value: "未到期", color: Theme.text2)
+            ])
+
+            Notice(text: "未来计划可改期、排序或回池；到达当天前不能标记完成。", tone: .locked)
+
+            DetailSection("描述") {
+                EditableDetailText(
+                    text: Binding(
+                        get: { trace.descriptionText ?? definition.descriptionText ?? "" },
+                        set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
+                    ),
+                    placeholder: "补充这个计划的背景、目标或范围…",
+                    editable: true,
+                    warm: false,
+                    fallback: "未填写描述"
+                )
+            }
+
+            DetailSection("附言") {
+                EditableDetailText(
+                    text: Binding(
+                        get: { trace.note ?? definition.note ?? "" },
+                        set: { store.updateTraceText(traceID: trace.id, note: $0) }
+                    ),
+                    placeholder: "未来开始前想提醒自己的事项…",
+                    editable: true,
+                    warm: true,
+                    fallback: "无附言"
+                )
+            }
+
+            DetailSection("计划操作") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        SmallActionButton("查看当天 →", tone: .accent) { openDay() }
+                        SmallActionButton("改期…") { store.showingPicker = .reschedule(trace.id) }
+                    }
+                    SmallActionButton("回到任务池") { store.returnToPool(trace.id) }
+                }
+            }
+        }
+    }
+
+    private func openDay() {
+        store.selectedDate = trace.date
+        store.page = .day
+        store.selectTrace(trace.id)
+    }
+}
+
+struct PlanSummaryItem {
+    let label: String
+    let value: String
+    let color: Color
+}
+
+struct PlanSummaryCard: View {
+    let items: [PlanSummaryItem]
+
+    var body: some View {
+        VStack(spacing: 7) {
+            ForEach(items, id: \.label) { item in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(item.label)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                        .frame(width: 44, alignment: .leading)
+                    Text(item.value)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(item.color)
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.navFuture.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
     }
 }
 

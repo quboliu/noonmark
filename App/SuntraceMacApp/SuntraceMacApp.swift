@@ -38,6 +38,7 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
         openMainWindow()
+        runLaunchAutomationIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -109,6 +110,26 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
 
     @objc private func undoAction(_ sender: Any?) {
         store.undo()
+    }
+
+    private func runLaunchAutomationIfNeeded() {
+        guard let quickTaskTitle = SuntraceStore.commandLineValue(after: "--e2e-add-quick-task"),
+              quickTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        else {
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [store] in
+            store.page = .day
+            store.selectedDate = store.today
+            store.quickText = quickTaskTitle
+            store.addQuickTask()
+
+            if CommandLine.arguments.contains("--e2e-quit-after-automation") {
+                store.persist()
+                NSApp.terminate(nil)
+            }
+        }
     }
 }
 

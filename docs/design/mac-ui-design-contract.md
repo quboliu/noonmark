@@ -234,4 +234,5 @@
 - Mac UI 契约已显式覆盖窗口尺寸、颜色 token、日期 strip 选中动效、日期 strip 视觉细节、任务行微观元素、逐页面空状态插图/文案、未来计划交互、详情栏标题/空态、子任务完成日期、子任务锁定图标、变更弹窗内部元素、撤销不可用 toast、变更指针和有限撤销。
 - Mac SwiftUI 主窗口已覆盖 Day Todo、任务池、未来计划、未完成池、已完成池、日历、烛龙 AI 和设置页；`scripts/test-e2e` 已生成真实 macOS 页面截图并验证正常模式持久化。
 - 设置页导出 / 导入入口已接入 `SuntraceDataPackage` JSON 数据包，Storage 测试覆盖 round-trip、重复键和断裂引用拒绝。
-- 待补齐：更深的真实交互 E2E、Provider 配置表单、Apple Developer ID 签名和 notarization。
+- 烛龙 Provider 配置表单已接入 App：非密配置保存到 UserDefaults，API Key 只进入 Keychain；OpenAI-compatible Provider 已支持 `/chat/completions` 和 `/models` 健康检查。
+- 待补齐：更深的真实 UI 交互自动化、建议草稿确认流、Apple Developer ID 签名和 notarization。

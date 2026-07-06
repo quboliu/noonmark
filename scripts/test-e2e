@@ -122,3 +122,42 @@ if [[ "$days" -lt 1 || "$chains" -lt 1 || "$definitions" -lt 1 || "$traces" -lt 
 fi
 
 echo "E2E persistence database: $persistence_db (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"
+
+interaction_dir="artifacts/e2e-interaction"
+interaction_db="${interaction_dir}/Suntrace.sqlite"
+interaction_title="E2E 快速新增任务"
+rm -rf "$interaction_dir"
+mkdir -p "$interaction_dir"
+
+open -W -n dist/SuntraceMacApp.app --args \
+  --data-url "$PWD/$interaction_db" \
+  --page day \
+  --e2e-add-quick-task "$interaction_title" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$interaction_db" ]]; then
+  echo "interaction database was not created: $interaction_db" >&2
+  exit 1
+fi
+
+read -r interaction_definitions interaction_traces < <(
+  sqlite3 -separator " " "$interaction_db" "
+    SELECT
+      (SELECT count(*)
+       FROM task_definitions
+       WHERE title = '$interaction_title'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = '$interaction_title'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'pending');
+  "
+)
+
+if [[ "$interaction_definitions" -ne 1 || "$interaction_traces" -ne 1 ]]; then
+  echo "quick-add interaction failed: definitions=$interaction_definitions traces=$interaction_traces" >&2
+  exit 1
+fi
+
+echo "E2E quick-add app interaction: $interaction_db (title=$interaction_title definitions=$interaction_definitions traces=$interaction_traces)"

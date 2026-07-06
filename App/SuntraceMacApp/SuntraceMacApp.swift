@@ -116,7 +116,8 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
         let quickTaskTitle = SuntraceStore.commandLineValue(after: "--e2e-add-quick-task")?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let zhulongTaskName = SuntraceStore.commandLineValue(after: "--e2e-generate-zhulong-draft")
-        guard quickTaskTitle?.isEmpty == false || zhulongTaskName != nil else {
+        let providerAutomation = ProviderE2EAutomation.fromCommandLine()
+        guard quickTaskTitle?.isEmpty == false || zhulongTaskName != nil || providerAutomation != nil else {
             return
         }
 
@@ -138,10 +139,122 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
                 }
             }
 
+            if let providerAutomation {
+                providerAutomation.run(on: store)
+            }
+
             if CommandLine.arguments.contains("--e2e-quit-after-automation") {
                 store.persist()
                 NSApp.terminate(nil)
             }
+        }
+    }
+}
+
+private struct ProviderE2EAutomation {
+    var expectedName: String
+    var expectedBaseURL: String
+    var expectedModel: String
+    var expectedAPIKey: String
+    var shouldConfigure: Bool
+    var shouldVerify: Bool
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> ProviderE2EAutomation? {
+        let shouldConfigure = CommandLine.arguments.contains("--e2e-configure-provider")
+        let shouldVerify = CommandLine.arguments.contains("--e2e-verify-provider")
+        guard shouldConfigure || shouldVerify else { return nil }
+
+        let expectedName = SuntraceStore.commandLineValue(after: "--e2e-provider-name") ?? ""
+        let expectedBaseURL = SuntraceStore.commandLineValue(after: "--e2e-provider-base-url") ?? ""
+        let expectedModel = SuntraceStore.commandLineValue(after: "--e2e-provider-model") ?? ""
+        let expectedAPIKey = SuntraceStore.commandLineValue(after: "--e2e-provider-api-key") ?? ""
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-provider-result-url")
+            .map { URL(fileURLWithPath: $0) }
+
+        return ProviderE2EAutomation(
+            expectedName: expectedName,
+            expectedBaseURL: expectedBaseURL,
+            expectedModel: expectedModel,
+            expectedAPIKey: expectedAPIKey,
+            shouldConfigure: shouldConfigure,
+            shouldVerify: shouldVerify,
+            resultURL: resultURL
+        )
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            if shouldConfigure {
+                try configureProvider(on: store)
+            }
+            if shouldVerify {
+                try verifyProvider(on: store)
+                store.zhulongProviderDraft = try ZhulongProviderSettingsStore.clear()
+            }
+            try writeResult("ok")
+        } catch {
+            if shouldVerify {
+                store.zhulongProviderDraft = (try? ZhulongProviderSettingsStore.clear()) ?? ZhulongProviderDraft()
+            }
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func configureProvider(on store: SuntraceStore) throws {
+        store.zhulongProviderDraft = try ZhulongProviderSettingsStore.clear()
+        store.zhulongProviderDraft.displayName = expectedName
+        store.zhulongProviderDraft.kind = .openAICompatible
+        store.zhulongProviderDraft.baseURL = expectedBaseURL
+        store.zhulongProviderDraft.model = expectedModel
+        store.zhulongProviderDraft.apiKeyInput = expectedAPIKey
+        store.zhulongProviderDraft.enabled = true
+        store.zhulongProviderDraft = try ZhulongProviderSettingsStore.save(store.zhulongProviderDraft)
+    }
+
+    @MainActor
+    private func verifyProvider(on store: SuntraceStore) throws {
+        let draft = store.zhulongProviderDraft
+        guard draft.displayName == expectedName else {
+            throw ProviderE2EAutomationError.mismatch("displayName")
+        }
+        guard draft.normalizedBaseURL?.absoluteString == URL(string: expectedBaseURL)?.absoluteString else {
+            throw ProviderE2EAutomationError.mismatch("baseURL")
+        }
+        guard draft.model == expectedModel else {
+            throw ProviderE2EAutomationError.mismatch("model")
+        }
+        guard draft.enabled else {
+            throw ProviderE2EAutomationError.mismatch("enabled")
+        }
+        guard draft.hasStoredAPIKey else {
+            throw ProviderE2EAutomationError.mismatch("hasStoredAPIKey")
+        }
+        guard try ZhulongProviderKeychain.readAPIKey() == expectedAPIKey else {
+            throw ProviderE2EAutomationError.mismatch("apiKey")
+        }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum ProviderE2EAutomationError: LocalizedError {
+    case mismatch(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .mismatch(field):
+            return "Provider E2E mismatch: \(field)"
         }
     }
 }

@@ -194,3 +194,43 @@ if [[ "$zhulong_review_count" -ne 1 ]]; then
 fi
 
 echo "E2E zhulong draft apply: $zhulong_db (review_count=$zhulong_review_count)"
+
+provider_dir="artifacts/e2e-provider"
+provider_result="${provider_dir}/provider-result.txt"
+provider_name="E2E Provider"
+provider_base_url="https://provider.example/v1"
+provider_model="suntrace-e2e-model"
+provider_api_key="suntrace-e2e-dummy-key"
+rm -rf "$provider_dir"
+mkdir -p "$provider_dir"
+
+open -W -n dist/SuntraceMacApp.app --args \
+  --page zhulong \
+  --e2e-configure-provider \
+  --e2e-provider-name "$provider_name" \
+  --e2e-provider-base-url "$provider_base_url" \
+  --e2e-provider-model "$provider_model" \
+  --e2e-provider-api-key "$provider_api_key" \
+  --e2e-quit-after-automation
+
+open -W -n dist/SuntraceMacApp.app --args \
+  --page zhulong \
+  --e2e-verify-provider \
+  --e2e-provider-name "$provider_name" \
+  --e2e-provider-base-url "$provider_base_url" \
+  --e2e-provider-model "$provider_model" \
+  --e2e-provider-api-key "$provider_api_key" \
+  --e2e-provider-result-url "$PWD/$provider_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$provider_result" ]]; then
+  echo "provider e2e result was not created: $provider_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$provider_result")" != "ok" ]]; then
+  echo "provider e2e failed: $(cat "$provider_result")" >&2
+  exit 1
+fi
+
+echo "E2E provider config round-trip: $provider_result (name=$provider_name model=$provider_model)"

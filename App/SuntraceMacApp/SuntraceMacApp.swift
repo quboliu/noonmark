@@ -1910,8 +1910,16 @@ struct NavItem: View {
             .frame(height: 32)
             .padding(.leading, 12)
             .padding(.trailing, 10)
-            .background(active ? Theme.accentSoft : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .hoverSurface(
+                active: active,
+                cornerRadius: 7,
+                idleFill: .clear,
+                hoverFill: Theme.chip,
+                activeFill: Theme.accentSoft,
+                idleStroke: .clear,
+                hoverStroke: Theme.line,
+                activeStroke: .clear
+            )
             .overlay(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 99)
                     .fill(active ? Theme.accent : .clear)
@@ -2227,8 +2235,16 @@ struct TaskRow: View {
                 .padding(.bottom, 10)
             }
         }
-        .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Theme.accent : Theme.line))
+        .hoverSurface(
+            active: selected,
+            cornerRadius: 8,
+            idleFill: Theme.panel,
+            hoverFill: Theme.panel2,
+            activeFill: Theme.accentSoft,
+            idleStroke: Theme.line,
+            hoverStroke: Theme.line2,
+            activeStroke: Theme.accent
+        )
         .contentShape(Rectangle())
         .onTapGesture { store.selectTrace(trace.id) }
         .contextMenu {
@@ -2510,8 +2526,17 @@ struct FuturePlanRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.navFuture.opacity(0.10) : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.navFuture : Theme.line, lineWidth: selected ? 1.3 : 1))
+        .hoverSurface(
+            active: selected,
+            cornerRadius: 9,
+            idleFill: Theme.panel,
+            hoverFill: Theme.panel2,
+            activeFill: Theme.navFuture.opacity(0.10),
+            idleStroke: Theme.line,
+            hoverStroke: Theme.line2,
+            activeStroke: Theme.navFuture,
+            activeLineWidth: 1.3
+        )
         .onTapGesture { store.selectTrace(item.trace.id) }
         .contextMenu {
             Button("查看详情") { store.selectTrace(item.trace.id) }
@@ -3072,8 +3097,16 @@ struct CalendarCell: View {
         .padding(.horizontal, 6)
         .padding(.bottom, 4)
         .frame(height: height, alignment: .top)
-        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.accent : isToday ? Theme.accent : Theme.line))
+        .hoverSurface(
+            active: selected,
+            cornerRadius: 9,
+            idleFill: Theme.panel,
+            hoverFill: Theme.panel2,
+            activeFill: Theme.accentSoft,
+            idleStroke: isToday ? Theme.accent : Theme.line,
+            hoverStroke: isToday ? Theme.accent : Theme.line2,
+            activeStroke: Theme.accent
+        )
         .contentShape(RoundedRectangle(cornerRadius: 9))
         .onTapGesture { store.selectedCalendarDate = date }
     }
@@ -5366,8 +5399,13 @@ struct HeaderButton: View {
             .padding(.horizontal, title.count == 1 ? 8 : 10)
             .frame(height: 26)
             .fixedSize(horizontal: true, vertical: false)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            .hoverSurface(
+                cornerRadius: 7,
+                idleFill: Theme.panel,
+                hoverFill: Theme.panel2,
+                idleStroke: Theme.line,
+                hoverStroke: Theme.line2
+            )
     }
 }
 
@@ -5399,8 +5437,68 @@ struct SmallActionButton: View {
             .padding(.horizontal, 9)
             .frame(height: 24)
             .fixedSize(horizontal: true, vertical: false)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line))
+            .hoverSurface(
+                cornerRadius: 6,
+                idleFill: Theme.panel,
+                hoverFill: Theme.panel2,
+                idleStroke: Theme.line,
+                hoverStroke: Theme.line2
+            )
+    }
+}
+
+struct HoverSurfaceModifier: ViewModifier {
+    @State private var hovering = false
+
+    let active: Bool
+    let cornerRadius: CGFloat
+    let idleFill: Color
+    let hoverFill: Color
+    let activeFill: Color
+    let idleStroke: Color
+    let hoverStroke: Color
+    let activeStroke: Color
+    let activeLineWidth: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(active ? activeFill : hovering ? hoverFill : idleFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(active ? activeStroke : hovering ? hoverStroke : idleStroke, lineWidth: active ? activeLineWidth : 1)
+            )
+            .onHover { hovering = $0 }
+    }
+}
+
+extension View {
+    func hoverSurface(
+        active: Bool = false,
+        cornerRadius: CGFloat,
+        idleFill: Color,
+        hoverFill: Color,
+        activeFill: Color? = nil,
+        idleStroke: Color,
+        hoverStroke: Color,
+        activeStroke: Color? = nil,
+        activeLineWidth: CGFloat = 1
+    ) -> some View {
+        modifier(
+            HoverSurfaceModifier(
+                active: active,
+                cornerRadius: cornerRadius,
+                idleFill: idleFill,
+                hoverFill: hoverFill,
+                activeFill: activeFill ?? hoverFill,
+                idleStroke: idleStroke,
+                hoverStroke: hoverStroke,
+                activeStroke: activeStroke ?? hoverStroke,
+                activeLineWidth: activeLineWidth
+            )
+        )
     }
 }
 

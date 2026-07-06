@@ -2534,8 +2534,8 @@ enum Theme {
     static let accentSoft = Color(red: 0.93, green: 0.955, blue: 1.0)
     static let ok = Color(red: 0.08, green: 0.55, blue: 0.38)
     static let okSoft = Color(red: 0.91, green: 0.98, blue: 0.95)
-    static let warn = Color(red: 0.82, green: 0.36, blue: 0.12)
-    static let warnSoft = Color(red: 1.0, green: 0.945, blue: 0.9)
+    static let warn = Color(red: 0.706, green: 0.302, blue: 0.204)
+    static let warnSoft = Color(red: 1.0, green: 0.937, blue: 0.922)
     static let navDay = hex(0x2A6FDB)
     static let navPool = hex(0x0E9488)
     static let navFuture = hex(0x7C5CFF)
@@ -3432,7 +3432,6 @@ struct UnfinishedRow: View {
     let item: UnfinishedPoolItem
 
     var expanded: Bool { store.expandedUnfinishedChainIDs.contains(item.chain.id) }
-    private var unfinishedMarkColor: Color { Color(red: 0.86, green: 0.32, blue: 0.24) }
     private var activeDateLabel: String {
         guard let active = item.activeTrace else { return "" }
         return active.date == store.today ? "今天" : SuntraceStore.displayDate(active.date)
@@ -3442,64 +3441,62 @@ struct UnfinishedRow: View {
         let selected = store.selectedUnfinishedChainID == item.chain.id
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 10) {
-                PlanningGlyph(systemName: "xmark", color: unfinishedMarkColor)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.definition.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                        .lineLimit(1)
-                    HStack(spacing: 8) {
-                        Text(store.copy.unfinishedMissedCount(item.unfinishedTraces.count))
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.warn)
-                            .monospacedDigit()
-                        UnfinishedMetaSeparator()
-                        Text(store.copy.unfinishedContinuationCount(item.continuationCount))
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.text3)
-                            .monospacedDigit()
-                        if let latestUnfinished = item.latestUnfinishedTrace {
-                            UnfinishedMetaSeparator()
-                            Text(store.copy.lastMissedDate(SuntraceStore.displayDate(latestUnfinished.date)))
-                                .font(.system(size: 11))
-                                .foregroundStyle(Theme.text3)
-                                .monospacedDigit()
-                        }
-                        if let active = item.activeTrace {
-                            Button("已延续到 \(activeDateLabel)，当前待完成 跳转 →") {
-                                store.selectedDate = active.date
-                                store.page = .day
-                                store.selectTrace(active.id)
-                            }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Theme.accentSoft))
-                        }
-                    }
-                }
+                StatusGlyph(status: .unfinished)
+                Text(item.definition.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                    .lineLimit(1)
                 Spacer()
-                VStack(alignment: .trailing, spacing: 6) {
-                    if item.activeTrace == nil, let source = item.unfinishedTraces.last {
-                        HStack(spacing: 8) {
-                            SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
-                            SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
-                        }
+                if item.activeTrace == nil, let source = item.unfinishedTraces.last {
+                    HStack(spacing: 8) {
+                        SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
+                        SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
                     }
-                    Button(expanded ? "▾ 明细" : "▸ 明细") {
-                        if expanded {
-                            store.expandedUnfinishedChainIDs.remove(item.chain.id)
-                        } else {
-                            store.expandedUnfinishedChainIDs.insert(item.chain.id)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.text2)
                 }
             }
+            HStack(spacing: 8) {
+                Text(store.copy.unfinishedMissedCount(item.unfinishedTraces.count))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.warn)
+                    .monospacedDigit()
+                UnfinishedMetaSeparator()
+                Text(store.copy.unfinishedContinuationCount(item.continuationCount))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+                    .monospacedDigit()
+                if let latestUnfinished = item.latestUnfinishedTrace {
+                    UnfinishedMetaSeparator()
+                    Text(store.copy.lastMissedDate(SuntraceStore.displayDate(latestUnfinished.date)))
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                        .monospacedDigit()
+                }
+                if let active = item.activeTrace {
+                    Button("已延续到 \(activeDateLabel)，当前待完成 跳转 →") {
+                        store.selectedDate = active.date
+                        store.page = .day
+                        store.selectTrace(active.id)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Theme.accentSoft))
+                }
+                Spacer()
+                Button(expanded ? "▾ 明细" : "▸ 明细") {
+                    if expanded {
+                        store.expandedUnfinishedChainIDs.remove(item.chain.id)
+                    } else {
+                        store.expandedUnfinishedChainIDs.insert(item.chain.id)
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text2)
+            }
+            .padding(.leading, 28)
             if expanded {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(item.unfinishedTraces, id: \.id) { trace in

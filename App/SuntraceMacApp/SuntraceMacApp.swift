@@ -2798,6 +2798,10 @@ struct UnfinishedRow: View {
 
     var expanded: Bool { store.expandedUnfinishedChainIDs.contains(item.chain.id) }
     private var unfinishedMarkColor: Color { Color(red: 0.86, green: 0.32, blue: 0.24) }
+    private var activeDateLabel: String {
+        guard let active = item.activeTrace else { return "" }
+        return active.date == store.today ? "今天" : SuntraceStore.displayDate(active.date)
+    }
 
     var body: some View {
         let selected = store.selectedUnfinishedChainID == item.chain.id
@@ -2818,7 +2822,7 @@ struct UnfinishedRow: View {
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.text3)
                         if let active = item.activeTrace {
-                            Button("已延续到 \(SuntraceStore.displayDate(active.date))，当前待完成 跳转 →") {
+                            Button("已延续到 \(activeDateLabel)，当前待完成 跳转 →") {
                                 store.selectedDate = active.date
                                 store.page = .day
                                 store.selectTrace(active.id)
@@ -5085,6 +5089,10 @@ struct UnfinishedDetail: View {
 
     var latestUnfinished: DayTrace? { item.unfinishedTraces.last }
     var latestContinuation: Int { latestUnfinished?.continuationSeq ?? 0 }
+    var activeDateLabel: String {
+        guard let active = item.activeTrace else { return "" }
+        return active.date == store.today ? "今天" : SuntraceStore.displayDate(active.date)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -5100,7 +5108,7 @@ struct UnfinishedDetail: View {
             DetailSection("处理") {
                 VStack(alignment: .leading, spacing: 8) {
                     if let active = item.activeTrace {
-                        Notice(text: "已延续到 \(SuntraceStore.displayDate(active.date))，当前仍待完成。", tone: .future)
+                        Notice(text: "已延续到 \(activeDateLabel)，当前仍待完成。", tone: .future)
                         SmallActionButton(store.copy.openCurrentPending, tone: .accent) {
                             store.selectedDate = active.date
                             store.page = .day

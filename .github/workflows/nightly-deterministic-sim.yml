@@ -1,0 +1,34 @@
+name: Nightly Deterministic Simulation
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "ST_SIM_RUNS"
+        required: false
+        default: "512"
+      seed:
+        description: "ST_SIM_SEED"
+        required: false
+        default: "1592598566"
+
+concurrency:
+  group: nightly-dst-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-sim:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run deep deterministic simulation
+        env:
+          ST_SIM_RUNS: ${{ github.event.inputs.runs || '512' }}
+          ST_SIM_SEED: ${{ github.event.inputs.seed || '1592598566' }}
+        run: scripts/test-deterministic-sim

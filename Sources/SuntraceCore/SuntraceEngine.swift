@@ -253,7 +253,11 @@ public final class SuntraceEngine {
             guard trace.continuedFromTraceID == nil else {
                 throw SuntraceError.invalidTransition("continued future traces cannot return to pool without a trace")
             }
+            for subtask in subtasks.values where subtask.traceID == traceID {
+                subtasks.removeValue(forKey: subtask.id)
+            }
             traces.removeValue(forKey: traceID)
+            touchChain(trace.chainID, now: now)
             return
         }
 
@@ -270,7 +274,7 @@ public final class SuntraceEngine {
         touchChain(trace.chainID, now: now)
     }
 
-    public func rescheduleFuturePlan(traceID: DayTraceID, targetDate: LocalDate, today: LocalDate) throws {
+    public func rescheduleFuturePlan(traceID: DayTraceID, targetDate: LocalDate, today: LocalDate, now: Date = Date()) throws {
         var trace = try trace(traceID)
         guard trace.date > today, targetDate > today else {
             throw SuntraceError.invalidTransition("only future plans can be rescheduled to future dates")
@@ -282,6 +286,7 @@ public final class SuntraceEngine {
         trace.date = targetDate
         trace.priority = nextPriority(on: targetDate)
         traces[trace.id] = trace
+        ensureDay(targetDate, now: now)
     }
 
     @discardableResult

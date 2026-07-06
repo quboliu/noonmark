@@ -17,8 +17,17 @@ xcrun --find xctest >/dev/null
 echo "==> Swift build"
 swift build
 
-echo "==> Swift tests"
-swift test
+echo "==> Unit tests"
+scripts/test-unit
+
+echo "==> Integration tests"
+scripts/test-integration
+
+echo "==> System tests"
+scripts/test-system
+
+echo "==> Deterministic simulation tests"
+scripts/test-deterministic-sim
 
 echo "==> SwiftLint"
 swiftlint lint --quiet

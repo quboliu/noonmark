@@ -137,9 +137,13 @@ final class SuntraceEngineTests: XCTestCase {
 
         try engine.rescheduleFuturePlan(traceID: traceID, targetDate: day2, today: day1)
         XCTAssertEqual(engine.traces[traceID]?.date, day2)
+        XCTAssertNotNil(engine.days[day2])
+
+        _ = try engine.addSubtask(traceID: traceID, title: "未来计划子任务", now: now)
 
         try engine.returnToPool(traceID: traceID, today: day1, now: now)
         XCTAssertNil(engine.traces[traceID])
+        XCTAssertTrue(engine.subtasks.isEmpty)
         XCTAssertEqual(engine.taskPool().map(\.chain.id), [chainID])
     }
 

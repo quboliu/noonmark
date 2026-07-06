@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          brew install swiftlint swiftformat
+      - name: Verify
+        run: scripts/check
+      - name: Package artifact
+        run: |
+          scripts/package-dmg release
+          ditto -c -k --keepParent dist/SuntraceMacApp.app dist/SuntraceMacApp.zip
+          shasum -a 256 dist/SuntraceMacApp.zip > dist/SuntraceMacApp.zip.sha256
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            tag="manual-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "title=晷迹 ${tag}" >> "$GITHUB_OUTPUT"
+      - name: Create or update GitHub Release
+        run: |
+          tag="${{ steps.meta.outputs.tag }}"
+          title="${{ steps.meta.outputs.title }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$title" --notes "自动化发布产物。优先下载 SuntraceMacApp.dmg。"
+          else
+            gh release create "$tag" --title "$title" --notes "自动化发布产物。优先下载 SuntraceMacApp.dmg。" --target "$GITHUB_SHA"
+          fi
+          gh release upload "$tag" \
+            dist/SuntraceMacApp.dmg \
+            dist/SuntraceMacApp.dmg.sha256 \
+            dist/SuntraceMacApp.zip \
+            dist/SuntraceMacApp.zip.sha256 \
+            --clobber

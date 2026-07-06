@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+configuration="${1:-release}"
+product="SuntraceMacApp"
+app_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
+volume_name="${SUNTRACE_DMG_VOLUME_NAME:-晷迹}"
+dist_dir="dist"
+app_path="${dist_dir}/${product}.app"
+dmg_root="${dist_dir}/dmg-root"
+dmg_path="${dist_dir}/${product}.dmg"
+
+scripts/build-mac-app "$configuration" >/dev/null
+
+rm -rf "$dmg_root" "$dmg_path"
+mkdir -p "$dmg_root"
+
+ditto "$app_path" "${dmg_root}/${app_display_name}.app"
+ln -s /Applications "${dmg_root}/Applications"
+
+hdiutil create \
+  -volname "$volume_name" \
+  -srcfolder "$dmg_root" \
+  -ov \
+  -format UDZO \
+  "$dmg_path" >/dev/null
+
+shasum -a 256 "$dmg_path" > "${dmg_path}.sha256"
+echo "$dmg_path"

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+swift test --filter SuntraceCoreTests
+swift test --filter SuntraceAITests
+swift test --filter SuntraceMacUIContractTests

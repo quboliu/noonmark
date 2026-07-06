@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts/test-unit
+scripts/test-integration
+scripts/test-system
+scripts/test-deterministic-sim
+scripts/test-e2e

@@ -690,16 +690,38 @@ final class SuntraceStore: ObservableObject {
     }
 
     func testZhulongProvider() {
+        Task { @MainActor in
+            await testZhulongProviderHealth()
+        }
+    }
+
+    private func testZhulongProviderHealth() async {
         do {
-            _ = try ZhulongProviderSettingsStore.makeConfig(from: zhulongProviderDraft)
-            guard zhulongProviderDraft.enabled else {
+            let config = try ZhulongProviderSettingsStore.makeConfig(from: zhulongProviderDraft)
+            guard config.enabled else {
                 showToast("Provider 已关闭，未发起连接测试")
                 return
             }
-            if zhulongProviderDraft.hasStoredAPIKey {
-                showToast("Provider 本机配置完整，后续请求会使用 Keychain 凭证")
-            } else {
-                showToast("Provider 缺少 API Key；本地模型可忽略，远程 provider 需要补齐")
+            guard config.kind == .openAICompatible else {
+                showToast("Provider 配置完整；该类型的远程健康检查尚未接入")
+                return
+            }
+
+            let provider = OpenAICompatibleProvider(
+                config: config,
+                apiKeyResolver: { ref in
+                    guard ref == ZhulongProviderKeychain.keyRef else { return nil }
+                    return try ZhulongProviderKeychain.readAPIKey()
+                }
+            )
+            let health = await provider.healthCheck()
+            switch health.status {
+            case .healthy:
+                showToast("Provider 连接成功")
+            case .unavailable:
+                showToast("Provider 连接失败：\(health.message ?? "未知错误")")
+            case .unconfigured:
+                showToast("Provider 尚未启用")
             }
         } catch {
             showToast("Provider 配置无效：\(error.localizedDescription)")

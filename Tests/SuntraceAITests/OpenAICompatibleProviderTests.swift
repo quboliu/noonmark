@@ -61,6 +61,42 @@ final class OpenAICompatibleProviderTests: XCTestCase {
         XCTAssertEqual(messages.last?["content"], "授权范围")
     }
 
+    func testCompleteParsesStructuredSuggestionOperations() async throws {
+        URLProtocolStub.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let structured = #"{"summary":"建议先创建任务池任务。","confidence":0.66,"proposedOperations":[{"type":"createPoolTask","title":"整理远程结构化输出","descriptionText":"解析安全操作","note":"确认后落库"}]}"#
+            let body = #"{"choices":[{"message":{"role":"assistant","content":"\#(structured.replacingOccurrences(of: "\"", with: "\\\""))"}}]}"#
+            return (response, Data(body.utf8))
+        }
+
+        let provider = OpenAICompatibleProvider(
+            config: AIProviderConfig(
+                providerID: AIProviderID("openai-compatible"),
+                displayName: "测试 Provider",
+                kind: .openAICompatible,
+                baseURL: URL(string: "https://provider.example/v1")!,
+                model: "suntrace-model"
+            ),
+            session: makeSession()
+        )
+
+        let response = try await provider.complete(
+            AIRequest(systemPrompt: "system", userPrompt: "user", responseSchemaName: "schema")
+        )
+
+        XCTAssertEqual(response.text, "建议先创建任务池任务。")
+        XCTAssertEqual(response.confidence, 0.66)
+        XCTAssertEqual(
+            response.proposedOperations,
+            [.createPoolTask(title: "整理远程结构化输出", descriptionText: "解析安全操作", note: "确认后落库")]
+        )
+    }
+
     func testCompleteFailsClosedWhenConfiguredKeyIsMissing() async throws {
         let provider = OpenAICompatibleProvider(
             config: AIProviderConfig(

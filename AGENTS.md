@@ -42,7 +42,7 @@
   - `swift test`
 - 当前环境取证：
   - `swift build` 通过。
-  - `swift test` 通过，当前 41 个 XCTest 全绿。
+  - `swift test` 通过，当前 45 个 XCTest 全绿。
   - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`。
 - 项目级工具入口：
   - `make build`
@@ -51,6 +51,7 @@
   - `make format-check`
   - `make check`
   - `scripts/test-e2e`
+  - `scripts/test-ai-provider-live`：手动 live AI provider smoke；必须显式设置 `SUNTRACE_AI_BASE_URL`、`SUNTRACE_AI_MODEL` 和 `SUNTRACE_AI_API_KEY`，不进入默认 `make check`。
   - `scripts/package-dmg release`
   - `scripts/test-dmg-install dist/SuntraceMacApp.dmg`
 
@@ -121,6 +122,7 @@
 
 - LLM 凭证只走 shell 替换，绝不 `echo`，绝不落盘明文。
 - CORS 不使用 `credentials: include`，统一使用 Bearer token。
+- `SuntraceAITests` 默认只跑 mock/contract 测试，不需要真实 API key；任何真实 AI provider 验证必须走 `scripts/test-ai-provider-live` 或等价显式 live 入口，缺少 key 时必须失败，不得把 mock 结果描述为 live AI 测试。
 
 ## Git 与文档语言
 

@@ -16,15 +16,18 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     private let session: URLSession
     private let apiKeyResolver: AIAPIKeyResolver
+    private let responseParser: AISuggestionResponseParser
 
     public init(
         config: AIProviderConfig,
         session: URLSession = .shared,
-        apiKeyResolver: @escaping AIAPIKeyResolver = { _ in nil }
+        apiKeyResolver: @escaping AIAPIKeyResolver = { _ in nil },
+        responseParser: AISuggestionResponseParser = AISuggestionResponseParser()
     ) {
         self.config = config
         self.session = session
         self.apiKeyResolver = apiKeyResolver
+        self.responseParser = responseParser
     }
 
     public func complete(_ request: AIRequest) async throws -> AIProviderResponse {
@@ -49,7 +52,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             throw AIProviderHTTPError.emptyResponse
         }
 
-        return AIProviderResponse(text: content)
+        return try responseParser.parse(content)
     }
 
     public func healthCheck() async -> AIProviderHealth {

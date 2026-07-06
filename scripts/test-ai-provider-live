@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+missing=0
+for name in SUNTRACE_AI_BASE_URL SUNTRACE_AI_MODEL SUNTRACE_AI_API_KEY; do
+  if [[ -z "${!name:-}" ]]; then
+    echo "missing required environment variable: ${name}" >&2
+    missing=1
+  fi
+done
+
+if [[ "$missing" -ne 0 ]]; then
+  echo "usage: SUNTRACE_AI_BASE_URL=https://provider.example/v1 SUNTRACE_AI_MODEL=model SUNTRACE_AI_API_KEY=... scripts/test-ai-provider-live" >&2
+  exit 1
+fi
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+swift_file="$tmpdir/live-ai-provider-smoke.swift"
+binary="$tmpdir/live-ai-provider-smoke"
+
+cat > "$swift_file" <<'SWIFT'
+import Foundation
+
+enum SmokeError: Error, CustomStringConvertible {
+    case missingEnvironment(String)
+    case invalidURL(String)
+    case invalidResponse(String)
+    case httpStatus(String, Int, String)
+    case emptyResponse(String)
+
+    var description: String {
+        switch self {
+        case let .missingEnvironment(name):
+            return "missing required environment variable: \(name)"
+        case let .invalidURL(value):
+            return "invalid SUNTRACE_AI_BASE_URL: \(value)"
+        case let .invalidResponse(path):
+            return "\(path) returned a non-HTTP response"
+        case let .httpStatus(path, status, body):
+            return "\(path) returned HTTP \(status): \(body)"
+        case let .emptyResponse(path):
+            return "\(path) returned an empty response"
+        }
+    }
+}
+
+struct ChatCompletionRequest: Encodable {
+    var model: String
+    var messages: [ChatMessage]
+    var temperature = 0.0
+}
+
+struct ChatMessage: Codable {
+    var role: String
+    var content: String
+}
+
+@main
+struct LiveAIProviderSmoke {
+    static func main() async {
+        do {
+            try await run()
+            print("AI provider live smoke passed: /models and /chat/completions returned usable responses.")
+        } catch {
+            fputs("AI provider live smoke failed: \(error)\n", stderr)
+            exit(1)
+        }
+    }
+
+    private static func run() async throws {
+        let env = ProcessInfo.processInfo.environment
+        let baseURLText = try required("SUNTRACE_AI_BASE_URL", env: env)
+        let model = try required("SUNTRACE_AI_MODEL", env: env)
+        let apiKey = try required("SUNTRACE_AI_API_KEY", env: env)
+        let timeout = TimeInterval(env["SUNTRACE_AI_TIMEOUT_SECONDS"].flatMap(Double.init) ?? 20)
+
+        guard let baseURL = URL(string: baseURLText) else {
+            throw SmokeError.invalidURL(baseURLText)
+        }
+
+        var modelsRequest = URLRequest(url: baseURL.appendingPathComponent("models"), timeoutInterval: timeout)
+        modelsRequest.httpMethod = "GET"
+        modelsRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        _ = try await send(modelsRequest, path: "/models")
+
+        var completionRequest = URLRequest(
+            url: baseURL.appendingPathComponent("chat/completions"),
+            timeoutInterval: timeout
+        )
+        completionRequest.httpMethod = "POST"
+        completionRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        completionRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        completionRequest.httpBody = try JSONEncoder().encode(
+            ChatCompletionRequest(
+                model: model,
+                messages: [
+                    ChatMessage(role: "system", content: "你是晷迹 AI provider 连通性探针。只回复一句简短中文。"),
+                    ChatMessage(role: "user", content: "回复：晷迹 live smoke ok")
+                ]
+            )
+        )
+
+        let completionData = try await send(completionRequest, path: "/chat/completions")
+        let object = try JSONSerialization.jsonObject(with: completionData)
+        guard let root = object as? [String: Any],
+              let choices = root["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let message = first["message"] as? [String: Any],
+              let content = message["content"] as? String,
+              content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        else {
+            throw SmokeError.emptyResponse("/chat/completions")
+        }
+    }
+
+    private static func required(_ name: String, env: [String: String]) throws -> String {
+        guard let value = env[name]?.trimmingCharacters(in: .whitespacesAndNewlines), value.isEmpty == false else {
+            throw SmokeError.missingEnvironment(name)
+        }
+        return value
+    }
+
+    private static func send(_ request: URLRequest, path: String) async throws -> Data {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SmokeError.invalidResponse(path)
+        }
+        guard 200 ..< 300 ~= httpResponse.statusCode else {
+            let body = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8 body>"
+            throw SmokeError.httpStatus(path, httpResponse.statusCode, body)
+        }
+        guard data.isEmpty == false else {
+            throw SmokeError.emptyResponse(path)
+        }
+        return data
+    }
+}
+SWIFT
+
+swiftc -parse-as-library "$swift_file" -o "$binary"
+"$binary"

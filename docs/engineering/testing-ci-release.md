@@ -34,6 +34,7 @@ Neon 的可借鉴点：
 - E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，会打包 `.app`、打开真实窗口并抓截图。
   当前覆盖 `day`、`day-detail`、`day-manual-detail`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 14 个场景。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
+- Live AI Provider Smoke：真实 OpenAI-compatible provider 连通性测试，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，必须显式提供 `SUNTRACE_AI_BASE_URL`、`SUNTRACE_AI_MODEL` 和 `SUNTRACE_AI_API_KEY`；一旦手动启用，缺少 key 或 provider 不可达必须失败。
 
 ## 命令
 
@@ -43,6 +44,7 @@ make test-integration
 make test-system
 make test-deterministic-sim
 make test-e2e
+make test-ai-provider-live
 make test-all
 make package-dmg
 make verify-dmg
@@ -57,6 +59,15 @@ ST_SIM_SEED=1592598566 ST_SIM_ITER=3 make test-deterministic-sim
 ST_SIM_RUNS=256 make test-deterministic-sim
 ```
 
+真实 AI provider smoke：
+
+```bash
+SUNTRACE_AI_BASE_URL=https://provider.example/v1 \
+SUNTRACE_AI_MODEL=model-name \
+SUNTRACE_AI_API_KEY=... \
+make test-ai-provider-live
+```
+
 ## CI 策略
 
 每次 push / PR：
@@ -64,6 +75,7 @@ ST_SIM_RUNS=256 make test-deterministic-sim
 - 安装 SwiftLint / SwiftFormat。
 - 运行 `scripts/check`。
 - 运行 `scripts/test-e2e`，验证真实 `.app` 可启动并生成截图 artifact。
+- 不在默认 push / PR 中运行 live AI provider smoke；它需要人工或受保护的 secret 环境显式触发。
 
 Nightly：
 
@@ -90,6 +102,7 @@ Release：
 - 2026-07-06：`scripts/test-dmg-install dist/SuntraceMacApp.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
 - 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，空库会初始化并写入 11 个 day、19 条 chain、19 条 definition、19 条 trace、6 个 subtask 和 1 条 preferences。
 - 2026-07-06：设置页导出 / 导入已接入 `SuntraceDataPackage` JSON 数据包；`swift test --filter SuntraceStorageTests` 通过 5 个 Storage 测试。
+- 2026-07-06：`SuntraceAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 provider 验证入口为 `scripts/test-ai-provider-live`，缺少 `SUNTRACE_AI_API_KEY` 时 fail-closed。
 
 ## 后续缺口
 

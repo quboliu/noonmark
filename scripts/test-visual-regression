@@ -2,31 +2,64 @@
 set -euo pipefail
 
 configuration="${1:-debug}"
-reference="${SUNTRACE_VISUAL_REFERENCE:-artifacts/prototype-calendar-reference.png}"
-actual="${SUNTRACE_VISUAL_ACTUAL:-artifacts/e2e/calendar.png}"
 out_dir="${SUNTRACE_VISUAL_OUT_DIR:-artifacts/visual-regression}"
-normalized="${out_dir}/calendar-actual-normalized.png"
-diff_image="${out_dir}/calendar-diff.png"
-report="${out_dir}/calendar-report.txt"
+reference_dir="${SUNTRACE_VISUAL_REFERENCE_DIR:-artifacts/prototype-screenshots}"
+actual_dir="${SUNTRACE_VISUAL_ACTUAL_DIR:-artifacts/e2e}"
+pages=(${SUNTRACE_VISUAL_PAGES:-day pool future unfinished completed calendar settings})
 
 if [[ "${SUNTRACE_VISUAL_REUSE_SCREENSHOTS:-0}" != "1" ]]; then
   scripts/test-e2e "$configuration"
 fi
 
-if [[ ! -f "$reference" ]]; then
-  echo "missing visual reference: $reference" >&2
-  exit 1
+single_reference="${SUNTRACE_VISUAL_REFERENCE:-}"
+single_actual="${SUNTRACE_VISUAL_ACTUAL:-}"
+if [[ -n "$single_reference" || -n "$single_actual" ]]; then
+  if [[ -z "$single_reference" || -z "$single_actual" ]]; then
+    echo "SUNTRACE_VISUAL_REFERENCE and SUNTRACE_VISUAL_ACTUAL must be set together" >&2
+    exit 1
+  fi
+  pages=(custom)
+  reference_dir=""
+  actual_dir=""
+else
+  SUNTRACE_PROTOTYPE_OUT_DIR="$reference_dir" scripts/render-prototype-screenshots
 fi
 
-if [[ ! -f "$actual" ]]; then
-  echo "missing actual screenshot: $actual" >&2
-  exit 1
-fi
-
+rm -rf "$out_dir"
 mkdir -p "$out_dir"
-sips -z 900 1440 "$actual" --out "$normalized" >/dev/null
+summary_report="${out_dir}/summary.txt"
+: > "$summary_report"
 
-python3 - "$reference" "$normalized" "$diff_image" "$report" <<'PY'
+compare_page() {
+  local page="$1"
+  local reference actual page_dir normalized diff_image report
+
+  if [[ "$page" == "custom" ]]; then
+    reference="$single_reference"
+    actual="$single_actual"
+  else
+    reference="${reference_dir}/${page}.png"
+    actual="${actual_dir}/${page}.png"
+  fi
+
+  page_dir="${out_dir}/${page}"
+  normalized="${page_dir}/actual-normalized.png"
+  diff_image="${page_dir}/diff.png"
+  report="${page_dir}/report.txt"
+
+  if [[ ! -f "$reference" ]]; then
+    echo "missing visual reference for ${page}: $reference" >&2
+    exit 1
+  fi
+  if [[ ! -f "$actual" ]]; then
+    echo "missing actual screenshot for ${page}: $actual" >&2
+    exit 1
+  fi
+
+  mkdir -p "$page_dir"
+  sips -z 900 1440 "$actual" --out "$normalized" >/dev/null
+
+  SUNTRACE_VISUAL_PAGE="$page" python3 - "$reference" "$normalized" "$diff_image" "$report" <<'PY'
 import os
 import struct
 import sys
@@ -113,6 +146,12 @@ def write_rgb_png(path, width, height, rows):
         file.write(png)
 
 
+def page_env_name(metric):
+    page = os.environ.get("SUNTRACE_VISUAL_PAGE", "custom")
+    token = "".join(ch if ch.isalnum() else "_" for ch in page.upper())
+    return f"SUNTRACE_VISUAL_{token}_{metric}"
+
+
 reference_path, actual_path, diff_path, report_path = sys.argv[1:5]
 ref_width, ref_height, ref_channels, ref_rows = read_png(reference_path)
 act_width, act_height, act_channels, act_rows = read_png(actual_path)
@@ -149,12 +188,24 @@ for y in range(ref_height):
 
 changed_ratio = changed_pixels / total_pixels
 mean_delta = sum_delta / total_pixels
-max_changed_ratio = float(os.environ.get("SUNTRACE_VISUAL_MAX_CHANGED_RATIO", "0.12"))
-max_mean_delta = float(os.environ.get("SUNTRACE_VISUAL_MAX_MEAN_DELTA", "0.025"))
+page = os.environ.get("SUNTRACE_VISUAL_PAGE", "custom")
+default_changed_ratios = {
+    "day": "0.20",
+    "pool": "0.12",
+    "future": "0.12",
+    "unfinished": "0.12",
+    "completed": "0.18",
+    "calendar": "0.12",
+    "settings": "0.12",
+}
+default_changed_ratio = default_changed_ratios.get(page, "0.12")
+max_changed_ratio = float(os.environ.get(page_env_name("MAX_CHANGED_RATIO"), os.environ.get("SUNTRACE_VISUAL_MAX_CHANGED_RATIO", default_changed_ratio)))
+max_mean_delta = float(os.environ.get(page_env_name("MAX_MEAN_DELTA"), os.environ.get("SUNTRACE_VISUAL_MAX_MEAN_DELTA", "0.025")))
 enforce = os.environ.get("SUNTRACE_VISUAL_ENFORCE", "1") != "0"
 
 write_rgb_png(diff_path, ref_width, ref_height, diff_rows)
 summary = (
+    f"page={page}\n"
     f"reference={reference_path}\n"
     f"actual={actual_path}\n"
     f"normalized={actual_path}\n"
@@ -176,4 +227,19 @@ if enforce and (changed_ratio > max_changed_ratio or mean_delta > max_mean_delta
     raise SystemExit("visual regression threshold exceeded")
 PY
 
-echo "Visual regression artifacts: $report $diff_image"
+  awk -F= -v page="$page" '
+    $1 == "changed_ratio" { changed = $2 }
+    $1 == "mean_delta" { mean = $2 }
+    $1 == "max_changed_ratio" { max_changed = $2 }
+    $1 == "max_mean_delta" { max_mean = $2 }
+    END {
+      printf "%s changed_ratio=%s mean_delta=%s max_changed_ratio=%s max_mean_delta=%s\n", page, changed, mean, max_changed, max_mean
+    }
+  ' "$report" | tee -a "$summary_report"
+}
+
+for page in "${pages[@]}"; do
+  compare_page "$page"
+done
+
+echo "Visual regression summary: $summary_report"

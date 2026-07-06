@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+prototype_dir="${SUNTRACE_PROTOTYPE_DIR:-docs/design/prototypes/claude-mac-ui-2026-07-05}"
+out_dir="${SUNTRACE_PROTOTYPE_OUT_DIR:-artifacts/prototype-screenshots}"
+window_size="${SUNTRACE_PROTOTYPE_WINDOW_SIZE:-1440,900}"
+render_timeout="${SUNTRACE_PROTOTYPE_RENDER_TIMEOUT:-15}"
+pages=(${SUNTRACE_PROTOTYPE_PAGES:-day pool future unfinished completed calendar settings})
+
+chrome_binary="${SUNTRACE_CHROME_BINARY:-}"
+if [[ -z "$chrome_binary" ]]; then
+  if command -v google-chrome >/dev/null 2>&1; then
+    chrome_binary="$(command -v google-chrome)"
+  elif command -v chromium >/dev/null 2>&1; then
+    chrome_binary="$(command -v chromium)"
+  elif [[ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
+    chrome_binary="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  else
+    echo "missing Chrome/Chromium for prototype screenshot rendering" >&2
+    exit 1
+  fi
+fi
+
+prototype_html="${prototype_dir}/suntrace-mac-prototype.dc.html"
+if [[ ! -f "$prototype_html" ]]; then
+  echo "missing prototype HTML: $prototype_html" >&2
+  exit 1
+fi
+
+rm -rf "$out_dir"
+mkdir -p "$out_dir"
+
+for page in "${pages[@]}"; do
+  work_dir="${out_dir}/.${page}-src"
+  mkdir -p "$work_dir"
+  cp -R "${prototype_dir}/." "$work_dir/"
+
+  page_html="${work_dir}/suntrace-mac-prototype.dc.html"
+  perl -0pi -e "s/page:'day',date:/page:'${page}',date:/" "$page_html"
+
+  user_data_dir="${out_dir}/.${page}-chrome-profile"
+  python3 - "$render_timeout" "$chrome_binary" \
+    --headless=new \
+    --disable-gpu \
+    --disable-background-networking \
+    --disable-component-update \
+    --disable-extensions \
+    --hide-scrollbars \
+    --no-default-browser-check \
+    --no-first-run \
+    --user-data-dir="$PWD/$user_data_dir" \
+    --virtual-time-budget=3000 \
+    --screenshot="$PWD/${out_dir}/${page}.png" \
+    --window-size="$window_size" \
+    "file://$PWD/$page_html" <<'PY'
+import os
+import subprocess
+import sys
+
+timeout = int(sys.argv[1])
+command = sys.argv[2:]
+screenshot = next((arg.split("=", 1)[1] for arg in command if arg.startswith("--screenshot=")), None)
+try:
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout, check=False)
+except subprocess.TimeoutExpired as error:
+    if screenshot and os.path.exists(screenshot):
+        raise SystemExit(0)
+    stderr = error.stderr or ""
+    raise SystemExit(f"prototype screenshot timed out after {timeout}s\n{stderr}")
+
+if screenshot and os.path.exists(screenshot):
+    raise SystemExit(0)
+
+if result.returncode != 0:
+    raise SystemExit(result.stderr or f"prototype screenshot failed with exit code {result.returncode}")
+PY
+
+  width="$(sips -g pixelWidth "${out_dir}/${page}.png" | awk '/pixelWidth/ {print $2}')"
+  height="$(sips -g pixelHeight "${out_dir}/${page}.png" | awk '/pixelHeight/ {print $2}')"
+  if [[ "${width:-0}" -ne 1440 || "${height:-0}" -ne 900 ]]; then
+    echo "invalid prototype screenshot size for ${page}: ${width:-unknown}x${height:-unknown}" >&2
+    exit 1
+  fi
+
+  rm -rf "$work_dir" "$user_data_dir"
+  echo "Prototype ${page} screenshot: ${out_dir}/${page}.png (${width}x${height})"
+done

@@ -63,7 +63,7 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "晷迹 · suntrace"
+        window.title = store.windowTitle
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
@@ -1783,6 +1783,14 @@ struct SuntraceRootView: View {
             ChangeTaskSheet()
                 .environmentObject(store)
         }
+        .onAppear(perform: syncNativeWindowTitle)
+        .onChange(of: store.windowTitle) { _, _ in
+            syncNativeWindowTitle()
+        }
+    }
+
+    private func syncNativeWindowTitle() {
+        NSApp.windows.first { $0 is SuntraceWindow }?.title = store.windowTitle
     }
 }
 
@@ -5755,13 +5763,18 @@ struct HeaderButton: View {
     }
 
     var body: some View {
-        Button(title, action: action)
+        Button(action: action) {
+            Text(title)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
             .buttonStyle(.plain)
             .font(.system(size: 12))
             .foregroundStyle(Theme.text2)
             .padding(.horizontal, title.count == 1 ? 8 : 10)
             .frame(height: 26)
             .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(1)
             .hoverSurface(
                 cornerRadius: 7,
                 idleFill: Theme.panel,

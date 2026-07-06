@@ -66,13 +66,15 @@ pkill -x "$app_executable_name" 2>/dev/null || true
 trap 'pkill -x "$app_executable_name" 2>/dev/null || true' EXIT
 
 find_window_id() {
-  swift -e '
+  local expected_title="$1"
+  SUNTRACE_E2E_EXPECTED_WINDOW_TITLE="$expected_title" swift -e '
 import CoreGraphics
 import Darwin
 import Foundation
 
 let expectedOwner = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_EXECUTABLE_NAME"] ?? "SuntraceMacAppE2E"
 let expectedDisplayName = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
+let expectedTitle = ProcessInfo.processInfo.environment["SUNTRACE_E2E_EXPECTED_WINDOW_TITLE"] ?? "晷迹 · Day Todo — 7月5日"
 
 if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
     for window in list {
@@ -82,7 +84,7 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
         if expectedOwner == "SuntraceMacApp" {
             allowedOwners.append(contentsOf: ["晷迹", "SuntraceMacApp"])
         }
-        if allowedOwners.contains(owner) && name == "晷迹 · suntrace" {
+        if allowedOwners.contains(owner) && name == expectedTitle {
             if let number = window[kCGWindowNumber as String] {
                 print(number)
                 exit(0)
@@ -98,7 +100,20 @@ capture_app_screenshot() {
   local out_dir="$1"
   local screenshot_name="$2"
   local page="$3"
+  local expected_window_title
   shift 3
+
+  case "$page" in
+    day) expected_window_title="晷迹 · Day Todo — 7月5日" ;;
+    pool) expected_window_title="晷迹 · 任务池" ;;
+    future) expected_window_title="晷迹 · 未来计划" ;;
+    unfinished) expected_window_title="晷迹 · 未完成" ;;
+    completed) expected_window_title="晷迹 · 已完成" ;;
+    calendar) expected_window_title="晷迹 · 日历 — 7月5日" ;;
+    zhulong) expected_window_title="晷迹 · 烛龙 AI" ;;
+    settings) expected_window_title="晷迹 · 设置" ;;
+    *) expected_window_title="晷迹 · suntrace" ;;
+  esac
 
   pkill -x "$app_executable_name" 2>/dev/null || true
   open -n "$app_path" --args "$@" --page "$page"
@@ -106,7 +121,7 @@ capture_app_screenshot() {
 
   window_id=""
   for _ in {1..20}; do
-    if window_id="$(find_window_id 2>/dev/null)"; then
+    if window_id="$(find_window_id "$expected_window_title" 2>/dev/null)"; then
       break
     fi
     sleep 0.25

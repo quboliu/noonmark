@@ -1475,6 +1475,15 @@ final class SuntraceStore: ObservableObject {
             defer { seedClock += 1 }
             return now.addingTimeInterval(TimeInterval(seedClock))
         }
+        func eventTime(_ date: LocalDate, hour: Int, minute: Int) -> Date {
+            var components = DateComponents()
+            components.year = date.year
+            components.month = date.month
+            components.day = date.day
+            components.hour = hour
+            components.minute = minute
+            return Calendar(identifier: .gregorian).date(from: components) ?? now
+        }
         let day0 = LocalDate("2026-07-01")
         let dayMinus3 = LocalDate("2026-07-02")
         let day1 = LocalDate("2026-07-03")
@@ -1499,10 +1508,10 @@ final class SuntraceStore: ObservableObject {
             try engine.returnToPool(traceID: physicalTrace, today: dayMinus3, now: now)
             let wireframe = try engine.createPoolTask(title: "画首页线框图", descriptionText: "日历完成样例任务。", now: seedNow())
             let wireframeTrace = try engine.scheduleFromPool(chainID: wireframe, date: dayMinus3, today: dayMinus3, now: now)
-            try engine.markCompleted(traceID: wireframeTrace, today: dayMinus3, now: now)
+            try engine.markCompleted(traceID: wireframeTrace, today: dayMinus3, now: eventTime(dayMinus3, hour: 16, minute: 30))
             let repository = try engine.createPoolTask(title: "搭建项目仓库与 CI", descriptionText: "日历完成样例任务。", now: seedNow())
             let repositoryTrace = try engine.scheduleFromPool(chainID: repository, date: day0, today: day0, now: now)
-            try engine.markCompleted(traceID: repositoryTrace, today: day0, now: now)
+            try engine.markCompleted(traceID: repositoryTrace, today: day0, now: eventTime(day0, hour: 9, minute: 10))
             let rust = try engine.createPoolTask(title: "学习 Rust 基础语法", descriptionText: "废弃样例任务。", now: seedNow())
             let rustTrace = try engine.scheduleFromPool(chainID: rust, date: day0, today: day0, now: now)
             try engine.abandonChain(from: rustTrace, now: now)
@@ -1514,7 +1523,7 @@ final class SuntraceStore: ObservableObject {
 
             let contract = try engine.createPoolTask(title: "回复设计合同邮件", descriptionText: "确认合同条款并回复对方。", now: seedNow())
             let contractTrace = try engine.scheduleFromPool(chainID: contract, date: day1, today: day1, now: now)
-            try engine.markCompleted(traceID: contractTrace, today: day1, now: now)
+            try engine.markCompleted(traceID: contractTrace, today: day1, now: eventTime(day1, hour: 11, minute: 20))
 
             let iconExport = try engine.createPoolTask(title: "修复图标导出脚本", descriptionText: "修复图标资源导出脚本。", now: seedNow())
             let iconDay2 = try engine.scheduleFromPool(chainID: iconExport, date: day2, today: day2, now: now)
@@ -1525,7 +1534,7 @@ final class SuntraceStore: ObservableObject {
             let weeklyReport = try engine.createPoolTask(title: "写本周周报", descriptionText: "整理本周进展和风险。", now: seedNow())
             let weeklyDay1 = try engine.scheduleFromPool(chainID: weeklyReport, date: day1, today: day1, now: now)
             let weeklyDay2 = try engine.continueTrace(traceID: weeklyDay1, targetDate: day2, today: day1, now: now)
-            try engine.markCompleted(traceID: weeklyDay2, today: day2, now: now)
+            try engine.markCompleted(traceID: weeklyDay2, today: day2, now: eventTime(day2, hour: 17, minute: 45))
 
             let pricing = try engine.createPoolTask(title: "调研竞品定价", descriptionText: "旧任务范围过大，需要变更为可交付对比表。", now: seedNow())
             let pricingTrace = try engine.scheduleFromPool(chainID: pricing, date: day2, today: day2, now: now)
@@ -1554,7 +1563,7 @@ final class SuntraceStore: ObservableObject {
 
             let running = try engine.createPoolTask(title: "晨跑 5 公里", descriptionText: "完成晨跑。", now: seedNow())
             let runningTrace = try engine.scheduleFromPool(chainID: running, date: day3, today: day3, now: now)
-            try engine.markCompleted(traceID: runningTrace, today: day3, now: now)
+            try engine.markCompleted(traceID: runningTrace, today: day3, now: eventTime(day3, hour: 7, minute: 36))
 
             let downloads = try engine.createPoolTask(title: "清理下载文件夹", descriptionText: "清理下载文件夹。", now: seedNow())
             _ = try engine.scheduleFromPool(chainID: downloads, date: day3, today: day3, now: now)
@@ -2503,7 +2512,7 @@ struct CompletedPoolPage: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(groupedDates, id: \.self) { date in
                         VStack(alignment: .leading, spacing: 7) {
-                            Text(SuntraceStore.displayDate(date))
+                            Text(groupTitle(for: date))
                                 .font(.system(size: 12, weight: .semibold))
                             ForEach(items.filter { $0.trace.date == date }, id: \.trace.id) { item in
                                 CompletedRow(item: item)
@@ -2518,7 +2527,7 @@ struct CompletedPoolPage: View {
                             .padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 20)
             }
         }
@@ -2526,6 +2535,11 @@ struct CompletedPoolPage: View {
 
     var groupedDates: [LocalDate] {
         Array(Set(items.map { $0.trace.date } + subtaskRecords.map(\.date))).sorted(by: >)
+    }
+
+    func groupTitle(for date: LocalDate) -> String {
+        let suffix = date == store.today ? " · 今天" : ""
+        return "\(SuntraceStore.displayDate(date)) \(SuntraceStore.weekday(date))\(suffix)"
     }
 }
 
@@ -2558,7 +2572,7 @@ struct CompletedRow: View {
                 CompletedTrajectoryNodes(nodes: item.trajectory.traces.map(CompletedTrajectoryNode.init(trace:)))
                     .padding(.leading, 28)
                 Spacer()
-                SmallActionButton("跳转当天") {
+                SmallActionButton("查看当天 →") {
                     store.selectedDate = item.trace.date
                     store.page = .day
                     store.selectTrace(item.trace.id)
@@ -2603,11 +2617,12 @@ struct CompletedSubtaskRow: View {
                 CompletedTrajectoryNodes(nodes: [CompletedTrajectoryNode(subtask: record.subtask, date: record.date)])
                     .padding(.leading, 28)
                 Spacer()
-                SmallActionButton("跳转当天") {
+                SmallActionButton("查看当天 →") {
                     store.selectedDate = record.date
                     store.page = .day
                     store.selectTrace(record.parentTrace.id)
                 }
+                SmallActionButton("复制为新任务") { store.copyAsNewTask(record.parentTrace.id) }
             }
         }
         .padding(.horizontal, 12)

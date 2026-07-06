@@ -2809,12 +2809,13 @@ struct UnfinishedRow: View {
     let item: UnfinishedPoolItem
 
     var expanded: Bool { store.expandedUnfinishedChainIDs.contains(item.chain.id) }
+    private var unfinishedMarkColor: Color { Color(red: 0.86, green: 0.32, blue: 0.24) }
 
     var body: some View {
         let selected = store.selectedUnfinishedChainID == item.chain.id
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 10) {
-                PlanningGlyph(systemName: "exclamationmark.circle", color: Theme.warn)
+                PlanningGlyph(systemName: "xmark", color: unfinishedMarkColor)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.definition.title)
                         .font(.system(size: 13, weight: .semibold))
@@ -2828,43 +2829,41 @@ struct UnfinishedRow: View {
                         Text("最近 \(SuntraceStore.displayDate(item.unfinishedTraces.last?.date ?? store.today))")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.text3)
+                        if let active = item.activeTrace {
+                            Button("已延续到 \(SuntraceStore.displayDate(active.date))，当前待完成 跳转 →") {
+                                store.selectedDate = active.date
+                                store.page = .day
+                                store.selectTrace(active.id)
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Theme.accentSoft))
+                        }
                     }
                 }
                 Spacer()
-                if item.activeTrace == nil, let source = item.unfinishedTraces.last {
-                    SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
-                    SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
-                }
-            }
-            HStack(spacing: 8) {
-                if let active = item.activeTrace {
-                    Button("已延续到 \(SuntraceStore.displayDate(active.date))，当前待完成 跳转 →") {
-                        store.selectedDate = active.date
-                        store.page = .day
-                        store.selectTrace(active.id)
+                VStack(alignment: .trailing, spacing: 6) {
+                    if item.activeTrace == nil, let source = item.unfinishedTraces.last {
+                        HStack(spacing: 8) {
+                            SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
+                            SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
+                        }
+                    }
+                    Button(expanded ? "▾ 明细" : "▸ 明细") {
+                        if expanded {
+                            store.expandedUnfinishedChainIDs.remove(item.chain.id)
+                        } else {
+                            store.expandedUnfinishedChainIDs.insert(item.chain.id)
+                        }
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Theme.accentSoft))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text2)
                 }
-                Spacer()
-                Button(expanded ? "▾ 明细" : "▸ 明细") {
-                    if expanded {
-                        store.expandedUnfinishedChainIDs.remove(item.chain.id)
-                    } else {
-                        store.expandedUnfinishedChainIDs.insert(item.chain.id)
-                    }
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.text2)
             }
-            .font(.system(size: 11))
-            .foregroundStyle(Theme.text3)
-            .padding(.leading, 28)
             if expanded {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(item.unfinishedTraces, id: \.id) { trace in
@@ -2874,7 +2873,8 @@ struct UnfinishedRow: View {
                 .padding(.leading, 30)
             }
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.warnSoft.opacity(0.55) : Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.warn : Theme.line, lineWidth: selected ? 1.3 : 1))
         .onTapGesture { store.selectUnfinished(item.chain.id) }

@@ -5415,15 +5415,12 @@ struct DetailProgressControl: View {
             }
 
             if editable {
-                Slider(
-                    value: Binding(
-                        get: { Double(progress.percent) },
-                        set: { store.setManualProgress(traceID: traceID, percent: $0) }
-                    ),
-                    in: Double(progress.floorPercent)...100,
-                    step: 5
-                )
-                .tint(Theme.accent)
+                ManualProgressSlider(
+                    percent: progress.percent,
+                    floorPercent: progress.floorPercent
+                ) { percent in
+                    store.setManualProgress(traceID: traceID, percent: Double(percent))
+                }
                 if progress.floorPercent > 0 {
                     Text("下限 \(progress.floorPercent)% · 延续后的进度不能回退")
                         .font(.system(size: 10))
@@ -5433,6 +5430,78 @@ struct DetailProgressControl: View {
                 StaticProgressBar(percent: progress.percent)
             }
         }
+    }
+}
+
+struct ManualProgressSlider: View {
+    let percent: Int
+    let floorPercent: Int
+    let onChange: (Int) -> Void
+
+    var normalizedPercent: CGFloat {
+        CGFloat(clampedPercent) / 100
+    }
+
+    var clampedPercent: Int {
+        min(max(percent, floorPercent), 100)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(proxy.size.width, 1)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Theme.chip)
+                    .frame(height: 6)
+                Capsule()
+                    .fill(Theme.accent)
+                    .frame(width: width * normalizedPercent, height: 6)
+                ForEach(Array(stride(from: 0, through: 100, by: 5)), id: \.self) { mark in
+                    Rectangle()
+                        .fill(mark <= clampedPercent ? Theme.accent.opacity(0.32) : Theme.line2)
+                        .frame(width: 1, height: 9)
+                        .offset(x: min(width - 1, width * CGFloat(mark) / 100))
+                }
+                Circle()
+                    .fill(Theme.panel)
+                    .frame(width: 12, height: 12)
+                    .overlay(Circle().stroke(Theme.accent, lineWidth: 1.8))
+                    .shadow(color: Theme.accent.opacity(0.16), radius: 3, y: 1)
+                    .offset(x: max(0, min(width - 12, width * normalizedPercent - 6)))
+            }
+            .frame(height: 22)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        onChange(snappedPercent(for: value.location.x, width: width))
+                    }
+            )
+        }
+        .frame(height: 22)
+        .accessibilityElement()
+        .accessibilityLabel("手动完成进度")
+        .accessibilityValue("\(clampedPercent)%")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment:
+                onChange(adjustedPercent(by: 5))
+            case .decrement:
+                onChange(adjustedPercent(by: -5))
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private func snappedPercent(for x: CGFloat, width: CGFloat) -> Int {
+        let rawPercent = Int((min(max(x / width, 0), 1) * 100).rounded())
+        let snapped = Int((Double(rawPercent) / 5).rounded()) * 5
+        return min(max(snapped, floorPercent), 100)
+    }
+
+    private func adjustedPercent(by delta: Int) -> Int {
+        min(max(clampedPercent + delta, floorPercent), 100)
     }
 }
 

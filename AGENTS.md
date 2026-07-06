@@ -42,7 +42,7 @@
   - `swift test`
 - 当前环境取证：
   - `swift build` 通过。
-  - `swift test` 通过，当前 38 个 XCTest 全绿。
+  - `swift test` 通过，当前 41 个 XCTest 全绿。
   - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`。
 - 项目级工具入口：
   - `make build`

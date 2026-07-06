@@ -113,17 +113,30 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
     }
 
     private func runLaunchAutomationIfNeeded() {
-        guard let quickTaskTitle = SuntraceStore.commandLineValue(after: "--e2e-add-quick-task"),
-              quickTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        else {
+        let quickTaskTitle = SuntraceStore.commandLineValue(after: "--e2e-add-quick-task")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let zhulongTaskName = SuntraceStore.commandLineValue(after: "--e2e-generate-zhulong-draft")
+        guard quickTaskTitle?.isEmpty == false || zhulongTaskName != nil else {
             return
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [store] in
-            store.page = .day
-            store.selectedDate = store.today
-            store.quickText = quickTaskTitle
-            store.addQuickTask()
+            if let quickTaskTitle, quickTaskTitle.isEmpty == false {
+                store.page = .day
+                store.selectedDate = store.today
+                store.quickText = quickTaskTitle
+                store.addQuickTask()
+            }
+
+            if let zhulongTaskName, let task = ZhulongTask(rawValue: zhulongTaskName) {
+                store.page = .zhulong
+                store.generateZhulongDraft(task: task)
+                if CommandLine.arguments.contains("--e2e-apply-first-zhulong-operation") {
+                    if let draft = store.zhulongDrafts.first, draft.proposedOperations.isEmpty == false {
+                        store.applyZhulongOperation(draftID: draft.id, operationIndex: 0)
+                    }
+                }
+            }
 
             if CommandLine.arguments.contains("--e2e-quit-after-automation") {
                 store.persist()
@@ -225,6 +238,9 @@ final class SuntraceStore: ObservableObject {
     @Published var detailSubtaskText = ""
     @Published var toast: String?
     @Published var zhulongProviderDraft = ZhulongProviderSettingsStore.load()
+    @Published var zhulongDrafts: [AISuggestionDraft] = []
+    @Published var selectedZhulongDraftID: AISuggestionDraftID?
+    @Published var appliedZhulongOperationKeys: Set<String> = []
 
     let today = LocalDate("2026-07-05")
     private let repository: SQLiteEngineRepository?
@@ -277,6 +293,11 @@ final class SuntraceStore: ObservableObject {
     var selectedUnfinishedItem: UnfinishedPoolItem? {
         guard let selectedUnfinishedChainID else { return nil }
         return engine.unfinishedPool().first { $0.chain.id == selectedUnfinishedChainID }
+    }
+
+    var selectedZhulongDraft: AISuggestionDraft? {
+        guard let selectedZhulongDraftID else { return zhulongDrafts.first }
+        return zhulongDrafts.first { $0.id == selectedZhulongDraftID }
     }
 
     func definition(for trace: DayTrace) -> TaskDefinition? {
@@ -746,6 +767,136 @@ final class SuntraceStore: ObservableObject {
             }
         } catch {
             showToast("Provider 配置无效：\(error.localizedDescription)")
+        }
+    }
+
+    func generateZhulongDraft(task: ZhulongTask) {
+        let scope = zhulongScope(for: task)
+        guard scope.isEmpty == false else {
+            showToast("授权范围为空，无法生成建议草稿")
+            return
+        }
+
+        let report = LocalInsightAnalyzer().analyze(scope)
+        let draft = AISuggestionDraft(
+            kind: task.suggestionKind,
+            createdAt: Date(),
+            sourceScope: scope,
+            localReport: report,
+            summary: zhulongSummary(for: task, report: report),
+            proposedOperations: zhulongOperations(for: task),
+            confidence: zhulongConfidence(for: task)
+        )
+
+        zhulongDrafts.insert(draft, at: 0)
+        selectedZhulongDraftID = draft.id
+        showToast("已生成建议草稿，等待用户确认")
+    }
+
+    func applyZhulongOperation(draftID: AISuggestionDraftID, operationIndex: Int) {
+        guard let draft = zhulongDrafts.first(where: { $0.id == draftID }),
+              draft.proposedOperations.indices.contains(operationIndex)
+        else {
+            showToast("建议操作不存在")
+            return
+        }
+
+        let key = zhulongOperationKey(draftID: draftID, operationIndex: operationIndex)
+        guard appliedZhulongOperationKeys.contains(key) == false else {
+            showToast("这条建议已应用")
+            return
+        }
+
+        do {
+            let result = try AISuggestionDraftApplier().applyConfirmed(
+                draft.proposedOperations[operationIndex],
+                to: engine,
+                today: today
+            )
+            appliedZhulongOperationKeys.insert(key)
+            normalizeSelection()
+            persist()
+            showToast(result.message)
+        } catch {
+            showToast("应用建议失败：\(error.localizedDescription)")
+        }
+    }
+
+    func zhulongOperationKey(draftID: AISuggestionDraftID, operationIndex: Int) -> String {
+        "\(draftID.description)-\(operationIndex)"
+    }
+
+    private func zhulongScope(for task: ZhulongTask) -> AIScopeSnapshot {
+        switch task {
+        case .dailyReview, .habitInsight, .taskDecomposition:
+            return AIScopeSnapshot.day(date: today, from: engine, isCurrentDay: true)
+        case .scheduling:
+            let day = AIScopeSnapshot.day(date: today, from: engine, isCurrentDay: true)
+            let pools = AIScopeSnapshot.pools(from: engine, includeTaskPool: true, includeUnfinishedPool: true, includeCompletedPool: false)
+            return AIScopeSnapshot.combined([day, pools])
+        case .labelClassification, .theoryAnalysis:
+            let day = AIScopeSnapshot.day(date: today, from: engine, isCurrentDay: true)
+            let pools = AIScopeSnapshot.pools(from: engine, includeTaskPool: true, includeUnfinishedPool: true, includeCompletedPool: true)
+            return AIScopeSnapshot.combined([day, pools])
+        }
+    }
+
+    private func zhulongSummary(for task: ZhulongTask, report: LocalInsightReport) -> String {
+        let facts = report.facts.isEmpty ? "当前范围暂无明显风险信号。" : report.facts.joined(separator: " ")
+        switch task {
+        case .dailyReview:
+            return "事实：\(facts) 建议：先补一段复盘草稿，区分事实、原因和明日注意。"
+        case .habitInsight:
+            return "事实：\(facts) 推断：当前只作为时间窗口内的假设，不写入用户身份。"
+        case .taskDecomposition:
+            return "事实：\(facts) 建议：为当前待完成任务补充一个可验收子任务，先收敛边界。"
+        case .scheduling:
+            return "事实：\(facts) 建议：优先把任务池中的一项排到明天，避免继续堆积。"
+        case .labelClassification:
+            return "事实：\(facts) 建议：先预览 label 候选；核心 label 模型落库前不自动写入。"
+        case .theoryAnalysis:
+            return "事实：\(facts) 建议：理论只能作为镜头，最终仍回到你的日轨迹证据。"
+        }
+    }
+
+    private func zhulongOperations(for task: ZhulongTask) -> [AIProposedOperation] {
+        switch task {
+        case .dailyReview:
+            let stats = engine.dailyReviewStats(date: today)
+            return [
+                .updateDailyReview(
+                    date: today,
+                    summary: "今日共 \(stats.total) 项任务，完成 \(stats.completed) 项，未完成 \(stats.unfinished) 项。",
+                    unfinishedReason: stats.unfinished > 0 ? "先记录真实阻塞，再决定延续、废弃或拆解。" : nil,
+                    tomorrowNote: "明天优先保留一个最小可完成承诺。"
+                )
+            ]
+        case .taskDecomposition:
+            guard let trace = selectedTrace ?? engine.getDayTodo(date: today).traces.first(where: { $0.status == .pending }) else {
+                return []
+            }
+            return [.addSubtask(traceID: trace.id, title: "补充验收标准", difficulty: .medium)]
+        case .scheduling:
+            if let task = engine.taskPool().first {
+                return [.scheduleFromPool(chainID: task.chain.id, targetDate: Self.offset(today, by: 1))]
+            }
+            if let item = engine.unfinishedPool().first, item.activeTrace == nil, let trace = item.unfinishedTraces.last {
+                return [.continueTrace(traceID: trace.id, targetDate: Self.offset(today, by: 1))]
+            }
+            return []
+        case .habitInsight, .labelClassification, .theoryAnalysis:
+            return []
+        }
+    }
+
+    private func zhulongConfidence(for task: ZhulongTask) -> Double {
+        switch task {
+        case .dailyReview, .scheduling:
+            return 0.74
+        case .taskDecomposition:
+            return 0.68
+        case .habitInsight, .labelClassification, .theoryAnalysis:
+            return 0.56
         }
     }
 
@@ -2392,6 +2543,7 @@ struct ZhulongPage: View {
                         }
                     }
 
+                    ZhulongDraftsCard()
                     ZhulongPoemCard()
                 }
                 .padding(20)
@@ -2401,10 +2553,10 @@ struct ZhulongPage: View {
 
     var zhulongCapabilities: [ZhulongCapability] {
         [
-            ZhulongCapability(title: "复盘分析", scope: "当前 Day Todo + 每日复盘", evidence: "\(store.engine.dailyReviewStats(date: store.today).total) 项今日任务"),
-            ZhulongCapability(title: "任务拆解", scope: "用户选中的任务链", evidence: "生成子任务草稿，用户确认后添加"),
-            ZhulongCapability(title: "排期建议", scope: "任务池 + 未来计划 + 未完成池", evidence: "\(store.engine.taskPool().count) 项未排期任务"),
-            ZhulongCapability(title: "Label 分类建议", scope: "任务标题、状态和轨迹摘要", evidence: "只生成候选 label，不自动写入")
+            ZhulongCapability(task: .dailyReview, title: "复盘分析", scope: "当前 Day Todo + 每日复盘", evidence: "\(store.engine.dailyReviewStats(date: store.today).total) 项今日任务"),
+            ZhulongCapability(task: .taskDecomposition, title: "任务拆解", scope: "用户选中的任务链", evidence: "生成子任务草稿，用户确认后添加"),
+            ZhulongCapability(task: .scheduling, title: "排期建议", scope: "任务池 + 未来计划 + 未完成池", evidence: "\(store.engine.taskPool().count) 项未排期任务"),
+            ZhulongCapability(task: .labelClassification, title: "Label 分类建议", scope: "任务标题、状态和轨迹摘要", evidence: "只生成候选 label，不自动写入")
         ]
     }
 }
@@ -2615,12 +2767,14 @@ struct ZhulongScopeChip: View {
 }
 
 struct ZhulongCapability {
+    let task: ZhulongTask
     let title: String
     let scope: String
     let evidence: String
 }
 
 struct ZhulongCapabilityRow: View {
+    @EnvironmentObject private var store: SuntraceStore
     let capability: ZhulongCapability
 
     var body: some View {
@@ -2641,10 +2795,168 @@ struct ZhulongCapabilityRow: View {
                 .foregroundStyle(Theme.text2)
                 .lineLimit(1)
             StatusPill(text: "建议草稿", color: Theme.accent)
+            SmallActionButton("生成草稿") { store.generateZhulongDraft(task: capability.task) }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct ZhulongDraftsCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("AI 建议草稿")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                StatusPill(text: "\(store.zhulongDrafts.count) 条", color: Theme.accent)
+            }
+
+            if store.zhulongDrafts.isEmpty {
+                Text("从上方入口生成草稿后，在这里查看证据和待确认操作。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            } else {
+                ForEach(store.zhulongDrafts, id: \.id) { draft in
+                    ZhulongDraftCard(draft: draft)
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+func zhulongKindLabel(_ kind: AISuggestionKind) -> String {
+    switch kind {
+    case .dailyReview:
+        return "复盘分析"
+    case .habitInsight:
+        return "习惯画像"
+    case .taskDecomposition:
+        return "任务拆解"
+    case .scheduling:
+        return "排期建议"
+    case .labelClassification:
+        return "Label 建议"
+    case .theoryAnalysis:
+        return "理论参照"
+    }
+}
+
+func zhulongOperationLabel(_ operation: AIProposedOperation) -> String {
+    switch operation {
+    case let .createPoolTask(title, _, _):
+        return "创建任务池任务：\(title)"
+    case let .addSubtask(_, title, difficulty):
+        return "添加子任务：\(title)（\(difficulty.label)）"
+    case let .scheduleFromPool(_, targetDate):
+        return "从任务池排期到 \(targetDate)"
+    case let .continueTrace(_, targetDate):
+        return "延续到 \(targetDate)"
+    case .abandonChain:
+        return "废弃任务链"
+    case let .assignLabel(_, label):
+        return "写入 Label：\(label)"
+    case let .updateDailyReview(date, _, _, _):
+        return "更新 \(date) 的每日复盘"
+    }
+}
+
+struct ZhulongDraftCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let draft: AISuggestionDraft
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                StatusPill(text: zhulongKindLabel(draft.kind), color: Theme.accent)
+                if let confidence = draft.confidence {
+                    Text("置信度 \(Int((confidence * 100).rounded()))%")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                }
+                Spacer()
+            }
+
+            Text(draft.summary)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.text2)
+                .lineSpacing(3)
+
+            if draft.localReport.facts.isEmpty == false {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("证据")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                    ForEach(Array(draft.localReport.facts.prefix(3).enumerated()), id: \.offset) { _, fact in
+                        Text("• \(fact)")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.text3)
+                    }
+                }
+                .padding(9)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("待确认操作")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+
+                if draft.proposedOperations.isEmpty {
+                    Text("这条草稿只提供分析，不包含写入操作。")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.text3)
+                } else {
+                    ForEach(Array(draft.proposedOperations.enumerated()), id: \.offset) { index, operation in
+                        ZhulongOperationRow(draft: draft, operationIndex: index, operation: operation)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct ZhulongOperationRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let draft: AISuggestionDraft
+    let operationIndex: Int
+    let operation: AIProposedOperation
+
+    var isApplied: Bool {
+        store.appliedZhulongOperationKeys.contains(store.zhulongOperationKey(draftID: draft.id, operationIndex: operationIndex))
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: isApplied ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isApplied ? Theme.ok : Theme.text3)
+            Text(zhulongOperationLabel(operation))
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.text2)
+            Spacer()
+            SmallActionButton(isApplied ? "已应用" : "确认应用", tone: isApplied ? .normal : .accent) {
+                store.applyZhulongOperation(draftID: draft.id, operationIndex: operationIndex)
+            }
+            .disabled(isApplied)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
     }
 }
 

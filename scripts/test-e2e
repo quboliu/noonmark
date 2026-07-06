@@ -161,3 +161,36 @@ if [[ "$interaction_definitions" -ne 1 || "$interaction_traces" -ne 1 ]]; then
 fi
 
 echo "E2E quick-add app interaction: $interaction_db (title=$interaction_title definitions=$interaction_definitions traces=$interaction_traces)"
+
+zhulong_dir="artifacts/e2e-zhulong"
+zhulong_db="${zhulong_dir}/Suntrace.sqlite"
+rm -rf "$zhulong_dir"
+mkdir -p "$zhulong_dir"
+
+open -W -n dist/SuntraceMacApp.app --args \
+  --data-url "$PWD/$zhulong_db" \
+  --page zhulong \
+  --e2e-generate-zhulong-draft dailyReview \
+  --e2e-apply-first-zhulong-operation \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$zhulong_db" ]]; then
+  echo "zhulong database was not created: $zhulong_db" >&2
+  exit 1
+fi
+
+read -r zhulong_review_count < <(
+  sqlite3 "$zhulong_db" "
+    SELECT count(*)
+    FROM days
+    WHERE date = '2026-07-05'
+      AND review_summary LIKE '今日共%';
+  "
+)
+
+if [[ "$zhulong_review_count" -ne 1 ]]; then
+  echo "zhulong draft apply failed: review_count=$zhulong_review_count" >&2
+  exit 1
+fi
+
+echo "E2E zhulong draft apply: $zhulong_db (review_count=$zhulong_review_count)"

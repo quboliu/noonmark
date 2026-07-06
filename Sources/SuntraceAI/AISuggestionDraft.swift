@@ -60,7 +60,7 @@ public struct AISuggestionDraft: Equatable, Sendable {
     }
 }
 
-extension ZhulongTask {
+public extension ZhulongTask {
     var suggestionKind: AISuggestionKind {
         switch self {
         case .dailyReview:

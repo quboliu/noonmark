@@ -1,7 +1,10 @@
-.PHONY: build test lint format format-check check
+.PHONY: build build-app test lint format format-check check
 
 build:
 	swift build
+
+build-app:
+	scripts/build-mac-app
 
 test:
 	swift test

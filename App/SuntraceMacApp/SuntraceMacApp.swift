@@ -3,26 +3,81 @@ import SwiftUI
 import SuntraceCore
 
 @main
-struct SuntraceMacApp: App {
-    @StateObject private var store = SuntraceStore()
+@MainActor
+final class SuntraceMacApp: NSObject, NSApplicationDelegate {
+    private static var retainedDelegate: SuntraceMacApp?
+    private var window: NSWindow?
+    private let store = SuntraceStore()
 
-    var body: some Scene {
-        WindowGroup {
-            SuntraceRootView()
-                .environmentObject(store)
-                .frame(minWidth: 1180, minHeight: 760)
-                .preferredColorScheme(.light)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .commands {
-            CommandGroup(replacing: .undoRedo) {
-                Button("撤销") {
-                    store.undo()
-                }
-                .keyboardShortcut("z", modifiers: .command)
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = SuntraceMacApp()
+        if CommandLine.arguments.contains("--page"), let index = CommandLine.arguments.firstIndex(of: "--page") {
+            let valueIndex = CommandLine.arguments.index(after: index)
+            if CommandLine.arguments.indices.contains(valueIndex), CommandLine.arguments[valueIndex] == "calendar" {
+                delegate.store.page = .calendar
             }
         }
+        retainedDelegate = delegate
+        app.delegate = delegate
+        app.setActivationPolicy(.regular)
+        app.run()
     }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        openMainWindow()
+    }
+
+    func openMainWindow() {
+        guard window == nil else {
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let root = SuntraceRootView()
+            .environmentObject(store)
+            .frame(minWidth: 1180, minHeight: 760)
+            .preferredColorScheme(.light)
+
+        let window = SuntraceWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1400, height: 880),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "晷迹 · suntrace"
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = false
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        window.isRestorable = false
+        window.center()
+        window.contentView = NSHostingView(rootView: root)
+        self.window = window
+
+        DispatchQueue.main.async {
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openMainWindow()
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
+
+final class SuntraceWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+
+    override var canBecomeMain: Bool { true }
 }
 
 @MainActor
@@ -442,6 +497,32 @@ final class SuntraceStore: ObservableObject {
         return names[max(0, min(index, names.count - 1))]
     }
 
+    static func gregorianDate(_ date: LocalDate) -> Date {
+        var components = DateComponents()
+        components.year = date.year
+        components.month = date.month
+        components.day = date.day
+        return Calendar(identifier: .gregorian).date(from: components) ?? Date()
+    }
+
+    static func daysInMonth(year: Int, month: Int) -> Int {
+        let date = gregorianDate(LocalDate(year: year, month: month, day: 1))
+        return Calendar(identifier: .gregorian).range(of: .day, in: .month, for: date)?.count ?? 30
+    }
+
+    static func mondayLeadBlankCount(year: Int, month: Int) -> Int {
+        let first = gregorianDate(LocalDate(year: year, month: month, day: 1))
+        let weekday = Calendar(identifier: .gregorian).component(.weekday, from: first)
+        return (weekday + 5) % 7
+    }
+
+    static func shiftedMonth(from date: LocalDate, by delta: Int) -> LocalDate {
+        let first = gregorianDate(LocalDate(year: date.year, month: date.month, day: 1))
+        let shifted = Calendar(identifier: .gregorian).date(byAdding: .month, value: delta, to: first) ?? first
+        let components = Calendar(identifier: .gregorian).dateComponents([.year, .month], from: shifted)
+        return LocalDate(year: components.year ?? date.year, month: components.month ?? date.month, day: 1)
+    }
+
     private func seed() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let day1 = LocalDate("2026-07-03")
@@ -466,7 +547,6 @@ final class SuntraceStore: ObservableObject {
             engine.settleDays(upTo: day3, now: now)
             let researchToday = try engine.continueTrace(traceID: researchDay2, targetDate: day3, today: day3, now: now)
             _ = try engine.addSubtask(traceID: researchToday, title: "SwiftUI 还原原型", difficulty: .hard, now: now)
-            try engine.setManualProgress(traceID: researchToday, percent: 72, today: day3)
 
             let review = try engine.createPoolTask(
                 title: "补齐每日复盘写作",
@@ -495,6 +575,27 @@ final class SuntraceStore: ObservableObject {
             let futureB = try engine.createPoolTask(title: "完善烛龙 AI provider 配置", descriptionText: "OpenAI-compatible endpoint，自定义模型与健康检查。", now: now)
             let futureTrace = try engine.scheduleFromPool(chainID: futureB, date: day7, today: day3, now: now)
             _ = try engine.addSubtask(traceID: futureTrace, title: "Provider Registry UI", difficulty: .medium, now: now)
+
+            let calendarSamples: [(String, String, Bool)] = [
+                ("2026-07-01", "整理任务池命名", true),
+                ("2026-07-01", "补充已完成池轨迹文案", false),
+                ("2026-07-02", "复核未完成池明细", false),
+                ("2026-07-06", "设计 SQLite Repository", false),
+                ("2026-07-06", "补日历热度规则", false),
+                ("2026-07-07", "完善设置同步占位", false),
+                ("2026-07-08", "补烛龙 AI Provider UI", false),
+                ("2026-07-09", "验证整月日历截图", false),
+                ("2026-07-10", "复盘导出数据包格式", false),
+                ("2026-07-11", "整理人工测试清单", false)
+            ]
+            for sample in calendarSamples {
+                let chainID = try engine.createPoolTask(title: sample.1, descriptionText: "日历总览样例任务。", now: now)
+                let traceID = try engine.scheduleFromPool(chainID: chainID, date: LocalDate(sample.0), today: day3, now: now)
+                if sample.2, LocalDate(sample.0) == day3 {
+                    try engine.markCompleted(traceID: traceID, today: day3, now: now)
+                }
+            }
+            engine.settleDays(upTo: day3, now: now)
 
             engine.updateDailyReview(
                 date: day3,
@@ -1421,36 +1522,81 @@ struct CompletedSubtaskRow: View {
 struct CalendarPage: View {
     @EnvironmentObject private var store: SuntraceStore
 
-    var days: [LocalDate] {
-        let first = LocalDate(year: store.selectedCalendarDate.year, month: store.selectedCalendarDate.month, day: 1)
-        return (0..<35).map { SuntraceStore.offset(first, by: $0) }
+    var calendarCells: [CalendarCellModel] {
+        let year = store.selectedCalendarDate.year
+        let month = store.selectedCalendarDate.month
+        let lead = SuntraceStore.mondayLeadBlankCount(year: year, month: month)
+        let dayCount = SuntraceStore.daysInMonth(year: year, month: month)
+        var cells = (0..<lead).map { CalendarCellModel.blank(id: "blank-\($0)") }
+        cells += (1...dayCount).map { day in
+            .date(LocalDate(year: year, month: month, day: day))
+        }
+        return cells
     }
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                PageHeader(title: "\(store.selectedCalendarDate.year) 年 \(store.selectedCalendarDate.month) 月", subtitle: "整月轨迹总览。点选任一天，右侧查看当天详情。") {
-                    HeaderButton("上一月") { store.selectedCalendarDate = LocalDate(year: store.selectedCalendarDate.year, month: max(1, store.selectedCalendarDate.month - 1), day: 1) }
+                HStack(spacing: 10) {
+                    Text(verbatim: "\(store.selectedCalendarDate.year)年 \(store.selectedCalendarDate.month) 月")
+                        .font(.system(size: 21, weight: .bold))
+                        .foregroundStyle(Theme.text1)
+                        .monospacedDigit()
+                    Spacer()
+                    HeaderButton("‹") {
+                        store.selectedCalendarDate = SuntraceStore.shiftedMonth(from: store.selectedCalendarDate, by: -1)
+                    }
                     HeaderButton("今天") { store.selectedCalendarDate = store.today }
-                    HeaderButton("下一月") { store.selectedCalendarDate = LocalDate(year: store.selectedCalendarDate.year, month: min(12, store.selectedCalendarDate.month + 1), day: 1) }
+                    HeaderButton("›") {
+                        store.selectedCalendarDate = SuntraceStore.shiftedMonth(from: store.selectedCalendarDate, by: 1)
+                    }
                 }
+                .padding(.top, 16)
+                .padding(.horizontal, 18)
+
+                Text("整月轨迹总览。点选任一天，右侧查看当天详情。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text3)
+                    .padding(.top, 4)
+                    .padding(.horizontal, 18)
+
                 HStack {
                     ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) {
-                        Text($0).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3).frame(maxWidth: .infinity)
+                        Text($0)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.text3)
+                            .frame(maxWidth: .infinity)
+                            .padding(.bottom, 6)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 8)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 7), spacing: 8) {
-                    ForEach(days, id: \.self) { date in
-                        CalendarCell(date: date)
+                .padding(.top, 14)
+                .padding(.horizontal, 18)
+
+                GeometryReader { proxy in
+                    let rows = max(5, Int(ceil(Double(calendarCells.count) / 7.0)))
+                    let rowHeight = max(88, (proxy.size.height - CGFloat(rows - 1) * 6) / CGFloat(rows))
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7),
+                        spacing: 6
+                    ) {
+                        ForEach(calendarCells) { cell in
+                            switch cell.kind {
+                            case .blank:
+                                Color.clear
+                                    .frame(height: rowHeight)
+                            case let .date(date):
+                                CalendarCell(date: date, height: rowHeight)
+                            }
+                        }
                     }
+                    .frame(maxHeight: .infinity, alignment: .top)
                 }
-                .padding(.horizontal, 20)
-                Spacer()
+                .padding(.top, 2)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 18)
             }
             CalendarDetailPanel()
-                .frame(width: 320)
+                .frame(width: 264)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(Theme.line).frame(width: 1)
                 }
@@ -1458,67 +1604,106 @@ struct CalendarPage: View {
     }
 }
 
+struct CalendarCellModel: Identifiable {
+    enum Kind {
+        case blank
+        case date(LocalDate)
+    }
+
+    let id: String
+    let kind: Kind
+
+    static func blank(id: String) -> CalendarCellModel {
+        CalendarCellModel(id: id, kind: .blank)
+    }
+
+    static func date(_ date: LocalDate) -> CalendarCellModel {
+        CalendarCellModel(id: date.description, kind: .date(date))
+    }
+}
+
 struct CalendarCell: View {
     @EnvironmentObject private var store: SuntraceStore
     let date: LocalDate
+    let height: CGFloat
+
     var summary: CalendarDaySummary { store.engine.calendarSummary(for: date) }
-    var traces: [DayTrace] { store.engine.getDayTodo(date: date).traces }
+    var traces: [DayTrace] {
+        store.engine.getDayTodo(date: date).traces.sorted { $0.priority < $1.priority }
+    }
+
+    var selected: Bool { store.selectedCalendarDate == date }
+
+    var isToday: Bool { date == store.today }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Text("\(date.day)")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(date == store.today ? Theme.accent : Theme.text1)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
+                Text(verbatim: "\(date.day)")
+                    .font(.system(size: 12.5, weight: isToday || selected ? .bold : .medium))
+                    .foregroundStyle(selected ? Theme.accent : traces.isEmpty ? Theme.text3 : Theme.text1)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                if isToday {
+                    Circle()
+                        .fill(Theme.accent)
+                        .frame(width: 4, height: 4)
+                }
                 Spacer()
-                if date == store.today {
-                    Circle().fill(Theme.accent).frame(width: 5, height: 5)
+                if summary.total > 0 {
+                    RoundedRectangle(cornerRadius: 2.5)
+                        .fill(heatColor)
+                        .frame(width: 10, height: 10)
                 }
             }
-            if summary.total > 0 {
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(heatColor)
-                    .frame(height: 8)
-            } else {
-                RoundedRectangle(cornerRadius: 3)
-                    .stroke(Theme.line2)
-                    .frame(height: 8)
-            }
-            ForEach(traces.prefix(6), id: \.id) { trace in
-                HStack(spacing: 4) {
-                    Circle().fill(color(for: trace.status)).frame(width: 5, height: 5)
-                    Text(store.definition(for: trace)?.title ?? "")
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(trace.status == .completed || trace.status == .abandoned ? Theme.text3 : Theme.text2)
-                        .strikethrough(trace.status == .completed || trace.status == .abandoned)
-                        .lineLimit(1)
+
+            VStack(alignment: .leading, spacing: 1.5) {
+                ForEach(traces.prefix(6), id: \.id) { trace in
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(dotColor(for: trace.status))
+                            .frame(width: 4, height: 4)
+                            .fixedSize()
+                        Text(store.definition(for: trace)?.title ?? "")
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(titleColor(for: trace.status))
+                            .strikethrough(trace.status == .completed || trace.status == .abandoned)
+                            .lineLimit(1)
+                    }
+                    .frame(height: 12, alignment: .leading)
+                }
+                if traces.count > 6 {
+                    Text("+\(traces.count - 6)")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.text3)
+                        .padding(.leading, 7)
                 }
             }
-            if traces.count > 6 {
-                Text("+\(traces.count - 6) 更多")
-                    .font(.system(size: 9))
-                    .foregroundStyle(Theme.text3)
-            }
+            .padding(.top, 3)
+
             Spacer()
         }
-        .padding(9)
-        .frame(height: 112)
-        .background(RoundedRectangle(cornerRadius: 8).fill(store.selectedCalendarDate == date ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(store.selectedCalendarDate == date || date == store.today ? Theme.accent : Theme.line))
+        .padding(.top, 5)
+        .padding(.horizontal, 6)
+        .padding(.bottom, 4)
+        .frame(height: height, alignment: .top)
+        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.accent : isToday ? Theme.accent : Theme.line))
+        .contentShape(RoundedRectangle(cornerRadius: 9))
         .onTapGesture { store.selectedCalendarDate = date }
     }
 
     var heatColor: Color {
         switch summary.heatLevel {
-        case 0: Theme.line2
-        case 1: Theme.ok.opacity(0.25)
-        case 2: Theme.ok.opacity(0.45)
-        case 3: Theme.ok.opacity(0.65)
-        default: Theme.ok
+        case 0: Color(red: 0.90, green: 0.97, blue: 0.94)
+        case 1: Color(red: 0.80, green: 0.93, blue: 0.86)
+        case 2: Color(red: 0.62, green: 0.84, blue: 0.72)
+        case 3: Color(red: 0.38, green: 0.72, blue: 0.58)
+        default: Color(red: 0.16, green: 0.58, blue: 0.43)
         }
     }
 
-    func color(for status: TraceStatus) -> Color {
+    func dotColor(for status: TraceStatus) -> Color {
         switch status {
         case .completed: Theme.ok
         case .pending: Theme.accent
@@ -1526,53 +1711,153 @@ struct CalendarCell: View {
         default: Theme.text3
         }
     }
+
+    func titleColor(for status: TraceStatus) -> Color {
+        switch status {
+        case .completed, .abandoned:
+            Theme.text3
+        case .pending:
+            Theme.text1
+        default:
+            Theme.text2
+        }
+    }
 }
 
 struct CalendarDetailPanel: View {
     @EnvironmentObject private var store: SuntraceStore
-    var traces: [DayTrace] { store.engine.getDayTodo(date: store.selectedCalendarDate).traces }
+    var traces: [DayTrace] {
+        store.engine.getDayTodo(date: store.selectedCalendarDate).traces.sorted { $0.priority < $1.priority }
+    }
+
+    var dayKind: (text: String, background: Color, foreground: Color) {
+        if store.selectedCalendarDate == store.today {
+            return ("今日", Theme.accent, .white)
+        }
+        if store.selectedCalendarDate < store.today {
+            return ("历史", Theme.chip, Theme.text2)
+        }
+        return ("未来", Theme.accentSoft, Theme.accent)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(SuntraceStore.displayDate(store.selectedCalendarDate))
-                        .font(.system(size: 18, weight: .semibold))
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(verbatim: "\(store.selectedCalendarDate.year)年\(SuntraceStore.displayDate(store.selectedCalendarDate))")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.text1)
+                        .monospacedDigit()
                     Text(SuntraceStore.weekday(store.selectedCalendarDate))
-                        .font(.system(size: 12))
+                        .font(.system(size: 11))
                         .foregroundStyle(Theme.text3)
                 }
-                Spacer()
-                StatusPill(text: store.selectedCalendarDate == store.today ? "今日" : store.selectedCalendarDate < store.today ? "历史" : "未来", color: Theme.accent)
-            }
-            Text("\(traces.count) 项任务")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text2)
-            Button("在 Day Todo 打开这一天 →") {
-                store.selectedDate = store.selectedCalendarDate
-                store.page = .day
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Theme.accent)
 
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(traces, id: \.id) { trace in
-                    HStack(spacing: 8) {
-                        StatusGlyph(status: trace.status)
-                        Text(store.definition(for: trace)?.title ?? "")
+                HStack(spacing: 8) {
+                    Text(dayKind.text)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(dayKind.foreground)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(dayKind.background))
+                    Text("\(traces.count) 项任务")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                        .monospacedDigit()
+                }
+                .padding(.top, 7)
+
+                Button("在 Day Todo 打开这一天 →") {
+                    store.selectedDate = store.selectedCalendarDate
+                    store.page = .day
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.accent)
+                .padding(.top, 9)
+            }
+            .padding(.top, 16)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Theme.line).frame(height: 1)
+            }
+
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(traces, id: \.id) { trace in
+                        CalendarDetailRow(trace: trace)
+                    }
+                    if traces.isEmpty {
+                        Text("这一天没有留下任务。")
                             .font(.system(size: 12))
+                            .foregroundStyle(Theme.text3)
+                            .multilineTextAlignment(.center)
+                            .lineSpacing(4)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 48)
                     }
                 }
-                if traces.isEmpty {
-                    EmptyState(text: "这一天没有留下任务。")
-                        .padding(.top, 20)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+        }
+        .background(Theme.panel)
+    }
+}
+
+struct CalendarDetailRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let trace: DayTrace
+
+    var body: some View {
+        HStack(spacing: 9) {
+            StatusGlyph(status: trace.status)
+                .frame(width: 16, height: 16)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(store.definition(for: trace)?.title ?? "")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(titleColor)
+                    .strikethrough(trace.status == .completed || trace.status == .abandoned)
+                    .lineLimit(1)
+                if trace.continuationSeq > 0 || trace.changedToTraceID != nil {
+                    Text(metaText)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.text3)
+                        .lineLimit(1)
                 }
             }
+
             Spacer()
+            StatusChip(status: trace.status)
         }
-        .padding(20)
-        .background(Theme.panel)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+
+    var titleColor: Color {
+        switch trace.status {
+        case .completed, .abandoned:
+            Theme.text3
+        case .pending:
+            Theme.text1
+        default:
+            Theme.text2
+        }
+    }
+
+    var metaText: String {
+        var parts: [String] = []
+        if trace.continuationSeq > 0 {
+            parts.append("第 \(trace.continuationSeq) 次延续")
+        }
+        if trace.changedToTraceID != nil {
+            parts.append("被变更为新任务")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 

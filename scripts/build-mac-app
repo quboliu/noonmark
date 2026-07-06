@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+configuration="${1:-debug}"
+product="SuntraceMacApp"
+bundle_dir="dist/${product}.app"
+contents_dir="${bundle_dir}/Contents"
+macos_dir="${contents_dir}/MacOS"
+resources_dir="${contents_dir}/Resources"
+
+swift build -c "$configuration" --product "$product"
+
+rm -rf "$bundle_dir"
+mkdir -p "$macos_dir" "$resources_dir"
+
+binary_path=".build/arm64-apple-macosx/${configuration}/${product}"
+if [[ ! -x "$binary_path" ]]; then
+  binary_path=".build/${configuration}/${product}"
+fi
+
+cp "$binary_path" "${macos_dir}/${product}"
+chmod +x "${macos_dir}/${product}"
+
+cat > "${contents_dir}/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>zh_CN</string>
+  <key>CFBundleDisplayName</key>
+  <string>晷迹</string>
+  <key>CFBundleExecutable</key>
+  <string>SuntraceMacApp</string>
+  <key>CFBundleIdentifier</key>
+  <string>app.suntrace.mac</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Suntrace</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+</dict>
+</plist>
+PLIST
+
+codesign --force --sign - "$bundle_dir" >/dev/null
+echo "$bundle_dir"

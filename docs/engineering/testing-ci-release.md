@@ -44,6 +44,7 @@ make test-integration
 make test-system
 make test-deterministic-sim
 make test-e2e
+make test-visual-regression
 make test-ai-provider-live
 make test-all
 make package-dmg
@@ -68,6 +69,13 @@ SUNTRACE_AI_API_KEY=... \
 make test-ai-provider-live
 ```
 
+视觉回归报告：
+
+```bash
+SUNTRACE_VISUAL_REUSE_SCREENSHOTS=1 make test-visual-regression
+SUNTRACE_VISUAL_ENFORCE=0 make test-visual-regression
+```
+
 ## CI 策略
 
 每次 push / PR：
@@ -75,6 +83,7 @@ make test-ai-provider-live
 - 安装 SwiftLint / SwiftFormat。
 - 运行 `scripts/check`。
 - 运行 `scripts/test-e2e`，验证真实 `.app` 可启动并生成截图 artifact。
+- 运行 `scripts/test-visual-regression`，复用真实 E2E 截图并上传日历页原型差异报告；默认启用阈值门禁，阈值会随 UI 复原推进逐步收紧。
 - 不在默认 push / PR 中运行 live AI provider smoke；它需要人工或受保护的 secret 环境显式触发。
 
 Nightly：
@@ -97,6 +106,7 @@ Release：
 ## 当前本地取证
 
 - 2026-07-06：`scripts/test-e2e` 通过，14 个真实 Mac app 截图均生成于 `artifacts/e2e/`，窗口尺寸为 2880x1800，对应原型 1440x900 Retina 截图基线。
+- 2026-07-06：`scripts/test-visual-regression` 已建立日历页原型量化对比，输出归一化截图、差异图和指标报告到 `artifacts/visual-regression/`。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 正常模式持久化探针，使用 `artifacts/e2e-persistence/Suntrace.sqlite` 验证空库初始化和保存。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App lifecycle workflow 探针，验证任务变更保留旧轨迹并创建新任务、回池保留日轨迹、废弃同步终止任务链。

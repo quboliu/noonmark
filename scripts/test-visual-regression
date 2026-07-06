@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+configuration="${1:-debug}"
+reference="${SUNTRACE_VISUAL_REFERENCE:-artifacts/prototype-calendar-reference.png}"
+actual="${SUNTRACE_VISUAL_ACTUAL:-artifacts/e2e/calendar.png}"
+out_dir="${SUNTRACE_VISUAL_OUT_DIR:-artifacts/visual-regression}"
+normalized="${out_dir}/calendar-actual-normalized.png"
+diff_image="${out_dir}/calendar-diff.png"
+report="${out_dir}/calendar-report.txt"
+
+if [[ "${SUNTRACE_VISUAL_REUSE_SCREENSHOTS:-0}" != "1" ]]; then
+  scripts/test-e2e "$configuration"
+fi
+
+if [[ ! -f "$reference" ]]; then
+  echo "missing visual reference: $reference" >&2
+  exit 1
+fi
+
+if [[ ! -f "$actual" ]]; then
+  echo "missing actual screenshot: $actual" >&2
+  exit 1
+fi
+
+mkdir -p "$out_dir"
+sips -z 900 1440 "$actual" --out "$normalized" >/dev/null
+
+python3 - "$reference" "$normalized" "$diff_image" "$report" <<'PY'
+import os
+import struct
+import sys
+import zlib
+
+
+def read_png(path):
+    with open(path, "rb") as file:
+        data = file.read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"{path} is not a PNG")
+
+    pos = 8
+    width = height = color_type = bit_depth = None
+    idat = bytearray()
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        kind = data[pos + 4:pos + 8]
+        payload = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b"IHDR":
+            width, height, bit_depth, color_type, _, _, _ = struct.unpack(">IIBBBBB", payload)
+        elif kind == b"IDAT":
+            idat.extend(payload)
+        elif kind == b"IEND":
+            break
+
+    if bit_depth != 8 or color_type not in (2, 6):
+        raise ValueError(f"{path} must be 8-bit RGB or RGBA PNG, got bitDepth={bit_depth} colorType={color_type}")
+
+    channels = 4 if color_type == 6 else 3
+    stride = width * channels
+    raw = zlib.decompress(bytes(idat))
+    rows = []
+    previous = [0] * stride
+    cursor = 0
+    for _ in range(height):
+        filter_type = raw[cursor]
+        cursor += 1
+        scanline = list(raw[cursor:cursor + stride])
+        cursor += stride
+        reconstructed = [0] * stride
+        for index, value in enumerate(scanline):
+            left = reconstructed[index - channels] if index >= channels else 0
+            up = previous[index]
+            upper_left = previous[index - channels] if index >= channels else 0
+            if filter_type == 0:
+                predictor = 0
+            elif filter_type == 1:
+                predictor = left
+            elif filter_type == 2:
+                predictor = up
+            elif filter_type == 3:
+                predictor = (left + up) // 2
+            elif filter_type == 4:
+                p = left + up - upper_left
+                pa = abs(p - left)
+                pb = abs(p - up)
+                pc = abs(p - upper_left)
+                predictor = left if pa <= pb and pa <= pc else up if pb <= pc else upper_left
+            else:
+                raise ValueError(f"{path} has unsupported PNG filter {filter_type}")
+            reconstructed[index] = (value + predictor) & 0xFF
+        previous = reconstructed
+        rows.append(reconstructed)
+    return width, height, channels, rows
+
+
+def write_rgb_png(path, width, height, rows):
+    raw = bytearray()
+    for row in rows:
+        raw.append(0)
+        raw.extend(row)
+
+    def chunk(kind, payload):
+        body = kind + payload
+        return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    png = bytearray(b"\x89PNG\r\n\x1a\n")
+    png.extend(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)))
+    png.extend(chunk(b"IDAT", zlib.compress(bytes(raw), level=9)))
+    png.extend(chunk(b"IEND", b""))
+    with open(path, "wb") as file:
+        file.write(png)
+
+
+reference_path, actual_path, diff_path, report_path = sys.argv[1:5]
+ref_width, ref_height, ref_channels, ref_rows = read_png(reference_path)
+act_width, act_height, act_channels, act_rows = read_png(actual_path)
+
+if (ref_width, ref_height) != (act_width, act_height):
+    raise SystemExit(f"size mismatch: reference={ref_width}x{ref_height} actual={act_width}x{act_height}")
+
+total_pixels = ref_width * ref_height
+changed_pixels = 0
+sum_delta = 0
+max_delta = 0
+diff_rows = []
+
+for y in range(ref_height):
+    diff_row = bytearray()
+    ref_row = ref_rows[y]
+    act_row = act_rows[y]
+    for x in range(ref_width):
+        ref_offset = x * ref_channels
+        act_offset = x * act_channels
+        channel_delta = [
+            abs(ref_row[ref_offset + 0] - act_row[act_offset + 0]),
+            abs(ref_row[ref_offset + 1] - act_row[act_offset + 1]),
+            abs(ref_row[ref_offset + 2] - act_row[act_offset + 2]),
+        ]
+        delta = sum(channel_delta) / (255 * 3)
+        if delta > 0.035:
+            changed_pixels += 1
+        sum_delta += delta
+        max_delta = max(max_delta, delta)
+        heat = min(255, int(delta * 900))
+        diff_row.extend((heat, 0, 255 - heat if heat else 0))
+    diff_rows.append(diff_row)
+
+changed_ratio = changed_pixels / total_pixels
+mean_delta = sum_delta / total_pixels
+max_changed_ratio = float(os.environ.get("SUNTRACE_VISUAL_MAX_CHANGED_RATIO", "0.12"))
+max_mean_delta = float(os.environ.get("SUNTRACE_VISUAL_MAX_MEAN_DELTA", "0.025"))
+enforce = os.environ.get("SUNTRACE_VISUAL_ENFORCE", "1") != "0"
+
+write_rgb_png(diff_path, ref_width, ref_height, diff_rows)
+summary = (
+    f"reference={reference_path}\n"
+    f"actual={actual_path}\n"
+    f"normalized={actual_path}\n"
+    f"diff={diff_path}\n"
+    f"size={ref_width}x{ref_height}\n"
+    f"changed_pixels={changed_pixels}\n"
+    f"changed_ratio={changed_ratio:.6f}\n"
+    f"mean_delta={mean_delta:.6f}\n"
+    f"max_delta={max_delta:.6f}\n"
+    f"enforce={str(enforce).lower()}\n"
+    f"max_changed_ratio={max_changed_ratio:.6f}\n"
+    f"max_mean_delta={max_mean_delta:.6f}\n"
+)
+with open(report_path, "w", encoding="utf-8") as file:
+    file.write(summary)
+print(summary, end="")
+
+if enforce and (changed_ratio > max_changed_ratio or mean_delta > max_mean_delta):
+    raise SystemExit("visual regression threshold exceeded")
+PY
+
+echo "Visual regression artifacts: $report $diff_image"

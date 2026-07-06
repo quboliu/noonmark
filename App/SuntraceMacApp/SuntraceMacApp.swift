@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import SuntraceCore
 import SuntraceStorage
+import UniformTypeIdentifiers
 
 @main
 @MainActor
@@ -616,6 +617,55 @@ final class SuntraceStore: ObservableObject {
 
     func setLanguage(_ language: AppLanguage) {
         engine.updateLanguage(language)
+        persist()
+    }
+
+    func exportDataPackage() {
+        let panel = NSSavePanel()
+        panel.title = "导出晷迹数据"
+        panel.nameFieldStringValue = "suntrace-backup-\(today.description).json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try exportDataPackage(to: url)
+            showToast("已导出 \(url.lastPathComponent)")
+        } catch {
+            showToast("导出失败：\(error.localizedDescription)")
+        }
+    }
+
+    func importDataPackage() {
+        let panel = NSOpenPanel()
+        panel.title = "导入晷迹数据"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try importDataPackage(from: url)
+            showToast("已导入 \(url.lastPathComponent)")
+        } catch {
+            showToast("导入失败：\(error.localizedDescription)")
+        }
+    }
+
+    func exportDataPackage(to url: URL) throws {
+        try SuntraceDataPackage.write(engine.snapshot(), to: url)
+    }
+
+    func importDataPackage(from url: URL) throws {
+        let snapshot = try SuntraceDataPackage.read(from: url)
+
+        undoStack.append(engine.snapshot())
+        engine = SuntraceEngine(snapshot: snapshot)
+        selectedDate = today
+        selectedCalendarDate = today
+        clearSelection()
         persist()
     }
 
@@ -2176,8 +2226,8 @@ struct SettingsPage: View {
                 }
                 SettingSection(title: "数据") {
                     HStack {
-                        SmallActionButton("导出数据 (JSON)", tone: .accent) { store.showToast("已导出 suntrace-backup.json（示意）") }
-                        SmallActionButton("导入数据…") { store.showToast("导入为第一期占位入口（示意）") }
+                        SmallActionButton("导出数据 (JSON)", tone: .accent) { store.exportDataPackage() }
+                        SmallActionButton("导入数据…") { store.importDataPackage() }
                     }
                 }
                 SettingSection(title: "同步") {

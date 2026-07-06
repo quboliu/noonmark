@@ -323,4 +323,34 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(engine.preferences.theme, .warmPaper)
         XCTAssertEqual(engine.preferences.language, .english)
     }
+
+    func testSnapshotCodableRoundTripsForDataPackage() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(
+            title: "导出导入数据包",
+            descriptionText: "验证 JSON 数据包能恢复核心状态。",
+            note: "第一期手动数据交换。",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        _ = try engine.addSubtask(traceID: traceID, title: "覆盖 snapshot Codable", difficulty: .medium, now: now)
+        engine.updateDailyReview(
+            date: day1,
+            summary: "导出前状态完整。",
+            unfinishedReason: "无。",
+            tomorrowNote: "导入后继续验证。",
+            now: now
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(engine.snapshot())
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let restored = try SuntraceEngine(snapshot: decoder.decode(SuntraceSnapshot.self, from: data))
+
+        XCTAssertEqual(restored.snapshot(), engine.snapshot())
+    }
 }

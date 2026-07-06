@@ -232,4 +232,6 @@
 - Core 已补齐描述/附言、手动进度、子任务权重、加权进度、进度下限、日历汇总、已完成子任务记录和设置偏好模型。
 - Storage 已补齐描述/附言、手动进度、子任务权重、已完成子任务记录 view、同步端点占位 view，并修正已回池任务链的任务池 view。
 - Mac UI 契约已显式覆盖窗口尺寸、颜色 token、日期 strip 选中动效、日期 strip 视觉细节、任务行微观元素、逐页面空状态插图/文案、未来计划交互、详情栏标题/空态、子任务完成日期、子任务锁定图标、变更弹窗内部元素、撤销不可用 toast、变更指针和有限撤销。
-- 待补齐：Mac SwiftUI 页面实现和真实 macOS 截图验收。
+- Mac SwiftUI 主窗口已覆盖 Day Todo、任务池、未来计划、未完成池、已完成池、日历、烛龙 AI 和设置页；`scripts/test-e2e` 已生成真实 macOS 页面截图并验证正常模式持久化。
+- 设置页导出 / 导入入口已接入 `SuntraceDataPackage` JSON 数据包，Storage 测试覆盖 round-trip、重复键和断裂引用拒绝。
+- 待补齐：更深的真实交互 E2E、Provider 配置表单、Apple Developer ID 签名和 notarization。

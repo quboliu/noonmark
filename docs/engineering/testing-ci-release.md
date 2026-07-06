@@ -29,6 +29,7 @@ Neon 的可借鉴点：
 
 - UT：纯领域和纯函数测试，当前入口为 `scripts/test-unit`。
 - IT：跨模块集成测试，当前入口为 `scripts/test-integration`，覆盖 Storage schema、Core 类型契约和 SQLite repository 核心状态 round-trip。
+- 数据包测试：随 Storage IT 运行，覆盖 `SuntraceDataPackage` JSON round-trip、重复键拒绝和断裂引用拒绝。
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
 - E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，会打包 `.app`、打开真实窗口并抓截图。
   当前覆盖 `day`、`day-detail`、`day-manual-detail`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 14 个场景。
@@ -88,6 +89,7 @@ Release：
 - 2026-07-06：`make package-dmg` 通过，生成 `dist/SuntraceMacApp.dmg` 与 `dist/SuntraceMacApp.dmg.sha256`，`shasum -a 256 -c dist/SuntraceMacApp.dmg.sha256` 通过。
 - 2026-07-06：`scripts/test-dmg-install dist/SuntraceMacApp.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
 - 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，空库会初始化并写入 11 个 day、19 条 chain、19 条 definition、19 条 trace、6 个 subtask 和 1 条 preferences。
+- 2026-07-06：设置页导出 / 导入已接入 `SuntraceDataPackage` JSON 数据包；`swift test --filter SuntraceStorageTests` 通过 5 个 Storage 测试。
 
 ## 后续缺口
 

@@ -32,7 +32,7 @@ Neon 的可借鉴点：
 - 数据包测试：随 Storage IT 运行，覆盖 `SuntraceDataPackage` JSON round-trip、重复键拒绝和断裂引用拒绝。
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
 - E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，会打包 `.app`、打开真实窗口并抓截图。
-  当前覆盖 `day`、`day-detail`、`day-manual-detail`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 14 个场景。
+  当前覆盖 `day`、`day-detail`、`day-manual-detail`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 14 个场景。UI 调试时可用 `SUNTRACE_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `SUNTRACE_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。
 - Prototype render：当前入口为 `scripts/render-prototype-screenshots`，使用 Chrome headless 从归档 HTML 原型生成 `day`、`pool`、`future`、`unfinished`、`completed`、`calendar`、`settings` 共 7 个 1440x900 参考图；默认渲染超时为 90 秒，可用 `SUNTRACE_PROTOTYPE_RENDER_TIMEOUT` 覆盖；每页默认最多渲染 3 次，可用 `SUNTRACE_PROTOTYPE_RENDER_ATTEMPTS` 覆盖；脚本会校验截图尺寸和非空白像素，防止 Chrome 超时留下全白参考图；烛龙 AI 是 SwiftUI 新增实现面，当前没有对应 HTML 原型页，只由 E2E 和契约测试覆盖。
 - Visual regression：当前入口为 `scripts/test-visual-regression`，默认先刷新真实 E2E 截图；设置 `SUNTRACE_VISUAL_REUSE_SCREENSHOTS=1` 时复用已有 E2E 截图。脚本会自动生成本次比较页面的原型参考图，并逐页输出 normalized actual、diff 和 report 到 `artifacts/visual-regression/<page>/`。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
@@ -75,6 +75,7 @@ make test-ai-provider-live
 视觉回归报告：
 
 ```bash
+SUNTRACE_E2E_SCENARIOS="day completed" SUNTRACE_E2E_SCREENSHOTS_ONLY=1 scripts/test-e2e
 SUNTRACE_VISUAL_REUSE_SCREENSHOTS=1 make test-visual-regression
 SUNTRACE_VISUAL_ENFORCE=0 make test-visual-regression
 SUNTRACE_VISUAL_PAGES="day completed" make test-visual-regression

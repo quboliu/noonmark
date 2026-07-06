@@ -24,6 +24,26 @@ scenarios=(
   "settings|settings|"
 )
 
+requested_scenarios="${SUNTRACE_E2E_SCENARIOS:-}"
+if [[ -n "$requested_scenarios" ]]; then
+  filtered_scenarios=()
+  for requested in $requested_scenarios; do
+    found=0
+    for scenario in "${scenarios[@]}"; do
+      IFS="|" read -r screenshot_name _ <<< "$scenario"
+      if [[ "$screenshot_name" == "$requested" ]]; then
+        filtered_scenarios+=("$scenario")
+        found=1
+      fi
+    done
+    if [[ "$found" -eq 0 ]]; then
+      echo "unknown E2E screenshot scenario: $requested" >&2
+      exit 1
+    fi
+  done
+  scenarios=("${filtered_scenarios[@]}")
+fi
+
 scripts/build-mac-app "$configuration"
 
 mkdir -p artifacts/e2e
@@ -97,6 +117,12 @@ for scenario in "${scenarios[@]}"; do
     capture_app_screenshot artifacts/e2e "$screenshot_name" "$page" --ephemeral
   fi
 done
+
+if [[ "${SUNTRACE_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
+  pkill -x SuntraceMacApp 2>/dev/null || true
+  echo "E2E screenshot-only scenarios: ${SUNTRACE_E2E_SCENARIOS:-all}"
+  exit 0
+fi
 
 pkill -x SuntraceMacApp 2>/dev/null || true
 

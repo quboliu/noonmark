@@ -151,7 +151,7 @@ pkill -x "$app_executable_name" 2>/dev/null || true
 
 blank_dir="artifacts/e2e-blank"
 blank_db="${blank_dir}/Suntrace.sqlite"
-blank_pages=(day pool future unfinished completed calendar)
+blank_pages=(day pool future unfinished completed calendar zhulong)
 rm -rf "$blank_dir"
 mkdir -p "$blank_dir"
 

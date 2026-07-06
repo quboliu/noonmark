@@ -2146,6 +2146,7 @@ struct Sidebar: View {
                 count: store.engine.completedPool().count + store.engine.completedSubtaskRecords().count
             )
             NavItem(page: .calendar, label: store.copy.navCalendar, count: 0)
+            NavItem(page: .zhulong, label: store.copy.navZhulong, count: 0)
 
             Spacer()
             NavItem(page: .settings, label: store.copy.navSettings, count: 0)

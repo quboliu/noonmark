@@ -89,6 +89,7 @@ public enum MacUIPage: String, CaseIterable, Sendable {
     case unfinishedPool
     case completedPool
     case calendar
+    case zhulongAI
     case settings
 }
 

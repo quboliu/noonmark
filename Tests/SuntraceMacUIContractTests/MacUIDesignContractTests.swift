@@ -7,7 +7,7 @@ final class MacUIDesignContractTests: XCTestCase {
 
         XCTAssertEqual(
             contract.pages,
-            [.dayTodo, .taskPool, .futurePlans, .unfinishedPool, .completedPool, .calendar, .settings]
+            [.dayTodo, .taskPool, .futurePlans, .unfinishedPool, .completedPool, .calendar, .zhulongAI, .settings]
         )
     }
 

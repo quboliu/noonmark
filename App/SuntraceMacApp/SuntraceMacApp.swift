@@ -5744,36 +5744,115 @@ struct Timeline: View {
             .filter { $0.chainID == trace.chainID }
             .sorted { $0.date < $1.date }
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(chainTraces, id: \.id) { item in
+            ForEach(Array(chainTraces.enumerated()), id: \.element.id) { index, item in
                 let isCurrent = item.id == trace.id
+                let isLast = index == chainTraces.count - 1
+                let nodeStyle = TimelineNodeStyle(status: item.status, isCurrent: isCurrent)
                 HStack(alignment: .top, spacing: 8) {
                     VStack(spacing: 0) {
-                        StatusGlyph(status: item.status)
-                        Rectangle().fill(Theme.line2).frame(width: 1, height: 22)
+                        TimelineNodeGlyph(style: nodeStyle)
+                        if !isLast {
+                            Rectangle()
+                                .fill(Theme.line2)
+                                .frame(width: 1.5, height: 28)
+                                .padding(.top, 1)
+                        }
                     }
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(item.status.uiStyle.label)
-                                .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 14)
+                    .padding(.top, 1)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(nodeStyle.label)
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(nodeStyle.labelColor)
                             if isCurrent {
                                 TimelineCurrentBadge()
                             }
+                            Spacer(minLength: 0)
+                            Text("#\(item.continuationSeq + 1)")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.text3)
+                                .monospacedDigit()
                         }
                         Text("\(SuntraceStore.displayDate(item.date)) \(SuntraceStore.weekday(item.date))")
                             .font(.system(size: 10.5))
                             .foregroundStyle(Theme.text3)
                     }
-                    Spacer()
+                    .padding(.top, 1)
+                    .padding(.bottom, isLast ? 0 : 12)
+                    .padding(.leading, 4)
+                    .padding(.trailing, isCurrent ? 8 : 0)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(isCurrent ? Theme.accentSoft : Color.clear)
+                    )
                 }
-                .padding(.horizontal, isCurrent ? 8 : 0)
-                .padding(.vertical, isCurrent ? 4 : 0)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isCurrent ? Theme.accentSoft : Color.clear)
-                )
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+}
+
+struct TimelineNodeStyle {
+    let label: String
+    let glyph: String
+    let labelColor: Color
+    let glyphForeground: Color
+    let glyphBackground: Color
+    let glyphBorder: Color
+
+    init(status: TraceStatus, isCurrent: Bool) {
+        switch status {
+        case .pending:
+            label = status.uiStyle.label
+            glyph = ""
+            labelColor = Theme.accent
+            glyphForeground = Theme.accent
+            glyphBackground = Theme.panel
+            glyphBorder = isCurrent ? Theme.accent : Theme.line2
+        case .completed:
+            label = status.uiStyle.label
+            glyph = status.uiStyle.glyph
+            labelColor = Theme.ok
+            glyphForeground = .white
+            glyphBackground = Theme.ok
+            glyphBorder = .clear
+        case .unfinished:
+            label = status.uiStyle.label
+            glyph = status.uiStyle.glyph
+            labelColor = Theme.warn
+            glyphForeground = Theme.warn
+            glyphBackground = Theme.warnSoft
+            glyphBorder = .clear
+        case .continued:
+            label = "未完成"
+            glyph = TraceStatus.unfinished.uiStyle.glyph
+            labelColor = Theme.warn
+            glyphForeground = Theme.warn
+            glyphBackground = Theme.warnSoft
+            glyphBorder = .clear
+        case .changed, .returnedToPool, .abandoned:
+            label = status.uiStyle.label
+            glyph = status.uiStyle.glyph
+            labelColor = status.uiStyle.foreground
+            glyphForeground = status.uiStyle.glyphForeground
+            glyphBackground = status.uiStyle.glyphBackground
+            glyphBorder = status.uiStyle.glyphBorder
+        }
+    }
+}
+
+struct TimelineNodeGlyph: View {
+    let style: TimelineNodeStyle
+
+    var body: some View {
+        Text(style.glyph)
+            .font(.system(size: 8.5, weight: .bold))
+            .foregroundStyle(style.glyphForeground)
+            .frame(width: 14, height: 14)
+            .background(Circle().fill(style.glyphBackground))
+            .overlay(Circle().stroke(style.glyphBorder, lineWidth: 1.5))
     }
 }
 

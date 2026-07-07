@@ -3509,8 +3509,8 @@ struct UnfinishedRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.warnSoft.opacity(0.55) : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.warn : Theme.line, lineWidth: selected ? 1.3 : 1))
+        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.accentSoft : Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.accent : Theme.line, lineWidth: selected ? 1.3 : 1))
         .onTapGesture { store.selectUnfinished(item.chain.id) }
     }
 }
@@ -6071,7 +6071,7 @@ struct UnfinishedDetail: View {
                 DetailTitleRow(item.definition.title)
 
                 HStack(spacing: 8) {
-                    StatusChip(status: trace.status)
+                    StatusChip(status: .unfinished)
                     Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.text3)

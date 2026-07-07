@@ -62,8 +62,28 @@ SUNTRACE_APP_BUNDLE_NAME="$app_bundle_name" \
   scripts/build-mac-app "$configuration"
 
 mkdir -p artifacts/e2e
-pkill -x "$app_executable_name" 2>/dev/null || true
-trap 'pkill -x "$app_executable_name" 2>/dev/null || true' EXIT
+
+terminate_e2e_app() {
+  pkill -x "$app_executable_name" 2>/dev/null || true
+  for _ in {1..40}; do
+    if ! pgrep -x "$app_executable_name" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  pkill -9 -x "$app_executable_name" 2>/dev/null || true
+  for _ in {1..20}; do
+    if ! pgrep -x "$app_executable_name" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "failed to terminate ${app_executable_name}" >&2
+  return 1
+}
+
+terminate_e2e_app
+trap 'terminate_e2e_app >/dev/null 2>&1 || true' EXIT
 
 find_window_id() {
   local expected_title="$1"
@@ -96,6 +116,23 @@ exit(1)
 '
 }
 
+dump_visible_windows() {
+  swift -e '
+import CoreGraphics
+import Foundation
+
+if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
+    for window in list {
+        let owner = window[kCGWindowOwnerName as String] as? String ?? ""
+        let name = window[kCGWindowName as String] as? String ?? ""
+        if owner.contains("Suntrace") || owner.contains("晷迹") || name.contains("晷迹") {
+            print("window owner=\(owner) title=\(name)")
+        }
+    }
+}
+'
+}
+
 capture_app_screenshot() {
   local out_dir="$1"
   local screenshot_name="$2"
@@ -115,7 +152,7 @@ capture_app_screenshot() {
     *) expected_window_title="晷迹 · suntrace" ;;
   esac
 
-  pkill -x "$app_executable_name" 2>/dev/null || true
+  terminate_e2e_app
   open -n "$app_path" --args "$@" --page "$page"
   sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
 
@@ -129,6 +166,7 @@ capture_app_screenshot() {
 
   if [[ -z "$window_id" ]]; then
     echo "Suntrace app window not found for ${page}" >&2
+    dump_visible_windows >&2
     exit 1
   fi
 
@@ -157,12 +195,12 @@ for scenario in "${scenarios[@]}"; do
 done
 
 if [[ "${SUNTRACE_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
-  pkill -x "$app_executable_name" 2>/dev/null || true
+  terminate_e2e_app
   echo "E2E screenshot-only scenarios: ${SUNTRACE_E2E_SCENARIOS:-all}"
   exit 0
 fi
 
-pkill -x "$app_executable_name" 2>/dev/null || true
+terminate_e2e_app
 
 blank_dir="artifacts/e2e-blank"
 blank_db="${blank_dir}/Suntrace.sqlite"
@@ -174,7 +212,7 @@ for page in "${blank_pages[@]}"; do
   capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$PWD/$blank_db"
 done
 
-pkill -x "$app_executable_name" 2>/dev/null || true
+terminate_e2e_app
 
 read -r blank_days blank_chains blank_definitions blank_traces blank_subtasks blank_preferences < <(
   sqlite3 -separator " " "$blank_db" "
@@ -202,7 +240,7 @@ mkdir -p "$persistence_dir"
 
 open -n "$app_path" --args --data-url "$PWD/$persistence_db" --page day
 sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
-pkill -x "$app_executable_name" 2>/dev/null || true
+terminate_e2e_app
 
 if [[ ! -f "$persistence_db" ]]; then
   echo "persistence database was not created: $persistence_db" >&2

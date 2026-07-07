@@ -127,19 +127,33 @@ process = subprocess.Popen(
 )
 
 
+def signal_process(signal_number):
+    errors = []
+    for send_signal in (
+        lambda: os.killpg(process.pid, signal_number),
+        lambda: process.send_signal(signal_number),
+    ):
+        try:
+            send_signal()
+            return ""
+        except ProcessLookupError:
+            return ""
+        except PermissionError as error:
+            errors.append(str(error))
+    return "; ".join(errors)
+
+
 def stop_process():
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    signal_error = signal_process(signal.SIGTERM)
     try:
         return process.communicate(timeout=3)
     except subprocess.TimeoutExpired:
+        kill_error = signal_process(signal.SIGKILL)
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        return process.communicate()
+            return process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            errors = "\n".join(error for error in (signal_error, kill_error) if error)
+            return "", errors or "prototype screenshot process did not stop after SIGKILL"
 
 
 deadline = time.monotonic() + timeout
@@ -147,7 +161,10 @@ stdout = ""
 stderr = ""
 while process.poll() is None:
     if screenshot and os.path.exists(screenshot):
-        stop_process()
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            stop_process()
         raise SystemExit(0)
     if time.monotonic() >= deadline:
         stdout, stderr = stop_process()

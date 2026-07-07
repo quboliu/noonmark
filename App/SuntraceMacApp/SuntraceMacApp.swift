@@ -6155,10 +6155,10 @@ struct ReviewRail: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
-                Spacer()
                 if let message = store.reviewAutosaveMessage {
-                    StatusPill(text: message, color: Theme.ok)
+                    ReviewSavedIndicator(text: message)
                 }
+                Spacer()
                 Text("\(SuntraceStore.displayDate(store.selectedDate)) \(SuntraceStore.weekday(store.selectedDate))")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text3)
@@ -6205,6 +6205,20 @@ struct ReviewRail: View {
                 )
             }
         }
+    }
+}
+
+struct ReviewSavedIndicator: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 8.5, weight: .bold))
+            Text(text)
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(Theme.ok.opacity(0.9))
     }
 }
 

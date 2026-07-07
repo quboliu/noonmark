@@ -2536,6 +2536,7 @@ enum Theme {
     static let okSoft = Color(red: 0.91, green: 0.98, blue: 0.95)
     static let warn = Color(red: 0.706, green: 0.302, blue: 0.204)
     static let warnSoft = Color(red: 1.0, green: 0.937, blue: 0.922)
+    static let noteBackground = Color(red: 1.0, green: 0.984, blue: 0.937)
     static let navDay = hex(0x2A6FDB)
     static let navPool = hex(0x0E9488)
     static let navFuture = hex(0x7C5CFF)
@@ -5676,7 +5677,7 @@ struct EditableDetailText: View {
                 .padding(.horizontal, 4)
                 .padding(.vertical, 2)
                 .frame(height: 66)
-                .background(RoundedRectangle(cornerRadius: 7).fill(warm ? Theme.warnSoft.opacity(0.45) : Theme.panel2))
+                .background(RoundedRectangle(cornerRadius: 7).fill(warm ? Theme.noteBackground : Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
                 .overlay(alignment: .topLeading) {
                     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -5697,7 +5698,7 @@ struct EditableDetailText: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(warm ? Theme.warnSoft.opacity(0.45) : Theme.panel2))
+                .background(RoundedRectangle(cornerRadius: 7).fill(warm ? Theme.noteBackground : Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
         }
     }

@@ -170,7 +170,8 @@ public enum SQLiteSchema {
             remote_payload TEXT,
             detected_at TEXT NOT NULL,
             resolved_at TEXT,
-            resolution TEXT NOT NULL DEFAULT 'unresolved'
+            resolution TEXT NOT NULL DEFAULT 'unresolved',
+            message TEXT
         )
         """,
         """

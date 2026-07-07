@@ -5078,6 +5078,36 @@ struct IconMenuButton<Content: View>: View {
     }
 }
 
+struct DetailTitleRow<Trailing: View>: View {
+    let title: String
+    @ViewBuilder let trailing: Trailing
+
+    init(_ title: String, @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.text1)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            trailing
+                .padding(.top, 1)
+        }
+    }
+}
+
+extension DetailTitleRow where Trailing == EmptyView {
+    init(_ title: String) {
+        self.init(title) {
+            EmptyView()
+        }
+    }
+}
+
 struct CompletedRecordDetail: View {
     @EnvironmentObject private var store: SuntraceStore
     let item: CompletedPoolItem
@@ -5086,17 +5116,14 @@ struct CompletedRecordDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("任务详情", onClose: { store.clearSelection() }, trailing: {
+            DetailHeader("任务详情", onClose: { store.clearSelection() })
+
+            DetailTitleRow(item.definition.title) {
                 IconMenuButton(menuContent: {
                     Button(store.copy.openDay) { openDay() }
                     Button(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
                 })
-            })
-
-            Text(item.definition.title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.text1)
-                .lineLimit(3)
+            }
 
             HStack(spacing: 8) {
                 StatusChip(status: .completed)
@@ -5249,17 +5276,14 @@ struct CompletedSubtaskDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("子任务完成记录", onClose: { store.clearSelection() }, trailing: {
+            DetailHeader("子任务完成记录", onClose: { store.clearSelection() })
+
+            DetailTitleRow(record.subtask.title) {
                 IconMenuButton(menuContent: {
                     Button(store.copy.openDay) { openDay() }
                     Button(store.copy.copyParentAsNewTask) { store.copyAsNewTask(record.parentTrace.id) }
                 })
-            })
-
-            Text(record.subtask.title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.text1)
-                .lineLimit(3)
+            }
 
             HStack(spacing: 8) {
                 CompletionKindPill(text: "子任务", color: Theme.accent)
@@ -5371,17 +5395,14 @@ struct TaskDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("任务详情", onClose: { store.clearSelection() }, trailing: {
+            DetailHeader("任务详情", onClose: { store.clearSelection() })
+
+            DetailTitleRow(definition.title) {
                 IconMenuButton(menuContent: {
                     TaskContextMenu(trace: trace)
                 })
-            })
-            HStack(alignment: .top, spacing: 8) {
-                Text(definition.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                    .lineLimit(3)
             }
+
             HStack {
                 StatusChip(status: trace.status)
                 Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
@@ -5934,18 +5955,15 @@ struct FuturePlanDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("计划详情", onClose: { store.clearSelection() }, trailing: {
+            DetailHeader("计划详情", onClose: { store.clearSelection() })
+
+            DetailTitleRow(definition.title) {
                 IconMenuButton(menuContent: {
                     Button(store.copy.openDay) { openDay() }
                     Button(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
                     Button(store.copy.returnToPool) { store.returnToPool(trace.id) }
                 })
-            })
-
-            Text(definition.title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.text1)
-                .lineLimit(3)
+            }
 
             HStack(spacing: 8) {
                 PlanMetaPill(text: "计划草稿", color: Theme.navFuture)
@@ -6049,10 +6067,7 @@ struct UnfinishedDetail: View {
         if let trace = detailTrace {
             VStack(alignment: .leading, spacing: 14) {
                 DetailHeader("任务详情", onClose: { store.clearSelection() })
-                Text(item.definition.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                    .lineLimit(3)
+                DetailTitleRow(item.definition.title)
 
                 HStack(spacing: 8) {
                     StatusChip(status: trace.status)

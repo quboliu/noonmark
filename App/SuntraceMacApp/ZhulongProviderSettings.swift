@@ -73,7 +73,7 @@ enum ZhulongProviderSettingsStore {
         guard let baseURL = draft.normalizedBaseURL else {
             throw ZhulongProviderSettingsError.invalidBaseURL
         }
-        guard draft.normalizedModel.isEmpty == false else {
+        guard draft.enabled == false || draft.normalizedModel.isEmpty == false else {
             throw ZhulongProviderSettingsError.emptyModel
         }
 
@@ -96,7 +96,11 @@ enum ZhulongProviderSettingsStore {
             next.apiKeyInput = ""
         }
         next.hasStoredAPIKey = ZhulongProviderKeychain.hasAPIKey()
-        next.statusMessage = next.hasStoredAPIKey ? "Provider 已保存，API Key 在 Keychain 中" : "Provider 已保存，未保存 API Key"
+        if next.enabled {
+            next.statusMessage = next.hasStoredAPIKey ? "Provider 已保存，API Key 在 Keychain 中" : "Provider 已保存，未保存 API Key"
+        } else {
+            next.statusMessage = "烛龙已关闭，普通清单不受影响"
+        }
         return next
     }
 

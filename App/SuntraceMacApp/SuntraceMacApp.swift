@@ -15,6 +15,9 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
     static func main() {
         let app = NSApplication.shared
         let delegate = SuntraceMacApp()
+        if CommandLine.arguments.contains("--e2e-reset-selection") {
+            delegate.store.resetLaunchSelection()
+        }
         if CommandLine.arguments.contains("--page"), let index = CommandLine.arguments.firstIndex(of: "--page") {
             let valueIndex = CommandLine.arguments.index(after: index)
             let pageName = CommandLine.arguments.indices.contains(valueIndex) ? CommandLine.arguments[valueIndex] : ""
@@ -144,6 +147,7 @@ private struct LaunchAutomation {
             let applyFirstOperation = CommandLine.arguments.contains("--e2e-apply-first-zhulong-operation")
             actions.append { store in
                 store.page = .zhulong
+                store.zhulongProviderDraft.enabled = true
                 store.generateZhulongDraft(task: task)
                 guard applyFirstOperation else { return }
                 guard let draft = store.zhulongDrafts.first else { return }
@@ -230,6 +234,7 @@ private struct ReviewZhulongEntryE2EAutomation: LaunchAutomationRunnable {
     func run(on store: SuntraceStore) {
         store.page = .day
         store.selectedDate = store.today
+        store.zhulongProviderDraft.enabled = true
         store.requestZhulongDailyReviewFromReviewRail()
 
         guard store.page == .zhulong,
@@ -1027,6 +1032,7 @@ final class SuntraceStore: ObservableObject {
     @Published var showingChangeDialog = false
     @Published var changeText = ""
     @Published var detailSubtaskText = ""
+    @Published var detailNoteText = ""
     @Published var toast: String?
     @Published var zhulongProviderDraft = ZhulongProviderSettingsStore.load()
     @Published var zhulongDrafts: [AISuggestionDraft] = []
@@ -1323,6 +1329,13 @@ final class SuntraceStore: ObservableObject {
         selectedCompletedTraceID = nil
         selectedCompletedSubtaskID = nil
         detailSubtaskText = ""
+        detailNoteText = ""
+    }
+
+    func resetLaunchSelection() {
+        selectedDate = today
+        selectedCalendarDate = today
+        clearSelection()
     }
 
     func addQuickTask() {
@@ -1550,6 +1563,14 @@ final class SuntraceStore: ObservableObject {
         }
     }
 
+    func appendTraceNote(traceID: DayTraceID) {
+        let body = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard body.isEmpty == false, let trace = engine.traces[traceID] else { return }
+        let nextNote = DetailNoteEntryStorage.appending(body, to: trace.note)
+        updateTraceText(traceID: traceID, note: nextNote)
+        detailNoteText = ""
+    }
+
     func setManualProgress(traceID: DayTraceID, percent: Double) {
         do {
             if let trace = engine.traces[traceID] {
@@ -1701,6 +1722,10 @@ final class SuntraceStore: ObservableObject {
     }
 
     func generateZhulongDraft(task: ZhulongTask) {
+        guard zhulongProviderDraft.enabled else {
+            showToast("烛龙已在设置中关闭")
+            return
+        }
         let scope = zhulongScope(for: task)
         guard scope.isEmpty == false else {
             showToast("授权范围为空，无法生成建议草稿")
@@ -2064,7 +2089,7 @@ final class SuntraceStore: ObservableObject {
             let okr = try engine.createPoolTask(
                 title: "整理 Q3 OKR 草案",
                 descriptionText: "汇总三条产品线负责人给的季度目标，收敛成不超过 3 个 O、每个 O 配 3 个可量化 KR。",
-                note: "等数据组下午的留存看板再定第 2 个 KR 的口径。",
+                note: "[2026-07-05 14:20] 等数据组下午的留存看板再定第 2 个 KR 的口径。",
                 now: seedNow()
             )
             let okrDay0 = try engine.scheduleFromPool(chainID: okr, date: day0, today: day0, now: now)
@@ -2260,7 +2285,7 @@ struct AppCopy {
     var navUnfinished: String { language == .chinese ? "未完成" : "Unfinished" }
     var navCompleted: String { language == .chinese ? "已完成" : "Completed" }
     var navCalendar: String { language == .chinese ? "日历" : "Calendar" }
-    var navZhulong: String { language == .chinese ? "烛龙 AI" : "Zhulong AI" }
+    var navZhulong: String { language == .chinese ? "烛龙" : "Zhulong" }
     var navSettings: String { language == .chinese ? "设置" : "Settings" }
     var today: String { language == .chinese ? "今天" : "Today" }
     var chooseDate: String { language == .chinese ? "选日期" : "Choose date" }
@@ -2343,8 +2368,8 @@ struct AppCopy {
 
     var settingsSubtitle: String {
         language == .chinese
-            ? "偏好、数据包、同步占位和烛龙 Provider 的统一入口。"
-            : "Preferences, data packages, sync placeholders, and Zhulong Provider in one place."
+            ? "偏好、数据包、同步占位和烛龙配置的统一入口。"
+            : "Preferences, data packages, sync placeholders, and Zhulong configuration in one place."
     }
 
     var preferencesTitle: String { language == .chinese ? "偏好" : "Preferences" }
@@ -2367,9 +2392,9 @@ struct AppCopy {
     var syncTitle: String { language == .chinese ? "同步" : "Sync" }
     var planned: String { language == .chinese ? "规划中" : "Planned" }
 
-    var providerTitle: String { language == .chinese ? "烛龙 Provider" : "Zhulong Provider" }
+    var providerTitle: String { language == .chinese ? "烛龙配置" : "Zhulong Configuration" }
     var providerSubtitle: String {
-        language == .chinese ? "AI 是可选 sidecar；普通清单不依赖 Provider。" : "AI is optional; normal lists do not depend on a Provider."
+        language == .chinese ? "烛龙是可选 sidecar；普通清单不依赖 Provider。" : "Zhulong is optional; normal lists do not depend on a Provider."
     }
 
     var zhulongSubtitle: String {
@@ -2384,7 +2409,7 @@ struct AppCopy {
 
     var providerConfigured: String { language == .chinese ? "Provider 已配置" : "Provider configured" }
     var providerIncomplete: String { language == .chinese ? "配置不完整" : "Incomplete" }
-    var providerDisabled: String { language == .chinese ? "Provider 未启用" : "Provider disabled" }
+    var providerDisabled: String { language == .chinese ? "烛龙未启用" : "Zhulong disabled" }
     var keychainStored: String { language == .chinese ? "Keychain 有凭证" : "Keychain credential" }
     var keychainMissing: String { language == .chinese ? "未保存凭证" : "No credential" }
     var providerType: String { language == .chinese ? "类型" : "Type" }
@@ -2392,7 +2417,7 @@ struct AppCopy {
     var providerModel: String { language == .chinese ? "模型" : "Model" }
     var providerUnset: String { language == .chinese ? "未配置" : "Unset" }
     var customProvider: String { language == .chinese ? "自定义 Provider" : "Custom Provider" }
-    var openZhulongConfig: String { language == .chinese ? "打开烛龙配置" : "Open Zhulong" }
+    var openZhulongConfig: String { language == .chinese ? "打开烛龙配置" : "Open Zhulong settings" }
     var save: String { language == .chinese ? "保存" : "Save" }
     var testConnection: String { language == .chinese ? "测试连接" : "Test" }
     var clear: String { language == .chinese ? "清空" : "Clear" }
@@ -2890,37 +2915,40 @@ struct DateStrip: View {
     var dates: [LocalDate] { store.dateStripDates() }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(dates, id: \.self) { date in
-                let selected = date == store.selectedDate
-                let today = date == store.today
-                let count = store.engine.getDayTodo(date: date).traces.count
-                Button {
-                    withAnimation(.spring(response: 0.24, dampingFraction: 0.74)) {
-                        store.selectedDate = date
-                    }
-                } label: {
-                    VStack(spacing: 4) {
-                        Text(SuntraceStore.weekday(date).replacingOccurrences(of: "周", with: ""))
-                            .font(.system(size: 9.5, weight: .medium))
-                            .foregroundStyle(Theme.text3)
-                        Text("\(date.day)")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(selected ? .white : today ? Theme.accent : Theme.text1)
-                            .frame(width: 24, height: 24)
-                            .overlay(Circle().stroke(today && !selected ? Theme.accent : .clear, lineWidth: 1.5))
-                        Circle()
-                            .fill(count > 0 ? (selected ? .white.opacity(0.9) : Theme.accent) : .clear)
-                            .frame(width: 4, height: 4)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 2)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .background(alignment: .topLeading) {
+        ZStack(alignment: .topLeading) {
             DateStripSelectionPill(selectedIndex: store.selectedDateStripIndex, cellCount: dates.count)
+                .frame(height: 52)
+                .clipped()
+
+            HStack(spacing: 0) {
+                ForEach(dates, id: \.self) { date in
+                    let selected = date == store.selectedDate
+                    let today = date == store.today
+                    let count = store.engine.getDayTodo(date: date).traces.count
+                    Button {
+                        withAnimation(.spring(response: 0.24, dampingFraction: 0.74)) {
+                            store.selectedDate = date
+                        }
+                    } label: {
+                        VStack(spacing: 4) {
+                            Text(SuntraceStore.weekday(date).replacingOccurrences(of: "周", with: ""))
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(Theme.text3)
+                            Text("\(date.day)")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(selected ? .white : today ? Theme.accent : Theme.text1)
+                                .frame(width: 24, height: 24)
+                                .overlay(Circle().stroke(today && !selected ? Theme.accent : .clear, lineWidth: 1.5))
+                            Circle()
+                                .fill(count > 0 ? (selected ? .white.opacity(0.9) : Theme.accent) : .clear)
+                                .frame(width: 4, height: 4)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 2)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
         .padding(.top, 14)
         .padding(.bottom, 10)
@@ -4175,7 +4203,7 @@ struct SyncOptionsCard: View {
 
 struct SettingsProviderOverviewCard: View {
     @EnvironmentObject private var store: SuntraceStore
-    @State private var isExpanded = false
+    @State private var isExpanded = true
 
     var status: (text: String, color: Color) {
         if store.zhulongProviderDraft.isConfigured {
@@ -4221,32 +4249,38 @@ struct SettingsProviderOverviewCard: View {
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        StatusPill(
-                            text: store.zhulongProviderDraft.hasStoredAPIKey ? store.copy.keychainStored : store.copy.keychainMissing,
-                            color: store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3
+                    Toggle("启用烛龙", isOn: $store.zhulongProviderDraft.enabled)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 12.5, weight: .medium))
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        ZhulongProviderKindPicker(selection: $store.zhulongProviderDraft.kind)
+                        ZhulongProviderTextField(label: store.copy.providerName, text: $store.zhulongProviderDraft.displayName, placeholder: store.copy.customProvider)
+                        ZhulongProviderTextField(label: "Base URL", text: $store.zhulongProviderDraft.baseURL, placeholder: "https://api.example.com/v1")
+                        ZhulongProviderTextField(label: store.copy.providerModel, text: $store.zhulongProviderDraft.model, placeholder: "gpt-4.1-mini / llama3.1")
+                        ZhulongProviderSecureField(
+                            label: "API Key",
+                            text: $store.zhulongProviderDraft.apiKeyInput,
+                            placeholder: store.zhulongProviderDraft.hasStoredAPIKey ? "Keychain 中已有凭证，留空则保留" : "只保存到 Keychain"
                         )
-                        Spacer()
                     }
 
-                    VStack(spacing: 0) {
-                        SettingsInfoRow(label: store.copy.providerType, value: providerKindLabel(store.zhulongProviderDraft.kind))
-                        SettingsInfoRow(label: store.copy.providerName, value: providerDisplayName)
-                        SettingsInfoRow(label: "Base URL", value: store.zhulongProviderDraft.normalizedBaseURL?.absoluteString ?? store.copy.providerUnset)
-                        SettingsInfoRow(label: store.copy.providerModel, value: store.zhulongProviderDraft.normalizedModel.isEmpty ? store.copy.providerUnset : store.zhulongProviderDraft.normalizedModel, last: true)
+                    HStack(spacing: 8) {
+                        Image(systemName: store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
+                            .foregroundStyle(store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
+                        Text(store.zhulongProviderDraft.statusMessage)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.text3)
+                            .lineLimit(2)
+                        Spacer()
                     }
                     .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
 
-                    Text(store.zhulongProviderDraft.statusMessage)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Theme.text3)
-                        .lineLimit(2)
-
                     HStack(spacing: 8) {
-                        SmallActionButton(store.copy.openZhulongConfig, tone: .accent) { store.page = .zhulong }
-                        SmallActionButton(store.copy.save) { store.saveZhulongProvider() }
+                        SmallActionButton(store.copy.save, tone: .accent) { store.saveZhulongProvider() }
                         SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
                         SmallActionButton(store.copy.clear, tone: .warn) { store.clearZhulongProvider() }
                     }
@@ -4258,24 +4292,6 @@ struct SettingsProviderOverviewCard: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-    }
-
-    var providerDisplayName: String {
-        let trimmed = store.zhulongProviderDraft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? store.copy.customProvider : trimmed
-    }
-
-    func providerKindLabel(_ kind: AIProviderKind) -> String {
-        switch kind {
-        case .openAICompatible:
-            return "OpenAI-compatible"
-        case .localModel:
-            return "本地模型"
-        case .customHTTP:
-            return "自定义 HTTP"
-        case .mock:
-            return "Mock"
-        }
     }
 }
 
@@ -4412,17 +4428,16 @@ struct ZhulongPage: View {
                                 .font(.system(size: 22, weight: .semibold))
                             Spacer()
                             StatusPill(
-                                text: store.zhulongProviderDraft.isConfigured ? "Provider 已配置" : "Provider 未配置",
-                                color: store.zhulongProviderDraft.isConfigured ? Theme.ok : Theme.warn
+                                text: store.zhulongProviderDraft.enabled ? "建议模式" : "已关闭",
+                                color: store.zhulongProviderDraft.enabled ? Theme.accent : Theme.text3
                             )
                         }
-                        Text("AI 只生成建议草稿。任何创建、排期、变更、延续、废弃或 label 写入，都必须由用户确认后再走普通领域接口。")
+                        Text("烛龙只生成建议草稿。任何创建、排期、变更、延续、废弃或 label 写入，都必须由用户确认后再走普通领域接口。")
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.text2)
                             .lineSpacing(4)
                     }
 
-                    ZhulongProviderCard()
                     ZhulongScopeCard()
 
                     VStack(alignment: .leading, spacing: 8) {
@@ -4450,63 +4465,6 @@ struct ZhulongPage: View {
             ZhulongCapability(task: .scheduling, title: "排期建议", scope: "任务池 + 未来计划 + 未完成池", evidence: "\(store.engine.taskPool().count) 项未排期任务"),
             ZhulongCapability(task: .labelClassification, title: "Label 分类建议", scope: "任务标题、状态和轨迹摘要", evidence: "只生成候选 label，不自动写入")
         ]
-    }
-}
-
-struct ZhulongProviderCard: View {
-    @EnvironmentObject private var store: SuntraceStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Provider 配置", systemImage: "sparkles")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                Spacer()
-                StatusPill(
-                    text: store.zhulongProviderDraft.enabled ? "已启用" : "未启用",
-                    color: store.zhulongProviderDraft.enabled ? Theme.ok : Theme.warn
-                )
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Toggle("启用 Provider", isOn: $store.zhulongProviderDraft.enabled)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 12.5))
-
-                ZhulongProviderKindPicker(selection: $store.zhulongProviderDraft.kind)
-                ZhulongProviderTextField(label: "名称", text: $store.zhulongProviderDraft.displayName, placeholder: "自定义 Provider")
-                ZhulongProviderTextField(label: "Base URL", text: $store.zhulongProviderDraft.baseURL, placeholder: "https://api.example.com/v1")
-                ZhulongProviderTextField(label: "模型", text: $store.zhulongProviderDraft.model, placeholder: "gpt-4.1-mini / llama3.1")
-                ZhulongProviderSecureField(
-                    label: "API Key",
-                    text: $store.zhulongProviderDraft.apiKeyInput,
-                    placeholder: store.zhulongProviderDraft.hasStoredAPIKey ? "Keychain 中已有凭证，留空则保留" : "只保存到 Keychain"
-                )
-            }
-
-            HStack(spacing: 8) {
-                Image(systemName: store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
-                    .foregroundStyle(store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
-                Text(store.zhulongProviderDraft.statusMessage)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.text3)
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-
-            HStack(spacing: 8) {
-                SmallActionButton("保存 Provider", tone: .accent) { store.saveZhulongProvider() }
-                SmallActionButton("测试连接") { store.testZhulongProvider() }
-                SmallActionButton("清空") { store.clearZhulongProvider() }
-            }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
     }
 }
 
@@ -4701,7 +4659,7 @@ struct ZhulongDraftsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("AI 建议草稿")
+                Text("烛龙建议草稿")
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
                 StatusPill(text: "\(store.zhulongDrafts.count) 条", color: Theme.accent)
@@ -5152,20 +5110,14 @@ struct CompletedRecordDetail: View {
                 )
             }
 
-            DetailSection("附言") {
-                EditableDetailText(
-                    text: Binding(
-                        get: { item.trace.note ?? item.definition.note ?? "" },
-                        set: { store.updateTraceText(traceID: item.trace.id, note: $0) }
-                    ),
-                    placeholder: "临时想法、提醒或补充说明…",
-                    editable: editableText,
-                    warm: true,
-                    fallback: "无附言"
-                )
-            }
-
             TraceTimelineSection(trace: item.trace)
+
+            DetailNotesSection(
+                traceID: item.trace.id,
+                noteText: item.trace.note ?? item.definition.note,
+                editable: editableText,
+                placeholder: "追加附言，回车确认"
+            )
         }
     }
 
@@ -5431,18 +5383,6 @@ struct TaskDetail: View {
                     fallback: "未填写描述"
                 )
             }
-            DetailSection("附言") {
-                EditableDetailText(
-                    text: Binding(
-                        get: { trace.note ?? definition.note ?? "" },
-                        set: { store.updateTraceText(traceID: trace.id, note: $0) }
-                    ),
-                    placeholder: "临时想法、提醒或补充说明…",
-                    editable: canEditText,
-                    warm: true,
-                    fallback: "无附言"
-                )
-            }
             DetailSection("子任务") {
                 VStack(spacing: 6) {
                     ForEach(subtasks, id: \.id) { subtask in
@@ -5468,6 +5408,12 @@ struct TaskDetail: View {
             DetailSection("任务轨迹") {
                 Timeline(trace: trace)
             }
+            DetailNotesSection(
+                traceID: trace.id,
+                noteText: trace.note ?? definition.note,
+                editable: canEditText,
+                placeholder: "追加附言，回车确认"
+            )
         }
     }
 }
@@ -5711,6 +5657,118 @@ struct EditableDetailText: View {
     }
 }
 
+struct DetailNoteEntry: Identifiable {
+    let id: Int
+    let timestamp: String
+    let body: String
+}
+
+enum DetailNoteEntryStorage {
+    private static let linePrefix = "["
+    private static let lineSeparator = "] "
+
+    static func entries(from noteText: String?) -> [DetailNoteEntry] {
+        let lines = (noteText ?? "")
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+
+        return lines.enumerated().map { index, line in
+            guard line.hasPrefix(linePrefix),
+                  let separatorRange = line.range(of: lineSeparator)
+            else {
+                return DetailNoteEntry(id: index, timestamp: "已有附言", body: line)
+            }
+            let timestamp = String(line[line.index(after: line.startIndex)..<separatorRange.lowerBound])
+            let body = String(line[separatorRange.upperBound...])
+            return DetailNoteEntry(id: index, timestamp: timestamp, body: body)
+        }
+    }
+
+    static func appending(_ body: String, to noteText: String?) -> String {
+        let timestamp = noteTimestampFormatter.string(from: Date())
+        let line = "[\(timestamp)] \(body)"
+        let existing = noteText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return existing.isEmpty ? line : "\(existing)\n\(line)"
+    }
+
+    private static let noteTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_SG")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter
+    }()
+}
+
+struct DetailNotesSection: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let traceID: DayTraceID
+    let noteText: String?
+    let editable: Bool
+    let placeholder: String
+
+    var entries: [DetailNoteEntry] {
+        DetailNoteEntryStorage.entries(from: noteText)
+    }
+
+    var body: some View {
+        DetailSection("附言") {
+            VStack(alignment: .leading, spacing: 8) {
+                if entries.isEmpty {
+                    Text("无附言")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text3)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                } else {
+                    ForEach(entries) { entry in
+                        DetailNoteEntryRow(entry: entry)
+                    }
+                }
+
+                if editable {
+                    TextField(placeholder, text: $store.detailNoteText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text1)
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                        .onSubmit { store.appendTraceNote(traceID: traceID) }
+                }
+            }
+        }
+    }
+}
+
+struct DetailNoteEntryRow: View {
+    let entry: DetailNoteEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(entry.timestamp)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(Theme.text3)
+                .monospacedDigit()
+            Text(entry.body)
+                .font(.system(size: 12))
+                .italic()
+                .foregroundStyle(Theme.text2)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+    }
+}
+
 struct TraceContextCard: View {
     @EnvironmentObject private var store: SuntraceStore
     let trace: DayTrace
@@ -5927,15 +5985,6 @@ struct PoolDetail: View {
                     fallback: "未填写描述"
                 )
             }
-            DetailSection("附言") {
-                EditableDetailText(
-                    text: .constant(task.definition.note ?? ""),
-                    placeholder: "",
-                    editable: false,
-                    warm: true,
-                    fallback: "无附言"
-                )
-            }
             DetailSection("排期") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
@@ -5943,6 +5992,25 @@ struct PoolDetail: View {
                         SmallActionButton(store.copy.scheduleTomorrow) { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
                     }
                     SmallActionButton(store.copy.schedulePickSpecificDate) { store.showingPicker = .schedulePool(task.chain.id) }
+                }
+            }
+            DetailSection("附言") {
+                VStack(alignment: .leading, spacing: 8) {
+                    let entries = DetailNoteEntryStorage.entries(from: task.definition.note)
+                    if entries.isEmpty {
+                        Text("无附言")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.text3)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
+                            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                    } else {
+                        ForEach(entries) { entry in
+                            DetailNoteEntryRow(entry: entry)
+                        }
+                    }
                 }
             }
         }
@@ -5994,19 +6062,6 @@ struct FuturePlanDetail: View {
                 )
             }
 
-            DetailSection("附言") {
-                EditableDetailText(
-                    text: Binding(
-                        get: { trace.note ?? definition.note ?? "" },
-                        set: { store.updateTraceText(traceID: trace.id, note: $0) }
-                    ),
-                    placeholder: "未来开始前想提醒自己的事项…",
-                    editable: true,
-                    warm: true,
-                    fallback: "无附言"
-                )
-            }
-
             DetailSection("计划操作") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
@@ -6016,6 +6071,17 @@ struct FuturePlanDetail: View {
                     SmallActionButton(store.copy.returnToPool) { store.returnToPool(trace.id) }
                 }
             }
+
+            DetailSection("任务轨迹") {
+                Timeline(trace: trace)
+            }
+
+            DetailNotesSection(
+                traceID: trace.id,
+                noteText: trace.note ?? definition.note,
+                editable: true,
+                placeholder: "追加未来计划附言，回车确认"
+            )
         }
     }
 
@@ -6089,6 +6155,13 @@ struct UnfinishedDetail: View {
                 DetailSection("任务轨迹") {
                     Timeline(trace: trace)
                 }
+
+                DetailNotesSection(
+                    traceID: trace.id,
+                    noteText: trace.note ?? item.definition.note,
+                    editable: false,
+                    placeholder: "追加附言，回车确认"
+                )
             }
         } else {
             RailHint(text: "没有需要处理的未完成轨迹。")

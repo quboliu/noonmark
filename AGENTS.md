@@ -12,13 +12,13 @@
 ## 当前仓库基线
 
 - 初始化日期：2026-07-05
-- 最新确认日期：2026-07-05
+- 最新确认日期：2026-07-06
 - 当前仓库已经初始化 Git，主分支为 `main`，并已关联 `origin/main`。
 - 当前技术栈为 Swift Package Manager 项目，`Package.swift` 使用 `swift-tools-version: 6.0`，目标平台为 macOS 14。
 - 当前源码模块：
   - `SuntraceMacApp`：SwiftUI Mac App，可通过 SwiftPM executable target 构建出 `.app`。
   - `SuntraceCore`：Day Todo、任务链、日轨迹、子任务、池化视图等核心领域引擎。
-  - `SuntraceAI`：烛龙 AI provider、scope、prompt、local insight、建议草稿和授权模型。
+  - `SuntraceAI`：烛龙 provider、scope、prompt、local insight、建议草稿和授权模型。
   - `SuntraceStorage`：SQLite schema 与领域持久化结构。
   - `SuntraceMacUIContract`：Mac UI 设计契约的代码化约束。
 - 当前测试模块：
@@ -28,7 +28,7 @@
   - `SuntraceStorageTests`
   - `SuntraceMacUIContractTests`
   - `SuntraceSimulationTests`
-- 当前文档已包含产品范围、功能规格、烛龙 AI、ADR、研究资料和 Mac UI 设计契约；领域术语以 `CONTEXT.md` 为准。
+- 当前文档已包含产品范围、功能规格、烛龙、ADR、研究资料和 Mac UI 设计契约；领域术语以 `CONTEXT.md` 为准。
 - 当前已有可运行 Mac App target 和本地 DMG 打包脚本；尚未发现后端服务、容器部署配置或生产 deployed endpoint。验证应覆盖 Swift Package 的 build/test、真实 `.app` E2E 截图、持久化探针和 DMG 安装启动。
 
 ## 当前开发入口
@@ -42,6 +42,7 @@
   - `swift test`
 - 当前环境取证：
   - `swift build` 通过。
+  - `make check` 通过，覆盖 `swift build`、UT、IT、ST、确定性仿真测试、SwiftLint 和 SwiftFormat lint。
   - `swift test` 通过，当前 46 个 XCTest 全绿。
   - `scripts/test-visual-regression` 默认覆盖 14 个原型可比场景：7 个顶层页面、6 个详情态和 `day-review-saved`。
   - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`。

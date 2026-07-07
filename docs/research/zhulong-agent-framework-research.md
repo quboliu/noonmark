@@ -1,6 +1,6 @@
-# 烛龙 AI Agent 框架调研
+# 烛龙 Agent 框架调研
 
-本文记录对 `/home/muxunting/WorkSpace/Aranya/CodeStudy/deep-into-agent/exemplar_project/` 下多个 agent 框架的源码调研，并给出晷迹第一版烛龙 AI 的框架取舍。
+本文记录对 `/home/muxunting/WorkSpace/Aranya/CodeStudy/deep-into-agent/exemplar_project/` 下多个 agent 框架的源码调研，并给出晷迹第一版烛龙的框架取舍。
 
 ## 调研对象
 
@@ -30,7 +30,7 @@ OpenClaw 的 runtime registry 和 auth profile 值得保留：provider/runtime �
 
 ## 敲定框架
 
-烛龙 AI 第一版采用独立 Swift target：`SuntraceAI`。它依赖 `SuntraceCore`，但 `SuntraceCore` 不依赖 `SuntraceAI`。
+烛龙 第一版采用独立 Swift target：`SuntraceAI`。它依赖 `SuntraceCore`，但 `SuntraceCore` 不依赖 `SuntraceAI`。
 
 框架分层：
 

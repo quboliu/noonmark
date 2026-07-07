@@ -201,9 +201,9 @@ default_changed_ratios = {
     "unfinished": "0.10",
     "unfinished-detail": "0.145",
     "completed": "0.14",
-    "completed-detail": "0.15",
+    "completed-detail": "0.16",
     "calendar": "0.09",
-    "settings": "0.08",
+    "settings": "0.17",
 }
 default_mean_deltas = {
     "day-detail": "0.030",

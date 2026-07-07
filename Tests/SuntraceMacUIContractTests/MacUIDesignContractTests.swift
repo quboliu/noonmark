@@ -7,7 +7,7 @@ final class MacUIDesignContractTests: XCTestCase {
 
         XCTAssertEqual(
             contract.pages,
-            [.dayTodo, .taskPool, .futurePlans, .unfinishedPool, .completedPool, .calendar, .zhulongAI, .settings]
+            [.dayTodo, .taskPool, .futurePlans, .unfinishedPool, .completedPool, .calendar, .zhulong, .settings]
         )
     }
 
@@ -83,7 +83,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUINavigationIconColorToken.unfinishedPool.hexValue, "#E0851B")
         XCTAssertEqual(MacUINavigationIconColorToken.completedPool.hexValue, "#1F8A5B")
         XCTAssertEqual(MacUINavigationIconColorToken.calendar.hexValue, "#D1477A")
-        XCTAssertEqual(MacUINavigationIconColorToken.zhulongAI.hexValue, "#7C5CFF")
+        XCTAssertEqual(MacUINavigationIconColorToken.zhulong.hexValue, "#7C5CFF")
         XCTAssertEqual(MacUINavigationIconColorToken.settings.hexValue, "#64748B")
 
         XCTAssertTrue(contract.dayTodoElements.contains(.fourteenDayStrip))
@@ -108,6 +108,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.calendarElements.contains(.selectedDayDetail))
         XCTAssertTrue(contract.calendarElements.contains(.compactSelectedDayTaskRows))
         XCTAssertTrue(contract.settingsElements.contains(.customSyncEndpoint))
+        XCTAssertTrue(contract.settingsElements.contains(.zhulongEnabledToggle))
+        XCTAssertTrue(contract.settingsElements.contains(.zhulongProviderConfiguration))
         XCTAssertTrue(contract.settingsElements.contains(.iCloudSync))
         XCTAssertTrue(contract.emptyStateElements.contains(.illustration))
         XCTAssertTrue(contract.emptyStateElements.contains(.copy))
@@ -139,6 +141,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.detailElements.contains(.progressSection))
         XCTAssertTrue(contract.detailElements.contains(.descriptionSection))
         XCTAssertTrue(contract.detailElements.contains(.noteSection))
+        XCTAssertTrue(contract.detailElements.contains(.timestampedNoteEntries))
+        XCTAssertTrue(contract.detailElements.contains(.appendOnlyNoteInput))
         XCTAssertTrue(contract.detailElements.contains(.subtaskSection))
         XCTAssertTrue(contract.detailElements.contains(.subtaskCompletionDate))
         XCTAssertTrue(contract.detailElements.contains(.subtaskLockedIcon))

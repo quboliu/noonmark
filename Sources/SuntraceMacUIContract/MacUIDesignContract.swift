@@ -57,7 +57,7 @@ public enum MacUINavigationIconColorToken: CaseIterable, Sendable {
     case unfinishedPool
     case completedPool
     case calendar
-    case zhulongAI
+    case zhulong
     case settings
 
     public var hexValue: String {
@@ -74,7 +74,7 @@ public enum MacUINavigationIconColorToken: CaseIterable, Sendable {
             return "#1F8A5B"
         case .calendar:
             return "#D1477A"
-        case .zhulongAI:
+        case .zhulong:
             return "#7C5CFF"
         case .settings:
             return "#64748B"
@@ -89,7 +89,7 @@ public enum MacUIPage: String, CaseIterable, Sendable {
     case unfinishedPool
     case completedPool
     case calendar
-    case zhulongAI
+    case zhulong
     case settings
 }
 
@@ -218,6 +218,8 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case progressSection
     case descriptionSection
     case noteSection
+    case timestampedNoteEntries
+    case appendOnlyNoteInput
     case subtaskSection
     case subtaskCompletionDate
     case subtaskLockedIcon
@@ -310,6 +312,8 @@ public enum MacUISettingsElement: String, CaseIterable, Sendable {
     case importData
     case customSyncEndpoint
     case iCloudSync
+    case zhulongEnabledToggle
+    case zhulongProviderConfiguration
 }
 
 public enum MacUIBackendCapability: String, CaseIterable, Sendable {

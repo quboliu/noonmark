@@ -1,6 +1,7 @@
 import Foundation
 import SQLite3
 import SuntraceCore
+import SuntraceSync
 
 public final class SQLiteEngineRepository {
     private let databaseURL: URL
@@ -33,20 +34,45 @@ public final class SQLiteEngineRepository {
         }
     }
 
+    public func save(
+        _ snapshot: SuntraceSnapshot,
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date = Date()
+    ) throws {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        let oldSnapshot = try loadSnapshot(from: database)
+        let journalEntries = SyncSnapshotDiffer().journalEntries(
+            from: oldSnapshot,
+            to: snapshot,
+            changedAt: changedAt,
+            deviceID: deviceID
+        )
+
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            try upsert(snapshot.days, into: database)
+            try upsert(snapshot.chains, into: database)
+            try upsert(snapshot.definitions, into: database)
+            try upsert(snapshot.traces, into: database)
+            try upsert(snapshot.subtasks, into: database)
+            try upsert(snapshot.preferences, into: database)
+            try appendJournalEntries(journalEntries, into: database)
+            try execute("COMMIT", on: database)
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
     public func load() throws -> SuntraceEngine {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
-        let snapshot = try SuntraceSnapshot(
-            days: loadDays(from: database),
-            chains: loadChains(from: database),
-            definitions: loadDefinitions(from: database),
-            traces: loadTraces(from: database),
-            subtasks: loadSubtasks(from: database),
-            preferences: loadPreferences(from: database)
-        )
-        return SuntraceEngine(snapshot: snapshot)
+        return try SuntraceEngine(snapshot: loadSnapshot(from: database))
     }
 }
 
@@ -248,6 +274,17 @@ private extension SQLiteEngineRepository {
 }
 
 private extension SQLiteEngineRepository {
+    func loadSnapshot(from database: Database?) throws -> SuntraceSnapshot {
+        try SuntraceSnapshot(
+            days: loadDays(from: database),
+            chains: loadChains(from: database),
+            definitions: loadDefinitions(from: database),
+            traces: loadTraces(from: database),
+            subtasks: loadSubtasks(from: database),
+            preferences: loadPreferences(from: database)
+        )
+    }
+
     func upsert(_ days: [Day], into database: Database?) throws {
         let sql = """
         INSERT INTO days(id, date, locked_at, review_summary, review_unfinished_reason, review_tomorrow_note, created_at, updated_at)
@@ -452,6 +489,37 @@ private extension SQLiteEngineRepository {
             bind(preferences.theme.rawValue, to: 1, in: statement)
             bind(preferences.language.rawValue, to: 2, in: statement)
             bind(Date(timeIntervalSince1970: 0), to: 3, in: statement)
+        }
+    }
+
+    func appendJournalEntries(_ entries: [SyncJournalEntry], into database: Database?) throws {
+        let sql = """
+        INSERT INTO change_journal(
+            id, entity_type, entity_id, operation, changed_at, device_id, sync_state, retry_count, last_error
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            entity_type = excluded.entity_type,
+            entity_id = excluded.entity_id,
+            operation = excluded.operation,
+            changed_at = excluded.changed_at,
+            device_id = excluded.device_id,
+            sync_state = excluded.sync_state,
+            retry_count = excluded.retry_count,
+            last_error = excluded.last_error
+        """
+        for entry in entries {
+            try run(sql, on: database) { statement in
+                bind(entry.id, to: 1, in: statement)
+                bind(entry.entityType.rawValue, to: 2, in: statement)
+                bind(entry.entityID, to: 3, in: statement)
+                bind(entry.operation.rawValue, to: 4, in: statement)
+                bind(entry.changedAt, to: 5, in: statement)
+                bind(entry.deviceID.rawValue, to: 6, in: statement)
+                bind(entry.state.rawValue, to: 7, in: statement)
+                bind(entry.retryCount, to: 8, in: statement)
+                bind(entry.lastError, to: 9, in: statement)
+            }
         }
     }
 }

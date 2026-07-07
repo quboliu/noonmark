@@ -1,9 +1,11 @@
+@testable import SuntraceCore
 @testable import SuntraceStorage
 import SuntraceSync
 import XCTest
 
 final class SQLiteSyncRepositoryTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private let today = LocalDate("2026-07-05")
 
     func testDeviceIdentityAndMetadataRoundTrip() throws {
         let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
@@ -102,6 +104,38 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
 
         XCTAssertEqual(try repository.auditLog().map(\.id), [newer.id, older.id])
         XCTAssertEqual(try repository.auditLog(limit: 1), [newer])
+    }
+
+    func testEngineSaveCanRecordDomainChangesIntoSyncJournal() throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let deviceID = SyncDeviceID("mac-a")
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "先保存基础任务", now: now)
+
+        try engineRepository.save(engine.snapshot())
+
+        XCTAssertTrue(try syncRepository.journalEntries().isEmpty)
+
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: today, today: today, now: now)
+        let subtaskID = try engine.addSubtask(traceID: traceID, title: "写入同步队列", difficulty: .medium, now: now)
+        try engineRepository.save(engine.snapshot(), recordingChangesFor: deviceID, changedAt: now.addingTimeInterval(10))
+
+        let scheduledEntries = try syncRepository.journalEntries(state: .pendingUpload)
+        XCTAssertEqual(scheduledEntries.map(\.entityType), [.day, .dayTrace, .subtask])
+        XCTAssertEqual(Set(scheduledEntries.map(\.deviceID)), [deviceID])
+
+        try syncRepository.markJournalEntriesUploaded(scheduledEntries.map(\.id))
+        try engineRepository.save(engine.snapshot(), recordingChangesFor: deviceID, changedAt: now.addingTimeInterval(20))
+
+        XCTAssertTrue(try syncRepository.journalEntries(state: .pendingUpload).isEmpty)
+
+        engine.updateDailyReview(date: today, summary: "同步保存复盘", unfinishedReason: nil, tomorrowNote: nil, now: now.addingTimeInterval(30))
+        try engine.updateSubtaskDifficulty(subtaskID, difficulty: .hard, today: today)
+        try engineRepository.save(engine.snapshot(), recordingChangesFor: deviceID, changedAt: now.addingTimeInterval(30))
+
+        XCTAssertEqual(try syncRepository.journalEntries(state: .pendingUpload).map(\.entityType), [.day, .subtask])
     }
 
     private func makeDatabaseURL() -> URL {

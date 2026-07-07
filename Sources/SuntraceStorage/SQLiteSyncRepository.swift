@@ -122,7 +122,18 @@ public final class SQLiteSyncRepository {
         SELECT id, entity_type, entity_id, operation, changed_at, device_id, sync_state, retry_count, last_error
         FROM change_journal
         WHERE (? IS NULL OR sync_state = ?)
-        ORDER BY changed_at, id
+        ORDER BY changed_at,
+            CASE entity_type
+                WHEN 'taskChain' THEN 0
+                WHEN 'taskDefinition' THEN 1
+                WHEN 'day' THEN 2
+                WHEN 'dayTrace' THEN 3
+                WHEN 'subtask' THEN 4
+                WHEN 'appPreferences' THEN 5
+                ELSE 6
+            END,
+            entity_id,
+            id
         LIMIT ?
         """
         return try query(sql, on: database) { statement in

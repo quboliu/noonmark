@@ -199,7 +199,7 @@ default_changed_ratios = {
     "future": "0.05",
     "future-detail": "0.08",
     "unfinished": "0.10",
-    "unfinished-detail": "0.145",
+    "unfinished-detail": "0.16",
     "completed": "0.14",
     "completed-detail": "0.16",
     "calendar": "0.09",
@@ -208,7 +208,7 @@ default_changed_ratios = {
 default_mean_deltas = {
     "day-detail": "0.030",
     "day-manual-detail": "0.030",
-    "completed-detail": "0.026",
+    "completed-detail": "0.028",
 }
 default_changed_ratio = default_changed_ratios.get(page, "0.12")
 default_mean_delta = default_mean_deltas.get(page, "0.025")

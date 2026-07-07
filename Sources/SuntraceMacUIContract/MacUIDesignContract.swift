@@ -117,6 +117,7 @@ public enum MacUIDayTodoElement: String, CaseIterable, Sendable {
     case taskRowTitle
     case taskRowProgress
     case taskRowTrajectoryMetadata
+    case changedTraceTargetJump
     case taskRowSubtaskExpansion
     case statusChips
     case priorityStepper
@@ -198,6 +199,7 @@ public enum MacUICalendarElement: String, CaseIterable, Sendable {
     case openDayTodoLink
     case selectedDayTaskList
     case compactSelectedDayTaskRows
+    case changedTraceTargetJump
     case emptyState
 }
 
@@ -219,6 +221,8 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case historyReadonlyNotice
     case progressSection
     case descriptionSection
+    case descriptionImmediatelyUnderTitle
+    case descriptionWithoutSectionTitle
     case noteSection
     case timestampedNoteEntries
     case appendOnlyNoteInput
@@ -227,6 +231,7 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case subtaskLockedIcon
     case subtaskDifficultyWeight
     case traceTimeline
+    case changedTraceTargetJump
 }
 
 public enum MacUIReviewElement: String, CaseIterable, Sendable {

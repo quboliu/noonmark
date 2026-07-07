@@ -19,6 +19,8 @@ export SUNTRACE_E2E_APP_DISPLAY_NAME="$app_display_name"
 
 scenarios=(
   "day|day|"
+  "day-subtasks-expanded|day|--e2e-expand-first-subtask-trace"
+  "day-changed-target|day|--select changed"
   "day-detail|day|--select first"
   "day-manual-detail|day|--select manual"
   "day-review-saved|day|--e2e-update-review --e2e-review-summary E2E自动保存反馈"
@@ -178,7 +180,13 @@ capture_app_screenshot() {
   shift 3
 
   case "$page" in
-    day) expected_window_title="晷迹 · Day Todo — 7月5日" ;;
+    day)
+      if [[ "$screenshot_name" == "day-changed-target" ]]; then
+        expected_window_title="晷迹 · Day Todo — 7月4日"
+      else
+        expected_window_title="晷迹 · Day Todo — 7月5日"
+      fi
+      ;;
     pool) expected_window_title="晷迹 · 任务池" ;;
     future) expected_window_title="晷迹 · 未来计划" ;;
     unfinished) expected_window_title="晷迹 · 未完成" ;;

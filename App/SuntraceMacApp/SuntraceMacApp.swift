@@ -28,7 +28,7 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--select"), let index = CommandLine.arguments.firstIndex(of: "--select") {
             let valueIndex = CommandLine.arguments.index(after: index)
             let selectionName = CommandLine.arguments.indices.contains(valueIndex) ? CommandLine.arguments[valueIndex] : ""
-            if selectionName == "first" || selectionName == "manual" {
+            if ["first", "manual", "changed"].contains(selectionName) {
                 delegate.store.selectItemForLaunch(selectionName)
             }
         }
@@ -166,6 +166,17 @@ private struct LaunchAutomation {
         append(UndoE2EAutomation.fromCommandLine(), to: &actions)
         append(DateStripE2EAutomation.fromCommandLine(), to: &actions)
         append(KeyboardDateNavigationE2EAutomation.fromCommandLine(), to: &actions)
+
+        if CommandLine.arguments.contains("--e2e-expand-first-subtask-trace") {
+            actions.append { store in
+                store.page = .day
+                store.selectedDate = store.today
+                if let trace = store.engine.getDayTodo(date: store.today).traces.first(where: { store.subtasks(for: $0.id).isEmpty == false }) {
+                    store.selectTrace(trace.id)
+                    store.expandedTraceIDs.insert(trace.id)
+                }
+            }
+        }
 
         guard actions.isEmpty == false else { return nil }
         return LaunchAutomation(
@@ -762,6 +773,20 @@ private struct LifecycleE2EAutomation: LaunchAutomationRunnable {
         store.selectTrace(traceID)
         store.changeText = newTitle
         store.changeSelectedTrace()
+        guard let oldTrace = store.engine.traces[traceID] else {
+            throw LifecycleE2EAutomationError.failed("changed source trace missing")
+        }
+        guard let target = store.changedTarget(for: oldTrace),
+              target.definition.title == newTitle
+        else {
+            throw LifecycleE2EAutomationError.failed("changed target did not resolve to new task title")
+        }
+        store.openChangedTarget(from: oldTrace)
+        guard store.selectedTraceID == target.trace.id,
+              store.selectedDate == target.trace.date
+        else {
+            throw LifecycleE2EAutomationError.failed("changed target jump did not select new trace")
+        }
     }
 
     @MainActor
@@ -785,6 +810,17 @@ private struct LifecycleE2EAutomation: LaunchAutomationRunnable {
             withIntermediateDirectories: true
         )
         try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum LifecycleE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
     }
 }
 
@@ -1343,6 +1379,24 @@ final class SuntraceStore: ObservableObject {
         detailSubtaskText = ""
     }
 
+    func changedTarget(for trace: DayTrace) -> (trace: DayTrace, definition: TaskDefinition)? {
+        guard let targetTraceID = trace.changedToTraceID,
+              let targetTrace = engine.traces[targetTraceID],
+              let targetDefinition = engine.definitions[targetTrace.definitionID]
+        else {
+            return nil
+        }
+        return (targetTrace, targetDefinition)
+    }
+
+    func openChangedTarget(from trace: DayTrace) {
+        guard let target = changedTarget(for: trace) else { return }
+        page = .day
+        selectedDate = target.trace.date
+        selectedCalendarDate = target.trace.date
+        selectTrace(target.trace.id)
+    }
+
     func selectPool(_ chainID: TaskChainID) {
         selectedPoolChainID = chainID
         selectedTraceID = nil
@@ -1397,6 +1451,16 @@ final class SuntraceStore: ObservableObject {
     }
 
     private func selectLaunchDayItem(_ selectionName: String) {
+        let latestChangedTrace = engine.traces.values
+            .filter { $0.status == .changed && $0.changedToTraceID != nil }
+            .sorted { $0.date > $1.date }
+            .first
+        if selectionName == "changed", let changedTrace = latestChangedTrace {
+            selectedDate = changedTrace.date
+            selectTrace(changedTrace.id)
+            return
+        }
+
         let traces = engine.getDayTodo(date: selectedDate).traces
         let trace = selectionName == "manual"
             ? traces.first { subtasks(for: $0.id).isEmpty && $0.status == .pending }
@@ -3143,21 +3207,31 @@ struct TaskRow: View {
                             .foregroundStyle(Theme.text3)
                             .padding(.top, 2)
                     }
+
+                    if let changedTarget = store.changedTarget(for: trace) {
+                        ChangedTargetButton(
+                            title: changedTarget.definition.title,
+                            compact: true
+                        ) {
+                            store.openChangedTarget(from: trace)
+                        }
+                        .padding(.top, 3)
+                    }
                 }
 
                 Spacer()
 
                 if subtasks.isEmpty == false {
-                    Button(expanded ? "▾" : "▸") {
+                    Button {
                         if expanded {
                             store.expandedTraceIDs.remove(trace.id)
                         } else {
                             store.expandedTraceIDs.insert(trace.id)
                         }
+                    } label: {
+                        SubtaskDisclosureLabel(count: subtasks.count, expanded: expanded)
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
                 }
 
                 StatusChip(status: trace.status)
@@ -3180,6 +3254,7 @@ struct TaskRow: View {
                         SubtaskRow(subtask: subtask)
                     }
                 }
+                .padding(.top, 1)
                 .padding(.leading, 40)
                 .padding(.trailing, 12)
                 .padding(.bottom, 10)
@@ -3207,7 +3282,6 @@ struct TaskRow: View {
         if trace.continuationSeq > 0 {
             parts.append("第 \(trace.continuationSeq) 次延续 · 持续 \(store.continuationDurationDays(for: trace)) 天")
         }
-        if trace.changedToTraceID != nil { parts.append("被变更为新任务") }
         if trace.status == .returnedToPool { parts.append("当天已回池") }
         return parts.joined(separator: " · ")
     }
@@ -3239,6 +3313,57 @@ struct TaskRow: View {
         store.engine.getDayTodo(date: trace.date).traces
             .filter { $0.status == .pending }
             .map(\.priority)
+    }
+}
+
+struct SubtaskDisclosureLabel: View {
+    let count: Int
+    let expanded: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .bold))
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+            Text("\(count) 子任务")
+                .font(.system(size: 11, weight: .semibold))
+                .monospacedDigit()
+        }
+        .foregroundStyle(Theme.accent)
+        .padding(.horizontal, 7)
+        .frame(height: 22)
+        .background(Capsule().fill(Theme.accentSoft))
+        .contentShape(Capsule())
+    }
+}
+
+struct ChangedTargetButton: View {
+    let title: String
+    var compact = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text("被变更为：")
+                    .foregroundStyle(Theme.text3)
+                Text(title)
+                    .lineLimit(1)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: compact ? 8.5 : 9.5, weight: .bold))
+            }
+            .font(.system(size: compact ? 10.5 : 11, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, compact ? 0 : 7)
+            .frame(height: compact ? nil : 22)
+            .background {
+                if !compact {
+                    Capsule().fill(Theme.accentSoft)
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -4181,11 +4306,19 @@ struct CalendarDetailRow: View {
                     .foregroundStyle(titleColor)
                     .strikethrough(trace.status == .completed || trace.status == .abandoned)
                     .lineLimit(1)
-                if trace.continuationSeq > 0 || trace.changedToTraceID != nil {
+                if metaText.isEmpty == false {
                     Text(metaText)
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(1)
+                }
+                if let changedTarget = store.changedTarget(for: trace) {
+                    ChangedTargetButton(
+                        title: changedTarget.definition.title,
+                        compact: true
+                    ) {
+                        store.openChangedTarget(from: trace)
+                    }
                 }
             }
 
@@ -4206,9 +4339,6 @@ struct CalendarDetailRow: View {
         var parts: [String] = []
         if trace.continuationSeq > 0 {
             parts.append("第 \(trace.continuationSeq) 次延续 · 持续 \(store.continuationDurationDays(for: trace)) 天")
-        }
-        if trace.changedToTraceID != nil {
-            parts.append("被变更为新任务")
         }
         return parts.joined(separator: " · ")
     }
@@ -5178,6 +5308,22 @@ extension DetailTitleRow where Trailing == EmptyView {
     }
 }
 
+struct DetailDescriptionBlock: View {
+    @Binding var text: String
+    let placeholder: String
+    let editable: Bool
+
+    var body: some View {
+        EditableDetailText(
+            text: $text,
+            placeholder: placeholder,
+            editable: editable,
+            warm: false,
+            fallback: "未填写描述"
+        )
+    }
+}
+
 struct CompletedRecordDetail: View {
     @EnvironmentObject private var store: SuntraceStore
     let item: CompletedPoolItem
@@ -5195,6 +5341,15 @@ struct CompletedRecordDetail: View {
                 })
             }
 
+            DetailDescriptionBlock(
+                text: Binding(
+                    get: { item.trace.descriptionText ?? item.definition.descriptionText ?? "" },
+                    set: { store.updateTraceText(traceID: item.trace.id, descriptionText: $0) }
+                ),
+                placeholder: "补充这个任务的背景、目标或范围…",
+                editable: editableText
+            )
+
             HStack(spacing: 8) {
                 StatusChip(status: .completed)
                 Text("\(SuntraceStore.displayDate(item.trace.date)) \(SuntraceStore.weekday(item.trace.date))")
@@ -5207,19 +5362,6 @@ struct CompletedRecordDetail: View {
                 progress: store.engine.traceProgress(for: item.trace.id),
                 editable: false
             )
-
-            DetailSection("描述") {
-                EditableDetailText(
-                    text: Binding(
-                        get: { item.trace.descriptionText ?? item.definition.descriptionText ?? "" },
-                        set: { store.updateTraceText(traceID: item.trace.id, descriptionText: $0) }
-                    ),
-                    placeholder: "补充这个任务的背景、目标或范围…",
-                    editable: editableText,
-                    warm: false,
-                    fallback: "未填写描述"
-                )
-            }
 
             TraceTimelineSection(trace: item.trace)
 
@@ -5467,6 +5609,15 @@ struct TaskDetail: View {
                 })
             }
 
+            DetailDescriptionBlock(
+                text: Binding(
+                    get: { trace.descriptionText ?? definition.descriptionText ?? "" },
+                    set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
+                ),
+                placeholder: "补充这个任务的背景、目标或范围…",
+                editable: canEditText
+            )
+
             HStack {
                 StatusChip(status: trace.status)
                 Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
@@ -5482,18 +5633,6 @@ struct TaskDetail: View {
                 progress: progress,
                 editable: canEditManualProgress
             )
-            DetailSection("描述") {
-                EditableDetailText(
-                    text: Binding(
-                        get: { trace.descriptionText ?? definition.descriptionText ?? "" },
-                        set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
-                    ),
-                    placeholder: "补充这个任务的背景、目标或范围…",
-                    editable: canEditText,
-                    warm: false,
-                    fallback: "未填写描述"
-                )
-            }
             DetailSection("子任务") {
                 VStack(spacing: 6) {
                     ForEach(subtasks, id: \.id) { subtask in
@@ -5890,10 +6029,12 @@ struct TraceContextCard: View {
             Text("·")
                 .foregroundStyle(Theme.text3)
             Text("持续 \(durationDays) 天")
-            if trace.changedToTraceID != nil {
+            if let changedTarget = store.changedTarget(for: trace) {
                 Text("·")
                     .foregroundStyle(Theme.text3)
-                Text("被变更为新任务")
+                ChangedTargetButton(title: changedTarget.definition.title) {
+                    store.openChangedTarget(from: trace)
+                }
             }
             if trace.status == .returnedToPool {
                 Text("·")
@@ -5969,6 +6110,15 @@ struct Timeline: View {
                         Text("\(SuntraceStore.displayDate(item.date)) \(SuntraceStore.weekday(item.date))")
                             .font(.system(size: 10.5))
                             .foregroundStyle(Theme.text3)
+                        if let changedTarget = store.changedTarget(for: item) {
+                            ChangedTargetButton(
+                                title: changedTarget.definition.title,
+                                compact: true
+                            ) {
+                                store.openChangedTarget(from: item)
+                            }
+                            .padding(.top, 2)
+                        }
                     }
                     .padding(.top, 1)
                     .padding(.bottom, isLast ? 0 : 12)
@@ -6068,6 +6218,11 @@ struct PoolDetail: View {
             Text(task.definition.title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.text1)
+            DetailDescriptionBlock(
+                text: .constant(task.definition.descriptionText ?? ""),
+                placeholder: "",
+                editable: false
+            )
             HStack {
                 StatusPill(text: "未排期", color: Theme.accent)
                 Text("任务链仍在任务池")
@@ -6086,15 +6241,6 @@ struct PoolDetail: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            }
-            DetailSection("描述") {
-                EditableDetailText(
-                    text: .constant(task.definition.descriptionText ?? ""),
-                    placeholder: "",
-                    editable: false,
-                    warm: false,
-                    fallback: "未填写描述"
-                )
             }
             DetailSection("排期") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -6145,6 +6291,15 @@ struct FuturePlanDetail: View {
                 })
             }
 
+            DetailDescriptionBlock(
+                text: Binding(
+                    get: { trace.descriptionText ?? definition.descriptionText ?? "" },
+                    set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
+                ),
+                placeholder: "补充这个计划的背景、目标或范围…",
+                editable: true
+            )
+
             HStack(spacing: 8) {
                 PlanMetaPill(text: "计划草稿", color: Theme.navFuture)
                 Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
@@ -6159,19 +6314,6 @@ struct FuturePlanDetail: View {
             ])
 
             Notice(text: "未来计划可改期、排序或回池；到达当天前不能标记完成。", tone: .locked)
-
-            DetailSection("描述") {
-                EditableDetailText(
-                    text: Binding(
-                        get: { trace.descriptionText ?? definition.descriptionText ?? "" },
-                        set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
-                    ),
-                    placeholder: "补充这个计划的背景、目标或范围…",
-                    editable: true,
-                    warm: false,
-                    fallback: "未填写描述"
-                )
-            }
 
             DetailSection("计划操作") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -6246,6 +6388,12 @@ struct UnfinishedDetail: View {
             VStack(alignment: .leading, spacing: 14) {
                 DetailHeader("任务详情", onClose: { store.clearSelection() })
                 DetailTitleRow(item.definition.title)
+
+                DetailDescriptionBlock(
+                    text: .constant(trace.descriptionText ?? item.definition.descriptionText ?? ""),
+                    placeholder: "",
+                    editable: false
+                )
 
                 HStack(spacing: 8) {
                     StatusChip(status: .unfinished)

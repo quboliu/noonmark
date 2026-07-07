@@ -15,6 +15,9 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
     static func main() {
         let app = NSApplication.shared
         let delegate = SuntraceMacApp()
+        if CommandLine.arguments.contains("--e2e-enable-zhulong") {
+            delegate.store.zhulongProviderDraft.enabled = true
+        }
         if CommandLine.arguments.contains("--e2e-reset-selection") {
             delegate.store.resetLaunchSelection()
         }
@@ -40,6 +43,7 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
+        store.ensureVisiblePage()
         openMainWindow()
         runLaunchAutomationIfNeeded()
     }
@@ -166,6 +170,9 @@ private struct LaunchAutomation {
         append(UndoE2EAutomation.fromCommandLine(), to: &actions)
         append(DateStripE2EAutomation.fromCommandLine(), to: &actions)
         append(KeyboardDateNavigationE2EAutomation.fromCommandLine(), to: &actions)
+        append(ZhulongNavigationE2EAutomation.fromCommandLine(), to: &actions)
+        append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)
+        append(SummarySidebarE2EAutomation.fromCommandLine(), to: &actions)
 
         if CommandLine.arguments.contains("--e2e-expand-first-subtask-trace") {
             actions.append { store in
@@ -679,6 +686,191 @@ private struct KeyboardDateNavigationE2EAutomation: LaunchAutomationRunnable {
 }
 
 private enum KeyboardDateNavigationE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
+private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> ZhulongNavigationE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-zhulong-navigation") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-zhulong-navigation-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return ZhulongNavigationE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            store.zhulongProviderDraft.enabled = false
+            store.ensureVisiblePage()
+            try expect(store.visibleNavigationPages.contains(.zhulong) == false, "disabled zhulong remained visible")
+            store.selectPage(.zhulong)
+            try expect(store.page == .day, "disabled zhulong selection did not fall back to Day Todo")
+
+            store.zhulongProviderDraft.enabled = true
+            try expect(store.visibleNavigationPages.contains(.zhulong), "enabled zhulong was not visible")
+            store.selectPage(.zhulong)
+            try expect(store.page == .zhulong, "enabled zhulong selection did not open the page")
+
+            store.zhulongProviderDraft.enabled = false
+            store.ensureVisiblePage()
+            try expect(store.visibleNavigationPages.contains(.zhulong) == false, "disabled zhulong remained visible after closing")
+            try expect(store.page == .day, "closing zhulong while active did not move to Day Todo")
+
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func expect(_ condition: Bool, _ message: String) throws {
+        guard condition else { throw ZhulongNavigationE2EAutomationError.failed(message) }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum ZhulongNavigationE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
+private struct SubtaskMutationE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> SubtaskMutationE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-subtask-mutation") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-subtask-mutation-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return SubtaskMutationE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            store.page = .day
+            store.selectedDate = store.today
+            guard let trace = store.engine.getDayTodo(date: store.today).traces.first(where: { store.subtasks(for: $0.id).contains { $0.status == .pending } }),
+                  let subtask = store.subtasks(for: trace.id).first(where: { $0.status == .pending })
+            else {
+                throw SubtaskMutationE2EAutomationError.failed("missing current pending subtask")
+            }
+
+            store.selectTrace(trace.id)
+            store.toggleSubtask(subtask.id)
+            try expect(store.engine.subtasks[subtask.id]?.status == .completed, "subtask did not complete")
+            try expect(store.engine.subtasks[subtask.id]?.completedAt != nil, "completedAt was not recorded")
+
+            store.toggleSubtask(subtask.id)
+            try expect(store.engine.subtasks[subtask.id]?.status == .pending, "subtask did not undo completion")
+            try expect(store.engine.subtasks[subtask.id]?.completedAt == nil, "completedAt was not cleared")
+
+            store.setSubtaskDifficulty(subtask.id, difficulty: .hard)
+            try expect(store.engine.subtasks[subtask.id]?.difficulty == .hard, "subtask difficulty did not update")
+
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func expect(_ condition: Bool, _ message: String) throws {
+        guard condition else { throw SubtaskMutationE2EAutomationError.failed(message) }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum SubtaskMutationE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
+private struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> SummarySidebarE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-summary-sidebar-probe") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-summary-sidebar-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return SummarySidebarE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            for page in [SuntraceStore.Page.pool, .future, .unfinished, .completed] {
+                store.page = page
+                store.clearSelection()
+                guard let model = SidebarAnalysisModel.make(for: page, store: store),
+                      model.metrics.isEmpty == false,
+                      model.recommendations.isEmpty == false
+                else {
+                    throw SummarySidebarE2EAutomationError.failed("\(page.rawValue) default analysis was empty")
+                }
+            }
+
+            store.page = .calendar
+            store.selectedCalendarDate = store.today
+            let insight = CalendarDayInsight.make(for: store.selectedCalendarDate, store: store)
+            guard insight.hasEnhancedContent else {
+                throw SummarySidebarE2EAutomationError.failed("calendar day insight was empty")
+            }
+
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error)")
+        }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum SummarySidebarE2EAutomationError: LocalizedError {
     case failed(String)
 
     var errorDescription: String? {
@@ -1211,6 +1403,19 @@ final class SuntraceStore: ObservableObject {
         return zhulongDrafts.first { $0.id == selectedZhulongDraftID }
     }
 
+    var isZhulongEnabled: Bool {
+        zhulongProviderDraft.enabled
+    }
+
+    var visibleNavigationPages: [Page] {
+        var pages: [Page] = [.day, .pool, .future, .unfinished, .completed, .calendar]
+        if isZhulongEnabled {
+            pages.append(.zhulong)
+        }
+        pages.append(.settings)
+        return pages
+    }
+
     var copy: AppCopy {
         AppCopy(language: engine.preferences.language)
     }
@@ -1244,6 +1449,44 @@ final class SuntraceStore: ObservableObject {
             return copy.navZhulong
         case .settings:
             return copy.navSettings
+        }
+    }
+
+    func navigationLabel(for page: Page) -> String {
+        switch page {
+        case .day:
+            return copy.navDay
+        case .pool:
+            return copy.navPool
+        case .future:
+            return copy.navFuture
+        case .unfinished:
+            return copy.navUnfinished
+        case .completed:
+            return copy.navCompleted
+        case .calendar:
+            return copy.navCalendar
+        case .zhulong:
+            return copy.navZhulong
+        case .settings:
+            return copy.navSettings
+        }
+    }
+
+    func navigationCount(for page: Page) -> Int {
+        switch page {
+        case .day:
+            return engine.getDayTodo(date: today).traces.filter { $0.status == .pending }.count
+        case .pool:
+            return engine.taskPool().count
+        case .future:
+            return engine.futurePlans(today: today).count
+        case .unfinished:
+            return engine.unfinishedPool().count
+        case .completed:
+            return engine.completedPool().count + engine.completedSubtaskRecords().count
+        case .calendar, .zhulong, .settings:
+            return 0
         }
     }
 
@@ -1366,8 +1609,22 @@ final class SuntraceStore: ObservableObject {
     }
 
     func selectPage(_ next: Page) {
+        page = visiblePage(for: next)
+        clearSelection()
+    }
+
+    func ensureVisiblePage(preferredFallback: Page = .day) {
+        let next = visiblePage(for: page, preferredFallback: preferredFallback)
+        guard next != page else { return }
         page = next
         clearSelection()
+    }
+
+    private func visiblePage(for requested: Page, preferredFallback: Page = .day) -> Page {
+        guard requested != .zhulong || isZhulongEnabled else {
+            return preferredFallback == .zhulong ? .day : preferredFallback
+        }
+        return requested
     }
 
     func selectTrace(_ traceID: DayTraceID) {
@@ -1575,32 +1832,66 @@ final class SuntraceStore: ObservableObject {
     func toggleSubtask(_ subtaskID: SubtaskID) {
         guard let subtask = engine.subtasks[subtaskID] else { return }
         guard let trace = engine.traces[subtask.traceID] else { return }
+        guard canMutateSubtask(subtask) else {
+            showToast(subtaskMutationUnavailableMessage(for: trace))
+            return
+        }
         do {
             if subtask.status == .pending {
                 pushUndoSnapshotIfAllowed(on: trace.date)
                 try engine.completeSubtask(subtaskID, today: today)
                 persist()
                 showToast("子任务已完成")
+            } else if subtask.status == .completed {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+                try engine.undoCompletedSubtask(subtaskID, today: today)
+                persist()
+                showToast("子任务已撤回")
             } else {
-                showToast("历史子任务不可改写")
+                showToast("只有待完成或已完成子任务可切换")
             }
         } catch {
             showToast(error.localizedDescription)
         }
     }
 
+    func canMutateSubtask(_ subtask: Subtask) -> Bool {
+        guard let trace = engine.traces[subtask.traceID] else { return false }
+        return trace.date == today && trace.status == .pending
+    }
+
+    private func subtaskMutationUnavailableMessage(for trace: DayTrace) -> String {
+        if trace.date < today {
+            return "历史子任务不可改写"
+        }
+        if trace.date > today {
+            return "未来子任务到当天前不可改写"
+        }
+        return "父任务不是待完成状态，子任务不可改写"
+    }
+
     func cycleSubtaskDifficulty(_ subtaskID: SubtaskID) {
         guard let current = engine.subtasks[subtaskID]?.difficulty else { return }
-        guard let trace = engine.subtasks[subtaskID].flatMap({ engine.traces[$0.traceID] }) else { return }
         let next: SubtaskDifficulty = switch current {
         case .simple: .medium
         case .medium: .hard
         case .hard: .simple
         }
+        setSubtaskDifficulty(subtaskID, difficulty: next)
+    }
+
+    func setSubtaskDifficulty(_ subtaskID: SubtaskID, difficulty: SubtaskDifficulty) {
+        guard let subtask = engine.subtasks[subtaskID] else { return }
+        guard let trace = engine.traces[subtask.traceID] else { return }
+        guard canMutateSubtask(subtask) else {
+            showToast(subtaskMutationUnavailableMessage(for: trace))
+            return
+        }
         do {
             pushUndoSnapshotIfAllowed(on: trace.date)
-            try engine.updateSubtaskDifficulty(subtaskID, difficulty: next, today: today)
+            try engine.updateSubtaskDifficulty(subtaskID, difficulty: difficulty, today: today)
             persist()
+            showToast("子任务难度已更新")
         } catch {
             showToast(error.localizedDescription)
         }
@@ -1839,6 +2130,9 @@ final class SuntraceStore: ObservableObject {
     func saveZhulongProvider() {
         do {
             zhulongProviderDraft = try ZhulongProviderSettingsStore.save(zhulongProviderDraft)
+            if zhulongProviderDraft.enabled == false {
+                ensureVisiblePage()
+            }
             showToast("Provider 配置已保存")
         } catch {
             showToast("Provider 保存失败：\(error.localizedDescription)")
@@ -1848,6 +2142,7 @@ final class SuntraceStore: ObservableObject {
     func clearZhulongProvider() {
         do {
             zhulongProviderDraft = try ZhulongProviderSettingsStore.clear()
+            ensureVisiblePage(preferredFallback: .settings)
             showToast("Provider 配置已清空")
         } catch {
             showToast("Provider 清空失败：\(error.localizedDescription)")
@@ -2430,6 +2725,9 @@ struct SuntraceRootView: View {
         .onChange(of: store.windowTitle) { _, _ in
             syncNativeWindowTitle()
         }
+        .onChange(of: store.isZhulongEnabled) { _, _ in
+            store.ensureVisiblePage()
+        }
     }
 
     private func syncNativeWindowTitle() {
@@ -2558,6 +2856,10 @@ struct AppCopy {
     var languageTitle: String { language == .chinese ? "语言" : "Language" }
 
     var dataSectionTitle: String { language == .chinese ? "数据" : "Data" }
+    var dataSectionSubtitle: String {
+        language == .chinese ? "导出和导入本机数据包。" : "Export and import local data packages."
+    }
+
     var exportJSON: String { language == .chinese ? "导出数据 (JSON)" : "Export JSON" }
     var importData: String { language == .chinese ? "导入数据…" : "Import…" }
     var todayTraceMetric: String { language == .chinese ? "今日轨迹" : "Today" }
@@ -2565,6 +2867,10 @@ struct AppCopy {
     var unfinishedMetric: String { navUnfinished }
     var completedMetric: String { navCompleted }
     var syncTitle: String { language == .chinese ? "同步" : "Sync" }
+    var syncSubtitle: String {
+        language == .chinese ? "同步入口保留在设置中，当前能力标记为规划中。" : "Sync controls stay in Settings; current options are marked as planned."
+    }
+
     var planned: String { language == .chinese ? "规划中" : "Planned" }
 
     var providerTitle: String { language == .chinese ? "烛龙配置" : "Zhulong Configuration" }
@@ -2782,6 +3088,15 @@ struct WindowChrome: View {
 struct Sidebar: View {
     @EnvironmentObject private var store: SuntraceStore
 
+    var planPages: [SuntraceStore.Page] {
+        [.day, .pool, .future]
+    }
+
+    var tracePages: [SuntraceStore.Page] {
+        [.unfinished, .completed, .calendar, .zhulong]
+            .filter { store.visibleNavigationPages.contains($0) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 9) {
@@ -2794,32 +3109,15 @@ struct Sidebar: View {
             .padding(.bottom, 16)
 
             NavGroupTitle(store.copy.planGroup)
-            NavItem(
-                page: .day,
-                label: store.copy.navDay,
-                count: store.engine.getDayTodo(date: store.today).traces.filter { $0.status == .pending }.count
-            )
-            NavItem(page: .pool, label: store.copy.navPool, count: store.engine.taskPool().count)
-            NavItem(
-                page: .future,
-                label: store.copy.navFuture,
-                count: store.engine.futurePlans(today: store.today).count
-            )
+            ForEach(planPages) { page in
+                NavItem(page: page, label: store.navigationLabel(for: page), count: store.navigationCount(for: page))
+            }
 
             NavGroupTitle(store.copy.traceGroup)
                 .padding(.top, 12)
-            NavItem(
-                page: .unfinished,
-                label: store.copy.navUnfinished,
-                count: store.engine.unfinishedPool().count
-            )
-            NavItem(
-                page: .completed,
-                label: store.copy.navCompleted,
-                count: store.engine.completedPool().count + store.engine.completedSubtaskRecords().count
-            )
-            NavItem(page: .calendar, label: store.copy.navCalendar, count: 0)
-            NavItem(page: .zhulong, label: store.copy.navZhulong, count: 0)
+            ForEach(tracePages) { page in
+                NavItem(page: page, label: store.navigationLabel(for: page), count: store.navigationCount(for: page))
+            }
 
             Spacer()
             NavItem(page: .settings, label: store.copy.navSettings, count: 0)
@@ -3371,6 +3669,10 @@ struct SubtaskRow: View {
     @EnvironmentObject private var store: SuntraceStore
     let subtask: Subtask
 
+    var canMutate: Bool {
+        store.canMutateSubtask(subtask)
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Button {
@@ -3391,21 +3693,51 @@ struct SubtaskRow: View {
 
             Spacer()
 
-            if subtask.completedAt != nil {
+            if subtask.completedAt != nil && canMutate == false {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 9))
                     .foregroundStyle(Theme.text3)
             }
 
-            Button(subtask.difficulty.label) {
-                store.cycleSubtaskDifficulty(subtask.id)
+            Menu {
+                ForEach(SubtaskDifficulty.allCases, id: \.self) { difficulty in
+                    Button {
+                        store.setSubtaskDifficulty(subtask.id, difficulty: difficulty)
+                    } label: {
+                        Label(
+                            difficultyMenuTitle(difficulty),
+                            systemImage: difficulty == subtask.difficulty ? "checkmark.circle.fill" : "circle"
+                        )
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(subtask.difficulty.label)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(subtask.difficulty == .hard ? Theme.warn : Theme.text2)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(subtask.difficulty == .hard ? Theme.warnSoft : Theme.chip))
+                .overlay(Capsule().stroke(Theme.line2))
             }
             .buttonStyle(.plain)
-            .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(subtask.difficulty == .hard ? Theme.warn : Theme.text2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(subtask.difficulty == .hard ? Theme.warnSoft : Theme.chip))
+            .help(canMutate ? "修改子任务难度" : "当前子任务不可改写")
+        }
+    }
+
+    private func difficultyMenuTitle(_ difficulty: SubtaskDifficulty) -> String {
+        switch difficulty {
+        case .simple:
+            return "简单"
+        case .medium:
+            return "中等"
+        case .hard:
+            return "困难"
         }
     }
 }
@@ -4215,10 +4547,129 @@ struct CalendarCell: View {
     }
 }
 
+struct CalendarDayInsight {
+    let stats: DailyReviewStats
+    let completionRate: Int
+    let continuationSummary: String
+    let changeSummary: String
+    let riskSummary: String
+
+    var hasEnhancedContent: Bool {
+        stats.total >= 0
+            && completionRate >= 0
+            && continuationSummary.isEmpty == false
+            && changeSummary.isEmpty == false
+            && riskSummary.isEmpty == false
+    }
+
+    @MainActor
+    static func make(for date: LocalDate, store: SuntraceStore) -> CalendarDayInsight {
+        let traces = store.engine.getDayTodo(date: date).traces
+        let stats = store.engine.dailyReviewStats(date: date)
+        let completionRate = stats.total == 0 ? 0 : Int((Double(stats.completed) / Double(stats.total) * 100).rounded())
+        let continuedBySeq = traces.filter { $0.continuationSeq > 0 }.count
+        let continuationCount = max(stats.continued, continuedBySeq)
+        let changedTargets = traces.filter { $0.changedToTraceID != nil }.count
+        let pending = max(
+            0,
+            stats.total
+                - stats.completed
+                - stats.unfinished
+                - stats.continued
+                - stats.changed
+                - stats.returnedToPool
+                - stats.abandoned
+        )
+
+        let continuationSummary = if continuationCount == 0 {
+            "当天没有延续链条。"
+        } else {
+            "\(continuationCount) 项涉及延续，需要关注持续天数和目标是否仍有效。"
+        }
+
+        let changeSummary = if stats.changed + changedTargets == 0 {
+            "当天没有任务变更记录。"
+        } else {
+            "\(stats.changed + changedTargets) 项发生变更，原任务和目标任务都保留轨迹。"
+        }
+
+        let riskSummary = if date < store.today, stats.unfinished + stats.abandoned > 0 {
+            "历史日有 \(stats.unfinished + stats.abandoned) 项未闭环或废弃，适合补写原因。"
+        } else if date >= store.today, pending >= 4 {
+            "待完成任务偏多，建议先排序或拆到其他日期。"
+        } else if date > store.today, stats.total == 0 {
+            "未来日暂无计划，可保持空白或从任务池排期。"
+        } else if stats.total == 0 {
+            "当天没有任务记录。"
+        } else {
+            "当天风险可控，重点看未完成和延续项。"
+        }
+
+        return CalendarDayInsight(
+            stats: stats,
+            completionRate: completionRate,
+            continuationSummary: continuationSummary,
+            changeSummary: changeSummary,
+            riskSummary: riskSummary
+        )
+    }
+}
+
+struct CalendarDayInsightPanel: View {
+    let insight: CalendarDayInsight
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("当天分析")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.6)
+                Spacer()
+                Text("\(insight.completionRate)% 完成")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(insight.completionRate == 100 && insight.stats.total > 0 ? Theme.ok : Theme.accent)
+                    .monospacedDigit()
+            }
+
+            ReviewStatsCard(stats: insight.stats)
+
+            VStack(alignment: .leading, spacing: 7) {
+                CalendarInsightRow(label: "延续", text: insight.continuationSummary)
+                CalendarInsightRow(label: "变更", text: insight.changeSummary)
+                CalendarInsightRow(label: "风险", text: insight.riskSummary)
+            }
+        }
+    }
+}
+
+struct CalendarInsightRow: View {
+    let label: String
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 7) {
+            Text(label)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .frame(width: 28, alignment: .leading)
+            Text(text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.text2)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 struct CalendarDetailPanel: View {
     @EnvironmentObject private var store: SuntraceStore
     var traces: [DayTrace] {
         store.engine.getDayTodo(date: store.selectedCalendarDate).traces.sorted { $0.priority < $1.priority }
+    }
+
+    var insight: CalendarDayInsight {
+        CalendarDayInsight.make(for: store.selectedCalendarDate, store: store)
     }
 
     var dayKind: (text: String, background: Color, foreground: Color) {
@@ -4275,7 +4726,10 @@ struct CalendarDetailPanel: View {
             }
 
             ScrollView {
-                LazyVStack(spacing: 6) {
+                LazyVStack(spacing: 10) {
+                    CalendarDayInsightPanel(insight: insight)
+                        .padding(.bottom, 2)
+
                     ForEach(traces, id: \.id) { trace in
                         CalendarDetailRow(trace: trace)
                     }
@@ -4351,15 +4805,19 @@ struct SettingsPage: View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: store.copy.navSettings, subtitle: store.copy.settingsSubtitle)
             ScrollView {
-                HStack(alignment: .top, spacing: 0) {
+                HStack(alignment: .top, spacing: 18) {
                     VStack(alignment: .leading, spacing: 18) {
                         SettingsPreferenceCard()
                         SettingsDataCard()
-                        SettingSection(title: store.copy.syncTitle) { SyncOptionsCard() }
-                        SettingsProviderOverviewCard()
+                        SettingsSyncCard()
                     }
-                    .frame(width: 510, alignment: .topLeading)
-                    Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                    VStack(alignment: .leading, spacing: 18) {
+                        SettingsProviderOverviewCard()
+                        SettingsPrivacyCard()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 2)
@@ -4373,24 +4831,30 @@ struct SettingsPreferenceCard: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            SettingSection(title: store.copy.appearanceTitle) {
-                SegmentedPair(
-                    left: store.copy.coolGray,
-                    right: store.copy.warmPaper,
-                    leftSelected: store.engine.preferences.theme == .coolGray,
-                    leftAction: { store.setTheme(.coolGray) },
-                    rightAction: { store.setTheme(.warmPaper) }
-                )
-            }
-            SettingSection(title: store.copy.languageTitle) {
-                SegmentedPair(
-                    left: "中文",
-                    right: "English",
-                    leftSelected: store.engine.preferences.language == .chinese,
-                    leftAction: { store.setLanguage(.chinese) },
-                    rightAction: { store.setLanguage(.english) }
-                )
+        SettingsCard(
+            systemImage: "slider.horizontal.3",
+            title: store.copy.preferencesTitle,
+            subtitle: store.copy.preferencesSubtitle
+        ) {
+            VStack(alignment: .leading, spacing: 16) {
+                SettingSection(title: store.copy.appearanceTitle) {
+                    SegmentedPair(
+                        left: store.copy.coolGray,
+                        right: store.copy.warmPaper,
+                        leftSelected: store.engine.preferences.theme == .coolGray,
+                        leftAction: { store.setTheme(.coolGray) },
+                        rightAction: { store.setTheme(.warmPaper) }
+                    )
+                }
+                SettingSection(title: store.copy.languageTitle) {
+                    SegmentedPair(
+                        left: "中文",
+                        right: "English",
+                        leftSelected: store.engine.preferences.language == .chinese,
+                        leftAction: { store.setLanguage(.chinese) },
+                        rightAction: { store.setLanguage(.english) }
+                    )
+                }
             }
         }
     }
@@ -4400,11 +4864,25 @@ struct SettingsDataCard: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        SettingSection(title: store.copy.dataSectionTitle) {
+        SettingsCard(
+            systemImage: "square.and.arrow.up.on.square",
+            title: store.copy.dataSectionTitle,
+            subtitle: store.copy.dataSectionSubtitle
+        ) {
             HStack(spacing: 8) {
                 SmallActionButton(store.copy.exportJSON, tone: .accent) { store.exportDataPackage() }
                 SmallActionButton(store.copy.importData) { store.importDataPackage() }
             }
+        }
+    }
+}
+
+struct SettingsSyncCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        SettingsCard(systemImage: "arrow.triangle.2.circlepath", title: store.copy.syncTitle, subtitle: store.copy.syncSubtitle) {
+            SyncOptionsCard()
         }
     }
 }
@@ -4525,8 +5003,6 @@ struct SettingsProviderOverviewCard: View {
                         SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
                         SmallActionButton(store.copy.clear, tone: .warn) { store.clearZhulongProvider() }
                     }
-
-                    SettingsPrivacyCard()
                 }
             }
         }
@@ -5146,6 +5622,252 @@ struct ZhulongRail: View {
     }
 }
 
+struct SidebarAnalysisMetric: Identifiable {
+    enum Tone {
+        case accent
+        case ok
+        case warn
+        case neutral
+
+        var color: Color {
+            switch self {
+            case .accent:
+                return Theme.accent
+            case .ok:
+                return Theme.ok
+            case .warn:
+                return Theme.warn
+            case .neutral:
+                return Theme.text2
+            }
+        }
+
+        var background: Color {
+            switch self {
+            case .accent:
+                return Theme.accentSoft
+            case .ok:
+                return Theme.okSoft
+            case .warn:
+                return Theme.warnSoft
+            case .neutral:
+                return Theme.chip
+            }
+        }
+    }
+
+    let id = UUID()
+    let label: String
+    let value: String
+    let tone: Tone
+}
+
+struct SidebarAnalysisModel {
+    let title: String
+    let subtitle: String
+    let metrics: [SidebarAnalysisMetric]
+    let signals: [String]
+    let recommendations: [String]
+    let zhulongNote: String
+
+    @MainActor
+    static func make(for page: SuntraceStore.Page, store: SuntraceStore) -> SidebarAnalysisModel? {
+        switch page {
+        case .pool:
+            let tasks = store.engine.taskPool()
+            let described = tasks.filter { ($0.definition.descriptionText ?? "").isEmpty == false }.count
+            let noted = tasks.filter { ($0.definition.note ?? "").isEmpty == false }.count
+            return SidebarAnalysisModel(
+                title: "任务池汇总",
+                subtitle: "未选中任务时显示本地排期分析。",
+                metrics: [
+                    SidebarAnalysisMetric(label: "未排期", value: "\(tasks.count)", tone: .accent),
+                    SidebarAnalysisMetric(label: "有描述", value: "\(described)", tone: .neutral),
+                    SidebarAnalysisMetric(label: "有附言", value: "\(noted)", tone: .neutral)
+                ],
+                signals: [
+                    tasks.isEmpty ? "任务池为空，可以直接从 Day Todo 新增今日任务。" : "最早入池任务会排在前面，适合先清理长期未排期项。",
+                    tasks.count >= 5 ? "池内任务偏多，建议先挑 2-3 项进入今天或明天。" : "池内任务量可控，适合按今天、明天、指定日期快速分流。"
+                ],
+                recommendations: [
+                    tasks.isEmpty ? "保持任务池为空；新想法先记录到这里再排期。" : "先处理标题明确、能在一天内推进的任务。",
+                    described < tasks.count ? "给模糊任务补一句目标描述，排期时更容易判断优先级。" : "描述覆盖较完整，可以直接按日期分配。"
+                ],
+                zhulongNote: "开启烛龙后，可基于任务池、未来计划和未完成池生成更细的排期建议。"
+            )
+        case .future:
+            let plans = store.engine.futurePlans(today: store.today)
+            let dates = Set(plans.map(\.trace.date))
+            let continuationCount = plans.filter { $0.trace.continuationSeq > 0 }.count
+            let maxDayLoad = Dictionary(grouping: plans, by: { $0.trace.date }).values.map(\.count).max() ?? 0
+            return SidebarAnalysisModel(
+                title: "未来计划分析",
+                subtitle: "按日期观察未来任务负载与延续压力。",
+                metrics: [
+                    SidebarAnalysisMetric(label: "计划任务", value: "\(plans.count)", tone: .accent),
+                    SidebarAnalysisMetric(label: "覆盖日期", value: "\(dates.count)", tone: .neutral),
+                    SidebarAnalysisMetric(label: "延续任务", value: "\(continuationCount)", tone: continuationCount > 0 ? .warn : .ok)
+                ],
+                signals: [
+                    plans.first.map { "最近计划：\(SuntraceStore.displayDate($0.trace.date)) · \($0.definition.title)" } ?? "未来计划为空。",
+                    maxDayLoad >= 4 ? "存在单日计划较密集，可能需要提前拆分。" : "单日计划密度目前可控。"
+                ],
+                recommendations: [
+                    plans.isEmpty ? "无需维护未来计划；保持今天列表清晰即可。" : "优先检查最近日期，避免未来任务堆到同一天。",
+                    continuationCount > 0 ? "延续任务已进入未来计划，建议在目标日前确认范围是否仍有效。" : "暂无延续压力，可以按新任务优先级排序。"
+                ],
+                zhulongNote: "开启烛龙后，可结合历史完成节奏给出更精细的改期建议。"
+            )
+        case .unfinished:
+            let items = store.engine.unfinishedPool()
+            let missed = items.reduce(0) { $0 + $1.unfinishedTraces.count }
+            let active = items.filter { $0.activeTrace != nil }.count
+            let repeated = items.filter { $0.unfinishedTraces.count >= 2 }.count
+            return SidebarAnalysisModel(
+                title: "未完成风险",
+                subtitle: "按任务链汇总历史未完成与当前延续状态。",
+                metrics: [
+                    SidebarAnalysisMetric(label: "任务链", value: "\(items.count)", tone: items.isEmpty ? .ok : .warn),
+                    SidebarAnalysisMetric(label: "未完成次", value: "\(missed)", tone: missed == 0 ? .ok : .warn),
+                    SidebarAnalysisMetric(label: "已延续", value: "\(active)", tone: .accent)
+                ],
+                signals: [
+                    repeated > 0 ? "\(repeated) 条任务链重复未完成，存在范围或优先级问题。" : "没有重复未完成链。",
+                    active > 0 ? "\(active) 条任务链已有当前待完成轨迹，避免重复延续。" : "暂无已延续到当前或未来的未完成链。"
+                ],
+                recommendations: [
+                    items.isEmpty ? "未完成池为空，保持每日收尾即可。" : "优先处理最近未完成且尚未延续的任务链。",
+                    repeated > 0 ? "重复未完成任务应先缩小目标，必要时废弃不再有效的链。" : "对单次未完成任务，直接延续或明确废弃。"
+                ],
+                zhulongNote: "开启烛龙后，可让模型结合复盘文本判断未完成原因。"
+            )
+        case .completed:
+            let completed = store.engine.completedPool()
+            let subtaskRecords = store.engine.completedSubtaskRecords()
+            let dates = Set(completed.map(\.trace.date) + subtaskRecords.map(\.date))
+            let continuedCompletions = completed.filter { $0.trace.continuationSeq > 0 }.count
+            return SidebarAnalysisModel(
+                title: "完成轨迹",
+                subtitle: "汇总完成记录、子任务完成和跨日轨迹。",
+                metrics: [
+                    SidebarAnalysisMetric(label: "完成任务", value: "\(completed.count)", tone: .ok),
+                    SidebarAnalysisMetric(label: "子任务", value: "\(subtaskRecords.count)", tone: .accent),
+                    SidebarAnalysisMetric(label: "覆盖日期", value: "\(dates.count)", tone: .neutral)
+                ],
+                signals: [
+                    completed.first.map { "最近完成：\(SuntraceStore.displayDate($0.trace.date)) · \($0.definition.title)" } ?? "暂无完成记录。",
+                    continuedCompletions > 0 ? "\(continuedCompletions) 条完成记录经历过延续。" : "完成记录多为当日闭环。"
+                ],
+                recommendations: [
+                    completed.isEmpty && subtaskRecords.isEmpty ? "暂无完成数据；先从 Day Todo 完成一项任务。" : "复盘最近完成记录，提取可复制的推进方式。",
+                    subtaskRecords.isEmpty == false ? "子任务完成已单独记录，可用来判断复杂任务的真实推进。" : "复杂任务可拆子任务，让完成记录更细。"
+                ],
+                zhulongNote: "开启烛龙后，可从完成轨迹中总结节奏和可复用模式。"
+            )
+        case .day, .calendar, .zhulong, .settings:
+            return nil
+        }
+    }
+}
+
+struct SidebarAnalysisRail: View {
+    let model: SidebarAnalysisModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(model.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Text(model.subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text2)
+                    .lineSpacing(3)
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(model.metrics) { metric in
+                    SidebarMetricTile(metric: metric)
+                }
+            }
+
+            SidebarTextBlock(title: "本地信号", rows: model.signals)
+            SidebarTextBlock(title: "算法建议", rows: model.recommendations)
+            ZhulongAnalysisHint(text: model.zhulongNote)
+        }
+    }
+}
+
+struct SidebarMetricTile: View {
+    let metric: SidebarAnalysisMetric
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(metric.label)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+            Text(metric.value)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(metric.tone.color)
+                .monospacedDigit()
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(metric.tone.background.opacity(0.72)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct SidebarTextBlock: View {
+    let title: String
+    let rows: [String]
+
+    var body: some View {
+        DetailSection(title) {
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack(alignment: .top, spacing: 7) {
+                        Circle()
+                            .fill(Theme.accent)
+                            .frame(width: 4, height: 4)
+                            .padding(.top, 6)
+                        Text(row)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.text2)
+                            .lineSpacing(3)
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+        }
+    }
+}
+
+struct ZhulongAnalysisHint: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 18, height: 18)
+            Text(text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.text3)
+                .lineSpacing(3)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.accentSoft.opacity(0.55)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent.opacity(0.16)))
+    }
+}
+
 struct DetailRail: View {
     @EnvironmentObject private var store: SuntraceStore
 
@@ -5170,6 +5892,8 @@ struct DetailRail: View {
                     ZhulongRail()
                 } else if store.page == .day {
                     ReviewRail()
+                } else if let model = SidebarAnalysisModel.make(for: store.page, store: store) {
+                    SidebarAnalysisRail(model: model)
                 } else {
                     RailHint(text: hint)
                         .padding(.top, 40)
@@ -5296,7 +6020,9 @@ struct DetailTitleRow<Trailing: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             trailing
                 .padding(.top, 1)
+                .frame(minWidth: 24, alignment: .trailing)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

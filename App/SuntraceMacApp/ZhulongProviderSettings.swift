@@ -70,12 +70,13 @@ enum ZhulongProviderSettingsStore {
     }
 
     static func save(_ draft: ZhulongProviderDraft) throws -> ZhulongProviderDraft {
-        guard let baseURL = draft.normalizedBaseURL else {
+        guard draft.enabled == false || draft.normalizedBaseURL != nil else {
             throw ZhulongProviderSettingsError.invalidBaseURL
         }
         guard draft.enabled == false || draft.normalizedModel.isEmpty == false else {
             throw ZhulongProviderSettingsError.emptyModel
         }
+        let baseURL = draft.normalizedBaseURL ?? URL(string: "https://api.example.com/v1")!
 
         let stored = StoredZhulongProviderConfig(
             displayName: draft.normalizedDisplayName,

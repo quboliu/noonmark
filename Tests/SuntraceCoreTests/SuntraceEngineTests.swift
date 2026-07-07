@@ -175,6 +175,36 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(copied.map(\.title), ["未完成子任务"])
     }
 
+    func testCurrentDayCompletedSubtaskCanBeUndone() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "当天子任务撤回", now: now)
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        let subtaskID = try engine.addSubtask(traceID: traceID, title: "先完成再撤回", now: now)
+
+        try engine.completeSubtask(subtaskID, today: day1, now: now)
+        XCTAssertEqual(engine.subtasks[subtaskID]?.status, .completed)
+        XCTAssertNotNil(engine.subtasks[subtaskID]?.completedAt)
+
+        try engine.undoCompletedSubtask(subtaskID, today: day1)
+
+        XCTAssertEqual(engine.subtasks[subtaskID]?.status, .pending)
+        XCTAssertNil(engine.subtasks[subtaskID]?.completedAt)
+        XCTAssertEqual(engine.subtaskProgress(for: traceID).pending, 1)
+    }
+
+    func testHistoricalCompletedSubtaskCannotBeUndone() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "历史子任务锁定", now: now)
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        let subtaskID = try engine.addSubtask(traceID: traceID, title: "历史完成项", now: now)
+
+        try engine.completeSubtask(subtaskID, today: day1, now: now)
+
+        XCTAssertThrowsError(try engine.undoCompletedSubtask(subtaskID, today: day2))
+        XCTAssertEqual(engine.subtasks[subtaskID]?.status, .completed)
+        XCTAssertNotNil(engine.subtasks[subtaskID]?.completedAt)
+    }
+
     func testParentTraceCannotCompleteWithOpenSubtasksAndShowsPartialProgress() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "大任务", now: now)
@@ -304,6 +334,44 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(progress.completedWeight, 1)
         XCTAssertEqual(progress.totalWeight, 4)
         XCTAssertEqual(progress.percent, 25)
+    }
+
+    func testSubtaskDifficultyCanOnlyChangeOnCurrentPendingParentTrace() throws {
+        let engine = SuntraceEngine()
+        let currentChainID = try engine.createPoolTask(title: "今天调整难度", now: now)
+        let currentTraceID = try engine.scheduleFromPool(chainID: currentChainID, date: day1, today: day1, now: now)
+        let currentSubtaskID = try engine.addSubtask(traceID: currentTraceID, title: "今天待调整", now: now)
+
+        try engine.updateSubtaskDifficulty(currentSubtaskID, difficulty: .hard, today: day1)
+        XCTAssertEqual(engine.subtasks[currentSubtaskID]?.difficulty, .hard)
+
+        let historicalChainID = try engine.createPoolTask(title: "历史难度锁定", now: now)
+        let historicalTraceID = try engine.scheduleFromPool(chainID: historicalChainID, date: day1, today: day1, now: now)
+        let historicalSubtaskID = try engine.addSubtask(traceID: historicalTraceID, title: "历史不可调整", now: now)
+
+        XCTAssertThrowsError(try engine.updateSubtaskDifficulty(historicalSubtaskID, difficulty: .medium, today: day2))
+        XCTAssertEqual(engine.subtasks[historicalSubtaskID]?.difficulty, .simple)
+
+        let completedParentChainID = try engine.createPoolTask(title: "父任务完成后锁定", now: now)
+        let completedParentTraceID = try engine.scheduleFromPool(
+            chainID: completedParentChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let completedParentSubtaskID = try engine.addSubtask(
+            traceID: completedParentTraceID,
+            title: "父任务完成后不可调整",
+            now: now
+        )
+
+        try engine.completeSubtask(completedParentSubtaskID, today: day1, now: now)
+        try engine.markCompleted(traceID: completedParentTraceID, today: day1, now: now)
+
+        XCTAssertThrowsError(
+            try engine.updateSubtaskDifficulty(completedParentSubtaskID, difficulty: .medium, today: day1)
+        )
+        XCTAssertEqual(engine.subtasks[completedParentSubtaskID]?.difficulty, .simple)
     }
 
     func testCalendarSummaryMatchesPrototypeHeatNeeds() throws {

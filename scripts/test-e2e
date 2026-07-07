@@ -33,7 +33,7 @@ scenarios=(
   "completed|completed|"
   "completed-detail|completed|--select first"
   "calendar|calendar|"
-  "zhulong|zhulong|"
+  "zhulong|zhulong|--e2e-enable-zhulong"
   "settings|settings|"
 )
 
@@ -256,6 +256,30 @@ fi
 
 terminate_e2e_app
 
+summary_sidebar_dir="artifacts/e2e-summary-sidebar"
+summary_sidebar_result="${summary_sidebar_dir}/summary-sidebar-result.txt"
+rm -rf "$summary_sidebar_dir"
+mkdir -p "$summary_sidebar_dir"
+
+"$app_executable_path" \
+  --ephemeral \
+  --page pool \
+  --e2e-summary-sidebar-probe \
+  --e2e-summary-sidebar-result-url "$PWD/$summary_sidebar_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$summary_sidebar_result" ]]; then
+  echo "summary sidebar result was not created: $summary_sidebar_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$summary_sidebar_result")" != "ok" ]]; then
+  echo "summary sidebar probe failed: $(cat "$summary_sidebar_result")" >&2
+  exit 1
+fi
+
+echo "E2E summary sidebar and calendar insight: $summary_sidebar_result"
+
 blank_dir="artifacts/e2e-blank"
 blank_db="${blank_dir}/Suntrace.sqlite"
 blank_pages=(day pool future unfinished completed calendar zhulong)
@@ -263,7 +287,11 @@ rm -rf "$blank_dir"
 mkdir -p "$blank_dir"
 
 for page in "${blank_pages[@]}"; do
-  capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$PWD/$blank_db" --e2e-reset-selection
+  if [[ "$page" == "zhulong" ]]; then
+    capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$PWD/$blank_db" --e2e-reset-selection --e2e-enable-zhulong
+  else
+    capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$PWD/$blank_db" --e2e-reset-selection
+  fi
 done
 
 terminate_e2e_app
@@ -512,6 +540,54 @@ if [[ "$(cat "$keyboard_date_result")" != "ok" ]]; then
 fi
 
 echo "E2E keyboard date navigation: $keyboard_date_result"
+
+subtask_mutation_dir="artifacts/e2e-subtask-mutation"
+subtask_mutation_result="${subtask_mutation_dir}/subtask-mutation-result.txt"
+rm -rf "$subtask_mutation_dir"
+mkdir -p "$subtask_mutation_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page day \
+  --e2e-subtask-mutation \
+  --e2e-subtask-mutation-result-url "$PWD/$subtask_mutation_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$subtask_mutation_result" ]]; then
+  echo "subtask mutation result was not created: $subtask_mutation_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$subtask_mutation_result")" != "ok" ]]; then
+  echo "subtask mutation failed: $(cat "$subtask_mutation_result")" >&2
+  exit 1
+fi
+
+echo "E2E subtask completion undo and difficulty: $subtask_mutation_result"
+
+zhulong_navigation_dir="artifacts/e2e-zhulong-navigation"
+zhulong_navigation_result="${zhulong_navigation_dir}/zhulong-navigation-result.txt"
+rm -rf "$zhulong_navigation_dir"
+mkdir -p "$zhulong_navigation_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page zhulong \
+  --e2e-zhulong-navigation \
+  --e2e-zhulong-navigation-result-url "$PWD/$zhulong_navigation_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$zhulong_navigation_result" ]]; then
+  echo "zhulong navigation result was not created: $zhulong_navigation_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$zhulong_navigation_result")" != "ok" ]]; then
+  echo "zhulong navigation visibility failed: $(cat "$zhulong_navigation_result")" >&2
+  exit 1
+fi
+
+echo "E2E zhulong navigation visibility: $zhulong_navigation_result"
 
 provider_dir="artifacts/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"

@@ -512,6 +512,23 @@ public final class SuntraceEngine {
         subtasks[subtask.id] = subtask
     }
 
+    public func undoCompletedSubtask(_ subtaskID: SubtaskID, today: LocalDate) throws {
+        guard var subtask = subtasks[subtaskID] else {
+            throw SuntraceError.notFound("subtask")
+        }
+        let trace = try trace(subtask.traceID)
+        guard trace.date == today, trace.status == .pending else {
+            throw SuntraceError.immutableHistory
+        }
+        guard subtask.status == .completed else {
+            throw SuntraceError.invalidTransition("only completed subtasks can be undone")
+        }
+
+        subtask.status = .pending
+        subtask.completedAt = nil
+        subtasks[subtask.id] = subtask
+    }
+
     public func abandonSubtask(_ subtaskID: SubtaskID, today: LocalDate, now: Date = Date()) throws {
         guard var subtask = subtasks[subtaskID] else {
             throw SuntraceError.notFound("subtask")

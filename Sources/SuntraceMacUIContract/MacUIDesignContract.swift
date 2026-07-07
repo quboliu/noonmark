@@ -47,6 +47,7 @@ public enum MacUINavigationElement: String, CaseIterable, Sendable {
     case selectedBackground
     case selectedLeadingBar
     case countBadges
+    case zhulongEntryVisibilityFollowsSettings
     case settingsFooterItem
 }
 
@@ -197,6 +198,11 @@ public enum MacUICalendarElement: String, CaseIterable, Sendable {
     case selectedDayBadge
     case selectedDayTaskCount
     case openDayTodoLink
+    case selectedDayStatusDistribution
+    case selectedDayCompletionRate
+    case selectedDayContinuationSummary
+    case selectedDayChangeSummary
+    case selectedDayRiskSummary
     case selectedDayTaskList
     case compactSelectedDayTaskRows
     case changedTraceTargetJump
@@ -207,6 +213,10 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case unselectedDayReviewRail
     case unselectedPageHint
     case unselectedRailHint
+    case unselectedPageSummaryRail
+    case unselectedLocalStats
+    case unselectedAlgorithmicSuggestions
+    case unselectedZhulongPlaceholder
     case calendarNoGenericDetailRail
     case calendarOwnDetailPanel
     case settingsNoDetailRail
@@ -321,6 +331,7 @@ public enum MacUISettingsElement: String, CaseIterable, Sendable {
     case iCloudSync
     case zhulongEnabledToggle
     case zhulongProviderConfiguration
+    case balancedSettingsLayout
 }
 
 public enum MacUIBackendCapability: String, CaseIterable, Sendable {

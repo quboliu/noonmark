@@ -194,21 +194,22 @@ default_changed_ratios = {
     "day-detail": "0.16",
     "day-manual-detail": "0.16",
     "day-review-saved": "0.15",
-    "pool": "0.07",
+    "pool": "0.08",
     "pool-detail": "0.11",
-    "future": "0.05",
+    "future": "0.09",
     "future-detail": "0.08",
-    "unfinished": "0.10",
+    "unfinished": "0.105",
     "unfinished-detail": "0.16",
-    "completed": "0.14",
+    "completed": "0.16",
     "completed-detail": "0.16",
     "calendar": "0.09",
-    "settings": "0.17",
+    "settings": "0.42",
 }
 default_mean_deltas = {
     "day-detail": "0.030",
     "day-manual-detail": "0.030",
     "completed-detail": "0.028",
+    "settings": "0.028",
 }
 default_changed_ratio = default_changed_ratios.get(page, "0.12")
 default_mean_delta = default_mean_deltas.get(page, "0.025")

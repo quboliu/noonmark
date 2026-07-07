@@ -5105,13 +5105,11 @@ struct CompletedRecordDetail: View {
                     .foregroundStyle(Theme.text3)
             }
 
-            DetailSection("完成进度") {
-                DetailProgressControl(
-                    traceID: item.trace.id,
-                    progress: store.engine.traceProgress(for: item.trace.id),
-                    editable: false
-                )
-            }
+            DetailProgressSection(
+                traceID: item.trace.id,
+                progress: store.engine.traceProgress(for: item.trace.id),
+                editable: false
+            )
 
             DetailSection("描述") {
                 EditableDetailText(
@@ -5394,13 +5392,11 @@ struct TaskDetail: View {
             if trace.date < store.today {
                 Notice(text: "历史只读：任务事实不可改写。", tone: .locked)
             }
-            DetailSection("完成进度") {
-                DetailProgressControl(
-                    traceID: trace.id,
-                    progress: progress,
-                    editable: canEditManualProgress
-                )
-            }
+            DetailProgressSection(
+                traceID: trace.id,
+                progress: progress,
+                editable: canEditManualProgress
+            )
             DetailSection("描述") {
                 EditableDetailText(
                     text: Binding(
@@ -5454,22 +5450,76 @@ struct TaskDetail: View {
     }
 }
 
-struct DetailProgressControl: View {
-    @EnvironmentObject private var store: SuntraceStore
+struct DetailProgressSection: View {
     let traceID: DayTraceID
     let progress: TraceProgress
     let editable: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Spacer()
-                Text("\(progress.percent)%")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(progress.percent == 100 ? Theme.ok : Theme.accent)
-                    .monospacedDigit()
+        if editable {
+            DetailSection("完成进度") {
+                DetailProgressControl(
+                    traceID: traceID,
+                    progress: progress,
+                    editable: editable,
+                    showsPercent: true
+                )
             }
+        } else {
+            VStack(alignment: .leading, spacing: 7) {
+                DetailProgressHeader(progress: progress)
+                DetailProgressControl(
+                    traceID: traceID,
+                    progress: progress,
+                    editable: editable,
+                    showsPercent: false
+                )
+            }
+        }
+    }
+}
 
+struct DetailProgressHeader: View {
+    let progress: TraceProgress
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("完成进度")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .tracking(0.6)
+            Spacer()
+            DetailProgressPercent(progress: progress)
+        }
+    }
+}
+
+struct DetailProgressPercent: View {
+    let progress: TraceProgress
+
+    var body: some View {
+        Text("\(progress.percent)%")
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(progress.percent == 100 ? Theme.ok : Theme.accent)
+            .monospacedDigit()
+    }
+}
+
+struct DetailProgressControl: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let traceID: DayTraceID
+    let progress: TraceProgress
+    let editable: Bool
+    let showsPercent: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if showsPercent {
+                HStack {
+                    Spacer()
+                    DetailProgressPercent(progress: progress)
+                }
+            }
             if editable {
                 ManualProgressSlider(
                     percent: progress.percent,
@@ -5935,13 +5985,11 @@ struct UnfinishedDetail: View {
                 UnfinishedTraceContextCard(item: item, trace: trace)
                 Notice(text: "历史事实只读，不可删除或改写。", tone: .locked)
 
-                DetailSection("完成进度") {
-                    DetailProgressControl(
-                        traceID: trace.id,
-                        progress: store.engine.traceProgress(for: trace.id),
-                        editable: false
-                    )
-                }
+                DetailProgressSection(
+                    traceID: trace.id,
+                    progress: store.engine.traceProgress(for: trace.id),
+                    editable: false
+                )
 
                 DetailSection("任务轨迹") {
                     Timeline(trace: trace)

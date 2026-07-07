@@ -191,24 +191,24 @@ mean_delta = sum_delta / total_pixels
 page = os.environ.get("SUNTRACE_VISUAL_PAGE", "custom")
 default_changed_ratios = {
     "day": "0.15",
-    "day-detail": "0.17",
-    "day-manual-detail": "0.17",
+    "day-detail": "0.16",
+    "day-manual-detail": "0.16",
     "day-review-saved": "0.15",
     "pool": "0.07",
     "pool-detail": "0.11",
     "future": "0.05",
     "future-detail": "0.08",
     "unfinished": "0.10",
-    "unfinished-detail": "0.17",
+    "unfinished-detail": "0.145",
     "completed": "0.14",
-    "completed-detail": "0.18",
+    "completed-detail": "0.15",
     "calendar": "0.09",
     "settings": "0.08",
 }
 default_mean_deltas = {
     "day-detail": "0.030",
     "day-manual-detail": "0.030",
-    "completed-detail": "0.030",
+    "completed-detail": "0.026",
 }
 default_changed_ratio = default_changed_ratios.get(page, "0.12")
 default_mean_delta = default_mean_deltas.get(page, "0.025")

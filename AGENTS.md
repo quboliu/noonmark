@@ -1,18 +1,18 @@
 # AGENTS.md
 
-本文件是晷迹（suntrace）项目的 agent 协作入口。所有 agent 在本仓库工作前必须先阅读并遵守本文件；若本文件与更高优先级的系统、开发者或用户即时指令冲突，以更高优先级指令为准，并在回复中说明取舍。
+本文件是晷迹（Noonmark）项目的 agent 协作入口。所有 agent 在本仓库工作前必须先阅读并遵守本文件；若本文件与更高优先级的系统、开发者或用户即时指令冲突，以更高优先级指令为准，并在回复中说明取舍。
 
 ## 项目身份
 
 - 中文名：晷迹
-- 英文名：suntrace
+- 英文名：Noonmark
 - 项目类型：Todo 清单研发项目
 - 默认文档语言：新加坡中文
 
 ## 当前仓库基线
 
 - 初始化日期：2026-07-05
-- 最新确认日期：2026-07-06
+- 最新确认日期：2026-07-07
 - 当前仓库已经初始化 Git，主分支为 `main`，并已关联 `origin/main`。
 - 当前技术栈为 Swift Package Manager 项目，`Package.swift` 使用 `swift-tools-version: 6.0`，目标平台为 macOS 14。
 - 当前源码模块：
@@ -43,7 +43,7 @@
 - 当前环境取证：
   - `swift build` 通过。
   - `make check` 通过，覆盖 `swift build`、UT、IT、ST、确定性仿真测试、SwiftLint 和 SwiftFormat lint。
-  - `swift test` 通过，当前 46 个 XCTest 全绿。
+  - `swift test` 通过，当前 74 个 XCTest 全绿。
   - `scripts/test-visual-regression` 默认覆盖 14 个原型可比场景：7 个顶层页面、6 个详情态和 `day-review-saved`。
   - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`。
 - 项目级工具入口：
@@ -56,7 +56,7 @@
   - `scripts/test-visual-regression`
   - `scripts/test-ai-provider-live`：手动 live AI provider smoke；必须显式设置 `SUNTRACE_AI_BASE_URL`、`SUNTRACE_AI_MODEL` 和 `SUNTRACE_AI_API_KEY`，不进入默认 `make check`。
   - `scripts/package-dmg release`
-  - `scripts/test-dmg-install dist/SuntraceMacApp.dmg`
+  - `scripts/test-dmg-install dist/Noonmark.dmg`
 
 ## 强制工作流
 

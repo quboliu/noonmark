@@ -186,15 +186,18 @@ input,textarea,button{font:inherit;color:inherit}button{cursor:pointer}textarea{
 <sc-for list="{{ unfVms }}" as="u" hint-placeholder-count="3">
 <div onClick="{{ u.onSelect }}" style="border:1px solid var(--line);background:var(--panel);border-radius:9px;margin-bottom:8px;padding:11px 13px;cursor:pointer" style-hover="border-color:var(--line2)">
 <div style="display:flex;align-items:center;gap:10px">
-<span style="width:18px;height:18px;border-radius:99px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:11px;background:var(--warn-soft);color:var(--warn)">✕</span>
-<div style="flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ u.title }}</div>
-<sc-if value="{{ u.canAct }}" hint-placeholder-val="{{ false }}">
+<span style="width:18px;height:18px;border-radius:99px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:11px;background:{{ u.statusBg }};color:{{ u.statusColor }}">{{ u.statusGlyph }}</span>
+<div style="flex:1;min-width:0;font-size:13px;font-weight:600;color:{{ u.titleColor }};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ u.title }}</div>
+<sc-if value="{{ u.showReactivate }}" hint-placeholder-val="{{ false }}">
+<button onClick="{{ u.onReactivate }}" style="height:24px;padding:0 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--accent);font-size:11.5px;flex-shrink:0" style-hover="background:var(--accent-soft)">{{ t.aReactivate }}</button>
+</sc-if>
+<sc-if value="{{ u.showNormalActions }}" hint-placeholder-val="{{ false }}">
 <button onClick="{{ u.onCont }}" style="height:24px;padding:0 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--accent);font-size:11.5px;flex-shrink:0" style-hover="background:var(--accent-soft)">{{ t.aCont }}</button>
 <button onClick="{{ u.onDrop }}" style="height:24px;padding:0 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--warn);font-size:11.5px;flex-shrink:0" style-hover="background:var(--warn-soft)">{{ t.aDrop }}</button>
 </sc-if>
 </div>
 <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-left:28px;flex-wrap:wrap">
-<span style="font-size:11px;color:var(--warn);font-variant-numeric:tabular-nums">{{ u.missedL }}</span>
+<span style="font-size:11px;color:{{ u.missedColor }};font-variant-numeric:tabular-nums">{{ u.missedL }}</span>
 <span style="font-size:11px;color:var(--t3)">·</span>
 <span style="font-size:11px;color:var(--t3);font-variant-numeric:tabular-nums">{{ u.contL }}</span>
 <span style="font-size:11px;color:var(--t3)">·</span>
@@ -209,7 +212,7 @@ input,textarea,button{font:inherit;color:inherit}button{cursor:pointer}textarea{
 <sc-for list="{{ u.details }}" as="d" hint-placeholder-count="2">
 <div style="display:flex;align-items:center;gap:8px;padding:3px 0">
 <span style="font-size:11px;color:var(--t3);width:84px;font-variant-numeric:tabular-nums">{{ d.dateL }}</span>
-<span style="font-size:11px;font-weight:600;color:var(--warn)">✕ {{ t.stMissed }}</span>
+<span style="font-size:11px;font-weight:600;color:{{ d.statusColor }}">{{ d.statusGlyph }} {{ d.statusL }}</span>
 <span style="font-size:10px;color:var(--t3)">{{ d.seqL }}</span>
 <span style="font-size:11px;color:var(--t3)">{{ d.contL }}</span>
 </div>
@@ -332,33 +335,56 @@ input,textarea,button{font:inherit;color:inherit}button{cursor:pointer}textarea{
 <div style="padding:16px 24px 0;flex-shrink:0">
 <div style="font-size:21px;font-weight:700;letter-spacing:-0.3px">{{ t.setTitle }}</div>
 </div>
-<div style="flex:1;overflow:auto;padding:16px 24px 24px;max-width:560px">
-<div style="font-size:11px;font-weight:600;color:var(--t3);letter-spacing:0.8px;margin-bottom:8px">{{ t.appearance }}</div>
-<div style="display:inline-flex;background:var(--chip);border-radius:8px;padding:2px;margin-bottom:18px">
+<div style="flex:1;overflow:auto;padding:16px 24px 24px">
+<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start">
+<div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+<div style="border:1px solid var(--line);background:var(--panel);border-radius:11px;padding:14px">
+<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:14px"><div style="width:28px;height:28px;border-radius:8px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:15px">☰</div><div><div style="font-size:14px;font-weight:650">{{ t.prefTitle }}</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">{{ t.prefDesc }}</div></div></div>
+<div style="font-size:11px;font-weight:600;color:var(--t3);letter-spacing:0.6px;margin-bottom:8px">{{ t.appearance }}</div>
+<div style="display:inline-flex;background:var(--chip);border-radius:9px;padding:3px;margin-bottom:16px">
 <sc-for list="{{ themeOpts }}" as="o" hint-placeholder-count="2">
-<button onClick="{{ o.onClick }}" style="height:26px;padding:0 14px;border:none;border-radius:6px;background:{{ o.bg }};font-weight:{{ o.fw }};font-size:12px;box-shadow:{{ o.sh }}">{{ o.label }}</button>
+<button onClick="{{ o.onClick }}" style="height:28px;padding:0 14px;border:none;border-radius:7px;background:{{ o.bg }};font-weight:{{ o.fw }};font-size:12px;box-shadow:{{ o.sh }}">{{ o.label }}</button>
 </sc-for>
 </div>
-<div style="font-size:11px;font-weight:600;color:var(--t3);letter-spacing:0.8px;margin-bottom:8px">{{ t.language }}</div>
-<div style="display:inline-flex;background:var(--chip);border-radius:8px;padding:2px;margin-bottom:18px">
+<div style="font-size:11px;font-weight:600;color:var(--t3);letter-spacing:0.6px;margin-bottom:8px">{{ t.language }}</div>
+<div style="display:inline-flex;background:var(--chip);border-radius:9px;padding:3px">
 <sc-for list="{{ langOpts }}" as="o" hint-placeholder-count="2">
-<button onClick="{{ o.onClick }}" style="height:26px;padding:0 14px;border:none;border-radius:6px;background:{{ o.bg }};font-weight:{{ o.fw }};font-size:12px;box-shadow:{{ o.sh }}">{{ o.label }}</button>
+<button onClick="{{ o.onClick }}" style="height:28px;padding:0 14px;border:none;border-radius:7px;background:{{ o.bg }};font-weight:{{ o.fw }};font-size:12px;box-shadow:{{ o.sh }}">{{ o.label }}</button>
 </sc-for>
 </div>
-<div style="font-size:11px;font-weight:600;color:var(--t3);letter-spacing:0.8px;margin-bottom:8px">{{ t.dataSec }}</div>
-<div style="display:flex;gap:8px;margin-bottom:18px">
-<button onClick="{{ onExport }}" style="height:30px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font-size:12.5px" style-hover="background:var(--chip)">{{ t.expBtn }}</button>
+</div>
+<div style="border:1px solid var(--line);background:var(--panel);border-radius:11px;padding:14px">
+<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:14px"><div style="width:28px;height:28px;border-radius:8px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:15px">⇪</div><div><div style="font-size:14px;font-weight:650">{{ t.dataSec }}</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">{{ t.dataDesc }}</div></div></div>
+<div style="display:flex;gap:8px">
+<button onClick="{{ onExport }}" style="height:30px;padding:0 14px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-soft);color:var(--accent);font-size:12.5px;font-weight:600" style-hover="background:var(--chip)">{{ t.expBtn }}</button>
 <button onClick="{{ onImport }}" style="height:30px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font-size:12.5px" style-hover="background:var(--chip)">{{ t.impBtn }}</button>
 </div>
-<div style="font-size:11px;font-weight:600;color:var(--t3);letter-spacing:0.8px;margin-bottom:8px">{{ t.syncSec }}</div>
-<div style="border:1px solid var(--line);background:var(--panel);border-radius:9px;overflow:hidden">
-<div style="display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line)">
-<div style="flex:1"><div style="font-size:13px;font-weight:500">{{ t.syncEp }}</div><div style="font-size:11.5px;color:var(--t3)">{{ t.syncEpDesc }}</div></div>
-<span style="font-size:11px;font-weight:500;color:var(--t3);background:var(--chip);padding:2px 9px;border-radius:99px">{{ t.soon }}</span>
 </div>
-<div style="display:flex;align-items:center;gap:10px;padding:11px 14px">
-<div style="flex:1"><div style="font-size:13px;font-weight:500">{{ t.syncCloud }}</div><div style="font-size:11.5px;color:var(--t3)">{{ t.syncCloudDesc }}</div></div>
-<span style="font-size:11px;font-weight:500;color:var(--t3);background:var(--chip);padding:2px 9px;border-radius:99px">{{ t.soon }}</span>
+<div style="border:1px solid var(--line);background:var(--panel);border-radius:11px;padding:14px">
+<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:14px"><div style="width:28px;height:28px;border-radius:8px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:15px">↻</div><div><div style="font-size:14px;font-weight:650">{{ t.syncSec }}</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">{{ t.syncDesc }}</div></div></div>
+<div style="font-size:11px;font-weight:600;color:var(--t3);letter-spacing:0.6px;margin-bottom:8px">{{ t.dataMode }}</div>
+<div style="display:inline-flex;background:var(--chip);border-radius:9px;padding:3px;margin-bottom:8px"><button style="height:28px;padding:0 14px;border:none;border-radius:7px;background:var(--panel);font-size:12px;font-weight:650;box-shadow:0 1px 2px rgba(0,0,0,.06)">{{ t.localFirst }}</button><button style="height:28px;padding:0 14px;border:none;border-radius:7px;background:transparent;font-size:12px">{{ t.onlineFirst }}</button></div>
+<div style="font-size:11.5px;color:var(--t3);line-height:1.55;margin-bottom:16px">{{ t.dataModeDesc }}</div>
+<div style="font-size:11px;font-weight:600;color:var(--t3);letter-spacing:0.6px;margin-bottom:8px">{{ t.scheduledBackup }}</div>
+<div style="display:inline-flex;background:var(--chip);border-radius:9px;padding:3px;margin-bottom:10px"><button style="height:28px;padding:0 12px;border:none;border-radius:7px;background:var(--panel);font-size:12px;font-weight:650;box-shadow:0 1px 2px rgba(0,0,0,.06)">{{ t.backupOff }}</button><button style="height:28px;padding:0 12px;border:none;border-radius:7px;background:transparent;font-size:12px">{{ t.backupDaily }}</button><button style="height:28px;padding:0 12px;border:none;border-radius:7px;background:transparent;font-size:12px">{{ t.backupWeekly }}</button></div>
+<div style="font-size:11px;font-weight:600;color:var(--t3);letter-spacing:0.6px;margin-bottom:8px">{{ t.backupDest }}</div>
+<div style="display:inline-flex;background:var(--chip);border-radius:9px;padding:3px;margin-bottom:8px"><button style="height:28px;padding:0 14px;border:none;border-radius:7px;background:var(--panel);font-size:12px;font-weight:650;box-shadow:0 1px 2px rgba(0,0,0,.06)">iCloud</button><button style="height:28px;padding:0 14px;border:none;border-radius:7px;background:transparent;font-size:12px">S3</button></div>
+<div style="font-size:11.5px;color:var(--t3);line-height:1.55;margin-bottom:14px">{{ t.backupDesc }}</div>
+<div style="border:1px solid var(--line);background:var(--panel2);border-radius:9px;overflow:hidden">
+<div style="display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line)"><div style="flex:1"><div style="font-size:13px;font-weight:500">{{ t.syncEp }}</div><div style="font-size:11.5px;color:var(--t3)">{{ t.syncEpDesc }}</div></div><span style="font-size:11px;font-weight:500;color:var(--t3);background:var(--chip);padding:2px 9px;border-radius:99px">{{ t.soon }}</span></div>
+<div style="display:flex;align-items:center;gap:10px;padding:11px 14px"><div style="flex:1"><div style="font-size:13px;font-weight:500">{{ t.syncCloud }}</div><div style="font-size:11.5px;color:var(--t3)">{{ t.syncCloudDesc }}</div></div><span style="font-size:11px;font-weight:500;color:var(--t3);background:var(--chip);padding:2px 9px;border-radius:99px">{{ t.soon }}</span></div>
+</div>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+<div style="border:1px solid var(--line);background:var(--panel);border-radius:11px;padding:14px">
+<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:14px"><div style="width:28px;height:28px;border-radius:8px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:15px">✦</div><div><div style="font-size:14px;font-weight:650">{{ t.providerTitle }}</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">{{ t.providerDesc }}</div></div></div>
+<div style="display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel2)"><div style="flex:1"><div style="font-size:13px;font-weight:500">{{ t.zhulongSwitch }}</div><div style="font-size:11.5px;color:var(--t3)">{{ t.zhulongSwitchDesc }}</div></div><span style="font-size:11px;font-weight:600;color:var(--t3);background:var(--chip);padding:2px 9px;border-radius:99px">{{ t.off }}</span></div>
+</div>
+<div style="border:1px solid var(--line);background:var(--panel);border-radius:11px;padding:14px">
+<div style="font-size:14px;font-weight:650;margin-bottom:6px">{{ t.privacyTitle }}</div>
+<div style="font-size:11.5px;color:var(--t3);line-height:1.6">{{ t.privacyDesc }}</div>
+</div>
 </div>
 </div>
 </div>
@@ -567,7 +593,7 @@ class Component extends DCLogic {
     this.SMETA={pending:{g:'○',zh:'待完成',en:'To do'},done:{g:'✓',zh:'已完成',en:'Done'},missed:{g:'✕',zh:'未完成',en:'Missed'},continued:{g:'→',zh:'已延续',en:'Continued'},changed:{g:'⇄',zh:'已变更',en:'Changed'},pooled:{g:'↩',zh:'已回池',en:'Repooled'},dropped:{g:'—',zh:'已废弃',en:'Dropped'}};
     this.CHIP={pending:['var(--accent-soft)','var(--accent)'],done:['var(--ok-soft)','var(--ok)'],missed:['var(--warn-soft)','var(--warn)'],continued:['var(--chip)','var(--t2)'],changed:['var(--chip)','var(--t2)'],pooled:['var(--chip)','var(--t2)'],dropped:['var(--chip)','var(--t3)']};
     this.I18N={
-      zh:{appName:'晷迹',appSub:'suntrace',navDay:'Day Todo',navPool:'任务池',navFuture:'未来计划',navUnf:'未完成',navDone:'已完成',navCal:'日历',navSet:'设置',gPlan:'计划',gTrace:'轨迹',
+      zh:{appName:'晷迹',appSub:'Noonmark',navDay:'Day Todo',navPool:'任务池',navFuture:'未来计划',navUnf:'未完成',navDone:'已完成',navCal:'日历',navSet:'设置',gPlan:'计划',gTrace:'轨迹',
       bToday:'今天',bHist:'历史 · 已锁定',bFut:'未来',btnToday:'今天',btnPick:'选日期',
       lockNote:'历史日已锁定：任务事实不可改写，可补写复盘。未完成任务可延续或废弃。',futNote:'未来日：可排期与调整顺序，不能提前完成或生成复盘。',
       quickAdd:'添加今日任务，回车确认',quickAddFut:'为这一天排期任务，回车确认',fromPool:'从任务池排期…',emptyDay:'这一天没有留下任务。',
@@ -578,22 +604,22 @@ class Component extends DCLogic {
       trCarry:'延续子任务：',trDoneOn:'完成',subDonePre:'当日完成 ',subProgOf:'/',subCarryTip:'（历史事实，不可改写）',
       descL:'描述',noteL:'附言',descPh:'补充这个任务的背景、目标或范围…',notePh:'临时想法、提醒或补充说明…',descEmpty:'未填写描述',noteEmpty:'无附言',
       wTier:['','简','中','难'],progManual:'完成进度',progAuto:'按子任务自动计算',progFloorPre:'下限 ',progOf:' · 已达',subWTip:'难度权重（点击切换 简/中/难）',
-      aDone:'标记完成',aUndone:'撤销完成',aCont:'延续到…',aChg:'变更为新任务…',aRepool:'回到任务池（留下轨迹）',aDrop:'废弃任务链',aMove:'改期…',aCopy:'复制为新任务',aToday:'排期到今天',aTomorrow:'排期到明天',aPick:'排期到指定日期…',
+      aDone:'标记完成',aUndone:'撤销完成',aCont:'延续到…',aChg:'变更为新任务…',aRepool:'回到任务池（留下轨迹）',aDrop:'废弃任务链',aReactivate:'重新启用',aMove:'改期…',aCopy:'复制为新任务',aToday:'排期到今天',aTomorrow:'排期到明天',aPick:'排期到指定日期…',
       histRO:'历史事实只读，不可删除或改写。',
       pkCont:'延续到哪一天？',pkSched:'排期到哪一天？',pkMove:'改到哪个未来日期？',pkGoto:'跳转到日期',pkPool:'从任务池排期到这一天',cancel:'取消',
       chgTitle:'变更任务',chgDesc:'原任务会保留在当天并标注「已变更」；新任务将以「待完成」出现在同一天。',chgPh:'新任务标题…',chgOk:'确认变更',
       changedToPre:'被变更为：',contToPre:'已延续到 ',pooledMeta:'当天已回池',inPool:'任务池',seqPre:'第 ',seqMid:' 次延续',durPre:'持续 ',durUnit:' 天',
       poolTitle:'任务池',poolDesc:'尚未安排日期的任务。排期后会出现在对应的 Day Todo。',poolPh:'新建任务到任务池，回车确认',poolEmpty:'任务池是空的。',
       futTitle:'未来计划',futDesc:'已排到未来日期的计划草稿，可改期或回到任务池。',futEmpty:'还没有未来计划。',jumpDay:'查看当天 →',
-      unfTitle:'未完成',unfDesc:'按任务链去重的未完成轨迹。延续它，或明确废弃。',unfEmpty:'没有待处理的未完成任务。',missedN:'次未完成',contN:'次延续',lastMiss:'最近未完成',contActive1:'已延续到 ',contActive2:'，当前待完成',showDetail:'明细',jumpActive:'跳转 →',
+      unfTitle:'未完成',unfDesc:'按任务链去重的未完成轨迹。废弃仍可见，可重新启用。',unfEmpty:'没有待处理的未完成任务。',missedN:'次未完成',contN:'次延续',lastMiss:'最近未完成',contActive1:'已延续到 ',contActive2:'，当前待完成',showDetail:'明细',jumpActive:'跳转 →',
       doneTitle:'已完成',doneDesc:'按完成记录逐条展示，并附带每条的任务轨迹。',doneEmpty:'还没有完成记录。',traceStart:'始于 ',traceCont:'延续 ',traceContUnit:' 天',traceDone:'完成于 ',doneSubTag:'子任务',doneSubOf:'属于「',doneSubOf2:'」',
       calTitle:'日历',calDesc:'整月轨迹总览。点选任一天，右侧查看当天详情。',calOpenDay:'在 Day Todo 打开这一天 →',calDayEmpty:'这一天没有留下任务。',calMon:['1 月','2 月','3 月','4 月','5 月','6 月','7 月','8 月','9 月','10 月','11 月','12 月'],calWk:['一','二','三','四','五','六','日'],calLegend:'色点：完成 / 待办 / 未完成',calTotalN:' 项任务',calHeatLess:'完成少',calHeatMore:'完成多',
-      setTitle:'设置',appearance:'外观',thCool:'冷灰',thWarm:'微暖纸感',language:'语言',dataSec:'数据',expBtn:'导出数据 (JSON)',impBtn:'导入数据…',syncSec:'同步',syncEp:'自定义同步端点',syncEpDesc:'连接自有服务端',syncCloud:'iCloud 云同步',syncCloudDesc:'原生云同步',soon:'规划中',
-      tExp:'已导出 suntrace-backup.json（示意）',tImp:'导入为第一期占位入口（示意）',tCont:'已延续到 ',tChg:'已变更，新任务已加入当天',tRepool:'已回池，轨迹保留在当天',tDrop:'任务链已废弃',tSched:'已排期到 ',tPool:'已回到任务池',tCopy:'已复制为新任务，放入任务池',tAdd:'已添加',
+      setTitle:'设置',prefTitle:'偏好',prefDesc:'影响本机显示，不改变任务事实。',appearance:'外观',thCool:'冷灰',thWarm:'微暖纸感',language:'语言',dataSec:'数据',dataDesc:'导出和导入本机数据包。',expBtn:'导出数据 (JSON)',impBtn:'导入数据…',syncSec:'同步',syncDesc:'选择本地优先或在线优先。两种模式互斥，当前只运行其中一种。',dataMode:'数据模式',localFirst:'本地优先',onlineFirst:'在线优先',dataModeDesc:'主数据模式互斥；定时备份只是旁路导出，不会成为第二套同步写入。',scheduledBackup:'定时备份',backupOff:'关闭',backupDaily:'每日',backupWeekly:'每周',backupDest:'备份目标',backupDesc:'在线优先可定时导出本地可恢复数据包到 iCloud 或 S3；这不是双向同步。',syncEp:'自定义同步端点',syncEpDesc:'连接自有服务端',syncCloud:'iCloud 云同步',syncCloudDesc:'原生云同步',soon:'规划中',providerTitle:'烛龙配置',providerDesc:'烛龙是可选 sidecar；普通清单不依赖 Provider。',zhulongSwitch:'启用烛龙',zhulongSwitchDesc:'开启后左侧导航显示烛龙入口。',off:'关闭',privacyTitle:'隐私与边界',privacyDesc:'Provider 凭证保存在本机安全存储；未启用烛龙时，任务数据不会发送到模型服务。',
+      tExp:'已导出 noonmark-backup.json（示意）',tImp:'导入为第一期占位入口（示意）',tCont:'已延续到 ',tChg:'已变更，新任务已加入当天',tRepool:'已回池，轨迹保留在当天',tDrop:'任务链已废弃',tReactivate:'已取消废弃',tSched:'已排期到 ',tPool:'已回到任务池',tCopy:'已复制为新任务，放入任务池',tAdd:'已添加',
       noUndo:'不能撤销历史事实。Cmd+Z 仅限当日与未来计划的误操作。',undone:'已撤销',nothing:'没有可撤销的操作',
       hintPool:'选中任务查看详情与排期操作。',hintFut:'选中计划查看详情，可改期或回池。',hintUnf:'选中任务链查看未完成明细。',hintDone:'选中记录可跳转当天或复制为新任务。',
       wd:['周日','周一','周二','周三','周四','周五','周六']},
-      en:{appName:'Suntrace',appSub:'晷迹',navDay:'Day Todo',navPool:'Task Pool',navFuture:'Upcoming',navUnf:'Unfinished',navDone:'Completed',navCal:'Calendar',navSet:'Settings',gPlan:'PLAN',gTrace:'TRACE',
+      en:{appName:'Noonmark',appSub:'晷迹',navDay:'Day Todo',navPool:'Task Pool',navFuture:'Upcoming',navUnf:'Unfinished',navDone:'Completed',navCal:'Calendar',navSet:'Settings',gPlan:'PLAN',gTrace:'TRACE',
       bToday:'Today',bHist:'History · Locked',bFut:'Future',btnToday:'Today',btnPick:'Pick date',
       lockNote:'This day is locked: facts can’t be rewritten. You may still continue or drop unfinished tasks, and write the review.',futNote:'Future day: schedule and reorder only — no completing, no review yet.',
       quickAdd:'Add a task for today, press Enter',quickAddFut:'Schedule a task for this day, press Enter',fromPool:'From task pool…',emptyDay:'No tasks were left on this day.',
@@ -604,18 +630,18 @@ class Component extends DCLogic {
       trCarry:'carried on: ',trDoneOn:'done',subDonePre:'done that day ',subProgOf:'/',subCarryTip:' (locked fact)',
       descL:'Description',noteL:'Note',descPh:'Add context, goal or scope for this task…',notePh:'A passing thought, reminder or aside…',descEmpty:'No description',noteEmpty:'No note',
       wTier:['','S','M','L'],progManual:'Progress',progAuto:'Auto from subtasks',progFloorPre:'min ',progOf:' · reached',subWTip:'Difficulty weight (click to cycle S/M/L)',
-      aDone:'Mark done',aUndone:'Undo done',aCont:'Continue to…',aChg:'Change into a new task…',aRepool:'Back to pool (leaves a trace)',aDrop:'Drop the chain',aMove:'Reschedule…',aCopy:'Copy as new task',aToday:'Schedule today',aTomorrow:'Schedule tomorrow',aPick:'Schedule to a date…',
+      aDone:'Mark done',aUndone:'Undo done',aCont:'Continue to…',aChg:'Change into a new task…',aRepool:'Back to pool (leaves a trace)',aDrop:'Drop the chain',aReactivate:'Re-enable',aMove:'Reschedule…',aCopy:'Copy as new task',aToday:'Schedule today',aTomorrow:'Schedule tomorrow',aPick:'Schedule to a date…',
       histRO:'Historical facts are read-only.',
       pkCont:'Continue to which day?',pkSched:'Schedule to which day?',pkMove:'Move to which future day?',pkGoto:'Jump to date',pkPool:'Schedule from pool to this day',cancel:'Cancel',
       chgTitle:'Change task',chgDesc:'The original stays on this day marked “Changed”; a new task appears the same day as “To do”.',chgPh:'New task title…',chgOk:'Confirm change',
       changedToPre:'Changed into: ',contToPre:'Continued to ',pooledMeta:'Returned to pool that day',inPool:'Task pool',seqPre:'Continuation #',seqMid:'',durPre:'day ',durUnit:' of streak',
       poolTitle:'Task Pool',poolDesc:'Tasks with no date yet. Scheduling moves them onto a Day Todo.',poolPh:'New task into the pool, press Enter',poolEmpty:'The pool is empty.',
       futTitle:'Upcoming',futDesc:'Drafts scheduled to future days. Reschedule or return to pool.',futEmpty:'No upcoming plans yet.',jumpDay:'Open day →',
-      unfTitle:'Unfinished',unfDesc:'Unfinished trails, deduped by task chain. Continue them — or drop them for good.',unfEmpty:'Nothing unfinished to handle.',missedN:'missed',contN:'continued',lastMiss:'Last missed',contActive1:'Continued to ',contActive2:', now pending',showDetail:'Details',jumpActive:'Jump →',
+      unfTitle:'Unfinished',unfDesc:'Unfinished trails, deduped by task chain. Dropped chains stay visible and can be re-enabled.',unfEmpty:'Nothing unfinished to handle.',missedN:'missed',contN:'continued',lastMiss:'Last missed',contActive1:'Continued to ',contActive2:', now pending',showDetail:'Details',jumpActive:'Jump →',
       doneTitle:'Completed',doneDesc:'Every completion record, each with its task trace.',doneEmpty:'No completions yet.',traceStart:'Started ',traceCont:'continued ',traceContUnit:'d',traceDone:'done ',doneSubTag:'Subtask',doneSubOf:'part of “',doneSubOf2:'”',
       calTitle:'Calendar',calDesc:'A whole-month trace overview. Pick any day to see its detail on the right.',calOpenDay:'Open in Day Todo →',calDayEmpty:'No tasks were left on this day.',calMon:['January','February','March','April','May','June','July','August','September','October','November','December'],calWk:['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],calLegend:'Dots: done / to-do / missed',calTotalN:' tasks',calHeatLess:'less',calHeatMore:'more',
-      setTitle:'Settings',appearance:'Appearance',thCool:'Cool gray',thWarm:'Warm paper',language:'Language',dataSec:'Data',expBtn:'Export data (JSON)',impBtn:'Import data…',syncSec:'Sync',syncEp:'Custom sync endpoint',syncEpDesc:'Connect your own server',syncCloud:'iCloud sync',syncCloudDesc:'Native cloud sync',soon:'Planned',
-      tExp:'Exported suntrace-backup.json (demo)',tImp:'Import is a placeholder in v1 (demo)',tCont:'Continued to ',tChg:'Changed — new task added to the same day',tRepool:'Repooled — trace kept on the day',tDrop:'Chain dropped',tSched:'Scheduled to ',tPool:'Returned to pool',tCopy:'Copied as a new task into the pool',tAdd:'Added',
+      setTitle:'Settings',prefTitle:'Preferences',prefDesc:'Affects local display only; task facts stay unchanged.',appearance:'Appearance',thCool:'Cool gray',thWarm:'Warm paper',language:'Language',dataSec:'Data',dataDesc:'Export and import local data packages.',expBtn:'Export data (JSON)',impBtn:'Import data…',syncSec:'Sync',syncDesc:'Choose local-first or online-first. The modes are exclusive; only one runs at a time.',dataMode:'Data mode',localFirst:'Local-first',onlineFirst:'Online-first',dataModeDesc:'Primary data modes are exclusive; scheduled backup is an export path, not a second sync writer.',scheduledBackup:'Scheduled backup',backupOff:'Off',backupDaily:'Daily',backupWeekly:'Weekly',backupDest:'Backup destination',backupDesc:'Online-first can export restorable local packages to iCloud or S3 on a schedule; this is not bidirectional sync.',syncEp:'Custom sync endpoint',syncEpDesc:'Connect your own server',syncCloud:'iCloud sync',syncCloudDesc:'Native cloud sync',soon:'Planned',providerTitle:'Zhulong Configuration',providerDesc:'Zhulong is optional; normal lists do not depend on a Provider.',zhulongSwitch:'Enable Zhulong',zhulongSwitchDesc:'When enabled, Zhulong appears in the sidebar.',off:'Off',privacyTitle:'Privacy and boundaries',privacyDesc:'Provider credentials stay in local secure storage; when Zhulong is disabled, task data is not sent to model services.',
+      tExp:'Exported noonmark-backup.json (demo)',tImp:'Import is a placeholder in v1 (demo)',tCont:'Continued to ',tChg:'Changed — new task added to the same day',tRepool:'Repooled — trace kept on the day',tDrop:'Chain dropped',tReactivate:'Drop marker cleared',tSched:'Scheduled to ',tPool:'Returned to pool',tCopy:'Copied as a new task into the pool',tAdd:'Added',
       noUndo:'History can’t be undone. Cmd+Z only reverts slips on today or future plans.',undone:'Undone',nothing:'Nothing to undo',
       hintPool:'Select a task to see details and scheduling.',hintFut:'Select a plan to reschedule or repool.',hintUnf:'Select a chain to inspect its missed records.',hintDone:'Select a record to open its day or copy it.',
       wd:['Sun','Mon','Tue','Wed','Thu','Fri','Sat']}
@@ -745,9 +771,21 @@ class Component extends DCLogic {
     const x=this.state.tasks.find(a=>a.id===id),t=this.tt();
     this.act(!fromHist,(ts,box)=>{
       box.dropped=[...box.dropped,x.chain];
+      const source=ts.find(a=>a.id===id);if(source)source.status='dropped';
       ts.forEach(y=>{if(y.chain===x.chain&&y.status==='pending'&&(y.date===null||y.date>=this.TODAY))y.status='dropped';});
       return {sel:null};
     },t.tDrop);
+  }
+  reactivateChain(chain){
+    const t=this.tt();
+    this.act(true,(ts,box)=>{
+      box.dropped=box.dropped.filter(c=>c!==chain);
+      ts.forEach(y=>{
+        if(y.chain!==chain||y.status!=='dropped')return;
+        y.status=(y.date&&y.date<this.TODAY)?'missed':'pending';
+      });
+      return {};
+    },t.tReactivate);
   }
   schedule(id,date){
     const t=this.tt();
@@ -961,27 +999,34 @@ class Component extends DCLogic {
     const futCount=tasks.filter(x=>x.date&&x.date>T).length;
     const unfVms=[];
     [...new Set(tasks.map(x=>x.chain))].forEach(c=>{
-      if(st.dropped.includes(c))return;
-      const es=chainOf(c),missed=es.filter(e=>e.status==='missed');
-      if(!missed.length)return;
+      const es=chainOf(c),isDropped=st.dropped.includes(c);
+      const missed=es.filter(e=>e.status==='missed'||e.status==='dropped');
+      if(!missed.length&&!isDropped)return;
       if(es.some(e=>e.status==='done'))return;
       const active=es.find(e=>e.status==='pending'&&e.date&&e.date>=T);
       const last=missed[missed.length-1];
       const contN=Math.max(...es.map(e=>e.seq))-1;
       unfVms.push({
         id:c,title:es[es.length-1].title,
-        missedL:missed.length+' '+t.missedN,contL:contN+' '+t.contN,
-        lastL:t.lastMiss+' · '+fmtMD(last.date),
+        statusGlyph:isDropped?'—':'✕',
+        statusBg:isDropped?'var(--chip)':'var(--warn-soft)',
+        statusColor:isDropped?'var(--t3)':'var(--warn)',
+        titleColor:isDropped?'var(--t2)':'var(--t1)',
+        missedColor:isDropped?'var(--t2)':'var(--warn)',
+        missedL:isDropped?t.stDrop:(missed.length+' '+t.missedN),contL:contN+' '+t.contN,
+        lastL:last?(t.lastMiss+' · '+fmtMD(last.date)):'',
         activeL:active?(t.contActive1+(active.date===T?t.bToday:fmtMD(active.date))+t.contActive2):'',
-        hasActive:!!active,canAct:!active,
+        hasActive:!!active,showNormalActions:!active&&!isDropped,showReactivate:isDropped,
         onJump:e=>{e.stopPropagation();if(active)this.setState({page:'day',date:active.date,sel:active.id});},
         expanded:!!st.expanded[c],
         caret:st.expanded[c]?'▾':'▸',
         onToggle:e=>{e.stopPropagation();this.setState(s=>({expanded:Object.assign({},s.expanded,{[c]:!s.expanded[c]})}));},
-        details:missed.map(e=>({dateL:fmtMD(e.date)+' '+wd(e.date),seqL:'#'+e.seq,contL:e.contTo?(t.contToPre+fmtMD(e.contTo)):''})),
-        onCont:e=>{e.stopPropagation();this.setState({picker:{mode:'continue',id:last.id}});},
-        onDrop:e=>{e.stopPropagation();this.dropChain(last.id,true);},
-        onSelect:()=>this.setState({sel:last.id})
+        details:missed.map(e=>({dateL:fmtMD(e.date)+' '+wd(e.date),seqL:'#'+e.seq,contL:e.contTo?(t.contToPre+fmtMD(e.contTo)):'',
+          statusGlyph:e.status==='dropped'?'—':'✕',statusL:e.status==='dropped'?t.stDrop:t.stMissed,statusColor:e.status==='dropped'?'var(--t3)':'var(--warn)'})),
+        onCont:e=>{e.stopPropagation();if(last)this.setState({picker:{mode:'continue',id:last.id}});},
+        onDrop:e=>{e.stopPropagation();if(last)this.dropChain(last.id,true);},
+        onReactivate:e=>{e.stopPropagation();this.reactivateChain(c);},
+        onSelect:()=>{if(last)this.setState({sel:last.id});}
       });
     });
     const dones=tasks.filter(x=>x.status==='done').sort((a,b)=>a.date<b.date?1:-1);

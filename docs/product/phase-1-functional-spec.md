@@ -1,11 +1,13 @@
 # 一期功能规格
 
-本文定义晷迹（suntrace）第一期 Mac 端的功能、领域规则、数据边界和核心接口。第一期目标不是复刻 Todo清单的全部能力，而是验证晷迹自己的核心理念：每日任务必须留下不可删除的轨迹，跨日不能无痕移动，只能延续复制，每一天都可以被清晰复盘。
+本文定义晷迹（Noonmark）第一期 Mac 端的功能、领域规则、数据边界和核心接口。第一期目标不是复刻 Todo清单的全部能力，而是验证晷迹自己的核心理念：每日任务必须留下不可删除的轨迹，跨日不能无痕移动，只能延续复制，每一天都可以被清晰复盘。
 
 ## 产品目标
 
 - Mac 首发，SwiftUI 是不可变技术约束。
 - 本地优先，无账号、无网络也能完整使用核心功能。
+- 允许用户选择 **本地优先** 或 **在线优先** 作为主 **数据模式**；两者互斥，不能并行写入同一份任务事实。
+- 在线优先模式可以配置 **定时备份**，把当前数据导出成可恢复数据包到 iCloud Drive、S3 或其他对象存储；备份不是双向同步，也不是第二事实源。
 - 每个自然日都有可回看的 Day Todo。
 - 当前日任务可以执行、完成、变更、回池、废弃或延续。
 - 历史日轨迹不可删除、不可无痕改期、不可覆盖式编辑。
@@ -13,6 +15,21 @@
 - 第一阶段只支持有限撤销，不能用撤销抹掉历史事实。
 - 一期只做手动数据包导出 / 导入和同步端点入口占位。
 - 烛龙是可选 sidecar；没有 AI provider 时普通清单功能必须完整可用。
+
+## 数据模式与备份边界
+
+晷迹的数据模式分为两类：
+
+- **本地优先**：本机 SQLite 事实表是主要运行路径；同步底座只作为未来跨设备交换和诊断能力，不要求在线服务可用。
+- **在线优先**：在线服务是主要运行路径；本机可以缓存和导出恢复包，但不再作为主同步事实源。
+
+约束：
+
+- 同一时间只能启用一种主数据模式。
+- 模式切换必须是显式操作，并且必须关闭另一套主同步链路。
+- 不允许本地优先同步和在线优先同步同时运行、同时写入、同时解决冲突。
+- 定时备份是旁路能力：它只把当前事实导出成可恢复数据包，不接收远端变更，不参与冲突合并。
+- 在线优先允许开启定时备份到 iCloud Drive、S3 或用户配置的对象存储；这不违反主数据模式互斥。
 
 ## 第一屏信息架构
 
@@ -72,7 +89,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 
 - 同一任务链同一时间最多一个活跃日轨迹。
 - 活跃日轨迹完成后，该任务链从未完成池移除。
-- 废弃后，该任务链不能再延续复制。
+- 废弃后，该任务链仍显示在未完成池并标注已废弃；它不能直接延续复制，但可以重新启用。
 
 ### TaskDefinition
 
@@ -235,7 +252,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 
 ### 未完成池
 
-按任务链去重汇总存在未完成历史的任务。未完成历史包括 `unfinished` 和已经被继续处理的 `continued`。
+按任务链去重汇总存在未完成历史或已废弃历史的任务。未完成历史包括 `unfinished`、已经被继续处理的 `continued`，以及被用户明确废弃但仍需可见的 `abandoned`。
 
 展示：
 
@@ -244,6 +261,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 延续次数。
 - 是否存在活跃日轨迹。
 - 已延续待完成状态。
+- 已废弃状态。
 
 支持操作：
 
@@ -251,13 +269,15 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 延续复制到目标日期。
 - 跳转到活跃日轨迹。
 - 废弃任务链。
+- 重新启用已废弃任务链。
 
 规则：
 
 - 如果任务链已经有活跃日轨迹，未完成池仍显示它，但标注已延续待完成。
 - 已延续待完成时不能再次延续。
 - 活跃日轨迹完成后，该任务链从未完成池移除。
-- 废弃后，该任务链从未完成池移除，但历史日轨迹保留。
+- 废弃后，该任务链仍在未完成池可见，并标注已废弃。
+- 重新启用只取消已废弃标记：当前日或未来日轨迹恢复为 `pending`，历史日轨迹恢复为 `unfinished`；该操作不创建今日任务、不复制子任务、不增加延续次数。
 
 ### 已完成池
 
@@ -309,6 +329,11 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 
 - `unfinished -> continued`
 - `unfinished -> abandoned`
+- `abandoned -> unfinished`，仅通过重新启用取消废弃标记。
+
+已废弃当前日或未来计划：
+
+- `abandoned -> pending`，仅通过重新启用取消废弃标记。
 
 未来计划：
 
@@ -320,7 +345,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 
 - 历史 `completed -> pending`
 - 历史 `unfinished -> taskPool`
-- 已废弃任务链再次延续
+- 已废弃任务链直接延续；必须先重新启用，再按普通未完成规则操作。
 - 有活跃日轨迹的任务链再次延续
 - 已有日轨迹的任务定义覆盖式编辑
 
@@ -366,6 +391,7 @@ func returnToPool(traceId: TraceID, now: Instant) throws
 func continueTrace(traceId: TraceID, targetDate: LocalDate, now: Instant) throws -> TraceID
 func changeTrace(traceId: TraceID, newTitle: String, newDescriptionText: String?, newNote: String?, now: Instant) throws -> TraceID
 func abandonChain(from traceId: TraceID, now: Instant) throws
+func reactivateAbandonedChain(from traceId: TraceID, today: LocalDate, now: Instant) throws -> TraceID
 func copyAsNewTask(from traceId: TraceID, target: NewTaskTarget) throws -> TaskChainID
 func updateTraceText(traceId: TraceID, descriptionText: String?, note: String?) throws
 func setManualProgress(traceId: TraceID, percent: Int) throws
@@ -535,7 +561,7 @@ func canUndoLastLocalAction() -> Bool
 - `task_definitions` 已被日轨迹引用后禁止覆盖关键字段。
 - 同一任务链最多一个活跃日轨迹。
 - 历史日优先级不可修改。
-- 废弃任务链不可新增延续轨迹。
+- 废弃任务链不可新增延续轨迹；重新启用只恢复原日轨迹状态，不新增轨迹。
 - AI 建议草稿不是历史事实，可以丢弃。
 - label assignment 不改变任务状态，也不能改写日轨迹。
 
@@ -571,7 +597,7 @@ func canUndoLastLocalAction() -> Bool
 7. 历史日轨迹不可删除、不可覆盖、不可无痕改期。
 8. 未来计划可换未来日期，可回任务池，但不能完成。
 9. 未来计划到期后自动进入当天 Day Todo。
-10. 未完成池按任务链去重，明细显示每个未完成或已延续日期。
+10. 未完成池按任务链去重，明细显示每个未完成、已延续或已废弃日期。
 11. 已完成池按完成日轨迹逐条显示，并展示每条任务链的开始日期、延续日期列表和完成日期。
 12. 父任务存在未完成子任务时不能完成，只能展示部分完成进度。
 13. 未完成子任务随父任务延续复制到目标日期，并保留同一条子任务轨迹线。
@@ -583,6 +609,7 @@ func canUndoLastLocalAction() -> Bool
 19. 烛龙 可以生成复盘、任务拆解、排期和 label 建议草稿，但不能未经确认写入任务事实。
 20. 烛龙 发送远程请求前，必须展示本次使用的数据范围。
 21. 烛龙的习惯画像必须带证据和置信度，且只表示时间窗口内的分析假设。
+22. 废弃任务链仍在未完成池可见，带已废弃标记；重新启用后只取消废弃标记，不创建今日任务。
 22. 烛龙页面可展示《苦昼短》/ 衔烛龙意象作为完整 slogan 元素。
 
 ## 明确不做

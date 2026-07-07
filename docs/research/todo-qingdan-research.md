@@ -2,7 +2,7 @@
 
 调研日期：2026-07-05  
 调研对象：[Todo清单官网](https://todo.evestudio.cn/)、[Todo清单学院](https://www.evetech.top/)、“Todo清单”应用公开资料  
-调研目的：理解 Todo清单的核心功能、核心理念，并提炼对晷迹（suntrace）的产品启发。
+调研目的：理解 Todo清单的核心功能、核心理念，并提炼对晷迹（Noonmark）的产品启发。
 
 ## 结论摘要
 

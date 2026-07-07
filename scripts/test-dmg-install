@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dmg_path="${1:-dist/SuntraceMacApp.dmg}"
+dmg_path="${1:-dist/Noonmark.dmg}"
 app_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
 work_dir="artifacts/dmg-install"
 install_dir="${work_dir}/Applications"
-database_path="${work_dir}/Suntrace.sqlite"
+database_path="${work_dir}/Noonmark.sqlite"
 screenshot_path="${work_dir}/installed-day.png"
-mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/suntrace-dmg-install.XXXXXX")"
+mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-install.XXXXXX")"
 
 required_tools=(hdiutil ditto sqlite3 swift open screencapture sips)
 for tool in "${required_tools[@]}"; do
@@ -56,7 +56,7 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
     for window in list {
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         let name = window[kCGWindowName as String] as? String ?? ""
-        if (owner == "晷迹" || owner == "SuntraceMacApp") && name == "晷迹 · suntrace" {
+        if (owner == "晷迹" || owner == "Noonmark" || owner == "SuntraceMacApp") && name == "晷迹 · Day Todo — 7月5日" {
             if let number = window[kCGWindowNumber as String] {
                 print(number)
                 exit(0)
@@ -81,7 +81,7 @@ for _ in {1..20}; do
 done
 
 if [[ -z "$window_id" ]]; then
-  echo "installed Suntrace app window not found" >&2
+  echo "installed Noonmark app window not found" >&2
   exit 1
 fi
 

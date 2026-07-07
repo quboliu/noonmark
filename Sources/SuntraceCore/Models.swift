@@ -66,6 +66,39 @@ public enum AppLanguage: String, Codable, Hashable, Sendable, CaseIterable {
     case english
 }
 
+public enum AppDataMode: String, Codable, Hashable, Sendable, CaseIterable {
+    case localFirst
+    case onlineFirst
+}
+
+public enum BackupDestinationKind: String, Codable, Hashable, Sendable, CaseIterable {
+    case iCloudDrive
+    case s3
+}
+
+public enum ScheduledBackupFrequency: String, Codable, Hashable, Sendable, CaseIterable {
+    case off
+    case daily
+    case weekly
+}
+
+public struct ScheduledBackupPolicy: Codable, Equatable, Sendable {
+    public var frequency: ScheduledBackupFrequency
+    public var destination: BackupDestinationKind
+
+    public var isEnabled: Bool {
+        frequency != .off
+    }
+
+    public init(
+        frequency: ScheduledBackupFrequency = .off,
+        destination: BackupDestinationKind = .iCloudDrive
+    ) {
+        self.frequency = frequency
+        self.destination = destination
+    }
+}
+
 public enum SyncEndpointKind: String, Codable, Hashable, Sendable, CaseIterable {
     case customEndpoint
     case iCloud
@@ -92,16 +125,37 @@ public struct SyncEndpointOption: Codable, Equatable, Sendable {
 public struct AppPreferences: Codable, Equatable, Sendable {
     public var theme: AppTheme
     public var language: AppLanguage
+    public var dataMode: AppDataMode
+    public var backupPolicy: ScheduledBackupPolicy
     public var syncEndpointOptions: [SyncEndpointOption]
 
     public init(
         theme: AppTheme = .coolGray,
         language: AppLanguage = .chinese,
+        dataMode: AppDataMode = .localFirst,
+        backupPolicy: ScheduledBackupPolicy = ScheduledBackupPolicy(),
         syncEndpointOptions: [SyncEndpointOption] = AppPreferences.defaultSyncEndpointOptions
     ) {
         self.theme = theme
         self.language = language
+        self.dataMode = dataMode
+        self.backupPolicy = backupPolicy
         self.syncEndpointOptions = syncEndpointOptions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? .coolGray
+        language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .chinese
+        dataMode = try container.decodeIfPresent(AppDataMode.self, forKey: .dataMode) ?? .localFirst
+        backupPolicy = try container.decodeIfPresent(
+            ScheduledBackupPolicy.self,
+            forKey: .backupPolicy
+        ) ?? ScheduledBackupPolicy()
+        syncEndpointOptions = try container.decodeIfPresent(
+            [SyncEndpointOption].self,
+            forKey: .syncEndpointOptions
+        ) ?? AppPreferences.defaultSyncEndpointOptions
     }
 
     public static let defaultSyncEndpointOptions: [SyncEndpointOption] = [

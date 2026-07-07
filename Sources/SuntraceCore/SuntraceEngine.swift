@@ -169,7 +169,8 @@ public final class SuntraceEngine {
     }
 
     public func unfinishedPool() -> [UnfinishedPoolItem] {
-        let unresolvedCandidatesByChain = Dictionary(grouping: traces.values.filter { $0.status == .unfinished || $0.status == .continued }) {
+        let unresolvedStatuses: Set<TraceStatus> = [.unfinished, .continued, .abandoned]
+        let unresolvedCandidatesByChain = Dictionary(grouping: traces.values.filter { unresolvedStatuses.contains($0.status) }) {
             $0.chainID
         }
 
@@ -177,13 +178,14 @@ public final class SuntraceEngine {
             let continuedCount = candidateTraces.filter { $0.status == .continued }.count
             let unfinishedTraces = candidateTraces.filter { trace in
                 trace.status == .unfinished
+                    || trace.status == .abandoned
                     || (trace.status == .continued && (trace.settledAt != nil || continuedCount > 1))
             }
 
             guard
                 unfinishedTraces.isEmpty == false,
                 var chain = chains[chainID],
-                chain.state == .active,
+                chain.state == .active || chain.state == .abandoned,
                 let definition = try? currentDefinition(for: chainID),
                 hasCompletedTrace(chainID) == false
             else {
@@ -449,6 +451,36 @@ public final class SuntraceEngine {
     }
 
     @discardableResult
+    public func reactivateAbandonedChain(
+        from traceID: DayTraceID,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> DayTraceID {
+        var source = try trace(traceID)
+        var chain = try chain(source.chainID)
+        guard chain.state == .abandoned, source.status == .abandoned else {
+            throw SuntraceError.invalidTransition("only abandoned chains can be reactivated")
+        }
+        if activeTrace(for: source.chainID) != nil {
+            throw SuntraceError.activeTraceAlreadyExists
+        }
+
+        if source.date >= today {
+            source.status = .pending
+            source.settledAt = nil
+        } else {
+            source.status = .unfinished
+            source.settledAt = source.settledAt ?? now
+        }
+        chain.state = .active
+        chain.updatedAt = now
+
+        traces[source.id] = source
+        chains[chain.id] = chain
+        return source.id
+    }
+
+    @discardableResult
     public func copyAsNewTask(
         from traceID: DayTraceID,
         target: NewTaskTarget,
@@ -700,6 +732,14 @@ public final class SuntraceEngine {
 
     public func updateLanguage(_ language: AppLanguage) {
         preferences.language = language
+    }
+
+    public func updateDataMode(_ dataMode: AppDataMode) {
+        preferences.dataMode = dataMode
+    }
+
+    public func updateBackupPolicy(_ backupPolicy: ScheduledBackupPolicy) {
+        preferences.backupPolicy = backupPolicy
     }
 
     public func syncEndpointOptions() -> [SyncEndpointOption] {

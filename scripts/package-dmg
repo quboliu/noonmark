@@ -8,7 +8,7 @@ volume_name="${SUNTRACE_DMG_VOLUME_NAME:-晷迹}"
 dist_dir="dist"
 app_path="${dist_dir}/${product}.app"
 dmg_root="${dist_dir}/dmg-root"
-dmg_path="${dist_dir}/${product}.dmg"
+dmg_path="${dist_dir}/Noonmark.dmg"
 
 scripts/build-mac-app "$configuration" >/dev/null
 

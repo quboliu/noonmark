@@ -242,7 +242,7 @@ public enum SQLiteSchema {
             d.note AS definition_note
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
-        WHERE t.status IN ('unfinished', 'continued')
+        WHERE t.status IN ('unfinished', 'continued', 'abandoned')
         """,
         """
         CREATE VIEW IF NOT EXISTS unfinished_pool_view AS
@@ -259,9 +259,9 @@ public enum SQLiteSchema {
             active.date AS active_trace_date
         FROM task_chains c
         JOIN task_definitions d ON d.chain_id = c.id AND d.superseded_at IS NULL
-        JOIN day_traces u ON u.chain_id = c.id AND u.status IN ('unfinished', 'continued')
+        JOIN day_traces u ON u.chain_id = c.id AND u.status IN ('unfinished', 'continued', 'abandoned')
         LEFT JOIN day_traces active ON active.chain_id = c.id AND active.status = 'pending'
-        WHERE c.state = 'active'
+        WHERE c.state IN ('active', 'abandoned')
           AND NOT EXISTS (
               SELECT 1 FROM day_traces done
               WHERE done.chain_id = c.id AND done.status = 'completed'

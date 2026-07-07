@@ -46,7 +46,7 @@ struct StoredZhulongProviderConfig: Codable, Equatable {
 }
 
 enum ZhulongProviderSettingsStore {
-    private static let defaultsKey = "suntrace.zhulong.provider.config"
+    private static let defaultsKey = "noonmark.zhulong.provider.config"
 
     static func load() -> ZhulongProviderDraft {
         var draft = ZhulongProviderDraft()
@@ -148,8 +148,8 @@ enum ZhulongProviderSettingsError: LocalizedError, Equatable {
 }
 
 enum ZhulongProviderKeychain {
-    static let keyRef = "keychain:suntrace.zhulong.default"
-    private static let service = "app.suntrace.zhulong.provider"
+    static let keyRef = "keychain:noonmark.zhulong.default"
+    private static let service = "app.noonmark.zhulong.provider"
     private static let account = "default-api-key"
 
     static func hasAPIKey() -> Bool {

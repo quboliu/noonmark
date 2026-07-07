@@ -27,7 +27,7 @@ public struct AIPromptBuilder: Sendable {
         AIRequest(
             systemPrompt: systemPrompt(for: task),
             userPrompt: userPrompt(scope: scope, report: report),
-            responseSchemaName: "suntrace.zhulong.suggestion_draft.v1",
+            responseSchemaName: "noonmark.zhulong.suggestion_draft.v1",
             metadata: [
                 "task": task.rawValue,
                 "rangeCount": String(scope.ranges.count)

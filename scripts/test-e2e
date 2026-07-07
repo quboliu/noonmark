@@ -9,9 +9,9 @@ fi
 
 app_bundle_name="${SUNTRACE_E2E_APP_BUNDLE_NAME:-SuntraceMacAppE2E}"
 app_executable_name="${SUNTRACE_E2E_APP_EXECUTABLE_NAME:-$app_bundle_name}"
-app_bundle_identifier="${SUNTRACE_E2E_BUNDLE_IDENTIFIER:-app.suntrace.mac.e2e}"
+app_bundle_identifier="${SUNTRACE_E2E_BUNDLE_IDENTIFIER:-app.noonmark.mac.e2e}"
 app_display_name="${SUNTRACE_E2E_APP_DISPLAY_NAME:-晷迹 E2E}"
-app_short_name="${SUNTRACE_E2E_APP_SHORT_NAME:-Suntrace E2E}"
+app_short_name="${SUNTRACE_E2E_APP_SHORT_NAME:-Noonmark E2E}"
 app_path="dist/${app_bundle_name}.app"
 app_executable_path="${app_path}/Contents/MacOS/${app_executable_name}"
 export SUNTRACE_E2E_APP_EXECUTABLE_NAME="$app_executable_name"
@@ -141,7 +141,7 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
         let name = window[kCGWindowName as String] as? String ?? ""
         var allowedOwners = [expectedOwner, expectedDisplayName]
         if expectedOwner == "SuntraceMacApp" {
-            allowedOwners.append(contentsOf: ["晷迹", "SuntraceMacApp"])
+            allowedOwners.append(contentsOf: ["晷迹", "Noonmark", "SuntraceMacApp"])
         }
         if allowedOwners.contains(owner) && name == expectedTitle {
             if let number = window[kCGWindowNumber as String] {
@@ -164,7 +164,7 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
     for window in list {
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         let name = window[kCGWindowName as String] as? String ?? ""
-        if owner.contains("Suntrace") || owner.contains("晷迹") || name.contains("晷迹") {
+        if owner.contains("Noonmark") || owner.contains("Suntrace") || owner.contains("晷迹") || name.contains("晷迹") {
             print("window owner=\(owner) title=\(name)")
         }
     }
@@ -194,7 +194,7 @@ capture_app_screenshot() {
     calendar) expected_window_title="晷迹 · 日历 — 7月5日" ;;
     zhulong) expected_window_title="晷迹 · 烛龙" ;;
     settings) expected_window_title="晷迹 · 设置" ;;
-    *) expected_window_title="晷迹 · suntrace" ;;
+    *) expected_window_title="晷迹 · Noonmark" ;;
   esac
 
   window_id=""
@@ -219,7 +219,7 @@ capture_app_screenshot() {
   done
 
   if [[ -z "$window_id" ]]; then
-    echo "Suntrace app window not found for ${page}" >&2
+    echo "Noonmark app window not found for ${page}" >&2
     dump_visible_windows >&2
     exit 1
   fi
@@ -281,7 +281,7 @@ fi
 echo "E2E summary sidebar and calendar insight: $summary_sidebar_result"
 
 blank_dir="artifacts/e2e-blank"
-blank_db="${blank_dir}/Suntrace.sqlite"
+blank_db="${blank_dir}/Noonmark.sqlite"
 blank_pages=(day pool future unfinished completed calendar zhulong)
 rm -rf "$blank_dir"
 mkdir -p "$blank_dir"
@@ -316,7 +316,7 @@ fi
 echo "E2E blank user screenshots: $blank_dir (days=$blank_days chains=$blank_chains definitions=$blank_definitions traces=$blank_traces subtasks=$blank_subtasks preferences=$blank_preferences)"
 
 persistence_dir="artifacts/e2e-persistence"
-persistence_db="${persistence_dir}/Suntrace.sqlite"
+persistence_db="${persistence_dir}/Noonmark.sqlite"
 rm -rf "$persistence_dir"
 mkdir -p "$persistence_dir"
 
@@ -350,7 +350,7 @@ fi
 echo "E2E blank persistence database: $persistence_db (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"
 
 interaction_dir="artifacts/e2e-interaction"
-interaction_db="${interaction_dir}/Suntrace.sqlite"
+interaction_db="${interaction_dir}/Noonmark.sqlite"
 interaction_title="E2E 快速新增任务"
 rm -rf "$interaction_dir"
 mkdir -p "$interaction_dir"
@@ -389,7 +389,7 @@ fi
 echo "E2E quick-add app interaction: $interaction_db (title=$interaction_title definitions=$interaction_definitions traces=$interaction_traces)"
 
 zhulong_dir="artifacts/e2e-zhulong"
-zhulong_db="${zhulong_dir}/Suntrace.sqlite"
+zhulong_db="${zhulong_dir}/Noonmark.sqlite"
 rm -rf "$zhulong_dir"
 mkdir -p "$zhulong_dir"
 
@@ -593,8 +593,8 @@ provider_dir="artifacts/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"
 provider_name="E2E Provider"
 provider_base_url="https://provider.example/v1"
-provider_model="suntrace-e2e-model"
-provider_api_key="suntrace-e2e-dummy-key"
+provider_model="noonmark-e2e-model"
+provider_api_key="noonmark-e2e-dummy-key"
 rm -rf "$provider_dir"
 mkdir -p "$provider_dir"
 
@@ -630,7 +630,7 @@ fi
 echo "E2E provider config round-trip: $provider_result (name=$provider_name model=$provider_model)"
 
 workflow_dir="artifacts/e2e-workflow"
-workflow_db="${workflow_dir}/Suntrace.sqlite"
+workflow_db="${workflow_dir}/Noonmark.sqlite"
 workflow_result="${workflow_dir}/workflow-result.txt"
 workflow_title="E2E 排期延续复盘"
 rm -rf "$workflow_dir"
@@ -687,7 +687,7 @@ fi
 echo "E2E domain workflow: $workflow_db (continued=$workflow_continued pending=$workflow_pending review=$workflow_review)"
 
 lifecycle_dir="artifacts/e2e-lifecycle"
-lifecycle_db="${lifecycle_dir}/Suntrace.sqlite"
+lifecycle_db="${lifecycle_dir}/Noonmark.sqlite"
 lifecycle_result="${lifecycle_dir}/lifecycle-result.txt"
 rm -rf "$lifecycle_dir"
 mkdir -p "$lifecycle_dir"
@@ -709,7 +709,7 @@ if [[ "$(cat "$lifecycle_result")" != "ok" ]]; then
   exit 1
 fi
 
-read -r lifecycle_changed lifecycle_new lifecycle_returned lifecycle_abandoned < <(
+read -r lifecycle_changed lifecycle_new lifecycle_returned lifecycle_reenabled lifecycle_abandoned lifecycle_abandon_total < <(
   sqlite3 -separator " " "$lifecycle_db" "
     SELECT
       (SELECT count(*)
@@ -737,21 +737,32 @@ read -r lifecycle_changed lifecycle_new lifecycle_returned lifecycle_abandoned <
        JOIN task_chains ON task_chains.id = day_traces.chain_id
        WHERE task_definitions.title = 'E2E 废弃任务'
          AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'pending'
+         AND task_chains.state = 'active'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       JOIN task_chains ON task_chains.id = day_traces.chain_id
+       WHERE task_definitions.title = 'E2E 废弃任务'
          AND day_traces.status = 'abandoned'
-         AND task_chains.state = 'abandoned');
+         AND task_chains.state = 'abandoned'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 废弃任务');
   "
 )
 
-if [[ "$lifecycle_changed" -ne 1 || "$lifecycle_new" -ne 1 || "$lifecycle_returned" -ne 1 || "$lifecycle_abandoned" -ne 1 ]]; then
-  echo "lifecycle e2e persistence failed: changed=$lifecycle_changed new=$lifecycle_new returned=$lifecycle_returned abandoned=$lifecycle_abandoned" >&2
+if [[ "$lifecycle_changed" -ne 1 || "$lifecycle_new" -ne 1 || "$lifecycle_returned" -ne 1 || "$lifecycle_reenabled" -ne 1 || "$lifecycle_abandoned" -ne 0 || "$lifecycle_abandon_total" -ne 1 ]]; then
+  echo "lifecycle e2e persistence failed: changed=$lifecycle_changed new=$lifecycle_new returned=$lifecycle_returned reenabled=$lifecycle_reenabled abandoned=$lifecycle_abandoned abandon_total=$lifecycle_abandon_total" >&2
   exit 1
 fi
 
-echo "E2E lifecycle workflow: $lifecycle_db (changed=$lifecycle_changed new=$lifecycle_new returned=$lifecycle_returned abandoned=$lifecycle_abandoned)"
+echo "E2E lifecycle workflow: $lifecycle_db (changed=$lifecycle_changed new=$lifecycle_new returned=$lifecycle_returned reenabled=$lifecycle_reenabled abandoned=$lifecycle_abandoned abandon_total=$lifecycle_abandon_total)"
 
 data_package_dir="artifacts/e2e-data-package"
-data_package_db="${data_package_dir}/Suntrace.sqlite"
-data_package_json="${data_package_dir}/suntrace-e2e-export.json"
+data_package_db="${data_package_dir}/Noonmark.sqlite"
+data_package_json="${data_package_dir}/noonmark-e2e-export.json"
 data_package_result="${data_package_dir}/data-package-result.txt"
 rm -rf "$data_package_dir"
 mkdir -p "$data_package_dir"

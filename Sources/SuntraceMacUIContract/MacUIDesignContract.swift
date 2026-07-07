@@ -165,6 +165,7 @@ public enum MacUIUnfinishedPoolElement: String, CaseIterable, Sendable {
     case activeTraceJump
     case continueButton
     case abandonButton
+    case reenableAbandonedButton
     case detailsExpansion
     case emptyState
 }
@@ -285,6 +286,7 @@ public enum MacUITaskAction: String, CaseIterable, Sendable {
     case changeIntoNewTask
     case returnToPool
     case abandonChain
+    case reactivateAbandonedChain
     case reschedule
     case copyAsNewTask
     case scheduleToday
@@ -327,6 +329,10 @@ public enum MacUISettingsElement: String, CaseIterable, Sendable {
     case englishLanguage
     case exportJSON
     case importData
+    case localFirstDataMode
+    case onlineFirstDataMode
+    case scheduledBackupPolicy
+    case backupDestination
     case customSyncEndpoint
     case iCloudSync
     case zhulongEnabledToggle
@@ -348,6 +354,8 @@ public enum MacUIBackendCapability: String, CaseIterable, Sendable {
     case limitedUndo
     case themeSetting
     case languageSetting
+    case dataModeSelection
+    case scheduledBackup
     case syncEndpointOptions
     case exportImport
     case syncPlaceholders

@@ -14,10 +14,11 @@ final class MacUIDesignContractTests: XCTestCase {
     func testContractKeepsPrototypeActionsAndModalsExplicit() {
         let contract = MacUIDesignContract.claudeMacPrototype20260705
 
-        XCTAssertEqual(contract.taskActions.count, 24)
+        XCTAssertEqual(contract.taskActions.count, 25)
         XCTAssertTrue(contract.taskActions.contains(.continueToDate))
         XCTAssertTrue(contract.taskActions.contains(.changeIntoNewTask))
         XCTAssertTrue(contract.taskActions.contains(.returnToPool))
+        XCTAssertTrue(contract.taskActions.contains(.reactivateAbandonedChain))
         XCTAssertTrue(contract.taskActions.contains(.copyAsNewTask))
         XCTAssertTrue(contract.taskActions.contains(.addSubtask))
         XCTAssertTrue(contract.taskActions.contains(.cycleSubtaskDifficulty))
@@ -106,6 +107,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.futurePlanElements.contains(.openDetailAction))
         XCTAssertTrue(contract.futurePlanElements.contains(.taskRowMoveButtons))
         XCTAssertTrue(contract.unfinishedPoolElements.contains(.detailsExpansion))
+        XCTAssertTrue(contract.unfinishedPoolElements.contains(.reenableAbandonedButton))
         XCTAssertTrue(contract.completedPoolElements.contains(.subtaskCompletionRecord))
         XCTAssertTrue(contract.calendarElements.contains(.completionHeatBlock))
         XCTAssertTrue(contract.calendarElements.contains(.keyboardDateNavigation))

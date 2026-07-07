@@ -28,13 +28,6 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
                 delegate.store.page = page
             }
         }
-        if CommandLine.arguments.contains("--select"), let index = CommandLine.arguments.firstIndex(of: "--select") {
-            let valueIndex = CommandLine.arguments.index(after: index)
-            let selectionName = CommandLine.arguments.indices.contains(valueIndex) ? CommandLine.arguments[valueIndex] : ""
-            if ["first", "manual", "changed"].contains(selectionName) {
-                delegate.store.selectItemForLaunch(selectionName)
-            }
-        }
         retainedDelegate = delegate
         app.delegate = delegate
         app.setActivationPolicy(.regular)
@@ -173,6 +166,7 @@ private struct LaunchAutomation {
         append(ZhulongNavigationE2EAutomation.fromCommandLine(), to: &actions)
         append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)
         append(SummarySidebarE2EAutomation.fromCommandLine(), to: &actions)
+        append(LaunchSelectionE2EAutomation.fromCommandLine(), to: &actions)
 
         if CommandLine.arguments.contains("--e2e-expand-first-subtask-trace") {
             actions.append { store in
@@ -217,6 +211,24 @@ private struct LaunchAutomation {
 private protocol LaunchAutomationRunnable {
     @MainActor
     func run(on store: SuntraceStore)
+}
+
+private struct LaunchSelectionE2EAutomation: LaunchAutomationRunnable {
+    var selectionName: String
+
+    @MainActor
+    static func fromCommandLine() -> LaunchSelectionE2EAutomation? {
+        guard let selectionName = SuntraceStore.commandLineValue(after: "--select"),
+              ["first", "manual", "changed"].contains(selectionName)
+        else {
+            return nil
+        }
+        return LaunchSelectionE2EAutomation(selectionName: selectionName)
+    }
+
+    func run(on store: SuntraceStore) {
+        store.selectItemForLaunch(selectionName)
+    }
 }
 
 private struct ReviewE2EAutomation: LaunchAutomationRunnable {
@@ -992,7 +1004,21 @@ private struct LifecycleE2EAutomation: LaunchAutomationRunnable {
     private func runAbandonFlow(on store: SuntraceStore) throws {
         let chainID = try store.engine.createPoolTask(title: "E2E 废弃任务", descriptionText: "E2E 废弃路径。")
         let traceID = try store.engine.scheduleFromPool(chainID: chainID, date: store.today, today: store.today)
+        let traceCount = store.engine.traces.count
         store.abandon(traceID)
+        guard let item = store.engine.unfinishedPool().first(where: { $0.chain.id == chainID }),
+              item.chain.state == .abandoned,
+              item.unfinishedTraces.contains(where: { $0.id == traceID && $0.status == .abandoned })
+        else {
+            throw LifecycleE2EAutomationError.failed("abandoned chain did not remain visible in unfinished pool")
+        }
+        store.reactivateAbandonedChain(from: traceID)
+        guard store.engine.chains[chainID]?.state == .active,
+              store.engine.traces[traceID]?.status == .pending,
+              store.engine.traces.count == traceCount
+        else {
+            throw LifecycleE2EAutomationError.failed("abandoned chain reactivation did not clear the abandoned marker in place")
+        }
     }
 
     private func writeResult(_ result: String) throws {
@@ -1941,6 +1967,17 @@ final class SuntraceStore: ObservableObject {
         }
     }
 
+    func reactivateAbandonedChain(from traceID: DayTraceID) {
+        do {
+            pushUndoSnapshot()
+            _ = try engine.reactivateAbandonedChain(from: traceID, today: today)
+            persist()
+            showToast("已取消废弃")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
     func copyAsNewTask(_ traceID: DayTraceID) {
         do {
             pushUndoSnapshot()
@@ -2077,10 +2114,35 @@ final class SuntraceStore: ObservableObject {
         persist()
     }
 
+    func setDataMode(_ dataMode: AppDataMode) {
+        objectWillChange.send()
+        engine.updateDataMode(dataMode)
+        persist()
+        showToast(copy.dataModeChangedToast(for: dataMode))
+    }
+
+    func setBackupFrequency(_ frequency: ScheduledBackupFrequency) {
+        objectWillChange.send()
+        var policy = engine.preferences.backupPolicy
+        policy.frequency = frequency
+        engine.updateBackupPolicy(policy)
+        persist()
+        showToast(copy.backupPolicyChangedToast)
+    }
+
+    func setBackupDestination(_ destination: BackupDestinationKind) {
+        objectWillChange.send()
+        var policy = engine.preferences.backupPolicy
+        policy.destination = destination
+        engine.updateBackupPolicy(policy)
+        persist()
+        showToast(copy.backupPolicyChangedToast)
+    }
+
     func exportDataPackage() {
         let panel = NSSavePanel()
         panel.title = "导出晷迹数据"
-        panel.nameFieldStringValue = "suntrace-backup-\(today.description).json"
+        panel.nameFieldStringValue = "noonmark-backup-\(today.description).json"
         panel.allowedContentTypes = [.json]
         panel.canCreateDirectories = true
 
@@ -2451,8 +2513,8 @@ final class SuntraceStore: ObservableObject {
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
         return base
-            .appendingPathComponent("suntrace", isDirectory: true)
-            .appendingPathComponent("Suntrace.sqlite")
+            .appendingPathComponent("noonmark", isDirectory: true)
+            .appendingPathComponent("Noonmark.sqlite")
     }
 
     static func commandLineValue(after flag: String) -> String? {
@@ -2746,7 +2808,7 @@ struct AppCopy {
     var appName: String {
         switch language {
         case .chinese: "晷迹"
-        case .english: "Suntrace"
+        case .english: "Noonmark"
         }
     }
 
@@ -2868,10 +2930,33 @@ struct AppCopy {
     var completedMetric: String { navCompleted }
     var syncTitle: String { language == .chinese ? "同步" : "Sync" }
     var syncSubtitle: String {
-        language == .chinese ? "同步入口保留在设置中，当前能力标记为规划中。" : "Sync controls stay in Settings; current options are marked as planned."
+        language == .chinese
+            ? "选择本地优先或在线优先。两种模式互斥，当前只运行其中一种。"
+            : "Choose local-first or online-first. The modes are exclusive; only one runs at a time."
     }
 
     var planned: String { language == .chinese ? "规划中" : "Planned" }
+    var dataModeTitle: String { language == .chinese ? "数据模式" : "Data mode" }
+    var localFirstMode: String { language == .chinese ? "本地优先" : "Local-first" }
+    var onlineFirstMode: String { language == .chinese ? "在线优先" : "Online-first" }
+    var dataModeBoundary: String {
+        language == .chinese
+            ? "主数据模式互斥；定时备份只是旁路导出，不会成为第二套同步写入。"
+            : "Primary data modes are exclusive; scheduled backup is an export path, not a second sync writer."
+    }
+
+    var scheduledBackupTitle: String { language == .chinese ? "定时备份" : "Scheduled backup" }
+    var backupDestinationTitle: String { language == .chinese ? "备份目标" : "Backup destination" }
+    var backupOff: String { language == .chinese ? "关闭" : "Off" }
+    var backupDaily: String { language == .chinese ? "每日" : "Daily" }
+    var backupWeekly: String { language == .chinese ? "每周" : "Weekly" }
+    var backupICloudDrive: String { language == .chinese ? "iCloud" : "iCloud" }
+    var backupS3: String { language == .chinese ? "S3" : "S3" }
+    var backupBoundary: String {
+        language == .chinese
+            ? "在线优先可定时导出本地可恢复数据包到 iCloud 或 S3；这不是双向同步。"
+            : "Online-first can export restorable local packages to iCloud or S3 on a schedule; this is not bidirectional sync."
+    }
 
     var providerTitle: String { language == .chinese ? "烛龙配置" : "Zhulong Configuration" }
     var providerSubtitle: String {
@@ -2902,6 +2987,16 @@ struct AppCopy {
     var save: String { language == .chinese ? "保存" : "Save" }
     var testConnection: String { language == .chinese ? "测试连接" : "Test" }
     var clear: String { language == .chinese ? "清空" : "Clear" }
+    var backupPolicyChangedToast: String { language == .chinese ? "备份策略已更新" : "Backup policy updated" }
+
+    func dataModeChangedToast(for dataMode: AppDataMode) -> String {
+        switch (language, dataMode) {
+        case (.chinese, .localFirst): "已切换为本地优先"
+        case (.chinese, .onlineFirst): "已切换为在线优先"
+        case (.english, .localFirst): "Switched to local-first"
+        case (.english, .onlineFirst): "Switched to online-first"
+        }
+    }
 
     var privacyTitle: String { language == .chinese ? "写入与隐私边界" : "Write & Privacy Boundaries" }
     var privacySubtitle: String {
@@ -2963,6 +3058,21 @@ struct AppCopy {
         case (.chinese, .iCloud): "原生云同步"
         case (.english, .customEndpoint): "Connect your own server"
         case (.english, .iCloud): "Native cloud sync"
+        }
+    }
+
+    func backupFrequencyTitle(for frequency: ScheduledBackupFrequency) -> String {
+        switch frequency {
+        case .off: backupOff
+        case .daily: backupDaily
+        case .weekly: backupWeekly
+        }
+    }
+
+    func backupDestinationTitle(for destination: BackupDestinationKind) -> String {
+        switch destination {
+        case .iCloudDrive: backupICloudDrive
+        case .s3: backupS3
         }
     }
 }
@@ -4016,6 +4126,10 @@ private extension UnfinishedPoolItem {
         unfinishedTraces.last
     }
 
+    var isAbandoned: Bool {
+        chain.state == .abandoned || latestUnfinishedTrace?.status == .abandoned
+    }
+
     var continuationCount: Int {
         let activeTraces = activeTrace.map { [$0] } ?? []
         let chainTraces = unfinishedTraces + activeTraces
@@ -4038,23 +4152,27 @@ struct UnfinishedRow: View {
         let selected = store.selectedUnfinishedChainID == item.chain.id
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 10) {
-                StatusGlyph(status: .unfinished)
+                StatusGlyph(status: item.isAbandoned ? .abandoned : .unfinished)
                 Text(item.definition.title)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
+                    .foregroundStyle(item.isAbandoned ? Theme.text2 : Theme.text1)
                     .lineLimit(1)
                 Spacer()
                 if item.activeTrace == nil, let source = item.unfinishedTraces.last {
                     HStack(spacing: 8) {
-                        SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
-                        SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
+                        if item.isAbandoned {
+                            SmallActionButton("重新启用", tone: .accent) { store.reactivateAbandonedChain(from: source.id) }
+                        } else {
+                            SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
+                            SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
+                        }
                     }
                 }
             }
             HStack(spacing: 8) {
-                Text(store.copy.unfinishedMissedCount(item.unfinishedTraces.count))
+                Text(item.isAbandoned ? "已废弃" : store.copy.unfinishedMissedCount(item.unfinishedTraces.count))
                     .font(.system(size: 11))
-                    .foregroundStyle(Theme.warn)
+                    .foregroundStyle(item.isAbandoned ? Theme.text2 : Theme.warn)
                     .monospacedDigit()
                 UnfinishedMetaSeparator()
                 Text(store.copy.unfinishedContinuationCount(item.continuationCount))
@@ -4129,13 +4247,33 @@ struct UnfinishedInlineTrace: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Theme.text2)
                 .frame(width: 74, alignment: .leading)
-            Text(trace.status == .continued ? "已延续" : "未完成")
+            Text(statusLabel)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(trace.status == .continued ? Theme.text2 : Theme.warn)
+                .foregroundStyle(statusColor)
             Text("第 \(trace.continuationSeq) 次延续")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.text3)
             Spacer()
+        }
+    }
+
+    var statusLabel: String {
+        switch trace.status {
+        case .continued:
+            return "已延续"
+        case .abandoned:
+            return "已废弃"
+        default:
+            return "未完成"
+        }
+    }
+
+    var statusColor: Color {
+        switch trace.status {
+        case .continued, .abandoned:
+            return Theme.text2
+        default:
+            return Theme.warn
         }
     }
 }
@@ -4882,7 +5020,53 @@ struct SettingsSyncCard: View {
 
     var body: some View {
         SettingsCard(systemImage: "arrow.triangle.2.circlepath", title: store.copy.syncTitle, subtitle: store.copy.syncSubtitle) {
-            SyncOptionsCard()
+            VStack(alignment: .leading, spacing: 16) {
+                SettingSection(title: store.copy.dataModeTitle) {
+                    SegmentedPair(
+                        left: store.copy.localFirstMode,
+                        right: store.copy.onlineFirstMode,
+                        leftSelected: store.engine.preferences.dataMode == .localFirst,
+                        leftAction: { store.setDataMode(.localFirst) },
+                        rightAction: { store.setDataMode(.onlineFirst) }
+                    )
+                    Text(store.copy.dataModeBoundary)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.text3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ScheduledBackupCard()
+                SyncOptionsCard()
+            }
+        }
+    }
+}
+
+struct ScheduledBackupCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var body: some View {
+        SettingSection(title: store.copy.scheduledBackupTitle) {
+            VStack(alignment: .leading, spacing: 10) {
+                SegmentedOptionRow(
+                    options: ScheduledBackupFrequency.allCases,
+                    selected: store.engine.preferences.backupPolicy.frequency,
+                    title: store.copy.backupFrequencyTitle(for:),
+                    action: store.setBackupFrequency
+                )
+                SettingSection(title: store.copy.backupDestinationTitle) {
+                    SegmentedPair(
+                        left: store.copy.backupDestinationTitle(for: .iCloudDrive),
+                        right: store.copy.backupDestinationTitle(for: .s3),
+                        leftSelected: store.engine.preferences.backupPolicy.destination == .iCloudDrive,
+                        leftAction: { store.setBackupDestination(.iCloudDrive) },
+                        rightAction: { store.setBackupDestination(.s3) }
+                    )
+                }
+                Text(store.copy.backupBoundary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -7122,14 +7306,23 @@ struct UnfinishedDetail: View {
                 )
 
                 HStack(spacing: 8) {
-                    StatusChip(status: .unfinished)
+                    StatusChip(status: item.isAbandoned ? .abandoned : .unfinished)
                     Text("\(SuntraceStore.displayDate(trace.date)) \(SuntraceStore.weekday(trace.date))")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.text3)
                 }
 
                 UnfinishedTraceContextCard(item: item, trace: trace)
-                Notice(text: "历史事实只读，不可删除或改写。", tone: .locked)
+                Notice(
+                    text: item.isAbandoned
+                        ? "任务链已废弃；历史事实保留，可重新启用并回到未完成状态。"
+                        : "历史事实只读，不可删除或改写。",
+                    tone: .locked
+                )
+
+                if item.isAbandoned {
+                    SmallActionButton("重新启用", tone: .accent) { store.reactivateAbandonedChain(from: trace.id) }
+                }
 
                 DetailProgressSection(
                     traceID: trace.id,
@@ -7565,6 +7758,37 @@ struct SegmentedPair: View {
                 .padding(.horizontal, 14)
                 .frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Theme.panel : .clear))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SegmentedOptionRow<Option: Hashable>: View {
+    let options: [Option]
+    let selected: Option
+    let title: (Option) -> String
+    let action: (Option) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.self) { option in
+                segment(option)
+            }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.chip))
+    }
+
+    func segment(_ option: Option) -> some View {
+        let isSelected = option == selected
+        return Button {
+            action(option)
+        } label: {
+            Text(title(option))
+                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                .padding(.horizontal, 14)
+                .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 7).fill(isSelected ? Theme.panel : .clear))
         }
         .buttonStyle(.plain)
     }

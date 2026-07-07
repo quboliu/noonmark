@@ -177,6 +177,27 @@ private extension SQLiteEngineRepository {
         let statement = try prepare(sql, on: database)
         defer { sqlite3_finalize(statement) }
 
+        return try readRows(from: statement, database: database, row: row)
+    }
+
+    func query<T>(
+        _ sql: String,
+        on database: Database?,
+        bind: (Statement?) throws -> Void,
+        row: (Statement?) throws -> T
+    ) throws -> [T] {
+        let statement = try prepare(sql, on: database)
+        defer { sqlite3_finalize(statement) }
+
+        try bind(statement)
+        return try readRows(from: statement, database: database, row: row)
+    }
+
+    func readRows<T>(
+        from statement: Statement?,
+        database: Database?,
+        row: (Statement?) throws -> T
+    ) throws -> [T] {
         var rows: [T] = []
         while true {
             let result = sqlite3_step(statement)
@@ -490,6 +511,32 @@ private extension SQLiteEngineRepository {
             bind(preferences.language.rawValue, to: 2, in: statement)
             bind(Date(timeIntervalSince1970: 0), to: 3, in: statement)
         }
+        try upsertPreferenceSetting(key: "app.data_mode", value: preferences.dataMode.rawValue, into: database)
+        try upsertPreferenceSetting(
+            key: "app.backup.frequency",
+            value: preferences.backupPolicy.frequency.rawValue,
+            into: database
+        )
+        try upsertPreferenceSetting(
+            key: "app.backup.destination",
+            value: preferences.backupPolicy.destination.rawValue,
+            into: database
+        )
+    }
+
+    func upsertPreferenceSetting(key: String, value: String, into database: Database?) throws {
+        let sql = """
+        INSERT INTO sync_settings(key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        """
+        try run(sql, on: database) { statement in
+            bind(key, to: 1, in: statement)
+            bind(value, to: 2, in: statement)
+            bind(Date(timeIntervalSince1970: 0), to: 3, in: statement)
+        }
     }
 
     func appendJournalEntries(_ entries: [SyncJournalEntry], into database: Database?) throws {
@@ -664,7 +711,63 @@ private extension SQLiteEngineRepository {
         guard let theme = AppTheme(rawValue: row.0), let language = AppLanguage(rawValue: row.1) else {
             throw SQLiteRepositoryError.invalidStoredValue("invalid app preferences")
         }
-        return AppPreferences(theme: theme, language: language)
+        return AppPreferences(
+            theme: theme,
+            language: language,
+            dataMode: try loadDataMode(from: database),
+            backupPolicy: try loadBackupPolicy(from: database)
+        )
+    }
+
+    func loadDataMode(from database: Database?) throws -> AppDataMode {
+        let rawValue = try settingValue(key: "app.data_mode", from: database)
+        guard let rawValue else {
+            return .localFirst
+        }
+        guard let dataMode = AppDataMode(rawValue: rawValue) else {
+            throw SQLiteRepositoryError.invalidStoredValue("invalid app data mode")
+        }
+        return dataMode
+    }
+
+    func loadBackupPolicy(from database: Database?) throws -> ScheduledBackupPolicy {
+        let rawFrequency = try settingValue(key: "app.backup.frequency", from: database)
+        let rawDestination = try settingValue(key: "app.backup.destination", from: database)
+        let frequency: ScheduledBackupFrequency
+        if let rawFrequency {
+            guard let decoded = ScheduledBackupFrequency(rawValue: rawFrequency) else {
+                throw SQLiteRepositoryError.invalidStoredValue("invalid scheduled backup frequency")
+            }
+            frequency = decoded
+        } else {
+            frequency = .off
+        }
+
+        let destination: BackupDestinationKind
+        if let rawDestination {
+            guard let decoded = BackupDestinationKind(rawValue: rawDestination) else {
+                throw SQLiteRepositoryError.invalidStoredValue("invalid backup destination")
+            }
+            destination = decoded
+        } else {
+            destination = .iCloudDrive
+        }
+
+        return ScheduledBackupPolicy(frequency: frequency, destination: destination)
+    }
+
+    func settingValue(key: String, from database: Database?) throws -> String? {
+        let rows = try query(
+            "SELECT value FROM sync_settings WHERE key = ?",
+            on: database,
+            bind: { statement in
+                bind(key, to: 1, in: statement)
+            },
+            row: { statement in
+            optionalString(statement, 0)
+            }
+        )
+        return rows.first ?? nil
     }
 }
 

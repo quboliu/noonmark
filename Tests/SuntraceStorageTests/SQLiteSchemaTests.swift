@@ -56,6 +56,8 @@ final class SQLiteSchemaTests: XCTestCase {
         )
         engine.updateTheme(.warmPaper)
         engine.updateLanguage(.english)
+        engine.updateDataMode(.onlineFirst)
+        engine.updateBackupPolicy(ScheduledBackupPolicy(frequency: .weekly, destination: .s3))
 
         let repository = SQLiteEngineRepository(databaseURL: databaseURL)
         try repository.save(engine)
@@ -69,6 +71,9 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertEqual(restored.engineReviewSummary(for: day1), "已完成 schema 与 repository 第一版。")
         XCTAssertEqual(restored.preferences.theme, .warmPaper)
         XCTAssertEqual(restored.preferences.language, .english)
+        XCTAssertEqual(restored.preferences.dataMode, .onlineFirst)
+        XCTAssertEqual(restored.preferences.backupPolicy.frequency, .weekly)
+        XCTAssertEqual(restored.preferences.backupPolicy.destination, .s3)
     }
 }
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dmg_path="${1:-dist/SuntraceMacApp.dmg}"
+dmg_path="${1:-dist/Noonmark.dmg}"
 app_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
-mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/suntrace-dmg.XXXXXX")"
+mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg.XXXXXX")"
 
 cleanup() {
   hdiutil detach "$mountpoint" -quiet >/dev/null 2>&1 || true

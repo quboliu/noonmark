@@ -39,6 +39,30 @@ final class DataPackageTests: XCTestCase {
         }
     }
 
+    func testLegacyPreferencesDecodeWithDefaultDataModeAndBackupPolicy() throws {
+        let json = """
+        {
+          "days": [],
+          "chains": [],
+          "definitions": [],
+          "traces": [],
+          "subtasks": [],
+          "preferences": {
+            "theme": "warmPaper",
+            "language": "english",
+            "syncEndpointOptions": []
+          }
+        }
+        """
+
+        let snapshot = try SuntraceDataPackage.decode(Data(json.utf8))
+
+        XCTAssertEqual(snapshot.preferences.theme, .warmPaper)
+        XCTAssertEqual(snapshot.preferences.language, .english)
+        XCTAssertEqual(snapshot.preferences.dataMode, .localFirst)
+        XCTAssertEqual(snapshot.preferences.backupPolicy, ScheduledBackupPolicy())
+    }
+
     private func makeEngine() throws -> SuntraceEngine {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(

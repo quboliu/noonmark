@@ -181,9 +181,9 @@ Agenda 对外强调支持 iCloud 和 Dropbox，且数据保存在用户个人云
 
 第一版使用：
 
-- `CKContainer(identifier: "iCloud.<team>.suntrace")`
+- `CKContainer(identifier: "iCloud.<team>.noonmark")`
 - `privateCloudDatabase`
-- custom zone：`SuntraceUserDataV1`
+- custom zone：`NoonmarkUserDataV1`
 
 暂不使用：
 

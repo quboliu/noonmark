@@ -276,6 +276,35 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(record.parentDefinition.title, "审阅 onboarding 三屏文案")
     }
 
+    func testAbandonedChainStaysInUnfinishedPoolAndCanBeReenabledInPlace() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "暂停但不删除的任务", now: now)
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        let subtaskID = try engine.addSubtask(traceID: traceID, title: "保留开放子任务", now: now)
+
+        try engine.abandonChain(from: traceID, now: now)
+
+        let abandonedItem = try XCTUnwrap(engine.unfinishedPool().first)
+        XCTAssertEqual(abandonedItem.chain.id, chainID)
+        XCTAssertEqual(abandonedItem.chain.state, .abandoned)
+        XCTAssertEqual(abandonedItem.unfinishedTraces.map(\.status), [.abandoned])
+
+        let reenabledTraceID = try engine.reactivateAbandonedChain(
+            from: traceID,
+            today: day2,
+            now: now
+        )
+
+        XCTAssertEqual(engine.chains[chainID]?.state, .active)
+        XCTAssertEqual(reenabledTraceID, traceID)
+        XCTAssertEqual(engine.traces[traceID]?.status, .unfinished)
+        XCTAssertNil(engine.traces[traceID]?.continuedFromTraceID)
+        XCTAssertEqual(engine.traces.count, 1)
+        XCTAssertEqual(engine.subtasks[subtaskID]?.status, .pending)
+        XCTAssertNil(engine.unfinishedPool().first?.activeTrace)
+        XCTAssertEqual(engine.unfinishedPool().first?.unfinishedTraces.map(\.id), [traceID])
+    }
+
     func testTraceDescriptionAndNoteAreEditableOnlyBeforeHistoryLocks() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(
@@ -395,14 +424,21 @@ final class SuntraceEngineTests: XCTestCase {
 
         XCTAssertEqual(engine.preferences.theme, .coolGray)
         XCTAssertEqual(engine.preferences.language, .chinese)
+        XCTAssertEqual(engine.preferences.dataMode, .localFirst)
+        XCTAssertEqual(engine.preferences.backupPolicy, ScheduledBackupPolicy())
         XCTAssertEqual(engine.syncEndpointOptions().map(\.kind), [.customEndpoint, .iCloud])
         XCTAssertTrue(engine.syncEndpointOptions().allSatisfy { $0.availability == .planned })
 
         engine.updateTheme(.warmPaper)
         engine.updateLanguage(.english)
+        engine.updateDataMode(.onlineFirst)
+        engine.updateBackupPolicy(ScheduledBackupPolicy(frequency: .daily, destination: .s3))
 
         XCTAssertEqual(engine.preferences.theme, .warmPaper)
         XCTAssertEqual(engine.preferences.language, .english)
+        XCTAssertEqual(engine.preferences.dataMode, .onlineFirst)
+        XCTAssertEqual(engine.preferences.backupPolicy.frequency, .daily)
+        XCTAssertEqual(engine.preferences.backupPolicy.destination, .s3)
     }
 
     func testSnapshotCodableRoundTripsForDataPackage() throws {

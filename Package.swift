@@ -12,7 +12,8 @@ let package = Package(
         .library(name: "SuntraceCore", targets: ["SuntraceCore"]),
         .library(name: "SuntraceAI", targets: ["SuntraceAI"]),
         .library(name: "SuntraceMacUIContract", targets: ["SuntraceMacUIContract"]),
-        .library(name: "SuntraceStorage", targets: ["SuntraceStorage"])
+        .library(name: "SuntraceStorage", targets: ["SuntraceStorage"]),
+        .library(name: "SuntraceSync", targets: ["SuntraceSync"])
     ],
     targets: [
         .executableTarget(
@@ -33,6 +34,10 @@ let package = Package(
                 .linkedLibrary("sqlite3")
             ]
         ),
+        .target(
+            name: "SuntraceSync",
+            dependencies: ["SuntraceCore"]
+        ),
         .testTarget(
             name: "SuntraceCoreTests",
             dependencies: ["SuntraceCore"]
@@ -48,6 +53,10 @@ let package = Package(
         .testTarget(
             name: "SuntraceStorageTests",
             dependencies: ["SuntraceStorage"]
+        ),
+        .testTarget(
+            name: "SuntraceSyncTests",
+            dependencies: ["SuntraceSync", "SuntraceCore"]
         ),
         .testTarget(
             name: "SuntraceSimulationTests",

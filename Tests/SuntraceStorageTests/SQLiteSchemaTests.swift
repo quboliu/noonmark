@@ -6,9 +6,14 @@ final class SQLiteSchemaTests: XCTestCase {
     func testSchemaContainsPrototypeBackedStorageObjects() {
         let schema = SQLiteSchema.statements.joined(separator: "\n")
 
-        XCTAssertEqual(SQLiteSchema.version, 3)
+        XCTAssertEqual(SQLiteSchema.version, 4)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
+        XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_device_identity"))
+        XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_metadata"))
+        XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS change_journal"))
+        XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_conflicts"))
+        XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_audit_log"))
         XCTAssertTrue(schema.contains("CREATE VIEW IF NOT EXISTS completed_subtask_record_view"))
         XCTAssertTrue(schema.contains("CREATE VIEW IF NOT EXISTS sync_endpoint_options_view"))
         XCTAssertTrue(schema.contains("t.status != 'returnedToPool'"))

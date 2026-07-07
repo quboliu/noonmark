@@ -2,7 +2,7 @@ import Foundation
 import SuntraceCore
 
 public enum SQLiteSchema {
-    public static let version = 3
+    public static let version = 4
 
     public static let statements: [String] = [
         """
@@ -124,6 +124,68 @@ public enum SQLiteSchema {
             key TEXT PRIMARY KEY NOT NULL,
             value TEXT,
             updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_device_identity (
+            id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+            device_id TEXT NOT NULL,
+            display_name TEXT,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_metadata (
+            key TEXT PRIMARY KEY NOT NULL,
+            value BLOB,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS change_journal (
+            id TEXT PRIMARY KEY NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            operation TEXT NOT NULL CHECK (operation IN ('upsert', 'delete')),
+            changed_at TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            sync_state TEXT NOT NULL CHECK (sync_state IN ('pendingUpload', 'uploaded', 'failed')),
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_change_journal_state_changed_at
+        ON change_journal(sync_state, changed_at)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_conflicts (
+            id TEXT PRIMARY KEY NOT NULL,
+            conflict_type TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            local_record_id TEXT,
+            remote_record_id TEXT NOT NULL,
+            local_payload TEXT,
+            remote_payload TEXT,
+            detected_at TEXT NOT NULL,
+            resolved_at TEXT,
+            resolution TEXT NOT NULL DEFAULT 'unresolved'
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_sync_conflicts_unresolved
+        ON sync_conflicts(resolution, detected_at)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_audit_log (
+            id TEXT PRIMARY KEY NOT NULL,
+            direction TEXT NOT NULL CHECK (direction IN ('upload', 'download', 'merge')),
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            message TEXT
         )
         """,
         """

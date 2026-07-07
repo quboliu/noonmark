@@ -106,6 +106,7 @@ public enum MacUIDayTodoElement: String, CaseIterable, Sendable {
     case dateStripTodayOutline
     case dateStripSelectedDot
     case dateStripTaskPresenceDot
+    case keyboardDateNavigation
     case historyLockNotice
     case futureDayNotice
     case quickAddInput
@@ -186,6 +187,7 @@ public enum MacUICalendarElement: String, CaseIterable, Sendable {
     case mondayFirstWeekHeader
     case monthGrid
     case dateCells
+    case keyboardDateNavigation
     case todayMarker
     case completionHeatBlock
     case taskSummaries

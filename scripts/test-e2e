@@ -481,6 +481,30 @@ fi
 
 echo "E2E date strip selection: $date_strip_result"
 
+keyboard_date_dir="artifacts/e2e-keyboard-date"
+keyboard_date_result="${keyboard_date_dir}/keyboard-date-result.txt"
+rm -rf "$keyboard_date_dir"
+mkdir -p "$keyboard_date_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page day \
+  --e2e-keyboard-date-navigation \
+  --e2e-keyboard-date-result-url "$PWD/$keyboard_date_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$keyboard_date_result" ]]; then
+  echo "keyboard date navigation result was not created: $keyboard_date_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$keyboard_date_result")" != "ok" ]]; then
+  echo "keyboard date navigation failed: $(cat "$keyboard_date_result")" >&2
+  exit 1
+fi
+
+echo "E2E keyboard date navigation: $keyboard_date_result"
+
 provider_dir="artifacts/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"
 provider_name="E2E Provider"

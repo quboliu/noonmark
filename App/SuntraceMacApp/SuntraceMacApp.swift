@@ -165,6 +165,7 @@ private struct LaunchAutomation {
         append(ContextMenuActionsE2EAutomation.fromCommandLine(), to: &actions)
         append(UndoE2EAutomation.fromCommandLine(), to: &actions)
         append(DateStripE2EAutomation.fromCommandLine(), to: &actions)
+        append(KeyboardDateNavigationE2EAutomation.fromCommandLine(), to: &actions)
 
         guard actions.isEmpty == false else { return nil }
         return LaunchAutomation(
@@ -592,6 +593,81 @@ private struct DateStripE2EAutomation: LaunchAutomationRunnable {
 }
 
 private enum DateStripE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
+private struct KeyboardDateNavigationE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> KeyboardDateNavigationE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-keyboard-date-navigation") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-keyboard-date-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return KeyboardDateNavigationE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            try verifyDayTodoNavigation(on: store)
+            try verifyCalendarNavigation(on: store)
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error)")
+        }
+    }
+
+    @MainActor
+    private func verifyDayTodoNavigation(on store: SuntraceStore) throws {
+        store.page = .day
+        store.selectedDate = store.today
+        store.moveSelectedDate(.right)
+        try expect(store.selectedDate == SuntraceStore.offset(store.today, by: 1), "day right arrow did not move by one day")
+        store.moveSelectedDate(.left)
+        try expect(store.selectedDate == store.today, "day left arrow did not return to today")
+        store.moveSelectedDate(.down)
+        try expect(store.selectedDate == SuntraceStore.offset(store.today, by: 7), "day down arrow did not move by one week")
+        store.moveSelectedDate(.up)
+        try expect(store.selectedDate == store.today, "day up arrow did not return to today")
+    }
+
+    @MainActor
+    private func verifyCalendarNavigation(on store: SuntraceStore) throws {
+        store.page = .calendar
+        store.selectedCalendarDate = store.today
+        store.moveSelectedDate(.right)
+        try expect(store.selectedCalendarDate == SuntraceStore.offset(store.today, by: 1), "calendar right arrow did not move by one day")
+        store.moveSelectedDate(.left)
+        try expect(store.selectedCalendarDate == store.today, "calendar left arrow did not return to today")
+        store.moveSelectedDate(.down)
+        try expect(store.selectedCalendarDate == SuntraceStore.offset(store.today, by: 7), "calendar down arrow did not move by one week")
+        store.moveSelectedDate(.up)
+        try expect(store.selectedCalendarDate == store.today, "calendar up arrow did not return to today")
+    }
+
+    private func expect(_ condition: Bool, _ message: String) throws {
+        guard condition else { throw KeyboardDateNavigationE2EAutomationError.failed(message) }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum KeyboardDateNavigationE2EAutomationError: LocalizedError {
     case failed(String)
 
     var errorDescription: String? {
@@ -1206,6 +1282,38 @@ final class SuntraceStore: ObservableObject {
 
     var selectedDateStripIndex: Int? {
         dateStripDates().firstIndex(of: selectedDate)
+    }
+
+    func moveSelectedDate(_ direction: MoveCommandDirection) {
+        guard showingPicker == nil,
+              showingFromPoolPicker == false,
+              showingChangeDialog == false
+        else {
+            return
+        }
+
+        let days: Int
+        switch direction {
+        case .left:
+            days = -1
+        case .right:
+            days = 1
+        case .up:
+            days = -7
+        case .down:
+            days = 7
+        @unknown default:
+            return
+        }
+
+        switch page {
+        case .day:
+            selectedDate = Self.offset(selectedDate, by: days)
+        case .calendar:
+            selectedCalendarDate = Self.offset(selectedCalendarDate, by: days)
+        case .pool, .future, .unfinished, .completed, .zhulong, .settings:
+            return
+        }
     }
 
     func continuationDurationDays(for trace: DayTrace) -> Int {
@@ -2250,6 +2358,9 @@ struct SuntraceRootView: View {
         .sheet(isPresented: $store.showingChangeDialog) {
             ChangeTaskSheet()
                 .environmentObject(store)
+        }
+        .onMoveCommand { direction in
+            store.moveSelectedDate(direction)
         }
         .onAppear(perform: syncNativeWindowTitle)
         .onChange(of: store.windowTitle) { _, _ in

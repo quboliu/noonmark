@@ -3284,6 +3284,11 @@ struct SuntraceRootView: View {
                 MainSurface()
             }
             .background(Theme.background)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Theme.line.opacity(0.7), lineWidth: 1)
+            )
             .ignoresSafeArea()
 
             if let toast = store.toast {

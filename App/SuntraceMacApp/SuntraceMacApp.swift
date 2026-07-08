@@ -2,6 +2,7 @@ import AppKit
 import SuntraceAI
 import SuntraceCore
 import SuntraceStorage
+import SuntraceSync
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -330,7 +331,7 @@ private struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
                 "current completed"
             )
 
-            let historicalUnfinishedID = try makeTrace(title: "E2E 历史未完成", date: past, today: today, store: store)
+            let historicalUnfinishedID = try makeTrace(title: "E2E 历史未完成", date: past, today: past, store: store)
             store.engine.settleDays(upTo: today)
             try assertActions(
                 store.contextMenuActions(for: try trace(historicalUnfinishedID, in: store)),
@@ -530,7 +531,7 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
     private func verifyHistoricalAbandonIsNotUndoable(on store: SuntraceStore) throws {
         reset(store)
         let past = SuntraceStore.offset(store.today, by: -1)
-        let traceID = try makeTrace(title: "E2E 历史废弃不可撤销", date: past, today: store.today, store: store)
+        let traceID = try makeTrace(title: "E2E 历史废弃不可撤销", date: past, today: past, store: store)
         store.engine.settleDays(upTo: store.today)
         store.abandon(traceID)
         guard store.engine.traces[traceID]?.status == .abandoned else {
@@ -848,15 +849,29 @@ private struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
     @MainActor
     func run(on store: SuntraceStore) {
         do {
+            store.page = .pool
+            store.clearSelection()
+            store.zhulongProviderDraft.enabled = false
+            guard store.shouldShowDetailRail == false else {
+                throw SummarySidebarE2EAutomationError.failed("pool rail stayed visible while zhulong was disabled")
+            }
+
+            store.zhulongProviderDraft.enabled = true
             for page in [SuntraceStore.Page.pool, .future, .unfinished, .completed] {
                 store.page = page
                 store.clearSelection()
-                guard let model = SidebarAnalysisModel.make(for: page, store: store),
-                      model.metrics.isEmpty == false,
-                      model.recommendations.isEmpty == false
-                else {
-                    throw SummarySidebarE2EAutomationError.failed("\(page.rawValue) default analysis was empty")
+                guard store.usesZhulongContextRail, store.shouldShowDetailRail else {
+                    throw SummarySidebarE2EAutomationError.failed("\(page.rawValue) zhulong context rail was unavailable")
                 }
+            }
+
+            store.zhulongProviderDraft.enabled = false
+            store.page = .pool
+            if let task = store.engine.taskPool().first {
+                store.selectPool(task.chain.id)
+            }
+            guard store.hasActiveDetailSelection, store.shouldShowDetailRail else {
+                throw SummarySidebarE2EAutomationError.failed("selection detail rail did not override zhulong gating")
             }
 
             store.page = .calendar
@@ -1335,6 +1350,29 @@ final class SuntraceStore: ObservableObject {
                 return "改到哪个未来日期？"
             }
         }
+
+        var allowsPastDates: Bool {
+            if case .gotoDay = self { return true }
+            return false
+        }
+
+        var futureOnly: Bool {
+            if case .reschedule = self { return true }
+            return false
+        }
+
+        var rangeHint: String {
+            switch self {
+            case .gotoDay:
+                return "可选范围：今天前 7 天到今天后 21 天。"
+            case .schedulePool, .scheduleSelectedPool:
+                return "任务池只能排期到今天或未来；当前可选今天到 21 天后。"
+            case .continueTrace:
+                return "延续只能选择今天或未来；当前可选今天到 21 天后。"
+            case .reschedule:
+                return "未来计划只能改到未来日期；当前可选明天到 21 天后。"
+            }
+        }
     }
 
     struct DateChoice: Identifiable {
@@ -1369,21 +1407,37 @@ final class SuntraceStore: ObservableObject {
     @Published var selectedZhulongDraftID: AISuggestionDraftID?
     @Published var appliedZhulongOperationKeys: Set<String> = []
     @Published var reviewAutosaveMessage: String?
+    @Published var isLocalFirstSyncing = false
+    @Published var localFirstSyncMessage: String?
 
     let today = LocalDate("2026-07-05")
     private let repository: SQLiteEngineRepository?
+    private let databaseURL: URL?
+    private let syncDeviceID: SyncDeviceID?
     private var toastTask: Task<Void, Never>?
+    private var localFirstSyncAutomationTask: Task<Void, Never>?
     private var undoStack: [SuntraceSnapshot] = []
 
     init() {
         if CommandLine.arguments.contains("--ephemeral") {
             repository = nil
+            databaseURL = nil
+            syncDeviceID = nil
             seed()
         } else {
-            repository = SQLiteEngineRepository(databaseURL: Self.configuredDatabaseURL())
+            let configuredDatabaseURL = Self.configuredDatabaseURL()
+            databaseURL = configuredDatabaseURL
+            repository = SQLiteEngineRepository(databaseURL: configuredDatabaseURL)
+            syncDeviceID = Self.loadOrCreateSyncDeviceID(databaseURL: configuredDatabaseURL)
             loadOrSeed()
         }
         Theme.apply(engine.preferences.theme)
+        restartLocalFirstSyncAutomation()
+    }
+
+    deinit {
+        toastTask?.cancel()
+        localFirstSyncAutomationTask?.cancel()
     }
 
     var isHistory: Bool {
@@ -1409,6 +1463,12 @@ final class SuntraceStore: ObservableObject {
         return engine.taskPool().first { $0.chain.id == selectedPoolChainID }
     }
 
+    func currentDefinition(for chainID: TaskChainID) -> TaskDefinition? {
+        engine.definitions.values.first {
+            $0.chainID == chainID && $0.supersededAt == nil
+        }
+    }
+
     var selectedCompletedItem: CompletedPoolItem? {
         guard let selectedCompletedTraceID else { return nil }
         return engine.completedPool().first { $0.trace.id == selectedCompletedTraceID }
@@ -1431,6 +1491,30 @@ final class SuntraceStore: ObservableObject {
 
     var isZhulongEnabled: Bool {
         zhulongProviderDraft.enabled
+    }
+
+    var hasActiveDetailSelection: Bool {
+        if selectedPoolTask != nil || selectedUnfinishedItem != nil || selectedCompletedItem != nil || selectedCompletedSubtaskRecord != nil {
+            return true
+        }
+        return selectedTrace != nil && selectedDefinition != nil
+    }
+
+    var usesZhulongContextRail: Bool {
+        isZhulongEnabled
+            && hasActiveDetailSelection == false
+            && [.pool, .future, .unfinished, .completed].contains(page)
+    }
+
+    var shouldShowDetailRail: Bool {
+        guard page != .calendar && page != .settings else { return false }
+        if page == .zhulong || hasActiveDetailSelection {
+            return true
+        }
+        if page == .day {
+            return true
+        }
+        return usesZhulongContextRail
     }
 
     var visibleNavigationPages: [Page] {
@@ -1689,6 +1773,166 @@ final class SuntraceStore: ObservableObject {
         detailSubtaskText = ""
     }
 
+    func tag(for tagID: TaskTagID) -> TaskTag? {
+        engine.preferences.taskTags.first { $0.id == tagID }
+    }
+
+    func tags(for chain: TaskChain) -> [(assignment: TaskTagAssignment, tag: TaskTag)] {
+        chain.tagAssignments.compactMap { assignment in
+            tag(for: assignment.tagID).map { (assignment, $0) }
+        }
+        .sorted { $0.assignment.slot < $1.assignment.slot }
+    }
+
+    func tags(for chainID: TaskChainID) -> [(assignment: TaskTagAssignment, tag: TaskTag)] {
+        guard let chain = engine.chains[chainID] else { return [] }
+        return tags(for: chain)
+    }
+
+    func primaryTagName(for chain: TaskChain) -> String {
+        guard let tagID = chain.primaryTagID, let tag = tag(for: tagID) else {
+            return "未标记"
+        }
+        return tag.name
+    }
+
+    func appendInlineTag(chainID: TaskChainID, name: String) {
+        guard let chain = engine.chains[chainID] else { return }
+        guard let slot = TaskTagSlot.allCases.first(where: { slot in
+            chain.tagAssignments.contains { $0.slot == slot } == false
+        }) else {
+            showToast("最多 3 个 Tag")
+            return
+        }
+        assignTagByNameOrCreate(chainID: chainID, slot: slot, name: name)
+    }
+
+    func removeInlineTag(chainID: TaskChainID, slot: TaskTagSlot) {
+        guard let chain = engine.chains[chainID] else { return }
+        let remainingTagIDs = chain.tagAssignments
+            .filter { $0.slot != slot }
+            .sorted { $0.slot < $1.slot }
+            .map(\.tagID)
+        do {
+            objectWillChange.send()
+            for slot in TaskTagSlot.allCases {
+                try engine.setTaskTagAssignment(chainID: chainID, slot: slot, tagID: nil)
+            }
+            for (index, tagID) in remainingTagIDs.prefix(TaskTagSlot.allCases.count).enumerated() {
+                try engine.setTaskTagAssignment(chainID: chainID, slot: TaskTagSlot.allCases[index], tagID: tagID)
+            }
+            persist()
+            showToast("任务 Tag 已更新")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func inlineTagSuggestions(for chain: TaskChain, query: String) -> [TaskTag] {
+        let assignedTagIDs = Set(chain.tagAssignments.map(\.tagID))
+        return orderedActiveTagSuggestions(query: query, excluding: assignedTagIDs)
+    }
+
+    func newTaskTagSuggestions(for draft: String) -> [TaskTag] {
+        let tagNames = Set(parsedTaskDraft(draft).tagNames.map { $0.lowercased() })
+        let excludedTagIDs = Set(engine.activeTaskTags().filter { tagNames.contains($0.name.lowercased()) }.map(\.id))
+        return orderedActiveTagSuggestions(query: lastHashQuery(in: draft), excluding: excludedTagIDs)
+    }
+
+    func primaryNewTaskSuggestionCount(for draft: String) -> Int {
+        let primaryTagIDs = Set(engine.taskTagsCommonlyUsed(in: .tagI).map(\.id))
+        return newTaskTagSuggestions(for: draft).prefix { primaryTagIDs.contains($0.id) }.count
+    }
+
+    func shouldShowNewTaskTagSuggestions(for draft: String) -> Bool {
+        draft.contains("#") && lastHashQuery(in: draft) != nil && newTaskTagSuggestions(for: draft).isEmpty == false
+    }
+
+    func completeLastHashToken(in draft: String, with tagName: String) -> String {
+        guard let hashIndex = draft.lastIndex(of: "#") else {
+            return "\(draft) #\(tagName)"
+        }
+        let prefix = draft[..<hashIndex]
+        return "\(prefix)#\(tagName) "
+    }
+
+    private func orderedActiveTagSuggestions(query: String?, excluding excludedTagIDs: Set<TaskTagID>) -> [TaskTag] {
+        let primaryTags = engine.taskTagsCommonlyUsed(in: .tagI)
+        let primaryTagIDs = Set(primaryTags.map(\.id))
+        let orderedTags = primaryTags + engine.activeTaskTags().filter { primaryTagIDs.contains($0.id) == false }
+        let normalizedQuery = query?.trimmingCharacters(in: CharacterSet(charactersIn: "#").union(.whitespacesAndNewlines)) ?? ""
+        return orderedTags.filter { tag in
+            guard excludedTagIDs.contains(tag.id) == false else { return false }
+            guard normalizedQuery.isEmpty == false else { return true }
+            return tag.name.localizedStandardContains(normalizedQuery)
+        }
+    }
+
+    func primaryInlineSuggestionCount(for chain: TaskChain, query: String) -> Int {
+        let primaryTagIDs = Set(engine.taskTagsCommonlyUsed(in: .tagI).map(\.id))
+        return inlineTagSuggestions(for: chain, query: query).prefix { primaryTagIDs.contains($0.id) }.count
+    }
+
+    private func assignTagByNameOrCreate(chainID: TaskChainID, slot: TaskTagSlot, name: String) {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard normalizedName.isEmpty == false else { return }
+        do {
+            objectWillChange.send()
+            let tagID = try tagIDByNameOrCreate(name: normalizedName, slot: slot)
+            try engine.setTaskTagAssignment(chainID: chainID, slot: slot, tagID: tagID)
+            persist()
+            showToast("任务 Tag 已更新")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    private func applyTaskDraftTags(chainID: TaskChainID, tagNames: [String]) throws {
+        for (index, tagName) in tagNames.prefix(TaskTagSlot.allCases.count).enumerated() {
+            let slot = TaskTagSlot.allCases[index]
+            let tagID = try tagIDByNameOrCreate(name: tagName, slot: slot)
+            try engine.setTaskTagAssignment(chainID: chainID, slot: slot, tagID: tagID)
+        }
+    }
+
+    private func tagIDByNameOrCreate(name: String, slot: TaskTagSlot) throws -> TaskTagID {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard normalizedName.isEmpty == false else {
+            throw SuntraceError.invalidInput("tag name cannot be empty")
+        }
+        if let existing = engine.activeTaskTags().first(where: {
+            $0.name.caseInsensitiveCompare(normalizedName) == .orderedSame
+        }) {
+            return existing.id
+        }
+        return try engine.createTaskTag(
+            name: normalizedName,
+            colorHex: defaultTagColorHex(for: slot)
+        )
+    }
+
+    private func defaultTagColorHex(for slot: TaskTagSlot) -> String {
+        switch slot {
+        case .tagI:
+            return "#2A6FDB"
+        case .tagII:
+            return "#0E9488"
+        case .tagIII:
+            return "#7C5CFF"
+        }
+    }
+
+    func commonlyUsedTags(in slot: TaskTagSlot) -> [TaskTag] {
+        engine.taskTagsCommonlyUsed(in: slot)
+    }
+
+    func otherActiveTags(for slot: TaskTagSlot) -> [TaskTag] {
+        let commonIDs = Set(commonlyUsedTags(in: slot).map(\.id))
+        return engine.activeTaskTags().filter { commonIDs.contains($0.id) == false }
+    }
+
     func selectUnfinished(_ chainID: TaskChainID) {
         selectedUnfinishedChainID = chainID
         selectedTraceID = nil
@@ -1794,26 +2038,28 @@ final class SuntraceStore: ObservableObject {
     }
 
     func addQuickTask() {
-        let title = quickText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard title.isEmpty == false else { return }
+        let draft = parsedTaskDraft(quickText)
+        guard draft.title.isEmpty == false else { return }
         do {
             pushUndoSnapshotIfAllowed(on: selectedDate)
-            let chainID = try engine.createPoolTask(title: title, descriptionText: "快速记录自 Day Todo。", now: Date())
+            let chainID = try engine.createPoolTask(title: draft.title, descriptionText: "快速记录自 Day Todo。", now: Date())
+            try applyTaskDraftTags(chainID: chainID, tagNames: draft.tagNames)
             _ = try engine.scheduleFromPool(chainID: chainID, date: selectedDate, today: today)
             quickText = ""
             persist()
-            showToast("已添加「\(title)」")
+            showToast("已添加「\(draft.title)」")
         } catch {
             showToast(error.localizedDescription)
         }
     }
 
     func addPoolTask() {
-        let title = poolText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard title.isEmpty == false else { return }
+        let draft = parsedTaskDraft(poolText)
+        guard draft.title.isEmpty == false else { return }
         do {
             pushUndoSnapshot()
-            let chainID = try engine.createPoolTask(title: title, descriptionText: "任务池中的待排期任务。", note: "可以排期到今天、明天或指定日期。")
+            let chainID = try engine.createPoolTask(title: draft.title, descriptionText: "任务池中的待排期任务。", note: "可以排期到今天、明天或指定日期。")
+            try applyTaskDraftTags(chainID: chainID, tagNames: draft.tagNames)
             selectedPoolChainID = chainID
             poolText = ""
             persist()
@@ -1823,7 +2069,41 @@ final class SuntraceStore: ObservableObject {
         }
     }
 
+    private func parsedTaskDraft(_ rawText: String) -> (title: String, tagNames: [String]) {
+        let raw = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard raw.isEmpty == false else { return ("", []) }
+        let pattern = #"#([^\s#]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return (raw, [])
+        }
+        let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+        let matches = regex.matches(in: raw, range: range)
+        let tagNames = matches.compactMap { match -> String? in
+            guard let range = Range(match.range(at: 1), in: raw) else { return nil }
+            let tagName = String(raw[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return tagName.isEmpty ? nil : tagName
+        }
+        let title = regex.stringByReplacingMatches(
+            in: raw,
+            range: range,
+            withTemplate: " "
+        )
+        .split(whereSeparator: \.isWhitespace)
+        .joined(separator: " ")
+        return (title, tagNames)
+    }
+
+    private func lastHashQuery(in text: String) -> String? {
+        guard let hashIndex = text.lastIndex(of: "#") else { return nil }
+        let tail = text[text.index(after: hashIndex)...]
+        return tail.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+    }
+
     func schedulePoolTask(_ chainID: TaskChainID, date: LocalDate) {
+        guard date >= today else {
+            showToast("任务池不能排期到过去日期")
+            return
+        }
         do {
             pushUndoSnapshotIfAllowed(on: date)
             let traceID = try engine.scheduleFromPool(chainID: chainID, date: date, today: today)
@@ -2063,11 +2343,35 @@ final class SuntraceStore: ObservableObject {
         }
     }
 
+    func updatePoolTaskText(chainID: TaskChainID, descriptionText: String? = nil, note: String? = nil) {
+        guard let definition = currentDefinition(for: chainID) else { return }
+        do {
+            objectWillChange.send()
+            try engine.updatePoolTask(
+                chainID: chainID,
+                title: definition.title,
+                descriptionText: descriptionText ?? definition.descriptionText,
+                note: note ?? definition.note
+            )
+            persist()
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
     func appendTraceNote(traceID: DayTraceID) {
         let body = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard body.isEmpty == false, let trace = engine.traces[traceID] else { return }
         let nextNote = DetailNoteEntryStorage.appending(body, to: trace.note)
         updateTraceText(traceID: traceID, note: nextNote)
+        detailNoteText = ""
+    }
+
+    func appendPoolNote(chainID: TaskChainID) {
+        let body = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard body.isEmpty == false, let definition = currentDefinition(for: chainID) else { return }
+        let nextNote = DetailNoteEntryStorage.appending(body, to: definition.note)
+        updatePoolTaskText(chainID: chainID, note: nextNote)
         detailNoteText = ""
     }
 
@@ -2101,6 +2405,49 @@ final class SuntraceStore: ObservableObject {
         }
     }
 
+    func addPoolPlannedSubtask(chainID: TaskChainID) {
+        let title = detailSubtaskText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title.isEmpty == false else { return }
+        do {
+            objectWillChange.send()
+            _ = try engine.addPlannedSubtask(chainID: chainID, title: title)
+            detailSubtaskText = ""
+            persist()
+            showToast("已添加子任务")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func removePoolPlannedSubtask(chainID: TaskChainID, plannedSubtaskID: PlannedSubtaskID) {
+        do {
+            objectWillChange.send()
+            try engine.removePlannedSubtask(chainID: chainID, plannedSubtaskID: plannedSubtaskID)
+            persist()
+            showToast("已更新子任务")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func setPoolPlannedSubtaskDifficulty(
+        chainID: TaskChainID,
+        plannedSubtaskID: PlannedSubtaskID,
+        difficulty: SubtaskDifficulty
+    ) {
+        do {
+            objectWillChange.send()
+            try engine.updatePlannedSubtaskDifficulty(
+                chainID: chainID,
+                plannedSubtaskID: plannedSubtaskID,
+                difficulty: difficulty
+            )
+            persist()
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
     func setTheme(_ theme: AppTheme) {
         objectWillChange.send()
         engine.updateTheme(theme)
@@ -2114,10 +2461,36 @@ final class SuntraceStore: ObservableObject {
         persist()
     }
 
+    func setSettingsPoemEnabled(_ enabled: Bool) {
+        objectWillChange.send()
+        var policy = engine.preferences.settingsPoemDisplayPolicy
+        policy.enabled = enabled
+        engine.updateSettingsPoemDisplayPolicy(policy)
+        persist()
+    }
+
+    func setSettingsPoemText(_ text: String) {
+        objectWillChange.send()
+        var policy = engine.preferences.settingsPoemDisplayPolicy
+        policy.text = text
+        engine.updateSettingsPoemDisplayPolicy(policy)
+        persist()
+    }
+
+    func resetSettingsPoemText() {
+        objectWillChange.send()
+        var policy = engine.preferences.settingsPoemDisplayPolicy
+        policy.text = SettingsPoemDisplayPolicy.defaultText
+        engine.updateSettingsPoemDisplayPolicy(policy)
+        persist()
+        showToast(copy.settingsPoemResetToast)
+    }
+
     func setDataMode(_ dataMode: AppDataMode) {
         objectWillChange.send()
         engine.updateDataMode(dataMode)
         persist()
+        restartLocalFirstSyncAutomation()
         showToast(copy.dataModeChangedToast(for: dataMode))
     }
 
@@ -2137,6 +2510,118 @@ final class SuntraceStore: ObservableObject {
         engine.updateBackupPolicy(policy)
         persist()
         showToast(copy.backupPolicyChangedToast)
+    }
+
+    func setLocalFirstSyncEndpoint(_ endpoint: CloudSyncEndpointKind) {
+        objectWillChange.send()
+        var policy = engine.preferences.localFirstSyncPolicy
+        policy.endpoint = endpoint
+        policy.enabled = endpoint == .iCloud || endpoint == .localFolder
+        engine.updateLocalFirstSyncPolicy(policy)
+        persist()
+        restartLocalFirstSyncAutomation()
+        showToast(copy.localFirstSyncChangedToast)
+    }
+
+    func setLocalFirstSyncMode(_ mode: CloudSyncMode) {
+        objectWillChange.send()
+        var policy = engine.preferences.localFirstSyncPolicy
+        policy.mode = mode
+        engine.updateLocalFirstSyncPolicy(policy)
+        persist()
+        restartLocalFirstSyncAutomation()
+        showToast(copy.localFirstSyncChangedToast)
+    }
+
+    func syncLocalFolderNow() {
+        runLocalFolderSync(showToastOnSuccess: true)
+    }
+
+    private func runLocalFolderSync(showToastOnSuccess: Bool) {
+        guard engine.preferences.dataMode == .localFirst,
+              supportsRunnableLocalFirstSync(engine.preferences.localFirstSyncPolicy.endpoint)
+        else {
+            showToast(copy.localFirstSyncUnavailableToast)
+            return
+        }
+        guard isLocalFirstSyncing == false else { return }
+        guard let databaseURL else {
+            showToast("临时模式不支持本地文件夹同步")
+            return
+        }
+
+        persist()
+        isLocalFirstSyncing = true
+        localFirstSyncMessage = "同步中…"
+        let endpoint = engine.preferences.localFirstSyncPolicy.endpoint
+        Task { [databaseURL, endpoint] in
+            do {
+                let coordinator = SQLiteLocalFirstSyncCoordinator(
+                    databaseURL: databaseURL,
+                    transport: try Self.localFirstSyncTransport(for: endpoint)
+                )
+                let result = try await coordinator.sync()
+                let loaded = try SQLiteEngineRepository(databaseURL: databaseURL).load()
+                await MainActor.run {
+                    engine = loaded
+                    Theme.apply(engine.preferences.theme)
+                    normalizeSelection()
+                    isLocalFirstSyncing = false
+                    localFirstSyncMessage = copy.localFirstSyncResult(result)
+                    if showToastOnSuccess {
+                        showToast(copy.localFirstSyncResult(result))
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isLocalFirstSyncing = false
+                    localFirstSyncMessage = "同步失败：\(error.localizedDescription)"
+                    showToast("同步失败：\(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func supportsRunnableLocalFirstSync(_ endpoint: CloudSyncEndpointKind) -> Bool {
+        endpoint == .iCloud || endpoint == .localFolder
+    }
+
+    private static func localFirstSyncTransport(for endpoint: CloudSyncEndpointKind) throws -> any SyncRecordTransport {
+        switch endpoint {
+        case .iCloud:
+            return try ICloudDriveSyncTransport()
+        case .localFolder:
+            return LocalFolderSyncTransport(rootURL: configuredSyncFolderURL())
+        case .s3, .webDAV:
+            throw ICloudDriveSyncTransportError.unavailable
+        }
+    }
+
+    private func restartLocalFirstSyncAutomation() {
+        localFirstSyncAutomationTask?.cancel()
+        localFirstSyncAutomationTask = nil
+        let policy = engine.preferences.localFirstSyncPolicy
+        guard databaseURL != nil,
+              engine.preferences.dataMode == .localFirst,
+              policy.enabled,
+              supportsRunnableLocalFirstSync(policy.endpoint),
+              policy.mode == .automatic
+        else { return }
+
+        let intervalNanoseconds = UInt64(policy.intervalSeconds) * 1_000_000_000
+        localFirstSyncAutomationTask = Task { [weak self] in
+            while Task.isCancelled == false {
+                do {
+                    try await Task.sleep(nanoseconds: intervalNanoseconds)
+                } catch {
+                    return
+                }
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    self?.runLocalFolderSync(showToastOnSuccess: false)
+                }
+            }
+        }
     }
 
     func exportDataPackage() {
@@ -2517,6 +3002,47 @@ final class SuntraceStore: ObservableObject {
             .appendingPathComponent("Noonmark.sqlite")
     }
 
+    static func configuredSyncFolderURL() -> URL {
+        if let path = commandLineValue(after: "--sync-folder-url"), path.isEmpty == false {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        return base
+            .appendingPathComponent("noonmark", isDirectory: true)
+            .appendingPathComponent("sync-repository", isDirectory: true)
+    }
+
+    static func configuredLocalFirstSyncEndpointURL(for endpoint: CloudSyncEndpointKind) -> URL? {
+        switch endpoint {
+        case .iCloud:
+            return try? ICloudDriveSyncTransport.defaultRootURL()
+        case .localFolder:
+            return configuredSyncFolderURL()
+        case .s3, .webDAV:
+            return nil
+        }
+    }
+
+    static func loadOrCreateSyncDeviceID(databaseURL: URL) -> SyncDeviceID {
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        do {
+            if let identity = try syncRepository.loadDeviceIdentity() {
+                return identity.deviceID
+            }
+            let identity = SyncDeviceIdentity(
+                displayName: Host.current().localizedName,
+                createdAt: Date()
+            )
+            try syncRepository.saveDeviceIdentity(identity)
+            return identity.deviceID
+        } catch {
+            NSLog("Suntrace sync identity load failed: %@", String(describing: error))
+            return SyncDeviceID()
+        }
+    }
+
     static func commandLineValue(after flag: String) -> String? {
         guard let index = CommandLine.arguments.firstIndex(of: flag) else { return nil }
         let valueIndex = CommandLine.arguments.index(after: index)
@@ -2553,7 +3079,11 @@ final class SuntraceStore: ObservableObject {
         guard let repository else { return }
 
         do {
-            try repository.save(engine)
+            if let syncDeviceID {
+                try repository.save(engine.snapshot(), recordingChangesFor: syncDeviceID)
+            } else {
+                try repository.save(engine)
+            }
         } catch {
             NSLog("Suntrace persistence save failed: %@", String(describing: error))
             showToast("保存失败：\(error.localizedDescription)")
@@ -2615,17 +3145,23 @@ final class SuntraceStore: ObservableObject {
         let day5 = LocalDate("2026-07-07")
 
         do {
+            let engineeringTag = try engine.createTaskTag(name: "工程", colorHex: "#2A6FDB", now: seedNow())
+            let reviewTag = try engine.createTaskTag(name: "复盘", colorHex: "#0E9488", now: seedNow())
+            let lifeTag = try engine.createTaskTag(name: "生活", colorHex: "#D1477A", now: seedNow())
+
             let okr = try engine.createPoolTask(
                 title: "整理 Q3 OKR 草案",
                 descriptionText: "汇总三条产品线负责人给的季度目标，收敛成不超过 3 个 O、每个 O 配 3 个可量化 KR。",
                 note: "[2026-07-05 14:20] 等数据组下午的留存看板再定第 2 个 KR 的口径。",
                 now: seedNow()
             )
+            try engine.setTaskTagAssignment(chainID: okr, slot: .tagI, tagID: reviewTag, now: seedNow())
             let okrDay0 = try engine.scheduleFromPool(chainID: okr, date: day0, today: day0, now: now)
 
             let launchScript = try engine.createPoolTask(title: "给发布会准备演示脚本", descriptionText: "准备发布会现场演示脚本。", now: seedNow())
             _ = try engine.scheduleFromPool(chainID: launchScript, date: dayMinus3, today: dayMinus3, now: now)
             let physical = try engine.createPoolTask(title: "预约年度体检", descriptionText: "预约年度体检时间。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: physical, slot: .tagI, tagID: lifeTag, now: seedNow())
             let physicalTrace = try engine.scheduleFromPool(chainID: physical, date: dayMinus3, today: dayMinus3, now: now)
             try engine.returnToPool(traceID: physicalTrace, today: dayMinus3, now: now)
             let wireframe = try engine.createPoolTask(title: "画首页线框图", descriptionText: "日历完成样例任务。", now: seedNow())
@@ -2648,12 +3184,14 @@ final class SuntraceStore: ObservableObject {
             try engine.markCompleted(traceID: contractTrace, today: day1, now: eventTime(day1, hour: 11, minute: 20))
 
             let iconExport = try engine.createPoolTask(title: "修复图标导出脚本", descriptionText: "修复图标资源导出脚本。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: iconExport, slot: .tagI, tagID: engineeringTag, now: seedNow())
             let iconDay2 = try engine.scheduleFromPool(chainID: iconExport, date: day2, today: day2, now: now)
             try engine.setManualProgress(traceID: iconDay2, percent: 45, today: day2)
             let iconToday = try engine.continueTrace(traceID: iconDay2, targetDate: day3, today: day2, now: now)
             try engine.setManualProgress(traceID: iconToday, percent: 45, today: day3)
 
             let weeklyReport = try engine.createPoolTask(title: "写本周周报", descriptionText: "整理本周进展和风险。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: weeklyReport, slot: .tagI, tagID: reviewTag, now: seedNow())
             let weeklyDay1 = try engine.scheduleFromPool(chainID: weeklyReport, date: day1, today: day1, now: now)
             let weeklyDay2 = try engine.continueTrace(traceID: weeklyDay1, targetDate: day2, today: day1, now: now)
             try engine.markCompleted(traceID: weeklyDay2, today: day2, now: eventTime(day2, hour: 17, minute: 45))
@@ -2663,6 +3201,7 @@ final class SuntraceStore: ObservableObject {
             _ = try engine.changeTrace(traceID: pricingTrace, newTitle: "输出竞品定价对比表", today: day2, now: seedNow())
 
             let visual = try engine.createPoolTask(title: "制作发布会主视觉", descriptionText: "推进发布会主视觉定稿。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: visual, slot: .tagI, tagID: engineeringTag, now: seedNow())
             let visualDay1 = try engine.scheduleFromPool(chainID: visual, date: day1, today: day1, now: now)
             let visualReference = try engine.addSubtask(traceID: visualDay1, title: "收集视觉参考", difficulty: .simple, now: now)
             _ = try engine.addSubtask(traceID: visualDay1, title: "出 3 版草图", difficulty: .hard, now: now)
@@ -2678,26 +3217,35 @@ final class SuntraceStore: ObservableObject {
             }
 
             let onboarding = try engine.createPoolTask(title: "审阅 onboarding 三屏文案", descriptionText: "审阅 onboarding 三屏文案。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: onboarding, slot: .tagI, tagID: reviewTag, now: seedNow())
             let onboardingTrace = try engine.scheduleFromPool(chainID: onboarding, date: day3, today: day3, now: now)
             let headline = try engine.addSubtask(traceID: onboardingTrace, title: "首屏标题与副标题", difficulty: .simple, now: now)
             _ = try engine.addSubtask(traceID: onboardingTrace, title: "通知权限请求文案", difficulty: .medium, now: now)
             try engine.completeSubtask(headline, today: day3, now: eventTime(day3, hour: 9, minute: 0))
 
             let running = try engine.createPoolTask(title: "晨跑 5 公里", descriptionText: "完成晨跑。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: running, slot: .tagI, tagID: lifeTag, now: seedNow())
             let runningTrace = try engine.scheduleFromPool(chainID: running, date: day3, today: day3, now: now)
             try engine.markCompleted(traceID: runningTrace, today: day3, now: eventTime(day3, hour: 7, minute: 36))
 
             let downloads = try engine.createPoolTask(title: "清理下载文件夹", descriptionText: "清理下载文件夹。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: downloads, slot: .tagI, tagID: lifeTag, now: seedNow())
             _ = try engine.scheduleFromPool(chainID: downloads, date: day3, today: day3, now: now)
 
-            _ = try engine.createPoolTask(title: "读《卡片笔记写作法》第三章", descriptionText: "任务池样例任务。", now: seedNow())
-            _ = try engine.createPoolTask(title: "调研 SwiftUI 动画 API", descriptionText: "任务池样例任务。", now: seedNow())
+            let reading = try engine.createPoolTask(title: "读《卡片笔记写作法》第三章", descriptionText: "任务池样例任务。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: reading, slot: .tagI, tagID: reviewTag, now: seedNow())
+            let animationAPI = try engine.createPoolTask(title: "调研 SwiftUI 动画 API", descriptionText: "任务池样例任务。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: animationAPI, slot: .tagI, tagID: engineeringTag, now: seedNow())
+            try engine.setTaskTagAssignment(chainID: animationAPI, slot: .tagII, tagID: reviewTag, now: seedNow())
 
             let standup = try engine.createPoolTask(title: "准备周一站会要点", descriptionText: "未来计划样例任务。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: standup, slot: .tagI, tagID: reviewTag, now: seedNow())
             _ = try engine.scheduleFromPool(chainID: standup, date: day4, today: day3, now: now)
             let invoice = try engine.createPoolTask(title: "整理六月发票报销", descriptionText: "未来计划样例任务。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: invoice, slot: .tagI, tagID: lifeTag, now: seedNow())
             _ = try engine.scheduleFromPool(chainID: invoice, date: day5, today: day3, now: now)
             let dinner = try engine.createPoolTask(title: "预订团队聚餐餐厅", descriptionText: "未来计划样例任务。", now: seedNow())
+            try engine.setTaskTagAssignment(chainID: dinner, slot: .tagI, tagID: lifeTag, now: seedNow())
             _ = try engine.scheduleFromPool(chainID: dinner, date: day4, today: day3, now: now)
 
             engine.settleDays(upTo: day3, now: now)
@@ -2734,21 +3282,18 @@ struct SuntraceRootView: View {
             Theme.desk
                 .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                WindowChrome()
-                HStack(spacing: 0) {
-                    Sidebar()
-                    MainSurface()
-                }
+            HStack(spacing: 0) {
+                Sidebar()
+                MainSurface()
             }
             .background(Theme.background)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(.black.opacity(0.12), lineWidth: 1)
+                    .stroke(Theme.line.opacity(0.7), lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.18), radius: 34, x: 0, y: 24)
-            .padding(18)
+            .shadow(color: .black.opacity(0.09), radius: 22, x: 0, y: 14)
+            .padding(10)
 
             if let toast = store.toast {
                 VStack {
@@ -2903,8 +3448,8 @@ struct AppCopy {
 
     var settingsSubtitle: String {
         language == .chinese
-            ? "偏好、数据包、同步占位和烛龙配置的统一入口。"
-            : "Preferences, data packages, sync placeholders, and Zhulong configuration in one place."
+            ? "偏好、数据包、本地优先云同步和烛龙配置的统一入口。"
+            : "Preferences, data packages, local-first cloud sync, and Zhulong configuration in one place."
     }
 
     var preferencesTitle: String { language == .chinese ? "偏好" : "Preferences" }
@@ -2916,6 +3461,11 @@ struct AppCopy {
     var coolGray: String { language == .chinese ? "冷灰" : "Cool gray" }
     var warmPaper: String { language == .chinese ? "微暖纸感" : "Warm paper" }
     var languageTitle: String { language == .chinese ? "语言" : "Language" }
+    var settingsPoemTitle: String { language == .chinese ? "设置页诗文" : "Settings poem" }
+    var settingsPoemDisplay: String { language == .chinese ? "右侧展示诗文" : "Show poem on the right" }
+    var settingsPoemEditorTitle: String { language == .chinese ? "诗文内容" : "Poem text" }
+    var resetSettingsPoem: String { language == .chinese ? "恢复默认《苦昼短》" : "Restore default" }
+    var settingsPoemResetToast: String { language == .chinese ? "已恢复默认诗文" : "Default poem restored" }
 
     var dataSectionTitle: String { language == .chinese ? "数据" : "Data" }
     var dataSectionSubtitle: String {
@@ -2931,18 +3481,74 @@ struct AppCopy {
     var syncTitle: String { language == .chinese ? "同步" : "Sync" }
     var syncSubtitle: String {
         language == .chinese
-            ? "选择本地优先或在线优先。两种模式互斥，当前只运行其中一种。"
-            : "Choose local-first or online-first. The modes are exclusive; only one runs at a time."
+            ? "本地优先使用云端点同步仓库；在线优先才允许旁路定时备份。"
+            : "Local-first uses a cloud sync endpoint; only online-first allows scheduled backup."
     }
 
     var planned: String { language == .chinese ? "规划中" : "Planned" }
+    var available: String { language == .chinese ? "可用" : "Available" }
     var dataModeTitle: String { language == .chinese ? "数据模式" : "Data mode" }
     var localFirstMode: String { language == .chinese ? "本地优先" : "Local-first" }
     var onlineFirstMode: String { language == .chinese ? "在线优先" : "Online-first" }
     var dataModeBoundary: String {
         language == .chinese
-            ? "主数据模式互斥；定时备份只是旁路导出，不会成为第二套同步写入。"
-            : "Primary data modes are exclusive; scheduled backup is an export path, not a second sync writer."
+            ? "两种主数据模式互斥。本地优先的 iCloud、S3 或 WebDAV 是同步端点，不是定时备份目标。"
+            : "The primary modes are exclusive. In local-first mode, iCloud, S3, or WebDAV is a sync endpoint, not a scheduled backup destination."
+    }
+
+    var localFirstSyncTitle: String { language == .chinese ? "本地优先云同步" : "Local-first cloud sync" }
+    var syncEndpointTitle: String { language == .chinese ? "同步端点" : "Sync endpoint" }
+    var syncModeTitle: String { language == .chinese ? "同步触发" : "Sync trigger" }
+    var syncManualMode: String { language == .chinese ? "手动" : "Manual" }
+    var syncAutomaticMode: String { language == .chinese ? "自动" : "Automatic" }
+    var syncSnapshotPolicyTitle: String { language == .chinese ? "快照保留" : "Snapshot retention" }
+    var syncConflictCopyTitle: String { language == .chinese ? "冲突副本" : "Conflict copy" }
+    var syncNow: String { language == .chinese ? "立即同步" : "Sync now" }
+    var syncing: String { language == .chinese ? "同步中" : "Syncing" }
+    var syncFolderPathTitle: String { language == .chinese ? "同步文件夹" : "Sync folder" }
+    var iCloudDriveLocationTitle: String { language == .chinese ? "iCloud Drive 位置" : "iCloud Drive location" }
+    var localCachePathTitle: String { language == .chinese ? "本机缓存路径" : "Local cache path" }
+    var iCloudDriveLogicalLocation: String {
+        "iCloud Drive/\(ICloudDriveSyncTransport.defaultRepositoryName)"
+    }
+
+    var localFolderSyncReady: String {
+        language == .chinese
+            ? "本地文件夹端点已接入：会上传本机变更、下载远端记录并在仓库生成快照索引。"
+            : "The local folder endpoint is active: it uploads local changes, downloads remote records, and writes snapshot indexes."
+    }
+
+    var iCloudSyncReady: String {
+        language == .chinese
+            ? "iCloud Drive 端点已接入：远端逻辑位置如下，本机路径是系统同步镜像。"
+            : "The iCloud Drive endpoint is active: the logical cloud location is below; the local path is the system-synced mirror."
+    }
+
+    var remoteEndpointPlanned: String {
+        language == .chinese
+            ? "该端点还在接入中；本地优先模式下它会作为同步仓库端点，不会出现定时备份。"
+            : "This endpoint is still being connected; in local-first mode it will be a sync repository endpoint, not scheduled backup."
+    }
+
+    func syncAvailabilityTitle(for availability: SyncEndpointAvailability) -> String {
+        switch availability {
+        case .available:
+            return available
+        case .planned:
+            return planned
+        }
+    }
+
+    var localFirstSyncUnavailableToast: String {
+        language == .chinese
+            ? "当前只有 iCloud 和本地文件夹端点可以立即同步"
+            : "Only iCloud and local folder endpoints can sync now"
+    }
+
+    var localFirstSyncBoundary: String {
+        language == .chinese
+            ? "参考思源：本机仍是事实源；同步前生成快照索引，远端只保存同步仓库对象。iCloud 和本地文件夹端点已可用，S3/WebDAV 继续按同一仓库协议接入。"
+            : "Following SiYuan: local data remains primary; sync creates snapshot indexes before exchanging repository objects. iCloud and local folder endpoints are available; S3/WebDAV will use the same repository protocol."
     }
 
     var scheduledBackupTitle: String { language == .chinese ? "定时备份" : "Scheduled backup" }
@@ -2988,6 +3594,16 @@ struct AppCopy {
     var testConnection: String { language == .chinese ? "测试连接" : "Test" }
     var clear: String { language == .chinese ? "清空" : "Clear" }
     var backupPolicyChangedToast: String { language == .chinese ? "备份策略已更新" : "Backup policy updated" }
+    var localFirstSyncChangedToast: String { language == .chinese ? "本地优先同步设置已更新" : "Local-first sync settings updated" }
+
+    func localFirstSyncResult(_ result: SQLiteLocalFirstSyncResult) -> String {
+        switch language {
+        case .chinese:
+            "同步完成：上传 \(result.upload.uploadedCount) 条，下载合并 \(result.download.appliedCount) 条，冲突 \(result.download.conflictCount) 条"
+        case .english:
+            "Sync complete: uploaded \(result.upload.uploadedCount), merged \(result.download.appliedCount), conflicts \(result.download.conflictCount)"
+        }
+    }
 
     func dataModeChangedToast(for dataMode: AppDataMode) -> String {
         switch (language, dataMode) {
@@ -3047,17 +3663,42 @@ struct AppCopy {
         switch (language, kind) {
         case (.chinese, .customEndpoint): "自定义同步端点"
         case (.chinese, .iCloud): "iCloud 云同步"
+        case (.chinese, .s3): "S3 云同步"
+        case (.chinese, .webDAV): "WebDAV 云同步"
+        case (.chinese, .localFolder): "本地同步文件夹"
         case (.english, .customEndpoint): "Custom sync endpoint"
         case (.english, .iCloud): "iCloud sync"
+        case (.english, .s3): "S3 sync"
+        case (.english, .webDAV): "WebDAV sync"
+        case (.english, .localFolder): "Local sync folder"
         }
     }
 
     func syncDescription(for kind: SyncEndpointKind) -> String {
         switch (language, kind) {
         case (.chinese, .customEndpoint): "连接自有服务端"
-        case (.chinese, .iCloud): "原生云同步"
+        case (.chinese, .iCloud): "使用 iCloud 作为同步仓库端点"
+        case (.chinese, .s3): "使用兼容 S3 的对象存储"
+        case (.chinese, .webDAV): "使用兼容 WebDAV 的远端目录"
+        case (.chinese, .localFolder): "使用自管目录或局域网共享"
         case (.english, .customEndpoint): "Connect your own server"
-        case (.english, .iCloud): "Native cloud sync"
+        case (.english, .iCloud): "Use iCloud as the sync repository endpoint"
+        case (.english, .s3): "Use S3-compatible object storage"
+        case (.english, .webDAV): "Use a WebDAV-compatible remote directory"
+        case (.english, .localFolder): "Use a managed folder or LAN share"
+        }
+    }
+
+    func cloudSyncEndpointTitle(for kind: CloudSyncEndpointKind) -> String {
+        switch (language, kind) {
+        case (.chinese, .iCloud): "iCloud"
+        case (.chinese, .s3): "S3"
+        case (.chinese, .webDAV): "WebDAV"
+        case (.chinese, .localFolder): "本地文件夹"
+        case (.english, .iCloud): "iCloud"
+        case (.english, .s3): "S3"
+        case (.english, .webDAV): "WebDAV"
+        case (.english, .localFolder): "Local folder"
         }
     }
 
@@ -3089,6 +3730,9 @@ enum Theme {
         let text2: Color
         let text3: Color
         let chip: Color
+        let sidebar: Color
+        let controlFill: Color
+        let listRowHover: Color
     }
 
     private nonisolated(unsafe) static var activeTheme: AppTheme = .coolGray
@@ -3109,29 +3753,35 @@ enum Theme {
         switch activeTheme {
         case .coolGray:
             return Palette(
-                desk: Color(red: 0.898, green: 0.902, blue: 0.914),
-                background: Color(red: 0.962, green: 0.962, blue: 0.968),
+                desk: Color(red: 0.925, green: 0.928, blue: 0.936),
+                background: Color(red: 0.994, green: 0.993, blue: 0.991),
                 panel: .white,
-                panel2: Color(red: 0.982, green: 0.982, blue: 0.987),
-                line: Color(red: 0.91, green: 0.91, blue: 0.925),
-                line2: Color(red: 0.82, green: 0.82, blue: 0.85),
+                panel2: Color(red: 0.984, green: 0.984, blue: 0.987),
+                line: Color(red: 0.90, green: 0.902, blue: 0.914),
+                line2: Color(red: 0.80, green: 0.805, blue: 0.835),
                 text1: Color(red: 0.11, green: 0.11, blue: 0.12),
                 text2: Color(red: 0.42, green: 0.42, blue: 0.46),
                 text3: Color(red: 0.63, green: 0.63, blue: 0.67),
-                chip: Color(red: 0.946, green: 0.946, blue: 0.956)
+                chip: Color(red: 0.951, green: 0.951, blue: 0.958),
+                sidebar: Color(red: 0.982, green: 0.981, blue: 0.978),
+                controlFill: Color(red: 0.996, green: 0.996, blue: 0.997),
+                listRowHover: Color(red: 0.977, green: 0.979, blue: 0.984)
             )
         case .warmPaper:
             return Palette(
-                desk: Color(red: 0.925, green: 0.905, blue: 0.865),
-                background: Color(red: 0.982, green: 0.969, blue: 0.942),
-                panel: Color(red: 1.0, green: 0.995, blue: 0.978),
-                panel2: Color(red: 0.988, green: 0.974, blue: 0.948),
-                line: Color(red: 0.91, green: 0.878, blue: 0.82),
-                line2: Color(red: 0.79, green: 0.725, blue: 0.64),
+                desk: Color(red: 0.93, green: 0.914, blue: 0.882),
+                background: Color(red: 0.997, green: 0.992, blue: 0.982),
+                panel: Color(red: 1.0, green: 0.998, blue: 0.992),
+                panel2: Color(red: 0.990, green: 0.982, blue: 0.964),
+                line: Color(red: 0.90, green: 0.872, blue: 0.824),
+                line2: Color(red: 0.78, green: 0.724, blue: 0.646),
                 text1: Color(red: 0.13, green: 0.105, blue: 0.085),
                 text2: Color(red: 0.44, green: 0.385, blue: 0.32),
                 text3: Color(red: 0.64, green: 0.58, blue: 0.50),
-                chip: Color(red: 0.955, green: 0.936, blue: 0.902)
+                chip: Color(red: 0.957, green: 0.946, blue: 0.925),
+                sidebar: Color(red: 0.989, green: 0.979, blue: 0.957),
+                controlFill: Color(red: 1.0, green: 0.997, blue: 0.989),
+                listRowHover: Color(red: 0.989, green: 0.981, blue: 0.966)
             )
         }
     }
@@ -3146,6 +3796,9 @@ enum Theme {
     static var text2: Color { palette.text2 }
     static var text3: Color { palette.text3 }
     static var chip: Color { palette.chip }
+    static var sidebar: Color { palette.sidebar }
+    static var controlFill: Color { palette.controlFill }
+    static var listRowHover: Color { palette.listRowHover }
     static let accent = Color(red: 0.16, green: 0.38, blue: 0.78)
     static let accentSoft = Color(red: 0.93, green: 0.955, blue: 1.0)
     static let ok = Color(red: 0.08, green: 0.55, blue: 0.38)
@@ -3163,28 +3816,14 @@ enum Theme {
     static let navSettings = hex(0x64748B)
 }
 
-struct WindowChrome: View {
-    @EnvironmentObject private var store: SuntraceStore
-
+struct TrafficLightDots: View {
     var body: some View {
         HStack(spacing: 9) {
             trafficLight(color: Color(red: 1, green: 0.451, blue: 0.416))
             trafficLight(color: Color(red: 0.996, green: 0.737, blue: 0.18))
             trafficLight(color: Color(red: 0.098, green: 0.765, blue: 0.188))
-            Spacer()
-            Text(store.windowTitle)
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(Theme.text2)
-                .lineLimit(1)
-            Spacer()
-            Color.clear.frame(width: 60, height: 1)
         }
-        .frame(height: 42)
-        .padding(.horizontal, 14)
-        .background(Theme.panel)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.line).frame(height: 1)
-        }
+        .frame(height: 14)
     }
 
     private func trafficLight(color: Color) -> some View {
@@ -3209,6 +3848,10 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            TrafficLightDots()
+                .padding(.horizontal, 18)
+                .padding(.bottom, 24)
+
             HStack(spacing: 9) {
                 ClockLogo()
                 Text(store.copy.appName)
@@ -3232,12 +3875,12 @@ struct Sidebar: View {
             Spacer()
             NavItem(page: .settings, label: store.copy.navSettings, count: 0)
         }
-        .frame(width: 204)
-        .padding(.top, 14)
+        .frame(width: 222)
+        .padding(.top, 16)
         .padding(.bottom, 10)
-        .background(Theme.panel2)
+        .background(Theme.sidebar)
         .overlay(alignment: .trailing) {
-            Rectangle().fill(Theme.line).frame(width: 1)
+            Rectangle().fill(Theme.line.opacity(0.55)).frame(width: 1)
         }
     }
 }
@@ -3264,10 +3907,10 @@ struct NavGroupTitle: View {
     }
 
     var body: some View {
-        Text(title)
+            Text(title)
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(Theme.text3)
-            .tracking(0.8)
+            .tracking(0.4)
             .padding(.horizontal, 18)
             .padding(.bottom, 4)
     }
@@ -3292,34 +3935,34 @@ struct NavItem: View {
                     .foregroundStyle(page.navigationIconColor)
                 Text(label)
                     .font(.system(size: 13.5, weight: active ? .semibold : .medium))
-                    .foregroundStyle(active ? Theme.accent : Theme.text2)
+                    .foregroundStyle(active ? Theme.text1 : Theme.text2)
                 Spacer()
                 if count > 0 {
                     Text("\(count)")
-                        .font(.system(size: 11))
+                        .font(.system(size: 11, weight: active ? .semibold : .regular))
                         .foregroundStyle(Theme.text2)
                         .padding(.horizontal, 6)
                         .frame(minWidth: 19, minHeight: 17)
-                        .background(Capsule().fill(Theme.chip))
+                        .background(Capsule().fill(active ? Theme.panel.opacity(0.8) : Theme.chip))
                 }
             }
-            .frame(height: 32)
+            .frame(height: 33)
             .padding(.leading, 12)
             .padding(.trailing, 10)
             .hoverSurface(
                 active: active,
-                cornerRadius: 7,
+                cornerRadius: 8,
                 idleFill: .clear,
-                hoverFill: Theme.chip,
-                activeFill: Theme.accentSoft,
+                hoverFill: Theme.panel.opacity(0.72),
+                activeFill: page.navigationIconColor.opacity(0.11),
                 idleStroke: .clear,
-                hoverStroke: Theme.line,
+                hoverStroke: Theme.line.opacity(0.45),
                 activeStroke: .clear
             )
             .overlay(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 99)
-                    .fill(active ? Theme.accent : .clear)
-                    .frame(width: 2.5, height: 15)
+                    .fill(active ? page.navigationIconColor : .clear)
+                    .frame(width: 2.5, height: 16)
                     .padding(.leading, 3)
             }
         }
@@ -3356,15 +3999,45 @@ struct MainSurface: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if store.page != .calendar && store.page != .settings {
+            if store.shouldShowDetailRail {
                 DetailRail()
                     .frame(width: 300)
                     .overlay(alignment: .leading) {
-                        Rectangle().fill(Theme.line).frame(width: 1)
+                        Rectangle().fill(Theme.line.opacity(0.58)).frame(width: 1)
                     }
             }
         }
-        .background(Theme.background)
+        .background(Theme.panel)
+    }
+}
+
+struct TaskSelectionClearingScrollView<Content: View>: View {
+    @EnvironmentObject private var store: SuntraceStore
+    @ViewBuilder let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                ZStack(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(Theme.panel)
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.clearSelection() }
+                    content
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: proxy.size.height,
+                    alignment: .topLeading
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -3391,14 +4064,14 @@ struct DayTodoPage: View {
                     .padding(.horizontal, 24)
             }
 
-            ScrollView {
+            TaskSelectionClearingScrollView {
                 VStack(spacing: 0) {
                     if store.isHistory == false {
                         DayQuickAdd()
                             .padding(.bottom, 12)
                     }
 
-                    LazyVStack(spacing: 6) {
+                    LazyVStack(spacing: 0) {
                         ForEach(traces, id: \.id) { trace in
                             TaskRow(trace: trace)
                         }
@@ -3478,17 +4151,79 @@ struct DayQuickAdd: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        HStack(spacing: 8) {
-            TextField(store.isFuture ? "为这一天排期任务，回车确认" : "添加今日任务，回车确认", text: $store.quickText)
+        HStack(alignment: .top, spacing: 8) {
+            NewTaskInlineField(
+                placeholder: store.isFuture ? "为这一天排期任务，回车确认" : "添加今日任务，回车确认",
+                text: $store.quickText
+            ) {
+                store.addQuickTask()
+            }
+            HeaderButton(store.copy.scheduleFromPool) { store.showingFromPoolPicker = true }
+        }
+    }
+}
+
+struct NewTaskInlineField: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let placeholder: String
+    @Binding var text: String
+    let onSubmit: () -> Void
+
+    var suggestions: [TaskTag] {
+        store.newTaskTagSuggestions(for: text)
+    }
+
+    var primarySuggestionCount: Int {
+        store.primaryNewTaskSuggestionCount(for: text)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .padding(.horizontal, 12)
                 .frame(height: 32)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-                .onSubmit { store.addQuickTask() }
-            HeaderButton(store.copy.scheduleFromPool) { store.showingFromPoolPicker = true }
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line.opacity(0.72)))
+                .onSubmit(onSubmit)
+
+            if store.shouldShowNewTaskTagSuggestions(for: text) {
+                VStack(spacing: 0) {
+                    ForEach(Array(suggestions.prefix(6).enumerated()), id: \.element.id) { index, tag in
+                        if index == primarySuggestionCount, primarySuggestionCount > 0 {
+                            Rectangle()
+                                .fill(Theme.line)
+                                .frame(height: 1)
+                                .padding(.vertical, 2)
+                        }
+                        Button {
+                            text = store.completeLastHashToken(in: text, with: tag.name)
+                        } label: {
+                            HStack(spacing: 7) {
+                                Circle()
+                                    .fill(tag.color)
+                                    .frame(width: 7, height: 7)
+                                Text("#\(tag.name)")
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(Theme.text1)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 9)
+                            .frame(height: 28)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line.opacity(0.72)))
+                .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+            }
         }
+        .layoutPriority(1)
     }
 }
 
@@ -3536,7 +4271,7 @@ struct DateStrip: View {
         .padding(.top, 14)
         .padding(.bottom, 10)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.line).frame(height: 1)
+            Rectangle().fill(Theme.line.opacity(0.62)).frame(height: 1)
         }
     }
 }
@@ -3590,6 +4325,8 @@ struct TaskRow: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(trace.status.uiStyle.titleColor)
                         .strikethrough(trace.status.uiStyle.strikethrough)
+
+                    TaskTagStrip(tags: store.tags(for: trace.chainID))
 
                     if showsProgress {
                         HStack(spacing: 6) {
@@ -3668,16 +4405,7 @@ struct TaskRow: View {
                 .padding(.bottom, 10)
             }
         }
-        .hoverSurface(
-            active: selected,
-            cornerRadius: 8,
-            idleFill: Theme.panel,
-            hoverFill: Theme.panel2,
-            activeFill: Theme.accentSoft,
-            idleStroke: Theme.line,
-            hoverStroke: Theme.line2,
-            activeStroke: Theme.accent
-        )
+        .listRowSurface(selected: selected, tint: Theme.accent, separatorLeadingInset: 44)
         .contentShape(Rectangle())
         .onTapGesture { store.selectTrace(trace.id) }
         .contextMenu {
@@ -3889,18 +4617,58 @@ struct TaskPoolPage: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var tasks: [PoolTask] { store.engine.taskPool() }
+    var groups: [PoolTaskGroup] {
+        Dictionary(grouping: tasks, by: { store.primaryTagName(for: $0.chain) })
+            .map { PoolTaskGroup(title: $0.key, tasks: $0.value.sorted { $0.definition.createdAt < $1.definition.createdAt }) }
+            .sorted {
+                if $0.title == "未标记" { return false }
+                if $1.title == "未标记" { return true }
+                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+    }
+
+    var shouldShowGroups: Bool {
+        groups.count > 1 || groups.contains { $0.title != "未标记" }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navPool, subtitle: store.copy.poolSubtitle)
-            ScrollView {
+            HStack(alignment: .top) {
+                PageHeader(title: store.copy.navPool, subtitle: store.copy.poolSubtitle)
+                Spacer()
+            }
+            TaskSelectionClearingScrollView {
                 VStack(spacing: 0) {
                     PoolQuickAdd()
                         .padding(.bottom, 12)
 
-                    LazyVStack(spacing: 8) {
-                        ForEach(tasks, id: \.chain.id) { task in
-                            PoolTaskRow(task: task)
+                    LazyVStack(spacing: 0) {
+                        if shouldShowGroups {
+                            ForEach(groups) { group in
+                                VStack(alignment: .leading, spacing: 0) {
+                                    HStack(spacing: 8) {
+                                        Text(group.title)
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(Theme.text2)
+                                        Text("\(group.tasks.count)")
+                                            .font(.system(size: 10.5, weight: .semibold))
+                                            .foregroundStyle(Theme.text3)
+                                            .padding(.horizontal, 6)
+                                            .frame(height: 18)
+                                            .background(Capsule().fill(Theme.chip))
+                                        Spacer()
+                                    }
+                                    .padding(.top, 12)
+                                    .padding(.bottom, 4)
+                                    ForEach(group.tasks, id: \.chain.id) { task in
+                                        PoolTaskRow(task: task)
+                                    }
+                                }
+                            }
+                        } else {
+                            ForEach(tasks, id: \.chain.id) { task in
+                                PoolTaskRow(task: task)
+                            }
                         }
                         if tasks.isEmpty {
                             EmptyState(kind: .taskPool, text: store.copy.emptyPool)
@@ -3916,18 +4684,23 @@ struct TaskPoolPage: View {
     }
 }
 
+struct PoolTaskGroup: Identifiable {
+    let title: String
+    let tasks: [PoolTask]
+
+    var id: String { title }
+}
+
 struct PoolQuickAdd: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        TextField("新建任务到任务池，回车确认", text: $store.poolText)
-            .textFieldStyle(.plain)
-            .font(.system(size: 13))
-            .padding(.horizontal, 12)
-            .frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-            .onSubmit { store.addPoolTask() }
+        NewTaskInlineField(
+            placeholder: "新建任务到任务池，回车确认",
+            text: $store.poolText
+        ) {
+            store.addPoolTask()
+        }
     }
 }
 
@@ -3943,6 +4716,9 @@ struct PoolTaskRow: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.text1)
                 .lineLimit(1)
+            ForEach(store.tags(for: task.chain), id: \.assignment.id) { tagged in
+                TaskTagChip(tag: tagged.tag, slot: tagged.assignment.slot)
+            }
             Spacer()
             SmallActionButton(store.copy.scheduleToday, tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
             SmallActionButton(store.copy.scheduleTomorrow) { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
@@ -3950,9 +4726,68 @@ struct PoolTaskRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.navPool.opacity(0.10) : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.navPool : Theme.line, lineWidth: selected ? 1.3 : 1))
+        .listRowSurface(selected: selected, tint: Theme.navPool, separatorLeadingInset: 40)
         .onTapGesture { store.selectPool(task.chain.id) }
+    }
+}
+
+struct TaskTagStrip: View {
+    let tags: [(assignment: TaskTagAssignment, tag: TaskTag)]
+
+    var body: some View {
+        if tags.isEmpty == false {
+            HStack(spacing: 6) {
+                ForEach(tags, id: \.assignment.id) { tagged in
+                    TaskTagChip(tag: tagged.tag, slot: tagged.assignment.slot)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+}
+
+struct TaskTagChip: View {
+    let tag: TaskTag
+    let slot: TaskTagSlot
+
+    var body: some View {
+        let active = tag.status == .active
+        HStack(spacing: 5) {
+            Circle()
+                .fill(active ? tag.color : Theme.text3)
+                .frame(width: 6, height: 6)
+            Text("#\(tag.name)")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(active ? Theme.text2 : Theme.text3)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 20)
+        .background(Capsule().fill(active ? tag.color.opacity(0.10) : Theme.chip))
+        .overlay(Capsule().stroke(active ? tag.color.opacity(0.24) : Theme.line))
+    }
+}
+
+private extension TaskTagSlot {
+    var shortTitle: String {
+        switch self {
+        case .tagI:
+            return "I"
+        case .tagII:
+            return "II"
+        case .tagIII:
+            return "III"
+        }
+    }
+}
+
+private extension TaskTag {
+    var color: Color {
+        let raw = colorHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard raw.count == 6, let value = Int(raw, radix: 16) else {
+            return Theme.navPool
+        }
+        return Theme.hex(value)
     }
 }
 
@@ -3976,10 +4811,10 @@ struct FuturePlansPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: store.copy.navFuture, subtitle: store.copy.futureSubtitle)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+            TaskSelectionClearingScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(grouped, id: \.0) { date, items in
-                        VStack(alignment: .leading, spacing: 7) {
+                        VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 10) {
                                 Text("\(SuntraceStore.displayDate(date)) · \(SuntraceStore.weekday(date))")
                                     .font(.system(size: 13, weight: .semibold))
@@ -3993,6 +4828,7 @@ struct FuturePlansPage: View {
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(Theme.accent)
                             }
+                            .padding(.bottom, 4)
                             ForEach(items, id: \.trace.id) { item in
                                 FuturePlanRow(item: item)
                             }
@@ -4019,10 +4855,13 @@ struct FuturePlanRow: View {
         let selected = store.selectedTraceID == item.trace.id
         HStack(spacing: 10) {
             PlanningGlyph(systemName: "calendar.badge.clock", color: Theme.navFuture)
-            Text(item.definition.title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.text1)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(item.definition.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                    .lineLimit(1)
+                TaskTagStrip(tags: store.tags(for: item.trace.chainID))
+            }
             Spacer()
             StatusChip(status: item.trace.status, scale: .compact)
             PriorityStepper(
@@ -4034,17 +4873,7 @@ struct FuturePlanRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .hoverSurface(
-            active: selected,
-            cornerRadius: 9,
-            idleFill: Theme.panel,
-            hoverFill: Theme.panel2,
-            activeFill: Theme.navFuture.opacity(0.10),
-            idleStroke: Theme.line,
-            hoverStroke: Theme.line2,
-            activeStroke: Theme.navFuture,
-            activeLineWidth: 1.3
-        )
+        .listRowSurface(selected: selected, tint: Theme.navFuture, separatorLeadingInset: 40)
         .onTapGesture { store.selectTrace(item.trace.id) }
         .contextMenu {
             Button("查看详情") { store.selectTrace(item.trace.id) }
@@ -4103,8 +4932,8 @@ struct UnfinishedPoolPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: store.copy.navUnfinished, subtitle: store.copy.unfinishedSubtitle)
-            ScrollView {
-                LazyVStack(spacing: 8) {
+            TaskSelectionClearingScrollView {
+                LazyVStack(spacing: 0) {
                     ForEach(items, id: \.chain.id) { item in
                         UnfinishedRow(item: item)
                     }
@@ -4151,12 +4980,15 @@ struct UnfinishedRow: View {
     var body: some View {
         let selected = store.selectedUnfinishedChainID == item.chain.id
         VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 StatusGlyph(status: item.isAbandoned ? .abandoned : .unfinished)
-                Text(item.definition.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(item.isAbandoned ? Theme.text2 : Theme.text1)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(item.definition.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(item.isAbandoned ? Theme.text2 : Theme.text1)
+                        .lineLimit(1)
+                    TaskTagStrip(tags: store.tags(for: item.chain))
+                }
                 Spacer()
                 if item.activeTrace == nil, let source = item.unfinishedTraces.last {
                     HStack(spacing: 8) {
@@ -4223,8 +5055,7 @@ struct UnfinishedRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 9).fill(selected ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Theme.accent : Theme.line, lineWidth: selected ? 1.3 : 1))
+        .listRowSurface(selected: selected, tint: Theme.accent, separatorLeadingInset: 40)
         .onTapGesture { store.selectUnfinished(item.chain.id) }
     }
 }
@@ -4286,12 +5117,12 @@ struct CompletedPoolPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: store.copy.navCompleted, subtitle: store.copy.completedSubtitle)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+            TaskSelectionClearingScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(groupedDates, id: \.self) { date in
                         let dayItems = items.filter { $0.trace.date == date }
                         let daySubtasks = subtaskRecords.filter { $0.date == date }
-                        VStack(alignment: .leading, spacing: 7) {
+                        VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 8) {
                                 Text(groupTitle(for: date))
                                     .font(.system(size: 13, weight: .semibold))
@@ -4299,6 +5130,7 @@ struct CompletedPoolPage: View {
                                     .monospacedDigit()
                             }
                             .padding(.top, 2)
+                            .padding(.bottom, 4)
 
                             ForEach(dayItems, id: \.trace.id) { item in
                                 CompletedRow(item: item)
@@ -4339,9 +5171,12 @@ struct CompletedRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 StatusGlyph(status: .completed)
-                Text(item.definition.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(item.definition.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                    TaskTagStrip(tags: store.tags(for: item.trace.chainID))
+                }
                 Spacer()
                 CompletionTimeText(time: SuntraceStore.displayTime(item.trace.completedAt))
             }
@@ -4360,8 +5195,7 @@ struct CompletedRow: View {
         .frame(minHeight: 52, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 9).fill(isSelected ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isSelected ? Theme.accent : Theme.line, lineWidth: isSelected ? 1.3 : 1))
+        .listRowSurface(selected: isSelected, tint: Theme.accent, separatorLeadingInset: 40)
         .onTapGesture { store.selectCompleted(item.trace.id) }
     }
 }
@@ -4383,6 +5217,7 @@ struct CompletedSubtaskRow: View {
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(1)
+                    TaskTagStrip(tags: store.tags(for: record.parentTrace.chainID))
                 }
                 Spacer()
                 CompletionKindPill(text: "子任务", color: Theme.accent)
@@ -4402,8 +5237,7 @@ struct CompletedSubtaskRow: View {
         .frame(minHeight: 66, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 9).fill(isSelected ? Theme.accentSoft : Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isSelected ? Theme.accent : Theme.line, lineWidth: isSelected ? 1.3 : 1))
+        .listRowSurface(selected: isSelected, tint: Theme.accent, separatorLeadingInset: 40)
         .onTapGesture { store.selectCompletedSubtask(record.subtask.id) }
     }
 }
@@ -4563,7 +5397,7 @@ struct CalendarPage: View {
             CalendarDetailPanel()
                 .frame(width: 264)
                 .overlay(alignment: .leading) {
-                    Rectangle().fill(Theme.line).frame(width: 1)
+                    Rectangle().fill(Theme.line.opacity(0.58)).frame(width: 1)
                 }
         }
     }
@@ -4860,7 +5694,7 @@ struct CalendarDetailPanel: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
             .overlay(alignment: .bottom) {
-                Rectangle().fill(Theme.line).frame(height: 1)
+            Rectangle().fill(Theme.line.opacity(0.62)).frame(height: 1)
             }
 
             ScrollView {
@@ -4919,8 +5753,7 @@ struct CalendarDetailRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+        .listRowSurface(selected: false, tint: Theme.accent, cornerRadius: 7, separatorLeadingInset: 36)
     }
 
     var titleColor: Color {
@@ -4938,28 +5771,116 @@ struct CalendarDetailRow: View {
 
 struct SettingsPage: View {
     @EnvironmentObject private var store: SuntraceStore
+    @State private var selectedPane: SettingsPane = .general
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: store.copy.navSettings, subtitle: store.copy.settingsSubtitle)
             ScrollView {
-                HStack(alignment: .top, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 18) {
-                        SettingsPreferenceCard()
-                        SettingsDataCard()
-                        SettingsSyncCard()
+                HStack(alignment: .top, spacing: 28) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        SettingsPaneToolbar(selectedPane: $selectedPane)
+                        SettingsPaneContent(pane: selectedPane)
+                            .frame(maxWidth: 740, alignment: .topLeading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                    VStack(alignment: .leading, spacing: 18) {
-                        SettingsProviderOverviewCard()
-                        SettingsPrivacyCard()
+                    .frame(maxWidth: 780, alignment: .topLeading)
+                    if store.engine.preferences.settingsPoemDisplayPolicy.enabled {
+                        SettingsPoemAside(text: store.engine.preferences.settingsPoemDisplayPolicy.text)
+                            .frame(width: 310)
+                            .padding(.top, 44)
                     }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 2)
-                .padding(.bottom, 28)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 20)
+            }
+        }
+    }
+}
+
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case general
+    case data
+    case sync
+    case zhulong
+    case privacy
+
+    var id: String { rawValue }
+
+    func title(copy: AppCopy) -> String {
+        switch self {
+        case .general: copy.preferencesTitle
+        case .data: copy.dataSectionTitle
+        case .sync: copy.syncTitle
+        case .zhulong: copy.providerTitle
+        case .privacy: copy.privacyTitle
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general: "slider.horizontal.3"
+        case .data: "square.and.arrow.up.on.square"
+        case .sync: "arrow.triangle.2.circlepath"
+        case .zhulong: "sparkles"
+        case .privacy: "lock.shield"
+        }
+    }
+}
+
+struct SettingsPaneToolbar: View {
+    @EnvironmentObject private var store: SuntraceStore
+    @Binding var selectedPane: SettingsPane
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(SettingsPane.allCases) { pane in
+                    Button {
+                        selectedPane = pane
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: pane.systemImage)
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(pane.title(copy: store.copy))
+                                .font(.system(size: 12, weight: selectedPane == pane ? .semibold : .medium))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(selectedPane == pane ? Theme.accent : Theme.text2)
+                        .padding(.horizontal, 11)
+                        .frame(height: 30)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7)
+                                .fill(selectedPane == pane ? Theme.accentSoft.opacity(0.72) : Theme.controlFill)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7)
+                                .stroke(selectedPane == pane ? Theme.accent.opacity(0.28) : Theme.line.opacity(0.72))
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+struct SettingsPaneContent: View {
+    let pane: SettingsPane
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            switch pane {
+            case .general:
+                SettingsPreferenceCard()
+            case .data:
+                SettingsDataCard()
+            case .sync:
+                SettingsSyncCard()
+            case .zhulong:
+                SettingsProviderOverviewCard()
+            case .privacy:
+                SettingsPrivacyCard()
             }
         }
     }
@@ -4967,6 +5888,20 @@ struct SettingsPage: View {
 
 struct SettingsPreferenceCard: View {
     @EnvironmentObject private var store: SuntraceStore
+
+    private var poemTextBinding: Binding<String> {
+        Binding(
+            get: { store.engine.preferences.settingsPoemDisplayPolicy.text },
+            set: { store.setSettingsPoemText($0) }
+        )
+    }
+
+    private var poemEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.engine.preferences.settingsPoemDisplayPolicy.enabled },
+            set: { store.setSettingsPoemEnabled($0) }
+        )
+    }
 
     var body: some View {
         SettingsCard(
@@ -4993,8 +5928,59 @@ struct SettingsPreferenceCard: View {
                         rightAction: { store.setLanguage(.english) }
                     )
                 }
+                SettingSection(title: store.copy.settingsPoemTitle) {
+                    Toggle(store.copy.settingsPoemDisplay, isOn: poemEnabledBinding)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 12.5, weight: .medium))
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Text(store.copy.settingsPoemEditorTitle)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Theme.text3)
+                            Spacer()
+                            SmallActionButton(store.copy.resetSettingsPoem) {
+                                store.resetSettingsPoemText()
+                            }
+                        }
+                        TextEditor(text: poemTextBinding)
+                            .font(.custom("Songti SC", size: 13))
+                            .lineSpacing(5)
+                            .scrollContentBackground(.hidden)
+                            .padding(8)
+                            .frame(minHeight: 150)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                    }
+                }
             }
         }
+    }
+}
+
+struct SettingsPoemAside: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("苦昼短")
+                .font(.custom("Songti SC", size: 18).weight(.semibold))
+                .foregroundStyle(Theme.text1.opacity(0.72))
+            Text(text)
+                .font(.custom("Songti SC", size: 15))
+                .lineSpacing(9)
+                .foregroundStyle(Theme.text2.opacity(0.72))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Theme.panel.opacity(0.62))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Theme.line.opacity(0.55))
+        )
     }
 }
 
@@ -5034,8 +6020,113 @@ struct SettingsSyncCard: View {
                         .foregroundStyle(Theme.text3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                ScheduledBackupCard()
-                SyncOptionsCard()
+                if store.engine.preferences.dataMode == .localFirst {
+                    LocalFirstCloudSyncCard()
+                } else {
+                    ScheduledBackupCard()
+                }
+            }
+        }
+    }
+}
+
+struct LocalFirstCloudSyncCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var policy: LocalFirstCloudSyncPolicy {
+        store.engine.preferences.localFirstSyncPolicy
+    }
+
+    var body: some View {
+        SettingSection(title: store.copy.localFirstSyncTitle) {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingSection(title: store.copy.syncEndpointTitle) {
+                    SegmentedOptionRow(
+                        options: CloudSyncEndpointKind.allCases,
+                        selected: policy.endpoint,
+                        title: store.copy.cloudSyncEndpointTitle(for:),
+                        action: store.setLocalFirstSyncEndpoint
+                    )
+                }
+                SettingSection(title: store.copy.syncModeTitle) {
+                    SegmentedPair(
+                        left: store.copy.syncManualMode,
+                        right: store.copy.syncAutomaticMode,
+                        leftSelected: policy.mode == .manual,
+                        leftAction: { store.setLocalFirstSyncMode(.manual) },
+                        rightAction: { store.setLocalFirstSyncMode(.automatic) }
+                    )
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    SettingsInfoRow(
+                        label: store.copy.syncSnapshotPolicyTitle,
+                        value: "\(policy.snapshotRetention.indexRetentionDays) 天 / 每日 \(policy.snapshotRetention.retentionIndexesDaily) 个"
+                    )
+                    SettingsInfoRow(
+                        label: store.copy.syncConflictCopyTitle,
+                        value: policy.generateConflictCopy ? "开启" : "关闭",
+                        last: true
+                    )
+                }
+                .padding(.horizontal, 10)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                if policy.endpoint == .iCloud || policy.endpoint == .localFolder {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            SmallActionButton(
+                                store.isLocalFirstSyncing ? store.copy.syncing : store.copy.syncNow,
+                                tone: .accent
+                            ) {
+                                store.syncLocalFolderNow()
+                            }
+                            .disabled(store.isLocalFirstSyncing)
+                            Text(policy.endpoint == .iCloud ? store.copy.iCloudSyncReady : store.copy.localFolderSyncReady)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Theme.text3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let endpointURL = SuntraceStore.configuredLocalFirstSyncEndpointURL(for: policy.endpoint) {
+                            if policy.endpoint == .iCloud {
+                                SettingsInfoRow(
+                                    label: store.copy.iCloudDriveLocationTitle,
+                                    value: store.copy.iCloudDriveLogicalLocation
+                                )
+                                SettingsInfoRow(
+                                    label: store.copy.localCachePathTitle,
+                                    value: endpointURL.path,
+                                    last: store.localFirstSyncMessage == nil
+                                )
+                            } else {
+                                SettingsInfoRow(
+                                    label: store.copy.syncFolderPathTitle,
+                                    value: endpointURL.path,
+                                    last: store.localFirstSyncMessage == nil
+                                )
+                            }
+                        } else {
+                            SettingsInfoRow(
+                                label: policy.endpoint == .iCloud ? store.copy.iCloudDriveLocationTitle : store.copy.syncFolderPathTitle,
+                                value: "iCloud Drive 不可用",
+                                last: store.localFirstSyncMessage == nil
+                            )
+                        }
+                        if let message = store.localFirstSyncMessage {
+                            Text(message)
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(Theme.accent)
+                        }
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                } else {
+                    Notice(text: store.copy.remoteEndpointPlanned, tone: .locked)
+                }
+                Text(store.copy.localFirstSyncBoundary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.text3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -5087,7 +6178,10 @@ struct SyncOptionsCard: View {
                             .foregroundStyle(Theme.text3)
                     }
                     Spacer()
-                    StatusPill(text: store.copy.planned, color: Theme.text3)
+                    StatusPill(
+                        text: store.copy.syncAvailabilityTitle(for: option.availability),
+                        color: option.availability == .available ? Theme.ok : Theme.text3
+                    )
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
@@ -5106,7 +6200,6 @@ struct SyncOptionsCard: View {
 
 struct SettingsProviderOverviewCard: View {
     @EnvironmentObject private var store: SuntraceStore
-    @State private var isExpanded = true
 
     var status: (text: String, color: Color) {
         if store.zhulongProviderDraft.isConfigured {
@@ -5119,80 +6212,67 @@ struct SettingsProviderOverviewCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.16)) {
-                    isExpanded.toggle()
-                }
-            } label: {
+        SettingsCard(
+            systemImage: "sparkles",
+            title: store.copy.providerTitle,
+            subtitle: store.copy.providerSubtitle
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.navSettings)
-                        .frame(width: 22, height: 22)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.chip))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(store.copy.providerTitle)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.text1)
-                        Text(store.copy.providerSubtitle)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Theme.text3)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    StatusPill(text: status.text, color: status.color)
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Theme.text3)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 12) {
                     Toggle("启用烛龙", isOn: $store.zhulongProviderDraft.enabled)
                         .toggleStyle(.checkbox)
                         .font(.system(size: 12.5, weight: .medium))
+                    StatusPill(text: status.text, color: status.color)
+                    Spacer()
+                }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        ZhulongProviderKindPicker(selection: $store.zhulongProviderDraft.kind)
-                        ZhulongProviderTextField(label: store.copy.providerName, text: $store.zhulongProviderDraft.displayName, placeholder: store.copy.customProvider)
-                        ZhulongProviderTextField(label: "Base URL", text: $store.zhulongProviderDraft.baseURL, placeholder: "https://api.example.com/v1")
-                        ZhulongProviderTextField(label: store.copy.providerModel, text: $store.zhulongProviderDraft.model, placeholder: "gpt-4.1-mini / llama3.1")
-                        ZhulongProviderSecureField(
-                            label: "API Key",
-                            text: $store.zhulongProviderDraft.apiKeyInput,
-                            placeholder: store.zhulongProviderDraft.hasStoredAPIKey ? "Keychain 中已有凭证，留空则保留" : "只保存到 Keychain"
-                        )
-                    }
+                SettingSection(title: store.copy.providerType) {
+                    ZhulongProviderKindPicker(selection: $store.zhulongProviderDraft.kind)
+                }
 
-                    HStack(spacing: 8) {
-                        Image(systemName: store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
-                            .foregroundStyle(store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
-                        Text(store.zhulongProviderDraft.statusMessage)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Theme.text3)
-                            .lineLimit(2)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                SettingsFormRows {
+                    ZhulongProviderTextField(label: store.copy.providerName, text: $store.zhulongProviderDraft.displayName, placeholder: store.copy.customProvider)
+                    ZhulongProviderTextField(label: "Base URL", text: $store.zhulongProviderDraft.baseURL, placeholder: "https://api.example.com/v1")
+                    ZhulongProviderTextField(label: store.copy.providerModel, text: $store.zhulongProviderDraft.model, placeholder: "gpt-4.1-mini / llama3.1")
+                    ZhulongProviderSecureField(
+                        label: "API Key",
+                        text: $store.zhulongProviderDraft.apiKeyInput,
+                        placeholder: store.zhulongProviderDraft.hasStoredAPIKey ? "Keychain 中已有凭证，留空则保留" : "只保存到 Keychain"
+                    )
+                }
 
-                    HStack(spacing: 8) {
-                        SmallActionButton(store.copy.save, tone: .accent) { store.saveZhulongProvider() }
-                        SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
-                        SmallActionButton(store.copy.clear, tone: .warn) { store.clearZhulongProvider() }
-                    }
+                HStack(spacing: 8) {
+                    Image(systemName: store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
+                        .foregroundStyle(store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
+                    Text(store.zhulongProviderDraft.statusMessage)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.text3)
+                        .lineLimit(2)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+
+                HStack(spacing: 8) {
+                    SmallActionButton(store.copy.save, tone: .accent) { store.saveZhulongProvider() }
+                    SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
+                    SmallActionButton(store.copy.clear, tone: .warn) { store.clearZhulongProvider() }
+                    Spacer()
                 }
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct SettingsFormRows<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            content
+        }
     }
 }
 
@@ -5322,25 +6402,9 @@ struct ZhulongPage: View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: store.copy.navZhulong, subtitle: store.copy.zhulongSubtitle)
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("衔烛龙，照苦昼短。")
-                                .font(.system(size: 22, weight: .semibold))
-                            Spacer()
-                            StatusPill(
-                                text: store.zhulongProviderDraft.enabled ? "建议模式" : "已关闭",
-                                color: store.zhulongProviderDraft.enabled ? Theme.accent : Theme.text3
-                            )
-                        }
-                        Text("烛龙只生成建议草稿。任何创建、排期、变更、延续、废弃或 label 写入，都必须由用户确认后再走普通领域接口。")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.text2)
-                            .lineSpacing(4)
-                    }
-
+                VStack(alignment: .leading, spacing: 16) {
+                    ZhulongWorkbenchCard()
                     ZhulongScopeCard()
-
                     VStack(alignment: .leading, spacing: 8) {
                         Text("建议入口")
                             .font(.system(size: 11, weight: .semibold))
@@ -5352,7 +6416,6 @@ struct ZhulongPage: View {
                     }
 
                     ZhulongDraftsCard()
-                    ZhulongPoemCard()
                 }
                 .padding(20)
             }
@@ -5364,8 +6427,55 @@ struct ZhulongPage: View {
             ZhulongCapability(task: .dailyReview, title: "复盘分析", scope: "当前 Day Todo + 每日复盘", evidence: "\(store.engine.dailyReviewStats(date: store.today).total) 项今日任务"),
             ZhulongCapability(task: .taskDecomposition, title: "任务拆解", scope: "用户选中的任务链", evidence: "生成子任务草稿，用户确认后添加"),
             ZhulongCapability(task: .scheduling, title: "排期建议", scope: "任务池 + 未来计划 + 未完成池", evidence: "\(store.engine.taskPool().count) 项未排期任务"),
-            ZhulongCapability(task: .labelClassification, title: "Label 分类建议", scope: "任务标题、状态和轨迹摘要", evidence: "只生成候选 label，不自动写入")
+            ZhulongCapability(task: .labelClassification, title: "Tag 建议", scope: "任务标题、状态和轨迹摘要", evidence: "只建议已有活跃 Tag，不自动写入")
         ]
+    }
+}
+
+struct ZhulongWorkbenchCard: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var status: (text: String, color: Color) {
+        if store.zhulongProviderDraft.isConfigured {
+            return ("可生成草稿", Theme.accent)
+        }
+        return ("待配置", Theme.warn)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("工作区")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Theme.text1)
+                    Text("Provider 和《苦昼短》都留在设置；这里只处理草稿生成、筛选和确认。")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Theme.text2)
+                }
+                Spacer()
+                StatusPill(text: status.text, color: status.color)
+                SmallActionButton(store.copy.navSettings) {
+                    store.page = .settings
+                }
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ZhulongScopeChip(
+                    title: "Provider",
+                    value: store.zhulongProviderDraft.isConfigured ? store.zhulongProviderDraft.normalizedDisplayName : "未配置"
+                )
+                ZhulongScopeChip(
+                    title: "Model",
+                    value: store.zhulongProviderDraft.isConfigured ? store.zhulongProviderDraft.normalizedModel : "未配置"
+                )
+                ZhulongScopeChip(title: "草稿", value: "\(store.zhulongDrafts.count) 条")
+                ZhulongScopeChip(title: "已应用", value: "\(store.appliedZhulongOperationKeys.count) 条")
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
     }
 }
 
@@ -5477,9 +6587,9 @@ struct ZhulongScopeCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("发送前数据边界")
+            Text("当前可见范围")
                 .font(.system(size: 13, weight: .semibold))
-            Text("每次远程请求前必须展示授权范围；不得发送数据库文件、内部 ID、Keychain 值或同步端点配置。")
+            Text("这里只显示会进入草稿分析的当前范围。")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text2)
                 .lineSpacing(3)
@@ -5529,24 +6639,28 @@ struct ZhulongCapabilityRow: View {
     let capability: ZhulongCapability
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 3) {
-                Text(capability.title)
-                    .font(.system(size: 13, weight: .semibold))
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(capability.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.text1)
+                    Spacer(minLength: 12)
+                    Text(capability.evidence)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text2)
+                        .lineLimit(1)
+                }
                 Text(capability.scope)
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.text3)
+                    .lineLimit(1)
             }
-            Spacer()
-            Text(capability.evidence)
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.text2)
-                .lineLimit(1)
-            StatusPill(text: "建议草稿", color: Theme.accent)
-            SmallActionButton("生成草稿") { store.generateZhulongDraft(task: capability.task) }
+            SmallActionButton("生成", tone: .accent) { store.generateZhulongDraft(task: capability.task) }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
@@ -5560,14 +6674,14 @@ struct ZhulongDraftsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("烛龙建议草稿")
+                Text("草稿收件箱")
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
                 StatusPill(text: "\(store.zhulongDrafts.count) 条", color: Theme.accent)
             }
 
             if store.zhulongDrafts.isEmpty {
-                Text("从上方入口生成草稿后，在这里查看证据和待确认操作。")
+                Text("还没有草稿。从上方入口生成后，右侧会显示证据和待确认操作。")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.text3)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -5575,14 +6689,110 @@ struct ZhulongDraftsCard: View {
                     .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
             } else {
-                ForEach(store.zhulongDrafts, id: \.id) { draft in
-                    ZhulongDraftCard(draft: draft)
+                VStack(spacing: 0) {
+                    ForEach(Array(store.zhulongDrafts.enumerated()), id: \.element.id) { index, draft in
+                        ZhulongDraftListRow(draft: draft)
+                        if index < store.zhulongDrafts.count - 1 {
+                            Rectangle()
+                                .fill(Theme.line)
+                                .frame(height: 1)
+                        }
+                    }
                 }
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
             }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+struct ZhulongDraftListRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let draft: AISuggestionDraft
+
+    var selected: Bool {
+        if let selectedZhulongDraftID = store.selectedZhulongDraftID {
+            return selectedZhulongDraftID == draft.id
+        }
+        return store.zhulongDrafts.first?.id == draft.id
+    }
+
+    var body: some View {
+        Button {
+            store.selectedZhulongDraftID = draft.id
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    StatusPill(text: zhulongKindLabel(draft.kind), color: Theme.accent)
+                    if let confidence = draft.confidence {
+                        Text("置信度 \(Int((confidence * 100).rounded()))%")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.text3)
+                    }
+                    Spacer()
+                    Text(SuntraceStore.displayTime(draft.createdAt) ?? "")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.text3)
+                }
+
+                Text(draft.summary)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Theme.text1)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    ZhulongMetaPill(title: "证据", value: "\(draft.localReport.facts.count)")
+                    ZhulongMetaPill(title: "操作", value: "\(draft.proposedOperations.count)")
+                    Spacer()
+                    if selected {
+                        Text("当前")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .padding(4)
+        .hoverSurface(
+            active: selected,
+            cornerRadius: 8,
+            idleFill: .clear,
+            hoverFill: Theme.panel,
+            activeFill: Theme.accentSoft.opacity(0.55),
+            idleStroke: .clear,
+            hoverStroke: Theme.line,
+            activeStroke: Theme.accent.opacity(0.18),
+            activeLineWidth: 1
+        )
+    }
+}
+
+struct ZhulongMetaPill: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(title)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(Theme.text3)
+            Text(value)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Theme.text2)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 20)
+        .background(Capsule().fill(Theme.chip))
+        .overlay(Capsule().stroke(Theme.line))
     }
 }
 
@@ -5597,7 +6807,7 @@ func zhulongKindLabel(_ kind: AISuggestionKind) -> String {
     case .scheduling:
         return "排期建议"
     case .labelClassification:
-        return "Label 建议"
+        return "Tag 建议"
     case .theoryAnalysis:
         return "理论参照"
     }
@@ -5616,68 +6826,9 @@ func zhulongOperationLabel(_ operation: AIProposedOperation) -> String {
     case .abandonChain:
         return "废弃任务链"
     case let .assignLabel(_, label):
-        return "写入 Label：\(label)"
+        return "写入 Tag I：\(label)"
     case let .updateDailyReview(date, _, _, _):
         return "更新 \(date) 的每日复盘"
-    }
-}
-
-struct ZhulongDraftCard: View {
-    @EnvironmentObject private var store: SuntraceStore
-    let draft: AISuggestionDraft
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                StatusPill(text: zhulongKindLabel(draft.kind), color: Theme.accent)
-                if let confidence = draft.confidence {
-                    Text("置信度 \(Int((confidence * 100).rounded()))%")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text3)
-                }
-                Spacer()
-            }
-
-            Text(draft.summary)
-                .font(.system(size: 12.5))
-                .foregroundStyle(Theme.text2)
-                .lineSpacing(3)
-
-            if draft.localReport.facts.isEmpty == false {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("证据")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(Theme.text3)
-                    ForEach(Array(draft.localReport.facts.prefix(3).enumerated()), id: \.offset) { _, fact in
-                        Text("• \(fact)")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Theme.text3)
-                    }
-                }
-                .padding(9)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("待确认操作")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-
-                if draft.proposedOperations.isEmpty {
-                    Text("这条草稿只提供分析，不包含写入操作。")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Theme.text3)
-                } else {
-                    ForEach(Array(draft.proposedOperations.enumerated()), id: \.offset) { index, operation in
-                        ZhulongOperationRow(draft: draft, operationIndex: index, operation: operation)
-                    }
-                }
-            }
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
     }
 }
 
@@ -5711,80 +6862,148 @@ struct ZhulongOperationRow: View {
     }
 }
 
-struct ZhulongPoemCard: View {
-    private let lines = [
-        "飞光，飞光，劝尔一杯酒。",
-        "吾不识青天高、黄地厚，",
-        "唯见月寒日暖，来煎人寿。",
-        "食熊则肥，食蛙则瘦。",
-        "神君何在？太一安有？",
-        "天东有若木，下置衔烛龙。",
-        "吾将斩龙足、嚼龙肉，",
-        "使之朝不得回、夜不得伏。",
-        "自然老者不死、少者不哭。",
-        "何为服黄金、吞白玉？",
-        "谁似任公子，云中骑碧驴？"
-    ]
+struct ZhulongRail: View {
+    @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("《苦昼短》意象")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text("可展开阅读")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.text3)
-            }
-            Text(lines.joined(separator: "\n"))
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text2)
-                .lineSpacing(5)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+        if let draft = store.selectedZhulongDraft {
+            ZhulongDraftInspector(draft: draft)
+        } else {
+            ZhulongEmptyRail()
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
     }
 }
 
-struct ZhulongRail: View {
-    private let lines = [
-        "飞光，飞光，劝尔一杯酒。",
-        "吾不识青天高、黄地厚，",
-        "唯见月寒日暖，来煎人寿。",
-        "天东有若木，下置衔烛龙。",
-        "谁似任公子，云中骑碧驴？"
-    ]
+struct ZhulongDraftInspector: View {
+    let draft: AISuggestionDraft
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("烛龙边界")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.text3)
-                .tracking(0.8)
-            Text("照见轨迹，不替你抹改事实。")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.text1)
-            Text(lines.joined(separator: "\n"))
+            HStack(spacing: 8) {
+                Text("当前草稿")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Spacer()
+                Text(SuntraceStore.displayTime(draft.createdAt) ?? "")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.text3)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    StatusPill(text: zhulongKindLabel(draft.kind), color: Theme.accent)
+                    if let confidence = draft.confidence {
+                        Text("置信度 \(Int((confidence * 100).rounded()))%")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                    }
+                }
+                Text(draft.summary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.text2)
+                    .lineSpacing(4)
+            }
+
+            if draft.localReport.facts.isEmpty == false {
+                DetailSection("证据") {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(Array(draft.localReport.facts.prefix(5).enumerated()), id: \.offset) { _, fact in
+                            HStack(alignment: .top, spacing: 7) {
+                                Circle()
+                                    .fill(Theme.accent)
+                                    .frame(width: 4, height: 4)
+                                    .padding(.top, 6)
+                                Text(fact)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(Theme.text2)
+                                    .lineSpacing(3)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                }
+            }
+
+            DetailSection("待确认操作") {
+                VStack(alignment: .leading, spacing: 6) {
+                    if draft.proposedOperations.isEmpty {
+                        Text("这条草稿只提供分析，不包含写入操作。")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.text3)
+                    } else {
+                        ForEach(Array(draft.proposedOperations.enumerated()), id: \.offset) { index, operation in
+                            ZhulongOperationRow(draft: draft, operationIndex: index, operation: operation)
+                        }
+                    }
+                }
+            }
+
+            DetailSection("写入护栏") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("不自动改写历史日。")
+                    Text("不发送数据库文件、内部 ID 或 Keychain 值。")
+                    Text("普通清单仍可以独立使用。")
+                }
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text2)
-                .lineSpacing(5)
-                .padding(10)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            }
+        }
+    }
+}
 
-            DetailSection("权限模式") {
-                VStack(alignment: .leading, spacing: 7) {
-                    StatusPill(text: "建议模式", color: Theme.accent)
-                    Text("当前只生成建议草稿；逐条确认和全权管家会在限定范围、次数和有效期内单独授权。")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.text2)
-                        .lineSpacing(3)
+struct ZhulongEmptyRail: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var status: (text: String, color: Color) {
+        if store.zhulongProviderDraft.isConfigured {
+            return ("可生成草稿", Theme.accent)
+        }
+        return ("待配置", Theme.warn)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Text("草稿检视")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Spacer()
+                StatusPill(text: status.text, color: status.color)
+            }
+
+            Text(store.zhulongProviderDraft.isConfigured
+                ? "从左侧入口生成草稿，右侧会在这里显示证据和待确认操作。"
+                : "Provider 还没配完整。先去设置补齐，再在这里生成草稿。")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text2)
+                .lineSpacing(3)
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ZhulongScopeChip(
+                    title: "Provider",
+                    value: store.zhulongProviderDraft.isConfigured ? store.zhulongProviderDraft.normalizedDisplayName : "未配置"
+                )
+                ZhulongScopeChip(
+                    title: "Model",
+                    value: store.zhulongProviderDraft.isConfigured ? store.zhulongProviderDraft.normalizedModel : "未配置"
+                )
+                ZhulongScopeChip(title: "草稿", value: "\(store.zhulongDrafts.count) 条")
+                ZhulongScopeChip(title: "已应用", value: "\(store.appliedZhulongOperationKeys.count) 条")
+            }
+
+            if store.zhulongProviderDraft.isConfigured == false {
+                SmallActionButton(store.copy.navSettings, tone: .accent) {
+                    store.page = .settings
                 }
             }
 
@@ -5803,6 +7022,177 @@ struct ZhulongRail: View {
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
             }
         }
+    }
+}
+
+struct ZhulongContextModel {
+    struct Stat: Identifiable {
+        let id = UUID()
+        let title: String
+        let value: String
+    }
+
+    let title: String
+    let subtitle: String
+    let stats: [Stat]
+    let recentDraft: AISuggestionDraft?
+
+    @MainActor
+    static func make(for page: SuntraceStore.Page, store: SuntraceStore) -> ZhulongContextModel? {
+        switch page {
+        case .pool:
+            let tasks = store.engine.taskPool()
+            let contextCount = tasks.filter {
+                ($0.definition.descriptionText ?? "").isEmpty == false || ($0.definition.note ?? "").isEmpty == false
+            }.count
+            let untaggedCount = tasks.filter { $0.chain.primaryTagID == nil }.count
+            return ZhulongContextModel(
+                title: "任务池排期",
+                subtitle: "任务池不再单独给本地汇总解释；只把当前队列交给烛龙统一生成排期草稿。",
+                stats: [
+                    Stat(title: "未排期", value: "\(tasks.count) 项"),
+                    Stat(title: "有说明", value: "\(contextCount) 项"),
+                    Stat(title: "未标记", value: "\(untaggedCount) 项")
+                ],
+                recentDraft: store.zhulongDrafts.first { $0.kind == .scheduling }
+            )
+        case .future:
+            let plans = store.engine.futurePlans(today: store.today)
+            let coveredDates = Set(plans.map(\.trace.date)).count
+            let continued = plans.filter { $0.trace.continuationSeq > 0 }.count
+            return ZhulongContextModel(
+                title: "未来改期",
+                subtitle: "未来计划的密度、延续链和改期判断统一留在烛龙，不再占一个常驻说明栏。",
+                stats: [
+                    Stat(title: "计划任务", value: "\(plans.count) 项"),
+                    Stat(title: "覆盖日期", value: "\(coveredDates) 天"),
+                    Stat(title: "延续任务", value: "\(continued) 项")
+                ],
+                recentDraft: store.zhulongDrafts.first { $0.kind == .scheduling }
+            )
+        case .unfinished:
+            let items = store.engine.unfinishedPool()
+            let missed = items.reduce(0) { $0 + $1.unfinishedTraces.count }
+            let active = items.filter { $0.activeTrace != nil }.count
+            return ZhulongContextModel(
+                title: "未完成处理",
+                subtitle: "是否该延续、拆小还是废弃，统一交给烛龙草稿，不再在这里做静态推断。",
+                stats: [
+                    Stat(title: "任务链", value: "\(items.count) 条"),
+                    Stat(title: "未完成次", value: "\(missed) 次"),
+                    Stat(title: "已延续", value: "\(active) 条")
+                ],
+                recentDraft: store.zhulongDrafts.first { $0.kind == .scheduling }
+            )
+        case .completed:
+            let completed = store.engine.completedPool()
+            let subtaskRecords = store.engine.completedSubtaskRecords()
+            let coveredDates = Set(completed.map(\.trace.date) + subtaskRecords.map(\.date)).count
+            return ZhulongContextModel(
+                title: "完成复看",
+                subtitle: "完成记录只作为证据输入烛龙，不再在这里堆本地解释文案。",
+                stats: [
+                    Stat(title: "完成任务", value: "\(completed.count) 项"),
+                    Stat(title: "子任务", value: "\(subtaskRecords.count) 条"),
+                    Stat(title: "覆盖日期", value: "\(coveredDates) 天")
+                ],
+                recentDraft: store.zhulongDrafts.first { draft in
+                    draft.kind == .habitInsight || draft.kind == .theoryAnalysis || draft.kind == .labelClassification
+                }
+            )
+        case .day, .calendar, .zhulong, .settings:
+            return nil
+        }
+    }
+}
+
+struct ZhulongContextRail: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let model: ZhulongContextModel
+
+    var statusText: String {
+        store.zhulongProviderDraft.isConfigured ? "已启用" : "待配置"
+    }
+
+    var entryTitle: String {
+        model.recentDraft == nil ? "进入烛龙" : "查看最近草稿"
+    }
+
+    var entrySubtitle: String {
+        if store.zhulongProviderDraft.isConfigured == false {
+            return "当前只打开入口。完成 Provider 配置后，再在烛龙页生成草稿。"
+        }
+        if let recentDraft = model.recentDraft {
+            return "\(zhulongKindLabel(recentDraft.kind)) · \(recentDraft.summary)"
+        }
+        return "在烛龙页统一生成草稿、查看证据并逐条确认写入。"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Text("烛龙")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Spacer()
+                StatusPill(text: statusText, color: store.zhulongProviderDraft.isConfigured ? Theme.accent : Theme.text3)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(model.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                Text(model.subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text2)
+                    .lineSpacing(3)
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(model.stats) { stat in
+                    ZhulongScopeChip(title: stat.title, value: stat.value)
+                }
+            }
+
+            Button(action: openZhulongDestination) {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entryTitle)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(Theme.text1)
+                        Text(entrySubtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                            .lineLimit(3)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func openZhulongDestination() {
+        if store.zhulongProviderDraft.isConfigured == false {
+            store.page = .settings
+            return
+        }
+        if let recentDraft = model.recentDraft {
+            store.selectedZhulongDraftID = recentDraft.id
+        }
+        store.page = .zhulong
     }
 }
 
@@ -5857,28 +7247,6 @@ struct SidebarAnalysisModel {
     @MainActor
     static func make(for page: SuntraceStore.Page, store: SuntraceStore) -> SidebarAnalysisModel? {
         switch page {
-        case .pool:
-            let tasks = store.engine.taskPool()
-            let described = tasks.filter { ($0.definition.descriptionText ?? "").isEmpty == false }.count
-            let noted = tasks.filter { ($0.definition.note ?? "").isEmpty == false }.count
-            return SidebarAnalysisModel(
-                title: "任务池汇总",
-                subtitle: "未选中任务时显示本地排期分析。",
-                metrics: [
-                    SidebarAnalysisMetric(label: "未排期", value: "\(tasks.count)", tone: .accent),
-                    SidebarAnalysisMetric(label: "有描述", value: "\(described)", tone: .neutral),
-                    SidebarAnalysisMetric(label: "有附言", value: "\(noted)", tone: .neutral)
-                ],
-                signals: [
-                    tasks.isEmpty ? "任务池为空，可以直接从 Day Todo 新增今日任务。" : "最早入池任务会排在前面，适合先清理长期未排期项。",
-                    tasks.count >= 5 ? "池内任务偏多，建议先挑 2-3 项进入今天或明天。" : "池内任务量可控，适合按今天、明天、指定日期快速分流。"
-                ],
-                recommendations: [
-                    tasks.isEmpty ? "保持任务池为空；新想法先记录到这里再排期。" : "先处理标题明确、能在一天内推进的任务。",
-                    described < tasks.count ? "给模糊任务补一句目标描述，排期时更容易判断优先级。" : "描述覆盖较完整，可以直接按日期分配。"
-                ],
-                zhulongNote: "开启烛龙后，可基于任务池、未来计划和未完成池生成更细的排期建议。"
-            )
         case .future:
             let plans = store.engine.futurePlans(today: store.today)
             let dates = Set(plans.map(\.trace.date))
@@ -5948,9 +7316,310 @@ struct SidebarAnalysisModel {
                 ],
                 zhulongNote: "开启烛龙后，可从完成轨迹中总结节奏和可复用模式。"
             )
-        case .day, .calendar, .zhulong, .settings:
+        case .pool, .day, .calendar, .zhulong, .settings:
             return nil
         }
+    }
+}
+
+struct PoolSummaryModel {
+    struct Group: Identifiable {
+        let id: String
+        let title: String
+        let color: Color
+        var count: Int
+        let leadTitle: String
+    }
+
+    let orderedTasks: [PoolTask]
+    let contextCount: Int
+    let plannedCount: Int
+    let needsDetailCount: Int
+    let untaggedCount: Int
+    let groups: [Group]
+
+    var totalCount: Int { orderedTasks.count }
+    var oldestCreatedAt: Date? { orderedTasks.first?.definition.createdAt }
+
+    @MainActor
+    static func make(store: SuntraceStore) -> PoolSummaryModel {
+        let orderedTasks = store.engine.taskPool()
+            .sorted { $0.definition.createdAt < $1.definition.createdAt }
+        let contextCount = orderedTasks.filter {
+            ($0.definition.descriptionText ?? "").isEmpty == false || ($0.definition.note ?? "").isEmpty == false
+        }.count
+        let plannedCount = orderedTasks.filter { $0.definition.plannedSubtasks.isEmpty == false }.count
+        let needsDetailCount = orderedTasks.filter {
+            ($0.definition.descriptionText ?? "").isEmpty &&
+                ($0.definition.note ?? "").isEmpty &&
+                $0.definition.plannedSubtasks.isEmpty
+        }.count
+        let untaggedCount = orderedTasks.filter { $0.chain.primaryTagID == nil }.count
+
+        var groups: [Group] = []
+        var groupIndexes: [String: Int] = [:]
+        for task in orderedTasks {
+            let primaryTag = store.tags(for: task.chain).first { $0.assignment.slot == .tagI }?.tag
+            let id = primaryTag?.id.description ?? "untagged"
+            if let index = groupIndexes[id] {
+                groups[index].count += 1
+            } else {
+                groupIndexes[id] = groups.count
+                groups.append(
+                    Group(
+                        id: id,
+                        title: primaryTag?.name ?? "未标记",
+                        color: primaryTag?.color ?? Theme.text3,
+                        count: 1,
+                        leadTitle: task.definition.title
+                    )
+                )
+            }
+        }
+
+        return PoolSummaryModel(
+            orderedTasks: orderedTasks,
+            contextCount: contextCount,
+            plannedCount: plannedCount,
+            needsDetailCount: needsDetailCount,
+            untaggedCount: untaggedCount,
+            groups: groups
+        )
+    }
+}
+
+struct PoolSummaryRail: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    var model: PoolSummaryModel {
+        PoolSummaryModel.make(store: store)
+    }
+
+    var focusTasks: [PoolTask] {
+        Array(model.orderedTasks.prefix(4))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            PoolSummaryOverviewCard(model: model)
+
+            if model.totalCount > 0 {
+                DetailSection("分组") {
+                    PoolSummaryGroupsPanel(groups: model.groups, totalCount: model.totalCount)
+                }
+
+                DetailSection("前 \(focusTasks.count) 条") {
+                    PoolSummaryQueuePanel(tasks: focusTasks)
+                }
+            }
+        }
+    }
+}
+
+enum PoolSummaryFormatter {
+    private static let createdAtFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M月d日"
+        return formatter
+    }()
+
+    static func createdAtLabel(_ date: Date) -> String {
+        createdAtFormatter.string(from: date)
+    }
+}
+
+struct PoolSummaryOverviewCard: View {
+    let model: PoolSummaryModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("任务池")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .tracking(0.8)
+
+            HStack(alignment: .lastTextBaseline, spacing: 8) {
+                Text("\(model.totalCount)")
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(Theme.navPool)
+                    .monospacedDigit()
+                Text("未排期")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.text2)
+            }
+
+            Text(model.oldestCreatedAt.map { "最早入池 \(PoolSummaryFormatter.createdAtLabel($0))" } ?? "现在是空的。")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.text2)
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                PoolSummaryMetric(label: "有说明", value: model.contextCount, color: Theme.navPool)
+                PoolSummaryMetric(label: "已拆分", value: model.plannedCount, color: Theme.accent)
+                PoolSummaryMetric(label: "待补充", value: model.needsDetailCount, color: Theme.warn)
+                PoolSummaryMetric(label: "未标记", value: model.untaggedCount, color: Theme.text3)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.navPool.opacity(0.16)))
+    }
+}
+
+struct PoolSummaryMetric: View {
+    let label: String
+    let value: Int
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+            Text("\(value)")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(value == 0 ? Theme.text3 : color)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct PoolSummaryGroupsPanel: View {
+    let groups: [PoolSummaryModel.Group]
+    let totalCount: Int
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                PoolSummaryGroupRow(group: group, totalCount: totalCount)
+                if index < groups.count - 1 {
+                    Rectangle()
+                        .fill(Theme.line)
+                        .frame(height: 1)
+                }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+    }
+}
+
+struct PoolSummaryGroupRow: View {
+    let group: PoolSummaryModel.Group
+    let totalCount: Int
+
+    var ratio: CGFloat {
+        guard totalCount > 0 else { return 0 }
+        return CGFloat(group.count) / CGFloat(totalCount)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(group.color)
+                    .frame(width: 7, height: 7)
+                Text(group.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.text1)
+                    .lineLimit(1)
+                Spacer()
+                Text("\(group.count) 项")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text2)
+                    .monospacedDigit()
+            }
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.panel)
+                    Capsule()
+                        .fill(group.color.opacity(0.82))
+                        .frame(width: max(8, proxy.size.width * ratio))
+                }
+            }
+            .frame(height: 5)
+
+            Text(group.leadTitle)
+                .font(.system(size: 10.5))
+                .foregroundStyle(Theme.text3)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+    }
+}
+
+struct PoolSummaryQueuePanel: View {
+    let tasks: [PoolTask]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(tasks.enumerated()), id: \.element.chain.id) { index, task in
+                PoolSummaryQueueRow(task: task)
+                if index < tasks.count - 1 {
+                    Rectangle()
+                        .fill(Theme.line)
+                        .frame(height: 1)
+                }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+    }
+}
+
+struct PoolSummaryQueueRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let task: PoolTask
+
+    var meta: String {
+        let hasDescription = (task.definition.descriptionText ?? "").isEmpty == false
+        let hasNote = (task.definition.note ?? "").isEmpty == false
+        let plannedSubtaskCount = task.definition.plannedSubtasks.count
+        var parts = ["\(PoolSummaryFormatter.createdAtLabel(task.definition.createdAt)) 入池"]
+        if task.chain.primaryTagID == nil {
+            parts.append("未标记")
+        }
+        if hasDescription == false && hasNote == false {
+            parts.append("缺说明")
+        }
+        if plannedSubtaskCount > 0 {
+            parts.append("\(plannedSubtaskCount) 子任务")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        Button { store.selectPool(task.chain.id) } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(task.definition.title)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Theme.text1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+
+                TaskTagStrip(tags: store.tags(for: task.chain))
+
+                Text(meta)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.text3)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .padding(4)
+        .hoverSurface(
+            cornerRadius: 8,
+            idleFill: .clear,
+            hoverFill: Theme.panel,
+            idleStroke: .clear,
+            hoverStroke: Theme.line
+        )
     }
 }
 
@@ -6055,6 +7724,11 @@ struct ZhulongAnalysisHint: View {
 struct DetailRail: View {
     @EnvironmentObject private var store: SuntraceStore
 
+    var zhulongContextModel: ZhulongContextModel? {
+        guard store.usesZhulongContextRail else { return nil }
+        return ZhulongContextModel.make(for: store.page, store: store)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -6076,8 +7750,8 @@ struct DetailRail: View {
                     ZhulongRail()
                 } else if store.page == .day {
                     ReviewRail()
-                } else if let model = SidebarAnalysisModel.make(for: store.page, store: store) {
-                    SidebarAnalysisRail(model: model)
+                } else if let model = zhulongContextModel {
+                    ZhulongContextRail(model: model)
                 } else {
                     RailHint(text: hint)
                         .padding(.top, 40)
@@ -6242,14 +7916,13 @@ struct CompletedRecordDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("任务详情", onClose: { store.clearSelection() })
-
-            DetailTitleRow(item.definition.title) {
+            DetailHeader("任务详情", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
                     Button(store.copy.openDay) { openDay() }
                     Button(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
                 })
-            }
+            })
+            DetailTitleRow(item.definition.title)
 
             DetailDescriptionBlock(
                 text: Binding(
@@ -6392,14 +8065,13 @@ struct CompletedSubtaskDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("子任务完成记录", onClose: { store.clearSelection() })
-
-            DetailTitleRow(record.subtask.title) {
+            DetailHeader("子任务完成记录", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
                     Button(store.copy.openDay) { openDay() }
                     Button(store.copy.copyParentAsNewTask) { store.copyAsNewTask(record.parentTrace.id) }
                 })
-            }
+            })
+            DetailTitleRow(record.subtask.title)
 
             HStack(spacing: 8) {
                 CompletionKindPill(text: "子任务", color: Theme.accent)
@@ -6511,13 +8183,12 @@ struct TaskDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("任务详情", onClose: { store.clearSelection() })
-
-            DetailTitleRow(definition.title) {
+            DetailHeader("任务详情", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
                     TaskContextMenu(trace: trace)
                 })
-            }
+            })
+            DetailTitleRow(definition.title)
 
             DetailDescriptionBlock(
                 text: Binding(
@@ -6872,33 +8543,24 @@ struct DetailNotesSection: View {
     }
 
     var body: some View {
-        DetailSection("附言") {
-            VStack(alignment: .leading, spacing: 8) {
-                if entries.isEmpty {
-                    Text("无附言")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.text3)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
-                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                } else {
+        if entries.isEmpty == false || editable {
+            DetailSection("附言") {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(entries) { entry in
                         DetailNoteEntryRow(entry: entry)
                     }
-                }
 
-                if editable {
-                    TextField(placeholder, text: $store.detailNoteText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.text1)
-                        .padding(.horizontal, 10)
-                        .frame(height: 30)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
-                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                        .onSubmit { store.appendTraceNote(traceID: traceID) }
+                    if editable {
+                        TextField(placeholder, text: $store.detailNoteText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.text1)
+                            .padding(.horizontal, 10)
+                            .frame(height: 30)
+                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
+                            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                            .onSubmit { store.appendTraceNote(traceID: traceID) }
+                    }
                 }
             }
         }
@@ -7129,15 +8791,24 @@ struct PoolDetail: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.text1)
             DetailDescriptionBlock(
-                text: .constant(task.definition.descriptionText ?? ""),
-                placeholder: "",
-                editable: false
+                text: Binding(
+                    get: { task.definition.descriptionText ?? "" },
+                    set: { store.updatePoolTaskText(chainID: task.chain.id, descriptionText: $0) }
+                ),
+                placeholder: "补充这个任务的背景、目标或范围…",
+                editable: true
             )
             HStack {
                 StatusPill(text: "未排期", color: Theme.accent)
                 Text("任务链仍在任务池")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text3)
+            }
+            DetailSection("Tag") {
+                TaskTagInlineEditor(chain: task.chain)
+            }
+            DetailSection("子任务") {
+                PoolPlannedSubtasksSection(task: task)
             }
             DetailSection("状态") {
                 VStack(alignment: .leading, spacing: 6) {
@@ -7161,26 +8832,270 @@ struct PoolDetail: View {
                     SmallActionButton(store.copy.schedulePickSpecificDate) { store.showingPicker = .schedulePool(task.chain.id) }
                 }
             }
-            DetailSection("附言") {
-                VStack(alignment: .leading, spacing: 8) {
-                    let entries = DetailNoteEntryStorage.entries(from: task.definition.note)
-                    if entries.isEmpty {
-                        Text("无附言")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.text3)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
-                            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                    } else {
-                        ForEach(entries) { entry in
-                            DetailNoteEntryRow(entry: entry)
-                        }
+            PoolNotesSection(chainID: task.chain.id, noteText: task.definition.note)
+        }
+    }
+}
+
+struct PoolPlannedSubtasksSection: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let task: PoolTask
+
+    var plannedSubtasks: [PlannedSubtask] {
+        task.definition.plannedSubtasks.sorted { $0.position < $1.position }
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ForEach(plannedSubtasks) { plannedSubtask in
+                PlannedSubtaskRow(chainID: task.chain.id, plannedSubtask: plannedSubtask)
+            }
+            TextField("添加子任务，回车确认", text: $store.detailSubtaskText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                .onSubmit { store.addPoolPlannedSubtask(chainID: task.chain.id) }
+        }
+    }
+}
+
+struct PlannedSubtaskRow: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let chainID: TaskChainID
+    let plannedSubtask: PlannedSubtask
+
+    var body: some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Theme.panel)
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.line2, lineWidth: 1.5))
+                .frame(width: 15, height: 15)
+
+            Text(plannedSubtask.title)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text1)
+                .lineLimit(1)
+
+            Spacer()
+
+            Menu {
+                ForEach(SubtaskDifficulty.allCases, id: \.self) { difficulty in
+                    Button {
+                        store.setPoolPlannedSubtaskDifficulty(
+                            chainID: chainID,
+                            plannedSubtaskID: plannedSubtask.id,
+                            difficulty: difficulty
+                        )
+                    } label: {
+                        Label(
+                            difficultyMenuTitle(difficulty),
+                            systemImage: difficulty == plannedSubtask.difficulty ? "checkmark.circle.fill" : "circle"
+                        )
                     }
                 }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(plannedSubtask.difficulty.label)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(plannedSubtask.difficulty == .hard ? Theme.warn : Theme.text2)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(plannedSubtask.difficulty == .hard ? Theme.warnSoft : Theme.chip))
+                .overlay(Capsule().stroke(Theme.line2))
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                store.removePoolPlannedSubtask(chainID: chainID, plannedSubtaskID: plannedSubtask.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Theme.text3)
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func difficultyMenuTitle(_ difficulty: SubtaskDifficulty) -> String {
+        switch difficulty {
+        case .simple:
+            return "简单"
+        case .medium:
+            return "中等"
+        case .hard:
+            return "困难"
+        }
+    }
+}
+
+struct PoolNotesSection: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let chainID: TaskChainID
+    let noteText: String?
+
+    var entries: [DetailNoteEntry] {
+        DetailNoteEntryStorage.entries(from: noteText)
+    }
+
+    var body: some View {
+        DetailSection("附言") {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(entries) { entry in
+                    DetailNoteEntryRow(entry: entry)
+                }
+                TextField("追加附言，回车确认", text: $store.detailNoteText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text1)
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                    .onSubmit { store.appendPoolNote(chainID: chainID) }
             }
         }
+    }
+}
+
+struct TaskTagInlineEditor: View {
+    @EnvironmentObject private var store: SuntraceStore
+    let chain: TaskChain
+    @State private var draft = ""
+
+    var tags: [(assignment: TaskTagAssignment, tag: TaskTag)] {
+        store.tags(for: chain)
+    }
+
+    var normalizedQuery: String {
+        let tail = draft.split(separator: "#", omittingEmptySubsequences: false).last.map(String.init) ?? draft
+        return tail.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var suggestions: [TaskTag] {
+        store.inlineTagSuggestions(for: chain, query: normalizedQuery)
+    }
+
+    var primarySuggestionCount: Int {
+        store.primaryInlineSuggestionCount(for: chain, query: normalizedQuery)
+    }
+
+    var showsSuggestions: Bool {
+        draft.contains("#") && suggestions.isEmpty == false && tags.count < TaskTagSlot.allCases.count
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(tags, id: \.assignment.id) { item in
+                    InlineTaskTagChip(tag: item.tag) {
+                        store.removeInlineTag(chainID: chain.id, slot: item.assignment.slot)
+                    }
+                }
+                if tags.count < TaskTagSlot.allCases.count {
+                    TextField("#", text: $draft)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.text1)
+                        .lineLimit(1)
+                        .onSubmit(commitDraft)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 9)
+            .frame(minHeight: 34)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+
+            if showsSuggestions {
+                VStack(spacing: 0) {
+                    ForEach(Array(suggestions.prefix(6).enumerated()), id: \.element.id) { index, tag in
+                        if index == primarySuggestionCount, primarySuggestionCount > 0 {
+                            Rectangle()
+                                .fill(Theme.line)
+                                .frame(height: 1)
+                                .padding(.vertical, 2)
+                        }
+                        Button {
+                            add(tag.name)
+                        } label: {
+                            HStack(spacing: 7) {
+                                Circle()
+                                    .fill(tag.color)
+                                    .frame(width: 7, height: 7)
+                                Text("#\(tag.name)")
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(Theme.text1)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 9)
+                            .frame(height: 28)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
+            }
+        }
+    }
+
+    private func commitDraft() {
+        let names = draft
+            .split(separator: "#")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+        if names.isEmpty {
+            add(normalizedQuery)
+        } else {
+            names.forEach(add)
+        }
+    }
+
+    private func add(_ name: String) {
+        store.appendInlineTag(chainID: chain.id, name: name)
+        draft = ""
+    }
+}
+
+struct InlineTaskTagChip: View {
+    let tag: TaskTag
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(tag.status == .active ? tag.color : Theme.text3)
+                .frame(width: 6, height: 6)
+            Text("#\(tag.name)")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(tag.status == .active ? Theme.text1 : Theme.text3)
+                .lineLimit(1)
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(Theme.text3)
+                    .frame(width: 12, height: 12)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 5)
+        .frame(height: 22)
+        .background(Capsule().fill(tag.status == .active ? tag.color.opacity(0.10) : Theme.chip))
+        .overlay(Capsule().stroke(tag.status == .active ? tag.color.opacity(0.24) : Theme.line))
     }
 }
 
@@ -7191,15 +9106,14 @@ struct FuturePlanDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("计划详情", onClose: { store.clearSelection() })
-
-            DetailTitleRow(definition.title) {
+            DetailHeader("计划详情", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
                     Button(store.copy.openDay) { openDay() }
                     Button(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
                     Button(store.copy.returnToPool) { store.returnToPool(trace.id) }
                 })
-            }
+            })
+            DetailTitleRow(definition.title)
 
             DetailDescriptionBlock(
                 text: Binding(
@@ -7610,9 +9524,13 @@ struct DatePickerSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(state.purpose.title)
                 .font(.system(size: 14, weight: .semibold))
+            Text(state.purpose.rangeHint)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.text3)
+                .fixedSize(horizontal: false, vertical: true)
             ScrollView {
                 VStack(spacing: 4) {
-                    ForEach(store.dateChoices(allowPast: true, futureOnly: futureOnly)) { choice in
+                    ForEach(store.dateChoices(allowPast: state.purpose.allowsPastDates, futureOnly: state.purpose.futureOnly)) { choice in
                         Button {
                             store.performDateChoice(choice.date)
                         } label: {
@@ -7638,11 +9556,6 @@ struct DatePickerSheet: View {
         .padding(14)
         .frame(width: 300, height: 440)
     }
-
-    var futureOnly: Bool {
-        if case .reschedule = state.purpose { return true }
-        return false
-    }
 }
 
 struct FromPoolSheet: View {
@@ -7652,24 +9565,28 @@ struct FromPoolSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("从任务池排期到这一天")
                 .font(.system(size: 14, weight: .semibold))
-            ForEach(store.engine.taskPool(), id: \.chain.id) { task in
-                Button {
-                    store.schedulePoolTask(task.chain.id, date: store.selectedDate)
-                    store.showingFromPoolPicker = false
-                } label: {
-                    HStack {
-                        Text(task.definition.title)
-                        Spacer()
-                        Text("排期")
-                            .foregroundStyle(Theme.accent)
+            if store.selectedDate < store.today {
+                Notice(text: "任务池不能排期到过去日期。请先切到今天或未来日期。", tone: .locked)
+            } else {
+                ForEach(store.engine.taskPool(), id: \.chain.id) { task in
+                    Button {
+                        store.schedulePoolTask(task.chain.id, date: store.selectedDate)
+                        store.showingFromPoolPicker = false
+                    } label: {
+                        HStack {
+                            Text(task.definition.title)
+                            Spacer()
+                            Text("排期")
+                                .foregroundStyle(Theme.accent)
+                        }
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
                     }
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-            }
-            if store.engine.taskPool().isEmpty {
-                EmptyState(kind: .taskPool, text: "任务池是空的。")
+                if store.engine.taskPool().isEmpty {
+                    EmptyState(kind: .taskPool, text: "任务池是空的。")
+                }
             }
             Button("取消") { store.showingFromPoolPicker = false }
                 .frame(maxWidth: .infinity)
@@ -7748,7 +9665,7 @@ struct SegmentedPair: View {
             segment(right, selected: !leftSelected, action: rightAction)
         }
         .padding(3)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.chip))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.chip.opacity(0.82)))
     }
 
     func segment(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -7776,7 +9693,7 @@ struct SegmentedOptionRow<Option: Hashable>: View {
             }
         }
         .padding(3)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.chip))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.chip.opacity(0.82)))
     }
 
     func segment(_ option: Option) -> some View {
@@ -7857,10 +9774,10 @@ struct HeaderButton: View {
             .layoutPriority(1)
             .hoverSurface(
                 cornerRadius: 7,
-                idleFill: Theme.panel,
-                hoverFill: Theme.panel2,
-                idleStroke: Theme.line,
-                hoverStroke: Theme.line2
+                idleFill: Theme.controlFill,
+                hoverFill: Theme.listRowHover,
+                idleStroke: Theme.line.opacity(0.72),
+                hoverStroke: Theme.line2.opacity(0.72)
             )
     }
 }
@@ -7895,10 +9812,10 @@ struct SmallActionButton: View {
             .fixedSize(horizontal: true, vertical: false)
             .hoverSurface(
                 cornerRadius: 6,
-                idleFill: Theme.panel,
-                hoverFill: Theme.panel2,
-                idleStroke: Theme.line,
-                hoverStroke: Theme.line2
+                idleFill: Theme.controlFill,
+                hoverFill: Theme.listRowHover,
+                idleStroke: Theme.line.opacity(0.72),
+                hoverStroke: Theme.line2.opacity(0.72)
             )
     }
 }
@@ -7930,6 +9847,37 @@ struct HoverSurfaceModifier: ViewModifier {
     }
 }
 
+struct ListRowSurfaceModifier: ViewModifier {
+    let selected: Bool
+    let tint: Color
+    let cornerRadius: CGFloat
+    let separatorLeadingInset: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .hoverSurface(
+                active: selected,
+                cornerRadius: cornerRadius,
+                idleFill: Theme.panel,
+                hoverFill: Theme.listRowHover,
+                activeFill: tint.opacity(0.08),
+                idleStroke: .clear,
+                hoverStroke: .clear,
+                activeStroke: .clear
+            )
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Theme.line.opacity(selected ? 0 : 0.62))
+                    .frame(height: 1)
+                    .padding(.leading, separatorLeadingInset)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(selected ? tint.opacity(0.22) : .clear, lineWidth: 1)
+            }
+    }
+}
+
 extension View {
     func hoverSurface(
         active: Bool = false,
@@ -7953,6 +9901,22 @@ extension View {
                 hoverStroke: hoverStroke,
                 activeStroke: activeStroke ?? hoverStroke,
                 activeLineWidth: activeLineWidth
+            )
+        )
+    }
+
+    func listRowSurface(
+        selected: Bool,
+        tint: Color,
+        cornerRadius: CGFloat = 7,
+        separatorLeadingInset: CGFloat = 0
+    ) -> some View {
+        modifier(
+            ListRowSurfaceModifier(
+                selected: selected,
+                tint: tint,
+                cornerRadius: cornerRadius,
+                separatorLeadingInset: separatorLeadingInset
             )
         )
     }

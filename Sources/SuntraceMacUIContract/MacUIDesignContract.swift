@@ -7,7 +7,7 @@ public enum MacUINavigationGroup: String, CaseIterable, Sendable {
 public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case macWindowChrome
     case trafficLights
-    case centeredWindowTitle
+    case integratedWindowControls
     case pageDerivedWindowTitle
     case appClockLogo
     case lightDeskBackground
@@ -20,6 +20,10 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case dateStripSelectionAnimation
     case semanticStatusStyles
     case protectedActionButtonLabels
+    case todoistInspiredUnifiedShell
+    case quietSidebarSurface
+    case lowContrastControlSurfaces
+    case borderlessListRows
 }
 
 public enum MacUIWindowMetric: String, CaseIterable, Sendable {
@@ -46,6 +50,7 @@ public enum MacUINavigationElement: String, CaseIterable, Sendable {
     case semanticIconColors
     case selectedBackground
     case selectedLeadingBar
+    case quietSelectedPill
     case countBadges
     case zhulongEntryVisibilityFollowsSettings
     case settingsFooterItem
@@ -331,10 +336,18 @@ public enum MacUISettingsElement: String, CaseIterable, Sendable {
     case importData
     case localFirstDataMode
     case onlineFirstDataMode
+    case localFirstCloudSync
+    case cloudSyncEndpoint
+    case syncTriggerMode
+    case syncSnapshotRetention
+    case syncConflictCopy
     case scheduledBackupPolicy
     case backupDestination
     case customSyncEndpoint
     case iCloudSync
+    case s3Sync
+    case webDAVSync
+    case localFolderSync
     case zhulongEnabledToggle
     case zhulongProviderConfiguration
     case balancedSettingsLayout
@@ -355,6 +368,9 @@ public enum MacUIBackendCapability: String, CaseIterable, Sendable {
     case themeSetting
     case languageSetting
     case dataModeSelection
+    case localFirstCloudSync
+    case syncRepositorySnapshots
+    case syncSnapshotRetention
     case scheduledBackup
     case syncEndpointOptions
     case exportImport

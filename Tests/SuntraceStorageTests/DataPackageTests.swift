@@ -61,6 +61,7 @@ final class DataPackageTests: XCTestCase {
         XCTAssertEqual(snapshot.preferences.language, .english)
         XCTAssertEqual(snapshot.preferences.dataMode, .localFirst)
         XCTAssertEqual(snapshot.preferences.backupPolicy, ScheduledBackupPolicy())
+        XCTAssertEqual(snapshot.preferences.localFirstSyncPolicy, LocalFirstCloudSyncPolicy())
     }
 
     private func makeEngine() throws -> SuntraceEngine {

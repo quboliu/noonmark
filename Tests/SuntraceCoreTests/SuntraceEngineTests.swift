@@ -20,6 +20,35 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(engine.getDayTodo(date: day1).traces.map(\.id), [traceID])
     }
 
+    func testSchedulingFromPoolCannotTargetPastDate() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "不能排期到过去", now: now)
+
+        XCTAssertThrowsError(try engine.scheduleFromPool(chainID: chainID, date: day1, today: day2, now: now))
+        XCTAssertEqual(engine.taskPool().map(\.chain.id), [chainID])
+        XCTAssertTrue(engine.getDayTodo(date: day1).traces.isEmpty)
+    }
+
+    func testTaskTagsUseThreeSlotsAndActiveTagRules() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "Tag 任务", now: now)
+        let work = try engine.createTaskTag(name: "工作", colorHex: "#0E9488", now: now)
+        let reading = try engine.createTaskTag(name: "阅读", colorHex: "#7C5CFF", now: now)
+
+        try engine.setTaskTagAssignment(chainID: chainID, slot: .tagI, tagID: work, now: now)
+        try engine.setTaskTagAssignment(chainID: chainID, slot: .tagII, tagID: reading, now: now)
+
+        XCTAssertEqual(engine.chains[chainID]?.primaryTagID, work)
+        XCTAssertEqual(engine.chains[chainID]?.tagAssignments.map(\.slot), [.tagI, .tagII])
+        XCTAssertThrowsError(try engine.setTaskTagAssignment(chainID: chainID, slot: .tagIII, tagID: work, now: now))
+
+        try engine.updateTaskTag(tagID: reading, name: "阅读", status: .inactive, colorHex: "#7C5CFF", now: now)
+        XCTAssertThrowsError(try engine.setTaskTagAssignment(chainID: chainID, slot: .tagIII, tagID: reading, now: now))
+
+        try engine.setTaskTagAssignment(chainID: chainID, slot: .tagII, tagID: nil, now: now)
+        XCTAssertEqual(engine.chains[chainID]?.tagAssignments.map(\.slot), [.tagI])
+    }
+
     func testCurrentCompletionCanBeUndoneButHistoryCannot() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "完成测试", now: now)
@@ -328,6 +357,40 @@ final class SuntraceEngineTests: XCTestCase {
         )
     }
 
+    func testPoolPlannedSubtasksAreCopiedWhenScheduled() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "规划发布任务", now: now)
+        let outlineID = try engine.addPlannedSubtask(
+            chainID: chainID,
+            title: "写发布大纲",
+            difficulty: .medium,
+            now: now
+        )
+        _ = try engine.addPlannedSubtask(
+            chainID: chainID,
+            title: "核对截图",
+            difficulty: .hard,
+            now: now
+        )
+        try engine.updatePlannedSubtaskDifficulty(
+            chainID: chainID,
+            plannedSubtaskID: outlineID,
+            difficulty: .simple,
+            now: now
+        )
+
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        let subtasks = engine.subtasks.values
+            .filter { $0.traceID == traceID }
+            .sorted { $0.position < $1.position }
+
+        XCTAssertEqual(subtasks.map(\.title), ["写发布大纲", "核对截图"])
+        XCTAssertEqual(subtasks.map(\.difficulty), [.simple, .hard])
+        XCTAssertThrowsError(
+            try engine.addPlannedSubtask(chainID: chainID, title: "排期后不能改规划", now: now)
+        )
+    }
+
     func testManualProgressCarriesForwardAndCannotRegressAfterContinuation() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "整理 Q3 OKR 草案", now: now)
@@ -426,19 +489,44 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(engine.preferences.language, .chinese)
         XCTAssertEqual(engine.preferences.dataMode, .localFirst)
         XCTAssertEqual(engine.preferences.backupPolicy, ScheduledBackupPolicy())
-        XCTAssertEqual(engine.syncEndpointOptions().map(\.kind), [.customEndpoint, .iCloud])
-        XCTAssertTrue(engine.syncEndpointOptions().allSatisfy { $0.availability == .planned })
+        XCTAssertEqual(engine.preferences.localFirstSyncPolicy.endpoint, .iCloud)
+        XCTAssertEqual(engine.preferences.localFirstSyncPolicy.snapshotRetention.indexRetentionDays, 180)
+        XCTAssertEqual(engine.syncEndpointOptions().map(\.kind), [.customEndpoint, .iCloud, .s3, .webDAV, .localFolder])
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: engine.syncEndpointOptions().map { ($0.kind, $0.availability) }),
+            [
+                .customEndpoint: .planned,
+                .iCloud: .available,
+                .s3: .planned,
+                .webDAV: .planned,
+                .localFolder: .available
+            ]
+        )
 
         engine.updateTheme(.warmPaper)
         engine.updateLanguage(.english)
         engine.updateDataMode(.onlineFirst)
         engine.updateBackupPolicy(ScheduledBackupPolicy(frequency: .daily, destination: .s3))
+        engine.updateLocalFirstSyncPolicy(
+            LocalFirstCloudSyncPolicy(
+                endpoint: .s3,
+                mode: .automatic,
+                intervalSeconds: 60,
+                snapshotRetention: SyncSnapshotRetentionPolicy(indexRetentionDays: 90, retentionIndexesDaily: 3)
+            )
+        )
 
         XCTAssertEqual(engine.preferences.theme, .warmPaper)
         XCTAssertEqual(engine.preferences.language, .english)
         XCTAssertEqual(engine.preferences.dataMode, .onlineFirst)
         XCTAssertEqual(engine.preferences.backupPolicy.frequency, .daily)
         XCTAssertEqual(engine.preferences.backupPolicy.destination, .s3)
+        XCTAssertEqual(engine.preferences.localFirstSyncPolicy.endpoint, .s3)
+        XCTAssertEqual(engine.preferences.localFirstSyncPolicy.mode, .automatic)
+        XCTAssertEqual(engine.preferences.localFirstSyncPolicy.snapshotRetention.retentionIndexesDaily, 3)
+
+        engine.updateDataMode(.localFirst)
+        XCTAssertEqual(engine.preferences.backupPolicy, ScheduledBackupPolicy())
     }
 
     func testSnapshotCodableRoundTripsForDataPackage() throws {

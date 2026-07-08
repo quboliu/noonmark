@@ -2,7 +2,7 @@ import Foundation
 import SuntraceCore
 
 public enum SQLiteSchema {
-    public static let version = 4
+    public static let version = 7
 
     public static let statements: [String] = [
         """
@@ -29,6 +29,38 @@ public enum SQLiteSchema {
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS task_tags (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+            status TEXT NOT NULL CHECK (status IN ('active', 'inactive')),
+            color_hex TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(name COLLATE NOCASE)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS task_tag_assignments (
+            chain_id TEXT NOT NULL REFERENCES task_chains(id) ON DELETE CASCADE,
+            tag_id TEXT NOT NULL REFERENCES task_tags(id),
+            slot INTEGER NOT NULL CHECK (slot IN (1, 2, 3)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(chain_id, slot),
+            UNIQUE(chain_id, tag_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS task_chain_metadata (
+            chain_id TEXT PRIMARY KEY NOT NULL REFERENCES task_chains(id) ON DELETE CASCADE,
+            manual_label TEXT,
+            ai_label TEXT,
+            manual_group TEXT,
+            ai_group TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS task_definitions (
             id TEXT PRIMARY KEY NOT NULL,
             chain_id TEXT NOT NULL REFERENCES task_chains(id),
@@ -36,6 +68,7 @@ public enum SQLiteSchema {
             title TEXT NOT NULL CHECK (length(trim(title)) > 0),
             description_text TEXT,
             note TEXT,
+            planned_subtasks_json TEXT,
             created_at TEXT NOT NULL,
             superseded_at TEXT,
             superseded_by_definition_id TEXT REFERENCES task_definitions(id),
@@ -212,10 +245,15 @@ public enum SQLiteSchema {
             d.title,
             d.description_text,
             d.note,
+            m.manual_label,
+            m.ai_label,
+            m.manual_group,
+            m.ai_group,
             c.created_at,
             c.updated_at
         FROM task_chains c
         JOIN task_definitions d ON d.chain_id = c.id AND d.superseded_at IS NULL
+        LEFT JOIN task_chain_metadata m ON m.chain_id = c.id
         WHERE c.state = 'active'
           AND NOT EXISTS (
               SELECT 1 FROM day_traces t
@@ -364,8 +402,14 @@ public enum SQLiteSchema {
         SELECT
             'iCloud' AS kind,
             'iCloud 云同步' AS title,
-            '原生云同步' AS description,
-            'planned' AS availability
+            '写入当前 Apple Account 的 iCloud Drive 同步仓库' AS description,
+            'available' AS availability
+        UNION ALL
+        SELECT
+            'localFolder' AS kind,
+            '本地同步文件夹' AS title,
+            '自管目录或局域网共享端点' AS description,
+            'available' AS availability
         """,
         """
         CREATE VIEW IF NOT EXISTS day_todo_view AS

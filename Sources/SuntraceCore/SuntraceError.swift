@@ -7,6 +7,7 @@ public enum SuntraceError: Error, Equatable, Sendable {
     case immutableHistory
     case activeTraceAlreadyExists
     case noActiveTrace
+    case invalidInput(String)
     case invalidTransition(String)
     case lockedDay
     case futurePlanCannotComplete

@@ -2,7 +2,7 @@ import Foundation
 import SuntraceCore
 import SuntraceSync
 
-public struct SQLiteSyncUploadResult: Equatable, Sendable {
+public struct SQLiteSyncUploadResult: Codable, Equatable, Sendable {
     public var pendingCount: Int
     public var uploadedCount: Int
     public var failedCount: Int

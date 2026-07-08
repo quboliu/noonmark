@@ -40,7 +40,23 @@ final class AISuggestionDraftApplierTests: XCTestCase {
         XCTAssertEqual(scheduled?.trace.status, .pending)
     }
 
-    func testAssignLabelFailsClosedUntilCoreModelExists() throws {
+    func testAssignLabelAppliesExistingActiveTagToPrimarySlot() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "分类任务", now: now)
+        let tagID = try engine.createTaskTag(name: "工程", now: now)
+
+        let result = try AISuggestionDraftApplier().applyConfirmed(
+            .assignLabel(chainID: chainID, label: "工程"),
+            to: engine,
+            today: today,
+            now: now
+        )
+
+        XCTAssertEqual(result.message, "已更新任务 Tag")
+        XCTAssertEqual(engine.chains[chainID]?.tagAssignments, [TaskTagAssignment(tagID: tagID, slot: .tagI, now: now)])
+    }
+
+    func testAssignLabelFailsClosedWhenTagDoesNotExist() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "分类任务", now: now)
 
@@ -52,7 +68,7 @@ final class AISuggestionDraftApplierTests: XCTestCase {
                 now: now
             )
         ) { error in
-            XCTAssertEqual(error as? AISuggestionApplyError, .unsupportedOperation("label 尚未进入核心领域模型"))
+            XCTAssertEqual(error as? AISuggestionApplyError, .unsupportedOperation("tag 尚未创建或已停用"))
         }
     }
 }

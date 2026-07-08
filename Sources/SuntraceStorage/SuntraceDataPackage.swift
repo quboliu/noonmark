@@ -48,11 +48,23 @@ private extension SuntraceDataPackage {
         try requireUnique(snapshot.definitions.map(\.id), label: "task_definitions.id")
         try requireUnique(snapshot.traces.map(\.id), label: "day_traces.id")
         try requireUnique(snapshot.subtasks.map(\.id), label: "subtasks.id")
+        try requireUnique(snapshot.preferences.taskTags.map(\.id), label: "task_tags.id")
+        try requireUnique(snapshot.preferences.taskTags.map { $0.name.lowercased() }, label: "task_tags.name")
 
         let chainIDs = Set(snapshot.chains.map(\.id))
         let definitionIDs = Set(snapshot.definitions.map(\.id))
         let traceIDs = Set(snapshot.traces.map(\.id))
         let subtaskIDs = Set(snapshot.subtasks.map(\.id))
+        let tagIDs = Set(snapshot.preferences.taskTags.map(\.id))
+
+        for chain in snapshot.chains {
+            try require(chain.tagAssignments.count <= 3, "chain has more than three tags")
+            try requireUnique(chain.tagAssignments.map(\.slot), label: "task_tag_assignments.slot")
+            try requireUnique(chain.tagAssignments.map(\.tagID), label: "task_tag_assignments.tag_id")
+            for assignment in chain.tagAssignments {
+                try require(tagIDs.contains(assignment.tagID), "task tag assignment references missing tag")
+            }
+        }
 
         for definition in snapshot.definitions {
             try require(chainIDs.contains(definition.chainID), "definition references missing chain")

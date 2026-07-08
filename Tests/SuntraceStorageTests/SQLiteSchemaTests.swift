@@ -6,9 +6,13 @@ final class SQLiteSchemaTests: XCTestCase {
     func testSchemaContainsPrototypeBackedStorageObjects() {
         let schema = SQLiteSchema.statements.joined(separator: "\n")
 
-        XCTAssertEqual(SQLiteSchema.version, 4)
+        XCTAssertEqual(SQLiteSchema.version, 7)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
+        XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS task_chain_metadata"))
+        XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS task_tags"))
+        XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS task_tag_assignments"))
+        XCTAssertTrue(schema.contains("planned_subtasks_json TEXT"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_device_identity"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_metadata"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS change_journal"))
@@ -35,6 +39,7 @@ final class SQLiteSchemaTests: XCTestCase {
             note: "稳定 ID 必须保留。",
             now: now
         )
+        _ = try engine.addPlannedSubtask(chainID: chainID, title: "先规划子任务", difficulty: .medium, now: now)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
         let subtaskID = try engine.addSubtask(traceID: traceID, title: "写 round-trip 测试", difficulty: .hard, now: now)
         try engine.completeSubtask(subtaskID, today: day1, now: now)
@@ -45,6 +50,10 @@ final class SQLiteSchemaTests: XCTestCase {
         let completedTraceID = try engine.scheduleFromPool(chainID: completedChainID, date: day2, today: day2, now: now)
         try engine.markCompleted(traceID: completedTraceID, today: day2, now: now)
         let changedChainID = try engine.createPoolTask(title: "写旧版任务标题", now: now)
+        let projectTagID = try engine.createTaskTag(name: "项目", colorHex: "#0E9488", now: now)
+        let writingTagID = try engine.createTaskTag(name: "写作", colorHex: "#7C5CFF", now: now)
+        try engine.setTaskTagAssignment(chainID: changedChainID, slot: .tagI, tagID: projectTagID, now: now)
+        try engine.setTaskTagAssignment(chainID: changedChainID, slot: .tagII, tagID: writingTagID, now: now)
         let changedTraceID = try engine.scheduleFromPool(chainID: changedChainID, date: day2, today: day2, now: now)
         _ = try engine.changeTrace(traceID: changedTraceID, newTitle: "写新版任务标题", today: day2, now: now)
         engine.updateDailyReview(
@@ -58,6 +67,15 @@ final class SQLiteSchemaTests: XCTestCase {
         engine.updateLanguage(.english)
         engine.updateDataMode(.onlineFirst)
         engine.updateBackupPolicy(ScheduledBackupPolicy(frequency: .weekly, destination: .s3))
+        engine.updateLocalFirstSyncPolicy(
+            LocalFirstCloudSyncPolicy(
+                endpoint: .webDAV,
+                mode: .automatic,
+                intervalSeconds: 120,
+                generateConflictCopy: true,
+                snapshotRetention: SyncSnapshotRetentionPolicy(indexRetentionDays: 120, retentionIndexesDaily: 4)
+            )
+        )
 
         let repository = SQLiteEngineRepository(databaseURL: databaseURL)
         try repository.save(engine)
@@ -74,6 +92,13 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertEqual(restored.preferences.dataMode, .onlineFirst)
         XCTAssertEqual(restored.preferences.backupPolicy.frequency, .weekly)
         XCTAssertEqual(restored.preferences.backupPolicy.destination, .s3)
+        XCTAssertEqual(restored.preferences.localFirstSyncPolicy.endpoint, .webDAV)
+        XCTAssertEqual(restored.preferences.localFirstSyncPolicy.mode, .automatic)
+        XCTAssertEqual(restored.preferences.localFirstSyncPolicy.intervalSeconds, 120)
+        XCTAssertEqual(restored.preferences.localFirstSyncPolicy.snapshotRetention.retentionIndexesDaily, 4)
+        XCTAssertEqual(restored.preferences.taskTags.map(\.name), ["项目", "写作"])
+        XCTAssertEqual(restored.chains[changedChainID]?.tagAssignments.map(\.tagID), [projectTagID, writingTagID])
+        XCTAssertEqual(restored.chains[changedChainID]?.tagAssignments.map(\.slot), [.tagI, .tagII])
     }
 }
 

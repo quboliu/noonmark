@@ -28,7 +28,8 @@ public final class SuntraceEngine {
     }
 
     public func snapshot() -> SuntraceSnapshot {
-        SuntraceSnapshot(
+        let traceByID = traces
+        return SuntraceSnapshot(
             days: days.values.sorted { $0.date < $1.date },
             chains: chains.values.sorted {
                 if $0.createdAt == $1.createdAt {
@@ -44,10 +45,16 @@ public final class SuntraceEngine {
             },
             traces: traces.values.sorted(by: traceChronology),
             subtasks: subtasks.values.sorted {
-                if $0.traceID == $1.traceID {
+                if let lhsTrace = traceByID[$0.traceID], let rhsTrace = traceByID[$1.traceID], lhsTrace != rhsTrace {
+                    return traceChronology(lhsTrace, rhsTrace)
+                }
+                if $0.traceID == $1.traceID, $0.position != $1.position {
                     return $0.position < $1.position
                 }
-                return $0.createdAt < $1.createdAt
+                if $0.createdAt != $1.createdAt {
+                    return $0.createdAt < $1.createdAt
+                }
+                return $0.id.description < $1.id.description
             },
             preferences: preferences
         )
@@ -83,7 +90,8 @@ public final class SuntraceEngine {
         title: String,
         descriptionText: String? = nil,
         note: String? = nil,
-        notes: String? = nil
+        notes: String? = nil,
+        plannedSubtasks: [PlannedSubtask]? = nil
     ) throws {
         let normalizedTitle = try normalizeTitle(title)
         let definition = try currentDefinition(for: chainID)
@@ -94,6 +102,170 @@ public final class SuntraceEngine {
         definitions[definition.id]?.title = normalizedTitle
         definitions[definition.id]?.descriptionText = descriptionText ?? notes
         definitions[definition.id]?.note = note
+        if let plannedSubtasks {
+            definitions[definition.id]?.plannedSubtasks = plannedSubtasks.sorted { $0.position < $1.position }
+        }
+    }
+
+    @discardableResult
+    public func addPlannedSubtask(
+        chainID: TaskChainID,
+        title: String,
+        difficulty: SubtaskDifficulty = .simple,
+        now: Date = Date()
+    ) throws -> PlannedSubtaskID {
+        let normalizedTitle = try normalizeTitle(title)
+        var definition = try currentDefinition(for: chainID)
+        guard traces.values.contains(where: { $0.chainID == chainID }) == false else {
+            throw SuntraceError.invalidTransition("planned subtasks can only be edited before scheduling")
+        }
+
+        let plannedSubtask = PlannedSubtask(
+            title: normalizedTitle,
+            difficulty: difficulty,
+            position: definition.plannedSubtasks.count + 1,
+            now: now
+        )
+        definition.plannedSubtasks.append(plannedSubtask)
+        definitions[definition.id] = definition
+        touchChain(chainID, now: now)
+        return plannedSubtask.id
+    }
+
+    public func removePlannedSubtask(
+        chainID: TaskChainID,
+        plannedSubtaskID: PlannedSubtaskID,
+        now: Date = Date()
+    ) throws {
+        var definition = try currentDefinition(for: chainID)
+        guard traces.values.contains(where: { $0.chainID == chainID }) == false else {
+            throw SuntraceError.invalidTransition("planned subtasks can only be edited before scheduling")
+        }
+        guard definition.plannedSubtasks.contains(where: { $0.id == plannedSubtaskID }) else {
+            throw SuntraceError.notFound("planned subtask")
+        }
+
+        definition.plannedSubtasks = definition.plannedSubtasks
+            .filter { $0.id != plannedSubtaskID }
+            .enumerated()
+            .map { index, plannedSubtask in
+                var plannedSubtask = plannedSubtask
+                plannedSubtask.position = index + 1
+                return plannedSubtask
+            }
+        definitions[definition.id] = definition
+        touchChain(chainID, now: now)
+    }
+
+    public func updatePlannedSubtaskDifficulty(
+        chainID: TaskChainID,
+        plannedSubtaskID: PlannedSubtaskID,
+        difficulty: SubtaskDifficulty,
+        now: Date = Date()
+    ) throws {
+        var definition = try currentDefinition(for: chainID)
+        guard traces.values.contains(where: { $0.chainID == chainID }) == false else {
+            throw SuntraceError.invalidTransition("planned subtasks can only be edited before scheduling")
+        }
+        guard let index = definition.plannedSubtasks.firstIndex(where: { $0.id == plannedSubtaskID }) else {
+            throw SuntraceError.notFound("planned subtask")
+        }
+
+        definition.plannedSubtasks[index].difficulty = difficulty
+        definitions[definition.id] = definition
+        touchChain(chainID, now: now)
+    }
+
+    @discardableResult
+    public func createTaskTag(
+        name: String,
+        colorHex: String = "#2A6FDB",
+        now: Date = Date()
+    ) throws -> TaskTagID {
+        let normalizedName = try normalizeTagName(name)
+        guard preferences.taskTags.contains(where: { $0.name.caseInsensitiveCompare(normalizedName) == .orderedSame }) == false else {
+            throw SuntraceError.invalidInput("tag already exists")
+        }
+        let tag = TaskTag(name: normalizedName, colorHex: normalizedColorHex(colorHex), now: now)
+        preferences.taskTags.append(tag)
+        preferences.taskTags.sort { $0.createdAt < $1.createdAt }
+        return tag.id
+    }
+
+    public func updateTaskTag(
+        tagID: TaskTagID,
+        name: String,
+        status: TaskTagStatus,
+        colorHex: String,
+        now: Date = Date()
+    ) throws {
+        let normalizedName = try normalizeTagName(name)
+        guard let index = preferences.taskTags.firstIndex(where: { $0.id == tagID }) else {
+            throw SuntraceError.notFound("task tag")
+        }
+        guard preferences.taskTags.contains(where: {
+            $0.id != tagID && $0.name.caseInsensitiveCompare(normalizedName) == .orderedSame
+        }) == false else {
+            throw SuntraceError.invalidInput("tag already exists")
+        }
+        preferences.taskTags[index].name = normalizedName
+        preferences.taskTags[index].status = status
+        preferences.taskTags[index].colorHex = normalizedColorHex(colorHex)
+        preferences.taskTags[index].updatedAt = now
+    }
+
+    public func setTaskTagAssignment(
+        chainID: TaskChainID,
+        slot: TaskTagSlot,
+        tagID: TaskTagID?,
+        now: Date = Date()
+    ) throws {
+        guard var chain = chains[chainID] else {
+            throw SuntraceError.notFound("task chain")
+        }
+        if let tagID {
+            guard let tag = preferences.taskTags.first(where: { $0.id == tagID }) else {
+                throw SuntraceError.notFound("task tag")
+            }
+            guard tag.status == .active || chain.tagAssignments.contains(where: { $0.slot == slot && $0.tagID == tagID }) else {
+                throw SuntraceError.invalidTransition("inactive tags cannot be newly assigned")
+            }
+            guard chain.tagAssignments.contains(where: { $0.tagID == tagID && $0.slot != slot }) == false else {
+                throw SuntraceError.invalidTransition("same tag cannot be assigned twice")
+            }
+            chain.tagAssignments.removeAll { $0.slot == slot }
+            chain.tagAssignments.append(TaskTagAssignment(tagID: tagID, slot: slot, now: now))
+        } else {
+            chain.tagAssignments.removeAll { $0.slot == slot }
+        }
+        chain.tagAssignments.sort { $0.slot < $1.slot }
+        chain.updatedAt = now
+        chains[chainID] = chain
+    }
+
+    public func activeTaskTags() -> [TaskTag] {
+        preferences.taskTags
+            .filter { $0.status == .active }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    public func taskTagsCommonlyUsed(in slot: TaskTagSlot) -> [TaskTag] {
+        let activeTagsByID = Dictionary(uniqueKeysWithValues: activeTaskTags().map { ($0.id, $0) })
+        let latestUseByTagID = chains.values.reduce(into: [TaskTagID: Date]()) { partial, chain in
+            guard let assignment = chain.tagAssignments.first(where: { $0.slot == slot }),
+                  activeTagsByID[assignment.tagID] != nil
+            else { return }
+            partial[assignment.tagID] = max(partial[assignment.tagID] ?? .distantPast, assignment.updatedAt)
+        }
+        return latestUseByTagID
+            .compactMap { tagID, lastUsed in activeTagsByID[tagID].map { (tag: $0, lastUsed: lastUsed) } }
+            .sorted {
+                if $0.lastUsed != $1.lastUsed {
+                    return $0.lastUsed > $1.lastUsed
+                }
+                return $0.tag.name.localizedStandardCompare($1.tag.name) == .orderedAscending
+            }
+            .map(\.tag)
     }
 
     @discardableResult
@@ -107,6 +279,9 @@ public final class SuntraceEngine {
         guard isInTaskPool(chainID) else {
             throw SuntraceError.invalidTransition("only task-pool tasks can be scheduled from pool")
         }
+        guard date >= today else {
+            throw SuntraceError.invalidTransition("task-pool tasks cannot be scheduled into the past")
+        }
 
         let definition = try currentDefinition(for: chainID)
         let trace = DayTrace(
@@ -119,6 +294,7 @@ public final class SuntraceEngine {
             now: now
         )
         traces[trace.id] = trace
+        copyPlannedSubtasks(from: definition, to: trace.id, now: now)
         ensureDay(date, now: now)
         return trace.id
     }
@@ -736,10 +912,21 @@ public final class SuntraceEngine {
 
     public func updateDataMode(_ dataMode: AppDataMode) {
         preferences.dataMode = dataMode
+        if dataMode == .localFirst {
+            preferences.backupPolicy = ScheduledBackupPolicy()
+        }
     }
 
     public func updateBackupPolicy(_ backupPolicy: ScheduledBackupPolicy) {
         preferences.backupPolicy = backupPolicy
+    }
+
+    public func updateLocalFirstSyncPolicy(_ policy: LocalFirstCloudSyncPolicy) {
+        preferences.localFirstSyncPolicy = policy
+    }
+
+    public func updateSettingsPoemDisplayPolicy(_ policy: SettingsPoemDisplayPolicy) {
+        preferences.settingsPoemDisplayPolicy = policy
     }
 
     public func syncEndpointOptions() -> [SyncEndpointOption] {
@@ -759,6 +946,25 @@ private extension SuntraceEngine {
     func normalizedOptionalText(_ text: String?) -> String? {
         let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == true ? nil : trimmed
+    }
+
+    func normalizeTagName(_ name: String) throws -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            throw SuntraceError.invalidInput("tag name cannot be empty")
+        }
+        guard trimmed.count <= 24 else {
+            throw SuntraceError.invalidInput("tag name is too long")
+        }
+        return trimmed
+    }
+
+    func normalizedColorHex(_ colorHex: String) -> String {
+        let trimmed = colorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.range(of: #"^#[0-9A-Fa-f]{6}$"#, options: .regularExpression) != nil else {
+            return "#2A6FDB"
+        }
+        return trimmed.uppercased()
     }
 
     func sorted(_ traces: [DayTrace], by sort: ViewSort) -> [DayTrace] {
@@ -1025,6 +1231,20 @@ private extension SuntraceEngine {
                 now: now
             )
             subtasks[newSubtask.id] = newSubtask
+        }
+    }
+
+    func copyPlannedSubtasks(from definition: TaskDefinition, to traceID: DayTraceID, now: Date) {
+        for (index, plannedSubtask) in definition.plannedSubtasks.sorted(by: { $0.position < $1.position }).enumerated() {
+            let subtask = Subtask(
+                lineageID: plannedSubtask.lineageID,
+                traceID: traceID,
+                title: plannedSubtask.title,
+                difficulty: plannedSubtask.difficulty,
+                position: index + 1,
+                now: now
+            )
+            subtasks[subtask.id] = subtask
         }
     }
 

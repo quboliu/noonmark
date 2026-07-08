@@ -1,7 +1,7 @@
 import Foundation
 import SuntraceSync
 
-public struct SQLiteSyncDownloadResult: Equatable, Sendable {
+public struct SQLiteSyncDownloadResult: Codable, Equatable, Sendable {
     public var fetchedCount: Int
     public var appliedCount: Int
     public var conflictCount: Int

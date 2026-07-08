@@ -56,11 +56,16 @@ final class MacUIDesignContractTests: XCTestCase {
         let contract = MacUIDesignContract.claudeMacPrototype20260705
 
         XCTAssertTrue(contract.globalElements.contains(.macWindowChrome))
+        XCTAssertTrue(contract.globalElements.contains(.integratedWindowControls))
         XCTAssertTrue(contract.globalElements.contains(.pageDerivedWindowTitle))
         XCTAssertTrue(contract.globalElements.contains(.appClockLogo))
         XCTAssertTrue(contract.globalElements.contains(.dateStripSelectionAnimation))
         XCTAssertTrue(contract.globalElements.contains(.semanticStatusStyles))
         XCTAssertTrue(contract.globalElements.contains(.protectedActionButtonLabels))
+        XCTAssertTrue(contract.globalElements.contains(.todoistInspiredUnifiedShell))
+        XCTAssertTrue(contract.globalElements.contains(.quietSidebarSurface))
+        XCTAssertTrue(contract.globalElements.contains(.lowContrastControlSurfaces))
+        XCTAssertTrue(contract.globalElements.contains(.borderlessListRows))
         XCTAssertTrue(contract.windowMetrics.contains(.prototypePreview1440x900))
         XCTAssertTrue(contract.windowMetrics.contains(.maxContent1400x880))
         XCTAssertTrue(contract.colorTokens.contains(.accent))
@@ -73,6 +78,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.colorTokens.contains(.t2))
         XCTAssertTrue(contract.colorTokens.contains(.t3))
         XCTAssertTrue(contract.navigationElements.contains(.semanticIconColors))
+        XCTAssertTrue(contract.navigationElements.contains(.quietSelectedPill))
         XCTAssertTrue(contract.navigationElements.contains(.countBadges))
         XCTAssertTrue(contract.navigationElements.contains(.zhulongEntryVisibilityFollowsSettings))
         XCTAssertEqual(

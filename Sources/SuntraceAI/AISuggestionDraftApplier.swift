@@ -45,8 +45,12 @@ public struct AISuggestionDraftApplier: Sendable {
             try engine.abandonChain(from: traceID, now: now)
             return AISuggestionApplyResult(operation: operation, message: "任务链已废弃")
 
-        case .assignLabel:
-            throw AISuggestionApplyError.unsupportedOperation("label 尚未进入核心领域模型")
+        case let .assignLabel(chainID, label):
+            guard let tag = engine.activeTaskTags().first(where: { $0.name.caseInsensitiveCompare(label) == .orderedSame }) else {
+                throw AISuggestionApplyError.unsupportedOperation("tag 尚未创建或已停用")
+            }
+            try engine.setTaskTagAssignment(chainID: chainID, slot: .tagI, tagID: tag.id, now: now)
+            return AISuggestionApplyResult(operation: operation, message: "已更新任务 Tag")
 
         case let .updateDailyReview(date, summary, unfinishedReason, tomorrowNote):
             engine.updateDailyReview(

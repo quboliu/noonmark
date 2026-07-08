@@ -63,6 +63,19 @@ public struct AISuggestionResponseParser: Sendable {
                 tomorrowNote: operation.tomorrowNote
             )
 
+        case "assignLabel":
+            guard let chainIDText = operation.chainID,
+                  let chainUUID = UUID(uuidString: chainIDText)
+            else {
+                throw AISuggestionResponseParseError.invalidOperation("assignLabel.chainID")
+            }
+            guard let label = operation.label?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  label.isEmpty == false
+            else {
+                throw AISuggestionResponseParseError.invalidOperation("assignLabel.label")
+            }
+            return .assignLabel(chainID: TaskChainID(chainUUID), label: label)
+
         default:
             throw AISuggestionResponseParseError.unsupportedOperation(operation.type)
         }
@@ -108,6 +121,8 @@ private struct StructuredSuggestionOperation: Decodable {
     var descriptionText: String?
     var note: String?
     var date: String?
+    var chainID: String?
+    var label: String?
     var summary: String?
     var unfinishedReason: String?
     var tomorrowNote: String?

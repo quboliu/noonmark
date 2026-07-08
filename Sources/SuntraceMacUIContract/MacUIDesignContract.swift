@@ -7,6 +7,8 @@ public enum MacUINavigationGroup: String, CaseIterable, Sendable {
 public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case macWindowChrome
     case trafficLights
+    case operableTrafficLights
+    case resizableWindow
     case integratedWindowControls
     case pageDerivedWindowTitle
     case appClockLogo

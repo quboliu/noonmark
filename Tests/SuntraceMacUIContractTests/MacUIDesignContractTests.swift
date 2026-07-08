@@ -56,6 +56,9 @@ final class MacUIDesignContractTests: XCTestCase {
         let contract = MacUIDesignContract.claudeMacPrototype20260705
 
         XCTAssertTrue(contract.globalElements.contains(.macWindowChrome))
+        XCTAssertTrue(contract.globalElements.contains(.trafficLights))
+        XCTAssertTrue(contract.globalElements.contains(.operableTrafficLights))
+        XCTAssertTrue(contract.globalElements.contains(.resizableWindow))
         XCTAssertTrue(contract.globalElements.contains(.integratedWindowControls))
         XCTAssertTrue(contract.globalElements.contains(.pageDerivedWindowTitle))
         XCTAssertTrue(contract.globalElements.contains(.appClockLogo))

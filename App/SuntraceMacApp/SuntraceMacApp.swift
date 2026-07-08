@@ -60,15 +60,22 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
 
         let window = SuntraceWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
-            styleMask: [.borderless],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = store.windowTitle
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
         window.isMovableByWindowBackground = true
+        window.minSize = NSSize(width: 1180, height: 760)
+        window.contentMinSize = NSSize(width: 1180, height: 760)
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
         window.isReleasedWhenClosed = false
         window.isRestorable = false
         window.center()
@@ -167,6 +174,7 @@ private struct LaunchAutomation {
         append(ZhulongNavigationE2EAutomation.fromCommandLine(), to: &actions)
         append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)
         append(SummarySidebarE2EAutomation.fromCommandLine(), to: &actions)
+        append(WindowResizeE2EAutomation.fromCommandLine(), to: &actions)
         append(LaunchSelectionE2EAutomation.fromCommandLine(), to: &actions)
 
         if CommandLine.arguments.contains("--e2e-expand-first-subtask-trace") {
@@ -825,6 +833,77 @@ private struct SubtaskMutationE2EAutomation: LaunchAutomationRunnable {
 }
 
 private enum SubtaskMutationE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
+private struct WindowResizeE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> WindowResizeE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-window-resize-probe") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-window-resize-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return WindowResizeE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            guard let window = NSApp.windows.first(where: { $0 is SuntraceWindow }) else {
+                throw WindowResizeE2EAutomationError.failed("missing SuntraceWindow")
+            }
+            guard window.styleMask.contains(.resizable) else {
+                throw WindowResizeE2EAutomationError.failed("window was not resizable")
+            }
+            guard window.minSize.width >= 1180, window.minSize.height >= 760 else {
+                throw WindowResizeE2EAutomationError.failed("window minSize was not preserved")
+            }
+
+            let originalFrame = window.frame
+            let resizedFrame = NSRect(
+                x: originalFrame.minX,
+                y: originalFrame.maxY - 800,
+                width: 1240,
+                height: 800
+            )
+            window.setFrame(resizedFrame, display: true)
+            guard Int(window.frame.width.rounded()) == 1240,
+                  Int(window.frame.height.rounded()) == 800
+            else {
+                throw WindowResizeE2EAutomationError.failed("window frame did not resize")
+            }
+
+            window.zoom(nil)
+            guard window.frame != resizedFrame else {
+                throw WindowResizeE2EAutomationError.failed("window zoom did not change frame")
+            }
+            window.setFrame(originalFrame, display: true)
+
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum WindowResizeE2EAutomationError: LocalizedError {
     case failed(String)
 
     var errorDescription: String? {
@@ -3815,18 +3894,55 @@ enum Theme {
 struct TrafficLightDots: View {
     var body: some View {
         HStack(spacing: 9) {
-            trafficLight(color: Color(red: 1, green: 0.451, blue: 0.416))
-            trafficLight(color: Color(red: 0.996, green: 0.737, blue: 0.18))
-            trafficLight(color: Color(red: 0.098, green: 0.765, blue: 0.188))
+            trafficLight(
+                color: Color(red: 1, green: 0.451, blue: 0.416),
+                accessibilityLabel: "关闭窗口",
+                action: closeWindow
+            )
+            trafficLight(
+                color: Color(red: 0.996, green: 0.737, blue: 0.18),
+                accessibilityLabel: "最小化窗口",
+                action: minimizeWindow
+            )
+            trafficLight(
+                color: Color(red: 0.098, green: 0.765, blue: 0.188),
+                accessibilityLabel: "缩放窗口",
+                action: zoomWindow
+            )
         }
         .frame(height: 14)
     }
 
-    private func trafficLight(color: Color) -> some View {
-        Circle()
-            .fill(color)
-            .overlay(Circle().stroke(.black.opacity(0.1), lineWidth: 0.5))
-            .frame(width: 14, height: 14)
+    private func trafficLight(
+        color: Color,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Circle()
+                .fill(color)
+                .overlay(Circle().stroke(.black.opacity(0.1), lineWidth: 0.5))
+                .frame(width: 14, height: 14)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func closeWindow() {
+        currentWindow?.close()
+    }
+
+    private func minimizeWindow() {
+        currentWindow?.miniaturize(nil)
+    }
+
+    private func zoomWindow() {
+        currentWindow?.zoom(nil)
+    }
+
+    private var currentWindow: NSWindow? {
+        NSApp.keyWindow ?? NSApp.windows.first { $0 is SuntraceWindow }
     }
 }
 

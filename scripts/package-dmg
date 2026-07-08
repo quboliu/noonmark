@@ -3,10 +3,11 @@ set -euo pipefail
 
 configuration="${1:-release}"
 product="SuntraceMacApp"
-app_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
+app_short_name="${SUNTRACE_APP_SHORT_NAME:-Noonmark}"
+app_bundle_name="${SUNTRACE_APP_BUNDLE_NAME:-$app_short_name}"
 volume_name="${SUNTRACE_DMG_VOLUME_NAME:-晷迹}"
 dist_dir="dist"
-app_path="${dist_dir}/${product}.app"
+app_path="${dist_dir}/${app_bundle_name}.app"
 dmg_root="${dist_dir}/dmg-root"
 dmg_path="${dist_dir}/Noonmark.dmg"
 
@@ -15,7 +16,7 @@ scripts/build-mac-app "$configuration" >/dev/null
 rm -rf "$dmg_root" "$dmg_path"
 mkdir -p "$dmg_root"
 
-ditto "$app_path" "${dmg_root}/${app_display_name}.app"
+ditto "$app_path" "${dmg_root}/${app_short_name}.app"
 ln -s /Applications "${dmg_root}/Applications"
 
 hdiutil create \

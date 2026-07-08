@@ -4,6 +4,18 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.1.0-test.1"
+        required: true
+      title:
+        description: "Release title override"
+        required: false
+      prerelease:
+        description: "Mark this GitHub Release as prerelease"
+        required: false
+        default: true
+        type: boolean
 
 concurrency:
   group: release-${{ github.ref }}
@@ -15,7 +27,7 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -29,36 +41,73 @@ jobs:
         run: scripts/check
       - name: App E2E
         run: scripts/test-e2e
+      - name: Visual regression
+        env:
+          SUNTRACE_VISUAL_REUSE_SCREENSHOTS: "1"
+        run: scripts/test-visual-regression
       - name: Package artifact
         run: |
           scripts/package-dmg release
-          scripts/verify-dmg dist/SuntraceMacApp.dmg
-          scripts/test-dmg-install dist/SuntraceMacApp.dmg
-          ditto -c -k --keepParent dist/SuntraceMacApp.app dist/SuntraceMacApp.zip
-          shasum -a 256 dist/SuntraceMacApp.zip > dist/SuntraceMacApp.zip.sha256
-          shasum -a 256 -c dist/SuntraceMacApp.zip.sha256
+          scripts/verify-dmg dist/Noonmark.dmg
+          scripts/test-dmg-install dist/Noonmark.dmg
+          ditto -c -k --keepParent dist/Noonmark.app dist/Noonmark.app.zip
+          shasum -a 256 dist/Noonmark.app.zip > dist/Noonmark.app.zip.sha256
+          shasum -a 256 -c dist/Noonmark.app.zip.sha256
+      - name: Upload release validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation
+          path: |
+            dist
+            artifacts/e2e
+            artifacts/visual-regression
+            artifacts/dmg-install
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Resolve release metadata
         id: meta
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ github.event.inputs.tag }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             tag="${GITHUB_REF#refs/tags/}"
           else
-            tag="manual-${GITHUB_RUN_NUMBER}"
+            echo "release tag is required" >&2
+            exit 1
           fi
+          if [[ -n "${{ github.event.inputs.title || '' }}" ]]; then
+            title="${{ github.event.inputs.title }}"
+          else
+            title="晷迹 ${tag}"
+          fi
+          prerelease="false"
+          if [[ "${{ github.event.inputs.prerelease || 'false' }}" == "true" || "$tag" == *-* ]]; then
+            prerelease="true"
+          fi
+          notes="自动化发布产物。优先下载 Noonmark.dmg，其次可用 Noonmark.app.zip。"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "title=晷迹 ${tag}" >> "$GITHUB_OUTPUT"
+          echo "title=${title}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "notes=${notes}" >> "$GITHUB_OUTPUT"
       - name: Create or update GitHub Release
         run: |
           tag="${{ steps.meta.outputs.tag }}"
           title="${{ steps.meta.outputs.title }}"
+          notes="${{ steps.meta.outputs.notes }}"
+          prerelease="${{ steps.meta.outputs.prerelease }}"
+          prerelease_args=()
+          if [[ "$prerelease" == "true" ]]; then
+            prerelease_args+=(--prerelease)
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --title "$title" --notes "自动化发布产物。优先下载 SuntraceMacApp.dmg。"
+            gh release edit "$tag" --title "$title" --notes "$notes" "${prerelease_args[@]}"
           else
-            gh release create "$tag" --title "$title" --notes "自动化发布产物。优先下载 SuntraceMacApp.dmg。" --target "$GITHUB_SHA"
+            gh release create "$tag" --title "$title" --notes "$notes" --target "$GITHUB_SHA" "${prerelease_args[@]}"
           fi
           gh release upload "$tag" \
-            dist/SuntraceMacApp.dmg \
-            dist/SuntraceMacApp.dmg.sha256 \
-            dist/SuntraceMacApp.zip \
-            dist/SuntraceMacApp.zip.sha256 \
+            dist/Noonmark.dmg \
+            dist/Noonmark.dmg.sha256 \
+            dist/Noonmark.app.zip \
+            dist/Noonmark.app.zip.sha256 \
             --clobber

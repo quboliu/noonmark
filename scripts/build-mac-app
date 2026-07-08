@@ -3,12 +3,15 @@ set -euo pipefail
 
 configuration="${1:-debug}"
 product="SuntraceMacApp"
-bundle_name="${SUNTRACE_APP_BUNDLE_NAME:-$product}"
 executable_name="${SUNTRACE_APP_EXECUTABLE_NAME:-$product}"
 bundle_identifier="${SUNTRACE_BUNDLE_IDENTIFIER:-app.noonmark.mac}"
 bundle_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
 bundle_short_name="${SUNTRACE_APP_SHORT_NAME:-Noonmark}"
+bundle_name="${SUNTRACE_APP_BUNDLE_NAME:-$bundle_short_name}"
+icon_source="${SUNTRACE_APP_ICON_SOURCE:-App/SuntraceMacApp/Resources/AppIcon.icns}"
+icon_name="${SUNTRACE_APP_ICON_NAME:-AppIcon}"
 bundle_dir="dist/${bundle_name}.app"
+legacy_bundle_dir="dist/${product}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
@@ -16,6 +19,9 @@ resources_dir="${contents_dir}/Resources"
 swift build -c "$configuration" --product "$product"
 
 rm -rf "$bundle_dir"
+if [[ -z "${SUNTRACE_APP_BUNDLE_NAME+x}" && "$bundle_dir" != "$legacy_bundle_dir" ]]; then
+  rm -rf "$legacy_bundle_dir"
+fi
 mkdir -p "$macos_dir" "$resources_dir"
 
 binary_path=".build/arm64-apple-macosx/${configuration}/${product}"
@@ -25,6 +31,16 @@ fi
 
 cp "$binary_path" "${macos_dir}/${executable_name}"
 chmod +x "${macos_dir}/${executable_name}"
+
+icon_plist_entry=""
+if [[ -f "$icon_source" ]]; then
+  cp "$icon_source" "${resources_dir}/${icon_name}.icns"
+  icon_plist_entry=$(cat <<ICON
+  <key>CFBundleIconFile</key>
+  <string>${icon_name}</string>
+ICON
+)
+fi
 
 cat > "${contents_dir}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -41,6 +57,7 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <string>${bundle_identifier}</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+${icon_plist_entry}
   <key>CFBundleName</key>
   <string>${bundle_short_name}</string>
   <key>CFBundlePackageType</key>

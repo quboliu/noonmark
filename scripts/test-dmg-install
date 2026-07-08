@@ -2,7 +2,7 @@
 set -euo pipefail
 
 dmg_path="${1:-dist/Noonmark.dmg}"
-app_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
+app_short_name="${SUNTRACE_APP_SHORT_NAME:-Noonmark}"
 work_dir="artifacts/dmg-install"
 install_dir="${work_dir}/Applications"
 database_path="${work_dir}/Noonmark.sqlite"
@@ -33,8 +33,8 @@ rm -rf "$work_dir"
 mkdir -p "$install_dir"
 
 hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$mountpoint" -quiet
-source_app="${mountpoint}/${app_display_name}.app"
-installed_app="${install_dir}/${app_display_name}.app"
+source_app="${mountpoint}/${app_short_name}.app"
+installed_app="${install_dir}/${app_short_name}.app"
 
 if [[ ! -d "$source_app" ]]; then
   echo "DMG missing app bundle: $source_app" >&2

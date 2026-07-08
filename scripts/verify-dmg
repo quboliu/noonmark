@@ -2,7 +2,7 @@
 set -euo pipefail
 
 dmg_path="${1:-dist/Noonmark.dmg}"
-app_display_name="${SUNTRACE_APP_DISPLAY_NAME:-晷迹}"
+app_short_name="${SUNTRACE_APP_SHORT_NAME:-Noonmark}"
 mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg.XXXXXX")"
 
 cleanup() {
@@ -24,12 +24,12 @@ fi
 shasum -a 256 -c "${dmg_path}.sha256"
 hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$mountpoint" -quiet
 
-app_path="${mountpoint}/${app_display_name}.app"
+app_path="${mountpoint}/${app_short_name}.app"
 binary_path="${app_path}/Contents/MacOS/SuntraceMacApp"
 plist_path="${app_path}/Contents/Info.plist"
 
 if [[ ! -d "$app_path" ]]; then
-  echo "DMG missing app bundle: ${app_display_name}.app" >&2
+  echo "DMG missing app bundle: ${app_short_name}.app" >&2
   exit 1
 fi
 

@@ -3279,21 +3279,12 @@ struct SuntraceRootView: View {
 
     var body: some View {
         ZStack {
-            Theme.desk
-                .ignoresSafeArea()
-
             HStack(spacing: 0) {
                 Sidebar()
                 MainSurface()
             }
             .background(Theme.background)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Theme.line.opacity(0.7), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.09), radius: 22, x: 0, y: 14)
-            .padding(10)
+            .ignoresSafeArea()
 
             if let toast = store.toast {
                 VStack {

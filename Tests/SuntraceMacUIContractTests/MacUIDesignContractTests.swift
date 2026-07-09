@@ -71,6 +71,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.quietSidebarSurface))
         XCTAssertTrue(contract.globalElements.contains(.lowContrastControlSurfaces))
         XCTAssertTrue(contract.globalElements.contains(.borderlessListRows))
+        XCTAssertTrue(contract.windowMetrics.contains(.defaultLaunch1320x820))
         XCTAssertTrue(contract.windowMetrics.contains(.prototypePreview1440x900))
         XCTAssertTrue(contract.windowMetrics.contains(.maxContent1400x880))
         XCTAssertTrue(contract.colorTokens.contains(.accent))

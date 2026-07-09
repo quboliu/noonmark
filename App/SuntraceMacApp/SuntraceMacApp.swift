@@ -55,11 +55,19 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
 
         let root = SuntraceRootView()
             .environmentObject(store)
-            .frame(minWidth: 1180, minHeight: 760)
+            .frame(
+                minWidth: SuntraceWindowMetrics.minimumSize.width,
+                minHeight: SuntraceWindowMetrics.minimumSize.height
+            )
             .preferredColorScheme(.light)
 
         let window = SuntraceWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: SuntraceWindowMetrics.launchSize.width,
+                height: SuntraceWindowMetrics.launchSize.height
+            ),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -71,8 +79,8 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.hasShadow = false
         window.isMovableByWindowBackground = true
-        window.minSize = NSSize(width: 1180, height: 760)
-        window.contentMinSize = NSSize(width: 1180, height: 760)
+        window.minSize = SuntraceWindowMetrics.minimumSize
+        window.contentMinSize = SuntraceWindowMetrics.minimumSize
         window.standardWindowButton(.closeButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
@@ -127,6 +135,11 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
             automation.run(on: store)
         }
     }
+}
+
+private enum SuntraceWindowMetrics {
+    static let launchSize = NSSize(width: 1320, height: 820)
+    static let minimumSize = NSSize(width: 1180, height: 760)
 }
 
 private struct LaunchAutomation {
@@ -866,6 +879,11 @@ private struct WindowResizeE2EAutomation: LaunchAutomationRunnable {
             }
             guard window.minSize.width >= 1180, window.minSize.height >= 760 else {
                 throw WindowResizeE2EAutomationError.failed("window minSize was not preserved")
+            }
+            guard Int(window.frame.width.rounded()) == Int(SuntraceWindowMetrics.launchSize.width),
+                  Int(window.frame.height.rounded()) == Int(SuntraceWindowMetrics.launchSize.height)
+            else {
+                throw WindowResizeE2EAutomationError.failed("window launch size was not preserved")
             }
 
             let originalFrame = window.frame

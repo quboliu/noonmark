@@ -31,6 +31,7 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
 }
 
 public enum MacUIWindowMetric: String, CaseIterable, Sendable {
+    case defaultLaunch1320x820
     case prototypePreview1440x900
     case maxContent1400x880
 }

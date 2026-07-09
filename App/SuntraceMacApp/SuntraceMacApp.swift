@@ -95,7 +95,7 @@ final class SuntraceMacApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
     }
 
     private func installMainMenu() {
@@ -175,6 +175,7 @@ private struct LaunchAutomation {
         append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)
         append(SummarySidebarE2EAutomation.fromCommandLine(), to: &actions)
         append(WindowResizeE2EAutomation.fromCommandLine(), to: &actions)
+        append(WindowCloseBehaviorE2EAutomation.fromCommandLine(), to: &actions)
         append(LaunchSelectionE2EAutomation.fromCommandLine(), to: &actions)
 
         if CommandLine.arguments.contains("--e2e-expand-first-subtask-trace") {
@@ -904,6 +905,77 @@ private struct WindowResizeE2EAutomation: LaunchAutomationRunnable {
 }
 
 private enum WindowResizeE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
+private struct WindowCloseBehaviorE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> WindowCloseBehaviorE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-window-close-behavior-probe") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-window-close-behavior-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return WindowCloseBehaviorE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        Task { @MainActor in
+            do {
+                guard let delegate = NSApp.delegate as? SuntraceMacApp else {
+                    throw WindowCloseBehaviorE2EAutomationError.failed("missing app delegate")
+                }
+                guard delegate.applicationShouldTerminateAfterLastWindowClosed(NSApp) == false else {
+                    throw WindowCloseBehaviorE2EAutomationError.failed("closing last window would terminate app")
+                }
+                guard let window = NSApp.windows.first(where: { $0 is SuntraceWindow }) else {
+                    throw WindowCloseBehaviorE2EAutomationError.failed("missing SuntraceWindow")
+                }
+
+                window.performClose(nil)
+                try await Task.sleep(nanoseconds: 250_000_000)
+
+                let visibleSuntraceWindows = NSApp.windows.filter { $0 is SuntraceWindow && $0.isVisible }
+                guard visibleSuntraceWindows.isEmpty else {
+                    throw WindowCloseBehaviorE2EAutomationError.failed("window remained visible after close")
+                }
+
+                delegate.openMainWindow()
+                try await Task.sleep(nanoseconds: 250_000_000)
+
+                guard NSApp.windows.contains(where: { $0 is SuntraceWindow && $0.isVisible }) else {
+                    throw WindowCloseBehaviorE2EAutomationError.failed("window did not reopen after dock activation")
+                }
+
+                try writeResult("ok")
+            } catch {
+                try? writeResult("failed: \(error.localizedDescription)")
+            }
+
+            store.persist()
+            NSApp.terminate(nil)
+        }
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum WindowCloseBehaviorE2EAutomationError: LocalizedError {
     case failed(String)
 
     var errorDescription: String? {
@@ -3948,7 +4020,7 @@ struct TrafficLightDots: View {
     }
 
     private func closeWindow() {
-        currentWindow?.close()
+        currentWindow?.performClose(nil)
     }
 
     private func minimizeWindow() {

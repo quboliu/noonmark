@@ -59,6 +59,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.trafficLights))
         XCTAssertTrue(contract.globalElements.contains(.operableTrafficLights))
         XCTAssertTrue(contract.globalElements.contains(.resizableWindow))
+        XCTAssertTrue(contract.globalElements.contains(.closeWindowKeepsAppRunning))
         XCTAssertTrue(contract.globalElements.contains(.visibleWindowBoundary))
         XCTAssertTrue(contract.globalElements.contains(.integratedWindowControls))
         XCTAssertTrue(contract.globalElements.contains(.pageDerivedWindowTitle))

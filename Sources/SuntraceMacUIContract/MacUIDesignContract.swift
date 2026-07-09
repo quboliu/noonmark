@@ -9,6 +9,7 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case trafficLights
     case operableTrafficLights
     case resizableWindow
+    case closeWindowKeepsAppRunning
     case visibleWindowBoundary
     case integratedWindowControls
     case pageDerivedWindowTitle

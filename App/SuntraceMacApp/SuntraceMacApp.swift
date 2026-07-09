@@ -4075,11 +4075,11 @@ struct Sidebar: View {
             HStack(spacing: 9) {
                 ClockLogo()
                 Text(store.copy.appName)
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 17, weight: .bold))
                     .tracking(0.2)
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 16)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 18)
 
             NavGroupTitle(store.copy.planGroup)
             ForEach(planPages) { page in
@@ -4095,7 +4095,7 @@ struct Sidebar: View {
             Spacer()
             NavItem(page: .settings, label: store.copy.navSettings, count: 0)
         }
-        .frame(width: 222)
+        .frame(width: 240)
         .padding(.top, 16)
         .padding(.bottom, 10)
         .background(Theme.sidebar)
@@ -4115,7 +4115,7 @@ struct ClockLogo: View {
                 .offset(y: -3)
             Circle().fill(Theme.accent).frame(width: 4, height: 4)
         }
-        .frame(width: 22, height: 22)
+        .frame(width: 24, height: 24)
     }
 }
 
@@ -4127,12 +4127,12 @@ struct NavGroupTitle: View {
     }
 
     var body: some View {
-            Text(title)
-            .font(.system(size: 11, weight: .semibold))
+        Text(title)
+            .font(.system(size: 11.5, weight: .semibold))
             .foregroundStyle(Theme.text3)
             .tracking(0.4)
-            .padding(.horizontal, 18)
-            .padding(.bottom, 4)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 5)
     }
 }
 
@@ -4148,27 +4148,27 @@ struct NavItem: View {
         Button {
             store.selectPage(page)
         } label: {
-            HStack(spacing: 9) {
+            HStack(spacing: 10) {
                 Image(systemName: page.navigationSystemImage)
-                    .font(.system(size: 14.5, weight: .medium))
-                    .frame(width: 19)
+                    .font(.system(size: 15.5, weight: .medium))
+                    .frame(width: 21)
                     .foregroundStyle(page.navigationIconColor)
                 Text(label)
-                    .font(.system(size: 13.5, weight: active ? .semibold : .medium))
+                    .font(.system(size: 14.5, weight: active ? .semibold : .medium))
                     .foregroundStyle(active ? Theme.text1 : Theme.text2)
                 Spacer()
                 if count > 0 {
                     Text("\(count)")
-                        .font(.system(size: 11, weight: active ? .semibold : .regular))
+                        .font(.system(size: 12, weight: active ? .semibold : .regular))
                         .foregroundStyle(Theme.text2)
-                        .padding(.horizontal, 6)
-                        .frame(minWidth: 19, minHeight: 17)
+                        .padding(.horizontal, 7)
+                        .frame(minWidth: 21, minHeight: 18)
                         .background(Capsule().fill(active ? Theme.panel.opacity(0.8) : Theme.chip))
                 }
             }
-            .frame(height: 33)
-            .padding(.leading, 12)
-            .padding(.trailing, 10)
+            .frame(height: 36)
+            .padding(.leading, 14)
+            .padding(.trailing, 12)
             .hoverSurface(
                 active: active,
                 cornerRadius: 8,
@@ -4187,8 +4187,8 @@ struct NavItem: View {
             }
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 1)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 1.5)
     }
 }
 

@@ -3365,8 +3365,7 @@ struct SuntraceRootView: View {
             .background(Theme.background)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Theme.line.opacity(0.7), lineWidth: 1)
+                WindowBoundaryStroke(cornerRadius: 12)
             )
             .ignoresSafeArea()
 
@@ -3793,6 +3792,21 @@ struct AppCopy {
     }
 }
 
+private struct WindowBoundaryStroke: View {
+    var cornerRadius: CGFloat
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Theme.windowBoundary, lineWidth: 1.35)
+            RoundedRectangle(cornerRadius: cornerRadius - 0.7, style: .continuous)
+                .inset(by: 1)
+                .stroke(.white.opacity(0.78), lineWidth: 0.7)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 enum Theme {
     struct Palette {
         let desk: Color
@@ -3801,6 +3815,7 @@ enum Theme {
         let panel2: Color
         let line: Color
         let line2: Color
+        let windowBoundary: Color
         let text1: Color
         let text2: Color
         let text3: Color
@@ -3834,6 +3849,7 @@ enum Theme {
                 panel2: Color(red: 0.984, green: 0.984, blue: 0.987),
                 line: Color(red: 0.90, green: 0.902, blue: 0.914),
                 line2: Color(red: 0.80, green: 0.805, blue: 0.835),
+                windowBoundary: Color(red: 0.69, green: 0.704, blue: 0.735),
                 text1: Color(red: 0.11, green: 0.11, blue: 0.12),
                 text2: Color(red: 0.42, green: 0.42, blue: 0.46),
                 text3: Color(red: 0.63, green: 0.63, blue: 0.67),
@@ -3850,6 +3866,7 @@ enum Theme {
                 panel2: Color(red: 0.990, green: 0.982, blue: 0.964),
                 line: Color(red: 0.90, green: 0.872, blue: 0.824),
                 line2: Color(red: 0.78, green: 0.724, blue: 0.646),
+                windowBoundary: Color(red: 0.67, green: 0.61, blue: 0.52),
                 text1: Color(red: 0.13, green: 0.105, blue: 0.085),
                 text2: Color(red: 0.44, green: 0.385, blue: 0.32),
                 text3: Color(red: 0.64, green: 0.58, blue: 0.50),
@@ -3867,6 +3884,7 @@ enum Theme {
     static var panel2: Color { palette.panel2 }
     static var line: Color { palette.line }
     static var line2: Color { palette.line2 }
+    static var windowBoundary: Color { palette.windowBoundary }
     static var text1: Color { palette.text1 }
     static var text2: Color { palette.text2 }
     static var text3: Color { palette.text3 }

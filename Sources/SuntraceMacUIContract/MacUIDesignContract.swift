@@ -9,6 +9,7 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case trafficLights
     case operableTrafficLights
     case resizableWindow
+    case visibleWindowBoundary
     case integratedWindowControls
     case pageDerivedWindowTitle
     case appClockLogo
@@ -40,6 +41,7 @@ public enum MacUIColorToken: String, CaseIterable, Sendable {
     case chip
     case panel
     case line
+    case windowBoundary
     case t1
     case t2
     case t3

@@ -178,6 +178,7 @@ private struct LaunchAutomation {
         append(WorkflowE2EAutomation.fromCommandLine(), to: &actions)
         append(LifecycleE2EAutomation.fromCommandLine(), to: &actions)
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
+        append(TaskTitleDeleteE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewZhulongEntryE2EAutomation.fromCommandLine(), to: &actions)
         append(ContextMenuActionsE2EAutomation.fromCommandLine(), to: &actions)
@@ -1126,6 +1127,117 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
             withIntermediateDirectories: true
         )
         try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private struct TaskTitleDeleteE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> TaskTitleDeleteE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-task-title-delete-workflow") else { return nil }
+        let resultURL = SuntraceStore.commandLineValue(after: "--e2e-task-title-delete-result-url")
+            .map { URL(fileURLWithPath: $0) }
+        return TaskTitleDeleteE2EAutomation(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            store.engine = SuntraceEngine()
+            let today = store.today
+            let tomorrow = SuntraceStore.offset(today, by: 1)
+            let yesterday = SuntraceStore.offset(today, by: -1)
+
+            let poolChainID = try store.engine.createPoolTask(title: "E2E 任务池旧标题")
+            store.renamePoolTask(chainID: poolChainID, title: "E2E 任务池新标题")
+            try expect(store.engine.taskPool().first?.definition.title == "E2E 任务池新标题", "pool title did not rename")
+
+            let deleteChainID = try store.engine.createPoolTask(title: "E2E 任务池删除")
+            store.deletePoolTask(deleteChainID)
+            try expect(store.engine.chains[deleteChainID] == nil, "unscheduled pool task was not deleted")
+
+            let currentChainID = try store.engine.createPoolTask(title: "E2E 今日旧标题")
+            let currentTraceID = try store.engine.scheduleFromPool(chainID: currentChainID, date: today, today: today)
+            store.renameTraceTitle(traceID: currentTraceID, title: "E2E 今日新标题")
+            let currentTrace = try trace(currentTraceID, in: store)
+            try expect(currentTrace.status == .pending, "current rename changed trace status")
+            try expect(store.definition(for: currentTrace)?.title == "E2E 今日新标题", "current title did not rename")
+            try expect(store.engine.traces.values.allSatisfy { $0.status != .changed }, "rename created changed trace")
+
+            let futureChainID = try store.engine.createPoolTask(title: "E2E 未来旧标题")
+            let futureTraceID = try store.engine.scheduleFromPool(chainID: futureChainID, date: tomorrow, today: today)
+            store.renameTraceTitle(traceID: futureTraceID, title: "E2E 未来新标题")
+            try expect(store.definition(for: try trace(futureTraceID, in: store))?.title == "E2E 未来新标题", "future title did not rename")
+
+            let returnedChainID = try store.engine.createPoolTask(title: "E2E 回池删除")
+            let returnedTraceID = try store.engine.scheduleFromPool(chainID: returnedChainID, date: today, today: today)
+            store.returnToPool(returnedTraceID)
+            store.deletePoolTask(returnedChainID)
+            try expect(store.engine.traces[returnedTraceID]?.status == .returnedToPool, "returned trace was deleted")
+            try expect(store.engine.taskPool().contains { $0.chain.id == returnedChainID } == false, "returned chain remained in pool")
+
+            let completedChainID = try store.engine.createPoolTask(title: "E2E 已完成旧标题")
+            let completedTraceID = try store.engine.scheduleFromPool(chainID: completedChainID, date: today, today: today)
+            try store.engine.markCompleted(traceID: completedTraceID, today: today)
+            try expectThrows {
+                try store.engine.renameTaskTitle(chainID: completedChainID, title: "E2E 已完成新标题", today: today)
+            }
+
+            let unfinishedChainID = try store.engine.createPoolTask(title: "E2E 未完成旧标题")
+            _ = try store.engine.scheduleFromPool(chainID: unfinishedChainID, date: yesterday, today: yesterday)
+            store.engine.settleDays(upTo: today)
+            try expectThrows {
+                try store.engine.renameTaskTitle(chainID: unfinishedChainID, title: "E2E 未完成新标题", today: today)
+            }
+
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func trace(_ id: DayTraceID, in store: SuntraceStore) throws -> DayTrace {
+        guard let trace = store.engine.traces[id] else {
+            throw TaskTitleDeleteE2EAutomationError.failed("missing trace")
+        }
+        return trace
+    }
+
+    private func expect(_ condition: Bool, _ message: String) throws {
+        guard condition else {
+            throw TaskTitleDeleteE2EAutomationError.failed(message)
+        }
+    }
+
+    private func expectThrows(_ operation: () throws -> Void) throws {
+        do {
+            try operation()
+            throw TaskTitleDeleteE2EAutomationError.failed("operation unexpectedly succeeded")
+        } catch let error as TaskTitleDeleteE2EAutomationError {
+            throw error
+        } catch {}
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum TaskTitleDeleteE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
     }
 }
 
@@ -2512,6 +2624,35 @@ final class SuntraceStore: ObservableObject {
         }
     }
 
+    func renameTraceTitle(traceID: DayTraceID, title: String) {
+        guard let trace = engine.traces[traceID] else { return }
+        let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard nextTitle.isEmpty == false else { return }
+        do {
+            pushUndoSnapshotIfAllowed(on: trace.date)
+            try engine.renameTaskTitle(chainID: trace.chainID, title: nextTitle, today: today)
+            objectWillChange.send()
+            persist()
+            showToast("任务标题已更新")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func renamePoolTask(chainID: TaskChainID, title: String) {
+        let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard nextTitle.isEmpty == false else { return }
+        do {
+            pushUndoSnapshot()
+            try engine.renameTaskTitle(chainID: chainID, title: nextTitle, today: today)
+            objectWillChange.send()
+            persist()
+            showToast("任务标题已更新")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
     func updatePoolTaskText(chainID: TaskChainID, descriptionText: String? = nil, note: String? = nil) {
         guard let definition = currentDefinition(for: chainID) else { return }
         do {
@@ -2523,6 +2664,21 @@ final class SuntraceStore: ObservableObject {
                 note: note ?? definition.note
             )
             persist()
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func deletePoolTask(_ chainID: TaskChainID) {
+        do {
+            pushUndoSnapshot()
+            try engine.removeTaskFromPool(chainID: chainID)
+            if selectedPoolChainID == chainID {
+                clearSelection()
+            }
+            objectWillChange.send()
+            persist()
+            showToast("已从任务池删除")
         } catch {
             showToast(error.localizedDescription)
         }
@@ -4943,6 +5099,17 @@ struct PoolTaskRow: View {
             SmallActionButton(store.copy.scheduleToday, tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
             SmallActionButton(store.copy.scheduleTomorrow) { store.schedulePoolTask(task.chain.id, date: SuntraceStore.offset(store.today, by: 1)) }
             SmallActionButton(store.copy.schedulePickDate) { store.showingPicker = .schedulePool(task.chain.id) }
+            Button(role: .destructive) {
+                store.deletePoolTask(task.chain.id)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 22, height: 22)
+                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.warn)
+            .help("删除任务")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
@@ -8112,6 +8279,90 @@ extension DetailTitleRow where Trailing == EmptyView {
     }
 }
 
+struct EditableDetailTitleRow<Trailing: View>: View {
+    let title: String
+    let editable: Bool
+    let onCommit: (String) -> Void
+    @ViewBuilder let trailing: Trailing
+    @State private var draft: String
+    @FocusState private var focused: Bool
+
+    init(
+        _ title: String,
+        editable: Bool,
+        onCommit: @escaping (String) -> Void,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.title = title
+        self.editable = editable
+        self.onCommit = onCommit
+        self.trailing = trailing()
+        _draft = State(initialValue: title)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if editable {
+                TextField("任务标题", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                    .lineLimit(2)
+                    .focused($focused)
+                    .onSubmit(commitDraft)
+                    .onChange(of: focused) { oldValue, newValue in
+                        if oldValue, newValue == false {
+                            commitDraft()
+                        }
+                    }
+                    .onChange(of: title) { _, newValue in
+                        if focused == false {
+                            draft = newValue
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(focused ? Theme.accent.opacity(0.65) : Theme.line))
+            } else {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            trailing
+                .padding(.top, 1)
+                .frame(minWidth: 24, alignment: .trailing)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func commitDraft() {
+        let nextTitle = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard nextTitle.isEmpty == false else {
+            draft = title
+            return
+        }
+        guard nextTitle != title else {
+            draft = title
+            return
+        }
+        draft = nextTitle
+        onCommit(nextTitle)
+    }
+}
+
+extension EditableDetailTitleRow where Trailing == EmptyView {
+    init(_ title: String, editable: Bool, onCommit: @escaping (String) -> Void) {
+        self.init(title, editable: editable, onCommit: onCommit) {
+            EmptyView()
+        }
+    }
+}
+
 struct DetailDescriptionBlock: View {
     @Binding var text: String
     let placeholder: String
@@ -8398,6 +8649,7 @@ struct TaskDetail: View {
     var progress: TraceProgress { store.engine.traceProgress(for: trace.id) }
     var subtasks: [Subtask] { store.subtasks(for: trace.id) }
     var canEditText: Bool { trace.status == .pending && trace.date >= store.today }
+    var canRenameTitle: Bool { trace.status == .pending && trace.date >= store.today }
     var canEditManualProgress: Bool { trace.status == .pending && trace.date == store.today && subtasks.isEmpty }
     var canAddSubtask: Bool { trace.status == .pending && trace.date >= store.today }
 
@@ -8408,7 +8660,9 @@ struct TaskDetail: View {
                     TaskContextMenu(trace: trace)
                 })
             })
-            DetailTitleRow(definition.title)
+            EditableDetailTitleRow(definition.title, editable: canRenameTitle) {
+                store.renameTraceTitle(traceID: trace.id, title: $0)
+            }
 
             DetailDescriptionBlock(
                 text: Binding(
@@ -9006,10 +9260,14 @@ struct PoolDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DetailHeader("任务池", onClose: { store.clearSelection() })
-            Text(task.definition.title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.text1)
+            DetailHeader("任务池", onClose: { store.clearSelection() }, trailing: {
+                IconMenuButton(menuContent: {
+                    Button("删除任务", role: .destructive) { store.deletePoolTask(task.chain.id) }
+                })
+            })
+            EditableDetailTitleRow(task.definition.title, editable: true) {
+                store.renamePoolTask(chainID: task.chain.id, title: $0)
+            }
             DetailDescriptionBlock(
                 text: Binding(
                     get: { task.definition.descriptionText ?? "" },
@@ -9333,7 +9591,9 @@ struct FuturePlanDetail: View {
                     Button(store.copy.returnToPool) { store.returnToPool(trace.id) }
                 })
             })
-            DetailTitleRow(definition.title)
+            EditableDetailTitleRow(definition.title, editable: true) {
+                store.renameTraceTitle(traceID: trace.id, title: $0)
+            }
 
             DetailDescriptionBlock(
                 text: Binding(

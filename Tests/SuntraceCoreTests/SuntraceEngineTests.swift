@@ -29,6 +29,65 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertTrue(engine.getDayTodo(date: day1).traces.isEmpty)
     }
 
+    func testTaskTitleRenameAppliesOnlyToEditablePoolCurrentAndFutureTasks() throws {
+        let engine = SuntraceEngine()
+        let poolChainID = try engine.createPoolTask(title: "任务池旧标题", now: now)
+
+        try engine.renameTaskTitle(chainID: poolChainID, title: "任务池新标题", today: day1, now: now)
+        XCTAssertEqual(engine.taskPool().first?.definition.title, "任务池新标题")
+
+        let currentTraceID = try engine.scheduleFromPool(chainID: poolChainID, date: day1, today: day1, now: now)
+        try engine.renameTaskTitle(chainID: poolChainID, title: "今日新标题", today: day1, now: now)
+        let currentTrace = try XCTUnwrap(engine.traces[currentTraceID])
+        XCTAssertEqual(currentTrace.status, .pending)
+        XCTAssertEqual(engine.definitions[currentTrace.definitionID]?.title, "今日新标题")
+        XCTAssertTrue(engine.traces.values.allSatisfy { $0.status != .changed })
+
+        let futureChainID = try engine.createPoolTask(title: "未来旧标题", now: now)
+        let futureTraceID = try engine.scheduleFromPool(chainID: futureChainID, date: day2, today: day1, now: now)
+        try engine.renameTaskTitle(chainID: futureChainID, title: "未来新标题", today: day1, now: now)
+        let futureTrace = try XCTUnwrap(engine.traces[futureTraceID])
+        XCTAssertEqual(futureTrace.status, .pending)
+        XCTAssertEqual(engine.definitions[futureTrace.definitionID]?.title, "未来新标题")
+    }
+
+    func testTaskTitleRenameRejectsCompletedAndUnfinishedFacts() throws {
+        let engine = SuntraceEngine()
+        let completedChainID = try engine.createPoolTask(title: "完成旧标题", now: now)
+        let completedTraceID = try engine.scheduleFromPool(chainID: completedChainID, date: day1, today: day1, now: now)
+        try engine.markCompleted(traceID: completedTraceID, today: day1, now: now)
+
+        XCTAssertThrowsError(
+            try engine.renameTaskTitle(chainID: completedChainID, title: "完成新标题", today: day1, now: now)
+        )
+
+        let unfinishedChainID = try engine.createPoolTask(title: "未完成旧标题", now: now)
+        _ = try engine.scheduleFromPool(chainID: unfinishedChainID, date: day1, today: day1, now: now)
+        engine.settleDays(upTo: day2, now: now)
+
+        XCTAssertThrowsError(
+            try engine.renameTaskTitle(chainID: unfinishedChainID, title: "未完成新标题", today: day2, now: now)
+        )
+    }
+
+    func testTaskPoolRemovalDeletesUnscheduledAndPreservesReturnedHistory() throws {
+        let engine = SuntraceEngine()
+        let unscheduledChainID = try engine.createPoolTask(title: "未排期删除", now: now)
+
+        try engine.removeTaskFromPool(chainID: unscheduledChainID, now: now)
+        XCTAssertNil(engine.chains[unscheduledChainID])
+        XCTAssertTrue(engine.definitions.values.allSatisfy { $0.chainID != unscheduledChainID })
+
+        let returnedChainID = try engine.createPoolTask(title: "回池删除", now: now)
+        let returnedTraceID = try engine.scheduleFromPool(chainID: returnedChainID, date: day1, today: day1, now: now)
+        try engine.returnToPool(traceID: returnedTraceID, today: day1, now: now)
+
+        try engine.removeTaskFromPool(chainID: returnedChainID, now: now)
+        XCTAssertEqual(engine.traces[returnedTraceID]?.status, .returnedToPool)
+        XCTAssertEqual(engine.chains[returnedChainID]?.state, .abandoned)
+        XCTAssertFalse(engine.taskPool().contains { $0.chain.id == returnedChainID })
+    }
+
     func testTaskTagsUseThreeSlotsAndActiveTagRules() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "Tag 任务", now: now)

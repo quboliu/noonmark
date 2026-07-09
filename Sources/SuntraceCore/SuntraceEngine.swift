@@ -107,6 +107,64 @@ public final class SuntraceEngine {
         }
     }
 
+    public func renameTaskTitle(
+        chainID: TaskChainID,
+        title: String,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        let normalizedTitle = try normalizeTitle(title)
+        var chain = try chain(chainID)
+        guard chain.state == .active else {
+            throw SuntraceError.chainAbandoned
+        }
+
+        let chainTraces = traces.values.filter { $0.chainID == chainID }
+        let editableStatuses: Set<TraceStatus> = [.pending, .returnedToPool]
+        guard chainTraces.allSatisfy({ editableStatuses.contains($0.status) }) else {
+            throw SuntraceError.invalidTransition("completed and unfinished task facts cannot be renamed")
+        }
+        guard chainTraces.allSatisfy({ $0.status != .pending || $0.date >= today }) else {
+            throw SuntraceError.immutableHistory
+        }
+
+        var currentDefinition = try currentDefinition(for: chainID)
+        guard currentDefinition.title != normalizedTitle else { return }
+
+        if chainTraces.isEmpty {
+            currentDefinition.title = normalizedTitle
+            definitions[currentDefinition.id] = currentDefinition
+        } else {
+            let nextSequence = (definitions.values
+                .filter { $0.chainID == chainID }
+                .map(\.sequence)
+                .max() ?? currentDefinition.sequence) + 1
+            let renamedDefinition = TaskDefinition(
+                chainID: chainID,
+                sequence: nextSequence,
+                title: normalizedTitle,
+                descriptionText: currentDefinition.descriptionText,
+                note: currentDefinition.note,
+                plannedSubtasks: currentDefinition.plannedSubtasks,
+                now: now
+            )
+
+            currentDefinition.supersededAt = now
+            currentDefinition.supersededByDefinitionID = renamedDefinition.id
+            definitions[currentDefinition.id] = currentDefinition
+            definitions[renamedDefinition.id] = renamedDefinition
+
+            for trace in chainTraces where trace.status == .pending {
+                var renamedTrace = trace
+                renamedTrace.definitionID = renamedDefinition.id
+                traces[renamedTrace.id] = renamedTrace
+            }
+        }
+
+        chain.updatedAt = now
+        chains[chainID] = chain
+    }
+
     @discardableResult
     public func addPlannedSubtask(
         chainID: TaskChainID,
@@ -310,6 +368,27 @@ public final class SuntraceEngine {
         for definition in definitions.values where definition.chainID == chainID {
             definitions.removeValue(forKey: definition.id)
         }
+    }
+
+    public func removeTaskFromPool(chainID: TaskChainID, now: Date = Date()) throws {
+        guard isInTaskPool(chainID) else {
+            throw SuntraceError.invalidTransition("only task-pool tasks can be removed")
+        }
+
+        let chainTraces = traces.values.filter { $0.chainID == chainID }
+        guard chainTraces.allSatisfy({ $0.status == .returnedToPool }) else {
+            throw SuntraceError.invalidTransition("completed and unfinished task facts cannot be deleted")
+        }
+
+        guard chainTraces.isEmpty == false else {
+            try deleteUnscheduledTask(chainID: chainID)
+            return
+        }
+
+        var chain = try chain(chainID)
+        chain.state = .abandoned
+        chain.updatedAt = now
+        chains[chainID] = chain
     }
 
     public func getDayTodo(date: LocalDate, sort: ViewSort = .priority) -> DayTodoView {

@@ -187,6 +187,31 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         XCTAssertEqual(restored.providerSends.last?.failure?.code, "invalid_provider_response")
     }
 
+    func testImmediateProviderCompletionStillProducesStrictlyOrderedEvents() async throws {
+        let repository = makeRepository()
+        let session = try makeAuthorizedSession()
+        try repository.save(session)
+        let provider = StubZhulongProvider(
+            identity: try makeProviderIdentity(),
+            probe: ProviderProbe(result: .success(makeResponse()))
+        )
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let startedAt = baseDate.addingTimeInterval(2)
+
+        let completed = try await orchestrator.run(
+            sessionID: session.id,
+            payload: makePayload(),
+            provider: provider,
+            startedAt: startedAt,
+            completedAt: { startedAt }
+        )
+
+        XCTAssertGreaterThan(
+            try XCTUnwrap(completed.providerSends.last?.completedAt),
+            startedAt
+        )
+    }
+
     func testConcurrentSecondRunIsRejectedBeforeDuplicateProviderCall() async throws {
         let repository = makeRepository()
         let session = try makeAuthorizedSession()

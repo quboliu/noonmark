@@ -160,6 +160,71 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.load(session.id), session)
     }
 
+    func testRepositoryRoundTripsCorrectionsAndPausedWorkspace() throws {
+        let repository = makeRepository(key: key)
+        var session = try ZhulongSession(
+            primaryIntent: "规划发布新版",
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+        let answer = try session.appendEntry(
+            author: .user,
+            kind: .answer,
+            content: "周五完成。",
+            now: now.addingTimeInterval(1)
+        )
+        _ = try session.correctEntry(
+            answer.id,
+            author: .user,
+            replacementContent: "下周一完成。",
+            now: now.addingTimeInterval(2)
+        )
+        try session.pause(now: now.addingTimeInterval(3))
+
+        try repository.save(session)
+
+        XCTAssertEqual(try repository.load(session.id), session)
+    }
+
+    func testRepositoryRejectsCorrectionWhoseTargetWasForged() throws {
+        let repository = makeRepository(key: key)
+        var session = try ZhulongSession(
+            primaryIntent: "规划发布新版",
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+        let answer = try session.appendEntry(
+            author: .user,
+            kind: .answer,
+            content: "周五完成。",
+            now: now.addingTimeInterval(1)
+        )
+        _ = try session.correctEntry(
+            answer.id,
+            author: .user,
+            replacementContent: "下周一完成。",
+            now: now.addingTimeInterval(2)
+        )
+        var record = ZhulongSessionRecord(session)
+        let correction = record.entries[2]
+        record.entries[2] = ZhulongSessionEntry(
+            id: correction.id,
+            author: correction.author,
+            kind: correction.kind,
+            content: correction.content,
+            createdAt: correction.createdAt,
+            correctsEntryID: ZhulongSessionEntryID()
+        )
+        try repository.saveRecordForTesting(record)
+
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(
+                error as? ZhulongSessionRestorationError,
+                .invalidEventsForPhase
+            )
+        }
+    }
+
     private func makeRepository(key: Data) -> EncryptedFileZhulongSessionRepository {
         EncryptedFileZhulongSessionRepository(
             directoryURL: directoryURL,

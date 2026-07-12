@@ -44,7 +44,7 @@ public actor ZhulongProviderOrchestrator {
         defer { activeSessionIDs.remove(sessionID) }
 
         let result = await provider.complete(request)
-        let resultDate = max(completedAt(), startedAt)
+        let resultDate = strictlyLaterDate(completedAt(), than: startedAt)
         switch result {
         case let .success(response):
             do {
@@ -97,5 +97,12 @@ public actor ZhulongProviderOrchestrator {
             )
         }
         return failure
+    }
+
+    private func strictlyLaterDate(_ candidate: Date, than earlier: Date) -> Date {
+        guard candidate <= earlier else { return candidate }
+        return Date(
+            timeIntervalSinceReferenceDate: earlier.timeIntervalSinceReferenceDate.nextUp
+        )
     }
 }

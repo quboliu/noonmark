@@ -83,8 +83,6 @@ public enum ZhulongSessionPhase: String, Codable, Equatable, Sendable {
     case readyForProvider
     case providerRunning
     case draftReview
-    case paused
-    case archived
 }
 
 public enum ZhulongSessionEventKind: String, Codable, Equatable, Sendable {
@@ -93,6 +91,10 @@ public enum ZhulongSessionEventKind: String, Codable, Equatable, Sendable {
     case providerRunStarted
     case providerRunFailed
     case draftReady
+    case sessionCorrected
+    case sessionPaused
+    case sessionResumed
+    case sessionArchived
 }
 
 public struct ZhulongSessionEvent: Codable, Equatable, Sendable {
@@ -100,7 +102,17 @@ public struct ZhulongSessionEvent: Codable, Equatable, Sendable {
     public let kind: ZhulongSessionEventKind
     public let occurredAt: Date
     public let summary: String
-    public let providerRunID: ZhulongProviderRunID?
+    public let reference: ZhulongSessionEventReference?
+
+    public var providerRunID: ZhulongProviderRunID? {
+        guard case let .providerRun(runID) = reference else { return nil }
+        return runID
+    }
+
+    public var sessionEntryID: ZhulongSessionEntryID? {
+        guard case let .sessionEntry(entryID) = reference else { return nil }
+        return entryID
+    }
 }
 
 public struct ZhulongScopeAuthorization: Equatable, Sendable {
@@ -130,6 +142,13 @@ public enum ZhulongSessionError: Error, Equatable, Sendable {
     case invalidDraftVersion
     case invalidProviderFailure
     case invalidProviderResponse
+    case workspaceInactive
+    case invalidWorkspaceTransition
+    case providerRunStillActive
+    case emptySessionEntry
+    case correctionRequiresTarget
+    case missingCorrectionTarget
+    case correctionTargetIsCorrection
     case nonMonotonicEventTime
     case invalidTransition(from: ZhulongSessionPhase, to: ZhulongSessionPhase)
 }
@@ -143,6 +162,8 @@ public struct ZhulongSession: Equatable, Sendable {
     public private(set) var draftVersion: Int?
     public private(set) var providerSends: [ZhulongProviderSendRecord]
     public private(set) var events: [ZhulongSessionEvent]
+    public internal(set) var workspaceStatus: ZhulongWorkspaceStatus
+    public internal(set) var entries: [ZhulongSessionEntry]
 
     public var authorization: ZhulongScopeAuthorization? { authorizations.last }
 
@@ -167,13 +188,24 @@ public struct ZhulongSession: Equatable, Sendable {
         authorizations = []
         draftVersion = nil
         providerSends = []
+        workspaceStatus = .active
+        entries = [
+            ZhulongSessionEntry(
+                id: ZhulongSessionEntryID(),
+                author: .user,
+                kind: .statement,
+                content: normalizedIntent,
+                createdAt: now,
+                correctsEntryID: nil
+            )
+        ]
         events = [
             ZhulongSessionEvent(
                 sequence: 1,
                 kind: .sessionCreated,
                 occurredAt: now,
                 summary: "已建立烛龙会话",
-                providerRunID: nil
+                reference: nil
             )
         ]
     }
@@ -186,7 +218,9 @@ public struct ZhulongSession: Equatable, Sendable {
         authorizations: [ZhulongScopeAuthorization],
         draftVersion: Int?,
         providerSends: [ZhulongProviderSendRecord],
-        events: [ZhulongSessionEvent]
+        events: [ZhulongSessionEvent],
+        workspaceStatus: ZhulongWorkspaceStatus,
+        entries: [ZhulongSessionEntry]
     ) {
         id = restoredID
         self.primaryIntent = primaryIntent
@@ -196,6 +230,8 @@ public struct ZhulongSession: Equatable, Sendable {
         self.draftVersion = draftVersion
         self.providerSends = providerSends
         self.events = events
+        self.workspaceStatus = workspaceStatus
+        self.entries = entries
     }
 
     public mutating func authorizeScope(
@@ -204,6 +240,9 @@ public struct ZhulongSession: Equatable, Sendable {
         expiresAt: Date,
         now: Date = Date()
     ) throws {
+        guard workspaceStatus == .active else {
+            throw ZhulongSessionError.workspaceInactive
+        }
         let canExplicitlyReauthorize = phase == .readyForProvider
         guard phase == .scopeReview || canExplicitlyReauthorize else {
             throw ZhulongSessionError.invalidTransition(from: phase, to: .readyForProvider)
@@ -236,6 +275,9 @@ public struct ZhulongSession: Equatable, Sendable {
         runID: ZhulongProviderRunID = ZhulongProviderRunID(),
         now: Date = Date()
     ) throws -> ZhulongProviderRequest {
+        guard workspaceStatus == .active else {
+            throw ZhulongSessionError.workspaceInactive
+        }
         guard phase == .readyForProvider, let authorization else {
             if authorization == nil {
                 throw ZhulongSessionError.scopeNotAuthorized
@@ -264,7 +306,7 @@ public struct ZhulongSession: Equatable, Sendable {
         appendEvent(
             .providerRunStarted,
             summary: "已向 Provider 发送授权内容",
-            providerRunID: runID,
+            reference: .providerRun(runID),
             now: now
         )
         return ZhulongProviderRequest(
@@ -297,7 +339,7 @@ public struct ZhulongSession: Equatable, Sendable {
         appendEvent(
             .draftReady,
             summary: "Provider 已返回可审查草稿",
-            providerRunID: runID,
+            reference: .providerRun(runID),
             now: now
         )
     }
@@ -323,7 +365,7 @@ public struct ZhulongSession: Equatable, Sendable {
         appendEvent(
             .providerRunFailed,
             summary: "Provider 请求失败",
-            providerRunID: runID,
+            reference: .providerRun(runID),
             now: now
         )
     }
@@ -345,10 +387,10 @@ public struct ZhulongSession: Equatable, Sendable {
         )
     }
 
-    private mutating func appendEvent(
+    mutating func appendEvent(
         _ kind: ZhulongSessionEventKind,
         summary: String,
-        providerRunID: ZhulongProviderRunID? = nil,
+        reference: ZhulongSessionEventReference? = nil,
         now: Date
     ) {
         events.append(
@@ -357,15 +399,23 @@ public struct ZhulongSession: Equatable, Sendable {
                 kind: kind,
                 occurredAt: now,
                 summary: summary,
-                providerRunID: providerRunID
+                reference: reference
             )
         )
     }
 
-    private func validateEventTime(_ now: Date) throws {
-        guard let lastEvent = events.last, now >= lastEvent.occurredAt else {
+    func validateActivityTime(_ now: Date) throws {
+        let lastActivity = max(
+            events.last?.occurredAt ?? .distantPast,
+            entries.last?.createdAt ?? .distantPast
+        )
+        guard now > lastActivity else {
             throw ZhulongSessionError.nonMonotonicEventTime
         }
+    }
+
+    private func validateEventTime(_ now: Date) throws {
+        try validateActivityTime(now)
     }
 
     private func activeSendIndex(runID: ZhulongProviderRunID) throws -> Int {

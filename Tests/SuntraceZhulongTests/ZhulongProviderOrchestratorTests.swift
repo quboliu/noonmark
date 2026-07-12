@@ -509,7 +509,36 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
 
     private func makeResponse(draftVersion: Int = 1) -> ZhulongProviderResponse {
         ZhulongProviderResponse(
-            content: "{\"summary\":\"今日完成两项\"}",
+            content: """
+            {
+              "kind":"planArtifact",
+              "summary":"先取得测量，再交付近期切片。",
+              "stages":[
+                {"id":"measure","title":"工程测量","objective":"取得真实数据","horizon":"nearTerm","dependencyIDs":[],"deliverables":["测量记录"],"triggerCondition":null},
+                {"id":"delivery","title":"交付切片","objective":"完成任务成形闭环","horizon":"later","dependencyIDs":["measure"],"deliverables":[],"triggerCondition":"测量记录已审查"}
+              ],
+              "decisionExplanations":[
+                {
+                  "subject":"为何先测量",
+                  "userDecisions":["先处理未完成任务"],
+                  "assumptions":[],
+                  "dataScopes":["currentDayTodo"],
+                  "evidence":["当前没有同度量工程数据"],
+                  "constraints":["不写入 Todo"],
+                  "alternatives":[
+                    {"title":"直接排期","tradeoffs":["快，但没有证据"]},
+                    {"title":"先测量","tradeoffs":["较慢，但可校准"]}
+                  ],
+                  "counterexamples":["直接排期会隐藏证据缺口"],
+                  "rationale":"测量后才能形成可信承诺。",
+                  "uncertainties":["测量结果尚未知"],
+                  "expectedImpacts":["近期只生成调查任务"],
+                  "requiredAuthorizations":["todoWrite"]
+                }
+              ],
+              "precisionClaims":[]
+            }
+            """,
             draftVersion: draftVersion
         )
     }

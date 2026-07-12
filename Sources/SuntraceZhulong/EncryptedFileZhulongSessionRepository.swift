@@ -10,11 +10,14 @@ public enum ZhulongSidecarRepositoryError: Error, Equatable {
     case unsupportedEnvelope
     case invalidCiphertext
     case missingSession
+    case invalidLegacyProvenance
 }
 
 public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @unchecked Sendable {
     private static let magic = Data("NOONMARK-ZHULONG-SIDECAR".utf8)
-    private static let formatVersion: UInt8 = 3
+    private static let formatVersion: UInt8 = 4
+    private static let migratedLegacyFormatVersion: UInt8 = 5
+    private static let planningBriefFormatVersion: UInt8 = 3
     private static let workspaceFormatVersion: UInt8 = 2
     private static let legacyFormatVersion: UInt8 = 1
 
@@ -37,7 +40,19 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
     }
 
     public func save(_ session: ZhulongSession) throws {
-        try saveRecord(ZhulongSessionRecord(session))
+        let containsLegacyPlanning = session.providerSends.contains {
+            if case .migratedLegacyPlanning = $0.purpose { return true }
+            return false
+        }
+        guard containsLegacyPlanning == false || session.hasAuthenticatedLegacyPlanningProvenance else {
+            throw ZhulongSidecarRepositoryError.invalidLegacyProvenance
+        }
+        try saveRecord(
+            ZhulongSessionRecord(session),
+            version: containsLegacyPlanning
+                ? Self.migratedLegacyFormatVersion
+                : Self.formatVersion
+        )
     }
 
     public func load(_ id: ZhulongSessionID) throws -> ZhulongSession {
@@ -61,23 +76,34 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             version: decodedEnvelope.version
         )
         let record: ZhulongSessionRecord
+        let allowsMigratedLegacyPlanning: Bool
         switch decodedEnvelope.version {
         case Self.legacyFormatVersion:
             let legacy = try decoder.decode(ZhulongSessionRecordV1.self, from: plaintext)
             record = ZhulongSessionRecord(migrating: legacy)
+            allowsMigratedLegacyPlanning = false
         case Self.workspaceFormatVersion:
             let workspace = try decoder.decode(ZhulongSessionRecordV2.self, from: plaintext)
             record = ZhulongSessionRecord(migrating: workspace)
-        case Self.formatVersion:
+            allowsMigratedLegacyPlanning = false
+        case Self.planningBriefFormatVersion:
+            let planningBrief = try decoder.decode(ZhulongSessionRecordV3.self, from: plaintext)
+            record = ZhulongSessionRecord(migrating: planningBrief)
+            allowsMigratedLegacyPlanning = true
+        case Self.formatVersion, Self.migratedLegacyFormatVersion:
             record = try decoder.decode(ZhulongSessionRecord.self, from: plaintext)
+            allowsMigratedLegacyPlanning = decodedEnvelope.version == Self.migratedLegacyFormatVersion
         default:
             throw ZhulongSidecarRepositoryError.unsupportedEnvelope
         }
-        return try record.restore(expectedID: id)
+        return try record.restore(
+            expectedID: id,
+            allowsMigratedLegacyPlanning: allowsMigratedLegacyPlanning
+        )
     }
 
     func saveRecordForTesting(_ record: ZhulongSessionRecord) throws {
-        try saveRecord(record)
+        try saveRecord(record, version: Self.formatVersion)
     }
 
     func saveLegacySessionForTesting(_ session: ZhulongSession) throws {
@@ -98,11 +124,23 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         )
     }
 
-    private func saveRecord(_ record: ZhulongSessionRecord) throws {
+    func saveVersionThreeSessionForTesting(_ session: ZhulongSession) throws {
+        try saveVersionThreeRecordForTesting(ZhulongSessionRecordV3(session))
+    }
+
+    func saveVersionThreeRecordForTesting(_ record: ZhulongSessionRecordV3) throws {
         try savePlaintext(
             encoder.encode(record),
             id: record.id,
-            version: Self.formatVersion
+            version: Self.planningBriefFormatVersion
+        )
+    }
+
+    private func saveRecord(_ record: ZhulongSessionRecord, version: UInt8) throws {
+        try savePlaintext(
+            encoder.encode(record),
+            id: record.id,
+            version: version
         )
     }
 
@@ -156,7 +194,9 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         let version = envelope[Self.magic.count]
         guard version == Self.legacyFormatVersion ||
             version == Self.workspaceFormatVersion ||
-            version == Self.formatVersion
+            version == Self.planningBriefFormatVersion ||
+            version == Self.formatVersion ||
+            version == Self.migratedLegacyFormatVersion
         else {
             throw ZhulongSidecarRepositoryError.unsupportedEnvelope
         }
@@ -221,7 +261,7 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             let workspaceKeys = Set(["workspaceStatus", "entries"])
             requiredKeys = commonKeys.union(workspaceKeys)
             allowedKeys = requiredKeys.union(optionalKeys)
-        case Self.formatVersion:
+        case Self.planningBriefFormatVersion:
             let planningKeys = Set([
                 "workspaceStatus", "entries", "planningBriefs", "planningBriefReviews",
                 "planningBriefInvalidations", "planningDelegations",
@@ -229,6 +269,16 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
                 "planningRunInvalidations"
             ])
             requiredKeys = commonKeys.union(planningKeys)
+            allowedKeys = requiredKeys.union(optionalKeys)
+        case Self.formatVersion, Self.migratedLegacyFormatVersion:
+            let planningOutputKeys = Set([
+                "workspaceStatus", "entries", "planningBriefs", "planningBriefReviews",
+                "planningBriefInvalidations", "planningDelegations",
+                "planningDelegationConsumptions", "planningDelegationInvalidations",
+                "planningRunInvalidations", "decisionGates", "decisionGateResolutions",
+                "planArtifacts"
+            ])
+            requiredKeys = commonKeys.union(planningOutputKeys)
             allowedKeys = requiredKeys.union(optionalKeys)
         default:
             throw ZhulongSidecarRepositoryError.unsupportedEnvelope

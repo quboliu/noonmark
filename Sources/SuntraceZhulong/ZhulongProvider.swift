@@ -72,6 +72,7 @@ public struct ZhulongPlanningRunContract: Codable, Equatable, Sendable {
 public enum ZhulongProviderRunPurpose: Codable, Equatable, Sendable {
     case conversation
     case delegatedPlanning(ZhulongPlanningRunContract)
+    case migratedLegacyPlanning(ZhulongPlanningRunContract)
 }
 
 public struct ZhulongProviderRequest: Equatable, Sendable {
@@ -85,9 +86,9 @@ public struct ZhulongProviderRequest: Equatable, Sendable {
 
 public struct ZhulongProviderResponse: Codable, Equatable, Sendable {
     public let content: String
-    public let draftVersion: Int
+    public let draftVersion: Int?
 
-    public init(content: String, draftVersion: Int) {
+    public init(content: String, draftVersion: Int? = nil) {
         self.content = content.trimmingCharacters(in: .whitespacesAndNewlines)
         self.draftVersion = draftVersion
     }
@@ -194,6 +195,25 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
             purpose: purpose,
             startedAt: startedAt,
             result: .failed(completedAt: date, failure: failure)
+        )
+    }
+
+    var planningContract: ZhulongPlanningRunContract? {
+        switch purpose {
+        case .conversation: nil
+        case let .delegatedPlanning(contract), let .migratedLegacyPlanning(contract): contract
+        }
+    }
+
+    var migratedFromVersionThree: Self {
+        guard case let .delegatedPlanning(contract) = purpose else { return self }
+        return Self(
+            runID: runID,
+            providerIdentity: providerIdentity,
+            payload: payload,
+            purpose: .migratedLegacyPlanning(contract),
+            startedAt: startedAt,
+            result: result
         )
     }
 }

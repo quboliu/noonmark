@@ -149,6 +149,47 @@ struct ZhulongSessionRecordV2: Codable, Equatable {
     }
 }
 
+struct ZhulongSessionRecordV3: Codable, Equatable {
+    var id: ZhulongSessionID
+    var primaryIntent: String
+    var proposedScopes: Set<ZhulongDataScope>
+    var phase: ZhulongSessionPhase
+    var authorizations: [ZhulongScopeAuthorizationRecord]
+    var draftVersion: Int?
+    var providerSends: [ZhulongProviderSendRecord]
+    var events: [ZhulongSessionEventRecord]
+    var workspaceStatus: ZhulongWorkspaceStatus
+    var entries: [ZhulongSessionEntry]
+    var planningBriefs: [ZhulongPlanningBrief]
+    var planningBriefReviews: [ZhulongPlanningBriefReview]
+    var planningBriefInvalidations: [ZhulongPlanningBriefInvalidation]
+    var planningDelegations: [ZhulongPlanningDelegation]
+    var planningDelegationConsumptions: [ZhulongPlanningDelegationConsumption]
+    var planningDelegationInvalidations: [ZhulongPlanningDelegationInvalidation]
+    var planningRunInvalidations: [ZhulongPlanningRunInvalidation]
+
+    init(_ session: ZhulongSession) {
+        let record = ZhulongSessionRecord(session)
+        id = record.id
+        primaryIntent = record.primaryIntent
+        proposedScopes = record.proposedScopes
+        phase = record.phase
+        authorizations = record.authorizations
+        draftVersion = record.draftVersion
+        providerSends = record.providerSends
+        events = record.events
+        workspaceStatus = record.workspaceStatus
+        entries = record.entries
+        planningBriefs = record.planningBriefs
+        planningBriefReviews = record.planningBriefReviews
+        planningBriefInvalidations = record.planningBriefInvalidations
+        planningDelegations = record.planningDelegations
+        planningDelegationConsumptions = record.planningDelegationConsumptions
+        planningDelegationInvalidations = record.planningDelegationInvalidations
+        planningRunInvalidations = record.planningRunInvalidations
+    }
+}
+
 private struct ZhulongEventReplayState {
     var phase = ZhulongSessionPhase.scopeReview
     var authorizationIndex = 0
@@ -165,6 +206,9 @@ private struct ZhulongEventReplayState {
     var consumptionIndex = 0
     var invalidationIndex = 0
     var runInvalidationIndex = 0
+    var decisionGateIndex = 0
+    var decisionGateResolutionIndex = 0
+    var planArtifactIndex = 0
     var currentBriefID: ZhulongPlanningBriefID?
     var reviewedBriefID: ZhulongPlanningBriefID?
     var activeDelegationID: ZhulongPlanningDelegationID?
@@ -174,6 +218,10 @@ private struct ZhulongEventReplayState {
     var pendingBriefInvalidationSourceID: ZhulongSessionEntryID?
     var pendingPlanningRunDelegationID: ZhulongPlanningDelegationID?
     var pendingRunInvalidationIDs: [ZhulongProviderRunID] = []
+    var currentDecisionGateID: ZhulongDecisionGateID?
+    var pendingDecisionGateResolutionID: ZhulongDecisionGateID?
+    var latestDecisionGateResolutionEntryID: ZhulongSessionEntryID?
+    var requiredDecisionGateRevisionEntryID: ZhulongSessionEntryID?
 }
 
 struct ZhulongSessionRecord: Codable, Equatable {
@@ -194,6 +242,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
     var planningDelegationConsumptions: [ZhulongPlanningDelegationConsumption]
     var planningDelegationInvalidations: [ZhulongPlanningDelegationInvalidation]
     var planningRunInvalidations: [ZhulongPlanningRunInvalidation]
+    var decisionGates: [ZhulongDecisionGate]
+    var decisionGateResolutions: [ZhulongDecisionGateResolution]
+    var planArtifacts: [ZhulongPlanArtifact]
 
     init(_ session: ZhulongSession) {
         id = session.id
@@ -228,6 +279,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
         planningDelegationConsumptions = session.planningDelegationConsumptions
         planningDelegationInvalidations = session.planningDelegationInvalidations
         planningRunInvalidations = session.planningRunInvalidations
+        decisionGates = session.decisionGates
+        decisionGateResolutions = session.decisionGateResolutions
+        planArtifacts = session.planArtifacts
     }
 
     init(migrating record: ZhulongSessionRecordV1) {
@@ -266,6 +320,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
         planningDelegationConsumptions = []
         planningDelegationInvalidations = []
         planningRunInvalidations = []
+        decisionGates = []
+        decisionGateResolutions = []
+        planArtifacts = []
     }
 
     init(migrating record: ZhulongSessionRecordV2) {
@@ -286,9 +343,45 @@ struct ZhulongSessionRecord: Codable, Equatable {
         planningDelegationConsumptions = []
         planningDelegationInvalidations = []
         planningRunInvalidations = []
+        decisionGates = []
+        decisionGateResolutions = []
+        planArtifacts = []
     }
 
-    func restore(expectedID: ZhulongSessionID) throws -> ZhulongSession {
+    init(migrating record: ZhulongSessionRecordV3) {
+        id = record.id
+        primaryIntent = record.primaryIntent
+        proposedScopes = record.proposedScopes
+        phase = record.phase
+        authorizations = record.authorizations
+        draftVersion = record.draftVersion
+        providerSends = record.providerSends.map(\.migratedFromVersionThree)
+        events = record.events
+        workspaceStatus = record.workspaceStatus
+        entries = record.entries
+        planningBriefs = record.planningBriefs
+        planningBriefReviews = record.planningBriefReviews
+        planningBriefInvalidations = record.planningBriefInvalidations
+        planningDelegations = record.planningDelegations
+        planningDelegationConsumptions = record.planningDelegationConsumptions
+        planningDelegationInvalidations = record.planningDelegationInvalidations
+        planningRunInvalidations = record.planningRunInvalidations
+        decisionGates = []
+        decisionGateResolutions = []
+        planArtifacts = []
+    }
+
+    func restore(
+        expectedID: ZhulongSessionID,
+        allowsMigratedLegacyPlanning: Bool
+    ) throws -> ZhulongSession {
+        let containsMigratedLegacyPlanning = providerSends.contains { send in
+            if case .migratedLegacyPlanning = send.purpose { return true }
+            return false
+        }
+        guard allowsMigratedLegacyPlanning || containsMigratedLegacyPlanning == false else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
         try validateBase(expectedID: expectedID)
         try validateEntries()
         let restoredAuthorizations = try restoreAuthorizations()
@@ -322,7 +415,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
             planningDelegations: planningDelegations,
             planningDelegationConsumptions: planningDelegationConsumptions,
             planningDelegationInvalidations: planningDelegationInvalidations,
-            planningRunInvalidations: planningRunInvalidations
+            planningRunInvalidations: planningRunInvalidations,
+            decisionGates: decisionGates,
+            decisionGateResolutions: decisionGateResolutions,
+            planArtifacts: planArtifacts,
+            hasAuthenticatedLegacyPlanningProvenance: allowsMigratedLegacyPlanning &&
+                containsMigratedLegacyPlanning
         )
     }
 
@@ -382,15 +480,83 @@ struct ZhulongSessionRecord: Codable, Equatable {
                   invalidation.invalidatedAt.timeIntervalSinceReferenceDate.isFinite &&
                       providerSends.contains(where: { send in
                           guard send.runID == invalidation.runID,
-                                case let .delegatedPlanning(contract) = send.purpose
+                                let contract = send.planningContract
                           else { return false }
                           return contract.briefID == invalidation.briefID
                       }) &&
                       validPlanningRunInvalidation(invalidation)
+              }),
+              Set(decisionGates.map(\.id)).count == decisionGates.count,
+              Set(decisionGates.map(\.runID)).count == decisionGates.count,
+              decisionGates.allSatisfy(validDecisionGate),
+              Set(decisionGateResolutions.map(\.gateID)).count == decisionGateResolutions.count,
+              decisionGateResolutions.allSatisfy(validDecisionGateResolution),
+              Set(planArtifacts.map(\.id)).count == planArtifacts.count,
+              Set(planArtifacts.map(\.runID)).count == planArtifacts.count,
+              planArtifacts.enumerated().allSatisfy({ offset, artifact in
+                  artifact.version == offset + 1 && validPlanArtifact(artifact)
               })
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
+    }
+
+    private func validDecisionGate(_ gate: ZhulongDecisionGate) -> Bool {
+        guard gate.sessionID == id,
+              gate.openedAt.timeIntervalSinceReferenceDate.isFinite,
+              let send = providerSends.first(where: { $0.runID == gate.runID }),
+              send.providerIdentity == gate.providerIdentity,
+              send.payload.contextVersion == gate.contextVersion,
+              send.completedAt == gate.openedAt,
+              send.response?.draftVersion == nil,
+              case let .delegatedPlanning(contract) = send.purpose,
+              contract.briefID == gate.briefID,
+              contract.briefVersion == gate.briefVersion,
+              let parsed = try? ZhulongPlanningOutputParser().parse(send.response?.content ?? ""),
+              case let .decisionGate(parsedDraft) = parsed
+        else { return false }
+        return parsedDraft == gate.draft
+    }
+
+    private func validDecisionGateResolution(_ resolution: ZhulongDecisionGateResolution) -> Bool {
+        guard resolution.resolvedAt.timeIntervalSinceReferenceDate.isFinite,
+              let gate = decisionGates.first(where: { $0.id == resolution.gateID }),
+              let option = gate.draft.options.first(where: {
+                  $0.id == resolution.selectedOptionID
+              }),
+              let entry = entries.first(where: { $0.id == resolution.decisionEntryID }),
+              entry.kind == .decision,
+              entry.author == .user,
+              entry.createdAt > gate.openedAt,
+              resolution.resolvedAt == Date(
+                  timeIntervalSinceReferenceDate: entry.createdAt.timeIntervalSinceReferenceDate.nextUp
+              ),
+              entry.content == option.title ||
+              entry.content.hasPrefix("\(option.title)：") &&
+              entry.content.count > option.title.count + 1
+        else { return false }
+        return true
+    }
+
+    private func validPlanArtifact(_ artifact: ZhulongPlanArtifact) -> Bool {
+        guard artifact.sessionID == id,
+              artifact.createdAt.timeIntervalSinceReferenceDate.isFinite,
+              let send = providerSends.first(where: { $0.runID == artifact.runID }),
+              send.providerIdentity == artifact.providerIdentity,
+              send.payload.contextVersion == artifact.contextVersion,
+              send.completedAt == artifact.createdAt,
+              send.response?.draftVersion == artifact.version,
+              case let .delegatedPlanning(contract) = send.purpose,
+              contract.briefID == artifact.briefID,
+              contract.briefVersion == artifact.briefVersion,
+              let brief = planningBriefs.first(where: {
+                  $0.id == contract.briefID && $0.version == contract.briefVersion
+              }),
+              let parsed = try? ZhulongPlanningOutputParser().parse(send.response?.content ?? ""),
+              case let .planArtifact(parsedProposal) = parsed,
+              parsedProposal.isBound(to: brief, contract: contract, payload: send.payload)
+        else { return false }
+        return parsedProposal == artifact.proposal
     }
 
     private func validPlanningRunInvalidation(
@@ -551,7 +717,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
             return true
         case let .succeeded(completedAt, response):
             return validCompletionTime(completedAt, after: send.startedAt) &&
-                response.draftVersion > 0 &&
+                (response.draftVersion.map { $0 > 0 } ?? true) &&
                 response.content.isEmpty == false &&
                 response.content == response.content.trimmingCharacters(in: .whitespacesAndNewlines)
         case let .failed(completedAt, failure):
@@ -606,16 +772,21 @@ struct ZhulongSessionRecord: Codable, Equatable {
               state.consumptionIndex == planningDelegationConsumptions.count,
               state.invalidationIndex == planningDelegationInvalidations.count,
               state.runInvalidationIndex == planningRunInvalidations.count,
+              state.decisionGateIndex == decisionGates.count,
+              state.decisionGateResolutionIndex == decisionGateResolutions.count,
+              state.planArtifactIndex == planArtifacts.count,
               state.pendingInvalidationID == nil,
               state.pendingInvalidationReason == nil,
               state.pendingBriefInvalidationID == nil,
               state.pendingBriefInvalidationSourceID == nil,
               state.pendingPlanningRunDelegationID == nil,
+              state.pendingDecisionGateResolutionID == nil,
               state.pendingRunInvalidationIDs.isEmpty,
               state.phase == phase,
               state.currentBriefID == currentPlanningBriefID(),
               state.reviewedBriefID == currentReviewedBriefID(),
               state.activeDelegationID == currentActiveDelegationID(),
+              state.currentDecisionGateID == currentDecisionGateID(),
               state.workspaceStatus == workspaceStatus,
               entriesAllowedByWorkspaceEvents()
         else {
@@ -646,6 +817,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
             try consumePlanningDelegationInvalidation(event, state: &state)
         case .planningRunInvalidated:
             try consumePlanningRunInvalidation(event, state: &state)
+        case .planningDecisionGateResolved:
+            try consumeDecisionGateResolution(event, state: &state)
         default:
             try consumeSessionEvent(
                 event,
@@ -663,6 +836,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
     ) throws {
         let expectedKind: ZhulongSessionEventKind? = if state.pendingBriefInvalidationID != nil {
             .planningBriefInvalidated
+        } else if state.pendingDecisionGateResolutionID != nil {
+            .planningDecisionGateResolved
         } else if state.pendingRunInvalidationIDs.isEmpty == false {
             .planningRunInvalidated
         } else if state.pendingInvalidationID != nil {
@@ -691,7 +866,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
             try consumeAuthorization(event, state: &state, authorizations: authorizations)
         case .providerRunStarted:
             try consumeProviderStart(event, state: &state)
-        case .providerRunFailed, .draftReady:
+        case .providerRunFailed, .draftReady, .planningDecisionGateOpened:
             try consumeProviderResult(event, state: &state)
         case .sessionCorrected:
             try consumeCorrection(event, state: &state, corrections: corrections)
@@ -706,7 +881,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
         case .planningBriefPublished, .planningBriefReviewed,
              .planningBriefInvalidated,
              .planningDelegationGranted, .planningDelegationConsumed,
-             .planningDelegationInvalidated, .planningRunInvalidated:
+             .planningDelegationInvalidated, .planningRunInvalidated,
+             .planningDecisionGateResolved:
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
     }
@@ -769,14 +945,99 @@ struct ZhulongSessionRecord: Codable, Equatable {
         guard state.workspaceStatus == .active,
               state.waitingForSendResult,
               state.phase == .providerRunning,
-              state.sendIndex < providerSends.count,
-              event == resultEvent(providerSends[state.sendIndex], sequence: event.sequence)
+              state.sendIndex < providerSends.count
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
-        state.phase = event.kind == .draftReady ? .draftReview : .readyForProvider
+        let send = providerSends[state.sendIndex]
+        switch send.result {
+        case .running:
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        case .failed:
+            guard event == resultEvent(send, sequence: event.sequence) else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            state.phase = .readyForProvider
+        case let .succeeded(_, response):
+            try consumeSucceededProviderResult(
+                event,
+                send: send,
+                response: response,
+                state: &state
+            )
+        }
         state.sendIndex += 1
         state.waitingForSendResult = false
+    }
+
+    private func consumeSucceededProviderResult(
+        _ event: ZhulongSessionEventRecord,
+        send: ZhulongProviderSendRecord,
+        response: ZhulongProviderResponse,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        switch send.purpose {
+        case .delegatedPlanning:
+            guard let output = try? ZhulongPlanningOutputParser().parse(response.content) else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            switch output {
+            case .decisionGate:
+                guard response.draftVersion == nil else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+                try consumeDecisionGateResult(event, send: send, state: &state)
+            case .planArtifact:
+                guard response.draftVersion != nil else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+                try consumePlanArtifactResult(event, send: send, state: &state)
+            }
+        case .conversation, .migratedLegacyPlanning:
+            guard event == resultEvent(send, sequence: event.sequence) else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            state.phase = .draftReview
+        }
+    }
+
+    private func consumeDecisionGateResult(
+        _ event: ZhulongSessionEventRecord,
+        send: ZhulongProviderSendRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard state.decisionGateIndex < decisionGates.count else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let gate = decisionGates[state.decisionGateIndex]
+        guard gate.runID == send.runID,
+              validDecisionGate(gate),
+              event == decisionGateOpenedEvent(gate, sequence: event.sequence)
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        state.currentDecisionGateID = gate.id
+        state.decisionGateIndex += 1
+        state.phase = .decisionGate
+    }
+
+    private func consumePlanArtifactResult(
+        _ event: ZhulongSessionEventRecord,
+        send: ZhulongProviderSendRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard state.planArtifactIndex < planArtifacts.count else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let artifact = planArtifacts[state.planArtifactIndex]
+        guard artifact.runID == send.runID,
+              validPlanArtifact(artifact),
+              event == planArtifactReadyEvent(artifact, sequence: event.sequence)
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        state.planArtifactIndex += 1
+        state.phase = .draftReview
     }
 
     private func validRunAuthority(
@@ -787,7 +1048,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         case .conversation:
             return state.pendingPlanningRunDelegationID == nil &&
                 state.activeDelegationID == nil
-        case let .delegatedPlanning(contract):
+        case let .delegatedPlanning(contract), let .migratedLegacyPlanning(contract):
             guard state.pendingPlanningRunDelegationID == contract.delegationID,
                   let delegation = planningDelegations.first(where: {
                       $0.id == contract.delegationID
@@ -804,7 +1065,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
     ) -> Bool {
         switch send.purpose {
         case .conversation: phase == .readyForProvider
-        case .delegatedPlanning: phase == .readyForProvider || phase == .draftReview
+        case .delegatedPlanning, .migratedLegacyPlanning:
+            phase == .readyForProvider || phase == .draftReview
         }
     }
 
@@ -840,7 +1102,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
     ) -> Bool {
         guard state.waitingForSendResult,
               state.sendIndex < providerSends.count,
-              case let .delegatedPlanning(contract) = providerSends[state.sendIndex].purpose,
+              let contract = providerSends[state.sendIndex].planningContract,
               contract.briefID == state.currentBriefID
         else { return false }
         return invalidation == nil
@@ -869,7 +1131,42 @@ struct ZhulongSessionRecord: Codable, Equatable {
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
+        if let gateID = state.currentDecisionGateID {
+            guard state.decisionGateResolutionIndex < decisionGateResolutions.count,
+                  decisionGateResolutions[state.decisionGateResolutionIndex].gateID == gateID,
+                  decisionGateResolutions[state.decisionGateResolutionIndex].decisionEntryID ==
+                  decisions[state.decisionIndex].id
+            else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            state.pendingDecisionGateResolutionID = gateID
+        }
         state.decisionIndex += 1
+    }
+
+    private func consumeDecisionGateResolution(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard state.workspaceStatus == .active,
+              state.phase == .decisionGate,
+              let gateID = state.pendingDecisionGateResolutionID,
+              state.decisionGateResolutionIndex < decisionGateResolutions.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let resolution = decisionGateResolutions[state.decisionGateResolutionIndex]
+        guard resolution.gateID == gateID,
+              event == decisionGateResolutionEvent(resolution, sequence: event.sequence)
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        state.pendingDecisionGateResolutionID = nil
+        state.currentDecisionGateID = nil
+        state.latestDecisionGateResolutionEntryID = resolution.decisionEntryID
+        state.requiredDecisionGateRevisionEntryID = resolution.decisionEntryID
+        state.decisionGateResolutionIndex += 1
+        state.phase = .readyForProvider
     }
 
     private func consumePlanningBrief(
@@ -879,12 +1176,15 @@ struct ZhulongSessionRecord: Codable, Equatable {
         guard state.workspaceStatus == .active,
               state.waitingForSendResult == false,
               state.phase != .providerRunning,
+              state.phase != .decisionGate,
               state.briefIndex < planningBriefs.count
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
         let brief = planningBriefs[state.briefIndex]
-        guard event == planningBriefEvent(brief, sequence: event.sequence) else {
+        guard event == planningBriefEvent(brief, sequence: event.sequence),
+              validDecisionGateRevision(brief, requiredEntryID: state.requiredDecisionGateRevisionEntryID)
+        else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
         if let previousBriefID = state.currentBriefID {
@@ -894,12 +1194,29 @@ struct ZhulongSessionRecord: Codable, Equatable {
                 invalidationIndex: state.runInvalidationIndex
             )
         }
+        state.requiredDecisionGateRevisionEntryID = nil
         state.pendingInvalidationID = state.activeDelegationID
         state.pendingInvalidationReason = state.activeDelegationID == nil ? nil : .briefRevised
         state.currentBriefID = brief.id
         state.reviewedBriefID = nil
         state.activeDelegationID = nil
         state.briefIndex += 1
+    }
+
+    private func validDecisionGateRevision(
+        _ brief: ZhulongPlanningBrief,
+        requiredEntryID: ZhulongSessionEntryID?
+    ) -> Bool {
+        guard let requiredEntryID else { return true }
+        guard brief.sourceEntryIDs.contains(requiredEntryID),
+              let decision = entries.first(where: { $0.id == requiredEntryID }),
+              decision.kind == .decision,
+              decision.author == .user
+        else { return false }
+        let effectiveDecision = entries.last(where: {
+            $0.correctsEntryID == requiredEntryID
+        })?.content ?? decision.content
+        return brief.userDecisions.contains(effectiveDecision)
     }
 
     private func consumePlanningBriefReview(
@@ -960,6 +1277,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         )
         state.currentBriefID = nil
         state.reviewedBriefID = nil
+        state.requiredDecisionGateRevisionEntryID = state.latestDecisionGateResolutionEntryID
         state.pendingBriefInvalidationID = nil
         state.pendingBriefInvalidationSourceID = nil
         state.briefInvalidationIndex += 1
@@ -975,7 +1293,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         )
         return providerSends.prefix(completedSendCount).compactMap { send in
             guard alreadyInvalidated.contains(send.runID) == false,
-                  case let .delegatedPlanning(contract) = send.purpose,
+                  let contract = send.planningContract,
                   contract.briefID == briefID
             else { return nil }
             return send.runID
@@ -1001,6 +1319,13 @@ struct ZhulongSessionRecord: Codable, Equatable {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
         state.pendingRunInvalidationIDs.removeFirst()
+        let invalidatesDecisionGate = state.currentDecisionGateID.map { gateID in
+            decisionGates.first(where: { $0.id == gateID })?.runID == runID
+        } ?? false
+        if invalidatesDecisionGate {
+            state.currentDecisionGateID = nil
+            state.phase = .readyForProvider
+        }
         state.runInvalidationIndex += 1
     }
 
@@ -1013,6 +1338,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
               state.phase != .providerRunning,
               state.pendingInvalidationID == nil,
               state.activeDelegationID == nil,
+              state.requiredDecisionGateRevisionEntryID == nil,
               state.delegationIndex < planningDelegations.count
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
@@ -1201,6 +1527,45 @@ struct ZhulongSessionRecord: Codable, Equatable {
         }
     }
 
+    private func decisionGateOpenedEvent(
+        _ gate: ZhulongDecisionGate,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .planningDecisionGateOpened,
+            occurredAt: gate.openedAt,
+            summary: "规划运行已停在用户决策门",
+            reference: .decisionGate(gate.id)
+        )
+    }
+
+    private func decisionGateResolutionEvent(
+        _ resolution: ZhulongDecisionGateResolution,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .planningDecisionGateResolved,
+            occurredAt: resolution.resolvedAt,
+            summary: "用户已处置规划决策门，必须修订简报后重新委托",
+            reference: .decisionGate(resolution.gateID)
+        )
+    }
+
+    private func planArtifactReadyEvent(
+        _ artifact: ZhulongPlanArtifact,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .draftReady,
+            occurredAt: artifact.createdAt,
+            summary: "Provider 已返回可审查结构化计划产物",
+            reference: .planArtifact(artifact.id)
+        )
+    }
+
     private func correctionEvent(
         _ correction: ZhulongSessionEntry,
         sequence: UInt64
@@ -1352,6 +1717,16 @@ struct ZhulongSessionRecord: Codable, Equatable {
         return delegation.id
     }
 
+    private func currentDecisionGateID() -> ZhulongDecisionGateID? {
+        guard phase == .decisionGate,
+              let gate = decisionGates.last,
+              decisionGateResolutions.contains(where: { $0.gateID == gate.id }) == false,
+              currentPlanningBriefID() == gate.briefID,
+              planningRunInvalidations.contains(where: { $0.runID == gate.runID }) == false
+        else { return nil }
+        return gate.id
+    }
+
     private func workspaceEvent(
         kind: ZhulongSessionEventKind,
         summary: String,
@@ -1403,16 +1778,46 @@ struct ZhulongSessionRecord: Codable, Equatable {
             else {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
+        case .decisionGate:
+            guard authorizations.isEmpty == false,
+                  draftVersion == nil,
+                  providerSends.last?.status == .succeeded,
+                  providerSends.last?.response?.draftVersion == nil,
+                  decisionGates.last?.runID == providerSends.last?.runID,
+                  decisionGateResolutions.contains(where: {
+                      $0.gateID == decisionGates.last?.id
+                  }) == false,
+                  providerSends.dropLast().allSatisfy({ $0.status != .running })
+            else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
         case .draftReview:
             guard authorizations.isEmpty == false,
                   let draftVersion,
                   draftVersion > 0,
                   providerSends.last?.status == .succeeded,
                   providerSends.last?.response?.draftVersion == draftVersion,
+                  validDraftReviewProjection(draftVersion: draftVersion),
                   providerSends.dropLast().allSatisfy({ $0.status != .running })
             else {
                 throw ZhulongSessionRestorationError.invalidDraftVersion
             }
+        }
+    }
+
+    private func validDraftReviewProjection(draftVersion: Int) -> Bool {
+        guard let send = providerSends.last,
+              let response = send.response
+        else { return false }
+        switch send.purpose {
+        case .conversation, .migratedLegacyPlanning:
+            return true
+        case .delegatedPlanning:
+            guard let parsed = try? ZhulongPlanningOutputParser().parse(response.content),
+                  case .planArtifact = parsed
+            else { return false }
+            return planArtifacts.last?.runID == send.runID &&
+                planArtifacts.last?.version == draftVersion
         }
     }
 }

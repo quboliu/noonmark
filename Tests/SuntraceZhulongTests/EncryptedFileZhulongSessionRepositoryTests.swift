@@ -62,21 +62,28 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 2]
+            replacementVersions: [1, 2, 3, 5]
+        )
+
+        try repository.saveVersionThreeSessionForTesting(session)
+        try assertVersionTamperingFails(
+            repository: repository,
+            sessionID: session.id,
+            replacementVersions: [1, 2, 4, 5]
         )
 
         try repository.saveVersionTwoSessionForTesting(session)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 3]
+            replacementVersions: [1, 3, 4, 5]
         )
 
         try repository.saveLegacySessionForTesting(session)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [2, 3]
+            replacementVersions: [2, 3, 4, 5]
         )
     }
 
@@ -251,6 +258,307 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.load(versionTwoSession.id), migrated)
     }
 
+    func testRepositoryMigratesVersionThreePlanningBriefSession() throws {
+        let repository = makeRepository(key: key)
+        var session = try makePlanningSession()
+        let brief = try session.publishPlanningBrief(
+            makePlanningBriefDraft(for: session),
+            now: now.addingTimeInterval(2)
+        )
+        try session.reviewPlanningBrief(brief.id, now: now.addingTimeInterval(3))
+        _ = try session.delegatePlanning(for: brief.id, now: now.addingTimeInterval(4))
+        try repository.saveVersionThreeSessionForTesting(session)
+
+        let migrated = try repository.load(session.id)
+
+        XCTAssertEqual(migrated, session)
+        XCTAssertTrue(migrated.decisionGates.isEmpty)
+        XCTAssertTrue(migrated.planArtifacts.isEmpty)
+    }
+
+    func testVersionThreeRawPlanArtifactMigratesToReadOnlyLegacyPurpose() throws {
+        let repository = makeRepository(key: key)
+        let session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
+        var record = ZhulongSessionRecordV3(session)
+        let send = try XCTUnwrap(record.providerSends.last)
+        let completedAt = try XCTUnwrap(send.completedAt)
+        record.providerSends[record.providerSends.count - 1] = ZhulongProviderSendRecord(
+            runID: send.runID,
+            providerIdentity: send.providerIdentity,
+            payload: send.payload,
+            purpose: send.purpose,
+            startedAt: send.startedAt,
+            result: .succeeded(
+                completedAt: completedAt,
+                response: ZhulongProviderResponse(content: "旧版规划草稿", draftVersion: 1)
+            )
+        )
+        let finalSequence = try XCTUnwrap(record.events.last?.sequence)
+        record.events[record.events.count - 1] = ZhulongSessionEventRecord(
+            sequence: finalSequence,
+            kind: .draftReady,
+            occurredAt: completedAt,
+            summary: "Provider 已返回可审查草稿",
+            reference: .providerRun(send.runID)
+        )
+        try repository.saveVersionThreeRecordForTesting(record)
+
+        let migrated = try repository.load(session.id)
+
+        guard case .migratedLegacyPlanning = migrated.providerSends.last?.purpose else {
+            return XCTFail("Expected explicit legacy planning purpose")
+        }
+        XCTAssertEqual(migrated.effectiveDraftVersion, 1)
+        XCTAssertNil(migrated.effectivePlanArtifact)
+        XCTAssertTrue(migrated.planArtifacts.isEmpty)
+        try repository.save(migrated)
+        XCTAssertEqual(try repository.load(session.id), migrated)
+        try assertVersionTamperingFails(
+            repository: repository,
+            sessionID: session.id,
+            replacementVersions: [1, 2, 3, 4]
+        )
+    }
+
+    func testRepositoryRoundTripsStructuredPlanArtifactAndRejectsMissingArtifact() throws {
+        let repository = makeRepository(key: key)
+        let session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
+
+        try repository.save(session)
+
+        XCTAssertEqual(try repository.load(session.id), session)
+        var forged = ZhulongSessionRecord(session)
+        forged.planArtifacts.removeAll()
+        try repository.saveRecordForTesting(forged)
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSessionRestorationError, .invalidDraftVersion)
+        }
+    }
+
+    func testCurrentEnvelopeRejectsDelegatedPlanningRelabeledAsMigratedLegacy() throws {
+        let repository = makeRepository(key: key)
+        let session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
+        var record = ZhulongSessionRecord(session)
+        let send = try XCTUnwrap(record.providerSends.last)
+        let contract = try XCTUnwrap(send.planningContract)
+        record.providerSends[record.providerSends.count - 1] = ZhulongProviderSendRecord(
+            runID: send.runID,
+            providerIdentity: send.providerIdentity,
+            payload: send.payload,
+            purpose: .migratedLegacyPlanning(contract),
+            startedAt: send.startedAt,
+            result: send.result
+        )
+        try repository.saveRecordForTesting(record)
+
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSessionRestorationError, .invalidEventsForPhase)
+        }
+    }
+
+    func testCurrentEnvelopeRejectsUnstructuredDelegatedSuccessWithoutArtifact() throws {
+        let repository = makeRepository(key: key)
+        let session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
+        var record = ZhulongSessionRecord(session)
+        let send = try XCTUnwrap(record.providerSends.last)
+        let completedAt = try XCTUnwrap(send.completedAt)
+        record.providerSends[record.providerSends.count - 1] = ZhulongProviderSendRecord(
+            runID: send.runID,
+            providerIdentity: send.providerIdentity,
+            payload: send.payload,
+            purpose: send.purpose,
+            startedAt: send.startedAt,
+            result: .succeeded(
+                completedAt: completedAt,
+                response: ZhulongProviderResponse(content: "未结构化旧草稿", draftVersion: 1)
+            )
+        )
+        record.planArtifacts.removeAll()
+        let sequence = try XCTUnwrap(record.events.last?.sequence)
+        record.events[record.events.count - 1] = ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .draftReady,
+            occurredAt: completedAt,
+            summary: "Provider 已返回可审查草稿",
+            reference: .providerRun(send.runID)
+        )
+        try repository.saveRecordForTesting(record)
+
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSessionRestorationError, .invalidDraftVersion)
+        }
+    }
+
+    func testCurrentEnvelopeRejectsPrecisionClaimWhoseBasisWasRewritten() throws {
+        let repository = makeRepository(key: key)
+        let validOutput = structuredPlanArtifactJSON()
+            .replacingOccurrences(
+                of: "普通 Todo 必须离线可用",
+                with: "必须在 2026-08-01 前完成"
+            )
+            .replacingOccurrences(
+                of: "\"precisionClaims\":[]",
+                with: precisionClaimJSON(basis: "必须在 2026-08-01 前完成")
+            )
+        let session = try makeStructuredPlanningSession(output: validOutput)
+        var record = ZhulongSessionRecord(session)
+        let send = try XCTUnwrap(record.providerSends.last)
+        let completedAt = try XCTUnwrap(send.completedAt)
+        let forgedOutput = structuredPlanArtifactJSON()
+            .replacingOccurrences(
+                of: "普通 Todo 必须离线可用",
+                with: "模型自称 2026-08-01 前完成"
+            )
+            .replacingOccurrences(
+                of: "\"precisionClaims\":[]",
+                with: precisionClaimJSON(basis: "模型自称 2026-08-01 前完成")
+            )
+        record.providerSends[record.providerSends.count - 1] = ZhulongProviderSendRecord(
+            runID: send.runID,
+            providerIdentity: send.providerIdentity,
+            payload: send.payload,
+            purpose: send.purpose,
+            startedAt: send.startedAt,
+            result: .succeeded(
+                completedAt: completedAt,
+                response: ZhulongProviderResponse(content: forgedOutput, draftVersion: 1)
+            )
+        )
+        let parsed = try ZhulongPlanningOutputParser().parse(forgedOutput)
+        guard case let .planArtifact(forgedProposal) = parsed else {
+            return XCTFail("Expected forged plan artifact")
+        }
+        let artifact = try XCTUnwrap(record.planArtifacts.last)
+        record.planArtifacts[record.planArtifacts.count - 1] = ZhulongPlanArtifact(
+            id: artifact.id,
+            sessionID: artifact.sessionID,
+            runID: artifact.runID,
+            briefID: artifact.briefID,
+            briefVersion: artifact.briefVersion,
+            providerIdentity: artifact.providerIdentity,
+            contextVersion: artifact.contextVersion,
+            version: artifact.version,
+            createdAt: artifact.createdAt,
+            proposal: forgedProposal
+        )
+        try repository.saveRecordForTesting(record)
+
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSessionRestorationError, .invalidEventsForPhase)
+        }
+    }
+
+    func testRepositoryRoundTripsResolvedDecisionGate() throws {
+        let repository = makeRepository(key: key)
+        var session = try makeStructuredPlanningSession(output: decisionGateJSON(), draftVersion: nil)
+        let gate = try XCTUnwrap(session.currentDecisionGate)
+        _ = try session.resolveDecisionGate(
+            gate.id,
+            selectedOptionID: "investigate",
+            supplementalDecision: "只形成真实测量任务。",
+            now: now.addingTimeInterval(7)
+        )
+
+        try repository.save(session)
+
+        XCTAssertEqual(try repository.load(session.id), session)
+    }
+
+    func testRepositoryRoundTripsGateSourceCorrectionBeforeAndAfterResolution() throws {
+        let repository = makeRepository(key: key)
+        var unresolved = try makeStructuredPlanningSession(
+            output: decisionGateJSON(),
+            draftVersion: nil
+        )
+        _ = try unresolved.correctEntry(
+            unresolved.entries[0].id,
+            author: .user,
+            replacementContent: "规划发布稳定版并先测量",
+            now: now.addingTimeInterval(7)
+        )
+        try repository.save(unresolved)
+        XCTAssertEqual(try repository.load(unresolved.id), unresolved)
+
+        var resolved = try makeStructuredPlanningSession(
+            output: decisionGateJSON(),
+            draftVersion: nil
+        )
+        let gate = try XCTUnwrap(resolved.currentDecisionGate)
+        let resolution = try resolved.resolveDecisionGate(
+            gate.id,
+            selectedOptionID: "investigate",
+            supplementalDecision: "只形成真实测量任务。",
+            now: now.addingTimeInterval(7)
+        )
+        let sourceID = resolved.entries[0].id
+        _ = try resolved.correctEntry(
+            sourceID,
+            author: .user,
+            replacementContent: "规划发布稳定版并先测量",
+            now: now.addingTimeInterval(8)
+        )
+        _ = try resolved.publishPlanningBrief(
+            ZhulongPlanningBriefDraft(
+                goal: "发布稳定版并先测量",
+                successCriteria: ["真实 App E2E 通过"],
+                hardConstraints: ["普通 Todo 必须离线可用"],
+                userDecisions: ["先完成 Mac 版", "先调查：只形成真实测量任务。"],
+                delegatedActivities: [.taskDecomposition, .sequencing, .riskReview],
+                assumptions: ["Provider 配置保持可用"],
+                openQuestions: [],
+                dataScopes: [.currentDayTodo],
+                sourceEntryIDs: [sourceID, resolution.decisionEntryID]
+            ),
+            now: now.addingTimeInterval(9)
+        )
+        try repository.save(resolved)
+        XCTAssertEqual(try repository.load(resolved.id), resolved)
+    }
+
+    func testRepositoryRejectsBriefRevisionThatNoLongerIncludesGateDecision() throws {
+        let repository = makeRepository(key: key)
+        var session = try makeStructuredPlanningSession(output: decisionGateJSON(), draftVersion: nil)
+        let gate = try XCTUnwrap(session.currentDecisionGate)
+        let resolution = try session.resolveDecisionGate(
+            gate.id,
+            selectedOptionID: "investigate",
+            supplementalDecision: "只形成真实测量任务。",
+            now: now.addingTimeInterval(7)
+        )
+        _ = try session.publishPlanningBrief(
+            ZhulongPlanningBriefDraft(
+                goal: "发布稳定版",
+                successCriteria: ["真实 App E2E 通过"],
+                hardConstraints: ["普通 Todo 必须离线可用"],
+                userDecisions: ["先完成 Mac 版", "先调查：只形成真实测量任务。"],
+                delegatedActivities: [.taskDecomposition, .sequencing, .riskReview],
+                assumptions: ["Provider 配置保持可用"],
+                openQuestions: [],
+                dataScopes: [.currentDayTodo],
+                sourceEntryIDs: [session.entries[0].id, resolution.decisionEntryID]
+            ),
+            now: now.addingTimeInterval(8)
+        )
+        var record = ZhulongSessionRecord(session)
+        let entryIndex = try XCTUnwrap(record.entries.firstIndex(where: {
+            $0.id == resolution.decisionEntryID
+        }))
+        let entry = record.entries[entryIndex]
+        record.entries[entryIndex] = ZhulongSessionEntry(
+            id: entry.id,
+            author: entry.author,
+            kind: entry.kind,
+            content: "先调查：改成另一项。",
+            createdAt: entry.createdAt,
+            correctsEntryID: entry.correctsEntryID
+        )
+        try repository.saveRecordForTesting(record)
+
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSessionRestorationError, .invalidEventsForPhase)
+        }
+    }
+
     func testRepositoryRoundTripsPlanningBriefReviewDelegationAndInvalidation() throws {
         let repository = makeRepository(key: key)
         var session = try makePlanningSession()
@@ -397,7 +705,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         }
     }
 
-    func testRepositoryRoundTripsInvalidatedCompletedPlanningDraft() throws {
+    func testRepositoryRoundTripsInvalidatedCompletedPlanArtifact() throws {
         let repository = makeRepository(key: key)
         var session = try makePlanningSession()
         let sourceID = session.entries[0].id
@@ -418,8 +726,8 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
             providerIdentity: makeProviderIdentity(),
             now: now.addingTimeInterval(5)
         )
-        try session.recordProviderResponse(
-            ZhulongProviderResponse(content: "规划草稿 v1", draftVersion: 1),
+        try session.recordPlanningProviderResponse(
+            ZhulongProviderResponse(content: structuredPlanArtifactJSON(), draftVersion: 1),
             runID: request.runID,
             now: now.addingTimeInterval(6)
         )
@@ -463,8 +771,8 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
             providerIdentity: makeProviderIdentity(),
             now: now.addingTimeInterval(5)
         )
-        try session.recordProviderResponse(
-            ZhulongProviderResponse(content: "规划草稿 v1", draftVersion: 1),
+        try session.recordPlanningProviderResponse(
+            ZhulongProviderResponse(content: structuredPlanArtifactJSON(), draftVersion: 1),
             runID: firstRequest.runID,
             now: now.addingTimeInterval(6)
         )
@@ -625,7 +933,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try ZhulongPlanningBriefDraft(
             goal: "发布稳定版",
             successCriteria: ["真实 App E2E 通过"],
-            hardConstraints: ["普通 Todo 必须离线可用"],
+            hardConstraints: ["普通 Todo 必须离线可用", "必须在 2026-08-01 前完成"],
             userDecisions: ["先完成 Mac 版"],
             delegatedActivities: [.taskDecomposition, .sequencing, .riskReview],
             assumptions: ["Provider 配置保持可用"],
@@ -645,6 +953,65 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
             contextVersion: contextVersion,
             scopeContent: [.currentDayTodo: "今日任务摘要"]
         )
+    }
+
+    private func makeStructuredPlanningSession(
+        output: String,
+        draftVersion: Int? = 1
+    ) throws -> ZhulongSession {
+        var session = try makePlanningSession()
+        let brief = try session.publishPlanningBrief(
+            makePlanningBriefDraft(for: session),
+            now: now.addingTimeInterval(2)
+        )
+        try session.reviewPlanningBrief(brief.id, now: now.addingTimeInterval(3))
+        let delegation = try session.delegatePlanning(for: brief.id, now: now.addingTimeInterval(4))
+        let request = try session.beginPlanningProviderRun(
+            delegationID: delegation.id,
+            payload: planningPayload(for: session, contextVersion: "context-v1"),
+            providerIdentity: makeProviderIdentity(),
+            now: now.addingTimeInterval(5)
+        )
+        try session.recordPlanningProviderResponse(
+            ZhulongProviderResponse(content: output, draftVersion: draftVersion),
+            runID: request.runID,
+            now: now.addingTimeInterval(6)
+        )
+        return session
+    }
+
+    private func decisionGateJSON() -> String {
+        """
+        {"kind":"decisionGate","summary":"证据不足。","prompt":"怎样继续？","reason":"缺少测量。","evidenceGaps":["没有同度量历史"],"options":[{"id":"investigate","title":"先调查","impact":"形成测量任务"},{"id":"stop","title":"保留未决","impact":"停止规划"}]}
+        """
+    }
+
+    private func structuredPlanArtifactJSON() -> String {
+        """
+        {
+          "kind":"planArtifact",
+          "summary":"先取得测量，再交付近期切片。",
+          "stages":[
+            {"id":"measure","title":"工程测量","objective":"取得真实数据","horizon":"nearTerm","dependencyIDs":[],"deliverables":["测量记录"],"triggerCondition":null},
+            {"id":"delivery","title":"交付切片","objective":"完成任务成形闭环","horizon":"later","dependencyIDs":["measure"],"deliverables":[],"triggerCondition":"测量记录已审查"}
+          ],
+          "decisionExplanations":[{
+            "subject":"为何先测量","userDecisions":["先完成 Mac 版"],"assumptions":["Provider 配置保持可用"],"dataScopes":["currentDayTodo"],"evidence":["当前没有同度量工程数据"],"constraints":["普通 Todo 必须离线可用"],
+            "alternatives":[{"title":"直接排期","tradeoffs":["快但无证据"]},{"title":"先测量","tradeoffs":["较慢但可校准"]}],
+            "counterexamples":["直接排期会隐藏证据缺口"],"rationale":"测量后才能形成可信承诺。","uncertainties":["测量结果未知"],"expectedImpacts":["近期只生成调查任务"],"requiredAuthorizations":["todoWrite"]
+          }],
+          "precisionClaims":[]
+        }
+        """
+    }
+
+    private func precisionClaimJSON(basis: String) -> String {
+        """
+        "precisionClaims":[{
+          "kind":"targetDate","dateValue":"2026-08-01","numericValue":null,
+          "basisSource":"hardConstraint","basis":"\(basis)","basisValue":"2026-08-01","dataScope":null
+        }]
+        """
     }
 }
 

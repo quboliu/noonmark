@@ -41,6 +41,8 @@ public enum ZhulongSessionEventReference: Codable, Equatable, Sendable {
     case sessionEntry(ZhulongSessionEntryID)
     case planningBrief(ZhulongPlanningBriefID)
     case planningDelegation(ZhulongPlanningDelegationID)
+    case decisionGate(ZhulongDecisionGateID)
+    case planArtifact(ZhulongPlanArtifactID)
 }
 
 public extension ZhulongSession {
@@ -57,6 +59,26 @@ public extension ZhulongSession {
         guard kind != .correction else {
             throw ZhulongSessionError.correctionRequiresTarget
         }
+        guard phase != .decisionGate || kind != .decision else {
+            throw ZhulongSessionError.decisionGateRequiresAtomicResolution
+        }
+        return try appendEntryUnchecked(author: author, kind: kind, content: content, now: now)
+    }
+
+    internal mutating func appendDecisionGateResolutionEntry(
+        author: ZhulongSessionEntryAuthor,
+        content: String,
+        now: Date
+    ) throws -> ZhulongSessionEntry {
+        try appendEntryUnchecked(author: author, kind: .decision, content: content, now: now)
+    }
+
+    private mutating func appendEntryUnchecked(
+        author: ZhulongSessionEntryAuthor,
+        kind: ZhulongSessionEntryKind,
+        content: String,
+        now: Date
+    ) throws -> ZhulongSessionEntry {
         let normalized = try normalizedEntryContent(content)
         try validateActivityTime(now)
         let entry = ZhulongSessionEntry(
@@ -122,7 +144,7 @@ public extension ZhulongSession {
     private func canCorrectDuringDelegatedPlanning(_ targetID: ZhulongSessionEntryID) -> Bool {
         guard let send = providerSends.last,
               send.status == .running,
-              case let .delegatedPlanning(contract) = send.purpose,
+              let contract = send.planningContract,
               let brief = currentPlanningBrief,
               brief.id == contract.briefID,
               brief.version == contract.briefVersion
@@ -186,6 +208,8 @@ public extension ZhulongSession {
         let briefInvalidatedAt = Date(
             timeIntervalSinceReferenceDate: correctionDate.timeIntervalSinceReferenceDate.nextUp
         )
+        let invalidatesOpenDecisionGate = phase == .decisionGate &&
+            currentDecisionGate?.briefID == brief.id
         let activeDelegation = activePlanningDelegation
         planningBriefInvalidations.append(ZhulongPlanningBriefInvalidation(
             briefID: brief.id,
@@ -204,6 +228,9 @@ public extension ZhulongSession {
             sourceEntryID: sourceEntryID,
             after: briefInvalidatedAt
         )
+        if invalidatesOpenDecisionGate {
+            leaveDecisionGateAfterSourceInvalidation()
+        }
         if let activeDelegation {
             let delegationInvalidatedAt = Date(
                 timeIntervalSinceReferenceDate: lastInvalidatedAt.timeIntervalSinceReferenceDate.nextUp

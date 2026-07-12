@@ -101,12 +101,21 @@ public actor ZhulongProviderOrchestrator {
         switch result {
         case let .success(response):
             do {
-                try session.recordProviderResponse(
-                    response,
-                    runID: request.runID,
-                    now: resultDate
-                )
-            } catch ZhulongSessionError.invalidProviderResponse {
+                switch authority {
+                case .conversation:
+                    try session.recordProviderResponse(
+                        response,
+                        runID: request.runID,
+                        now: resultDate
+                    )
+                case .planning:
+                    try session.recordPlanningProviderResponse(
+                        response,
+                        runID: request.runID,
+                        now: resultDate
+                    )
+                }
+            } catch {
                 let failure = ZhulongProviderFailure(
                     code: "invalid_provider_response",
                     message: "Provider 返回了无效内容"
@@ -139,7 +148,7 @@ public actor ZhulongProviderOrchestrator {
         var correctionDate = now
         if session.phase == .providerRunning {
             guard let send = session.providerSends.last,
-                  case let .delegatedPlanning(contract) = send.purpose
+                  let contract = send.planningContract
             else {
                 throw ZhulongProviderOrchestrationError.providerRunStillActive
             }

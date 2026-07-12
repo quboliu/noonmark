@@ -44,6 +44,9 @@ public enum ZhulongPlanningBriefError: Error, Equatable, Sendable {
     case authorizationExpired
     case activeDelegationAlreadyExists
     case delegationNotActive
+    case decisionGateUnresolved
+    case briefRevisionRequired
+    case decisionGateResolutionMissingFromRevision
 }
 
 public struct ZhulongPlanningOpenQuestion: Codable, Equatable, Sendable {
@@ -242,7 +245,8 @@ public extension ZhulongSession {
               let send = providerSends.last,
               send.status == .succeeded
         else { return nil }
-        guard case let .delegatedPlanning(contract) = send.purpose else { return draftVersion }
+        guard let contract = send.planningContract else { return draftVersion }
+        if case .migratedLegacyPlanning = send.purpose { return draftVersion }
         guard currentPlanningBrief?.id == contract.briefID,
               currentPlanningBrief?.version == contract.briefVersion,
               planningRunInvalidations.contains(where: { $0.runID == send.runID }) == false
@@ -284,6 +288,7 @@ public extension ZhulongSession {
         guard phase != .providerRunning else {
             throw ZhulongSessionError.providerRunStillActive
         }
+        try validateDecisionGateAllowsBriefRevision(draft)
         guard draft.dataScopes.isSubset(of: proposedScopes) else {
             throw ZhulongPlanningBriefError.scopeOutsideSessionProposal
         }
@@ -338,6 +343,23 @@ public extension ZhulongSession {
         return brief
     }
 
+    private func validateDecisionGateAllowsBriefRevision(
+        _ draft: ZhulongPlanningBriefDraft
+    ) throws {
+        guard phase != .decisionGate else {
+            throw ZhulongPlanningBriefError.decisionGateUnresolved
+        }
+        guard let resolution = latestDecisionGateResolutionRequiringBriefRevision else {
+            return
+        }
+        guard draft.sourceEntryIDs.contains(resolution.decisionEntryID),
+              let decision = effectiveContent(for: resolution.decisionEntryID),
+              draft.userDecisions.contains(decision)
+        else {
+            throw ZhulongPlanningBriefError.decisionGateResolutionMissingFromRevision
+        }
+    }
+
     @discardableResult
     mutating func invalidatePlanningRuns(
         derivedFrom briefID: ZhulongPlanningBriefID,
@@ -346,7 +368,7 @@ public extension ZhulongSession {
         after date: Date
     ) -> Date {
         let derivedRuns = providerSends.filter { send in
-            guard case let .delegatedPlanning(contract) = send.purpose else { return false }
+            guard let contract = send.planningContract else { return false }
             return contract.briefID == briefID &&
                 planningRunInvalidations.contains(where: { $0.runID == send.runID }) == false
         }
@@ -410,6 +432,7 @@ public extension ZhulongSession {
         guard phase != .providerRunning else {
             throw ZhulongSessionError.providerRunStillActive
         }
+        try validateDecisionGateAllowsDelegation()
         guard let brief = currentPlanningBrief, brief.id == briefID else {
             throw ZhulongPlanningBriefError.briefNotCurrent
         }
@@ -451,6 +474,15 @@ public extension ZhulongSession {
             now: now
         )
         return delegation
+    }
+
+    private func validateDecisionGateAllowsDelegation() throws {
+        guard currentDecisionGate == nil else {
+            throw ZhulongPlanningBriefError.decisionGateUnresolved
+        }
+        guard currentBriefRequiresDecisionGateRevision == false else {
+            throw ZhulongPlanningBriefError.briefRevisionRequired
+        }
     }
 
     private func strictlyLater(than date: Date) -> Date {

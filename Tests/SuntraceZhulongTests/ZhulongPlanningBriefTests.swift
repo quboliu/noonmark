@@ -270,8 +270,8 @@ final class ZhulongPlanningBriefTests: XCTestCase {
             providerIdentity: makeProviderIdentity(),
             now: now.addingTimeInterval(5)
         )
-        try session.recordProviderResponse(
-            ZhulongProviderResponse(content: "规划草稿 v1", draftVersion: 1),
+        try session.recordPlanningProviderResponse(
+            ZhulongProviderResponse(content: planArtifactJSON(), draftVersion: 1),
             runID: request.runID,
             now: now.addingTimeInterval(6)
         )
@@ -300,8 +300,8 @@ final class ZhulongPlanningBriefTests: XCTestCase {
             providerIdentity: makeProviderIdentity(),
             now: now.addingTimeInterval(5)
         )
-        try session.recordProviderResponse(
-            ZhulongProviderResponse(content: "规划草稿 v1", draftVersion: 1),
+        try session.recordPlanningProviderResponse(
+            ZhulongProviderResponse(content: planArtifactJSON(), draftVersion: 1),
             runID: request.runID,
             now: now.addingTimeInterval(6)
         )
@@ -331,8 +331,8 @@ final class ZhulongPlanningBriefTests: XCTestCase {
             providerIdentity: makeProviderIdentity(),
             now: now.addingTimeInterval(5)
         )
-        try session.recordProviderResponse(
-            ZhulongProviderResponse(content: "规划草稿 v1", draftVersion: 1),
+        try session.recordPlanningProviderResponse(
+            ZhulongProviderResponse(content: planArtifactJSON(), draftVersion: 1),
             runID: request.runID,
             now: now.addingTimeInterval(6)
         )
@@ -393,5 +393,11 @@ final class ZhulongPlanningBriefTests: XCTestCase {
             contextVersion: "context-v1",
             scopeContent: [.currentDayTodo: "今日任务摘要"]
         )
+    }
+
+    private func planArtifactJSON() -> String {
+        """
+        {"kind":"planArtifact","summary":"先测量再交付。","stages":[{"id":"measure","title":"工程测量","objective":"取得真实数据","horizon":"nearTerm","dependencyIDs":[],"deliverables":["测量记录"],"triggerCondition":null}],"decisionExplanations":[{"subject":"为何先测量","userDecisions":["先完成 Mac 版"],"assumptions":["Provider 配置保持不变"],"dataScopes":["currentDayTodo"],"evidence":["没有同度量数据"],"constraints":["普通 Todo 必须离线可用"],"alternatives":[{"title":"直接排期","tradeoffs":["快但无证据"]},{"title":"先测量","tradeoffs":["较慢但可校准"]}],"counterexamples":["直接排期会隐藏证据缺口"],"rationale":"测量后才能形成可信承诺。","uncertainties":["结果未知"],"expectedImpacts":["先形成调查任务"],"requiredAuthorizations":["todoWrite"]}],"precisionClaims":[]}
+        """
     }
 }

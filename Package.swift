@@ -30,6 +30,7 @@ let package = Package(
         ),
         .target(
             name: "SuntraceZhulong",
+            dependencies: ["SuntraceCore"],
             linkerSettings: [
                 .linkedFramework("Security")
             ]

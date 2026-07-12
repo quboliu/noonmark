@@ -605,7 +605,7 @@ public extension ZhulongSession {
     }
 }
 
-private enum ZhulongTodoDigest {
+enum ZhulongTodoDigest {
     static func snapshot(_ snapshot: SuntraceSnapshot) throws -> String {
         try value(ZhulongTodoFactSnapshot(snapshot))
     }

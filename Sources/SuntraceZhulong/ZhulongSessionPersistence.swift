@@ -223,7 +223,9 @@ struct ZhulongSessionRecordV4: Codable, Equatable {
         providerSends = record.providerSends
         events = record.events.filter {
             switch $0.kind {
-            case .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied:
+            case .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied,
+                 .dailyCloseCaptured, .unfinishedCauseProposed, .unfinishedCauseResolved,
+                 .dailyReviewDraftPublished, .dailyReviewAuthorized, .dailyReviewApplied:
                 false
             default:
                 true
@@ -279,6 +281,18 @@ private struct ZhulongEventReplayState {
 }
 
 struct ZhulongSessionRecord: Codable, Equatable {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, primaryIntent, proposedScopes, phase, authorizations, draftVersion
+        case providerSends, events, workspaceStatus, entries
+        case planningBriefs, planningBriefReviews, planningBriefInvalidations
+        case planningDelegations, planningDelegationConsumptions
+        case planningDelegationInvalidations, planningRunInvalidations
+        case decisionGates, decisionGateResolutions, planArtifacts
+        case todoDiffDrafts, todoWriteAuthorizations, todoApplyReceipts
+        case dailyCloseSnapshots, unfinishedCauseHypotheses, unfinishedCauseResolutions
+        case dailyReviewDrafts, dailyReviewAuthorizations, dailyReviewReceipts
+    }
+
     var id: ZhulongSessionID
     var primaryIntent: String
     var proposedScopes: Set<ZhulongDataScope>
@@ -302,6 +316,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
     var todoDiffDrafts: [ZhulongTodoDiffDraft]
     var todoWriteAuthorizations: [ZhulongTodoWriteAuthorization]
     var todoApplyReceipts: [ZhulongTodoApplyReceipt]
+    var dailyCloseSnapshots: [ZhulongDailyCloseSnapshot]
+    var unfinishedCauseHypotheses: [ZhulongUnfinishedCauseHypothesis]
+    var unfinishedCauseResolutions: [ZhulongUnfinishedCauseResolution]
+    var dailyReviewDrafts: [ZhulongDailyReviewDraft]
+    var dailyReviewAuthorizations: [ZhulongDailyReviewAuthorization]
+    var dailyReviewReceipts: [ZhulongDailyReviewReceipt]
 
     init(_ session: ZhulongSession) {
         id = session.id
@@ -342,6 +362,81 @@ struct ZhulongSessionRecord: Codable, Equatable {
         todoDiffDrafts = session.todoDiffDrafts
         todoWriteAuthorizations = session.todoWriteAuthorizations
         todoApplyReceipts = session.todoApplyReceipts
+        dailyCloseSnapshots = session.dailyCloseSnapshots
+        unfinishedCauseHypotheses = session.unfinishedCauseHypotheses
+        unfinishedCauseResolutions = session.unfinishedCauseResolutions
+        dailyReviewDrafts = session.dailyReviewDrafts
+        dailyReviewAuthorizations = session.dailyReviewAuthorizations
+        dailyReviewReceipts = session.dailyReviewReceipts
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ZhulongSessionID.self, forKey: .id)
+        primaryIntent = try container.decode(String.self, forKey: .primaryIntent)
+        proposedScopes = try container.decode(Set<ZhulongDataScope>.self, forKey: .proposedScopes)
+        phase = try container.decode(ZhulongSessionPhase.self, forKey: .phase)
+        authorizations = try container.decode([ZhulongScopeAuthorizationRecord].self, forKey: .authorizations)
+        draftVersion = try container.decodeIfPresent(Int.self, forKey: .draftVersion)
+        providerSends = try container.decode([ZhulongProviderSendRecord].self, forKey: .providerSends)
+        events = try container.decode([ZhulongSessionEventRecord].self, forKey: .events)
+        workspaceStatus = try container.decode(ZhulongWorkspaceStatus.self, forKey: .workspaceStatus)
+        entries = try container.decode([ZhulongSessionEntry].self, forKey: .entries)
+        planningBriefs = try container.decode([ZhulongPlanningBrief].self, forKey: .planningBriefs)
+        planningBriefReviews = try container.decode([ZhulongPlanningBriefReview].self, forKey: .planningBriefReviews)
+        planningBriefInvalidations = try container.decode(
+            [ZhulongPlanningBriefInvalidation].self,
+            forKey: .planningBriefInvalidations
+        )
+        planningDelegations = try container.decode([ZhulongPlanningDelegation].self, forKey: .planningDelegations)
+        planningDelegationConsumptions = try container.decode(
+            [ZhulongPlanningDelegationConsumption].self,
+            forKey: .planningDelegationConsumptions
+        )
+        planningDelegationInvalidations = try container.decode(
+            [ZhulongPlanningDelegationInvalidation].self,
+            forKey: .planningDelegationInvalidations
+        )
+        planningRunInvalidations = try container.decode(
+            [ZhulongPlanningRunInvalidation].self,
+            forKey: .planningRunInvalidations
+        )
+        decisionGates = try container.decode([ZhulongDecisionGate].self, forKey: .decisionGates)
+        decisionGateResolutions = try container.decode(
+            [ZhulongDecisionGateResolution].self,
+            forKey: .decisionGateResolutions
+        )
+        planArtifacts = try container.decode([ZhulongPlanArtifact].self, forKey: .planArtifacts)
+        todoDiffDrafts = try container.decode([ZhulongTodoDiffDraft].self, forKey: .todoDiffDrafts)
+        todoWriteAuthorizations = try container.decode(
+            [ZhulongTodoWriteAuthorization].self,
+            forKey: .todoWriteAuthorizations
+        )
+        todoApplyReceipts = try container.decode([ZhulongTodoApplyReceipt].self, forKey: .todoApplyReceipts)
+        dailyCloseSnapshots = try container.decodeIfPresent(
+            [ZhulongDailyCloseSnapshot].self,
+            forKey: .dailyCloseSnapshots
+        ) ?? []
+        unfinishedCauseHypotheses = try container.decodeIfPresent(
+            [ZhulongUnfinishedCauseHypothesis].self,
+            forKey: .unfinishedCauseHypotheses
+        ) ?? []
+        unfinishedCauseResolutions = try container.decodeIfPresent(
+            [ZhulongUnfinishedCauseResolution].self,
+            forKey: .unfinishedCauseResolutions
+        ) ?? []
+        dailyReviewDrafts = try container.decodeIfPresent(
+            [ZhulongDailyReviewDraft].self,
+            forKey: .dailyReviewDrafts
+        ) ?? []
+        dailyReviewAuthorizations = try container.decodeIfPresent(
+            [ZhulongDailyReviewAuthorization].self,
+            forKey: .dailyReviewAuthorizations
+        ) ?? []
+        dailyReviewReceipts = try container.decodeIfPresent(
+            [ZhulongDailyReviewReceipt].self,
+            forKey: .dailyReviewReceipts
+        ) ?? []
     }
 
     init(migrating record: ZhulongSessionRecordV1) {
@@ -386,6 +481,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
         todoDiffDrafts = []
         todoWriteAuthorizations = []
         todoApplyReceipts = []
+        dailyCloseSnapshots = []
+        unfinishedCauseHypotheses = []
+        unfinishedCauseResolutions = []
+        dailyReviewDrafts = []
+        dailyReviewAuthorizations = []
+        dailyReviewReceipts = []
     }
 
     init(migrating record: ZhulongSessionRecordV2) {
@@ -412,6 +513,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
         todoDiffDrafts = []
         todoWriteAuthorizations = []
         todoApplyReceipts = []
+        dailyCloseSnapshots = []
+        unfinishedCauseHypotheses = []
+        unfinishedCauseResolutions = []
+        dailyReviewDrafts = []
+        dailyReviewAuthorizations = []
+        dailyReviewReceipts = []
     }
 
     init(migrating record: ZhulongSessionRecordV3) {
@@ -438,6 +545,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
         todoDiffDrafts = []
         todoWriteAuthorizations = []
         todoApplyReceipts = []
+        dailyCloseSnapshots = []
+        unfinishedCauseHypotheses = []
+        unfinishedCauseResolutions = []
+        dailyReviewDrafts = []
+        dailyReviewAuthorizations = []
+        dailyReviewReceipts = []
     }
 
     init(migrating record: ZhulongSessionRecordV4) {
@@ -464,6 +577,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
         todoDiffDrafts = []
         todoWriteAuthorizations = []
         todoApplyReceipts = []
+        dailyCloseSnapshots = []
+        unfinishedCauseHypotheses = []
+        unfinishedCauseResolutions = []
+        dailyReviewDrafts = []
+        dailyReviewAuthorizations = []
+        dailyReviewReceipts = []
     }
 
     func restore(
@@ -483,6 +602,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         try validateProviderSends()
         try validatePlanningArtifacts()
         try validateTodoLedger()
+        try validateDailyCloseLedger()
         try validatePhase(authorizations: restoredAuthorizations)
         try validateEvents(authorizations: restoredAuthorizations)
 
@@ -518,6 +638,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
             todoDiffDrafts: todoDiffDrafts,
             todoWriteAuthorizations: todoWriteAuthorizations,
             todoApplyReceipts: todoApplyReceipts,
+            dailyCloseSnapshots: dailyCloseSnapshots,
+            unfinishedCauseHypotheses: unfinishedCauseHypotheses,
+            unfinishedCauseResolutions: unfinishedCauseResolutions,
+            dailyReviewDrafts: dailyReviewDrafts,
+            dailyReviewAuthorizations: dailyReviewAuthorizations,
+            dailyReviewReceipts: dailyReviewReceipts,
             hasAuthenticatedLegacyPlanningProvenance: allowsMigratedLegacyPlanning &&
                 containsMigratedLegacyPlanning
         )
@@ -613,6 +739,142 @@ struct ZhulongSessionRecord: Codable, Equatable {
         try validateTodoAuthorizations()
         try validateTodoReceipts()
         try validateTodoLedgerEvents()
+    }
+
+    private func validateDailyCloseLedger() throws {
+        guard Set(dailyCloseSnapshots.map(\.id)).count == dailyCloseSnapshots.count,
+              Set(unfinishedCauseHypotheses.map(\.id)).count == unfinishedCauseHypotheses.count,
+              Set(unfinishedCauseResolutions.map(\.id)).count == unfinishedCauseResolutions.count,
+              Set(unfinishedCauseResolutions.map(\.hypothesisID)).count == unfinishedCauseResolutions.count,
+              Set(dailyReviewDrafts.map(\.id)).count == dailyReviewDrafts.count,
+              Set(dailyReviewAuthorizations.map(\.id)).count == dailyReviewAuthorizations.count,
+              Set(dailyReviewAuthorizations.map(\.draftID)).count == dailyReviewAuthorizations.count,
+              Set(dailyReviewReceipts.map(\.id)).count == dailyReviewReceipts.count,
+              Set(dailyReviewReceipts.map(\.draftID)).count == dailyReviewReceipts.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        try validateDailyCloseArtifacts()
+        try validateDailyReviewArtifacts()
+        try validateDailyCloseEvents()
+    }
+
+    private func validateDailyCloseArtifacts() throws {
+        for snapshot in dailyCloseSnapshots {
+            try snapshot.validateForPersistence(expectedSessionID: id)
+        }
+        for hypothesis in unfinishedCauseHypotheses {
+            guard let snapshot = dailyCloseSnapshots.first(where: { $0.id == hypothesis.dailyCloseID }) else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            try hypothesis.validateForPersistence(snapshot: snapshot)
+        }
+        for resolution in unfinishedCauseResolutions {
+            guard let hypothesis = unfinishedCauseHypotheses.first(where: {
+                $0.id == resolution.hypothesisID
+            }) else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            try resolution.validateForPersistence(hypothesis: hypothesis)
+        }
+    }
+
+    private func validateDailyReviewArtifacts() throws {
+        for draft in dailyReviewDrafts {
+            guard let snapshot = dailyCloseSnapshots.first(where: { $0.id == draft.dailyCloseID }) else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            let resolutions = draft.confirmedCauseResolutionIDs.compactMap { resolutionID in
+                unfinishedCauseResolutions.first { $0.id == resolutionID }
+            }
+            guard resolutions.count == draft.confirmedCauseResolutionIDs.count else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            try draft.validateForPersistence(snapshot: snapshot, resolutions: resolutions)
+        }
+        for authorization in dailyReviewAuthorizations {
+            try validateDailyReviewAuthorization(authorization)
+        }
+        for receipt in dailyReviewReceipts {
+            guard let authorization = dailyReviewAuthorizations.first(where: {
+                $0.id == receipt.authorizationID && $0.draftID == receipt.draftID
+            }),
+            case let .consumed(receiptID, consumedAt) = authorization.status,
+            receiptID == receipt.id,
+            consumedAt == receipt.appliedAt,
+            receipt.appliedAt > authorization.grantedAt,
+            receipt.beforeSnapshotDigest.isEmpty == false,
+            receipt.afterSnapshotDigest.isEmpty == false
+            else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+        }
+    }
+
+    private func validateDailyReviewAuthorization(
+        _ authorization: ZhulongDailyReviewAuthorization
+    ) throws {
+        guard let draft = dailyReviewDrafts.first(where: { $0.id == authorization.draftID }),
+              authorization.grantedAt > draft.createdAt,
+              authorization.draftDigest == (try? draft.integrityDigest())
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        switch authorization.status {
+        case .active:
+            guard dailyReviewReceipts.contains(where: {
+                $0.authorizationID == authorization.id
+            }) == false else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+        case let .consumed(receiptID, consumedAt):
+            guard let receipt = dailyReviewReceipts.first(where: { $0.id == receiptID }),
+                  receipt.authorizationID == authorization.id,
+                  receipt.draftID == authorization.draftID,
+                  receipt.appliedAt == consumedAt
+            else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+        }
+    }
+
+    private func validateDailyCloseEvents() throws {
+        var expected: [(Date, ZhulongSessionEventKind, String, ZhulongSessionEventReference)] = []
+        expected.append(contentsOf: dailyCloseSnapshots.map {
+            ($0.capturedAt, .dailyCloseCaptured, "已捕获每日收尾事实快照", .dailyClose($0.id))
+        })
+        expected.append(contentsOf: unfinishedCauseHypotheses.map {
+            ($0.createdAt, .unfinishedCauseProposed, "烛龙已提出未完成原因假设", .unfinishedCauseHypothesis($0.id))
+        })
+        expected.append(contentsOf: unfinishedCauseResolutions.map {
+            ($0.resolvedAt, .unfinishedCauseResolved, "用户已裁决未完成原因假设", .unfinishedCauseResolution($0.id))
+        })
+        expected.append(contentsOf: dailyReviewDrafts.map {
+            ($0.createdAt, .dailyReviewDraftPublished, "已发布可编辑 AI 复盘草稿", .dailyReviewDraft($0.id))
+        })
+        expected.append(contentsOf: dailyReviewAuthorizations.map {
+            ($0.grantedAt, .dailyReviewAuthorized, "用户已对当前 AI 复盘草稿授予一次性保存授权", .dailyReviewAuthorization($0.id))
+        })
+        expected.append(contentsOf: dailyReviewReceipts.map {
+            ($0.appliedAt, .dailyReviewApplied, "已保存用户确认的每日复盘", .dailyReviewReceipt($0.id))
+        })
+        expected.sort { $0.0 < $1.0 }
+        guard zip(expected, expected.dropFirst()).allSatisfy({ $0.0.0 < $0.1.0 }) else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let kinds: Set<ZhulongSessionEventKind> = [
+            .dailyCloseCaptured, .unfinishedCauseProposed, .unfinishedCauseResolved,
+            .dailyReviewDraftPublished, .dailyReviewAuthorized, .dailyReviewApplied
+        ]
+        let actual = events.filter { kinds.contains($0.kind) }
+        guard actual.count == expected.count,
+              zip(actual, expected).allSatisfy({ event, value in
+                  event.occurredAt == value.0 && event.kind == value.1 &&
+                      event.summary == value.2 && event.reference == value.3
+              })
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
     }
 
     private func validateTodoDrafts() throws {
@@ -1081,7 +1343,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
             try consumePlanningRunInvalidation(event, state: &state)
         case .planningDecisionGateResolved:
             try consumeDecisionGateResolution(event, state: &state)
-        case .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied:
+        case .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied,
+             .dailyCloseCaptured, .unfinishedCauseProposed, .unfinishedCauseResolved,
+             .dailyReviewDraftPublished, .dailyReviewAuthorized, .dailyReviewApplied:
             break
         default:
             try consumeSessionEvent(
@@ -1147,7 +1411,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
              .planningDelegationGranted, .planningDelegationConsumed,
              .planningDelegationInvalidated, .planningRunInvalidated,
              .planningDecisionGateResolved,
-             .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied:
+             .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied,
+             .dailyCloseCaptured, .unfinishedCauseProposed, .unfinishedCauseResolved,
+             .dailyReviewDraftPublished, .dailyReviewAuthorized, .dailyReviewApplied:
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
     }

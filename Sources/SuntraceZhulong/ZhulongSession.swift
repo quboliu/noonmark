@@ -107,6 +107,12 @@ public enum ZhulongSessionEventKind: String, Codable, Equatable, Sendable {
     case todoDiffRevised
     case todoWriteAuthorized
     case todoBatchApplied
+    case dailyCloseCaptured
+    case unfinishedCauseProposed
+    case unfinishedCauseResolved
+    case dailyReviewDraftPublished
+    case dailyReviewAuthorized
+    case dailyReviewApplied
     case sessionPaused
     case sessionResumed
     case sessionArchived
@@ -194,6 +200,12 @@ public struct ZhulongSession: Equatable, Sendable {
     public internal(set) var todoDiffDrafts: [ZhulongTodoDiffDraft]
     public internal(set) var todoWriteAuthorizations: [ZhulongTodoWriteAuthorization]
     public internal(set) var todoApplyReceipts: [ZhulongTodoApplyReceipt]
+    public internal(set) var dailyCloseSnapshots: [ZhulongDailyCloseSnapshot]
+    public internal(set) var unfinishedCauseHypotheses: [ZhulongUnfinishedCauseHypothesis]
+    public internal(set) var unfinishedCauseResolutions: [ZhulongUnfinishedCauseResolution]
+    public internal(set) var dailyReviewDrafts: [ZhulongDailyReviewDraft]
+    public internal(set) var dailyReviewAuthorizations: [ZhulongDailyReviewAuthorization]
+    public internal(set) var dailyReviewReceipts: [ZhulongDailyReviewReceipt]
     var hasAuthenticatedLegacyPlanningProvenance: Bool
 
     public var authorization: ZhulongScopeAuthorization? { authorizations.last }
@@ -254,6 +266,12 @@ public struct ZhulongSession: Equatable, Sendable {
         todoDiffDrafts = []
         todoWriteAuthorizations = []
         todoApplyReceipts = []
+        dailyCloseSnapshots = []
+        unfinishedCauseHypotheses = []
+        unfinishedCauseResolutions = []
+        dailyReviewDrafts = []
+        dailyReviewAuthorizations = []
+        dailyReviewReceipts = []
         hasAuthenticatedLegacyPlanningProvenance = false
         events = [
             ZhulongSessionEvent(
@@ -290,6 +308,12 @@ public struct ZhulongSession: Equatable, Sendable {
         todoDiffDrafts: [ZhulongTodoDiffDraft] = [],
         todoWriteAuthorizations: [ZhulongTodoWriteAuthorization] = [],
         todoApplyReceipts: [ZhulongTodoApplyReceipt] = [],
+        dailyCloseSnapshots: [ZhulongDailyCloseSnapshot] = [],
+        unfinishedCauseHypotheses: [ZhulongUnfinishedCauseHypothesis] = [],
+        unfinishedCauseResolutions: [ZhulongUnfinishedCauseResolution] = [],
+        dailyReviewDrafts: [ZhulongDailyReviewDraft] = [],
+        dailyReviewAuthorizations: [ZhulongDailyReviewAuthorization] = [],
+        dailyReviewReceipts: [ZhulongDailyReviewReceipt] = [],
         hasAuthenticatedLegacyPlanningProvenance: Bool = false
     ) {
         id = restoredID
@@ -315,6 +339,12 @@ public struct ZhulongSession: Equatable, Sendable {
         self.todoDiffDrafts = todoDiffDrafts
         self.todoWriteAuthorizations = todoWriteAuthorizations
         self.todoApplyReceipts = todoApplyReceipts
+        self.dailyCloseSnapshots = dailyCloseSnapshots
+        self.unfinishedCauseHypotheses = unfinishedCauseHypotheses
+        self.unfinishedCauseResolutions = unfinishedCauseResolutions
+        self.dailyReviewDrafts = dailyReviewDrafts
+        self.dailyReviewAuthorizations = dailyReviewAuthorizations
+        self.dailyReviewReceipts = dailyReviewReceipts
         self.hasAuthenticatedLegacyPlanningProvenance = hasAuthenticatedLegacyPlanningProvenance
     }
 

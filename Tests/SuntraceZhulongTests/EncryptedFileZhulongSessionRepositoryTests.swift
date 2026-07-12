@@ -87,6 +87,87 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         }
     }
 
+    func testRepositoryRoundTripsDailyCloseLedgerAndRejectsMissingSnapshot() throws {
+        let repository = makeRepository(key: key)
+        var session = try ZhulongSession(
+            primaryIntent: "完成每日收尾",
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+        var engine = SuntraceEngine()
+        let date = LocalDate("2026-07-12")
+        let chainID = try engine.createPoolTask(title: "仍在进行", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: date,
+            today: date,
+            now: now
+        )
+        let snapshot = try session.captureDailyClose(
+            date: date,
+            from: engine,
+            now: now.addingTimeInterval(1)
+        )
+        let hypothesis = try ZhulongUnfinishedCauseHypothesis(
+            dailyCloseID: snapshot.id,
+            content: "任务范围可能大于预期",
+            evidenceTraceIDs: [traceID],
+            confidence: 0.65,
+            counterexamples: ["也可能是外部依赖延迟"],
+            createdAt: now.addingTimeInterval(2)
+        )
+        try session.proposeUnfinishedCause(hypothesis)
+        let resolution = try session.resolveUnfinishedCause(
+            hypothesis.id,
+            decision: .confirmed(content: "任务范围比预期大"),
+            now: now.addingTimeInterval(3)
+        )
+        let draft = try session.publishDailyReviewDraft(
+            dailyCloseID: snapshot.id,
+            summary: "完成了证据整理",
+            tomorrowNote: nil,
+            causeResolutionIDs: [resolution.id],
+            now: now.addingTimeInterval(4)
+        )
+        _ = try session.authorizeDailyReview(
+            draft.id,
+            against: engine,
+            now: now.addingTimeInterval(5)
+        )
+        _ = try session.applyAuthorizedDailyReview(
+            draft.id,
+            to: &engine,
+            now: now.addingTimeInterval(6)
+        )
+
+        try repository.save(session)
+        XCTAssertEqual(try repository.load(session.id), session)
+
+        var forged = ZhulongSessionRecord(session)
+        forged.dailyCloseSnapshots.removeAll()
+        try repository.saveRecordForTesting(forged)
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSessionRestorationError, .invalidEventsForPhase)
+        }
+    }
+
+    func testRepositoryMigratesVersionSixTodoLedgerToEmptyDailyCloseLedger() throws {
+        let repository = makeRepository(key: key)
+        let session = try makeDraftReviewSession()
+
+        try repository.saveVersionSixSessionForTesting(session)
+        let restored = try repository.load(session.id)
+
+        XCTAssertEqual(restored, session)
+        XCTAssertTrue(restored.dailyCloseSnapshots.isEmpty)
+        XCTAssertTrue(restored.dailyReviewReceipts.isEmpty)
+
+        try repository.saveCurrentSessionWithoutDailyLedgerForTesting(session)
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSidecarRepositoryError, .invalidCiphertext)
+        }
+    }
+
     func testWrongKeyAndCiphertextTamperingFailClosed() throws {
         let repository = makeRepository(key: key)
         let session = try makeDraftReviewSession()
@@ -121,28 +202,28 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 2, 3, 4, 5, 7]
+            replacementVersions: [1, 2, 3, 4, 5, 6, 7, 9]
         )
 
         try repository.saveVersionThreeSessionForTesting(session)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 2, 4, 5, 6, 7]
+            replacementVersions: [1, 2, 4, 5, 6, 7, 8, 9]
         )
 
         try repository.saveVersionTwoSessionForTesting(session)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 3, 4, 5, 6, 7]
+            replacementVersions: [1, 3, 4, 5, 6, 7, 8, 9]
         )
 
         try repository.saveLegacySessionForTesting(session)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [2, 3, 4, 5, 6, 7]
+            replacementVersions: [2, 3, 4, 5, 6, 7, 8, 9]
         )
     }
 
@@ -154,7 +235,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 2, 3, 5, 6, 7]
+            replacementVersions: [1, 2, 3, 5, 6, 7, 8, 9]
         )
         try repository.saveVersionFourSessionForTesting(session)
         let restored = try repository.load(session.id)
@@ -163,7 +244,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertTrue(restored.todoDiffDrafts.isEmpty)
         try repository.save(restored)
         let bytes = try Data(contentsOf: repository.fileURL(for: session.id))
-        XCTAssertEqual(bytes[Data("NOONMARK-ZHULONG-SIDECAR".utf8).count], 6)
+        XCTAssertEqual(bytes[Data("NOONMARK-ZHULONG-SIDECAR".utf8).count], 8)
     }
 
     func testUnavailableKeyFailsBeforeWritingAnything() throws {
@@ -392,18 +473,18 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertTrue(migrated.planArtifacts.isEmpty)
         try repository.save(migrated)
         let migratedBytes = try Data(contentsOf: repository.fileURL(for: session.id))
-        XCTAssertEqual(migratedBytes[Data("NOONMARK-ZHULONG-SIDECAR".utf8).count], 7)
+        XCTAssertEqual(migratedBytes[Data("NOONMARK-ZHULONG-SIDECAR".utf8).count], 9)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 2, 3, 4, 5, 6]
+            replacementVersions: [1, 2, 3, 4, 5, 6, 7, 8]
         )
         try repository.save(migrated)
         XCTAssertEqual(try repository.load(session.id), migrated)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 2, 3, 4]
+            replacementVersions: [1, 2, 3, 4, 5, 6, 7, 8]
         )
     }
 

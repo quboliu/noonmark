@@ -16,8 +16,10 @@ public enum ZhulongSidecarRepositoryError: Error, Equatable {
 
 public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @unchecked Sendable {
     private static let magic = Data("NOONMARK-ZHULONG-SIDECAR".utf8)
-    private static let formatVersion: UInt8 = 6
-    private static let migratedLegacyFormatVersion: UInt8 = 7
+    private static let formatVersion: UInt8 = 8
+    private static let migratedLegacyFormatVersion: UInt8 = 9
+    private static let todoLedgerFormatVersion: UInt8 = 6
+    private static let migratedTodoLedgerFormatVersion: UInt8 = 7
     private static let planningOutputFormatVersion: UInt8 = 4
     private static let migratedPlanningOutputFormatVersion: UInt8 = 5
     private static let planningBriefFormatVersion: UInt8 = 3
@@ -50,8 +52,13 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         guard containsLegacyPlanning == false || session.hasAuthenticatedLegacyPlanningProvenance else {
             throw ZhulongSidecarRepositoryError.invalidLegacyProvenance
         }
+        let record = ZhulongSessionRecord(session)
+        _ = try record.restore(
+            expectedID: session.id,
+            allowsMigratedLegacyPlanning: containsLegacyPlanning
+        )
         try saveRecord(
-            ZhulongSessionRecord(session),
+            record,
             version: containsLegacyPlanning
                 ? Self.migratedLegacyFormatVersion
                 : Self.formatVersion
@@ -78,6 +85,7 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             id: id,
             version: decodedEnvelope.version
         )
+        try validateSchema(plaintext, version: decodedEnvelope.version)
         let record: ZhulongSessionRecord
         let allowsMigratedLegacyPlanning: Bool
         switch decodedEnvelope.version {
@@ -98,9 +106,11 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             record = ZhulongSessionRecord(migrating: planningOutput)
             allowsMigratedLegacyPlanning = decodedEnvelope.version ==
                 Self.migratedPlanningOutputFormatVersion
-        case Self.formatVersion, Self.migratedLegacyFormatVersion:
+        case Self.todoLedgerFormatVersion, Self.migratedTodoLedgerFormatVersion,
+             Self.formatVersion, Self.migratedLegacyFormatVersion:
             record = try decoder.decode(ZhulongSessionRecord.self, from: plaintext)
-            allowsMigratedLegacyPlanning = decodedEnvelope.version == Self.migratedLegacyFormatVersion
+            allowsMigratedLegacyPlanning = decodedEnvelope.version == Self.migratedLegacyFormatVersion ||
+                decodedEnvelope.version == Self.migratedTodoLedgerFormatVersion
         default:
             throw ZhulongSidecarRepositoryError.unsupportedEnvelope
         }
@@ -149,6 +159,40 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             encoder.encode(ZhulongSessionRecordV4(session)),
             id: session.id,
             version: Self.planningOutputFormatVersion
+        )
+    }
+
+    func saveVersionSixSessionForTesting(_ session: ZhulongSession) throws {
+        let record = ZhulongSessionRecord(session)
+        let data = try encoder.encode(record)
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard var dictionary = object as? [String: Any] else {
+            throw ZhulongSidecarRepositoryError.invalidCiphertext
+        }
+        for key in [
+            "dailyCloseSnapshots", "unfinishedCauseHypotheses", "unfinishedCauseResolutions",
+            "dailyReviewDrafts", "dailyReviewAuthorizations", "dailyReviewReceipts"
+        ] {
+            dictionary.removeValue(forKey: key)
+        }
+        try savePlaintext(
+            JSONSerialization.data(withJSONObject: dictionary, options: [.sortedKeys]),
+            id: session.id,
+            version: Self.todoLedgerFormatVersion
+        )
+    }
+
+    func saveCurrentSessionWithoutDailyLedgerForTesting(_ session: ZhulongSession) throws {
+        let data = try encoder.encode(ZhulongSessionRecord(session))
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard var dictionary = object as? [String: Any] else {
+            throw ZhulongSidecarRepositoryError.invalidCiphertext
+        }
+        dictionary.removeValue(forKey: "dailyCloseSnapshots")
+        try savePlaintext(
+            JSONSerialization.data(withJSONObject: dictionary, options: [.sortedKeys]),
+            id: session.id,
+            version: Self.formatVersion
         )
     }
 
@@ -224,6 +268,8 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             version == Self.planningBriefFormatVersion ||
             version == Self.planningOutputFormatVersion ||
             version == Self.migratedPlanningOutputFormatVersion ||
+            version == Self.todoLedgerFormatVersion ||
+            version == Self.migratedTodoLedgerFormatVersion ||
             version == Self.formatVersion ||
             version == Self.migratedLegacyFormatVersion
         else {
@@ -264,7 +310,7 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
                     using: key,
                     authenticating: legacyAuthenticatedData(for: id)
                 )
-                try validateLegacySchema(plaintext, version: version)
+                try validateSchema(plaintext, version: version)
                 return plaintext
             } catch {
                 throw ZhulongSidecarRepositoryError.invalidCiphertext
@@ -272,7 +318,7 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         }
     }
 
-    private func validateLegacySchema(_ plaintext: Data, version: UInt8) throws {
+    private func validateSchema(_ plaintext: Data, version: UInt8) throws {
         guard let object = try? JSONSerialization.jsonObject(with: plaintext),
               let record = object as? [String: Any]
         else {
@@ -312,7 +358,7 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             ])
             requiredKeys = commonKeys.union(planningOutputKeys)
             allowedKeys = requiredKeys.union(optionalKeys)
-        case Self.formatVersion, Self.migratedLegacyFormatVersion:
+        case Self.todoLedgerFormatVersion, Self.migratedTodoLedgerFormatVersion:
             let todoLedgerKeys = Set([
                 "workspaceStatus", "entries", "planningBriefs", "planningBriefReviews",
                 "planningBriefInvalidations", "planningDelegations",
@@ -322,6 +368,19 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
                 "todoApplyReceipts"
             ])
             requiredKeys = commonKeys.union(todoLedgerKeys)
+            allowedKeys = requiredKeys.union(optionalKeys)
+        case Self.formatVersion, Self.migratedLegacyFormatVersion:
+            let dailyCloseKeys = Set([
+                "workspaceStatus", "entries", "planningBriefs", "planningBriefReviews",
+                "planningBriefInvalidations", "planningDelegations",
+                "planningDelegationConsumptions", "planningDelegationInvalidations",
+                "planningRunInvalidations", "decisionGates", "decisionGateResolutions",
+                "planArtifacts", "todoDiffDrafts", "todoWriteAuthorizations",
+                "todoApplyReceipts", "dailyCloseSnapshots", "unfinishedCauseHypotheses",
+                "unfinishedCauseResolutions", "dailyReviewDrafts",
+                "dailyReviewAuthorizations", "dailyReviewReceipts"
+            ])
+            requiredKeys = commonKeys.union(dailyCloseKeys)
             allowedKeys = requiredKeys.union(optionalKeys)
         default:
             throw ZhulongSidecarRepositoryError.unsupportedEnvelope

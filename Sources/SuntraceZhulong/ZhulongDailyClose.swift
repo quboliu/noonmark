@@ -239,13 +239,15 @@ public struct ZhulongUnfinishedCauseResolution: Codable, Equatable, Sendable {
         decision: ZhulongUnfinishedCauseDecision,
         resolvedAt: Date = Date()
     ) throws {
-        let hasInvalidConfirmedContent = switch decision {
+        let normalizedDecision = switch decision {
         case let .confirmed(content):
-            content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ZhulongUnfinishedCauseDecision.confirmed(
+                content: content.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
         case .rejected:
-            false
+            ZhulongUnfinishedCauseDecision.rejected
         }
-        if hasInvalidConfirmedContent {
+        if case let .confirmed(content) = normalizedDecision, content.isEmpty {
             throw ZhulongDailyCloseError.invalidResolution
         }
         guard resolvedAt.timeIntervalSinceReferenceDate.isFinite,
@@ -255,7 +257,7 @@ public struct ZhulongUnfinishedCauseResolution: Codable, Equatable, Sendable {
         }
         self.id = id
         hypothesisID = hypothesis.id
-        self.decision = decision
+        self.decision = normalizedDecision
         self.resolvedAt = resolvedAt
     }
 }
@@ -424,5 +426,299 @@ public struct ZhulongDailyReviewApplier: Sendable {
         authorization.consume(receiptID: receiptID, at: now)
         engine = staged
         return receipt
+    }
+}
+
+extension ZhulongDailyCloseSnapshot {
+    func validateForPersistence(expectedSessionID: ZhulongSessionID) throws {
+        guard sessionID == expectedSessionID,
+              capturedAt.timeIntervalSinceReferenceDate.isFinite,
+              dayLockedAt?.timeIntervalSinceReferenceDate.isFinite ?? true,
+              Set(traces.map(\.traceID)).count == traces.count,
+              counts.total == traces.count,
+              counts.completed == traces.filter({ $0.status == .completed }).count,
+              counts.unfinished == traces.filter({ $0.status == .unfinished }).count,
+              counts.continued == traces.filter({ $0.status == .continued }).count,
+              counts.changed == traces.filter({ $0.status == .changed }).count,
+              counts.returnedToPool == traces.filter({ $0.status == .returnedToPool }).count,
+              counts.abandoned == traces.filter({ $0.status == .abandoned }).count,
+              counts.pending == traces.filter({ $0.status == .pending }).count,
+              traces.allSatisfy({ trace in
+                  trace.continuationSequence >= 0 &&
+                      (0 ... 100).contains(trace.progressPercent) &&
+                      trace.subtaskCount >= 0 &&
+                      trace.completedSubtaskCount >= 0 &&
+                      trace.completedSubtaskCount <= trace.subtaskCount
+              }),
+              evidenceDigest == (try? Self.digest(
+                  date: date,
+                  dayLockedAt: dayLockedAt,
+                  counts: counts,
+                  traces: traces
+              ))
+        else {
+            throw ZhulongDailyCloseError.staleEvidence
+        }
+    }
+}
+
+extension ZhulongUnfinishedCauseHypothesis {
+    func validateForPersistence(snapshot: ZhulongDailyCloseSnapshot) throws {
+        let unfinishedTraceIDs = Set(snapshot.traces.compactMap { trace in
+            trace.status == .pending || trace.status == .unfinished ? trace.traceID : nil
+        })
+        guard dailyCloseID == snapshot.id,
+              createdAt > snapshot.capturedAt,
+              Set(evidenceTraceIDs).isSubset(of: unfinishedTraceIDs),
+              (try? ZhulongUnfinishedCauseHypothesis(
+                  id: id,
+                  dailyCloseID: dailyCloseID,
+                  content: content,
+                  evidenceTraceIDs: evidenceTraceIDs,
+                  confidence: confidence,
+                  counterexamples: counterexamples,
+                  createdAt: createdAt
+              )) == self
+        else {
+            throw ZhulongDailyCloseError.invalidHypothesis
+        }
+    }
+}
+
+extension ZhulongUnfinishedCauseResolution {
+    func validateForPersistence(hypothesis: ZhulongUnfinishedCauseHypothesis) throws {
+        guard hypothesisID == hypothesis.id,
+              (try? ZhulongUnfinishedCauseResolution(
+                  id: id,
+                  hypothesis: hypothesis,
+                  decision: decision,
+                  resolvedAt: resolvedAt
+              )) == self
+        else {
+            throw ZhulongDailyCloseError.invalidResolution
+        }
+    }
+}
+
+extension ZhulongDailyReviewDraft {
+    func validateForPersistence(
+        snapshot: ZhulongDailyCloseSnapshot,
+        resolutions: [ZhulongUnfinishedCauseResolution]
+    ) throws {
+        guard dailyCloseID == snapshot.id,
+              confirmedCauseResolutionIDs == resolutions.compactMap({ resolution in
+                  guard case .confirmed = resolution.decision else { return nil }
+                  return resolution.id
+              }),
+              (try? ZhulongDailyReviewDraft(
+                  id: id,
+                  snapshot: snapshot,
+                  summary: summary,
+                  tomorrowNote: tomorrowNote,
+                  causeResolutions: resolutions,
+                  createdAt: createdAt
+              )) == self
+        else {
+            throw ZhulongDailyCloseError.invalidReviewDraft
+        }
+    }
+}
+
+public extension ZhulongSession {
+    @discardableResult
+    mutating func captureDailyClose(
+        date: LocalDate,
+        from engine: SuntraceEngine,
+        now: Date = Date()
+    ) throws -> ZhulongDailyCloseSnapshot {
+        try validateDailyCloseActivity(now)
+        guard proposedScopes.contains(.currentDayTodo) else {
+            throw ZhulongSessionError.scopeNotAuthorized
+        }
+        let snapshot = try ZhulongDailyCloseSnapshot(
+            sessionID: id,
+            date: date,
+            engine: engine,
+            capturedAt: now
+        )
+        dailyCloseSnapshots.append(snapshot)
+        appendEvent(
+            .dailyCloseCaptured,
+            summary: "已捕获每日收尾事实快照",
+            reference: .dailyClose(snapshot.id),
+            now: now
+        )
+        return snapshot
+    }
+
+    mutating func proposeUnfinishedCause(_ hypothesis: ZhulongUnfinishedCauseHypothesis) throws {
+        try validateDailyCloseActivity(hypothesis.createdAt)
+        guard let snapshot = dailyCloseSnapshots.first(where: { $0.id == hypothesis.dailyCloseID }) else {
+            throw ZhulongDailyCloseError.invalidHypothesis
+        }
+        let unfinishedTraceIDs = Set(snapshot.traces.compactMap { trace in
+            trace.status == .pending || trace.status == .unfinished ? trace.traceID : nil
+        })
+        guard hypothesis.createdAt > snapshot.capturedAt,
+              unfinishedCauseHypotheses.contains(where: { $0.id == hypothesis.id }) == false,
+              Set(hypothesis.evidenceTraceIDs).isSubset(of: unfinishedTraceIDs)
+        else {
+            throw ZhulongDailyCloseError.invalidHypothesis
+        }
+        unfinishedCauseHypotheses.append(hypothesis)
+        appendEvent(
+            .unfinishedCauseProposed,
+            summary: "烛龙已提出未完成原因假设",
+            reference: .unfinishedCauseHypothesis(hypothesis.id),
+            now: hypothesis.createdAt
+        )
+    }
+
+    @discardableResult
+    mutating func resolveUnfinishedCause(
+        _ hypothesisID: ZhulongUnfinishedCauseHypothesisID,
+        decision: ZhulongUnfinishedCauseDecision,
+        now: Date = Date()
+    ) throws -> ZhulongUnfinishedCauseResolution {
+        try validateDailyCloseActivity(now)
+        guard let hypothesis = unfinishedCauseHypotheses.first(where: { $0.id == hypothesisID }),
+              unfinishedCauseResolutions.contains(where: { $0.hypothesisID == hypothesisID }) == false
+        else {
+            throw ZhulongDailyCloseError.invalidResolution
+        }
+        let resolution = try ZhulongUnfinishedCauseResolution(
+            hypothesis: hypothesis,
+            decision: decision,
+            resolvedAt: now
+        )
+        unfinishedCauseResolutions.append(resolution)
+        appendEvent(
+            .unfinishedCauseResolved,
+            summary: "用户已裁决未完成原因假设",
+            reference: .unfinishedCauseResolution(resolution.id),
+            now: now
+        )
+        return resolution
+    }
+
+    @discardableResult
+    mutating func publishDailyReviewDraft(
+        dailyCloseID: ZhulongDailyCloseID,
+        summary: String?,
+        tomorrowNote: String?,
+        causeResolutionIDs: [ZhulongUnfinishedCauseResolutionID],
+        now: Date = Date()
+    ) throws -> ZhulongDailyReviewDraft {
+        try validateDailyCloseActivity(now)
+        guard let snapshot = dailyCloseSnapshots.first(where: { $0.id == dailyCloseID }),
+              Set(causeResolutionIDs).count == causeResolutionIDs.count
+        else {
+            throw ZhulongDailyCloseError.invalidReviewDraft
+        }
+        let resolutions = try causeResolutionIDs.map { resolutionID in
+            guard let resolution = unfinishedCauseResolutions.first(where: { $0.id == resolutionID }),
+                  unfinishedCauseHypotheses.contains(where: {
+                      $0.id == resolution.hypothesisID && $0.dailyCloseID == dailyCloseID
+                  })
+            else {
+                throw ZhulongDailyCloseError.invalidReviewDraft
+            }
+            return resolution
+        }
+        let draft = try ZhulongDailyReviewDraft(
+            snapshot: snapshot,
+            summary: summary,
+            tomorrowNote: tomorrowNote,
+            causeResolutions: resolutions,
+            createdAt: now
+        )
+        dailyReviewDrafts.append(draft)
+        appendEvent(
+            .dailyReviewDraftPublished,
+            summary: "已发布可编辑 AI 复盘草稿",
+            reference: .dailyReviewDraft(draft.id),
+            now: now
+        )
+        return draft
+    }
+
+    @discardableResult
+    mutating func authorizeDailyReview(
+        _ draftID: ZhulongDailyReviewDraftID,
+        against engine: SuntraceEngine,
+        now: Date = Date()
+    ) throws -> ZhulongDailyReviewAuthorization {
+        try validateDailyCloseActivity(now)
+        guard let draft = dailyReviewDrafts.first(where: { $0.id == draftID }),
+              let snapshot = dailyCloseSnapshots.first(where: { $0.id == draft.dailyCloseID }),
+              dailyReviewAuthorizations.contains(where: { $0.draftID == draftID }) == false
+        else {
+            throw ZhulongDailyCloseError.authorizationMismatch
+        }
+        let authorization = try ZhulongDailyReviewApplier().authorize(
+            draft,
+            snapshot: snapshot,
+            against: engine,
+            now: now
+        )
+        dailyReviewAuthorizations.append(authorization)
+        appendEvent(
+            .dailyReviewAuthorized,
+            summary: "用户已对当前 AI 复盘草稿授予一次性保存授权",
+            reference: .dailyReviewAuthorization(authorization.id),
+            now: now
+        )
+        return authorization
+    }
+
+    @discardableResult
+    mutating func applyAuthorizedDailyReview(
+        _ draftID: ZhulongDailyReviewDraftID,
+        to engine: inout SuntraceEngine,
+        now: Date = Date()
+    ) throws -> ZhulongDailyReviewReceipt {
+        try validateDailyCloseActivity(now)
+        var stagedSession = self
+        let stagedEngine = try SuntraceEngine(snapshot: engine.snapshot())
+        guard let draft = stagedSession.dailyReviewDrafts.first(where: { $0.id == draftID }),
+              let snapshot = stagedSession.dailyCloseSnapshots.first(where: {
+                  $0.id == draft.dailyCloseID
+              }),
+              let authorizationIndex = stagedSession.dailyReviewAuthorizations.firstIndex(where: {
+                  $0.draftID == draftID && $0.status == .active
+              })
+        else {
+            throw ZhulongDailyCloseError.authorizationMismatch
+        }
+        var authorization = stagedSession.dailyReviewAuthorizations[authorizationIndex]
+        var mutableEngine = stagedEngine
+        let receipt = try ZhulongDailyReviewApplier().apply(
+            draft,
+            snapshot: snapshot,
+            authorization: &authorization,
+            to: &mutableEngine,
+            now: now
+        )
+        stagedSession.dailyReviewAuthorizations[authorizationIndex] = authorization
+        stagedSession.dailyReviewReceipts.append(receipt)
+        stagedSession.appendEvent(
+            .dailyReviewApplied,
+            summary: "已保存用户确认的每日复盘",
+            reference: .dailyReviewReceipt(receipt.id),
+            now: now
+        )
+        self = stagedSession
+        engine = mutableEngine
+        return receipt
+    }
+
+    private func validateDailyCloseActivity(_ now: Date) throws {
+        guard workspaceStatus == .active else {
+            throw ZhulongSessionError.workspaceInactive
+        }
+        guard phase != .providerRunning else {
+            throw ZhulongSessionError.providerRunStillActive
+        }
+        try validateActivityTime(now)
     }
 }

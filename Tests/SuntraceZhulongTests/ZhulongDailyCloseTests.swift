@@ -174,4 +174,69 @@ final class ZhulongDailyCloseTests: XCTestCase {
         XCTAssertEqual(engine.snapshot(), before)
         XCTAssertEqual(authorization.status, .active)
     }
+
+    func testSessionRecordsDailyCloseLedgerAndAppliesReviewAtomically() throws {
+        var session = try ZhulongSession(
+            id: sessionID,
+            primaryIntent: "完成每日收尾",
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+        var engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "仍在进行", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: date,
+            today: date,
+            now: now
+        )
+        let snapshot = try session.captureDailyClose(
+            date: date,
+            from: engine,
+            now: now.addingTimeInterval(1)
+        )
+        let hypothesis = try ZhulongUnfinishedCauseHypothesis(
+            dailyCloseID: snapshot.id,
+            content: "任务范围可能大于预期",
+            evidenceTraceIDs: [traceID],
+            confidence: 0.65,
+            counterexamples: ["也可能是外部依赖延迟"],
+            createdAt: now.addingTimeInterval(2)
+        )
+        try session.proposeUnfinishedCause(hypothesis)
+        let resolution = try session.resolveUnfinishedCause(
+            hypothesis.id,
+            decision: .confirmed(content: "任务范围比预期大"),
+            now: now.addingTimeInterval(3)
+        )
+        let draft = try session.publishDailyReviewDraft(
+            dailyCloseID: snapshot.id,
+            summary: "完成了证据整理",
+            tomorrowNote: "重新确认范围",
+            causeResolutionIDs: [resolution.id],
+            now: now.addingTimeInterval(4)
+        )
+        _ = try session.authorizeDailyReview(
+            draft.id,
+            against: engine,
+            now: now.addingTimeInterval(5)
+        )
+        let receipt = try session.applyAuthorizedDailyReview(
+            draft.id,
+            to: &engine,
+            now: now.addingTimeInterval(6)
+        )
+
+        XCTAssertEqual(session.dailyReviewReceipts, [receipt])
+        XCTAssertEqual(engine.days[date]?.reviewUnfinishedReason, "任务范围比预期大")
+        XCTAssertEqual(session.phase, .scopeReview)
+        XCTAssertEqual(session.events.suffix(6).map(\.kind), [
+            .dailyCloseCaptured,
+            .unfinishedCauseProposed,
+            .unfinishedCauseResolved,
+            .dailyReviewDraftPublished,
+            .dailyReviewAuthorized,
+            .dailyReviewApplied
+        ])
+    }
 }

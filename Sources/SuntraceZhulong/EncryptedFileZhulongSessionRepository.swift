@@ -91,6 +91,10 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directoryURL.path
+        )
         let fileURL = fileURL(for: record.id)
         try envelope.write(to: fileURL, options: .atomic)
         try fileManager.setAttributes(

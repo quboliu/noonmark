@@ -21,7 +21,7 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         let session = try makeAuthorizedSession()
         try repository.save(session)
         let probe = ProviderProbe(result: .success(makeResponse()))
-        let provider = try StubZhulongProvider(identity: "provider-config-v5", probe: probe)
+        let provider = StubZhulongProvider(identity: try makeProviderIdentity(version: "v5"), probe: probe)
         let orchestrator = ZhulongProviderOrchestrator(repository: repository)
         let completedDate = baseDate.addingTimeInterval(3)
 
@@ -47,7 +47,7 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         let session = try makeAuthorizedSession()
         try repository.save(session)
         let probe = ProviderProbe(result: .success(makeResponse()))
-        let provider = try StubZhulongProvider(identity: "provider-config-v4", probe: probe)
+        let provider = StubZhulongProvider(identity: try makeProviderIdentity(), probe: probe)
         let orchestrator = ZhulongProviderOrchestrator(repository: repository)
         let completedDate = baseDate.addingTimeInterval(3)
         let payload = try ZhulongProviderPayload(
@@ -80,7 +80,7 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         try repository.save(session)
         let inspection = ProviderInspection(repository: repository, sessionID: session.id)
         let probe = ProviderProbe(result: .success(makeResponse()), inspection: inspection)
-        let provider = try StubZhulongProvider(identity: "provider-config-v4", probe: probe)
+        let provider = StubZhulongProvider(identity: try makeProviderIdentity(), probe: probe)
         let orchestrator = ZhulongProviderOrchestrator(repository: repository)
         let payload = try makePayload()
         let completedDate = baseDate.addingTimeInterval(3)
@@ -114,7 +114,7 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         try repository.save(session)
         let failure = ZhulongProviderFailure(code: "rate_limited", message: "Provider 暂时繁忙")
         let failedProbe = ProviderProbe(result: .failure(failure))
-        let provider = try StubZhulongProvider(identity: "provider-config-v4", probe: failedProbe)
+        let provider = StubZhulongProvider(identity: try makeProviderIdentity(), probe: failedProbe)
         let orchestrator = ZhulongProviderOrchestrator(repository: repository)
         let failedAt = baseDate.addingTimeInterval(3)
 
@@ -135,9 +135,11 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         XCTAssertEqual(failedSession.providerSends.last?.status, .failed)
         XCTAssertEqual(failedSession.providerSends.last?.failure, failure)
         XCTAssertEqual(failedSession.events.last?.kind, .providerRunFailed)
+        XCTAssertEqual(failedSession.events.last?.summary, "Provider 请求失败")
+        XCTAssertFalse(failedSession.events.last?.summary.contains(failure.message) == true)
 
         let successProbe = ProviderProbe(result: .success(makeResponse(draftVersion: 2)))
-        let retryProvider = try StubZhulongProvider(identity: "provider-config-v4", probe: successProbe)
+        let retryProvider = StubZhulongProvider(identity: try makeProviderIdentity(), probe: successProbe)
         let succeededAt = baseDate.addingTimeInterval(5)
         let retried = try await orchestrator.run(
             sessionID: session.id,
@@ -160,7 +162,7 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         try repository.save(session)
         let invalidResponse = ZhulongProviderResponse(content: "  ", draftVersion: 0)
         let probe = ProviderProbe(result: .success(invalidResponse))
-        let provider = try StubZhulongProvider(identity: "provider-config-v4", probe: probe)
+        let provider = StubZhulongProvider(identity: try makeProviderIdentity(), probe: probe)
         let orchestrator = ZhulongProviderOrchestrator(repository: repository)
         let completedDate = baseDate.addingTimeInterval(3)
 
@@ -190,7 +192,7 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         let session = try makeAuthorizedSession()
         try repository.save(session)
         let gate = ProviderGate(result: .success(makeResponse()))
-        let provider = try GatedZhulongProvider(identity: "provider-config-v4", gate: gate)
+        let provider = GatedZhulongProvider(identity: try makeProviderIdentity(), gate: gate)
         let orchestrator = ZhulongProviderOrchestrator(repository: repository)
         let firstStartedDate = baseDate.addingTimeInterval(2)
         let secondStartedDate = baseDate.addingTimeInterval(3)
@@ -219,8 +221,21 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
             )
         } errorHandler: { error in
             XCTAssertEqual(
-                error as? ZhulongSessionError,
-                .invalidTransition(from: .providerRunning, to: .providerRunning)
+                error as? ZhulongProviderOrchestrationError,
+                .providerRunStillActive
+            )
+        }
+
+        do {
+            _ = try await orchestrator.recoverInterruptedRun(
+                sessionID: session.id,
+                now: secondCompletedDate
+            )
+            XCTFail("An in-flight request must not be marked interrupted")
+        } catch {
+            XCTAssertEqual(
+                error as? ZhulongProviderOrchestrationError,
+                .providerRunStillActive
             )
         }
 
@@ -228,6 +243,28 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         _ = try await firstRun.value
         let callCount = await gate.callCount
         XCTAssertEqual(callCount, 1)
+    }
+
+    func testRestartRecoveryMarksPersistedRunningSendInterruptedAndRetryable() async throws {
+        let repository = makeRepository()
+        var session = try makeAuthorizedSession()
+        let request = try session.beginProviderRun(
+            payload: makePayload(),
+            providerIdentity: makeProviderIdentity(),
+            now: baseDate.addingTimeInterval(2)
+        )
+        try repository.save(session)
+        let restartedOrchestrator = ZhulongProviderOrchestrator(repository: repository)
+
+        let recovered = try await restartedOrchestrator.recoverInterruptedRun(
+            sessionID: session.id,
+            now: baseDate.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(recovered.phase, .readyForProvider)
+        XCTAssertEqual(recovered.providerSends.last?.failure?.code, "provider_run_interrupted")
+        XCTAssertEqual(recovered.events.last?.providerRunID, request.runID)
+        XCTAssertEqual(try repository.load(session.id), recovered)
     }
 
     private func makeRepository() -> EncryptedFileZhulongSessionRepository {
@@ -245,7 +282,8 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         )
         try session.authorizeScope(
             [.currentDayTodo],
-            providerIdentity: ZhulongProviderConfigurationIdentity("provider-config-v4"),
+            providerIdentity: makeProviderIdentity(),
+            expiresAt: baseDate.addingTimeInterval(301),
             now: baseDate.addingTimeInterval(1)
         )
         return session
@@ -291,8 +329,8 @@ private struct StubZhulongProvider: ZhulongProvider {
     let configurationIdentity: ZhulongProviderConfigurationIdentity
     let probe: ProviderProbe
 
-    init(identity: String, probe: ProviderProbe) throws {
-        configurationIdentity = try ZhulongProviderConfigurationIdentity(identity)
+    init(identity: ZhulongProviderConfigurationIdentity, probe: ProviderProbe) {
+        configurationIdentity = identity
         self.probe = probe
     }
 
@@ -305,8 +343,8 @@ private struct GatedZhulongProvider: ZhulongProvider {
     let configurationIdentity: ZhulongProviderConfigurationIdentity
     let gate: ProviderGate
 
-    init(identity: String, gate: ProviderGate) throws {
-        configurationIdentity = try ZhulongProviderConfigurationIdentity(identity)
+    init(identity: ZhulongProviderConfigurationIdentity, gate: ProviderGate) {
+        configurationIdentity = identity
         self.gate = gate
     }
 

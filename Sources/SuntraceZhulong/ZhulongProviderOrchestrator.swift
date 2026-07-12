@@ -8,10 +8,12 @@ public protocol ZhulongSessionRepository: Sendable {
 public enum ZhulongProviderOrchestrationError: Error, Equatable, Sendable {
     case providerIdentityMismatch
     case providerFailed(String)
+    case providerRunStillActive
 }
 
 public actor ZhulongProviderOrchestrator {
     private let repository: any ZhulongSessionRepository
+    private var activeSessionIDs: Set<ZhulongSessionID> = []
 
     public init(repository: any ZhulongSessionRepository) {
         self.repository = repository
@@ -24,6 +26,9 @@ public actor ZhulongProviderOrchestrator {
         startedAt: Date = Date(),
         completedAt: @escaping @Sendable () -> Date = Date.init
     ) async throws -> ZhulongSession {
+        guard activeSessionIDs.contains(sessionID) == false else {
+            throw ZhulongProviderOrchestrationError.providerRunStillActive
+        }
         var session = try repository.load(sessionID)
         guard session.authorization?.providerIdentity == provider.configurationIdentity else {
             throw ZhulongProviderOrchestrationError.providerIdentityMismatch
@@ -35,6 +40,8 @@ public actor ZhulongProviderOrchestrator {
             now: startedAt
         )
         try repository.save(session)
+        activeSessionIDs.insert(sessionID)
+        defer { activeSessionIDs.remove(sessionID) }
 
         let result = await provider.complete(request)
         let resultDate = max(completedAt(), startedAt)
@@ -67,6 +74,19 @@ public actor ZhulongProviderOrchestrator {
             try repository.save(session)
             throw ZhulongProviderOrchestrationError.providerFailed(recordedFailure.code)
         }
+    }
+
+    public func recoverInterruptedRun(
+        sessionID: ZhulongSessionID,
+        now: Date = Date()
+    ) throws -> ZhulongSession {
+        guard activeSessionIDs.contains(sessionID) == false else {
+            throw ZhulongProviderOrchestrationError.providerRunStillActive
+        }
+        var session = try repository.load(sessionID)
+        try session.recoverInterruptedProviderRun(now: now)
+        try repository.save(session)
+        return session
     }
 
     private func validatedFailure(_ failure: ZhulongProviderFailure) -> ZhulongProviderFailure {

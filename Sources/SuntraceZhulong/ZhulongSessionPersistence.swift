@@ -15,12 +15,15 @@ struct ZhulongSessionEventRecord: Codable, Equatable {
     var sequence: UInt64
     var kind: ZhulongSessionEventKind
     var occurredAt: Date
+    var summary: String
+    var providerRunID: ZhulongProviderRunID?
 }
 
 struct ZhulongScopeAuthorizationRecord: Codable, Equatable {
     var scopes: Set<ZhulongDataScope>
-    var providerIdentity: String
+    var providerIdentity: ZhulongProviderConfigurationIdentity
     var grantedAt: Date
+    var expiresAt: Date
 }
 
 struct ZhulongSessionRecord: Codable, Equatable {
@@ -28,7 +31,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
     var primaryIntent: String
     var proposedScopes: Set<ZhulongDataScope>
     var phase: ZhulongSessionPhase
-    var authorization: ZhulongScopeAuthorizationRecord?
+    var authorizations: [ZhulongScopeAuthorizationRecord]
     var draftVersion: Int?
     var providerSends: [ZhulongProviderSendRecord]
     var events: [ZhulongSessionEventRecord]
@@ -38,11 +41,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
         primaryIntent = session.primaryIntent
         proposedScopes = session.proposedScopes
         phase = session.phase
-        authorization = session.authorization.map {
+        authorizations = session.authorizations.map {
             ZhulongScopeAuthorizationRecord(
                 scopes: $0.scopes,
-                providerIdentity: $0.providerIdentity.rawValue,
-                grantedAt: $0.grantedAt
+                providerIdentity: $0.providerIdentity,
+                grantedAt: $0.grantedAt,
+                expiresAt: $0.expiresAt
             )
         }
         draftVersion = session.draftVersion
@@ -51,31 +55,35 @@ struct ZhulongSessionRecord: Codable, Equatable {
             ZhulongSessionEventRecord(
                 sequence: $0.sequence,
                 kind: $0.kind,
-                occurredAt: $0.occurredAt
+                occurredAt: $0.occurredAt,
+                summary: $0.summary,
+                providerRunID: $0.providerRunID
             )
         }
     }
 
     func restore(expectedID: ZhulongSessionID) throws -> ZhulongSession {
         try validateBase(expectedID: expectedID)
-        let restoredAuthorization = try restoreAuthorization()
-        try validateProviderSends(authorization: restoredAuthorization)
-        try validatePhase(authorization: restoredAuthorization)
-        try validateEvents(authorization: restoredAuthorization)
+        let restoredAuthorizations = try restoreAuthorizations()
+        try validateProviderSends()
+        try validatePhase(authorizations: restoredAuthorizations)
+        try validateEvents(authorizations: restoredAuthorizations)
 
         return ZhulongSession(
             restoredID: id,
             primaryIntent: primaryIntent,
             proposedScopes: proposedScopes,
             phase: phase,
-            authorization: restoredAuthorization,
+            authorizations: restoredAuthorizations,
             draftVersion: draftVersion,
             providerSends: providerSends,
             events: events.map {
                 ZhulongSessionEvent(
                     sequence: $0.sequence,
                     kind: $0.kind,
-                    occurredAt: $0.occurredAt
+                    occurredAt: $0.occurredAt,
+                    summary: $0.summary,
+                    providerRunID: $0.providerRunID
                 )
             }
         )
@@ -94,7 +102,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
         }
         guard events.isEmpty == false,
               events.enumerated().allSatisfy({ offset, event in
-                  event.sequence == UInt64(offset + 1)
+                  event.sequence == UInt64(offset + 1) &&
+                      event.occurredAt.timeIntervalSinceReferenceDate.isFinite
               })
         else {
             throw ZhulongSessionRestorationError.noncanonicalEventSequence
@@ -106,38 +115,43 @@ struct ZhulongSessionRecord: Codable, Equatable {
         }
     }
 
-    private func restoreAuthorization() throws -> ZhulongScopeAuthorization? {
-        try authorization.map { record in
-            guard record.scopes == proposedScopes else {
-                throw ZhulongSessionRestorationError.invalidAuthorization
-            }
-            let identity: ZhulongProviderConfigurationIdentity
-            do {
-                identity = try ZhulongProviderConfigurationIdentity(record.providerIdentity)
-            } catch {
+    private func restoreAuthorizations() throws -> [ZhulongScopeAuthorization] {
+        try authorizations.map { record in
+            guard record.scopes == proposedScopes,
+                  record.grantedAt.timeIntervalSinceReferenceDate.isFinite,
+                  record.expiresAt.timeIntervalSinceReferenceDate.isFinite,
+                  record.expiresAt > record.grantedAt,
+                  validIdentity(record.providerIdentity)
+            else {
                 throw ZhulongSessionRestorationError.invalidAuthorization
             }
             return ZhulongScopeAuthorization(
                 scopes: record.scopes,
-                providerIdentity: identity,
-                grantedAt: record.grantedAt
+                providerIdentity: record.providerIdentity,
+                grantedAt: record.grantedAt,
+                expiresAt: record.expiresAt
             )
         }
     }
 
-    private func validateProviderSends(
-        authorization: ZhulongScopeAuthorization?
-    ) throws {
-        guard let authorization else {
-            guard providerSends.isEmpty else {
-                throw ZhulongSessionRestorationError.invalidEventsForPhase
-            }
-            return
+    private func validIdentity(_ identity: ZhulongProviderConfigurationIdentity) -> Bool {
+        guard let rebuilt = try? ZhulongProviderConfigurationIdentity(
+            providerID: identity.providerID,
+            kind: identity.kind,
+            baseURL: identity.baseURL,
+            location: identity.location,
+            model: identity.model,
+            dataCapabilities: identity.dataCapabilities
+        ) else {
+            return false
         }
+        return rebuilt == identity
+    }
+
+    private func validateProviderSends() throws {
         guard Set(providerSends.map(\.runID)).count == providerSends.count,
               providerSends.allSatisfy({ send in
-                  send.providerIdentity == authorization.providerIdentity &&
-                      send.payload.scopes == authorization.scopes &&
+                  validIdentity(send.providerIdentity) &&
                       validPayload(send.payload) &&
                       validSendResult(send)
               })
@@ -159,76 +173,153 @@ struct ZhulongSessionRecord: Codable, Equatable {
     }
 
     private func validSendResult(_ send: ZhulongProviderSendRecord) -> Bool {
-        switch send.status {
+        guard send.startedAt.timeIntervalSinceReferenceDate.isFinite else { return false }
+        switch send.result {
         case .running:
-            return send.completedAt == nil && send.response == nil && send.failure == nil
-        case .succeeded:
-            guard let completedAt = send.completedAt,
-                  let response = send.response,
-                  response.draftVersion > 0,
-                  response.content.isEmpty == false,
-                  response.content == response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            else {
-                return false
-            }
-            return completedAt >= send.startedAt && send.failure == nil
-        case .failed:
-            guard let completedAt = send.completedAt,
-                  let failure = send.failure,
-                  failure.code.isEmpty == false,
-                  failure.message.isEmpty == false,
-                  failure.code == failure.code.trimmingCharacters(in: .whitespacesAndNewlines),
-                  failure.message == failure.message.trimmingCharacters(in: .whitespacesAndNewlines)
-            else {
-                return false
-            }
-            return completedAt >= send.startedAt && send.response == nil
+            return true
+        case let .succeeded(completedAt, response):
+            return validCompletionTime(completedAt, after: send.startedAt) &&
+                response.draftVersion > 0 &&
+                response.content.isEmpty == false &&
+                response.content == response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        case let .failed(completedAt, failure):
+            return validCompletionTime(completedAt, after: send.startedAt) &&
+                failure.code.isEmpty == false &&
+                failure.message.isEmpty == false &&
+                failure.code == failure.code.trimmingCharacters(in: .whitespacesAndNewlines) &&
+                failure.message == failure.message.trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 
+    private func validCompletionTime(_ completedAt: Date, after startedAt: Date) -> Bool {
+        completedAt.timeIntervalSinceReferenceDate.isFinite && completedAt >= startedAt
+    }
+
     private func validateEvents(
-        authorization: ZhulongScopeAuthorization?
+        authorizations: [ZhulongScopeAuthorization]
     ) throws {
-        let expected = expectedEvents(authorization: authorization)
-        guard events.count == expected.count,
-              zip(events, expected).allSatisfy({ event, expectedEvent in
-                  event.kind == expectedEvent.kind && event.occurredAt == expectedEvent.occurredAt
-              })
+        guard events.first == ZhulongSessionEventRecord(
+            sequence: 1,
+            kind: .sessionCreated,
+            occurredAt: events[0].occurredAt,
+            summary: "已建立烛龙会话",
+            providerRunID: nil
+        ) else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+
+        var authorizationIndex = 0
+        var sendIndex = 0
+        var waitingForSendResult = false
+        var currentAuthorization: ZhulongScopeAuthorization?
+        for event in events.dropFirst() {
+            switch event.kind {
+            case .sessionCreated:
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            case .scopeAuthorized:
+                guard waitingForSendResult == false,
+                      authorizationIndex < authorizations.count,
+                      event == authorizationEvent(
+                          authorizations[authorizationIndex],
+                          sequence: event.sequence
+                      )
+                else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+                currentAuthorization = authorizations[authorizationIndex]
+                authorizationIndex += 1
+            case .providerRunStarted:
+                guard waitingForSendResult == false,
+                      sendIndex < providerSends.count,
+                      currentAuthorization?.isValid(at: providerSends[sendIndex].startedAt) == true,
+                      currentAuthorization?.providerIdentity == providerSends[sendIndex].providerIdentity,
+                      currentAuthorization?.scopes == providerSends[sendIndex].payload.scopes,
+                      event == startedEvent(providerSends[sendIndex], sequence: event.sequence)
+                else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+                waitingForSendResult = true
+            case .providerRunFailed, .draftReady:
+                guard waitingForSendResult,
+                      sendIndex < providerSends.count,
+                      event == resultEvent(providerSends[sendIndex], sequence: event.sequence)
+                else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+                sendIndex += 1
+                waitingForSendResult = false
+            }
+        }
+
+        let hasRunningSend = providerSends.last?.status == .running
+        guard authorizationIndex == authorizations.count,
+              sendIndex == providerSends.count - (hasRunningSend ? 1 : 0),
+              waitingForSendResult == hasRunningSend
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
     }
 
-    private func expectedEvents(
-        authorization: ZhulongScopeAuthorization?
-    ) -> [(kind: ZhulongSessionEventKind, occurredAt: Date)] {
-        var expected = [(kind: ZhulongSessionEventKind, occurredAt: Date)]()
-        if let createdAt = events.first?.occurredAt {
-            expected.append((.sessionCreated, createdAt))
-        }
-        if let authorization {
-            expected.append((.scopeAuthorized, authorization.grantedAt))
-        }
-        for send in providerSends {
-            expected.append((.providerRunStarted, send.startedAt))
-            if let completedAt = send.completedAt {
-                let resultKind: ZhulongSessionEventKind = send.status == .succeeded
-                    ? .draftReady
-                    : .providerRunFailed
-                expected.append((resultKind, completedAt))
-            }
-        }
-        return expected
+    private func authorizationEvent(
+        _ authorization: ZhulongScopeAuthorization,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .scopeAuthorized,
+            occurredAt: authorization.grantedAt,
+            summary: "已授权 \(authorization.scopes.count) 项数据范围",
+            providerRunID: nil
+        )
     }
 
-    private func validatePhase(authorization: ZhulongScopeAuthorization?) throws {
+    private func startedEvent(
+        _ send: ZhulongProviderSendRecord,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .providerRunStarted,
+            occurredAt: send.startedAt,
+            summary: "已向 Provider 发送授权内容",
+            providerRunID: send.runID
+        )
+    }
+
+    private func resultEvent(
+        _ send: ZhulongProviderSendRecord,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord? {
+        switch send.result {
+        case .running:
+            return nil
+        case let .succeeded(completedAt, _):
+            return ZhulongSessionEventRecord(
+                sequence: sequence,
+                kind: .draftReady,
+                occurredAt: completedAt,
+                summary: "Provider 已返回可审查草稿",
+                providerRunID: send.runID
+            )
+        case let .failed(completedAt, _):
+            return ZhulongSessionEventRecord(
+                sequence: sequence,
+                kind: .providerRunFailed,
+                occurredAt: completedAt,
+                summary: "Provider 请求失败",
+                providerRunID: send.runID
+            )
+        }
+    }
+
+    private func validatePhase(authorizations: [ZhulongScopeAuthorization]) throws {
         switch phase {
         case .scopeReview:
-            guard authorization == nil, draftVersion == nil, providerSends.isEmpty else {
+            guard authorizations.isEmpty, draftVersion == nil, providerSends.isEmpty else {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
         case .readyForProvider:
-            guard authorization != nil,
+            guard authorizations.isEmpty == false,
                   draftVersion == nil,
                   providerSends.last?.status != .running,
                   providerSends.allSatisfy({ $0.status == .failed })
@@ -236,7 +327,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
         case .providerRunning:
-            guard authorization != nil,
+            guard authorizations.isEmpty == false,
                   draftVersion == nil,
                   providerSends.last?.status == .running,
                   providerSends.dropLast().allSatisfy({ $0.status == .failed })
@@ -244,7 +335,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
         case .draftReview:
-            guard authorization != nil,
+            guard authorizations.isEmpty == false,
                   let draftVersion,
                   draftVersion > 0,
                   providerSends.last?.status == .succeeded,

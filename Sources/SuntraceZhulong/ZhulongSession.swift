@@ -10,15 +10,63 @@ public struct ZhulongSessionID: Codable, Hashable, Sendable, CustomStringConvert
     public var description: String { rawValue.uuidString.lowercased() }
 }
 
-public struct ZhulongProviderConfigurationIdentity: Codable, Hashable, Sendable {
-    public let rawValue: String
+public enum ZhulongProviderKind: String, Codable, Hashable, Sendable {
+    case openAICompatible
+    case localModel
+    case customHTTP
+}
 
-    public init(_ rawValue: String) throws {
-        let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.isEmpty == false else {
+public enum ZhulongProviderLocation: String, Codable, Hashable, Sendable {
+    case local
+    case remote
+}
+
+public enum ZhulongProviderDataCapability: String, Codable, Hashable, Sendable {
+    case structuredOutput
+    case taskContext
+    case sessionSummary
+    case memoryContext
+}
+
+public struct ZhulongProviderConfigurationIdentity: Codable, Hashable, Sendable {
+    public let providerID: String
+    public let kind: ZhulongProviderKind
+    public let baseURL: URL?
+    public let location: ZhulongProviderLocation
+    public let model: String
+    public let dataCapabilities: Set<ZhulongProviderDataCapability>
+
+    public init(
+        providerID: String,
+        kind: ZhulongProviderKind,
+        baseURL: URL?,
+        location: ZhulongProviderLocation,
+        model: String,
+        dataCapabilities: Set<ZhulongProviderDataCapability>
+    ) throws {
+        let normalizedProviderID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedProviderID.isEmpty == false,
+              normalizedModel.isEmpty == false,
+              dataCapabilities.isEmpty == false
+        else {
             throw ZhulongSessionError.emptyProviderIdentity
         }
-        self.rawValue = normalized
+        guard location != .remote || baseURL != nil else {
+            throw ZhulongSessionError.invalidProviderIdentity
+        }
+        if let components = baseURL.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) }) {
+            guard components.user == nil, components.password == nil, components.fragment == nil else {
+                throw ZhulongSessionError.invalidProviderIdentity
+            }
+        }
+
+        self.providerID = normalizedProviderID
+        self.kind = kind
+        self.baseURL = baseURL
+        self.location = location
+        self.model = normalizedModel
+        self.dataCapabilities = dataCapabilities
     }
 }
 
@@ -51,23 +99,34 @@ public struct ZhulongSessionEvent: Codable, Equatable, Sendable {
     public let sequence: UInt64
     public let kind: ZhulongSessionEventKind
     public let occurredAt: Date
+    public let summary: String
+    public let providerRunID: ZhulongProviderRunID?
 }
 
 public struct ZhulongScopeAuthorization: Equatable, Sendable {
     public let scopes: Set<ZhulongDataScope>
     public let providerIdentity: ZhulongProviderConfigurationIdentity
     public let grantedAt: Date
+    public let expiresAt: Date
+
+    public func isValid(at date: Date) -> Bool {
+        date >= grantedAt && date < expiresAt
+    }
 }
 
 public enum ZhulongSessionError: Error, Equatable, Sendable {
     case emptyPrimaryIntent
     case emptyScopeProposal
     case emptyProviderIdentity
+    case invalidProviderIdentity
+    case invalidAuthorizationExpiration
     case scopeNotAuthorized
     case scopeDoesNotMatchProposal
+    case authorizationExpired
     case providerIdentityMismatch
     case providerPayloadScopeMismatch
     case providerRunMismatch
+    case noInterruptedProviderRun
     case invalidDraftVersion
     case invalidProviderFailure
     case invalidProviderResponse
@@ -80,10 +139,12 @@ public struct ZhulongSession: Equatable, Sendable {
     public let primaryIntent: String
     public let proposedScopes: Set<ZhulongDataScope>
     public private(set) var phase: ZhulongSessionPhase
-    public private(set) var authorization: ZhulongScopeAuthorization?
+    public private(set) var authorizations: [ZhulongScopeAuthorization]
     public private(set) var draftVersion: Int?
     public private(set) var providerSends: [ZhulongProviderSendRecord]
     public private(set) var events: [ZhulongSessionEvent]
+
+    public var authorization: ZhulongScopeAuthorization? { authorizations.last }
 
     public init(
         id: ZhulongSessionID = ZhulongSessionID(),
@@ -103,14 +164,16 @@ public struct ZhulongSession: Equatable, Sendable {
         self.primaryIntent = normalizedIntent
         self.proposedScopes = proposedScopes
         phase = .scopeReview
-        authorization = nil
+        authorizations = []
         draftVersion = nil
         providerSends = []
         events = [
             ZhulongSessionEvent(
                 sequence: 1,
                 kind: .sessionCreated,
-                occurredAt: now
+                occurredAt: now,
+                summary: "已建立烛龙会话",
+                providerRunID: nil
             )
         ]
     }
@@ -120,7 +183,7 @@ public struct ZhulongSession: Equatable, Sendable {
         primaryIntent: String,
         proposedScopes: Set<ZhulongDataScope>,
         phase: ZhulongSessionPhase,
-        authorization: ZhulongScopeAuthorization?,
+        authorizations: [ZhulongScopeAuthorization],
         draftVersion: Int?,
         providerSends: [ZhulongProviderSendRecord],
         events: [ZhulongSessionEvent]
@@ -129,7 +192,7 @@ public struct ZhulongSession: Equatable, Sendable {
         self.primaryIntent = primaryIntent
         self.proposedScopes = proposedScopes
         self.phase = phase
-        self.authorization = authorization
+        self.authorizations = authorizations
         self.draftVersion = draftVersion
         self.providerSends = providerSends
         self.events = events
@@ -138,23 +201,33 @@ public struct ZhulongSession: Equatable, Sendable {
     public mutating func authorizeScope(
         _ scopes: Set<ZhulongDataScope>,
         providerIdentity: ZhulongProviderConfigurationIdentity,
+        expiresAt: Date,
         now: Date = Date()
     ) throws {
-        guard phase == .scopeReview else {
+        let canExplicitlyReauthorize = phase == .readyForProvider
+        guard phase == .scopeReview || canExplicitlyReauthorize else {
             throw ZhulongSessionError.invalidTransition(from: phase, to: .readyForProvider)
         }
         guard scopes == proposedScopes else {
             throw ZhulongSessionError.scopeDoesNotMatchProposal
         }
         try validateEventTime(now)
+        guard expiresAt > now else {
+            throw ZhulongSessionError.invalidAuthorizationExpiration
+        }
 
-        authorization = ZhulongScopeAuthorization(
+        authorizations.append(ZhulongScopeAuthorization(
             scopes: scopes,
             providerIdentity: providerIdentity,
-            grantedAt: now
-        )
+            grantedAt: now,
+            expiresAt: expiresAt
+        ))
         phase = .readyForProvider
-        appendEvent(.scopeAuthorized, now: now)
+        appendEvent(
+            .scopeAuthorized,
+            summary: "已授权 \(scopes.count) 项数据范围",
+            now: now
+        )
     }
 
     public mutating func beginProviderRun(
@@ -172,6 +245,9 @@ public struct ZhulongSession: Equatable, Sendable {
         guard providerIdentity == authorization.providerIdentity else {
             throw ZhulongSessionError.providerIdentityMismatch
         }
+        guard authorization.isValid(at: now) else {
+            throw ZhulongSessionError.authorizationExpired
+        }
         guard payload.scopes == authorization.scopes else {
             throw ZhulongSessionError.providerPayloadScopeMismatch
         }
@@ -185,7 +261,12 @@ public struct ZhulongSession: Equatable, Sendable {
         )
         providerSends.append(send)
         phase = .providerRunning
-        appendEvent(.providerRunStarted, now: now)
+        appendEvent(
+            .providerRunStarted,
+            summary: "已向 Provider 发送授权内容",
+            providerRunID: runID,
+            now: now
+        )
         return ZhulongProviderRequest(
             runID: runID,
             sessionID: id,
@@ -213,7 +294,12 @@ public struct ZhulongSession: Equatable, Sendable {
         providerSends[sendIndex] = providerSends[sendIndex].completing(with: response, at: now)
         draftVersion = response.draftVersion
         phase = .draftReview
-        appendEvent(.draftReady, now: now)
+        appendEvent(
+            .draftReady,
+            summary: "Provider 已返回可审查草稿",
+            providerRunID: runID,
+            now: now
+        )
     }
 
     public mutating func recordProviderFailure(
@@ -234,15 +320,44 @@ public struct ZhulongSession: Equatable, Sendable {
 
         providerSends[sendIndex] = providerSends[sendIndex].failing(with: failure, at: now)
         phase = .readyForProvider
-        appendEvent(.providerRunFailed, now: now)
+        appendEvent(
+            .providerRunFailed,
+            summary: "Provider 请求失败",
+            providerRunID: runID,
+            now: now
+        )
     }
 
-    private mutating func appendEvent(_ kind: ZhulongSessionEventKind, now: Date) {
+    public mutating func recoverInterruptedProviderRun(now: Date = Date()) throws {
+        guard phase == .providerRunning,
+              let runID = providerSends.last?.runID,
+              providerSends.last?.status == .running
+        else {
+            throw ZhulongSessionError.noInterruptedProviderRun
+        }
+        try recordProviderFailure(
+            ZhulongProviderFailure(
+                code: "provider_run_interrupted",
+                message: "上次 Provider 请求因应用中断而停止"
+            ),
+            runID: runID,
+            now: now
+        )
+    }
+
+    private mutating func appendEvent(
+        _ kind: ZhulongSessionEventKind,
+        summary: String,
+        providerRunID: ZhulongProviderRunID? = nil,
+        now: Date
+    ) {
         events.append(
             ZhulongSessionEvent(
                 sequence: UInt64(events.count + 1),
                 kind: kind,
-                occurredAt: now
+                occurredAt: now,
+                summary: summary,
+                providerRunID: providerRunID
             )
         )
     }

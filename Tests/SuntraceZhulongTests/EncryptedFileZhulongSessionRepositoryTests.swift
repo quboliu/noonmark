@@ -29,7 +29,8 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         let fileURL = repository.fileURL(for: session.id)
         let storedBytes = try Data(contentsOf: fileURL)
         XCTAssertNil(storedBytes.range(of: Data(session.primaryIntent.utf8)))
-        XCTAssertNil(storedBytes.range(of: Data("provider-config-v4".utf8)))
+        XCTAssertNil(storedBytes.range(of: Data("provider-v4".utf8)))
+        XCTAssertNil(storedBytes.range(of: Data("https://provider.example/v4".utf8)))
         XCTAssertNil(storedBytes.range(of: Data("只输出结构化规划草稿。".utf8)))
         XCTAssertNil(storedBytes.range(of: Data("完成 2 项，未完成 1 项".utf8)))
 
@@ -66,6 +67,21 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: repository.fileURL(for: session.id).path))
     }
 
+    func testRepositoryTightensExistingSidecarDirectoryPermissions() throws {
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o755]
+        )
+        let repository = makeRepository(key: key)
+
+        try repository.save(makeDraftReviewSession())
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: directoryURL.path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber).intValue
+        XCTAssertEqual(permissions & 0o777, 0o700)
+    }
+
     func testRepositoryRejectsNoncanonicalPersistedEventSequenceAfterDecryption() throws {
         let repository = makeRepository(key: key)
         let session = try makeDraftReviewSession()
@@ -88,13 +104,10 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         let send = try XCTUnwrap(record.providerSends.first)
         record.providerSends[0] = try ZhulongProviderSendRecord(
             runID: send.runID,
-            providerIdentity: ZhulongProviderConfigurationIdentity("provider-config-forged"),
+            providerIdentity: makeProviderIdentity(version: "forged"),
             payload: send.payload,
             startedAt: send.startedAt,
-            status: send.status,
-            completedAt: send.completedAt,
-            response: send.response,
-            failure: send.failure
+            result: send.result
         )
         try repository.saveRecordForTesting(record)
 
@@ -104,6 +117,47 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
                 .invalidEventsForPhase
             )
         }
+    }
+
+    func testRepositoryRoundTripsExplicitProviderReauthorizationInEventOrder() throws {
+        let repository = makeRepository(key: key)
+        var session = try ZhulongSession(
+            primaryIntent: "重新规划明天",
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: makeProviderIdentity(),
+            expiresAt: now.addingTimeInterval(300),
+            now: now.addingTimeInterval(1)
+        )
+        let replacement = try makeProviderIdentity(version: "v5")
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: replacement,
+            expiresAt: now.addingTimeInterval(400),
+            now: now.addingTimeInterval(2)
+        )
+        let request = try session.beginProviderRun(
+            payload: ZhulongProviderPayload(
+                systemPrompt: "只输出结构化规划草稿。",
+                userPrompt: session.primaryIntent,
+                contextVersion: "context-v2",
+                scopeContent: [.currentDayTodo: "明日有三项候选任务"]
+            ),
+            providerIdentity: replacement,
+            now: now.addingTimeInterval(3)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(content: "{}", draftVersion: 1),
+            runID: request.runID,
+            now: now.addingTimeInterval(4)
+        )
+
+        try repository.save(session)
+
+        XCTAssertEqual(try repository.load(session.id), session)
     }
 
     private func makeRepository(key: Data) -> EncryptedFileZhulongSessionRepository {
@@ -121,10 +175,11 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         )
         try session.authorizeScope(
             [.currentDayTodo],
-            providerIdentity: ZhulongProviderConfigurationIdentity("provider-config-v4"),
+            providerIdentity: makeProviderIdentity(),
+            expiresAt: now.addingTimeInterval(301),
             now: now.addingTimeInterval(1)
         )
-        let identity = try ZhulongProviderConfigurationIdentity("provider-config-v4")
+        let identity = try makeProviderIdentity()
         let payload = try ZhulongProviderPayload(
             systemPrompt: "只输出结构化规划草稿。",
             userPrompt: session.primaryIntent,

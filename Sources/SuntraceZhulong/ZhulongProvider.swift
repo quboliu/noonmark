@@ -97,34 +97,56 @@ public enum ZhulongProviderSendStatus: String, Codable, Equatable, Sendable {
     case failed
 }
 
+public enum ZhulongProviderSendResult: Codable, Equatable, Sendable {
+    case running
+    case succeeded(completedAt: Date, response: ZhulongProviderResponse)
+    case failed(completedAt: Date, failure: ZhulongProviderFailure)
+}
+
 public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
     public let runID: ZhulongProviderRunID
     public let providerIdentity: ZhulongProviderConfigurationIdentity
     public let payload: ZhulongProviderPayload
     public let startedAt: Date
-    public let status: ZhulongProviderSendStatus
-    public let completedAt: Date?
-    public let response: ZhulongProviderResponse?
-    public let failure: ZhulongProviderFailure?
+    public let result: ZhulongProviderSendResult
 
     init(
         runID: ZhulongProviderRunID,
         providerIdentity: ZhulongProviderConfigurationIdentity,
         payload: ZhulongProviderPayload,
         startedAt: Date,
-        status: ZhulongProviderSendStatus = .running,
-        completedAt: Date? = nil,
-        response: ZhulongProviderResponse? = nil,
-        failure: ZhulongProviderFailure? = nil
+        result: ZhulongProviderSendResult = .running
     ) {
         self.runID = runID
         self.providerIdentity = providerIdentity
         self.payload = payload
         self.startedAt = startedAt
-        self.status = status
-        self.completedAt = completedAt
-        self.response = response
-        self.failure = failure
+        self.result = result
+    }
+
+    public var status: ZhulongProviderSendStatus {
+        switch result {
+        case .running: .running
+        case .succeeded: .succeeded
+        case .failed: .failed
+        }
+    }
+
+    public var completedAt: Date? {
+        switch result {
+        case .running: nil
+        case let .succeeded(completedAt, _), let .failed(completedAt, _): completedAt
+        }
+    }
+
+    public var response: ZhulongProviderResponse? {
+        guard case let .succeeded(_, response) = result else { return nil }
+        return response
+    }
+
+    public var failure: ZhulongProviderFailure? {
+        guard case let .failed(_, failure) = result else { return nil }
+        return failure
     }
 
     func completing(with response: ZhulongProviderResponse, at date: Date) -> Self {
@@ -133,9 +155,7 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
             providerIdentity: providerIdentity,
             payload: payload,
             startedAt: startedAt,
-            status: .succeeded,
-            completedAt: date,
-            response: response
+            result: .succeeded(completedAt: date, response: response)
         )
     }
 
@@ -145,9 +165,7 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
             providerIdentity: providerIdentity,
             payload: payload,
             startedAt: startedAt,
-            status: .failed,
-            completedAt: date,
-            failure: failure
+            result: .failed(completedAt: date, failure: failure)
         )
     }
 }

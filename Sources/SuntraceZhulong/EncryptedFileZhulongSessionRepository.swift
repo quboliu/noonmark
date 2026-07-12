@@ -10,6 +10,7 @@ public enum ZhulongSidecarRepositoryError: Error, Equatable {
     case unsupportedEnvelope
     case invalidCiphertext
     case missingSession
+    case missingMemoryLedger
     case invalidLegacyProvenance
 }
 

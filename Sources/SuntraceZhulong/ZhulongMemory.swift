@@ -179,6 +179,7 @@ public enum ZhulongMemoryError: Error, Equatable, Sendable {
     case conflictAlreadyResolved
     case memoryNotFound
     case invalidTime
+    case invalidLedger
 }
 
 public struct ZhulongMemoryLedger: Codable, Equatable, Sendable {
@@ -455,6 +456,154 @@ public struct ZhulongMemoryLedger: Codable, Equatable, Sendable {
         }
         memories.append(next)
         return next
+    }
+
+    func validateForPersistence() throws {
+        guard Set(candidates.map(\.id)).count == candidates.count,
+              Set(memories.map(\.reference)).count == memories.count,
+              Set(conflicts.map(\.id)).count == conflicts.count,
+              Set(suppressionRules.map(\.id)).count == suppressionRules.count,
+              Set(suppressionRules.map(\.topicKey)).count == suppressionRules.count
+        else {
+            throw ZhulongMemoryError.invalidLedger
+        }
+        try validatePersistedCandidates()
+        try validatePersistedMemories()
+        try validatePersistedConflictsAndDecisions()
+        guard suppressionRules.allSatisfy({ rule in
+            rule.topicKey.isEmpty == false &&
+                rule.topicKey == rule.topicKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() &&
+                rule.createdAt.timeIntervalSinceReferenceDate.isFinite
+        }) else {
+            throw ZhulongMemoryError.invalidLedger
+        }
+    }
+
+    private func validatePersistedCandidates() throws {
+        for candidate in candidates {
+            guard (try? ZhulongMemoryCandidate(
+                id: candidate.id,
+                topicKey: candidate.topicKey,
+                content: candidate.content,
+                source: candidate.source,
+                evidenceWindowStart: candidate.evidenceWindowStart,
+                evidenceWindowEnd: candidate.evidenceWindowEnd,
+                evidenceReferences: candidate.evidenceReferences,
+                confidence: candidate.confidence,
+                counterexamples: candidate.counterexamples,
+                conflictsWith: candidate.conflictsWith,
+                createdAt: candidate.createdAt
+            )) == candidate else {
+                throw ZhulongMemoryError.invalidLedger
+            }
+        }
+    }
+
+    private func validatePersistedMemories() throws {
+        for group in Dictionary(grouping: memories, by: \.memoryID).values {
+            let ordered = group.sorted { $0.version < $1.version }
+            guard ordered.map(\.version) == Array(1 ... ordered.count),
+                  ordered.dropLast().allSatisfy({ $0.status == .superseded }),
+                  ordered.last?.status != .superseded
+            else {
+                throw ZhulongMemoryError.invalidLedger
+            }
+            for memory in ordered {
+                guard let candidate = candidates.first(where: { $0.id == memory.sourceCandidateID }),
+                      memory.topicKey == candidate.topicKey,
+                      memory.source == candidate.source,
+                      memory.content.trimmingCharacters(in: .whitespacesAndNewlines) == memory.content,
+                      memory.content.isEmpty == false,
+                      memory.effectiveAt.timeIntervalSinceReferenceDate.isFinite,
+                      memory.effectiveAt > candidate.createdAt
+                else {
+                    throw ZhulongMemoryError.invalidLedger
+                }
+            }
+        }
+    }
+
+    private func validatePersistedConflictsAndDecisions() throws {
+        guard Set(candidateDecisions.keys).isSubset(of: Set(candidates.map(\.id))) else {
+            throw ZhulongMemoryError.invalidLedger
+        }
+        for candidate in candidates {
+            let candidateConflicts = conflicts.filter { $0.candidateID == candidate.id }
+            guard Set(candidateConflicts.map(\.existingMemory)) == Set(candidate.conflictsWith) else {
+                throw ZhulongMemoryError.invalidLedger
+            }
+            try validateDecision(candidateDecisions[candidate.id], for: candidate, conflicts: candidateConflicts)
+        }
+    }
+
+    private func validateDecision(
+        _ decision: ZhulongMemoryCandidateDecision?,
+        for candidate: ZhulongMemoryCandidate,
+        conflicts candidateConflicts: [ZhulongMemoryConflict]
+    ) throws {
+        let unresolved = candidateConflicts.filter { $0.resolution == nil }
+        guard unresolved.isEmpty || decision == nil else {
+            throw ZhulongMemoryError.invalidLedger
+        }
+        try validateConflictFacts(candidateConflicts, for: candidate)
+        switch decision {
+        case nil:
+            guard candidateConflicts.allSatisfy({ $0.resolution == nil }) else {
+                throw ZhulongMemoryError.invalidLedger
+            }
+        case let .rejected(decidedAt):
+            guard decidedAt > candidate.createdAt,
+                  candidateConflicts.allSatisfy({ conflict in
+                      conflict.resolution?.choice == .keepExisting &&
+                          conflict.resolution?.resultingMemory == nil
+                  })
+            else {
+                throw ZhulongMemoryError.invalidLedger
+            }
+        case let .confirmed(reference, decidedAt):
+            guard let memory = memories.first(where: { $0.reference == reference }),
+                  memory.sourceCandidateID == candidate.id,
+                  memory.effectiveAt == decidedAt,
+                  conflictsConfirm(candidateConflicts, resultingIn: reference)
+            else {
+                throw ZhulongMemoryError.invalidLedger
+            }
+        }
+    }
+
+    private func validateConflictFacts(
+        _ candidateConflicts: [ZhulongMemoryConflict],
+        for candidate: ZhulongMemoryCandidate
+    ) throws {
+        for conflict in candidateConflicts {
+            guard let existing = memories.first(where: { $0.reference == conflict.existingMemory }),
+                  existing.topicKey == candidate.topicKey,
+                  conflict.openedAt == candidate.createdAt
+            else {
+                throw ZhulongMemoryError.invalidLedger
+            }
+            let resolutionIsBackdated = conflict.resolution.map {
+                $0.resolvedAt <= conflict.openedAt
+            } ?? false
+            if resolutionIsBackdated {
+                throw ZhulongMemoryError.invalidLedger
+            }
+        }
+    }
+
+    private func conflictsConfirm(
+        _ candidateConflicts: [ZhulongMemoryConflict],
+        resultingIn reference: ZhulongMemoryVersionReference
+    ) -> Bool {
+        candidateConflicts.allSatisfy { conflict in
+            guard let resolution = conflict.resolution else { return false }
+            switch resolution.choice {
+            case .acceptCandidate, .merge:
+                return resolution.resultingMemory == reference
+            case .keepExisting:
+                return false
+            }
+        }
     }
 
     private func validateDecisionTime(_ now: Date, after earlier: Date) throws {

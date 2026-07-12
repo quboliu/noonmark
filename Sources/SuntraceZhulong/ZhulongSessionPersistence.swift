@@ -36,6 +36,51 @@ struct ZhulongScopeAuthorizationRecord: Codable, Equatable {
     var expiresAt: Date
 }
 
+struct ZhulongSessionEventRecordV1: Codable, Equatable {
+    var sequence: UInt64
+    var kind: ZhulongSessionEventKind
+    var occurredAt: Date
+    var summary: String
+    var providerRunID: ZhulongProviderRunID?
+}
+
+struct ZhulongSessionRecordV1: Codable, Equatable {
+    var id: ZhulongSessionID
+    var primaryIntent: String
+    var proposedScopes: Set<ZhulongDataScope>
+    var phase: ZhulongSessionPhase
+    var authorizations: [ZhulongScopeAuthorizationRecord]
+    var draftVersion: Int?
+    var providerSends: [ZhulongProviderSendRecord]
+    var events: [ZhulongSessionEventRecordV1]
+
+    init(_ session: ZhulongSession) {
+        id = session.id
+        primaryIntent = session.initialPrimaryIntent
+        proposedScopes = session.proposedScopes
+        phase = session.phase
+        authorizations = session.authorizations.map {
+            ZhulongScopeAuthorizationRecord(
+                scopes: $0.scopes,
+                providerIdentity: $0.providerIdentity,
+                grantedAt: $0.grantedAt,
+                expiresAt: $0.expiresAt
+            )
+        }
+        draftVersion = session.draftVersion
+        providerSends = session.providerSends
+        events = session.events.map {
+            ZhulongSessionEventRecordV1(
+                sequence: $0.sequence,
+                kind: $0.kind,
+                occurredAt: $0.occurredAt,
+                summary: $0.summary,
+                providerRunID: $0.providerRunID
+            )
+        }
+    }
+}
+
 private struct ZhulongEventReplayState {
     var authorizationIndex = 0
     var sendIndex = 0
@@ -43,6 +88,7 @@ private struct ZhulongEventReplayState {
     var currentAuthorization: ZhulongScopeAuthorization?
     var workspaceStatus = ZhulongWorkspaceStatus.active
     var correctionIndex = 0
+    var decisionIndex = 0
 }
 
 struct ZhulongSessionRecord: Codable, Equatable {
@@ -59,7 +105,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
 
     init(_ session: ZhulongSession) {
         id = session.id
-        primaryIntent = session.primaryIntent
+        primaryIntent = session.initialPrimaryIntent
         proposedScopes = session.proposedScopes
         phase = session.phase
         authorizations = session.authorizations.map {
@@ -83,6 +129,37 @@ struct ZhulongSessionRecord: Codable, Equatable {
         }
         workspaceStatus = session.workspaceStatus
         entries = session.entries
+    }
+
+    init(migrating record: ZhulongSessionRecordV1) {
+        id = record.id
+        primaryIntent = record.primaryIntent
+        proposedScopes = record.proposedScopes
+        phase = record.phase
+        authorizations = record.authorizations
+        draftVersion = record.draftVersion
+        providerSends = record.providerSends
+        events = record.events.map {
+            ZhulongSessionEventRecord(
+                sequence: $0.sequence,
+                kind: $0.kind,
+                occurredAt: $0.occurredAt,
+                summary: $0.summary,
+                reference: $0.providerRunID.map(ZhulongSessionEventReference.providerRun)
+            )
+        }
+        workspaceStatus = .active
+        let createdAt = record.events.first?.occurredAt ?? .distantPast
+        entries = [
+            ZhulongSessionEntry(
+                id: ZhulongSessionEntryID(record.id.rawValue),
+                author: .user,
+                kind: .statement,
+                content: record.primaryIntent,
+                createdAt: createdAt,
+                correctsEntryID: nil
+            )
+        ]
     }
 
     func restore(expectedID: ZhulongSessionID) throws -> ZhulongSession {
@@ -174,7 +251,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
             throw ZhulongSessionRestorationError.noncanonicalEventSequence
         }
         guard zip(events, events.dropFirst()).allSatisfy({ earlier, later in
-            earlier.occurredAt <= later.occurredAt
+            earlier.occurredAt < later.occurredAt
         }) else {
             throw ZhulongSessionRestorationError.nonmonotonicEventTime
         }
@@ -257,7 +334,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
     }
 
     private func validCompletionTime(_ completedAt: Date, after startedAt: Date) -> Bool {
-        completedAt.timeIntervalSinceReferenceDate.isFinite && completedAt >= startedAt
+        completedAt.timeIntervalSinceReferenceDate.isFinite && completedAt > startedAt
     }
 
     private func validateEvents(
@@ -275,12 +352,14 @@ struct ZhulongSessionRecord: Codable, Equatable {
 
         var state = ZhulongEventReplayState()
         let corrections = entries.filter { $0.correctsEntryID != nil }
+        let decisions = entries.filter { $0.kind == .decision }
         for event in events.dropFirst() {
             try consumeEvent(
                 event,
                 state: &state,
                 authorizations: authorizations,
-                corrections: corrections
+                corrections: corrections,
+                decisions: decisions
             )
         }
 
@@ -289,6 +368,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
               state.sendIndex == providerSends.count - (hasRunningSend ? 1 : 0),
               state.waitingForSendResult == hasRunningSend,
               state.correctionIndex == corrections.count,
+              state.decisionIndex == decisions.count,
               state.workspaceStatus == workspaceStatus,
               entriesAllowedByWorkspaceEvents()
         else {
@@ -300,7 +380,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
         _ event: ZhulongSessionEventRecord,
         state: inout ZhulongEventReplayState,
         authorizations: [ZhulongScopeAuthorization],
-        corrections: [ZhulongSessionEntry]
+        corrections: [ZhulongSessionEntry],
+        decisions: [ZhulongSessionEntry]
     ) throws {
         switch event.kind {
         case .sessionCreated:
@@ -313,6 +394,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
             try consumeProviderResult(event, state: &state)
         case .sessionCorrected:
             try consumeCorrection(event, state: &state, corrections: corrections)
+        case .sessionDecisionRecorded:
+            try consumeDecision(event, state: &state, decisions: decisions)
         case .sessionPaused:
             try consumePause(event, state: &state)
         case .sessionResumed:
@@ -389,6 +472,20 @@ struct ZhulongSessionRecord: Codable, Equatable {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
         state.correctionIndex += 1
+    }
+
+    private func consumeDecision(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState,
+        decisions: [ZhulongSessionEntry]
+    ) throws {
+        guard state.workspaceStatus == .active,
+              state.decisionIndex < decisions.count,
+              event == decisionEvent(decisions[state.decisionIndex], sequence: event.sequence)
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        state.decisionIndex += 1
     }
 
     private func consumePause(
@@ -519,6 +616,19 @@ struct ZhulongSessionRecord: Codable, Equatable {
         )
     }
 
+    private func decisionEvent(
+        _ decision: ZhulongSessionEntry,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .sessionDecisionRecorded,
+            occurredAt: decision.createdAt,
+            summary: "已记录用户决定",
+            reference: .sessionEntry(decision.id)
+        )
+    }
+
     private func workspaceEvent(
         kind: ZhulongSessionEventKind,
         summary: String,
@@ -537,7 +647,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
     private func entriesAllowedByWorkspaceEvents() -> Bool {
         entries.dropFirst().filter { $0.correctsEntryID == nil }.allSatisfy { entry in
             var status = ZhulongWorkspaceStatus.active
-            for event in events where event.occurredAt < entry.createdAt {
+            for event in events where event.occurredAt <= entry.createdAt {
                 switch event.kind {
                 case .sessionPaused: status = .paused
                 case .sessionResumed: status = .active

@@ -186,6 +186,23 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.load(session.id), session)
     }
 
+    func testRepositoryMigratesVersionOneEncryptedSessionWithoutLosingProviderHistory() throws {
+        let repository = makeRepository(key: key)
+        let legacySession = try makeDraftReviewSession()
+        try repository.saveLegacySessionForTesting(legacySession)
+
+        let migrated = try repository.load(legacySession.id)
+
+        XCTAssertEqual(migrated.id, legacySession.id)
+        XCTAssertEqual(migrated.primaryIntent, legacySession.primaryIntent)
+        XCTAssertEqual(migrated.phase, legacySession.phase)
+        XCTAssertEqual(migrated.authorizations, legacySession.authorizations)
+        XCTAssertEqual(migrated.providerSends, legacySession.providerSends)
+        XCTAssertEqual(migrated.workspaceStatus, .active)
+        XCTAssertEqual(migrated.entries.map(\.content), [legacySession.primaryIntent])
+        XCTAssertEqual(try repository.load(legacySession.id), migrated)
+    }
+
     func testRepositoryRejectsCorrectionWhoseTargetWasForged() throws {
         let repository = makeRepository(key: key)
         var session = try ZhulongSession(
@@ -215,6 +232,34 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
             createdAt: correction.createdAt,
             correctsEntryID: ZhulongSessionEntryID()
         )
+        try repository.saveRecordForTesting(record)
+
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(
+                error as? ZhulongSessionRestorationError,
+                .invalidEventsForPhase
+            )
+        }
+    }
+
+    func testRepositoryRejectsEntryForgedAtTheSameTimeAsPause() throws {
+        let repository = makeRepository(key: key)
+        var session = try ZhulongSession(
+            primaryIntent: "规划发布新版",
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+        let pausedAt = now.addingTimeInterval(1)
+        try session.pause(now: pausedAt)
+        var record = ZhulongSessionRecord(session)
+        record.entries.append(ZhulongSessionEntry(
+            id: ZhulongSessionEntryID(),
+            author: .user,
+            kind: .statement,
+            content: "伪造的暂停后内容",
+            createdAt: pausedAt,
+            correctsEntryID: nil
+        ))
         try repository.saveRecordForTesting(record)
 
         XCTAssertThrowsError(try repository.load(session.id)) { error in

@@ -92,6 +92,7 @@ public enum ZhulongSessionEventKind: String, Codable, Equatable, Sendable {
     case providerRunFailed
     case draftReady
     case sessionCorrected
+    case sessionDecisionRecorded
     case sessionPaused
     case sessionResumed
     case sessionArchived
@@ -155,7 +156,7 @@ public enum ZhulongSessionError: Error, Equatable, Sendable {
 
 public struct ZhulongSession: Equatable, Sendable {
     public let id: ZhulongSessionID
-    public let primaryIntent: String
+    public let initialPrimaryIntent: String
     public let proposedScopes: Set<ZhulongDataScope>
     public private(set) var phase: ZhulongSessionPhase
     public private(set) var authorizations: [ZhulongScopeAuthorization]
@@ -166,6 +167,10 @@ public struct ZhulongSession: Equatable, Sendable {
     public internal(set) var entries: [ZhulongSessionEntry]
 
     public var authorization: ZhulongScopeAuthorization? { authorizations.last }
+    public var primaryIntent: String {
+        guard let firstEntry = entries.first else { return initialPrimaryIntent }
+        return effectiveContent(for: firstEntry.id) ?? initialPrimaryIntent
+    }
 
     public init(
         id: ZhulongSessionID = ZhulongSessionID(),
@@ -182,7 +187,7 @@ public struct ZhulongSession: Equatable, Sendable {
         }
 
         self.id = id
-        self.primaryIntent = normalizedIntent
+        initialPrimaryIntent = normalizedIntent
         self.proposedScopes = proposedScopes
         phase = .scopeReview
         authorizations = []
@@ -223,7 +228,7 @@ public struct ZhulongSession: Equatable, Sendable {
         entries: [ZhulongSessionEntry]
     ) {
         id = restoredID
-        self.primaryIntent = primaryIntent
+        initialPrimaryIntent = primaryIntent
         self.proposedScopes = proposedScopes
         self.phase = phase
         self.authorizations = authorizations

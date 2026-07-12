@@ -66,6 +66,14 @@ public extension ZhulongSession {
             correctsEntryID: nil
         )
         entries.append(entry)
+        if kind == .decision {
+            appendEvent(
+                .sessionDecisionRecorded,
+                summary: "已记录用户决定",
+                reference: .sessionEntry(entry.id),
+                now: now
+            )
+        }
         return entry
     }
 

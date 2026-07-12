@@ -14,7 +14,8 @@ public enum ZhulongSidecarRepositoryError: Error, Equatable {
 
 public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @unchecked Sendable {
     private static let magic = Data("NOONMARK-ZHULONG-SIDECAR".utf8)
-    private static let formatVersion: UInt8 = 1
+    private static let formatVersion: UInt8 = 2
+    private static let legacyFormatVersion: UInt8 = 1
 
     public let directoryURL: URL
     private let keySource: any ZhulongSidecarKeySource
@@ -44,11 +45,11 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             throw ZhulongSidecarRepositoryError.missingSession
         }
         let envelope = try Data(contentsOf: fileURL)
-        let ciphertext = try decodeEnvelope(envelope)
+        let decodedEnvelope = try decodeEnvelope(envelope)
         let key = try symmetricKey()
         let sealedBox: AES.GCM.SealedBox
         do {
-            sealedBox = try AES.GCM.SealedBox(combined: ciphertext)
+            sealedBox = try AES.GCM.SealedBox(combined: decodedEnvelope.ciphertext)
         } catch {
             throw ZhulongSidecarRepositoryError.invalidCiphertext
         }
@@ -62,7 +63,16 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         } catch {
             throw ZhulongSidecarRepositoryError.invalidCiphertext
         }
-        let record = try decoder.decode(ZhulongSessionRecord.self, from: plaintext)
+        let record: ZhulongSessionRecord
+        switch decodedEnvelope.version {
+        case Self.legacyFormatVersion:
+            let legacy = try decoder.decode(ZhulongSessionRecordV1.self, from: plaintext)
+            record = ZhulongSessionRecord(migrating: legacy)
+        case Self.formatVersion:
+            record = try decoder.decode(ZhulongSessionRecord.self, from: plaintext)
+        default:
+            throw ZhulongSidecarRepositoryError.unsupportedEnvelope
+        }
         return try record.restore(expectedID: id)
     }
 
@@ -70,20 +80,39 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         try saveRecord(record)
     }
 
+    func saveLegacySessionForTesting(_ session: ZhulongSession) throws {
+        try savePlaintext(
+            encoder.encode(ZhulongSessionRecordV1(session)),
+            id: session.id,
+            version: Self.legacyFormatVersion
+        )
+    }
+
     private func saveRecord(_ record: ZhulongSessionRecord) throws {
+        try savePlaintext(
+            encoder.encode(record),
+            id: record.id,
+            version: Self.formatVersion
+        )
+    }
+
+    private func savePlaintext(
+        _ plaintext: Data,
+        id: ZhulongSessionID,
+        version: UInt8
+    ) throws {
         let key = try symmetricKey()
-        let plaintext = try encoder.encode(record)
         let sealedBox = try AES.GCM.seal(
             plaintext,
             using: key,
-            authenticating: authenticatedData(for: record.id)
+            authenticating: authenticatedData(for: id)
         )
         guard let combined = sealedBox.combined else {
             throw ZhulongSidecarRepositoryError.invalidCiphertext
         }
 
         var envelope = Self.magic
-        envelope.append(Self.formatVersion)
+        envelope.append(version)
         envelope.append(combined)
 
         try fileManager.createDirectory(
@@ -95,7 +124,7 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             [.posixPermissions: 0o700],
             ofItemAtPath: directoryURL.path
         )
-        let fileURL = fileURL(for: record.id)
+        let fileURL = fileURL(for: id)
         try envelope.write(to: fileURL, options: .atomic)
         try fileManager.setAttributes(
             [.posixPermissions: 0o600],
@@ -103,15 +132,18 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         )
     }
 
-    private func decodeEnvelope(_ envelope: Data) throws -> Data {
+    private func decodeEnvelope(_ envelope: Data) throws -> (version: UInt8, ciphertext: Data) {
         let headerSize = Self.magic.count + 1
         guard envelope.count > headerSize,
-              envelope.prefix(Self.magic.count) == Self.magic,
-              envelope[Self.magic.count] == Self.formatVersion
+              envelope.prefix(Self.magic.count) == Self.magic
         else {
             throw ZhulongSidecarRepositoryError.unsupportedEnvelope
         }
-        return envelope.dropFirst(headerSize)
+        let version = envelope[Self.magic.count]
+        guard version == Self.legacyFormatVersion || version == Self.formatVersion else {
+            throw ZhulongSidecarRepositoryError.unsupportedEnvelope
+        }
+        return (version, envelope.dropFirst(headerSize))
     }
 
     private func symmetricKey() throws -> SymmetricKey {

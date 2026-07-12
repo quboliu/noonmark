@@ -29,6 +29,22 @@ final class ZhulongSessionWorkspaceTests: XCTestCase {
         XCTAssertEqual(answer.kind, .answer)
     }
 
+    func testDecisionAddsContentFreeLinkedAuditEvent() throws {
+        var session = try makeSession()
+
+        let decision = try session.appendEntry(
+            author: .user,
+            kind: .decision,
+            content: "先保证离线能力，再接远程同步。",
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(session.events.last?.kind, .sessionDecisionRecorded)
+        XCTAssertEqual(session.events.last?.sessionEntryID, decision.id)
+        XCTAssertEqual(session.events.last?.summary, "已记录用户决定")
+        XCTAssertFalse(session.events.last?.summary.contains("离线") == true)
+    }
+
     func testCorrectionAppendsWithoutRewritingOriginalAndEffectiveViewUsesLatest() throws {
         var session = try makeSession()
         let answer = try session.appendEntry(
@@ -51,6 +67,20 @@ final class ZhulongSessionWorkspaceTests: XCTestCase {
         XCTAssertEqual(session.events.last?.kind, .sessionCorrected)
         XCTAssertEqual(session.events.last?.sessionEntryID, correction.id)
         XCTAssertFalse(session.events.last?.summary.contains("下周一") == true)
+    }
+
+    func testCorrectingInitialIntentChangesTheEffectivePrimaryIntent() throws {
+        var session = try makeSession()
+
+        _ = try session.correctEntry(
+            session.entries[0].id,
+            author: .user,
+            replacementContent: "规划发布稳定版",
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(session.initialPrimaryIntent, "规划发布新版")
+        XCTAssertEqual(session.primaryIntent, "规划发布稳定版")
     }
 
     func testCorrectionRejectsMissingOrCorrectionTargetsWithoutMutation() throws {

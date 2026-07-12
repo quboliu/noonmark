@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "SuntraceMacApp", targets: ["SuntraceMacApp"]),
         .library(name: "SuntraceCore", targets: ["SuntraceCore"]),
         .library(name: "SuntraceAI", targets: ["SuntraceAI"]),
+        .library(name: "SuntraceZhulong", targets: ["SuntraceZhulong"]),
         .library(name: "SuntraceMacUIContract", targets: ["SuntraceMacUIContract"]),
         .library(name: "SuntraceStorage", targets: ["SuntraceStorage"]),
         .library(name: "SuntraceSync", targets: ["SuntraceSync"])
@@ -26,6 +27,12 @@ let package = Package(
         .target(
             name: "SuntraceAI",
             dependencies: ["SuntraceCore"]
+        ),
+        .target(
+            name: "SuntraceZhulong",
+            linkerSettings: [
+                .linkedFramework("Security")
+            ]
         ),
         .target(name: "SuntraceMacUIContract"),
         .target(
@@ -46,6 +53,10 @@ let package = Package(
         .testTarget(
             name: "SuntraceAITests",
             dependencies: ["SuntraceAI", "SuntraceCore"]
+        ),
+        .testTarget(
+            name: "SuntraceZhulongTests",
+            dependencies: ["SuntraceZhulong"]
         ),
         .testTarget(
             name: "SuntraceMacUIContractTests",

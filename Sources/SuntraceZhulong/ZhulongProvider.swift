@@ -53,11 +53,34 @@ public struct ZhulongProviderRunID: Codable, Hashable, Sendable, CustomStringCon
     public var description: String { rawValue.uuidString.lowercased() }
 }
 
+public struct ZhulongPlanningRunContract: Codable, Equatable, Sendable {
+    public let delegationID: ZhulongPlanningDelegationID
+    public let briefID: ZhulongPlanningBriefID
+    public let briefVersion: Int
+    public let activities: Set<ZhulongPlanningActivity>
+    public let dataScopes: Set<ZhulongDataScope>
+
+    init(delegation: ZhulongPlanningDelegation) {
+        delegationID = delegation.id
+        briefID = delegation.briefID
+        briefVersion = delegation.briefVersion
+        activities = delegation.activities
+        dataScopes = delegation.dataScopes
+    }
+}
+
+public enum ZhulongProviderRunPurpose: Codable, Equatable, Sendable {
+    case conversation
+    case delegatedPlanning(ZhulongPlanningRunContract)
+}
+
 public struct ZhulongProviderRequest: Equatable, Sendable {
     public let runID: ZhulongProviderRunID
     public let sessionID: ZhulongSessionID
     public let providerIdentity: ZhulongProviderConfigurationIdentity
     public let payload: ZhulongProviderPayload
+    public let purpose: ZhulongProviderRunPurpose
+    public let startedAt: Date
 }
 
 public struct ZhulongProviderResponse: Codable, Equatable, Sendable {
@@ -107,6 +130,7 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
     public let runID: ZhulongProviderRunID
     public let providerIdentity: ZhulongProviderConfigurationIdentity
     public let payload: ZhulongProviderPayload
+    public let purpose: ZhulongProviderRunPurpose
     public let startedAt: Date
     public let result: ZhulongProviderSendResult
 
@@ -114,12 +138,14 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
         runID: ZhulongProviderRunID,
         providerIdentity: ZhulongProviderConfigurationIdentity,
         payload: ZhulongProviderPayload,
+        purpose: ZhulongProviderRunPurpose = .conversation,
         startedAt: Date,
         result: ZhulongProviderSendResult = .running
     ) {
         self.runID = runID
         self.providerIdentity = providerIdentity
         self.payload = payload
+        self.purpose = purpose
         self.startedAt = startedAt
         self.result = result
     }
@@ -154,6 +180,7 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
             runID: runID,
             providerIdentity: providerIdentity,
             payload: payload,
+            purpose: purpose,
             startedAt: startedAt,
             result: .succeeded(completedAt: date, response: response)
         )
@@ -164,6 +191,7 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
             runID: runID,
             providerIdentity: providerIdentity,
             payload: payload,
+            purpose: purpose,
             startedAt: startedAt,
             result: .failed(completedAt: date, failure: failure)
         )

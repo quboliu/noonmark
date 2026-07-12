@@ -93,6 +93,13 @@ public enum ZhulongSessionEventKind: String, Codable, Equatable, Sendable {
     case draftReady
     case sessionCorrected
     case sessionDecisionRecorded
+    case planningBriefPublished
+    case planningBriefReviewed
+    case planningBriefInvalidated
+    case planningDelegationGranted
+    case planningDelegationConsumed
+    case planningDelegationInvalidated
+    case planningRunInvalidated
     case sessionPaused
     case sessionResumed
     case sessionArchived
@@ -146,6 +153,7 @@ public enum ZhulongSessionError: Error, Equatable, Sendable {
     case workspaceInactive
     case invalidWorkspaceTransition
     case providerRunStillActive
+    case planningDelegationRequired
     case emptySessionEntry
     case correctionRequiresTarget
     case missingCorrectionTarget
@@ -165,11 +173,25 @@ public struct ZhulongSession: Equatable, Sendable {
     public private(set) var events: [ZhulongSessionEvent]
     public internal(set) var workspaceStatus: ZhulongWorkspaceStatus
     public internal(set) var entries: [ZhulongSessionEntry]
+    public internal(set) var planningBriefs: [ZhulongPlanningBrief]
+    public internal(set) var planningBriefReviews: [ZhulongPlanningBriefReview]
+    public internal(set) var planningBriefInvalidations: [ZhulongPlanningBriefInvalidation]
+    public internal(set) var planningDelegations: [ZhulongPlanningDelegation]
+    public internal(set) var planningDelegationConsumptions: [ZhulongPlanningDelegationConsumption]
+    public internal(set) var planningDelegationInvalidations: [ZhulongPlanningDelegationInvalidation]
+    public internal(set) var planningRunInvalidations: [ZhulongPlanningRunInvalidation]
 
     public var authorization: ZhulongScopeAuthorization? { authorizations.last }
     public var primaryIntent: String {
         guard let firstEntry = entries.first else { return initialPrimaryIntent }
         return effectiveContent(for: firstEntry.id) ?? initialPrimaryIntent
+    }
+
+    var latestActivityAt: Date {
+        max(
+            events.last?.occurredAt ?? .distantPast,
+            entries.last?.createdAt ?? .distantPast
+        )
     }
 
     public init(
@@ -204,6 +226,13 @@ public struct ZhulongSession: Equatable, Sendable {
                 correctsEntryID: nil
             )
         ]
+        planningBriefs = []
+        planningBriefReviews = []
+        planningBriefInvalidations = []
+        planningDelegations = []
+        planningDelegationConsumptions = []
+        planningDelegationInvalidations = []
+        planningRunInvalidations = []
         events = [
             ZhulongSessionEvent(
                 sequence: 1,
@@ -225,7 +254,14 @@ public struct ZhulongSession: Equatable, Sendable {
         providerSends: [ZhulongProviderSendRecord],
         events: [ZhulongSessionEvent],
         workspaceStatus: ZhulongWorkspaceStatus,
-        entries: [ZhulongSessionEntry]
+        entries: [ZhulongSessionEntry],
+        planningBriefs: [ZhulongPlanningBrief] = [],
+        planningBriefReviews: [ZhulongPlanningBriefReview] = [],
+        planningBriefInvalidations: [ZhulongPlanningBriefInvalidation] = [],
+        planningDelegations: [ZhulongPlanningDelegation] = [],
+        planningDelegationConsumptions: [ZhulongPlanningDelegationConsumption] = [],
+        planningDelegationInvalidations: [ZhulongPlanningDelegationInvalidation] = [],
+        planningRunInvalidations: [ZhulongPlanningRunInvalidation] = []
     ) {
         id = restoredID
         initialPrimaryIntent = primaryIntent
@@ -237,6 +273,13 @@ public struct ZhulongSession: Equatable, Sendable {
         self.events = events
         self.workspaceStatus = workspaceStatus
         self.entries = entries
+        self.planningBriefs = planningBriefs
+        self.planningBriefReviews = planningBriefReviews
+        self.planningBriefInvalidations = planningBriefInvalidations
+        self.planningDelegations = planningDelegations
+        self.planningDelegationConsumptions = planningDelegationConsumptions
+        self.planningDelegationInvalidations = planningDelegationInvalidations
+        self.planningRunInvalidations = planningRunInvalidations
     }
 
     public mutating func authorizeScope(
@@ -260,6 +303,7 @@ public struct ZhulongSession: Equatable, Sendable {
             throw ZhulongSessionError.invalidAuthorizationExpiration
         }
 
+        let invalidatedDelegation = activePlanningDelegation
         authorizations.append(ZhulongScopeAuthorization(
             scopes: scopes,
             providerIdentity: providerIdentity,
@@ -272,6 +316,22 @@ public struct ZhulongSession: Equatable, Sendable {
             summary: "已授权 \(scopes.count) 项数据范围",
             now: now
         )
+        if let invalidatedDelegation {
+            let invalidatedAt = Date(
+                timeIntervalSinceReferenceDate: now.timeIntervalSinceReferenceDate.nextUp
+            )
+            planningDelegationInvalidations.append(ZhulongPlanningDelegationInvalidation(
+                delegationID: invalidatedDelegation.id,
+                invalidatedAt: invalidatedAt,
+                reason: .authorizationChanged
+            ))
+            appendEvent(
+                .planningDelegationInvalidated,
+                summary: "授权变更已使旧规划委托失效",
+                reference: .planningDelegation(invalidatedDelegation.id),
+                now: invalidatedAt
+            )
+        }
     }
 
     public mutating func beginProviderRun(
@@ -280,10 +340,85 @@ public struct ZhulongSession: Equatable, Sendable {
         runID: ZhulongProviderRunID = ZhulongProviderRunID(),
         now: Date = Date()
     ) throws -> ZhulongProviderRequest {
+        guard activePlanningDelegation == nil else {
+            throw ZhulongSessionError.planningDelegationRequired
+        }
+        let authorization = try validateProviderStart(
+            providerIdentity: providerIdentity,
+            now: now,
+            allowsDraftReview: false
+        )
+        guard payload.scopes.isSubset(of: authorization.scopes) else {
+            throw ZhulongSessionError.providerPayloadScopeMismatch
+        }
+        try validateEventTime(now)
+        return startProviderRun(
+            payload: payload,
+            providerIdentity: providerIdentity,
+            purpose: .conversation,
+            runID: runID,
+            now: now
+        )
+    }
+
+    public mutating func beginPlanningProviderRun(
+        delegationID: ZhulongPlanningDelegationID,
+        payload: ZhulongProviderPayload,
+        providerIdentity: ZhulongProviderConfigurationIdentity,
+        runID: ZhulongProviderRunID = ZhulongProviderRunID(),
+        now: Date = Date()
+    ) throws -> ZhulongProviderRequest {
+        guard let delegation = activePlanningDelegation,
+              delegation.id == delegationID
+        else {
+            throw ZhulongPlanningBriefError.delegationNotActive
+        }
+        let providerStartedAt = Date(
+            timeIntervalSinceReferenceDate: now.timeIntervalSinceReferenceDate.nextUp
+        )
+        let authorization = try validateProviderStart(
+            providerIdentity: providerIdentity,
+            now: providerStartedAt,
+            allowsDraftReview: true
+        )
+        guard authorization.providerIdentity == delegation.providerIdentity,
+              delegation.dataScopes.isSubset(of: authorization.scopes),
+              payload.scopes == delegation.dataScopes
+        else {
+            throw ZhulongSessionError.providerPayloadScopeMismatch
+        }
+        try validateEventTime(now)
+
+        planningDelegationConsumptions.append(ZhulongPlanningDelegationConsumption(
+            delegationID: delegationID,
+            consumedAt: now
+        ))
+        appendEvent(
+            .planningDelegationConsumed,
+            summary: "单次规划委托已消费",
+            reference: .planningDelegation(delegationID),
+            now: now
+        )
+        return startProviderRun(
+            payload: payload,
+            providerIdentity: providerIdentity,
+            purpose: .delegatedPlanning(ZhulongPlanningRunContract(delegation: delegation)),
+            runID: runID,
+            now: providerStartedAt
+        )
+    }
+
+    private func validateProviderStart(
+        providerIdentity: ZhulongProviderConfigurationIdentity,
+        now: Date,
+        allowsDraftReview: Bool
+    ) throws -> ZhulongScopeAuthorization {
         guard workspaceStatus == .active else {
             throw ZhulongSessionError.workspaceInactive
         }
-        guard phase == .readyForProvider, let authorization else {
+        let phaseAllowsRun = phase == .readyForProvider ||
+            (allowsDraftReview && phase == .draftReview)
+        guard phaseAllowsRun, let authorization else {
             if authorization == nil {
                 throw ZhulongSessionError.scopeNotAuthorized
             }
@@ -295,18 +430,25 @@ public struct ZhulongSession: Equatable, Sendable {
         guard authorization.isValid(at: now) else {
             throw ZhulongSessionError.authorizationExpired
         }
-        guard payload.scopes == authorization.scopes else {
-            throw ZhulongSessionError.providerPayloadScopeMismatch
-        }
-        try validateEventTime(now)
+        return authorization
+    }
 
+    private mutating func startProviderRun(
+        payload: ZhulongProviderPayload,
+        providerIdentity: ZhulongProviderConfigurationIdentity,
+        purpose: ZhulongProviderRunPurpose,
+        runID: ZhulongProviderRunID,
+        now: Date
+    ) -> ZhulongProviderRequest {
         let send = ZhulongProviderSendRecord(
             runID: runID,
             providerIdentity: providerIdentity,
             payload: payload,
+            purpose: purpose,
             startedAt: now
         )
         providerSends.append(send)
+        draftVersion = nil
         phase = .providerRunning
         appendEvent(
             .providerRunStarted,
@@ -318,7 +460,9 @@ public struct ZhulongSession: Equatable, Sendable {
             runID: runID,
             sessionID: id,
             providerIdentity: providerIdentity,
-            payload: payload
+            payload: payload,
+            purpose: purpose,
+            startedAt: now
         )
     }
 
@@ -410,11 +554,9 @@ public struct ZhulongSession: Equatable, Sendable {
     }
 
     func validateActivityTime(_ now: Date) throws {
-        let lastActivity = max(
-            events.last?.occurredAt ?? .distantPast,
-            entries.last?.createdAt ?? .distantPast
-        )
-        guard now > lastActivity else {
+        guard now.timeIntervalSinceReferenceDate.isFinite,
+              now > latestActivityAt
+        else {
             throw ZhulongSessionError.nonMonotonicEventTime
         }
     }

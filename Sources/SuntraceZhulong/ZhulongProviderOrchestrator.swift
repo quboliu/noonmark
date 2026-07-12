@@ -9,6 +9,17 @@ public enum ZhulongProviderOrchestrationError: Error, Equatable, Sendable {
     case providerIdentityMismatch
     case providerFailed(String)
     case providerRunStillActive
+    case providerRunSuperseded
+}
+
+private enum ZhulongProviderRunAuthority {
+    case conversation
+    case planning(ZhulongPlanningDelegationID)
+}
+
+private struct ZhulongProviderRunTiming {
+    let startedAt: Date
+    let completedAt: @Sendable () -> Date
 }
 
 public actor ZhulongProviderOrchestrator {
@@ -26,6 +37,39 @@ public actor ZhulongProviderOrchestrator {
         startedAt: Date = Date(),
         completedAt: @escaping @Sendable () -> Date = Date.init
     ) async throws -> ZhulongSession {
+        try await execute(
+            sessionID: sessionID,
+            payload: payload,
+            provider: provider,
+            authority: .conversation,
+            timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt)
+        )
+    }
+
+    public func runPlanning(
+        sessionID: ZhulongSessionID,
+        delegationID: ZhulongPlanningDelegationID,
+        payload: ZhulongProviderPayload,
+        provider: any ZhulongProvider,
+        startedAt: Date = Date(),
+        completedAt: @escaping @Sendable () -> Date = Date.init
+    ) async throws -> ZhulongSession {
+        try await execute(
+            sessionID: sessionID,
+            payload: payload,
+            provider: provider,
+            authority: .planning(delegationID),
+            timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt)
+        )
+    }
+
+    private func execute(
+        sessionID: ZhulongSessionID,
+        payload: ZhulongProviderPayload,
+        provider: any ZhulongProvider,
+        authority: ZhulongProviderRunAuthority,
+        timing: ZhulongProviderRunTiming
+    ) async throws -> ZhulongSession {
         guard activeSessionIDs.contains(sessionID) == false else {
             throw ZhulongProviderOrchestrationError.providerRunStillActive
         }
@@ -34,17 +78,26 @@ public actor ZhulongProviderOrchestrator {
             throw ZhulongProviderOrchestrationError.providerIdentityMismatch
         }
 
-        let request = try session.beginProviderRun(
+        let request = try beginRun(
+            authority: authority,
+            session: &session,
             payload: payload,
             providerIdentity: provider.configurationIdentity,
-            now: startedAt
+            startedAt: timing.startedAt
         )
         try repository.save(session)
         activeSessionIDs.insert(sessionID)
         defer { activeSessionIDs.remove(sessionID) }
 
         let result = await provider.complete(request)
-        let resultDate = strictlyLaterDate(completedAt(), than: startedAt)
+        session = try repository.load(sessionID)
+        guard session.providerSends.last(where: { $0.runID == request.runID })?.status == .running else {
+            throw ZhulongProviderOrchestrationError.providerRunSuperseded
+        }
+        let resultDate = strictlyLaterDate(
+            timing.completedAt(),
+            than: max(request.startedAt, session.latestActivityAt)
+        )
         switch result {
         case let .success(response):
             do {
@@ -73,6 +126,68 @@ public actor ZhulongProviderOrchestrator {
             )
             try repository.save(session)
             throw ZhulongProviderOrchestrationError.providerFailed(recordedFailure.code)
+        }
+    }
+
+    public func correctPlanningSource(
+        sessionID: ZhulongSessionID,
+        sourceEntryID: ZhulongSessionEntryID,
+        replacementContent: String,
+        now: Date = Date()
+    ) throws -> ZhulongSession {
+        var session = try repository.load(sessionID)
+        var correctionDate = now
+        if session.phase == .providerRunning {
+            guard let send = session.providerSends.last,
+                  case let .delegatedPlanning(contract) = send.purpose
+            else {
+                throw ZhulongProviderOrchestrationError.providerRunStillActive
+            }
+            let sourceIsBound = session.currentPlanningBrief?.id == contract.briefID &&
+                session.currentPlanningBrief?.sourceEntryIDs.contains(sourceEntryID) == true
+            if sourceIsBound {
+                try session.recordProviderFailure(
+                    ZhulongProviderFailure(
+                        code: "planning_source_corrected",
+                        message: "规划来源已被用户更正"
+                    ),
+                    runID: send.runID,
+                    now: now
+                )
+                correctionDate = strictlyLaterDate(now, than: now)
+            }
+        }
+        _ = try session.correctEntry(
+            sourceEntryID,
+            author: .user,
+            replacementContent: replacementContent,
+            now: correctionDate
+        )
+        try repository.save(session)
+        return session
+    }
+
+    private func beginRun(
+        authority: ZhulongProviderRunAuthority,
+        session: inout ZhulongSession,
+        payload: ZhulongProviderPayload,
+        providerIdentity: ZhulongProviderConfigurationIdentity,
+        startedAt: Date
+    ) throws -> ZhulongProviderRequest {
+        switch authority {
+        case .conversation:
+            try session.beginProviderRun(
+                payload: payload,
+                providerIdentity: providerIdentity,
+                now: startedAt
+            )
+        case let .planning(delegationID):
+            try session.beginPlanningProviderRun(
+                delegationID: delegationID,
+                payload: payload,
+                providerIdentity: providerIdentity,
+                now: startedAt
+            )
         }
     }
 

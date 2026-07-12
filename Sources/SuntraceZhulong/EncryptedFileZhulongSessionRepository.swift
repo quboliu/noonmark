@@ -14,7 +14,8 @@ public enum ZhulongSidecarRepositoryError: Error, Equatable {
 
 public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @unchecked Sendable {
     private static let magic = Data("NOONMARK-ZHULONG-SIDECAR".utf8)
-    private static let formatVersion: UInt8 = 2
+    private static let formatVersion: UInt8 = 3
+    private static let workspaceFormatVersion: UInt8 = 2
     private static let legacyFormatVersion: UInt8 = 1
 
     public let directoryURL: URL
@@ -53,21 +54,20 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         } catch {
             throw ZhulongSidecarRepositoryError.invalidCiphertext
         }
-        let plaintext: Data
-        do {
-            plaintext = try AES.GCM.open(
-                sealedBox,
-                using: key,
-                authenticating: authenticatedData(for: id)
-            )
-        } catch {
-            throw ZhulongSidecarRepositoryError.invalidCiphertext
-        }
+        let plaintext = try decrypt(
+            sealedBox,
+            using: key,
+            id: id,
+            version: decodedEnvelope.version
+        )
         let record: ZhulongSessionRecord
         switch decodedEnvelope.version {
         case Self.legacyFormatVersion:
             let legacy = try decoder.decode(ZhulongSessionRecordV1.self, from: plaintext)
             record = ZhulongSessionRecord(migrating: legacy)
+        case Self.workspaceFormatVersion:
+            let workspace = try decoder.decode(ZhulongSessionRecordV2.self, from: plaintext)
+            record = ZhulongSessionRecord(migrating: workspace)
         case Self.formatVersion:
             record = try decoder.decode(ZhulongSessionRecord.self, from: plaintext)
         default:
@@ -84,7 +84,17 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         try savePlaintext(
             encoder.encode(ZhulongSessionRecordV1(session)),
             id: session.id,
-            version: Self.legacyFormatVersion
+            version: Self.legacyFormatVersion,
+            usesLegacyAuthentication: true
+        )
+    }
+
+    func saveVersionTwoSessionForTesting(_ session: ZhulongSession) throws {
+        try savePlaintext(
+            encoder.encode(ZhulongSessionRecordV2(session)),
+            id: session.id,
+            version: Self.workspaceFormatVersion,
+            usesLegacyAuthentication: true
         )
     }
 
@@ -99,13 +109,17 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
     private func savePlaintext(
         _ plaintext: Data,
         id: ZhulongSessionID,
-        version: UInt8
+        version: UInt8,
+        usesLegacyAuthentication: Bool = false
     ) throws {
         let key = try symmetricKey()
+        let authentication = usesLegacyAuthentication
+            ? legacyAuthenticatedData(for: id)
+            : authenticatedData(for: id, version: version)
         let sealedBox = try AES.GCM.seal(
             plaintext,
             using: key,
-            authenticating: authenticatedData(for: id)
+            authenticating: authentication
         )
         guard let combined = sealedBox.combined else {
             throw ZhulongSidecarRepositoryError.invalidCiphertext
@@ -140,7 +154,10 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             throw ZhulongSidecarRepositoryError.unsupportedEnvelope
         }
         let version = envelope[Self.magic.count]
-        guard version == Self.legacyFormatVersion || version == Self.formatVersion else {
+        guard version == Self.legacyFormatVersion ||
+            version == Self.workspaceFormatVersion ||
+            version == Self.formatVersion
+        else {
             throw ZhulongSidecarRepositoryError.unsupportedEnvelope
         }
         return (version, envelope.dropFirst(headerSize))
@@ -154,7 +171,82 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         return SymmetricKey(data: keyData)
     }
 
-    private func authenticatedData(for id: ZhulongSessionID) -> Data {
+    private func decrypt(
+        _ sealedBox: AES.GCM.SealedBox,
+        using key: SymmetricKey,
+        id: ZhulongSessionID,
+        version: UInt8
+    ) throws -> Data {
+        do {
+            return try AES.GCM.open(
+                sealedBox,
+                using: key,
+                authenticating: authenticatedData(for: id, version: version)
+            )
+        } catch {
+            // Existing v1-v3 files used session-only AAD. Their authenticated JSON
+            // shape must match the declared version before migration can continue.
+            do {
+                let plaintext = try AES.GCM.open(
+                    sealedBox,
+                    using: key,
+                    authenticating: legacyAuthenticatedData(for: id)
+                )
+                try validateLegacySchema(plaintext, version: version)
+                return plaintext
+            } catch {
+                throw ZhulongSidecarRepositoryError.invalidCiphertext
+            }
+        }
+    }
+
+    private func validateLegacySchema(_ plaintext: Data, version: UInt8) throws {
+        guard let object = try? JSONSerialization.jsonObject(with: plaintext),
+              let record = object as? [String: Any]
+        else {
+            throw ZhulongSidecarRepositoryError.invalidCiphertext
+        }
+        let commonKeys = Set([
+            "id", "primaryIntent", "proposedScopes", "phase", "authorizations",
+            "providerSends", "events"
+        ])
+        let optionalKeys = Set(["draftVersion"])
+        let requiredKeys: Set<String>
+        let allowedKeys: Set<String>
+        switch version {
+        case Self.legacyFormatVersion:
+            requiredKeys = commonKeys
+            allowedKeys = commonKeys.union(optionalKeys)
+        case Self.workspaceFormatVersion:
+            let workspaceKeys = Set(["workspaceStatus", "entries"])
+            requiredKeys = commonKeys.union(workspaceKeys)
+            allowedKeys = requiredKeys.union(optionalKeys)
+        case Self.formatVersion:
+            let planningKeys = Set([
+                "workspaceStatus", "entries", "planningBriefs", "planningBriefReviews",
+                "planningBriefInvalidations", "planningDelegations",
+                "planningDelegationConsumptions", "planningDelegationInvalidations",
+                "planningRunInvalidations"
+            ])
+            requiredKeys = commonKeys.union(planningKeys)
+            allowedKeys = requiredKeys.union(optionalKeys)
+        default:
+            throw ZhulongSidecarRepositoryError.unsupportedEnvelope
+        }
+        let actualKeys = Set(record.keys)
+        guard requiredKeys.isSubset(of: actualKeys), actualKeys.isSubset(of: allowedKeys) else {
+            throw ZhulongSidecarRepositoryError.invalidCiphertext
+        }
+    }
+
+    private func authenticatedData(for id: ZhulongSessionID, version: UInt8) -> Data {
+        var data = Self.magic
+        data.append(version)
+        data.append(Data("noonmark.zhulong.session:\(id.description)".utf8))
+        return data
+    }
+
+    private func legacyAuthenticatedData(for id: ZhulongSessionID) -> Data {
         Data("noonmark.zhulong.session:\(id.description)".utf8)
     }
 

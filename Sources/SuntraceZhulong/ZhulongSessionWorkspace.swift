@@ -39,6 +39,8 @@ public enum ZhulongWorkspaceStatus: String, Codable, Equatable, Sendable {
 public enum ZhulongSessionEventReference: Codable, Equatable, Sendable {
     case providerRun(ZhulongProviderRunID)
     case sessionEntry(ZhulongSessionEntryID)
+    case planningBrief(ZhulongPlanningBriefID)
+    case planningDelegation(ZhulongPlanningDelegationID)
 }
 
 public extension ZhulongSession {
@@ -90,6 +92,9 @@ public extension ZhulongSession {
         guard let target = entries.first(where: { $0.id == targetID }) else {
             throw ZhulongSessionError.missingCorrectionTarget
         }
+        if phase == .providerRunning && canCorrectDuringDelegatedPlanning(targetID) == false {
+            throw ZhulongSessionError.providerRunStillActive
+        }
         guard target.correctsEntryID == nil else {
             throw ZhulongSessionError.correctionTargetIsCorrection
         }
@@ -110,7 +115,19 @@ public extension ZhulongSession {
             reference: .sessionEntry(correction.id),
             now: now
         )
+        invalidatePlanningDerivedFromSource(targetID, after: now)
         return correction
+    }
+
+    private func canCorrectDuringDelegatedPlanning(_ targetID: ZhulongSessionEntryID) -> Bool {
+        guard let send = providerSends.last,
+              send.status == .running,
+              case let .delegatedPlanning(contract) = send.purpose,
+              let brief = currentPlanningBrief,
+              brief.id == contract.briefID,
+              brief.version == contract.briefVersion
+        else { return false }
+        return brief.sourceEntryIDs.contains(targetID) == false
     }
 
     func effectiveContent(for entryID: ZhulongSessionEntryID) -> String? {
@@ -157,5 +174,51 @@ public extension ZhulongSession {
             throw ZhulongSessionError.emptySessionEntry
         }
         return normalized
+    }
+
+    private mutating func invalidatePlanningDerivedFromSource(
+        _ sourceEntryID: ZhulongSessionEntryID,
+        after correctionDate: Date
+    ) {
+        guard let brief = currentPlanningBrief,
+              brief.sourceEntryIDs.contains(sourceEntryID)
+        else { return }
+        let briefInvalidatedAt = Date(
+            timeIntervalSinceReferenceDate: correctionDate.timeIntervalSinceReferenceDate.nextUp
+        )
+        let activeDelegation = activePlanningDelegation
+        planningBriefInvalidations.append(ZhulongPlanningBriefInvalidation(
+            briefID: brief.id,
+            sourceEntryID: sourceEntryID,
+            invalidatedAt: briefInvalidatedAt
+        ))
+        appendEvent(
+            .planningBriefInvalidated,
+            summary: "来源更正已使规划简报失效",
+            reference: .planningBrief(brief.id),
+            now: briefInvalidatedAt
+        )
+        let lastInvalidatedAt = invalidatePlanningRuns(
+            derivedFrom: brief.id,
+            reason: .sourceCorrected,
+            sourceEntryID: sourceEntryID,
+            after: briefInvalidatedAt
+        )
+        if let activeDelegation {
+            let delegationInvalidatedAt = Date(
+                timeIntervalSinceReferenceDate: lastInvalidatedAt.timeIntervalSinceReferenceDate.nextUp
+            )
+            planningDelegationInvalidations.append(ZhulongPlanningDelegationInvalidation(
+                delegationID: activeDelegation.id,
+                invalidatedAt: delegationInvalidatedAt,
+                reason: .briefSourceCorrected
+            ))
+            appendEvent(
+                .planningDelegationInvalidated,
+                summary: "来源更正已使规划委托失效",
+                reference: .planningDelegation(activeDelegation.id),
+                now: delegationInvalidatedAt
+            )
+        }
     }
 }

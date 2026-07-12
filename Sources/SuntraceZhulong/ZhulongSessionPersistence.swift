@@ -36,6 +36,33 @@ struct ZhulongScopeAuthorizationRecord: Codable, Equatable {
     var expiresAt: Date
 }
 
+struct ZhulongProviderSendRecordV2: Codable, Equatable {
+    var runID: ZhulongProviderRunID
+    var providerIdentity: ZhulongProviderConfigurationIdentity
+    var payload: ZhulongProviderPayload
+    var startedAt: Date
+    var result: ZhulongProviderSendResult
+
+    init(_ send: ZhulongProviderSendRecord) {
+        runID = send.runID
+        providerIdentity = send.providerIdentity
+        payload = send.payload
+        startedAt = send.startedAt
+        result = send.result
+    }
+
+    var migrated: ZhulongProviderSendRecord {
+        ZhulongProviderSendRecord(
+            runID: runID,
+            providerIdentity: providerIdentity,
+            payload: payload,
+            purpose: .conversation,
+            startedAt: startedAt,
+            result: result
+        )
+    }
+}
+
 struct ZhulongSessionEventRecordV1: Codable, Equatable {
     var sequence: UInt64
     var kind: ZhulongSessionEventKind
@@ -51,7 +78,7 @@ struct ZhulongSessionRecordV1: Codable, Equatable {
     var phase: ZhulongSessionPhase
     var authorizations: [ZhulongScopeAuthorizationRecord]
     var draftVersion: Int?
-    var providerSends: [ZhulongProviderSendRecord]
+    var providerSends: [ZhulongProviderSendRecordV2]
     var events: [ZhulongSessionEventRecordV1]
 
     init(_ session: ZhulongSession) {
@@ -68,7 +95,7 @@ struct ZhulongSessionRecordV1: Codable, Equatable {
             )
         }
         draftVersion = session.draftVersion
-        providerSends = session.providerSends
+        providerSends = session.providerSends.map(ZhulongProviderSendRecordV2.init)
         events = session.events.map {
             ZhulongSessionEventRecordV1(
                 sequence: $0.sequence,
@@ -81,7 +108,49 @@ struct ZhulongSessionRecordV1: Codable, Equatable {
     }
 }
 
+struct ZhulongSessionRecordV2: Codable, Equatable {
+    var id: ZhulongSessionID
+    var primaryIntent: String
+    var proposedScopes: Set<ZhulongDataScope>
+    var phase: ZhulongSessionPhase
+    var authorizations: [ZhulongScopeAuthorizationRecord]
+    var draftVersion: Int?
+    var providerSends: [ZhulongProviderSendRecordV2]
+    var events: [ZhulongSessionEventRecord]
+    var workspaceStatus: ZhulongWorkspaceStatus
+    var entries: [ZhulongSessionEntry]
+
+    init(_ session: ZhulongSession) {
+        id = session.id
+        primaryIntent = session.initialPrimaryIntent
+        proposedScopes = session.proposedScopes
+        phase = session.phase
+        authorizations = session.authorizations.map {
+            ZhulongScopeAuthorizationRecord(
+                scopes: $0.scopes,
+                providerIdentity: $0.providerIdentity,
+                grantedAt: $0.grantedAt,
+                expiresAt: $0.expiresAt
+            )
+        }
+        draftVersion = session.draftVersion
+        providerSends = session.providerSends.map(ZhulongProviderSendRecordV2.init)
+        events = session.events.map {
+            ZhulongSessionEventRecord(
+                sequence: $0.sequence,
+                kind: $0.kind,
+                occurredAt: $0.occurredAt,
+                summary: $0.summary,
+                reference: $0.reference
+            )
+        }
+        workspaceStatus = session.workspaceStatus
+        entries = session.entries
+    }
+}
+
 private struct ZhulongEventReplayState {
+    var phase = ZhulongSessionPhase.scopeReview
     var authorizationIndex = 0
     var sendIndex = 0
     var waitingForSendResult = false
@@ -89,6 +158,22 @@ private struct ZhulongEventReplayState {
     var workspaceStatus = ZhulongWorkspaceStatus.active
     var correctionIndex = 0
     var decisionIndex = 0
+    var briefIndex = 0
+    var reviewIndex = 0
+    var briefInvalidationIndex = 0
+    var delegationIndex = 0
+    var consumptionIndex = 0
+    var invalidationIndex = 0
+    var runInvalidationIndex = 0
+    var currentBriefID: ZhulongPlanningBriefID?
+    var reviewedBriefID: ZhulongPlanningBriefID?
+    var activeDelegationID: ZhulongPlanningDelegationID?
+    var pendingInvalidationID: ZhulongPlanningDelegationID?
+    var pendingInvalidationReason: ZhulongDelegationInvalidationReason?
+    var pendingBriefInvalidationID: ZhulongPlanningBriefID?
+    var pendingBriefInvalidationSourceID: ZhulongSessionEntryID?
+    var pendingPlanningRunDelegationID: ZhulongPlanningDelegationID?
+    var pendingRunInvalidationIDs: [ZhulongProviderRunID] = []
 }
 
 struct ZhulongSessionRecord: Codable, Equatable {
@@ -102,6 +187,13 @@ struct ZhulongSessionRecord: Codable, Equatable {
     var events: [ZhulongSessionEventRecord]
     var workspaceStatus: ZhulongWorkspaceStatus
     var entries: [ZhulongSessionEntry]
+    var planningBriefs: [ZhulongPlanningBrief]
+    var planningBriefReviews: [ZhulongPlanningBriefReview]
+    var planningBriefInvalidations: [ZhulongPlanningBriefInvalidation]
+    var planningDelegations: [ZhulongPlanningDelegation]
+    var planningDelegationConsumptions: [ZhulongPlanningDelegationConsumption]
+    var planningDelegationInvalidations: [ZhulongPlanningDelegationInvalidation]
+    var planningRunInvalidations: [ZhulongPlanningRunInvalidation]
 
     init(_ session: ZhulongSession) {
         id = session.id
@@ -129,6 +221,13 @@ struct ZhulongSessionRecord: Codable, Equatable {
         }
         workspaceStatus = session.workspaceStatus
         entries = session.entries
+        planningBriefs = session.planningBriefs
+        planningBriefReviews = session.planningBriefReviews
+        planningBriefInvalidations = session.planningBriefInvalidations
+        planningDelegations = session.planningDelegations
+        planningDelegationConsumptions = session.planningDelegationConsumptions
+        planningDelegationInvalidations = session.planningDelegationInvalidations
+        planningRunInvalidations = session.planningRunInvalidations
     }
 
     init(migrating record: ZhulongSessionRecordV1) {
@@ -138,7 +237,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         phase = record.phase
         authorizations = record.authorizations
         draftVersion = record.draftVersion
-        providerSends = record.providerSends
+        providerSends = record.providerSends.map(\.migrated)
         events = record.events.map {
             ZhulongSessionEventRecord(
                 sequence: $0.sequence,
@@ -160,6 +259,33 @@ struct ZhulongSessionRecord: Codable, Equatable {
                 correctsEntryID: nil
             )
         ]
+        planningBriefs = []
+        planningBriefReviews = []
+        planningBriefInvalidations = []
+        planningDelegations = []
+        planningDelegationConsumptions = []
+        planningDelegationInvalidations = []
+        planningRunInvalidations = []
+    }
+
+    init(migrating record: ZhulongSessionRecordV2) {
+        id = record.id
+        primaryIntent = record.primaryIntent
+        proposedScopes = record.proposedScopes
+        phase = record.phase
+        authorizations = record.authorizations
+        draftVersion = record.draftVersion
+        providerSends = record.providerSends.map(\.migrated)
+        events = record.events
+        workspaceStatus = record.workspaceStatus
+        entries = record.entries
+        planningBriefs = []
+        planningBriefReviews = []
+        planningBriefInvalidations = []
+        planningDelegations = []
+        planningDelegationConsumptions = []
+        planningDelegationInvalidations = []
+        planningRunInvalidations = []
     }
 
     func restore(expectedID: ZhulongSessionID) throws -> ZhulongSession {
@@ -167,6 +293,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         try validateEntries()
         let restoredAuthorizations = try restoreAuthorizations()
         try validateProviderSends()
+        try validatePlanningArtifacts()
         try validatePhase(authorizations: restoredAuthorizations)
         try validateEvents(authorizations: restoredAuthorizations)
 
@@ -188,8 +315,111 @@ struct ZhulongSessionRecord: Codable, Equatable {
                 )
             },
             workspaceStatus: workspaceStatus,
-            entries: entries
+            entries: entries,
+            planningBriefs: planningBriefs,
+            planningBriefReviews: planningBriefReviews,
+            planningBriefInvalidations: planningBriefInvalidations,
+            planningDelegations: planningDelegations,
+            planningDelegationConsumptions: planningDelegationConsumptions,
+            planningDelegationInvalidations: planningDelegationInvalidations,
+            planningRunInvalidations: planningRunInvalidations
         )
+    }
+
+    private func validatePlanningArtifacts() throws {
+        let briefsAreValid = planningBriefs.enumerated().allSatisfy { offset, brief in
+            brief.version == offset + 1 &&
+                brief.publishedAt.timeIntervalSinceReferenceDate.isFinite &&
+                brief.dataScopes.isSubset(of: proposedScopes) &&
+                brief.sourceEntryIDs.allSatisfy { sourceID in
+                    entries.contains {
+                        $0.id == sourceID && $0.correctsEntryID == nil
+                    }
+                } &&
+                validBriefContent(brief)
+        }
+        guard Set(planningBriefs.map(\.id)).count == planningBriefs.count,
+              briefsAreValid,
+              Set(planningBriefReviews.map(\.briefID)).count == planningBriefReviews.count,
+              planningBriefReviews.allSatisfy({ review in
+                  review.reviewedAt.timeIntervalSinceReferenceDate.isFinite &&
+                      planningBriefs.contains(where: { $0.id == review.briefID })
+              }),
+              Set(planningBriefInvalidations.map(\.briefID)).count == planningBriefInvalidations.count,
+              planningBriefInvalidations.allSatisfy({ invalidation in
+                  invalidation.invalidatedAt.timeIntervalSinceReferenceDate.isFinite &&
+                      planningBriefs.contains(where: {
+                          $0.id == invalidation.briefID &&
+                              $0.sourceEntryIDs.contains(invalidation.sourceEntryID)
+                      })
+              }),
+              Set(planningDelegations.map(\.id)).count == planningDelegations.count,
+              planningDelegations.allSatisfy({ delegation in
+                  delegation.sessionID == id &&
+                      delegation.grantedAt.timeIntervalSinceReferenceDate.isFinite &&
+                      planningBriefs.contains(where: {
+                          $0.id == delegation.briefID &&
+                              $0.version == delegation.briefVersion &&
+                              $0.dataScopes == delegation.dataScopes &&
+                              $0.delegatedActivities == delegation.activities
+                      }) &&
+                      validIdentity(delegation.providerIdentity)
+              }),
+              Set(planningDelegationConsumptions.map(\.delegationID)).count ==
+              planningDelegationConsumptions.count,
+              planningDelegationConsumptions.allSatisfy({ consumption in
+                  consumption.consumedAt.timeIntervalSinceReferenceDate.isFinite &&
+                      planningDelegations.contains(where: { $0.id == consumption.delegationID })
+              }),
+              Set(planningDelegationInvalidations.map(\.delegationID)).count ==
+              planningDelegationInvalidations.count,
+              planningDelegationInvalidations.allSatisfy({ invalidation in
+                  invalidation.invalidatedAt.timeIntervalSinceReferenceDate.isFinite &&
+                      planningDelegations.contains(where: { $0.id == invalidation.delegationID })
+              }),
+              Set(planningRunInvalidations.map(\.runID)).count == planningRunInvalidations.count,
+              planningRunInvalidations.allSatisfy({ invalidation in
+                  invalidation.invalidatedAt.timeIntervalSinceReferenceDate.isFinite &&
+                      providerSends.contains(where: { send in
+                          guard send.runID == invalidation.runID,
+                                case let .delegatedPlanning(contract) = send.purpose
+                          else { return false }
+                          return contract.briefID == invalidation.briefID
+                      }) &&
+                      validPlanningRunInvalidation(invalidation)
+              })
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+    }
+
+    private func validPlanningRunInvalidation(
+        _ invalidation: ZhulongPlanningRunInvalidation
+    ) -> Bool {
+        guard let brief = planningBriefs.first(where: { $0.id == invalidation.briefID }) else {
+            return false
+        }
+        switch invalidation.reason {
+        case .briefRevised:
+            return invalidation.sourceEntryID == nil
+        case .sourceCorrected:
+            guard let sourceEntryID = invalidation.sourceEntryID else { return false }
+            return brief.sourceEntryIDs.contains(sourceEntryID)
+        }
+    }
+
+    private func validBriefContent(_ brief: ZhulongPlanningBrief) -> Bool {
+        (try? ZhulongPlanningBriefDraft(
+            goal: brief.goal,
+            successCriteria: brief.successCriteria,
+            hardConstraints: brief.hardConstraints,
+            userDecisions: brief.userDecisions,
+            delegatedActivities: brief.delegatedActivities,
+            assumptions: brief.assumptions,
+            openQuestions: brief.openQuestions,
+            dataScopes: brief.dataScopes,
+            sourceEntryIDs: brief.sourceEntryIDs
+        )) != nil
     }
 
     private func validateEntries() throws {
@@ -369,6 +599,23 @@ struct ZhulongSessionRecord: Codable, Equatable {
               state.waitingForSendResult == hasRunningSend,
               state.correctionIndex == corrections.count,
               state.decisionIndex == decisions.count,
+              state.briefIndex == planningBriefs.count,
+              state.reviewIndex == planningBriefReviews.count,
+              state.briefInvalidationIndex == planningBriefInvalidations.count,
+              state.delegationIndex == planningDelegations.count,
+              state.consumptionIndex == planningDelegationConsumptions.count,
+              state.invalidationIndex == planningDelegationInvalidations.count,
+              state.runInvalidationIndex == planningRunInvalidations.count,
+              state.pendingInvalidationID == nil,
+              state.pendingInvalidationReason == nil,
+              state.pendingBriefInvalidationID == nil,
+              state.pendingBriefInvalidationSourceID == nil,
+              state.pendingPlanningRunDelegationID == nil,
+              state.pendingRunInvalidationIDs.isEmpty,
+              state.phase == phase,
+              state.currentBriefID == currentPlanningBriefID(),
+              state.reviewedBriefID == currentReviewedBriefID(),
+              state.activeDelegationID == currentActiveDelegationID(),
               state.workspaceStatus == workspaceStatus,
               entriesAllowedByWorkspaceEvents()
         else {
@@ -377,6 +624,60 @@ struct ZhulongSessionRecord: Codable, Equatable {
     }
 
     private func consumeEvent(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState,
+        authorizations: [ZhulongScopeAuthorization],
+        corrections: [ZhulongSessionEntry],
+        decisions: [ZhulongSessionEntry]
+    ) throws {
+        try validatePendingEventKind(event.kind, state: state)
+        switch event.kind {
+        case .planningBriefPublished:
+            try consumePlanningBrief(event, state: &state)
+        case .planningBriefReviewed:
+            try consumePlanningBriefReview(event, state: &state)
+        case .planningBriefInvalidated:
+            try consumePlanningBriefInvalidation(event, state: &state)
+        case .planningDelegationGranted:
+            try consumePlanningDelegation(event, state: &state)
+        case .planningDelegationConsumed:
+            try consumePlanningDelegationConsumption(event, state: &state)
+        case .planningDelegationInvalidated:
+            try consumePlanningDelegationInvalidation(event, state: &state)
+        case .planningRunInvalidated:
+            try consumePlanningRunInvalidation(event, state: &state)
+        default:
+            try consumeSessionEvent(
+                event,
+                state: &state,
+                authorizations: authorizations,
+                corrections: corrections,
+                decisions: decisions
+            )
+        }
+    }
+
+    private func validatePendingEventKind(
+        _ kind: ZhulongSessionEventKind,
+        state: ZhulongEventReplayState
+    ) throws {
+        let expectedKind: ZhulongSessionEventKind? = if state.pendingBriefInvalidationID != nil {
+            .planningBriefInvalidated
+        } else if state.pendingRunInvalidationIDs.isEmpty == false {
+            .planningRunInvalidated
+        } else if state.pendingInvalidationID != nil {
+            .planningDelegationInvalidated
+        } else if state.pendingPlanningRunDelegationID != nil {
+            .providerRunStarted
+        } else {
+            nil
+        }
+        guard expectedKind == nil || expectedKind == kind else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+    }
+
+    private func consumeSessionEvent(
         _ event: ZhulongSessionEventRecord,
         state: inout ZhulongEventReplayState,
         authorizations: [ZhulongScopeAuthorization],
@@ -402,6 +703,11 @@ struct ZhulongSessionRecord: Codable, Equatable {
             try consumeResume(event, state: &state)
         case .sessionArchived:
             try consumeArchive(event, state: &state)
+        case .planningBriefPublished, .planningBriefReviewed,
+             .planningBriefInvalidated,
+             .planningDelegationGranted, .planningDelegationConsumed,
+             .planningDelegationInvalidated, .planningRunInvalidated:
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
     }
 
@@ -412,6 +718,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
     ) throws {
         guard state.workspaceStatus == .active,
               state.waitingForSendResult == false,
+              state.phase == .scopeReview || state.phase == .readyForProvider,
               state.authorizationIndex < authorizations.count,
               event == authorizationEvent(
                   authorizations[state.authorizationIndex],
@@ -421,6 +728,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
         state.currentAuthorization = authorizations[state.authorizationIndex]
+        if let activeDelegationID = state.activeDelegationID {
+            state.pendingInvalidationID = activeDelegationID
+            state.pendingInvalidationReason = .authorizationChanged
+            state.activeDelegationID = nil
+        }
+        state.phase = .readyForProvider
         state.authorizationIndex += 1
     }
 
@@ -437,11 +750,15 @@ struct ZhulongSessionRecord: Codable, Equatable {
         let send = providerSends[state.sendIndex]
         guard state.currentAuthorization?.isValid(at: send.startedAt) == true,
               state.currentAuthorization?.providerIdentity == send.providerIdentity,
-              state.currentAuthorization?.scopes == send.payload.scopes,
+              send.payload.scopes.isSubset(of: state.currentAuthorization?.scopes ?? []),
+              validPhaseForRun(send, phase: state.phase),
+              validRunAuthority(send, state: state),
               event == startedEvent(send, sequence: event.sequence)
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
+        state.pendingPlanningRunDelegationID = nil
+        state.phase = .providerRunning
         state.waitingForSendResult = true
     }
 
@@ -451,13 +768,44 @@ struct ZhulongSessionRecord: Codable, Equatable {
     ) throws {
         guard state.workspaceStatus == .active,
               state.waitingForSendResult,
+              state.phase == .providerRunning,
               state.sendIndex < providerSends.count,
               event == resultEvent(providerSends[state.sendIndex], sequence: event.sequence)
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
+        state.phase = event.kind == .draftReady ? .draftReview : .readyForProvider
         state.sendIndex += 1
         state.waitingForSendResult = false
+    }
+
+    private func validRunAuthority(
+        _ send: ZhulongProviderSendRecord,
+        state: ZhulongEventReplayState
+    ) -> Bool {
+        switch send.purpose {
+        case .conversation:
+            return state.pendingPlanningRunDelegationID == nil &&
+                state.activeDelegationID == nil
+        case let .delegatedPlanning(contract):
+            guard state.pendingPlanningRunDelegationID == contract.delegationID,
+                  let delegation = planningDelegations.first(where: {
+                      $0.id == contract.delegationID
+                  })
+            else { return false }
+            return contract == ZhulongPlanningRunContract(delegation: delegation) &&
+                send.payload.scopes == contract.dataScopes
+        }
+    }
+
+    private func validPhaseForRun(
+        _ send: ZhulongProviderSendRecord,
+        phase: ZhulongSessionPhase
+    ) -> Bool {
+        switch send.purpose {
+        case .conversation: phase == .readyForProvider
+        case .delegatedPlanning: phase == .readyForProvider || phase == .draftReview
+        }
     }
 
     private func consumeCorrection(
@@ -471,7 +819,43 @@ struct ZhulongSessionRecord: Codable, Equatable {
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
+        let correction = corrections[state.correctionIndex]
+        let invalidation = planningInvalidation(for: correction, currentBriefID: state.currentBriefID)
+        guard state.phase != .providerRunning ||
+            canCorrectDuringDelegatedPlanning(correction, invalidation: invalidation, state: state)
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        if let invalidation {
+            state.pendingBriefInvalidationID = invalidation.briefID
+            state.pendingBriefInvalidationSourceID = invalidation.sourceEntryID
+        }
         state.correctionIndex += 1
+    }
+
+    private func canCorrectDuringDelegatedPlanning(
+        _: ZhulongSessionEntry,
+        invalidation: (briefID: ZhulongPlanningBriefID, sourceEntryID: ZhulongSessionEntryID)?,
+        state: ZhulongEventReplayState
+    ) -> Bool {
+        guard state.waitingForSendResult,
+              state.sendIndex < providerSends.count,
+              case let .delegatedPlanning(contract) = providerSends[state.sendIndex].purpose,
+              contract.briefID == state.currentBriefID
+        else { return false }
+        return invalidation == nil
+    }
+
+    private func planningInvalidation(
+        for correction: ZhulongSessionEntry,
+        currentBriefID: ZhulongPlanningBriefID?
+    ) -> (briefID: ZhulongPlanningBriefID, sourceEntryID: ZhulongSessionEntryID)? {
+        guard let sourceEntryID = correction.correctsEntryID,
+              let briefID = currentBriefID,
+              planningBriefs.first(where: { $0.id == briefID })?
+              .sourceEntryIDs.contains(sourceEntryID) == true
+        else { return nil }
+        return (briefID, sourceEntryID)
     }
 
     private func consumeDecision(
@@ -486,6 +870,220 @@ struct ZhulongSessionRecord: Codable, Equatable {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
         state.decisionIndex += 1
+    }
+
+    private func consumePlanningBrief(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard state.workspaceStatus == .active,
+              state.waitingForSendResult == false,
+              state.phase != .providerRunning,
+              state.briefIndex < planningBriefs.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let brief = planningBriefs[state.briefIndex]
+        guard event == planningBriefEvent(brief, sequence: event.sequence) else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        if let previousBriefID = state.currentBriefID {
+            state.pendingRunInvalidationIDs = pendingRunInvalidationIDs(
+                briefID: previousBriefID,
+                completedSendCount: state.sendIndex,
+                invalidationIndex: state.runInvalidationIndex
+            )
+        }
+        state.pendingInvalidationID = state.activeDelegationID
+        state.pendingInvalidationReason = state.activeDelegationID == nil ? nil : .briefRevised
+        state.currentBriefID = brief.id
+        state.reviewedBriefID = nil
+        state.activeDelegationID = nil
+        state.briefIndex += 1
+    }
+
+    private func consumePlanningBriefReview(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard state.workspaceStatus == .active,
+              state.waitingForSendResult == false,
+              state.phase != .providerRunning,
+              state.pendingInvalidationID == nil,
+              state.reviewIndex < planningBriefReviews.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let review = planningBriefReviews[state.reviewIndex]
+        guard state.currentBriefID == review.briefID,
+              state.reviewedBriefID == nil,
+              event == planningBriefReviewEvent(review, sequence: event.sequence)
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        state.reviewedBriefID = review.briefID
+        state.reviewIndex += 1
+    }
+
+    private func consumePlanningBriefInvalidation(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard state.workspaceStatus == .active,
+              state.waitingForSendResult == false,
+              state.phase != .providerRunning,
+              let briefID = state.pendingBriefInvalidationID,
+              let sourceEntryID = state.pendingBriefInvalidationSourceID,
+              state.briefInvalidationIndex < planningBriefInvalidations.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let invalidation = planningBriefInvalidations[state.briefInvalidationIndex]
+        guard invalidation.briefID == briefID,
+              invalidation.sourceEntryID == sourceEntryID,
+              event == planningBriefInvalidationEvent(
+                  invalidation,
+                  sequence: event.sequence
+              )
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        if let activeDelegationID = state.activeDelegationID {
+            state.pendingInvalidationID = activeDelegationID
+            state.pendingInvalidationReason = .briefSourceCorrected
+            state.activeDelegationID = nil
+        }
+        state.pendingRunInvalidationIDs = pendingRunInvalidationIDs(
+            briefID: briefID,
+            completedSendCount: state.sendIndex,
+            invalidationIndex: state.runInvalidationIndex
+        )
+        state.currentBriefID = nil
+        state.reviewedBriefID = nil
+        state.pendingBriefInvalidationID = nil
+        state.pendingBriefInvalidationSourceID = nil
+        state.briefInvalidationIndex += 1
+    }
+
+    private func pendingRunInvalidationIDs(
+        briefID: ZhulongPlanningBriefID,
+        completedSendCount: Int,
+        invalidationIndex: Int
+    ) -> [ZhulongProviderRunID] {
+        let alreadyInvalidated = Set(
+            planningRunInvalidations.prefix(invalidationIndex).map(\.runID)
+        )
+        return providerSends.prefix(completedSendCount).compactMap { send in
+            guard alreadyInvalidated.contains(send.runID) == false,
+                  case let .delegatedPlanning(contract) = send.purpose,
+                  contract.briefID == briefID
+            else { return nil }
+            return send.runID
+        }
+    }
+
+    private func consumePlanningRunInvalidation(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard let runID = state.pendingRunInvalidationIDs.first,
+              state.runInvalidationIndex < planningRunInvalidations.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let invalidation = planningRunInvalidations[state.runInvalidationIndex]
+        guard invalidation.runID == runID,
+              event == planningRunInvalidationEvent(
+                  invalidation,
+                  sequence: event.sequence
+              )
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        state.pendingRunInvalidationIDs.removeFirst()
+        state.runInvalidationIndex += 1
+    }
+
+    private func consumePlanningDelegation(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard state.workspaceStatus == .active,
+              state.waitingForSendResult == false,
+              state.phase != .providerRunning,
+              state.pendingInvalidationID == nil,
+              state.activeDelegationID == nil,
+              state.delegationIndex < planningDelegations.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let delegation = planningDelegations[state.delegationIndex]
+        guard state.currentBriefID == delegation.briefID,
+              state.reviewedBriefID == delegation.briefID,
+              let brief = planningBriefs.first(where: { $0.id == delegation.briefID }),
+              brief.openQuestions.contains(where: \.isBlocking) == false,
+              state.currentAuthorization?.isValid(at: delegation.grantedAt) == true,
+              state.currentAuthorization?.providerIdentity == delegation.providerIdentity,
+              delegation.dataScopes.isSubset(of: state.currentAuthorization?.scopes ?? []),
+              event == planningDelegationEvent(delegation, sequence: event.sequence)
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        state.activeDelegationID = delegation.id
+        state.delegationIndex += 1
+    }
+
+    private func consumePlanningDelegationConsumption(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard state.workspaceStatus == .active,
+              state.waitingForSendResult == false,
+              state.phase != .providerRunning,
+              state.pendingInvalidationID == nil,
+              state.consumptionIndex < planningDelegationConsumptions.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let consumption = planningDelegationConsumptions[state.consumptionIndex]
+        guard state.activeDelegationID == consumption.delegationID,
+              event == planningDelegationConsumptionEvent(
+                  consumption,
+                  sequence: event.sequence
+              )
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        state.activeDelegationID = nil
+        state.pendingPlanningRunDelegationID = consumption.delegationID
+        state.consumptionIndex += 1
+    }
+
+    private func consumePlanningDelegationInvalidation(
+        _ event: ZhulongSessionEventRecord,
+        state: inout ZhulongEventReplayState
+    ) throws {
+        guard state.workspaceStatus == .active,
+              state.waitingForSendResult == false,
+              let delegationID = state.pendingInvalidationID,
+              let reason = state.pendingInvalidationReason,
+              state.invalidationIndex < planningDelegationInvalidations.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let invalidation = planningDelegationInvalidations[state.invalidationIndex]
+        guard invalidation.delegationID == delegationID,
+              invalidation.reason == reason,
+              event == planningDelegationInvalidationEvent(
+                  invalidation,
+                  sequence: event.sequence
+              )
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        state.pendingInvalidationID = nil
+        state.pendingInvalidationReason = nil
+        state.invalidationIndex += 1
     }
 
     private func consumePause(
@@ -555,7 +1153,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         _ authorization: ZhulongScopeAuthorization,
         sequence: UInt64
     ) -> ZhulongSessionEventRecord {
-        ZhulongSessionEventRecord(
+        return ZhulongSessionEventRecord(
             sequence: sequence,
             kind: .scopeAuthorized,
             occurredAt: authorization.grantedAt,
@@ -629,6 +1227,131 @@ struct ZhulongSessionRecord: Codable, Equatable {
         )
     }
 
+    private func planningBriefEvent(
+        _ brief: ZhulongPlanningBrief,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .planningBriefPublished,
+            occurredAt: brief.publishedAt,
+            summary: "已发布规划简报 v\(brief.version)",
+            reference: .planningBrief(brief.id)
+        )
+    }
+
+    private func planningBriefReviewEvent(
+        _ review: ZhulongPlanningBriefReview,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .planningBriefReviewed,
+            occurredAt: review.reviewedAt,
+            summary: "用户已审查规划简报",
+            reference: .planningBrief(review.briefID)
+        )
+    }
+
+    private func planningBriefInvalidationEvent(
+        _ invalidation: ZhulongPlanningBriefInvalidation,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .planningBriefInvalidated,
+            occurredAt: invalidation.invalidatedAt,
+            summary: "来源更正已使规划简报失效",
+            reference: .planningBrief(invalidation.briefID)
+        )
+    }
+
+    private func planningDelegationEvent(
+        _ delegation: ZhulongPlanningDelegation,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .planningDelegationGranted,
+            occurredAt: delegation.grantedAt,
+            summary: "已建立单次规划委托，不包含 Todo 写入",
+            reference: .planningDelegation(delegation.id)
+        )
+    }
+
+    private func planningDelegationConsumptionEvent(
+        _ consumption: ZhulongPlanningDelegationConsumption,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .planningDelegationConsumed,
+            occurredAt: consumption.consumedAt,
+            summary: "单次规划委托已消费",
+            reference: .planningDelegation(consumption.delegationID)
+        )
+    }
+
+    private func planningDelegationInvalidationEvent(
+        _ invalidation: ZhulongPlanningDelegationInvalidation,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        let summary = switch invalidation.reason {
+        case .briefRevised: "简报修订已使旧规划委托失效"
+        case .briefSourceCorrected: "来源更正已使规划委托失效"
+        case .authorizationChanged: "授权变更已使旧规划委托失效"
+        }
+        return ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .planningDelegationInvalidated,
+            occurredAt: invalidation.invalidatedAt,
+            summary: summary,
+            reference: .planningDelegation(invalidation.delegationID)
+        )
+    }
+
+    private func planningRunInvalidationEvent(
+        _ invalidation: ZhulongPlanningRunInvalidation,
+        sequence: UInt64
+    ) -> ZhulongSessionEventRecord {
+        ZhulongSessionEventRecord(
+            sequence: sequence,
+            kind: .planningRunInvalidated,
+            occurredAt: invalidation.invalidatedAt,
+            summary: invalidation.reason == .briefRevised
+                ? "简报修订已使旧规划运行与草稿失效"
+                : "来源更正已使规划运行与草稿失效",
+            reference: .providerRun(invalidation.runID)
+        )
+    }
+
+    private func currentReviewedBriefID() -> ZhulongPlanningBriefID? {
+        guard let briefID = currentPlanningBriefID(),
+              planningBriefReviews.contains(where: { $0.briefID == briefID })
+        else { return nil }
+        return briefID
+    }
+
+    private func currentPlanningBriefID() -> ZhulongPlanningBriefID? {
+        guard let briefID = planningBriefs.last?.id,
+              planningBriefInvalidations.contains(where: { $0.briefID == briefID }) == false
+        else { return nil }
+        return briefID
+    }
+
+    private func currentActiveDelegationID() -> ZhulongPlanningDelegationID? {
+        guard let briefID = currentPlanningBriefID(),
+              let delegation = planningDelegations.last(where: { $0.briefID == briefID }),
+              planningDelegationConsumptions.contains(where: {
+                  $0.delegationID == delegation.id
+              }) == false,
+              planningDelegationInvalidations.contains(where: {
+                  $0.delegationID == delegation.id
+              }) == false
+        else { return nil }
+        return delegation.id
+    }
+
     private func workspaceEvent(
         kind: ZhulongSessionEventKind,
         summary: String,
@@ -668,8 +1391,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         case .readyForProvider:
             guard authorizations.isEmpty == false,
                   draftVersion == nil,
-                  providerSends.last?.status != .running,
-                  providerSends.allSatisfy({ $0.status == .failed })
+                  providerSends.allSatisfy({ $0.status != .running })
             else {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
@@ -677,7 +1399,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
             guard authorizations.isEmpty == false,
                   draftVersion == nil,
                   providerSends.last?.status == .running,
-                  providerSends.dropLast().allSatisfy({ $0.status == .failed })
+                  providerSends.dropLast().allSatisfy({ $0.status != .running })
             else {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
@@ -687,7 +1409,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
                   draftVersion > 0,
                   providerSends.last?.status == .succeeded,
                   providerSends.last?.response?.draftVersion == draftVersion,
-                  providerSends.dropLast().allSatisfy({ $0.status == .failed })
+                  providerSends.dropLast().allSatisfy({ $0.status != .running })
             else {
                 throw ZhulongSessionRestorationError.invalidDraftVersion
             }

@@ -108,6 +108,163 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         XCTAssertEqual(try repository.load(session.id), completed)
     }
 
+    func testConversationRunCannotBypassActivePlanningDelegation() async throws {
+        let repository = makeRepository()
+        let prepared = try makeDelegatedPlanningSession()
+        try repository.save(prepared.session)
+        let probe = ProviderProbe(result: .success(makeResponse()))
+        let provider = StubZhulongProvider(identity: try makeProviderIdentity(), probe: probe)
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let completedAt = baseDate.addingTimeInterval(6)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await orchestrator.run(
+                sessionID: prepared.session.id,
+                payload: try makePayload(),
+                provider: provider,
+                startedAt: baseDate.addingTimeInterval(5),
+                completedAt: { completedAt }
+            )
+        } errorHandler: { error in
+            XCTAssertEqual(error as? ZhulongSessionError, .planningDelegationRequired)
+        }
+
+        let callCount = await probe.callCount
+        XCTAssertEqual(callCount, 0)
+        XCTAssertEqual(try repository.load(prepared.session.id), prepared.session)
+    }
+
+    func testPlanningRunAtomicallyConsumesExactDelegationBeforeProviderCall() async throws {
+        let repository = makeRepository()
+        let prepared = try makeDelegatedPlanningSession()
+        try repository.save(prepared.session)
+        let inspection = ProviderInspection(repository: repository, sessionID: prepared.session.id)
+        let probe = ProviderProbe(result: .success(makeResponse()), inspection: inspection)
+        let provider = StubZhulongProvider(identity: try makeProviderIdentity(), probe: probe)
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let completedAt = baseDate.addingTimeInterval(6)
+
+        let completed = try await orchestrator.runPlanning(
+            sessionID: prepared.session.id,
+            delegationID: prepared.delegation.id,
+            payload: makePayload(),
+            provider: provider,
+            startedAt: baseDate.addingTimeInterval(5),
+            completedAt: { completedAt }
+        )
+
+        let requests = await probe.requests
+        let request = try XCTUnwrap(requests.first)
+        guard case let .delegatedPlanning(contract) = request.purpose else {
+            return XCTFail("Expected delegated planning purpose")
+        }
+        XCTAssertEqual(contract.delegationID, prepared.delegation.id)
+        XCTAssertEqual(contract.briefID, prepared.delegation.briefID)
+        XCTAssertEqual(contract.activities, prepared.delegation.activities)
+        XCTAssertEqual(completed.planningDelegationConsumptions.map(\.delegationID), [prepared.delegation.id])
+        XCTAssertEqual(
+            completed.events.suffix(3).map(\.kind),
+            [.planningDelegationConsumed, .providerRunStarted, .draftReady]
+        )
+        XCTAssertEqual(try repository.load(prepared.session.id), completed)
+    }
+
+    func testCorrectingSourceCancelsInFlightPlanningAndRejectsLateProviderResult() async throws {
+        let repository = makeRepository()
+        let prepared = try makeDelegatedPlanningSession()
+        try repository.save(prepared.session)
+        let gate = ProviderGate(result: .success(makeResponse()))
+        let provider = GatedZhulongProvider(identity: try makeProviderIdentity(), gate: gate)
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let sessionID = prepared.session.id
+        let delegationID = prepared.delegation.id
+        let payload = try makePayload()
+        let startedAt = baseDate.addingTimeInterval(5)
+        let completedAt = baseDate.addingTimeInterval(9)
+
+        let running = Task {
+            try await orchestrator.runPlanning(
+                sessionID: sessionID,
+                delegationID: delegationID,
+                payload: payload,
+                provider: provider,
+                startedAt: startedAt,
+                completedAt: { completedAt }
+            )
+        }
+        await gate.waitUntilCalled()
+
+        let corrected = try await orchestrator.correctPlanningSource(
+            sessionID: prepared.session.id,
+            sourceEntryID: prepared.session.entries[0].id,
+            replacementContent: "结束今天，但明天只安排一项任务",
+            now: baseDate.addingTimeInterval(7)
+        )
+        XCTAssertEqual(corrected.providerSends.last?.failure?.code, "planning_source_corrected")
+        XCTAssertEqual(corrected.planningRunInvalidations.count, 1)
+        XCTAssertNil(corrected.currentPlanningBrief)
+
+        await gate.release()
+        do {
+            _ = try await running.value
+            XCTFail("Late Provider result must not overwrite the corrected session")
+        } catch {
+            XCTAssertEqual(
+                error as? ZhulongProviderOrchestrationError,
+                .providerRunSuperseded
+            )
+        }
+        XCTAssertEqual(try repository.load(prepared.session.id), corrected)
+    }
+
+    func testUnrelatedCorrectionDoesNotCancelInFlightPlanningRun() async throws {
+        let repository = makeRepository()
+        var prepared = try makeDelegatedPlanningSession()
+        let unrelated = try prepared.session.appendEntry(
+            author: .user,
+            kind: .statement,
+            content: "与本次规划无关的备注",
+            now: baseDate.addingTimeInterval(4.5)
+        )
+        try repository.save(prepared.session)
+        let gate = ProviderGate(result: .success(makeResponse()))
+        let provider = GatedZhulongProvider(identity: try makeProviderIdentity(), gate: gate)
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let sessionID = prepared.session.id
+        let delegationID = prepared.delegation.id
+        let payload = try makePayload()
+        let startedAt = baseDate.addingTimeInterval(5)
+        let completedAt = baseDate.addingTimeInterval(9)
+
+        let running = Task {
+            try await orchestrator.runPlanning(
+                sessionID: sessionID,
+                delegationID: delegationID,
+                payload: payload,
+                provider: provider,
+                startedAt: startedAt,
+                completedAt: { completedAt }
+            )
+        }
+        await gate.waitUntilCalled()
+
+        let corrected = try await orchestrator.correctPlanningSource(
+            sessionID: sessionID,
+            sourceEntryID: unrelated.id,
+            replacementContent: "修改无关备注",
+            now: baseDate.addingTimeInterval(7)
+        )
+        XCTAssertEqual(corrected.phase, .providerRunning)
+        XCTAssertEqual(corrected.effectiveContent(for: unrelated.id), "修改无关备注")
+        XCTAssertEqual(corrected.providerSends.last?.status, .running)
+
+        await gate.release()
+        let completed = try await running.value
+        XCTAssertEqual(completed.phase, .draftReview)
+        XCTAssertTrue(completed.planningRunInvalidations.isEmpty)
+        XCTAssertEqual(completed.effectiveContent(for: unrelated.id), "修改无关备注")
+    }
+
     func testFailureIsAuditedAndSameAuthorizedProviderCanRetry() async throws {
         let repository = makeRepository()
         let session = try makeAuthorizedSession()
@@ -312,6 +469,33 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
             now: baseDate.addingTimeInterval(1)
         )
         return session
+    }
+
+    private func makeDelegatedPlanningSession() throws -> (
+        session: ZhulongSession,
+        delegation: ZhulongPlanningDelegation
+    ) {
+        var session = try makeAuthorizedSession()
+        let brief = try session.publishPlanningBrief(
+            ZhulongPlanningBriefDraft(
+                goal: "安排明日任务",
+                successCriteria: ["形成可审查的明日计划"],
+                hardConstraints: ["不写入 Todo"],
+                userDecisions: ["先处理未完成任务"],
+                delegatedActivities: [.taskDecomposition, .sequencing, .riskReview],
+                assumptions: [],
+                openQuestions: [],
+                dataScopes: [.currentDayTodo],
+                sourceEntryIDs: [session.entries[0].id]
+            ),
+            now: baseDate.addingTimeInterval(2)
+        )
+        try session.reviewPlanningBrief(brief.id, now: baseDate.addingTimeInterval(3))
+        let delegation = try session.delegatePlanning(
+            for: brief.id,
+            now: baseDate.addingTimeInterval(4)
+        )
+        return (session, delegation)
     }
 
     private func makePayload(contextVersion: String = "context-v1") throws -> ZhulongProviderPayload {

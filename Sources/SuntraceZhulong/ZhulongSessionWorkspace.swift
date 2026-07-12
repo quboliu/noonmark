@@ -43,6 +43,9 @@ public enum ZhulongSessionEventReference: Codable, Equatable, Sendable {
     case planningDelegation(ZhulongPlanningDelegationID)
     case decisionGate(ZhulongDecisionGateID)
     case planArtifact(ZhulongPlanArtifactID)
+    case todoDiff(ZhulongTodoDiffID)
+    case todoWriteAuthorization(ZhulongTodoWriteAuthorizationID)
+    case todoApplyReceipt(ZhulongTodoApplyReceiptID)
 }
 
 public extension ZhulongSession {

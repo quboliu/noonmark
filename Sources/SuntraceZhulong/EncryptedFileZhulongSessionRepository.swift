@@ -15,8 +15,10 @@ public enum ZhulongSidecarRepositoryError: Error, Equatable {
 
 public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @unchecked Sendable {
     private static let magic = Data("NOONMARK-ZHULONG-SIDECAR".utf8)
-    private static let formatVersion: UInt8 = 4
-    private static let migratedLegacyFormatVersion: UInt8 = 5
+    private static let formatVersion: UInt8 = 6
+    private static let migratedLegacyFormatVersion: UInt8 = 7
+    private static let planningOutputFormatVersion: UInt8 = 4
+    private static let migratedPlanningOutputFormatVersion: UInt8 = 5
     private static let planningBriefFormatVersion: UInt8 = 3
     private static let workspaceFormatVersion: UInt8 = 2
     private static let legacyFormatVersion: UInt8 = 1
@@ -90,6 +92,11 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             let planningBrief = try decoder.decode(ZhulongSessionRecordV3.self, from: plaintext)
             record = ZhulongSessionRecord(migrating: planningBrief)
             allowsMigratedLegacyPlanning = true
+        case Self.planningOutputFormatVersion, Self.migratedPlanningOutputFormatVersion:
+            let planningOutput = try decoder.decode(ZhulongSessionRecordV4.self, from: plaintext)
+            record = ZhulongSessionRecord(migrating: planningOutput)
+            allowsMigratedLegacyPlanning = decodedEnvelope.version ==
+                Self.migratedPlanningOutputFormatVersion
         case Self.formatVersion, Self.migratedLegacyFormatVersion:
             record = try decoder.decode(ZhulongSessionRecord.self, from: plaintext)
             allowsMigratedLegacyPlanning = decodedEnvelope.version == Self.migratedLegacyFormatVersion
@@ -133,6 +140,25 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             encoder.encode(record),
             id: record.id,
             version: Self.planningBriefFormatVersion
+        )
+    }
+
+    func saveVersionFourSessionForTesting(_ session: ZhulongSession) throws {
+        try savePlaintext(
+            encoder.encode(ZhulongSessionRecordV4(session)),
+            id: session.id,
+            version: Self.planningOutputFormatVersion
+        )
+    }
+
+    func saveCurrentSessionWithLegacyAuthenticationForTesting(
+        _ session: ZhulongSession
+    ) throws {
+        try savePlaintext(
+            encoder.encode(ZhulongSessionRecord(session)),
+            id: session.id,
+            version: Self.formatVersion,
+            usesLegacyAuthentication: true
         )
     }
 
@@ -195,6 +221,8 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         guard version == Self.legacyFormatVersion ||
             version == Self.workspaceFormatVersion ||
             version == Self.planningBriefFormatVersion ||
+            version == Self.planningOutputFormatVersion ||
+            version == Self.migratedPlanningOutputFormatVersion ||
             version == Self.formatVersion ||
             version == Self.migratedLegacyFormatVersion
         else {
@@ -226,6 +254,9 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         } catch {
             // Existing v1-v3 files used session-only AAD. Their authenticated JSON
             // shape must match the declared version before migration can continue.
+            guard version <= Self.planningBriefFormatVersion else {
+                throw ZhulongSidecarRepositoryError.invalidCiphertext
+            }
             do {
                 let plaintext = try AES.GCM.open(
                     sealedBox,
@@ -270,7 +301,7 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
             ])
             requiredKeys = commonKeys.union(planningKeys)
             allowedKeys = requiredKeys.union(optionalKeys)
-        case Self.formatVersion, Self.migratedLegacyFormatVersion:
+        case Self.planningOutputFormatVersion, Self.migratedPlanningOutputFormatVersion:
             let planningOutputKeys = Set([
                 "workspaceStatus", "entries", "planningBriefs", "planningBriefReviews",
                 "planningBriefInvalidations", "planningDelegations",
@@ -279,6 +310,17 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
                 "planArtifacts"
             ])
             requiredKeys = commonKeys.union(planningOutputKeys)
+            allowedKeys = requiredKeys.union(optionalKeys)
+        case Self.formatVersion, Self.migratedLegacyFormatVersion:
+            let todoLedgerKeys = Set([
+                "workspaceStatus", "entries", "planningBriefs", "planningBriefReviews",
+                "planningBriefInvalidations", "planningDelegations",
+                "planningDelegationConsumptions", "planningDelegationInvalidations",
+                "planningRunInvalidations", "decisionGates", "decisionGateResolutions",
+                "planArtifacts", "todoDiffDrafts", "todoWriteAuthorizations",
+                "todoApplyReceipts"
+            ])
+            requiredKeys = commonKeys.union(todoLedgerKeys)
             allowedKeys = requiredKeys.union(optionalKeys)
         default:
             throw ZhulongSidecarRepositoryError.unsupportedEnvelope

@@ -190,6 +190,60 @@ struct ZhulongSessionRecordV3: Codable, Equatable {
     }
 }
 
+struct ZhulongSessionRecordV4: Codable, Equatable {
+    var id: ZhulongSessionID
+    var primaryIntent: String
+    var proposedScopes: Set<ZhulongDataScope>
+    var phase: ZhulongSessionPhase
+    var authorizations: [ZhulongScopeAuthorizationRecord]
+    var draftVersion: Int?
+    var providerSends: [ZhulongProviderSendRecord]
+    var events: [ZhulongSessionEventRecord]
+    var workspaceStatus: ZhulongWorkspaceStatus
+    var entries: [ZhulongSessionEntry]
+    var planningBriefs: [ZhulongPlanningBrief]
+    var planningBriefReviews: [ZhulongPlanningBriefReview]
+    var planningBriefInvalidations: [ZhulongPlanningBriefInvalidation]
+    var planningDelegations: [ZhulongPlanningDelegation]
+    var planningDelegationConsumptions: [ZhulongPlanningDelegationConsumption]
+    var planningDelegationInvalidations: [ZhulongPlanningDelegationInvalidation]
+    var planningRunInvalidations: [ZhulongPlanningRunInvalidation]
+    var decisionGates: [ZhulongDecisionGate]
+    var decisionGateResolutions: [ZhulongDecisionGateResolution]
+    var planArtifacts: [ZhulongPlanArtifact]
+
+    init(_ session: ZhulongSession) {
+        let record = ZhulongSessionRecord(session)
+        id = record.id
+        primaryIntent = record.primaryIntent
+        proposedScopes = record.proposedScopes
+        phase = record.phase
+        authorizations = record.authorizations
+        draftVersion = record.draftVersion
+        providerSends = record.providerSends
+        events = record.events.filter {
+            switch $0.kind {
+            case .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied:
+                false
+            default:
+                true
+            }
+        }
+        workspaceStatus = record.workspaceStatus
+        entries = record.entries
+        planningBriefs = record.planningBriefs
+        planningBriefReviews = record.planningBriefReviews
+        planningBriefInvalidations = record.planningBriefInvalidations
+        planningDelegations = record.planningDelegations
+        planningDelegationConsumptions = record.planningDelegationConsumptions
+        planningDelegationInvalidations = record.planningDelegationInvalidations
+        planningRunInvalidations = record.planningRunInvalidations
+        decisionGates = record.decisionGates
+        decisionGateResolutions = record.decisionGateResolutions
+        planArtifacts = record.planArtifacts
+    }
+}
+
 private struct ZhulongEventReplayState {
     var phase = ZhulongSessionPhase.scopeReview
     var authorizationIndex = 0
@@ -245,6 +299,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
     var decisionGates: [ZhulongDecisionGate]
     var decisionGateResolutions: [ZhulongDecisionGateResolution]
     var planArtifacts: [ZhulongPlanArtifact]
+    var todoDiffDrafts: [ZhulongTodoDiffDraft]
+    var todoWriteAuthorizations: [ZhulongTodoWriteAuthorization]
+    var todoApplyReceipts: [ZhulongTodoApplyReceipt]
 
     init(_ session: ZhulongSession) {
         id = session.id
@@ -282,6 +339,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
         decisionGates = session.decisionGates
         decisionGateResolutions = session.decisionGateResolutions
         planArtifacts = session.planArtifacts
+        todoDiffDrafts = session.todoDiffDrafts
+        todoWriteAuthorizations = session.todoWriteAuthorizations
+        todoApplyReceipts = session.todoApplyReceipts
     }
 
     init(migrating record: ZhulongSessionRecordV1) {
@@ -323,6 +383,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
         decisionGates = []
         decisionGateResolutions = []
         planArtifacts = []
+        todoDiffDrafts = []
+        todoWriteAuthorizations = []
+        todoApplyReceipts = []
     }
 
     init(migrating record: ZhulongSessionRecordV2) {
@@ -346,6 +409,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
         decisionGates = []
         decisionGateResolutions = []
         planArtifacts = []
+        todoDiffDrafts = []
+        todoWriteAuthorizations = []
+        todoApplyReceipts = []
     }
 
     init(migrating record: ZhulongSessionRecordV3) {
@@ -369,6 +435,35 @@ struct ZhulongSessionRecord: Codable, Equatable {
         decisionGates = []
         decisionGateResolutions = []
         planArtifacts = []
+        todoDiffDrafts = []
+        todoWriteAuthorizations = []
+        todoApplyReceipts = []
+    }
+
+    init(migrating record: ZhulongSessionRecordV4) {
+        id = record.id
+        primaryIntent = record.primaryIntent
+        proposedScopes = record.proposedScopes
+        phase = record.phase
+        authorizations = record.authorizations
+        draftVersion = record.draftVersion
+        providerSends = record.providerSends
+        events = record.events
+        workspaceStatus = record.workspaceStatus
+        entries = record.entries
+        planningBriefs = record.planningBriefs
+        planningBriefReviews = record.planningBriefReviews
+        planningBriefInvalidations = record.planningBriefInvalidations
+        planningDelegations = record.planningDelegations
+        planningDelegationConsumptions = record.planningDelegationConsumptions
+        planningDelegationInvalidations = record.planningDelegationInvalidations
+        planningRunInvalidations = record.planningRunInvalidations
+        decisionGates = record.decisionGates
+        decisionGateResolutions = record.decisionGateResolutions
+        planArtifacts = record.planArtifacts
+        todoDiffDrafts = []
+        todoWriteAuthorizations = []
+        todoApplyReceipts = []
     }
 
     func restore(
@@ -387,6 +482,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         let restoredAuthorizations = try restoreAuthorizations()
         try validateProviderSends()
         try validatePlanningArtifacts()
+        try validateTodoLedger()
         try validatePhase(authorizations: restoredAuthorizations)
         try validateEvents(authorizations: restoredAuthorizations)
 
@@ -419,6 +515,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
             decisionGates: decisionGates,
             decisionGateResolutions: decisionGateResolutions,
             planArtifacts: planArtifacts,
+            todoDiffDrafts: todoDiffDrafts,
+            todoWriteAuthorizations: todoWriteAuthorizations,
+            todoApplyReceipts: todoApplyReceipts,
             hasAuthenticatedLegacyPlanningProvenance: allowsMigratedLegacyPlanning &&
                 containsMigratedLegacyPlanning
         )
@@ -499,6 +598,169 @@ struct ZhulongSessionRecord: Codable, Equatable {
         else {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
+    }
+
+    private func validateTodoLedger() throws {
+        guard Set(todoDiffDrafts.map(\.id)).count == todoDiffDrafts.count,
+              Set(todoWriteAuthorizations.map(\.id)).count == todoWriteAuthorizations.count,
+              Set(todoWriteAuthorizations.map(\.draftID)).count == todoWriteAuthorizations.count,
+              Set(todoApplyReceipts.map(\.id)).count == todoApplyReceipts.count,
+              Set(todoApplyReceipts.map(\.draftID)).count == todoApplyReceipts.count
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        try validateTodoDrafts()
+        try validateTodoAuthorizations()
+        try validateTodoReceipts()
+        try validateTodoLedgerEvents()
+    }
+
+    private func validateTodoDrafts() throws {
+        var latestDraftByArtifact: [ZhulongPlanArtifactID: ZhulongTodoDiffDraft] = [:]
+        for draft in todoDiffDrafts {
+            guard (try? draft.validate()) != nil,
+                  draft.sessionID == id,
+                  let artifact = planArtifacts.first(where: {
+                      $0.id == draft.planArtifactID && $0.version == draft.planArtifactVersion
+                  }),
+                  draft.createdAt > artifact.createdAt,
+                  validDigest(draft.sourceSnapshotDigest)
+            else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            switch draft.source {
+            case .providerOriginal:
+                guard draft.version == 1, latestDraftByArtifact[artifact.id] == nil else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+            case let .userRevision(parentDraftID, _):
+                guard let parent = latestDraftByArtifact[artifact.id],
+                      parent.id == parentDraftID,
+                      draft.isValidRevision(of: parent),
+                      todoWriteAuthorizations.contains(where: {
+                          $0.draftID == parent.id && $0.status == .active
+                      }) == false,
+                      todoApplyReceipts.contains(where: { $0.draftID == parent.id }) == false
+                else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+            }
+            latestDraftByArtifact[artifact.id] = draft
+        }
+    }
+
+    private func validateTodoAuthorizations() throws {
+        for authorization in todoWriteAuthorizations {
+            guard let draft = todoDiffDrafts.first(where: { $0.id == authorization.draftID }),
+                  authorization.draftVersion == draft.version,
+                  authorization.draftDigest == (try? draft.integrityDigest()),
+                  authorization.sourceSnapshotDigest == draft.sourceSnapshotDigest,
+                  authorization.planningDate == draft.planningDate,
+                  authorization.grantedAt.timeIntervalSinceReferenceDate.isFinite,
+                  authorization.grantedAt > draft.createdAt,
+                  validDigest(authorization.draftDigest),
+                  validDigest(authorization.sourceSnapshotDigest)
+            else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+            switch authorization.status {
+            case .active:
+                guard todoApplyReceipts.contains(where: {
+                    $0.authorizationID == authorization.id
+                }) == false else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+            case let .consumed(receiptID, consumedAt):
+                guard consumedAt.timeIntervalSinceReferenceDate.isFinite,
+                      let receipt = todoApplyReceipts.first(where: { $0.id == receiptID }),
+                      receipt.authorizationID == authorization.id,
+                      receipt.appliedAt == consumedAt
+                else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+            }
+        }
+    }
+
+    private func validateTodoReceipts() throws {
+        for receipt in todoApplyReceipts {
+            guard let authorization = todoWriteAuthorizations.first(where: {
+                $0.id == receipt.authorizationID
+            }),
+            let draft = todoDiffDrafts.first(where: { $0.id == receipt.draftID }),
+            receipt.draftVersion == draft.version,
+            receipt.beforeSnapshotDigest == draft.sourceSnapshotDigest,
+            validDigest(receipt.beforeSnapshotDigest),
+            validDigest(receipt.afterSnapshotDigest),
+            receipt.beforeSnapshotDigest != receipt.afterSnapshotDigest,
+            receipt.appliedAt.timeIntervalSinceReferenceDate.isFinite,
+            receipt.appliedAt > authorization.grantedAt,
+            receipt.items.map(\.diffItemID) == draft.items.map(\.id),
+            case let .consumed(receiptID, consumedAt) = authorization.status,
+            receiptID == receipt.id,
+            consumedAt == receipt.appliedAt
+            else {
+                throw ZhulongSessionRestorationError.invalidEventsForPhase
+            }
+        }
+    }
+
+    private func validateTodoLedgerEvents() throws {
+        var expected: [(Date, ZhulongSessionEventKind, String, ZhulongSessionEventReference)] = []
+        expected.append(contentsOf: todoDiffDrafts.map { draft in
+            let revised = switch draft.source {
+            case .providerOriginal: false
+            case .userRevision: true
+            }
+            return (
+                draft.createdAt,
+                revised ? .todoDiffRevised : .todoDiffPublished,
+                revised
+                    ? "用户已建立 Todo 变更 diff 修订版本"
+                    : "已发布可编辑 Todo 变更 diff",
+                .todoDiff(draft.id)
+            )
+        })
+        expected.append(contentsOf: todoWriteAuthorizations.map { authorization in
+            (
+                authorization.grantedAt,
+                .todoWriteAuthorized,
+                "用户已对当前 Todo diff 授予一次性写入授权",
+                .todoWriteAuthorization(authorization.id)
+            )
+        })
+        expected.append(contentsOf: todoApplyReceipts.map { receipt in
+            (
+                receipt.appliedAt,
+                .todoBatchApplied,
+                "已原子应用 Todo diff，共 \(receipt.items.count) 项",
+                .todoApplyReceipt(receipt.id)
+            )
+        })
+        expected.sort { $0.0 < $1.0 }
+        guard zip(expected, expected.dropFirst()).allSatisfy({ earlier, later in
+            earlier.0 < later.0
+        }) else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+        let ledgerKinds: Set<ZhulongSessionEventKind> = [
+            .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied
+        ]
+        let actual = events.filter { ledgerKinds.contains($0.kind) }
+        guard actual.count == expected.count,
+              zip(actual, expected).allSatisfy({ event, value in
+                  event.occurredAt == value.0 &&
+                      event.kind == value.1 &&
+                      event.summary == value.2 &&
+                      event.reference == value.3
+              })
+        else {
+            throw ZhulongSessionRestorationError.invalidEventsForPhase
+        }
+    }
+
+    private func validDigest(_ value: String) -> Bool {
+        value.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil
     }
 
     private func validDecisionGate(_ gate: ZhulongDecisionGate) -> Bool {
@@ -819,6 +1081,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
             try consumePlanningRunInvalidation(event, state: &state)
         case .planningDecisionGateResolved:
             try consumeDecisionGateResolution(event, state: &state)
+        case .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied:
+            break
         default:
             try consumeSessionEvent(
                 event,
@@ -882,7 +1146,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
              .planningBriefInvalidated,
              .planningDelegationGranted, .planningDelegationConsumed,
              .planningDelegationInvalidated, .planningRunInvalidated,
-             .planningDecisionGateResolved:
+             .planningDecisionGateResolved,
+             .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied:
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
     }

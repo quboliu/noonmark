@@ -1,4 +1,5 @@
 import Foundation
+@testable import SuntraceCore
 @testable import SuntraceZhulong
 import XCTest
 
@@ -39,6 +40,53 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertEqual(permissions & 0o777, 0o600)
     }
 
+    func testRepositoryRoundTripsTodoLedgerAndRejectsMissingAuthorization() throws {
+        let repository = makeRepository(key: key)
+        var session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
+        var engine = SuntraceEngine()
+        let artifact = try XCTUnwrap(session.effectivePlanArtifact)
+        let draft = try ZhulongTodoDiffDraft(
+            sessionID: session.id,
+            planArtifactID: artifact.id,
+            planArtifactVersion: artifact.version,
+            planningDate: LocalDate("2026-07-12"),
+            sourceSnapshot: engine.snapshot(),
+            createdAt: now.addingTimeInterval(7),
+            items: [
+                ZhulongTodoDiffItem(
+                    operation: .createTask(
+                        title: "持久化原子批次",
+                        descriptionText: nil,
+                        note: nil,
+                        plannedSubtasks: [],
+                        targetDate: nil
+                    )
+                )
+            ]
+        )
+        try session.publishTodoDiff(draft, now: now.addingTimeInterval(7))
+        _ = try session.authorizeTodoWrite(
+            against: engine,
+            today: LocalDate("2026-07-12"),
+            now: now.addingTimeInterval(8)
+        )
+        _ = try session.applyAuthorizedTodoDiff(
+            to: &engine,
+            today: LocalDate("2026-07-12"),
+            now: now.addingTimeInterval(9)
+        )
+
+        try repository.save(session)
+        XCTAssertEqual(try repository.load(session.id), session)
+
+        var record = ZhulongSessionRecord(session)
+        record.todoWriteAuthorizations.removeAll()
+        try repository.saveRecordForTesting(record)
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSessionRestorationError, .invalidEventsForPhase)
+        }
+    }
+
     func testWrongKeyAndCiphertextTamperingFailClosed() throws {
         let repository = makeRepository(key: key)
         let session = try makeDraftReviewSession()
@@ -54,6 +102,17 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertThrowsError(try repository.load(session.id))
     }
 
+    func testCurrentSchemaRejectsLegacySessionOnlyAuthentication() throws {
+        let repository = makeRepository(key: key)
+        let session = try makeDraftReviewSession()
+
+        try repository.saveCurrentSessionWithLegacyAuthenticationForTesting(session)
+
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSidecarRepositoryError, .invalidCiphertext)
+        }
+    }
+
     func testEnvelopeVersionTamperingFailsClosedForCurrentAndLegacyFiles() throws {
         let repository = makeRepository(key: key)
         let session = try makeDraftReviewSession()
@@ -62,29 +121,49 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 2, 3, 5]
+            replacementVersions: [1, 2, 3, 4, 5, 7]
         )
 
         try repository.saveVersionThreeSessionForTesting(session)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 2, 4, 5]
+            replacementVersions: [1, 2, 4, 5, 6, 7]
         )
 
         try repository.saveVersionTwoSessionForTesting(session)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 3, 4, 5]
+            replacementVersions: [1, 3, 4, 5, 6, 7]
         )
 
         try repository.saveLegacySessionForTesting(session)
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [2, 3, 4, 5]
+            replacementVersions: [2, 3, 4, 5, 6, 7]
         )
+    }
+
+    func testRepositoryMigratesVersionFourPlanningOutputToEmptyTodoLedger() throws {
+        let repository = makeRepository(key: key)
+        let session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
+
+        try repository.saveVersionFourSessionForTesting(session)
+        try assertVersionTamperingFails(
+            repository: repository,
+            sessionID: session.id,
+            replacementVersions: [1, 2, 3, 5, 6, 7]
+        )
+        try repository.saveVersionFourSessionForTesting(session)
+        let restored = try repository.load(session.id)
+
+        XCTAssertEqual(restored, session)
+        XCTAssertTrue(restored.todoDiffDrafts.isEmpty)
+        try repository.save(restored)
+        let bytes = try Data(contentsOf: repository.fileURL(for: session.id))
+        XCTAssertEqual(bytes[Data("NOONMARK-ZHULONG-SIDECAR".utf8).count], 6)
     }
 
     func testUnavailableKeyFailsBeforeWritingAnything() throws {
@@ -311,6 +390,14 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertEqual(migrated.effectiveDraftVersion, 1)
         XCTAssertNil(migrated.effectivePlanArtifact)
         XCTAssertTrue(migrated.planArtifacts.isEmpty)
+        try repository.save(migrated)
+        let migratedBytes = try Data(contentsOf: repository.fileURL(for: session.id))
+        XCTAssertEqual(migratedBytes[Data("NOONMARK-ZHULONG-SIDECAR".utf8).count], 7)
+        try assertVersionTamperingFails(
+            repository: repository,
+            sessionID: session.id,
+            replacementVersions: [1, 2, 3, 4, 5, 6]
+        )
         try repository.save(migrated)
         XCTAssertEqual(try repository.load(session.id), migrated)
         try assertVersionTamperingFails(

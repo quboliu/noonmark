@@ -89,6 +89,8 @@ public enum ZhulongTodoDiffError: Error, Equatable, Sendable {
     case authorizationMismatch
     case authorizationConsumed
     case digestFailure
+    case sessionBindingMismatch
+    case todoDiffRequired
 }
 
 public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
@@ -126,12 +128,31 @@ public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
         try validate()
     }
 
+    func isValidRevision(of parent: ZhulongTodoDiffDraft) -> Bool {
+        guard sessionID == parent.sessionID,
+              planArtifactID == parent.planArtifactID,
+              planArtifactVersion == parent.planArtifactVersion,
+              version == parent.version + 1,
+              sourceSnapshotDigest == parent.sourceSnapshotDigest,
+              createdAt > parent.createdAt,
+              case let .userRevision(parentDraftID, modifiedItemIDs) = source,
+              parentDraftID == parent.id
+        else { return false }
+        let previous = Dictionary(uniqueKeysWithValues: parent.items.map { ($0.id, $0.operation) })
+        let current = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.operation) })
+        let expected = Set(previous.keys).union(current.keys).filter {
+            previous[$0] != current[$0]
+        }
+        return Set(modifiedItemIDs) == Set(expected) && modifiedItemIDs.count == expected.count
+    }
+
     public init(
         id: ZhulongTodoDiffID = ZhulongTodoDiffID(),
         revising parent: ZhulongTodoDiffDraft,
         createdAt: Date = Date(),
         items: [ZhulongTodoDiffItem]
     ) throws {
+        try parent.validate()
         guard Set(items.map(\.id)).count == items.count else {
             throw ZhulongTodoDiffError.duplicateItem
         }
@@ -442,6 +463,145 @@ public struct ZhulongTodoDiffApplier: Sendable {
         guard date.timeIntervalSinceReferenceDate.isFinite else {
             throw ZhulongTodoDiffError.invalidTime
         }
+    }
+}
+
+public extension ZhulongSession {
+    var currentTodoDiff: ZhulongTodoDiffDraft? {
+        guard let artifact = effectivePlanArtifact else { return nil }
+        return todoDiffDrafts.last {
+            $0.planArtifactID == artifact.id && $0.planArtifactVersion == artifact.version
+        }
+    }
+
+    mutating func publishTodoDiff(
+        _ draft: ZhulongTodoDiffDraft,
+        now: Date = Date()
+    ) throws {
+        guard workspaceStatus == .active,
+              phase == .draftReview,
+              let artifact = effectivePlanArtifact,
+              draft.sessionID == id,
+              draft.planArtifactID == artifact.id,
+              draft.planArtifactVersion == artifact.version,
+              draft.version == 1,
+              draft.source == .providerOriginal,
+              draft.createdAt == now,
+              currentTodoDiff == nil,
+              todoDiffDrafts.contains(where: { $0.id == draft.id }) == false
+        else {
+            throw ZhulongTodoDiffError.sessionBindingMismatch
+        }
+        try draft.validate()
+        try validateActivityTime(now)
+        todoDiffDrafts.append(draft)
+        appendEvent(
+            .todoDiffPublished,
+            summary: "已发布可编辑 Todo 变更 diff",
+            reference: .todoDiff(draft.id),
+            now: now
+        )
+    }
+
+    mutating func reviseTodoDiff(
+        _ revision: ZhulongTodoDiffDraft,
+        now: Date = Date()
+    ) throws {
+        guard workspaceStatus == .active,
+              phase == .draftReview,
+              let parent = currentTodoDiff,
+              revision.sessionID == id,
+              revision.planArtifactID == parent.planArtifactID,
+              revision.planArtifactVersion == parent.planArtifactVersion,
+              revision.version == parent.version + 1,
+              revision.createdAt == now,
+              case let .userRevision(parentDraftID, _) = revision.source,
+              parentDraftID == parent.id,
+              todoWriteAuthorizations.contains(where: {
+                  $0.draftID == parent.id && $0.status == .active
+              }) == false,
+              todoApplyReceipts.contains(where: { $0.draftID == parent.id }) == false,
+              todoDiffDrafts.contains(where: { $0.id == revision.id }) == false
+        else {
+            throw ZhulongTodoDiffError.sessionBindingMismatch
+        }
+        try revision.validate()
+        try validateActivityTime(now)
+        todoDiffDrafts.append(revision)
+        appendEvent(
+            .todoDiffRevised,
+            summary: "用户已建立 Todo 变更 diff 修订版本",
+            reference: .todoDiff(revision.id),
+            now: now
+        )
+    }
+
+    @discardableResult
+    mutating func authorizeTodoWrite(
+        against engine: SuntraceEngine,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> ZhulongTodoWriteAuthorization {
+        guard workspaceStatus == .active,
+              phase == .draftReview,
+              let draft = currentTodoDiff,
+              todoApplyReceipts.contains(where: { $0.draftID == draft.id }) == false,
+              todoWriteAuthorizations.contains(where: {
+                  $0.draftID == draft.id && $0.status == .active
+              }) == false
+        else {
+            throw ZhulongTodoDiffError.todoDiffRequired
+        }
+        try validateActivityTime(now)
+        let authorization = try ZhulongTodoDiffApplier().authorize(
+            draft,
+            against: engine,
+            today: today,
+            now: now
+        )
+        todoWriteAuthorizations.append(authorization)
+        appendEvent(
+            .todoWriteAuthorized,
+            summary: "用户已对当前 Todo diff 授予一次性写入授权",
+            reference: .todoWriteAuthorization(authorization.id),
+            now: now
+        )
+        return authorization
+    }
+
+    @discardableResult
+    mutating func applyAuthorizedTodoDiff(
+        to engine: inout SuntraceEngine,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> ZhulongTodoApplyReceipt {
+        guard workspaceStatus == .active,
+              phase == .draftReview,
+              let draft = currentTodoDiff,
+              let index = todoWriteAuthorizations.lastIndex(where: {
+                  $0.draftID == draft.id && $0.status == .active
+              })
+        else {
+            throw ZhulongTodoDiffError.todoDiffRequired
+        }
+        try validateActivityTime(now)
+        var authorization = todoWriteAuthorizations[index]
+        let receipt = try ZhulongTodoDiffApplier().apply(
+            draft,
+            authorization: &authorization,
+            to: &engine,
+            today: today,
+            now: now
+        )
+        todoWriteAuthorizations[index] = authorization
+        todoApplyReceipts.append(receipt)
+        appendEvent(
+            .todoBatchApplied,
+            summary: "已原子应用 Todo diff，共 \(receipt.items.count) 项",
+            reference: .todoApplyReceipt(receipt.id),
+            now: now
+        )
+        return receipt
     }
 }
 

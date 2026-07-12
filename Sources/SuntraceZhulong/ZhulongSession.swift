@@ -103,6 +103,10 @@ public enum ZhulongSessionEventKind: String, Codable, Equatable, Sendable {
     case planningRunInvalidated
     case planningDecisionGateOpened
     case planningDecisionGateResolved
+    case todoDiffPublished
+    case todoDiffRevised
+    case todoWriteAuthorized
+    case todoBatchApplied
     case sessionPaused
     case sessionResumed
     case sessionArchived
@@ -187,6 +191,9 @@ public struct ZhulongSession: Equatable, Sendable {
     public internal(set) var decisionGates: [ZhulongDecisionGate]
     public internal(set) var decisionGateResolutions: [ZhulongDecisionGateResolution]
     public internal(set) var planArtifacts: [ZhulongPlanArtifact]
+    public internal(set) var todoDiffDrafts: [ZhulongTodoDiffDraft]
+    public internal(set) var todoWriteAuthorizations: [ZhulongTodoWriteAuthorization]
+    public internal(set) var todoApplyReceipts: [ZhulongTodoApplyReceipt]
     var hasAuthenticatedLegacyPlanningProvenance: Bool
 
     public var authorization: ZhulongScopeAuthorization? { authorizations.last }
@@ -244,6 +251,9 @@ public struct ZhulongSession: Equatable, Sendable {
         decisionGates = []
         decisionGateResolutions = []
         planArtifacts = []
+        todoDiffDrafts = []
+        todoWriteAuthorizations = []
+        todoApplyReceipts = []
         hasAuthenticatedLegacyPlanningProvenance = false
         events = [
             ZhulongSessionEvent(
@@ -277,6 +287,9 @@ public struct ZhulongSession: Equatable, Sendable {
         decisionGates: [ZhulongDecisionGate] = [],
         decisionGateResolutions: [ZhulongDecisionGateResolution] = [],
         planArtifacts: [ZhulongPlanArtifact] = [],
+        todoDiffDrafts: [ZhulongTodoDiffDraft] = [],
+        todoWriteAuthorizations: [ZhulongTodoWriteAuthorization] = [],
+        todoApplyReceipts: [ZhulongTodoApplyReceipt] = [],
         hasAuthenticatedLegacyPlanningProvenance: Bool = false
     ) {
         id = restoredID
@@ -299,6 +312,9 @@ public struct ZhulongSession: Equatable, Sendable {
         self.decisionGates = decisionGates
         self.decisionGateResolutions = decisionGateResolutions
         self.planArtifacts = planArtifacts
+        self.todoDiffDrafts = todoDiffDrafts
+        self.todoWriteAuthorizations = todoWriteAuthorizations
+        self.todoApplyReceipts = todoApplyReceipts
         self.hasAuthenticatedLegacyPlanningProvenance = hasAuthenticatedLegacyPlanningProvenance
     }
 

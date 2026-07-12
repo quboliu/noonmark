@@ -1,8 +1,90 @@
+@testable import SuntraceCore
 @testable import SuntraceZhulong
 import XCTest
 
 final class ZhulongStructuredPlanningSessionTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testTodoDiffRequiresCurrentArtifactAndConsumesOneWriteAuthorization() throws {
+        var prepared = try makePreparedSession()
+        let request = try prepared.session.beginPlanningProviderRun(
+            delegationID: prepared.delegation.id,
+            payload: makePayload(),
+            providerIdentity: makeProviderIdentity(),
+            now: now.addingTimeInterval(5)
+        )
+        try prepared.session.recordPlanningProviderResponse(
+            ZhulongProviderResponse(content: planArtifactJSON(), draftVersion: 1),
+            runID: request.runID,
+            now: now.addingTimeInterval(6)
+        )
+        var engine = SuntraceEngine()
+        let artifact = try XCTUnwrap(prepared.session.effectivePlanArtifact)
+        let draft = try ZhulongTodoDiffDraft(
+            sessionID: prepared.session.id,
+            planArtifactID: artifact.id,
+            planArtifactVersion: artifact.version,
+            planningDate: LocalDate("2026-07-12"),
+            sourceSnapshot: engine.snapshot(),
+            createdAt: now.addingTimeInterval(7),
+            items: [
+                ZhulongTodoDiffItem(
+                    operation: .createTask(
+                        title: "接入正式三视图",
+                        descriptionText: nil,
+                        note: nil,
+                        plannedSubtasks: [],
+                        targetDate: nil
+                    )
+                )
+            ]
+        )
+
+        try prepared.session.publishTodoDiff(draft, now: now.addingTimeInterval(7))
+        let revision = try ZhulongTodoDiffDraft(
+            revising: draft,
+            createdAt: now.addingTimeInterval(8),
+            items: [
+                ZhulongTodoDiffItem(
+                    id: draft.items[0].id,
+                    operation: .createTask(
+                        title: "接入正式 A/B/C 三视图",
+                        descriptionText: nil,
+                        note: nil,
+                        plannedSubtasks: [],
+                        targetDate: nil
+                    )
+                )
+            ]
+        )
+        try prepared.session.reviseTodoDiff(revision, now: now.addingTimeInterval(8))
+        _ = try prepared.session.authorizeTodoWrite(
+            against: engine,
+            today: LocalDate("2026-07-12"),
+            now: now.addingTimeInterval(9)
+        )
+        let receipt = try prepared.session.applyAuthorizedTodoDiff(
+            to: &engine,
+            today: LocalDate("2026-07-12"),
+            now: now.addingTimeInterval(10)
+        )
+
+        XCTAssertEqual(engine.chains.count, 1)
+        XCTAssertEqual(prepared.session.todoApplyReceipts, [receipt])
+        XCTAssertEqual(
+            prepared.session.events.suffix(4).map(\.kind),
+            [.todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied]
+        )
+        XCTAssertThrowsError(
+            try prepared.session.applyAuthorizedTodoDiff(
+                to: &engine,
+                today: LocalDate("2026-07-12"),
+                now: now.addingTimeInterval(11)
+            )
+        ) { error in
+            XCTAssertEqual(error as? ZhulongTodoDiffError, .todoDiffRequired)
+        }
+    }
 
     func testDelegatedRunCanStopAtDurableDecisionGateBoundToExactInputs() throws {
         var prepared = try makePreparedSession()

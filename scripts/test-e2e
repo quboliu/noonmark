@@ -25,6 +25,7 @@ scenarios=(
   "day-manual-detail|day|--select manual"
   "day-review-saved|day|--e2e-update-review --e2e-review-summary E2E自动保存反馈"
   "pool|pool|"
+  "pool-context-menu|pool|--e2e-open-pool-context-menu"
   "pool-classification-overflow|pool|--e2e-classification-overflow-via-ui --e2e-classification-overflow-ui-result-url $PWD/artifacts/e2e/pool-classification-overflow-ui.txt --e2e-ui-entry-keep-open"
   "pool-classification-manager|pool|--select first --e2e-classification-manager-via-ui --e2e-classification-manager-ui-result-url $PWD/artifacts/e2e/pool-classification-manager-ui.txt --e2e-ui-entry-keep-open"
   "pool-classification-manager-labels|pool|--select first --e2e-classification-manager-labels-via-ui --e2e-classification-manager-ui-result-url $PWD/artifacts/e2e/pool-classification-manager-labels-ui.txt --e2e-ui-entry-keep-open"
@@ -371,6 +372,115 @@ assert_clean_app_log() {
     grep -E -n "$failure_pattern" "$log_path" >&2
     exit 1
   fi
+}
+
+assert_pool_context_menu_screenshot() {
+  local screenshot="artifacts/e2e/pool-context-menu.png"
+  local ocr="artifacts/e2e/pool-context-menu-ocr.txt"
+  local ocr_log="artifacts/e2e/pool-context-menu-ocr.log"
+
+  if [[ -n "$requested_scenarios" && " $requested_scenarios " != *" pool-context-menu "* ]]; then
+    return 0
+  fi
+  if [[ ! -f "$screenshot" ]]; then
+    echo "pool context-menu screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" swift -e '
+import AppKit
+import Foundation
+import Vision
+
+guard let path = ProcessInfo.processInfo.environment["NOONMARK_E2E_OCR_IMAGE"],
+      let image = NSImage(contentsOfFile: path),
+      let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+else {
+    exit(1)
+}
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.recognitionLanguages = ["zh-Hans", "en-US"]
+request.usesLanguageCorrection = false
+try VNImageRequestHandler(cgImage: cgImage).perform([request])
+print((request.results ?? [])
+    .compactMap { $0.topCandidates(1).first?.string }
+    .joined(separator: "\n"))
+' >"$ocr" 2>"$ocr_log"; then
+    echo "pool context-menu screenshot OCR failed:" >&2
+    cat "$ocr_log" >&2
+    exit 1
+  fi
+  for expected in 排期到今天 排期到明天 选择日期 删除任务; do
+    if ! grep -Fq "$expected" "$ocr"; then
+      echo "pool context-menu is missing $expected; OCR output:" >&2
+      cat "$ocr" >&2
+      exit 1
+    fi
+  done
+  echo "E2E pool task real context menu: $screenshot"
+}
+
+assert_pool_detail_density_screenshot() {
+  local screenshot="artifacts/e2e/pool-detail.png"
+  local result="artifacts/e2e/pool-detail-density.txt"
+  local result_log="artifacts/e2e/pool-detail-density.log"
+
+  if [[ -n "$requested_scenarios" && " $requested_scenarios " != *" pool-detail "* ]]; then
+    return 0
+  fi
+  if [[ ! -f "$screenshot" ]]; then
+    echo "pool detail screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" swift -e '
+import AppKit
+import Foundation
+import Vision
+
+guard let path = ProcessInfo.processInfo.environment["NOONMARK_E2E_OCR_IMAGE"],
+      let image = NSImage(contentsOfFile: path),
+      let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+else {
+    exit(1)
+}
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.recognitionLanguages = ["zh-Hans", "en-US"]
+request.usesLanguageCorrection = false
+try VNImageRequestHandler(cgImage: cgImage).perform([request])
+let observations = request.results ?? []
+let railObservations = observations.filter { $0.boundingBox.minX > 0.70 }
+func observation(_ expected: String) -> VNRecognizedTextObservation? {
+    railObservations.first { $0.topCandidates(1).first?.string == expected }
+}
+guard let title = observation("预约年度体检"),
+      let description = observation("预约年度体检时间。")
+else {
+    print("missing deterministic pool-detail title or description")
+    exit(2)
+}
+let backingScale = CGFloat(cgImage.width) / 1000
+let visibleGap = (title.boundingBox.minY - description.boundingBox.maxY)
+    * CGFloat(cgImage.height) / backingScale
+let roundedGap = visibleGap.rounded()
+guard roundedGap >= 10, roundedGap <= 14 else {
+    print("title-description visible gap is \(visibleGap)pt; expected rounded 10...14pt")
+    exit(3)
+}
+let forbidden = Set(["更换", "排期"])
+let redundantLabels = railObservations.compactMap { $0.topCandidates(1).first?.string }.filter(forbidden.contains)
+guard redundantLabels.isEmpty else {
+    print("pool detail still contains redundant labels: \(redundantLabels)")
+    exit(4)
+}
+print(String(format: "title-description visible gap: %.2fpt", visibleGap))
+' >"$result" 2>"$result_log"; then
+    echo "pool detail density screenshot assertion failed:" >&2
+    cat "$result" >&2
+    cat "$result_log" >&2
+    exit 1
+  fi
+  echo "E2E pool detail density: $(cat "$result")"
 }
 
 run_task_note_persistence_probe() {
@@ -834,6 +944,71 @@ run_pool_list_layout_probe() {
   echo "E2E pool list layout: $default_result $minimum_result"
 }
 
+run_pool_context_menu_action_probe() {
+  local action_dir="artifacts/e2e-pool-context-menu-action"
+  local action_db="$action_dir/Noonmark.sqlite"
+  local action_result="$action_dir/result.txt"
+  local action_chain="$action_dir/chain.txt"
+  local action_log="$action_dir/app.log"
+  local chain_id
+  local persisted
+
+  rm -rf "$action_dir"
+  mkdir -p "$action_dir"
+  run_terminating_ui_probe \
+    "pool context-menu schedule action" \
+    "$action_result" \
+    "$action_log" \
+    --data-url "$PWD/$action_db" \
+    --page pool \
+    --e2e-pool-context-menu-action-result-url "$PWD/$action_result" \
+    --e2e-pool-context-menu-action-chain-url "$PWD/$action_chain"
+
+  chain_id="$(<"$action_chain")"
+  persisted="$(sqlite3 -noheader "$action_db" "
+    SELECT count(*)
+    FROM day_traces
+    WHERE chain_id = '$chain_id'
+      AND status = 'pending';
+  ")"
+  if [[ "$persisted" != "1" ]]; then
+    echo "pool context-menu schedule persistence failed: ${persisted:-missing}" >&2
+    exit 1
+  fi
+  echo "E2E pool context-menu schedule and persistence: $action_db"
+}
+
+run_markdown_editor_ui_probe() {
+  local markdown_dir="artifacts/e2e-markdown-editor"
+  local markdown_db="$markdown_dir/Noonmark.sqlite"
+  local markdown_result="$markdown_dir/result.txt"
+  local markdown_log="$markdown_dir/app.log"
+  local persisted
+
+  rm -rf "$markdown_dir"
+  mkdir -p "$markdown_dir"
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "Markdown editor native commands" \
+    "$markdown_result" \
+    "$markdown_log" \
+    --data-url "$PWD/$markdown_db" \
+    --page pool \
+    --e2e-markdown-editor-via-ui \
+    --e2e-markdown-editor-ui-result-url "$PWD/$markdown_result"
+
+  persisted="$(sqlite3 -noheader "$markdown_db" "
+    SELECT description_text
+    FROM task_definitions
+    WHERE title = 'E2E Markdown 编辑'
+      AND superseded_at IS NULL;
+  ")"
+  if [[ "$persisted" != '**alpha beta!**' ]]; then
+    echo "Markdown editor persistence probe failed: ${persisted:-missing}" >&2
+    exit 1
+  fi
+  echo "E2E Markdown native edit commands and persistence: $markdown_db"
+}
+
 run_copy_undo_persistence_probe() {
   local copy_undo_dir="artifacts/e2e-copy-undo-persistence"
   local copy_undo_db="${copy_undo_dir}/Noonmark.sqlite"
@@ -996,7 +1171,11 @@ run_terminating_ui_probe() {
   shift 3
 
   rm -f "$result"
-  "$app_executable_path" "$@" >"$log" 2>&1 &
+  if [[ "${NOONMARK_E2E_LAUNCH_WITH_OPEN:-0}" == "1" ]]; then
+    /usr/bin/open -W -n "$app_path" --args "$@" >"$log" 2>&1 &
+  else
+    "$app_executable_path" "$@" >"$log" 2>&1 &
+  fi
   pid=$!
 
   for _ in {1..120}; do
@@ -1078,6 +1257,16 @@ if [[ "${NOONMARK_E2E_POOL_LIST_LAYOUT_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_POOL_CONTEXT_ACTION_ONLY:-0}" == "1" ]]; then
+  run_pool_context_menu_action_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_MARKDOWN_ONLY:-0}" == "1" ]]; then
+  run_markdown_editor_ui_probe
+  exit 0
+fi
+
 for scenario in "${scenarios[@]}"; do
   IFS="|" read -r screenshot_name page extra_args <<< "$scenario"
   if [[ -n "$extra_args" ]]; then
@@ -1087,6 +1276,9 @@ for scenario in "${scenarios[@]}"; do
     capture_app_screenshot artifacts/e2e "$screenshot_name" "$page" --ephemeral --e2e-reset-selection
   fi
 done
+
+assert_pool_context_menu_screenshot
+assert_pool_detail_density_screenshot
 
 if [[ "${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
   terminate_e2e_app
@@ -1109,6 +1301,10 @@ run_ui_entry_probes
 run_seed_clock_probe
 
 run_pool_list_layout_probe
+
+run_pool_context_menu_action_probe
+
+run_markdown_editor_ui_probe
 
 run_window_resize_probe
 

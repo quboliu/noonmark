@@ -40,6 +40,9 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
+        store.onLanguageChange = { [weak self] in
+            self?.installMainMenu()
+        }
         store.ensureVisiblePage()
         openMainWindow()
         runLaunchAutomationIfNeeded()
@@ -109,26 +112,116 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
     }
 
     private func installMainMenu() {
+        let copy = store.copy
         let mainMenu = NSMenu()
-        let appItem = NSMenuItem(title: "晷迹", action: nil, keyEquivalent: "")
-        let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
+        let appItem = NSMenuItem(title: copy.appName, action: nil, keyEquivalent: "")
+        let editItem = NSMenuItem(title: copy.editMenu, action: nil, keyEquivalent: "")
         mainMenu.addItem(appItem)
         mainMenu.addItem(editItem)
 
-        let appMenu = NSMenu(title: "晷迹")
+        let appMenu = NSMenu(title: copy.appName)
         appItem.submenu = appMenu
-        appMenu.addItem(withTitle: "退出晷迹", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(
+            withTitle: copy.quitApp,
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
 
-        let editMenu = NSMenu(title: "编辑")
+        let editMenu = NSMenu(title: copy.editMenu)
         editItem.submenu = editMenu
-        let undoItem = editMenu.addItem(withTitle: "撤销", action: #selector(undoAction(_:)), keyEquivalent: "z")
+        let undoItem = editMenu.addItem(
+            withTitle: copy.undo,
+            action: #selector(undoAction(_:)),
+            keyEquivalent: "z"
+        )
         undoItem.target = self
+        let redoItem = editMenu.addItem(
+            withTitle: copy.redo,
+            action: #selector(redoAction(_:)),
+            keyEquivalent: "Z"
+        )
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        redoItem.target = self
+        editMenu.addItem(.separator())
+        editMenu.addItem(
+            withTitle: copy.cut,
+            action: #selector(cutAction(_:)),
+            keyEquivalent: "x"
+        ).target = self
+        editMenu.addItem(
+            withTitle: copy.copy,
+            action: #selector(copyAction(_:)),
+            keyEquivalent: "c"
+        ).target = self
+        editMenu.addItem(
+            withTitle: copy.paste,
+            action: #selector(pasteAction(_:)),
+            keyEquivalent: "v"
+        ).target = self
+        editMenu.addItem(
+            withTitle: copy.delete,
+            action: #selector(deleteTextAction(_:)),
+            keyEquivalent: ""
+        ).target = self
+        editMenu.addItem(.separator())
+        editMenu.addItem(
+            withTitle: copy.selectAll,
+            action: #selector(selectAllAction(_:)),
+            keyEquivalent: "a"
+        ).target = self
         NSApp.mainMenu = mainMenu
     }
 
     @objc private func undoAction(_ sender: Any?) {
+        if let textResponder = activeTextResponder {
+            if textResponder.undoManager?.canUndo == true {
+                textResponder.undoManager?.undo()
+            }
+            return
+        }
         guard store.showingClassificationManager == false else { return }
         store.undo()
+    }
+
+    @objc private func redoAction(_ sender: Any?) {
+        guard let textResponder = activeTextResponder,
+              textResponder.undoManager?.canRedo == true
+        else {
+            return
+        }
+        textResponder.undoManager?.redo()
+    }
+
+    @objc private func cutAction(_ sender: Any?) {
+        performTextAction(#selector(NSText.cut(_:)), sender: sender)
+    }
+
+    @objc private func copyAction(_ sender: Any?) {
+        performTextAction(#selector(NSText.copy(_:)), sender: sender)
+    }
+
+    @objc private func pasteAction(_ sender: Any?) {
+        performTextAction(#selector(NSText.paste(_:)), sender: sender)
+    }
+
+    @objc private func deleteTextAction(_ sender: Any?) {
+        performTextAction(#selector(NSText.delete(_:)), sender: sender)
+    }
+
+    @objc private func selectAllAction(_ sender: Any?) {
+        performTextAction(#selector(NSResponder.selectAll(_:)), sender: sender)
+    }
+
+    private func performTextAction(_ action: Selector, sender: Any?) {
+        guard let textResponder = activeTextResponder else { return }
+        NSApp.sendAction(action, to: textResponder, from: sender)
+    }
+
+    private var activeTextResponder: NSTextView? {
+        if let responder = NSApp.keyWindow?.firstResponder as? NSTextView {
+            return responder
+        }
+        return window?.firstResponder as? NSTextView
     }
 
     private func runLaunchAutomationIfNeeded() {
@@ -185,6 +278,8 @@ private struct LaunchAutomation {
         append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)
         append(SummarySidebarE2EAutomation.fromCommandLine(), to: &actions)
         append(PoolListLayoutE2EAutomation.fromCommandLine(), to: &actions)
+        append(PoolContextMenuActionE2EAutomation.fromCommandLine(), to: &actions)
+        append(PoolContextMenuPresentationE2EAutomation.fromCommandLine(), to: &actions)
         append(WindowResizeE2EAutomation.fromCommandLine(), to: &actions)
         append(WindowCloseBehaviorE2EAutomation.fromCommandLine(), to: &actions)
         append(LaunchSelectionE2EAutomation.fromCommandLine(), to: &actions)
@@ -246,6 +341,76 @@ private protocol LaunchAutomationRunnable {
     func run(on store: NoonmarkStore)
 }
 
+private struct PoolContextMenuPresentationE2EAutomation: LaunchAutomationRunnable {
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        guard CommandLine.arguments.contains("--e2e-open-pool-context-menu") else {
+            return nil
+        }
+        return Self()
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        store.page = .pool
+        guard let task = store.engine.taskPool().first else { return }
+        PoolContextMenuPresentationE2EDriver.start(
+            taskIdentifier: task.chain.id.description
+        )
+    }
+}
+
+private struct PoolContextMenuActionE2EAutomation: LaunchAutomationRunnable {
+    let resultURL: URL
+    let chainURL: URL
+
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        guard let resultPath = NoonmarkStore.commandLineValue(
+            after: "--e2e-pool-context-menu-action-result-url"
+        ), let chainPath = NoonmarkStore.commandLineValue(
+            after: "--e2e-pool-context-menu-action-chain-url"
+        ) else {
+            return nil
+        }
+        return Self(
+            resultURL: URL(fileURLWithPath: resultPath),
+            chainURL: URL(fileURLWithPath: chainPath)
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        store.page = .pool
+        if store.engine.taskPool().isEmpty {
+            store.poolText = "E2E 右键排期任务"
+            store.addPoolTask()
+        }
+        guard let task = store.selectedPoolTask ?? store.engine.taskPool().first else { return }
+        try? FileManager.default.createDirectory(
+            at: chainURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? task.chain.id.description.write(
+            to: chainURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        PoolContextMenuPresentationE2EDriver.selectScheduleToday(
+            taskIdentifier: task.chain.id.description,
+            resultURL: resultURL,
+            isScheduled: {
+                store.engine.taskPool().contains { $0.chain.id == task.chain.id } == false
+                    && store.engine.traces.values.contains {
+                        $0.chainID == task.chain.id
+                            && $0.date == store.today
+                            && $0.status == .pending
+                    }
+            }
+        )
+    }
+}
+
 private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
     let resultURL: URL
     let usesMinimumWindowSize: Bool
@@ -298,9 +463,6 @@ private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
                 surface: "pool-row",
                 instanceID: task.chain.id.description
             )
-            let rowNamespace = PoolTaskRowE2ENamespace(
-                taskIdentifier: task.chain.id.description
-            )
             return PoolListLayoutUIE2EExpectation(
                 taskIdentifier: task.chain.id.description,
                 title: task.definition.title,
@@ -312,10 +474,11 @@ private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
                 expectedVisibleLabelCount: adaptiveVisibleLabelCounts[
                     task.chain.id.description
                 ] ?? min(2, classification?.labels.count ?? 0),
-                actionTitlesByIdentifier: [
-                    rowNamespace.scheduleTodayIdentifier: store.copy.scheduleToday,
-                    rowNamespace.scheduleTomorrowIdentifier: store.copy.scheduleTomorrow,
-                    rowNamespace.scheduleDateIdentifier: store.copy.schedulePickDate
+                forbiddenInlineActionTitles: [
+                    store.copy.scheduleToday,
+                    store.copy.scheduleTomorrow,
+                    store.copy.chooseScheduleDate,
+                    store.copy.deleteTask
                 ]
             )
         }
@@ -863,6 +1026,7 @@ private struct UIEntryE2EAutomation: LaunchAutomationRunnable {
     private enum Mode {
         case classificationManager(selectsLabels: Bool)
         case classificationOverflow
+        case markdownEditor
         case zhulongWorkflows
     }
 
@@ -881,6 +1045,9 @@ private struct UIEntryE2EAutomation: LaunchAutomationRunnable {
         let opensClassificationOverflow = CommandLine.arguments.contains(
             "--e2e-classification-overflow-via-ui"
         )
+        let exercisesMarkdownEditor = CommandLine.arguments.contains(
+            "--e2e-markdown-editor-via-ui"
+        )
         let opensZhulongWorkflows = CommandLine.arguments.contains(
             "--e2e-zhulong-workflows-via-ui"
         )
@@ -888,6 +1055,7 @@ private struct UIEntryE2EAutomation: LaunchAutomationRunnable {
             opensClassificationManager,
             opensClassificationManagerLabels,
             opensClassificationOverflow,
+            exercisesMarkdownEditor,
             opensZhulongWorkflows
         ].filter { $0 }.count
         guard selectedModeCount == 1 else { return nil }
@@ -900,6 +1068,9 @@ private struct UIEntryE2EAutomation: LaunchAutomationRunnable {
         } else if opensClassificationOverflow {
             mode = .classificationOverflow
             resultArgument = "--e2e-classification-overflow-ui-result-url"
+        } else if exercisesMarkdownEditor {
+            mode = .markdownEditor
+            resultArgument = "--e2e-markdown-editor-ui-result-url"
         } else {
             mode = .zhulongWorkflows
             resultArgument = "--e2e-zhulong-workflows-ui-result-url"
@@ -939,6 +1110,34 @@ private struct UIEntryE2EAutomation: LaunchAutomationRunnable {
                 labels: classification.labels,
                 resultURL: resultURL,
                 keepsAppOpen: keepsAppOpen
+            )
+        case .markdownEditor:
+            if store.engine.taskPool().isEmpty {
+                store.poolText = "E2E Markdown 编辑"
+                store.addPoolTask()
+            }
+            guard let task = store.selectedPoolTask ?? store.engine.taskPool().first else {
+                try? "failed: 没有可编辑的任务池 fixture".write(
+                    to: resultURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+                return
+            }
+            let initialText = "alpha beta"
+            store.page = .pool
+            store.selectPool(task.chain.id)
+            store.updatePoolTaskText(
+                chainID: task.chain.id,
+                descriptionText: initialText
+            )
+            MarkdownEditorUIE2EDriver.start(
+                resultURL: resultURL,
+                initialText: initialText,
+                classificationMenuIdentifier: "classification.editor.category.\(task.chain.id.description)",
+                readback: {
+                    store.currentDefinition(for: task.chain.id)?.descriptionText ?? ""
+                }
             )
         case .zhulongWorkflows:
             ZhulongWorkflowE2EUIInteractionDriver.start(resultURL: resultURL)
@@ -4050,6 +4249,8 @@ private struct EnginePersistenceCommitError: LocalizedError {
 
 @MainActor
 final class NoonmarkStore: ObservableObject {
+    var onLanguageChange: (() -> Void)?
+
     private enum NoteUndoOwner: Equatable {
         case trace(DayTraceID)
         case pool(TaskChainID)
@@ -5533,9 +5734,11 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func setLanguage(_ language: AppLanguage) {
+        guard engine.preferences.language != language else { return }
         objectWillChange.send()
         engine.updateLanguage(language)
         persist()
+        onLanguageChange?()
     }
 
     func setSettingsPoemEnabled(_ enabled: Bool) {
@@ -7345,6 +7548,16 @@ struct AppCopy {
         }
     }
 
+    var editMenu: String { language == .chinese ? "编辑" : "Edit" }
+    var quitApp: String { language == .chinese ? "退出晷迹" : "Quit Noonmark" }
+    var undo: String { language == .chinese ? "撤销" : "Undo" }
+    var redo: String { language == .chinese ? "重做" : "Redo" }
+    var cut: String { language == .chinese ? "剪切" : "Cut" }
+    var copy: String { language == .chinese ? "复制" : "Copy" }
+    var paste: String { language == .chinese ? "粘贴" : "Paste" }
+    var delete: String { language == .chinese ? "删除" : "Delete" }
+    var selectAll: String { language == .chinese ? "全选" : "Select All" }
+
     var planGroup: String { language == .chinese ? "计划" : "Plan" }
     var traceGroup: String { language == .chinese ? "轨迹" : "Trace" }
     var navDay: String { "Day Todo" }
@@ -7363,14 +7576,15 @@ struct AppCopy {
     var returnToPool: String { language == .chinese ? "回池" : "Back to pool" }
     var scheduleToday: String { language == .chinese ? "排期到今天" : "Schedule today" }
     var scheduleTomorrow: String { language == .chinese ? "排期到明天" : "Schedule tomorrow" }
-    var schedulePickDate: String { language == .chinese ? "选日期…" : "Pick date…" }
     var continueTo: String { language == .chinese ? "延续到…" : "Continue to…" }
     var abandonChain: String { language == .chinese ? "废弃任务链" : "Drop chain" }
     var markComplete: String { language == .chinese ? "标记完成" : "Mark complete" }
     var undoComplete: String { language == .chinese ? "撤销完成" : "Undo complete" }
     var changeToNewTask: String { language == .chinese ? "变更为新任务…" : "Change to new task…" }
     var returnToPoolWithTrace: String { language == .chinese ? "回到任务池（留下轨迹）" : "Back to pool, keep trace" }
-    var schedulePickSpecificDate: String { language == .chinese ? "排期到指定日期…" : "Schedule to date…" }
+    var chooseScheduleDate: String { language == .chinese ? "选择日期…" : "Choose date…" }
+    var deleteTask: String { language == .chinese ? "删除任务" : "Delete task" }
+    var reactivateChain: String { language == .chinese ? "重新启用" : "Reactivate" }
     var openCurrentPending: String { language == .chinese ? "跳转到当前待完成" : "Open current pending" }
     var copyParentAsNewTask: String { language == .chinese ? "复制父任务为新任务" : "Copy parent as new task" }
     var copyParentTask: String { language == .chinese ? "复制父任务" : "Copy parent task" }
@@ -8697,6 +8911,39 @@ struct TaskContextMenu: View {
     }
 }
 
+struct PoolTaskContextMenu: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let task: PoolTask
+    let surface: String
+
+    private var accessibilityPrefix: String {
+        "pool.context.\(surface).\(task.chain.id.description)"
+    }
+
+    var body: some View {
+        Button(store.copy.scheduleToday) {
+            store.schedulePoolTask(task.chain.id, date: store.today)
+        }
+        .accessibilityIdentifier("\(accessibilityPrefix).schedule-today")
+        Button(store.copy.scheduleTomorrow) {
+            store.schedulePoolTask(
+                task.chain.id,
+                date: NoonmarkStore.offset(store.today, by: 1)
+            )
+        }
+        .accessibilityIdentifier("\(accessibilityPrefix).schedule-tomorrow")
+        Button(store.copy.chooseScheduleDate) {
+            store.showingPicker = .schedulePool(task.chain.id)
+        }
+        .accessibilityIdentifier("\(accessibilityPrefix).schedule-date")
+        Divider()
+        Button(store.copy.deleteTask, role: .destructive) {
+            store.deletePoolTask(task.chain.id)
+        }
+        .accessibilityIdentifier("\(accessibilityPrefix).delete")
+    }
+}
+
 struct TaskPoolPage: View {
     @EnvironmentObject private var store: NoonmarkStore
 
@@ -8800,87 +9047,39 @@ struct PoolTaskRow: View {
         let e2eNamespace = PoolTaskRowE2ENamespace(
             taskIdentifier: task.chain.id.description
         )
-        HStack(alignment: .top, spacing: 10) {
+        HStack(spacing: 10) {
             PoolTaskPlaceholderGlyph()
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    MarkdownInlineText(task.definition.title)
-                        .font(.noonmarkSystem(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                        .background {
-                            AppE2EViewAnchor(
-                                identifier: e2eNamespace.titleIdentifier,
-                                verificationText: task.definition.title
-                            )
-                        }
-                    if let classification = store.currentClassification(for: task.chain.id) {
-                        TaskClassificationBadges(
-                            display: .current(classification),
-                            taskTitle: task.definition.title,
-                            accessibilityNamespace: TaskClassificationAccessibilityNamespace(
-                                surface: "pool-row",
-                                instanceID: task.chain.id.description
-                            ),
-                            showsCategory: false
-                        )
-                    }
-                    Spacer(minLength: 0)
+            MarkdownInlineText(task.definition.title)
+                .font(.noonmarkSystem(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.text1)
+                .lineLimit(1)
+                .layoutPriority(1)
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: e2eNamespace.titleIdentifier,
+                        verificationText: task.definition.title
+                    )
                 }
-
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-                    SmallActionButton(store.copy.scheduleToday, tone: .accent) {
-                        store.schedulePoolTask(task.chain.id, date: store.today)
-                    }
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: e2eNamespace.scheduleTodayIdentifier,
-                            verificationText: store.copy.scheduleToday
-                        )
-                    }
-                    SmallActionButton(store.copy.scheduleTomorrow) {
-                        store.schedulePoolTask(
-                            task.chain.id,
-                            date: NoonmarkStore.offset(store.today, by: 1)
-                        )
-                    }
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: e2eNamespace.scheduleTomorrowIdentifier,
-                            verificationText: store.copy.scheduleTomorrow
-                        )
-                    }
-                    SmallActionButton(store.copy.schedulePickDate) {
-                        store.showingPicker = .schedulePool(task.chain.id)
-                    }
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: e2eNamespace.scheduleDateIdentifier,
-                            verificationText: store.copy.schedulePickDate
-                        )
-                    }
-                    Button(role: .destructive) {
-                        store.deletePoolTask(task.chain.id)
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.noonmarkSystem(size: 11, weight: .semibold))
-                            .frame(width: 22, height: 22)
-                            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.warn)
-                    .help("删除任务")
-                }
+            if let classification = store.currentClassification(for: task.chain.id) {
+                TaskClassificationBadges(
+                    display: .current(classification),
+                    taskTitle: task.definition.title,
+                    accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                        surface: "pool-row",
+                        instanceID: task.chain.id.description
+                    ),
+                    showsCategory: false
+                )
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
         .listRowSurface(selected: selected, tint: Theme.navPool, separatorLeadingInset: 40)
         .onTapGesture { store.selectPool(task.chain.id) }
+        .contextMenu {
+            PoolTaskContextMenu(task: task, surface: "task-row")
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("pool.task.\(task.chain.id.description)")
         .accessibilityLabel("任务「\(task.definition.title)」")
@@ -9011,8 +9210,7 @@ struct FuturePlanRow: View {
         .onTapGesture { store.selectTrace(item.trace.id) }
         .contextMenu {
             Button("查看详情") { store.selectTrace(item.trace.id) }
-            Button("改期…") { store.showingPicker = .reschedule(item.trace.id) }
-            Button("回到任务池") { store.returnToPool(item.trace.id) }
+            TaskContextMenu(trace: item.trace)
         }
     }
 
@@ -9101,6 +9299,28 @@ private extension UnfinishedPoolItem {
     }
 }
 
+struct UnfinishedTaskContextMenu: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let item: UnfinishedPoolItem
+
+    var body: some View {
+        if item.activeTrace == nil, let source = item.unfinishedTraces.last {
+            if item.isAbandoned {
+                Button(store.copy.reactivateChain) {
+                    store.reactivateAbandonedChain(from: source.id)
+                }
+            } else {
+                Button(store.copy.continueTo) {
+                    store.showingPicker = .continueTrace(source.id)
+                }
+                Button(store.copy.abandonChain, role: .destructive) {
+                    store.abandon(source.id)
+                }
+            }
+        }
+    }
+}
+
 struct UnfinishedRow: View {
     @EnvironmentObject private var store: NoonmarkStore
     let item: UnfinishedPoolItem
@@ -9136,16 +9356,6 @@ struct UnfinishedRow: View {
                     }
                 }
                 Spacer()
-                if item.activeTrace == nil, let source = item.unfinishedTraces.last {
-                    HStack(spacing: 8) {
-                        if item.isAbandoned {
-                            SmallActionButton("重新启用", tone: .accent) { store.reactivateAbandonedChain(from: source.id) }
-                        } else {
-                            SmallActionButton(store.copy.continueTo, tone: .accent) { store.showingPicker = .continueTrace(source.id) }
-                            SmallActionButton(store.copy.abandonChain, tone: .warn) { store.abandon(source.id) }
-                        }
-                    }
-                }
             }
             HStack(spacing: 8) {
                 Text(item.isAbandoned ? "已废弃" : store.copy.unfinishedMissedCount(item.unfinishedTraces.count))
@@ -9203,6 +9413,9 @@ struct UnfinishedRow: View {
         .padding(.vertical, 10)
         .listRowSurface(selected: selected, tint: Theme.accent, separatorLeadingInset: 40)
         .onTapGesture { store.selectUnfinished(item.chain.id) }
+        .contextMenu {
+            UnfinishedTaskContextMenu(item: item)
+        }
     }
 }
 
@@ -9336,23 +9549,17 @@ struct CompletedRow: View {
                 Spacer()
                 CompletionTimeText(time: NoonmarkStore.displayTime(item.trace.completedAt))
             }
-            HStack(alignment: .center, spacing: 8) {
-                CompletedTrajectoryNodes(nodes: item.trajectory.traces.map(CompletedTrajectoryNode.init(trace:)))
-                    .padding(.leading, 28)
-                Spacer()
-                SmallActionButton(store.copy.openDay) {
-                    store.selectedDate = item.trace.date
-                    store.page = .day
-                    store.selectTrace(item.trace.id)
-                }
-                SmallActionButton(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
-            }
+            CompletedTrajectoryNodes(nodes: item.trajectory.traces.map(CompletedTrajectoryNode.init(trace:)))
+                .padding(.leading, 28)
         }
         .frame(minHeight: 52, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
         .listRowSurface(selected: isSelected, tint: Theme.accent, separatorLeadingInset: 40)
         .onTapGesture { store.selectCompleted(item.trace.id) }
+        .contextMenu {
+            CompletedTaskContextMenu(item: item)
+        }
     }
 }
 
@@ -9388,23 +9595,49 @@ struct CompletedSubtaskRow: View {
                 Spacer()
                 CompletionKindPill(text: "子任务", color: Theme.accent)
             }
-            HStack(alignment: .center, spacing: 8) {
-                CompletedTrajectoryNodes(nodes: [CompletedTrajectoryNode(subtask: record.subtask, date: record.date)])
-                    .padding(.leading, 28)
-                Spacer()
-                SmallActionButton(store.copy.openDay) {
-                    store.selectedDate = record.date
-                    store.page = .day
-                    store.selectTrace(record.parentTrace.id)
-                }
-                SmallActionButton(store.copy.copyAsNewTask) { store.copyAsNewTask(record.parentTrace.id) }
-            }
+            CompletedTrajectoryNodes(nodes: [CompletedTrajectoryNode(subtask: record.subtask, date: record.date)])
+                .padding(.leading, 28)
         }
         .frame(minHeight: 66, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
         .listRowSurface(selected: isSelected, tint: Theme.accent, separatorLeadingInset: 40)
         .onTapGesture { store.selectCompletedSubtask(record.subtask.id) }
+        .contextMenu {
+            CompletedSubtaskContextMenu(record: record)
+        }
+    }
+}
+
+struct CompletedTaskContextMenu: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let item: CompletedPoolItem
+
+    var body: some View {
+        Button(store.copy.openDay) {
+            store.selectedDate = item.trace.date
+            store.page = .day
+            store.selectTrace(item.trace.id)
+        }
+        Button(store.copy.copyAsNewTask) {
+            store.copyAsNewTask(item.trace.id)
+        }
+    }
+}
+
+struct CompletedSubtaskContextMenu: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let record: CompletedSubtaskRecord
+
+    var body: some View {
+        Button(store.copy.openDay) {
+            store.selectedDate = record.date
+            store.page = .day
+            store.selectTrace(record.parentTrace.id)
+        }
+        Button(store.copy.copyParentAsNewTask) {
+            store.copyAsNewTask(record.parentTrace.id)
+        }
     }
 }
 
@@ -11312,6 +11545,9 @@ struct PoolSummaryQueueRow: View {
             idleStroke: .clear,
             hoverStroke: Theme.line
         )
+        .contextMenu {
+            PoolTaskContextMenu(task: task, surface: "summary-row")
+        }
     }
 }
 
@@ -11613,7 +11849,8 @@ struct EditableDetailTitleRow<Trailing: View>: View {
                     style: .title,
                     showsSurface: false,
                     onCommit: commitDraft,
-                    onEndEditing: commitDraft
+                    onEndEditing: commitDraft,
+                    nativeAccessibilityIdentifier: "detail.title"
                 )
                     .onChange(of: title) { _, newValue in
                         if draft != newValue {
@@ -11658,6 +11895,22 @@ extension EditableDetailTitleRow where Trailing == EmptyView {
     }
 }
 
+struct DetailPrimaryText<Title: View, Description: View>: View {
+    @ViewBuilder let title: Title
+    @ViewBuilder let description: Description
+
+    var body: some View {
+        VStack(
+            alignment: .leading,
+            spacing: NoonmarkVisualMetrics.detailTitleDescriptionSpacing
+        ) {
+            title
+            description
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct DetailDescriptionBlock: View {
     @Binding var text: String
     let placeholder: String
@@ -11669,7 +11922,8 @@ struct DetailDescriptionBlock: View {
             placeholder: placeholder,
             editable: editable,
             warm: false,
-            fallback: "未填写描述"
+            fallback: "未填写描述",
+            nativeAccessibilityIdentifier: "detail.description"
         )
     }
 }
@@ -11682,20 +11936,21 @@ struct CompletedRecordDetail: View {
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader("任务详情", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
-                    Button(store.copy.openDay) { openDay() }
-                    Button(store.copy.copyAsNewTask) { store.copyAsNewTask(item.trace.id) }
+                    CompletedTaskContextMenu(item: item)
                 })
             })
-            DetailTitleRow(item.definition.title)
-
-            DetailDescriptionBlock(
-                text: Binding(
-                    get: { item.trace.descriptionText ?? item.definition.descriptionText ?? "" },
-                    set: { store.updateTraceText(traceID: item.trace.id, descriptionText: $0) }
-                ),
-                placeholder: "补充这个任务的背景、目标或范围…",
-                editable: false
-            )
+            DetailPrimaryText {
+                DetailTitleRow(item.definition.title)
+            } description: {
+                DetailDescriptionBlock(
+                    text: Binding(
+                        get: { item.trace.descriptionText ?? item.definition.descriptionText ?? "" },
+                        set: { store.updateTraceText(traceID: item.trace.id, descriptionText: $0) }
+                    ),
+                    placeholder: "补充这个任务的背景、目标或范围…",
+                    editable: false
+                )
+            }
 
             HStack(spacing: 8) {
                 StatusChip(status: .completed)
@@ -11725,12 +11980,6 @@ struct CompletedRecordDetail: View {
                 placeholder: store.copy.noteComposerPlaceholder
             )
         }
-    }
-
-    private func openDay() {
-        store.selectedDate = item.trace.date
-        store.page = .day
-        store.selectTrace(item.trace.id)
     }
 }
 
@@ -11837,8 +12086,7 @@ struct CompletedSubtaskDetail: View {
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader("子任务完成记录", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
-                    Button(store.copy.openDay) { openDay() }
-                    Button(store.copy.copyParentAsNewTask) { store.copyAsNewTask(record.parentTrace.id) }
+                    CompletedSubtaskContextMenu(record: record)
                 })
             })
             DetailTitleRow(record.subtask.title)
@@ -11875,7 +12123,6 @@ struct CompletedSubtaskDetail: View {
                         .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(3)
-                    SmallActionButton(store.copy.openDay, tone: .accent) { openDay() }
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -11886,18 +12133,7 @@ struct CompletedSubtaskDetail: View {
             DetailSection("完成节点") {
                 CompletedTrajectoryPanel(nodes: [CompletedTrajectoryNode(subtask: record.subtask, date: record.date)])
             }
-
-            HStack(spacing: 8) {
-                SmallActionButton(store.copy.openDay, tone: .accent) { openDay() }
-                SmallActionButton(store.copy.copyParentTask) { store.copyAsNewTask(record.parentTrace.id) }
-            }
         }
-    }
-
-    private func openDay() {
-        store.selectedDate = record.date
-        store.page = .day
-        store.selectTrace(record.parentTrace.id)
     }
 }
 
@@ -11965,18 +12201,20 @@ struct TaskDetail: View {
                     TaskContextMenu(trace: trace)
                 })
             })
-            EditableDetailTitleRow(definition.title, editable: canRenameTitle) {
-                store.renameTraceTitle(traceID: trace.id, title: $0)
+            DetailPrimaryText {
+                EditableDetailTitleRow(definition.title, editable: canRenameTitle) {
+                    store.renameTraceTitle(traceID: trace.id, title: $0)
+                }
+            } description: {
+                DetailDescriptionBlock(
+                    text: Binding(
+                        get: { trace.descriptionText ?? definition.descriptionText ?? "" },
+                        set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
+                    ),
+                    placeholder: "补充这个任务的背景、目标或范围…",
+                    editable: canEditText
+                )
             }
-
-            DetailDescriptionBlock(
-                text: Binding(
-                    get: { trace.descriptionText ?? definition.descriptionText ?? "" },
-                    set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
-                ),
-                placeholder: "补充这个任务的背景、目标或范围…",
-                editable: canEditText
-            )
 
             HStack {
                 StatusChip(status: trace.status)
@@ -12228,31 +12466,28 @@ struct EditableDetailText: View {
     let editable: Bool
     let warm: Bool
     let fallback: String
+    var nativeAccessibilityIdentifier: String?
 
     var body: some View {
         if editable {
             MarkdownEditor(
                 text: normalizedBinding,
                 placeholder: placeholder,
-                style: .body,
-                warm: warm
+                style: .detailBody,
+                warm: warm,
+                showsSurface: false,
+                nativeAccessibilityIdentifier: nativeAccessibilityIdentifier
             )
                 .italic(warm)
                 .foregroundStyle(warm ? Theme.text2 : Theme.text1)
-                .frame(minHeight: 86)
-                .background(RoundedRectangle(cornerRadius: 7).fill(warm ? Theme.noteBackground : Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             MarkdownText(text, fallback: fallback)
                 .font(.noonmarkSystem(size: 12))
                 .italic(warm)
                 .foregroundStyle(warm ? Theme.text2 : Theme.text2)
                 .lineSpacing(3)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(warm ? Theme.noteBackground : Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
         }
     }
 
@@ -12670,20 +12905,23 @@ struct PoolDetail: View {
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader("任务池", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
-                    Button("删除任务", role: .destructive) { store.deletePoolTask(task.chain.id) }
+                    PoolTaskContextMenu(task: task, surface: "detail-overflow")
                 })
             })
-            EditableDetailTitleRow(task.definition.title, editable: true) {
-                store.renamePoolTask(chainID: task.chain.id, title: $0)
+            DetailPrimaryText {
+                EditableDetailTitleRow(task.definition.title, editable: true) {
+                    store.renamePoolTask(chainID: task.chain.id, title: $0)
+                }
+            } description: {
+                DetailDescriptionBlock(
+                    text: Binding(
+                        get: { task.definition.descriptionText ?? "" },
+                        set: { store.updatePoolTaskText(chainID: task.chain.id, descriptionText: $0) }
+                    ),
+                    placeholder: "补充这个任务的背景、目标或范围…",
+                    editable: true
+                )
             }
-            DetailDescriptionBlock(
-                text: Binding(
-                    get: { task.definition.descriptionText ?? "" },
-                    set: { store.updatePoolTaskText(chainID: task.chain.id, descriptionText: $0) }
-                ),
-                placeholder: "补充这个任务的背景、目标或范围…",
-                editable: true
-            )
             HStack {
                 StatusPill(text: "未排期", color: Theme.accent)
                 Text("任务链仍在任务池")
@@ -12711,15 +12949,6 @@ struct PoolDetail: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            }
-            DetailSection("排期") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        SmallActionButton(store.copy.scheduleToday, tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
-                        SmallActionButton(store.copy.scheduleTomorrow) { store.schedulePoolTask(task.chain.id, date: NoonmarkStore.offset(store.today, by: 1)) }
-                    }
-                    SmallActionButton(store.copy.schedulePickSpecificDate) { store.showingPicker = .schedulePool(task.chain.id) }
-                }
             }
             PoolNotesSection(chainID: task.chain.id, entries: task.chain.activeNoteEntries)
         }
@@ -12859,22 +13088,23 @@ struct FuturePlanDetail: View {
             DetailHeader("计划详情", onClose: { store.clearSelection() }, trailing: {
                 IconMenuButton(menuContent: {
                     Button(store.copy.openDay) { openDay() }
-                    Button(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
-                    Button(store.copy.returnToPool) { store.returnToPool(trace.id) }
+                    TaskContextMenu(trace: trace)
                 })
             })
-            EditableDetailTitleRow(definition.title, editable: true) {
-                store.renameTraceTitle(traceID: trace.id, title: $0)
+            DetailPrimaryText {
+                EditableDetailTitleRow(definition.title, editable: true) {
+                    store.renameTraceTitle(traceID: trace.id, title: $0)
+                }
+            } description: {
+                DetailDescriptionBlock(
+                    text: Binding(
+                        get: { trace.descriptionText ?? definition.descriptionText ?? "" },
+                        set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
+                    ),
+                    placeholder: "补充这个计划的背景、目标或范围…",
+                    editable: true
+                )
             }
-
-            DetailDescriptionBlock(
-                text: Binding(
-                    get: { trace.descriptionText ?? definition.descriptionText ?? "" },
-                    set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
-                ),
-                placeholder: "补充这个计划的背景、目标或范围…",
-                editable: true
-            )
 
             HStack(spacing: 8) {
                 PlanMetaPill(text: "计划草稿", color: Theme.navFuture)
@@ -12896,16 +13126,6 @@ struct FuturePlanDetail: View {
                 taskTitle: definition.title,
                 editable: true
             )
-
-            DetailSection("计划操作") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        SmallActionButton(store.copy.openDay, tone: .accent) { openDay() }
-                        SmallActionButton(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
-                    }
-                    SmallActionButton(store.copy.returnToPool) { store.returnToPool(trace.id) }
-                }
-            }
 
             DetailSection("任务轨迹") {
                 Timeline(trace: trace)
@@ -12968,14 +13188,22 @@ struct UnfinishedDetail: View {
     var body: some View {
         if let trace = detailTrace {
             VStack(alignment: .leading, spacing: 14) {
-                DetailHeader("任务详情", onClose: { store.clearSelection() })
-                DetailTitleRow(item.definition.title)
-
-                DetailDescriptionBlock(
-                    text: .constant(trace.descriptionText ?? item.definition.descriptionText ?? ""),
-                    placeholder: "",
-                    editable: false
-                )
+                DetailHeader("任务详情", onClose: { store.clearSelection() }, trailing: {
+                    if item.activeTrace == nil {
+                        IconMenuButton(menuContent: {
+                            UnfinishedTaskContextMenu(item: item)
+                        })
+                    }
+                })
+                DetailPrimaryText {
+                    DetailTitleRow(item.definition.title)
+                } description: {
+                    DetailDescriptionBlock(
+                        text: .constant(trace.descriptionText ?? item.definition.descriptionText ?? ""),
+                        placeholder: "",
+                        editable: false
+                    )
+                }
 
                 HStack(spacing: 8) {
                     StatusChip(status: item.isAbandoned ? .abandoned : .unfinished)
@@ -12991,10 +13219,6 @@ struct UnfinishedDetail: View {
                         : "历史事实只读，不可删除或改写。",
                     tone: .locked
                 )
-
-                if item.isAbandoned {
-                    SmallActionButton("重新启用", tone: .accent) { store.reactivateAbandonedChain(from: trace.id) }
-                }
 
                 DetailProgressSection(
                     traceID: trace.id,
@@ -13026,6 +13250,7 @@ struct UnfinishedDetail: View {
 }
 
 struct UnfinishedTraceContextCard: View {
+    @EnvironmentObject private var store: NoonmarkStore
     let item: UnfinishedPoolItem
     let trace: DayTrace
 
@@ -13038,7 +13263,12 @@ struct UnfinishedTraceContextCard: View {
             if let active = item.activeTrace {
                 Text("·")
                     .foregroundStyle(Theme.text3)
-                Text("已延续到 \(NoonmarkStore.displayDate(active.date))")
+                Button("已延续到 \(NoonmarkStore.displayDate(active.date)) →") {
+                    store.selectedDate = active.date
+                    store.page = .day
+                    store.selectTrace(active.id)
+                }
+                .buttonStyle(.plain)
                     .foregroundStyle(Theme.accent)
             }
             Spacer(minLength: 0)

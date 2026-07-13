@@ -11,9 +11,6 @@ struct PoolTaskRowE2ENamespace {
     }
 
     var titleIdentifier: String { "\(rawValue).title" }
-    var scheduleTodayIdentifier: String { "\(rawValue).action.schedule-today" }
-    var scheduleTomorrowIdentifier: String { "\(rawValue).action.schedule-tomorrow" }
-    var scheduleDateIdentifier: String { "\(rawValue).action.schedule-date" }
 }
 
 struct PoolListLayoutUIE2EExpectation {
@@ -21,7 +18,7 @@ struct PoolListLayoutUIE2EExpectation {
     let title: String
     let labelNamesByIdentifier: [String: String]
     let expectedVisibleLabelCount: Int
-    let actionTitlesByIdentifier: [String: String]
+    let forbiddenInlineActionTitles: [String]
 }
 
 @MainActor
@@ -82,7 +79,7 @@ enum PoolListLayoutUIE2EDriver {
                 if let failure = classificationFailure(for: expectation) {
                     return failure
                 }
-                if let failure = actionFailure(for: expectation) {
+                if let failure = inlineActionFailure(for: expectation) {
                     return failure
                 }
                 if let failure = titleFailure(for: expectation) {
@@ -165,26 +162,14 @@ enum PoolListLayoutUIE2EDriver {
             return nil
         }
 
-        private func actionFailure(
+        private func inlineActionFailure(
             for expectation: PoolListLayoutUIE2EExpectation
         ) -> String? {
-            for (identifier, title) in expectation.actionTitlesByIdentifier {
-                guard let actionView = AppViewTreeE2E.view(identifier: identifier) else {
-                    return "failed: 缺少任务池排期操作：\(expectation.title) / \(title)"
-                }
-                let requiredWidth = measuredWidth(
-                    title,
-                    font: .noonmarkSystemFont(ofSize: 11.5)
-                ) + 18
-                let actualWidth = AppViewTreeE2E.frameInWindow(for: actionView).width
-                guard AppViewTreeE2E.verificationText(for: actionView) == title,
-                      actualWidth + 1 >= requiredWidth,
-                      isFullyVisible(actionView)
-                else {
-                    return "failed: 任务池排期文案被挤压：\(expectation.title) / \(title) actual=\(rounded(actualWidth)) required=\(rounded(requiredWidth))"
-                }
-            }
-            return nil
+            let visibleButtonLabels = AppViewTreeE2E.visibleButtonLabels()
+            guard let title = expectation.forbiddenInlineActionTitles.first(where: {
+                visibleButtonLabels.contains($0)
+            }) else { return nil }
+            return "failed: 任务池低频操作仍常驻列表行：\(expectation.title) / \(title)"
         }
 
         private func titleFailure(

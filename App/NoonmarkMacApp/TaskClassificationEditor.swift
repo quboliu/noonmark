@@ -50,21 +50,13 @@ struct TaskClassificationEditor: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 editorFieldLabel("分组")
-
-                if let selectedCategory {
-                    categoryChip(selectedCategory)
-                } else {
-                    Text("无分组")
-                        .font(.noonmarkSystem(size: 11))
-                        .foregroundStyle(Theme.text3)
-                }
+                categoryMenu
 
                 Spacer(minLength: 6)
                 if showsSavedStatus {
                     savedStatus
                         .transition(.opacity.combined(with: .scale(scale: 0.94)))
                 }
-                categoryMenu
                 ClassificationManagerButton()
                     .fixedSize(horizontal: true, vertical: false)
             }
@@ -118,23 +110,31 @@ struct TaskClassificationEditor: View {
                 isCreatingGroup = true
             }
         } label: {
-            HStack(spacing: 4) {
-                Text(selectedCategoryID == nil ? "选择" : "更换")
-                Image(systemName: "chevron.down")
-                    .font(.noonmarkSystem(size: 7, weight: .bold))
+            if let selectedCategory {
+                categoryChip(selectedCategory)
+            } else {
+                HStack(spacing: 5) {
+                    Text("无分组")
+                        .font(.noonmarkSystem(size: 11))
+                    Image(systemName: "chevron.down")
+                        .font(.noonmarkSystem(size: 7, weight: .bold))
+                }
+                .foregroundStyle(Theme.text3)
+                .padding(.horizontal, 7)
+                .frame(height: 24)
+                .contentShape(Rectangle())
             }
-            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-            .foregroundStyle(Theme.accent)
-            .padding(.horizontal, 7)
-            .frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accentSoft.opacity(0.52)))
-            .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .accessibilityIdentifier("classification.editor.category.\(chainID.description)")
         .accessibilityLabel("任务「\(taskTitle)」的分组")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "classification.editor.category.\(chainID.description)",
+                verificationText: selectedCategory?.name ?? "无分组"
+            )
+        }
     }
 
     private func categoryChip(_ category: ClassificationCatalogItemProjection) -> some View {
@@ -148,6 +148,9 @@ struct TaskClassificationEditor: View {
                 .foregroundStyle(Theme.text1)
                 .lineLimit(1)
                 .help(category.name)
+            Image(systemName: "chevron.down")
+                .font(.noonmarkSystem(size: 7, weight: .bold))
+                .foregroundStyle(Theme.text3)
         }
         .padding(.horizontal, 7)
         .frame(height: 24)

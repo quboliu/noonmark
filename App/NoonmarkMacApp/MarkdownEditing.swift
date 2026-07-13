@@ -5,21 +5,44 @@ import SwiftUI
 enum MarkdownEditorStyle {
     case title
     case body
+    case detailBody
     case compact
 
     var font: NSFont {
         switch self {
         case .title: .noonmarkSystemFont(ofSize: 14, weight: .semibold)
-        case .body: .noonmarkSystemFont(ofSize: 12)
+        case .body, .detailBody: .noonmarkSystemFont(ofSize: 12)
         case .compact: .noonmarkSystemFont(ofSize: 12.5, weight: .medium)
         }
     }
 
     var minimumHeight: CGFloat {
         switch self {
-        case .title: 58
-        case .body: 86
+        case .title: NoonmarkVisualMetrics.detailTitleMinimumHeight
+        case .body: 54
+        case .detailBody: NoonmarkVisualMetrics.detailDescriptionMinimumHeight
         case .compact: 32
+        }
+    }
+
+    var maximumHeight: CGFloat {
+        switch self {
+        case .title: NoonmarkVisualMetrics.detailTitleMaximumHeight
+        case .detailBody: NoonmarkVisualMetrics.detailDescriptionMaximumHeight
+        case .body: 132
+        case .compact: 32
+        }
+    }
+
+    var textContainerInset: NSSize {
+        switch self {
+        case .title, .detailBody:
+            NSSize(
+                width: NoonmarkVisualMetrics.detailTextInset,
+                height: NoonmarkVisualMetrics.detailTextInset
+            )
+        case .body, .compact:
+            NSSize(width: 5, height: 6)
         }
     }
 }
@@ -37,7 +60,7 @@ struct MarkdownEditor: View {
     var nativeAccessibilityIdentifier: String?
 
     var body: some View {
-        MarkdownTextViewRepresentable(
+        let editor = MarkdownTextViewRepresentable(
             text: $text,
             style: style,
             commitsOnReturn: commitsOnReturn,
@@ -46,15 +69,24 @@ struct MarkdownEditor: View {
             accessibilityLabel: placeholder,
             nativeAccessibilityIdentifier: nativeAccessibilityIdentifier
         )
-            .frame(height: height ?? style.minimumHeight)
+        Group {
+            if let height {
+                editor.frame(height: height)
+            } else {
+                editor.frame(
+                    minHeight: style.minimumHeight,
+                    maxHeight: style.maximumHeight
+                )
+            }
+        }
             .background(showsSurface ? (warm ? Theme.noteBackground : Theme.panel2) : Color.clear)
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
                     Text(placeholder)
                         .font(.noonmarkSystem(size: style == .title ? 14 : 12))
                         .foregroundStyle(Theme.text3)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 8)
+                        .padding(.horizontal, style.textContainerInset.width)
+                        .padding(.vertical, style.textContainerInset.height)
                         .allowsHitTesting(false)
                 }
             }
@@ -93,7 +125,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.allowsUndo = true
-        textView.textContainerInset = NSSize(width: 5, height: 6)
+        textView.textContainerInset = style.textContainerInset
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -125,6 +157,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             )
         }
         textView.font = style.font
+        textView.textContainerInset = style.textContainerInset
         textView.commitsOnReturn = commitsOnReturn
         textView.commitAction = onCommit
         scrollView.setAccessibilityLabel(accessibilityLabel)
@@ -139,6 +172,38 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         }
         context.coordinator.text = $text
         context.coordinator.onEndEditing = onEndEditing
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView scrollView: NSScrollView,
+        context: Context
+    ) -> CGSize? {
+        guard let width = proposal.width, width > 0,
+              let textView = scrollView.documentView as? MarkdownNSTextView
+        else {
+            return nil
+        }
+        let horizontalInsets = textView.textContainerInset.width * 2
+        let verticalInsets = textView.textContainerInset.height * 2
+        let availableWidth = max(1, width - horizontalInsets)
+        let source = textView.string.isEmpty ? " " : textView.string
+        let measured = (source as NSString).boundingRect(
+            with: NSSize(
+                width: availableWidth,
+                height: CGFloat.greatestFiniteMagnitude
+            ),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: style.font]
+        )
+        let contentHeight = ceil(measured.height + verticalInsets)
+        return CGSize(
+            width: width,
+            height: min(
+                max(contentHeight, style.minimumHeight),
+                style.maximumHeight
+            )
+        )
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {

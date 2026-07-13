@@ -20,6 +20,23 @@ enum NoonmarkVisualMetrics {
     static let detailPadding = CGFloat(MacUIShellLayout.detailPadding)
     static let navigationRowHeight = CGFloat(MacUIShellLayout.navigationRowHeight)
 
+    static let detailTitleDescriptionSpacing = CGFloat(
+        MacUIDetailEditorLayout.titleDescriptionSpacing
+    )
+    static let detailTitleMinimumHeight = CGFloat(
+        MacUIDetailEditorLayout.titleHeight.lowerBound
+    )
+    static let detailTitleMaximumHeight = CGFloat(
+        MacUIDetailEditorLayout.titleHeight.upperBound
+    )
+    static let detailDescriptionMinimumHeight = CGFloat(
+        MacUIDetailEditorLayout.descriptionHeight.lowerBound
+    )
+    static let detailDescriptionMaximumHeight = CGFloat(
+        MacUIDetailEditorLayout.descriptionHeight.upperBound
+    )
+    static let detailTextInset = CGFloat(MacUIDetailEditorLayout.textInset)
+
     static let trafficLightDiameter = CGFloat(MacUIIconMetrics.trafficLightDiameter)
     static let trafficLightHitTarget = CGFloat(MacUIIconMetrics.trafficLightHitTarget)
     static let clockLogoSize = CGFloat(MacUIIconMetrics.clockLogoSize)

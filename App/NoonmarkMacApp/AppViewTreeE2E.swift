@@ -52,6 +52,28 @@ enum AppViewTreeE2E {
         return nil
     }
 
+    static func visibleButtonLabels() -> Set<String> {
+        Set(currentVisibleViews().compactMap { view in
+            guard let button = view as? NSButton else { return nil }
+            let candidates = [button.title, button.toolTip, button.accessibilityLabel()]
+            return candidates.compactMap { $0 }.first { $0.isEmpty == false }
+        })
+    }
+
+    static func button(overlapping anchor: NSView) -> NSButton? {
+        let anchorFrame = frameInWindow(for: anchor)
+        let anchorArea = anchorFrame.width * anchorFrame.height
+        guard anchorArea > 0 else { return nil }
+        let matches = currentVisibleViews().compactMap { view -> NSButton? in
+            guard let button = view as? NSButton else { return nil }
+            let intersection = anchorFrame.intersection(frameInWindow(for: button))
+            let intersectionArea = intersection.width * intersection.height
+            return intersectionArea >= anchorArea * 0.8 ? button : nil
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
     static func frameInWindow(for view: NSView) -> NSRect {
         view.convert(view.bounds, to: nil)
     }
@@ -97,6 +119,89 @@ enum AppViewTreeE2E {
     static func click(identifier: String) -> Bool {
         guard let view = view(identifier: identifier) else { return false }
         return click(view)
+    }
+
+    static func rightClick(_ view: NSView) -> Bool {
+        guard let events = rightClickEvents(for: view),
+              let window = view.window
+        else { return false }
+        // Deliver mouseDown synchronously so SwiftUI enters the native menu
+        // tracking loop before the queued mouseUp is consumed. Posting both
+        // events was racy whenever the E2E bundle could not become frontmost.
+        NSApp.postEvent(events.mouseUp, atStart: false)
+        window.sendEvent(events.mouseDown)
+        return true
+    }
+
+    static func selectFirstContextMenuItem(of view: NSView) -> Bool {
+        guard let events = rightClickEvents(for: view),
+              let window = view.window,
+              let downArrow = NSEvent.keyEvent(
+                  with: .keyDown,
+                  location: .zero,
+                  modifierFlags: [],
+                  timestamp: ProcessInfo.processInfo.systemUptime + 0.04,
+                  windowNumber: window.windowNumber,
+                  context: nil,
+                  characters: String(UnicodeScalar(NSDownArrowFunctionKey)!),
+                  charactersIgnoringModifiers: String(UnicodeScalar(NSDownArrowFunctionKey)!),
+                  isARepeat: false,
+                  keyCode: 125
+              ), let confirm = NSEvent.keyEvent(
+                  with: .keyDown,
+                  location: .zero,
+                  modifierFlags: [],
+                  timestamp: ProcessInfo.processInfo.systemUptime + 0.05,
+                  windowNumber: window.windowNumber,
+                  context: nil,
+                  characters: "\r",
+                  charactersIgnoringModifiers: "\r",
+                  isARepeat: false,
+                  keyCode: 36
+              )
+        else {
+            return false
+        }
+        for event in [events.mouseUp, downArrow, confirm] {
+            NSApp.postEvent(event, atStart: false)
+        }
+        window.sendEvent(events.mouseDown)
+        return true
+    }
+
+    private static func rightClickEvents(
+        for view: NSView
+    ) -> (mouseDown: NSEvent, mouseUp: NSEvent)? {
+        guard isVisible(view), let window = view.window else { return nil }
+        let point = view.convert(
+            NSPoint(x: view.bounds.midX, y: view.bounds.midY),
+            to: nil
+        )
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        guard let mouseDown = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: point,
+            modifierFlags: [],
+            timestamp: timestamp,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ), let mouseUp = NSEvent.mouseEvent(
+            with: .rightMouseUp,
+            location: point,
+            modifierFlags: [],
+            timestamp: timestamp + 0.01,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 0
+        ) else {
+            return nil
+        }
+        return (mouseDown, mouseUp)
     }
 
     static func writeDump(beside resultURL: URL) {

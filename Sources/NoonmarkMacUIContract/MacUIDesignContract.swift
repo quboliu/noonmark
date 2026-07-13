@@ -190,9 +190,13 @@ public enum MacUITaskPoolElement: String, CaseIterable, Sendable {
     case description
     case newTaskInput
     case taskRows
-    case scheduleTodayButton
-    case scheduleTomorrowButton
-    case pickDateButton
+    case unscheduledPlaceholder
+    case rowContextMenu
+    case scheduleTodayContextMenuAction
+    case scheduleTomorrowContextMenuAction
+    case scheduleToDateContextMenuAction
+    case deleteContextMenuAction
+    case sharedRowAndDetailActions
     case emptyState
 }
 
@@ -221,10 +225,11 @@ public enum MacUIUnfinishedPoolElement: String, CaseIterable, Sendable {
     case missedCount
     case continuationCount
     case lastMissedDate
-    case activeTraceJump
-    case continueButton
-    case abandonButton
-    case reenableAbandonedButton
+    case rowContextMenu
+    case activeTraceJumpAction
+    case continueContextMenuAction
+    case abandonContextMenuAction
+    case reenableAbandonedContextMenuAction
     case detailsExpansion
     case emptyState
 }
@@ -236,8 +241,9 @@ public enum MacUICompletedPoolElement: String, CaseIterable, Sendable {
     case parentCompletionRecord
     case subtaskCompletionRecord
     case trajectoryNodes
-    case jumpDayButton
-    case copyAsNewTaskButton
+    case rowContextMenu
+    case jumpDayContextMenuAction
+    case copyAsNewTaskContextMenuAction
     case emptyState
 }
 
@@ -291,10 +297,16 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case historyReadonlyNotice
     case progressSection
     case compactClassificationEditor
+    case classificationValuePicker
     case onDemandClassificationLabelInput
-    case descriptionSection
+    case descriptionEditor
     case descriptionImmediatelyUnderTitle
     case descriptionWithoutSectionTitle
+    case compactTitleDescriptionLayout
+    case borderlessDescriptionEditor
+    case markdownDescriptionEditing
+    case nativeDescriptionEditingCommands
+    case sharedRowAndOverflowMenuActions
     case noteSection
     case timestampedNoteEntries
     case noteComposerInput
@@ -309,6 +321,28 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case subtaskDifficultyWeight
     case traceTimeline
     case changedTraceTargetJump
+}
+
+public enum MacUIDetailEditorLayout {
+    public static let titleDescriptionSpacing = 6.0
+    public static let titleHeight: ClosedRange<Double> = 22 ... 72
+    public static let descriptionHeight: ClosedRange<Double> = 32 ... 132
+    public static let textInset = 3.0
+}
+
+public enum MacUIMarkdownEditingCommand: String, CaseIterable, Sendable {
+    case selectAll
+    case cut
+    case copy
+    case paste
+    case undo
+    case redo
+    case bold
+    case italic
+    case inlineCode
+    case link
+    case indent
+    case hardLineBreak
 }
 
 public enum MacUIReviewElement: String, CaseIterable, Sendable {
@@ -358,6 +392,7 @@ public enum MacUITaskAction: String, CaseIterable, Sendable {
     case scheduleToday
     case scheduleTomorrow
     case scheduleToDate
+    case deleteTask
     case addTask
     case addSubtask
     case toggleSubtask
@@ -493,6 +528,7 @@ public struct MacUIDesignContract: Sendable {
     public let reviewElements: [MacUIReviewElement]
     public let emptyStateElements: [MacUIEmptyStateElement]
     public let pageEmptyStateElements: [MacUIPageEmptyStateElement]
+    public let markdownEditingCommands: [MacUIMarkdownEditingCommand]
     public let taskActions: [MacUITaskAction]
     public let modals: [MacUIModal]
     public let settingsElements: [MacUISettingsElement]
@@ -516,6 +552,7 @@ public struct MacUIDesignContract: Sendable {
         reviewElements: [MacUIReviewElement] = MacUIReviewElement.allCases,
         emptyStateElements: [MacUIEmptyStateElement] = MacUIEmptyStateElement.allCases,
         pageEmptyStateElements: [MacUIPageEmptyStateElement] = MacUIPageEmptyStateElement.allCases,
+        markdownEditingCommands: [MacUIMarkdownEditingCommand] = MacUIMarkdownEditingCommand.allCases,
         taskActions: [MacUITaskAction] = MacUITaskAction.allCases,
         modals: [MacUIModal] = MacUIModal.allCases,
         settingsElements: [MacUISettingsElement] = MacUISettingsElement.allCases,
@@ -538,6 +575,7 @@ public struct MacUIDesignContract: Sendable {
         self.reviewElements = reviewElements
         self.emptyStateElements = emptyStateElements
         self.pageEmptyStateElements = pageEmptyStateElements
+        self.markdownEditingCommands = markdownEditingCommands
         self.taskActions = taskActions
         self.modals = modals
         self.settingsElements = settingsElements

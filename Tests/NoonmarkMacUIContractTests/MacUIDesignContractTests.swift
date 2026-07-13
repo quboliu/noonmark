@@ -51,12 +51,13 @@ final class MacUIDesignContractTests: XCTestCase {
     func testContractKeepsActionsAndModalsExplicit() {
         let contract = MacUIDesignContract.current
 
-        XCTAssertEqual(contract.taskActions.count, 27)
+        XCTAssertEqual(contract.taskActions.count, 28)
         XCTAssertTrue(contract.taskActions.contains(.continueToDate))
         XCTAssertTrue(contract.taskActions.contains(.changeIntoNewTask))
         XCTAssertTrue(contract.taskActions.contains(.returnToPool))
         XCTAssertTrue(contract.taskActions.contains(.reactivateAbandonedChain))
         XCTAssertTrue(contract.taskActions.contains(.copyAsNewTask))
+        XCTAssertTrue(contract.taskActions.contains(.deleteTask))
         XCTAssertTrue(contract.taskActions.contains(.addSubtask))
         XCTAssertTrue(contract.taskActions.contains(.cycleSubtaskDifficulty))
         XCTAssertTrue(contract.taskActions.contains(.dragManualProgress))
@@ -150,15 +151,18 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.dayTodoElements.contains(.taskRowTrajectoryMetadata))
         XCTAssertTrue(contract.dayTodoElements.contains(.changedTraceTargetJump))
         XCTAssertTrue(contract.dayTodoElements.contains(.taskRowMoveButtons))
-        XCTAssertTrue(contract.taskPoolElements.contains(.scheduleTomorrowButton))
+        XCTAssertTrue(contract.taskPoolElements.contains(.rowContextMenu))
+        XCTAssertTrue(contract.taskPoolElements.contains(.scheduleTomorrowContextMenuAction))
+        XCTAssertTrue(contract.taskPoolElements.contains(.sharedRowAndDetailActions))
         XCTAssertTrue(contract.futurePlanElements.contains(.groupedByDate))
         XCTAssertTrue(contract.futurePlanElements.contains(.selectTaskAction))
         XCTAssertTrue(contract.futurePlanElements.contains(.contextMenuAction))
         XCTAssertTrue(contract.futurePlanElements.contains(.openDetailAction))
         XCTAssertTrue(contract.futurePlanElements.contains(.taskRowMoveButtons))
         XCTAssertTrue(contract.unfinishedPoolElements.contains(.detailsExpansion))
-        XCTAssertTrue(contract.unfinishedPoolElements.contains(.reenableAbandonedButton))
+        XCTAssertTrue(contract.unfinishedPoolElements.contains(.reenableAbandonedContextMenuAction))
         XCTAssertTrue(contract.completedPoolElements.contains(.subtaskCompletionRecord))
+        XCTAssertTrue(contract.completedPoolElements.contains(.copyAsNewTaskContextMenuAction))
         XCTAssertTrue(contract.calendarElements.contains(.completionHeatBlock))
         XCTAssertTrue(contract.calendarElements.contains(.keyboardDateNavigation))
         XCTAssertTrue(contract.calendarElements.contains(.selectedDayDetail))
@@ -196,6 +200,99 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.completedPoolCopy))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.calendarIllustration))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.calendarCopy))
+    }
+
+    func testLowFrequencyTaskActionsUseContextMenusWithoutInlineDuplicates() {
+        let contract = MacUIDesignContract.current
+
+        XCTAssertEqual(
+            Set(contract.taskPoolElements),
+            [
+                .title,
+                .description,
+                .newTaskInput,
+                .taskRows,
+                .unscheduledPlaceholder,
+                .rowContextMenu,
+                .scheduleTodayContextMenuAction,
+                .scheduleTomorrowContextMenuAction,
+                .scheduleToDateContextMenuAction,
+                .deleteContextMenuAction,
+                .sharedRowAndDetailActions,
+                .emptyState
+            ]
+        )
+        XCTAssertEqual(
+            Set(contract.unfinishedPoolElements),
+            [
+                .title,
+                .description,
+                .dedupedChainRows,
+                .missedCount,
+                .continuationCount,
+                .lastMissedDate,
+                .rowContextMenu,
+                .activeTraceJumpAction,
+                .continueContextMenuAction,
+                .abandonContextMenuAction,
+                .reenableAbandonedContextMenuAction,
+                .detailsExpansion,
+                .emptyState
+            ]
+        )
+        XCTAssertEqual(
+            Set(contract.completedPoolElements),
+            [
+                .title,
+                .description,
+                .groupedByCompletionDate,
+                .parentCompletionRecord,
+                .subtaskCompletionRecord,
+                .trajectoryNodes,
+                .rowContextMenu,
+                .jumpDayContextMenuAction,
+                .copyAsNewTaskContextMenuAction,
+                .emptyState
+            ]
+        )
+    }
+
+    func testDetailEditorUsesCompactBorderlessMarkdownContract() {
+        let contract = MacUIDesignContract.current
+
+        XCTAssertEqual(MacUIDetailEditorLayout.titleDescriptionSpacing, 6)
+        XCTAssertEqual(MacUIDetailEditorLayout.titleHeight, 22 ... 72)
+        XCTAssertEqual(MacUIDetailEditorLayout.descriptionHeight, 32 ... 132)
+        XCTAssertEqual(MacUIDetailEditorLayout.textInset, 3)
+        XCTAssertTrue(contract.detailElements.contains(.compactTitleDescriptionLayout))
+        XCTAssertTrue(contract.detailElements.contains(.borderlessDescriptionEditor))
+        XCTAssertTrue(contract.detailElements.contains(.markdownDescriptionEditing))
+        XCTAssertTrue(contract.detailElements.contains(.nativeDescriptionEditingCommands))
+        XCTAssertTrue(contract.detailElements.contains(.sharedRowAndOverflowMenuActions))
+
+        XCTAssertEqual(
+            Set(contract.markdownEditingCommands),
+            [
+                .selectAll,
+                .cut,
+                .copy,
+                .paste,
+                .undo,
+                .redo,
+                .bold,
+                .italic,
+                .inlineCode,
+                .link,
+                .indent,
+                .hardLineBreak
+            ]
+        )
+    }
+
+    func testClassificationCurrentValueIsTheOnlyChangePicker() {
+        let contract = MacUIDesignContract.current
+
+        XCTAssertTrue(contract.detailElements.contains(.classificationValuePicker))
     }
 
     func testClassificationManagementUsesCompactVerifiedMetrics() {
@@ -258,7 +355,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.detailElements.contains(.progressSection))
         XCTAssertTrue(contract.detailElements.contains(.compactClassificationEditor))
         XCTAssertTrue(contract.detailElements.contains(.onDemandClassificationLabelInput))
-        XCTAssertTrue(contract.detailElements.contains(.descriptionSection))
+        XCTAssertTrue(contract.detailElements.contains(.descriptionEditor))
         XCTAssertTrue(contract.detailElements.contains(.descriptionImmediatelyUnderTitle))
         XCTAssertTrue(contract.detailElements.contains(.descriptionWithoutSectionTitle))
         XCTAssertTrue(contract.detailElements.contains(.noteSection))

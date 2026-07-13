@@ -25,9 +25,7 @@ if [[ ! -f "$prototype_html" ]]; then
 fi
 
 scenarios=(
-  "01-home-a|surface=zhulong&flow=shape&step=home&variant=A|1320|820"
-  "01-home-b|surface=zhulong&flow=shape&step=home&variant=B|1320|820"
-  "01-home-c|surface=zhulong&flow=shape&step=home&variant=C|1320|820"
+  "01-home|surface=zhulong&flow=shape&step=home|1320|820"
   "02-day-entry|surface=day&step=home|1320|820"
   "03-shape-scope|surface=zhulong&flow=shape&step=scope|1320|820"
   "04-shape-focus|surface=zhulong&flow=shape&step=focus|1320|820"

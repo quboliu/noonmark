@@ -561,76 +561,108 @@ class ZhulongR3Acceptance:
             "};"
             "})()"
         )
-        self.navigate("surface=zhulong&flow=shape&step=home&variant=A")
+        self.navigate("surface=zhulong&flow=shape&step=home")
+        suggestion_labels = self.evaluate(
+            "Array.from(document.querySelectorAll('.home-workflow-title small'), element => element.textContent.trim())"
+        )
+        workflow_ids = self.evaluate(
+            "Array.from(document.querySelectorAll('[data-home-workflow]'), element => element.dataset.homeWorkflow)"
+        )
         self.check(
-            "home-a-is-single-command-surface",
-            self.count('[data-home-variant="A"]') == 1
-            and self.count("[data-home-intent]") == 1
-            and self.count(".home-decision-row") == 2
+            "home-is-the-only-sparse-command-surface",
+            self.count("[data-home-intent]") == 1
+            and self.count(".home-workflow-list") == 1
+            and self.count(".home-workflow-row") == 4
+            and self.count(".home-workflow-start") == 4
+            and workflow_ids == ["task-shaping", "daily-close", "scheduling", "classification"]
+            and suggestion_labels == ["建议模式", "建议模式"]
+            and self.count(".detail-rail") == 0
+            and self.count(".prototype-switcher") == 0
+            and self.count(".home-decision-row") == 0
+            and self.count(".home-section") == 0
             and "Provider" not in self.text(".home-prototype"),
+            json.dumps(
+                {"workflows": workflow_ids, "suggestionLabels": suggestion_labels},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
         )
-        example = "规划一个还很模糊的大任务"
-        self.click(f'[data-action="set-home-intent"][data-value="{example}"]')
-        self.wait_for(
-            "document.activeElement === document.querySelector('[data-home-intent]')",
-            "home example to focus the intent composer",
+        self.check(
+            "home-empty-intent-keeps-the-only-submit-action-disabled",
+            self.count(".home-intent-submit") == 1
+            and self.evaluate("document.querySelector('.home-intent-submit').disabled") is True,
         )
+        intent = "规划一个还很模糊的大任务"
+        self.input("[data-home-intent]", intent)
         intent_state = self.evaluate(
             "(() => {"
             "const input = document.querySelector('[data-home-intent]');"
-            "return {value: input.value, focused: document.activeElement === input};"
+            "const submit = document.querySelector('.home-intent-submit');"
+            "return {value: input.value, submitDisabled: submit.disabled};"
             "})()"
         )
         self.check(
-            "home-example-populates-and-focuses-composer",
-            intent_state["value"] == example and intent_state["focused"],
+            "home-input-enables-its-real-submit-action",
+            intent_state["value"] == intent and intent_state["submitDisabled"] is False,
             json.dumps(intent_state, ensure_ascii=False, sort_keys=True),
         )
-        self.evaluate(
-            "document.querySelector('[data-home-intent]').dispatchEvent("
-            "new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))"
-        )
+        self.click(".home-intent-submit")
         self.check(
-            "home-arrow-key-does-not-switch-while-composer-focused",
-            self.count('[data-home-variant="A"]') == 1,
+            "home-submit-enters-the-bounded-session",
+            self.step() == "scope"
+            and self.evaluate("new URLSearchParams(location.search).get('flow')") == "shape",
         )
-        self.evaluate("document.querySelector('[data-home-intent]').blur(); document.body.focus()")
-        self.evaluate(
-            "document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))"
-        )
-        self.check(
-            "home-arrow-key-switches-to-next-variant",
-            self.count('[data-home-variant="B"]') == 1
-            and self.evaluate("new URLSearchParams(location.search).get('variant')") == "B",
-        )
-        self.evaluate(
-            "document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))"
-        )
-        self.check(
-            "home-c-separates-user-decisions-into-rail",
-            self.count('[data-home-variant="C"]') == 1
-            and self.count(".home-decision-rail") == 1
-            and self.count(".home-decision-rail .home-decision-row") == 2,
-        )
-        variant_geometry = self.evaluate(
+
+        workflow_routes = [
+            ("task-shaping", "shape", "scope"),
+            ("daily-close", "close", "facts"),
+            ("scheduling", "shape", "scope"),
+            ("classification", "shape", "scope"),
+        ]
+        for workflow_id, expected_flow, expected_step in workflow_routes:
+            self.navigate("surface=zhulong&flow=shape&step=home")
+            self.click(f'[data-home-workflow="{workflow_id}"]')
+            self.check(
+                f"home-{workflow_id}-starts-directly",
+                self.step() == expected_step
+                and self.evaluate("new URLSearchParams(location.search).get('flow')") == expected_flow,
+            )
+
+        self.navigate("surface=zhulong&flow=shape&step=home")
+        home_geometry = self.evaluate(
             "(() => {"
             "const page = document.querySelector('.page-scroll');"
-            "const split = document.querySelector('.home-split');"
+            "const main = document.querySelector('.app-main').getBoundingClientRect();"
+            "const columns = document.querySelector('.native-columns').getBoundingClientRect();"
+            "const headerAxis = document.querySelector('.home-header-axis').getBoundingClientRect();"
+            "const header = document.querySelector('.home-header-axis .page-header').getBoundingClientRect();"
+            "const prototype = document.querySelector('.home-prototype').getBoundingClientRect();"
+            "const title = document.querySelector('.home-header-axis h1').getBoundingClientRect();"
+            "const composer = document.querySelector('.home-intent-field').getBoundingClientRect();"
             "return {"
+            "mainWidth: main.width,"
+            "columnsWidth: columns.width,"
+            "headerAxisWidth: headerAxis.width,"
+            "headerLeft: header.left,"
+            "headerWidth: header.width,"
+            "prototypeLeft: prototype.left,"
+            "prototypeWidth: prototype.width,"
+            "pageWidth: page.getBoundingClientRect().width,"
             "pageClientWidth: page.clientWidth,"
             "pageScrollWidth: page.scrollWidth,"
-            "splitClientWidth: split.clientWidth,"
-            "splitScrollWidth: split.scrollWidth,"
-            "pageOverflowY: getComputedStyle(page).overflowY"
+            "pageOverflowY: getComputedStyle(page).overflowY,"
+            "titleLeft: title.left,"
+            "composerLeft: composer.left,"
+            "axisDelta: Math.abs(title.left - composer.left)"
             "};"
             "})()"
         )
         self.check(
-            "home-variants-preserve-continuous-scroll-container",
-            variant_geometry["pageScrollWidth"] <= variant_geometry["pageClientWidth"]
-            and variant_geometry["splitScrollWidth"] <= variant_geometry["splitClientWidth"]
-            and variant_geometry["pageOverflowY"] == "auto",
-            json.dumps(variant_geometry, ensure_ascii=False, sort_keys=True),
+            "home-preserves-one-aligned-scroll-axis",
+            home_geometry["pageScrollWidth"] <= home_geometry["pageClientWidth"]
+            and home_geometry["pageOverflowY"] == "auto"
+            and home_geometry["axisDelta"] < 1,
+            json.dumps(home_geometry, ensure_ascii=False, sort_keys=True),
         )
         long_home = self.evaluate(
             "(() => {"
@@ -648,12 +680,6 @@ class ZhulongR3Acceptance:
             "home-long-content-bottom-remains-reachable",
             long_home["hasOverflow"] and long_home["atBottom"],
             json.dumps(long_home, ensure_ascii=False, sort_keys=True),
-        )
-        self.click('.prototype-switcher [aria-label="下一个方案"]')
-        self.check(
-            "home-switcher-wraps-from-c-to-a",
-            self.count('[data-home-variant="A"]') == 1
-            and self.evaluate("new URLSearchParams(location.search).get('variant')") == "A",
         )
         self.geometry.update(
             self.evaluate(

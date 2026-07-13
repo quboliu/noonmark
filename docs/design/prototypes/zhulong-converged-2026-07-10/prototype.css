@@ -453,6 +453,8 @@ button:disabled {
   width: 100%;
   max-width: 828px;
   margin: 0 auto;
+  padding-right: 24px;
+  padding-left: 24px;
 }
 
 .home-prototype {

@@ -350,13 +350,12 @@
     return `${railHeader("当前对象检视", "每日收尾")}<div class="detail-rail-scroll"></div>`;
   }
 
-  function r3NativeDetailRail(model, location = "session") {
+  function r3NativeDetailRail(model) {
     let content = "";
     if (model.panel === "events") content = eventRail(model);
     else if (model.panel === "context") content = contextRail(model);
     else if (model.panel === "session") content = sessionControlRail();
     else if (model.panel === "memory") content = memoryRail();
-    else if (location === "home") content = `${railHeader("烛龙边界", "可选 sidecar，不影响普通清单")}<div class="detail-rail-scroll">${railSection("一次一个主要意图", `<div class="rail-card"><p>会话可以暂停与恢复；新目标建立新会话。</p></div>`)}${railSection("快速捕获不受影响", `<div class="rail-card"><p>普通 Todo 始终可以不经过烛龙直接创建。</p></div>`)}${railSection("写入护栏", railList(["没有具体 diff 不写入", "不自动改写历史日", "Provider 失败不影响清单"]))}</div>`;
     else content = r3DefaultSessionRail(model);
     return `<aside class="detail-rail">${content}</aside>`;
   }
@@ -378,8 +377,8 @@
     </section>`;
   }
 
-  function homeWorkflowRow({ title, detail, suggestion = false, route }) {
-    return `<button class="home-workflow-row" type="button" ${routeAttributes(route)}>
+  function homeWorkflowRow({ id, title, detail, suggestion = false, route }) {
+    return `<button class="home-workflow-row" type="button" data-home-workflow="${id}" ${routeAttributes(route)}>
       <span class="home-workflow-start" aria-hidden="true">＋</span>
       <span class="home-workflow-copy">
         <span class="home-workflow-title"><strong>${title}</strong>${suggestion ? "<small>建议模式</small>" : ""}</span>
@@ -390,10 +389,10 @@
 
   function homeWorkflowList() {
     return `<div class="home-workflow-list" aria-label="烛龙工作流">
-      ${homeWorkflowRow({ title: "把模糊任务变成计划", detail: "澄清目标与约束，形成可审查的规划和 Todo diff", route: { surface: "zhulong", flow: "shape", step: "scope" } })}
-      ${homeWorkflowRow({ title: "结束今天并安排明天", detail: "复盘今日事实，处置未完成任务并形成下一次承诺", route: { surface: "zhulong", flow: "close", step: "facts" } })}
-      ${homeWorkflowRow({ title: "重新安排任务", detail: "基于任务池与未完成任务提出可确认的排期建议", suggestion: true, route: { surface: "zhulong", flow: "shape", step: "scope" } })}
-      ${homeWorkflowRow({ title: "整理分组与标签", detail: "审查现有分类，并提出可确认的整理建议", suggestion: true, route: { surface: "zhulong", flow: "shape", step: "scope" } })}
+      ${homeWorkflowRow({ id: "task-shaping", title: "把模糊任务变成计划", detail: "澄清目标与约束，形成可审查的规划和 Todo diff", route: { surface: "zhulong", flow: "shape", step: "scope" } })}
+      ${homeWorkflowRow({ id: "daily-close", title: "结束今天并安排明天", detail: "复盘今日事实，处置未完成任务并形成下一次承诺", route: { surface: "zhulong", flow: "close", step: "facts" } })}
+      ${homeWorkflowRow({ id: "scheduling", title: "重新安排任务", detail: "基于任务池与未完成任务提出可确认的排期建议", suggestion: true, route: { surface: "zhulong", flow: "shape", step: "scope" } })}
+      ${homeWorkflowRow({ id: "classification", title: "整理分组与标签", detail: "审查现有分类，并提出可确认的整理建议", suggestion: true, route: { surface: "zhulong", flow: "shape", step: "scope" } })}
     </div>`;
   }
 
@@ -978,6 +977,8 @@
     const homeIntent = target.closest("[data-home-intent]");
     if (homeIntent) {
       ui.homeIntent = homeIntent.value;
+      const submit = document.querySelector(".home-intent-submit");
+      if (submit) submit.disabled = ui.homeIntent.trim() === "";
       return;
     }
     const correction = target.closest("[data-correction-input]");

@@ -1220,6 +1220,33 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
             try expect(ZhulongHomeIntentResolver.task(for: "给任务池重新排期") == .scheduling, "scheduling intent was routed incorrectly")
             try expect(ZhulongHomeIntentResolver.task(for: "整理标签分类") == .labelClassification, "classification intent was routed incorrectly")
             try expect(ZhulongHomeIntentResolver.task(for: "梳理一个模糊任务") == .taskDecomposition, "fallback intent was routed incorrectly")
+
+            let fixedWorkflowCases: [(intent: String, task: ZhulongTask, scopes: Set<ZhulongDataScope>)] = [
+                ("规划一个还很模糊的大任务", .taskDecomposition, [.currentDayTodo]),
+                ("给任务池和未完成任务重新排期", .scheduling, [.currentDayTodo, .taskPool, .unfinishedPool]),
+                (
+                    "整理任务的分组与标签分类",
+                    .labelClassification,
+                    [.currentDayTodo, .taskPool, .unfinishedPool, .completedPool, .taskClassifications]
+                )
+            ]
+            for workflow in fixedWorkflowCases {
+                try expect(
+                    ZhulongHomeIntentResolver.task(for: workflow.intent) == workflow.task,
+                    "fixed workflow intent was routed incorrectly: \(workflow.intent)"
+                )
+                let priorCount = store.zhulongWorkspace.sessions.count
+                store.startZhulongWorkspaceSession(intent: workflow.intent, task: workflow.task)
+                try expect(
+                    store.zhulongWorkspace.sessions.count == priorCount + 1,
+                    "fixed workflow did not create a session: \(workflow.intent)"
+                )
+                try expect(
+                    store.zhulongWorkspace.selectedSession?.proposedScopes == workflow.scopes,
+                    "fixed workflow proposed incorrect scopes: \(workflow.intent)"
+                )
+                store.zhulongWorkspace.showHome()
+            }
             let sessionCount = store.zhulongWorkspace.sessions.count
             store.startZhulongWorkspaceSession(intent: "结束今天并安排明天")
             try expect(store.zhulongWorkspace.sessions.count == sessionCount + 1, "workspace session was not created")
@@ -3674,6 +3701,10 @@ final class NoonmarkStore: ObservableObject {
 
     func startZhulongWorkspaceSession(intent: String) {
         let task = ZhulongHomeIntentResolver.task(for: intent)
+        startZhulongWorkspaceSession(intent: intent, task: task)
+    }
+
+    func startZhulongWorkspaceSession(intent: String, task: ZhulongTask) {
         zhulongWorkspace.createSession(intent: intent, scopes: zhulongDataScopes(for: task))
     }
 

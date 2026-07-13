@@ -174,6 +174,18 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUIClassificationAccessibility.discardActionPrefix, "classification.manager.lifecycle.discard")
     }
 
+    func testZhulongHomeExposesFixedWorkflowsWithoutDecorativeComposerActions() {
+        let contract = MacUIDesignContract.claudeMacPrototype20260705
+
+        XCTAssertEqual(Set(contract.zhulongHomeElements), Set(MacUIZhulongHomeElement.allCases))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.freeformIntentComposer))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.verticallyCenteredComposerContent))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.coreWorkflowEntrances))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.specialistAssistantEntrances))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.directWorkflowStart))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.noDecorativeComposerAction))
+    }
+
     func testDetailAndReviewSectionsAreNotOptional() {
         let contract = MacUIDesignContract.claudeMacPrototype20260705
 

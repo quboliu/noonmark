@@ -105,6 +105,15 @@ public enum MacUIPage: String, CaseIterable, Sendable {
     case settings
 }
 
+public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
+    case freeformIntentComposer
+    case verticallyCenteredComposerContent
+    case coreWorkflowEntrances
+    case specialistAssistantEntrances
+    case directWorkflowStart
+    case noDecorativeComposerAction
+}
+
 public enum MacUIDayTodoElement: String, CaseIterable, Sendable {
     case dateTitle
     case weekday
@@ -415,6 +424,7 @@ public struct MacUIDesignContract: Sendable {
     public let navigationElements: [MacUINavigationElement]
     public let navigationIconColorTokens: [MacUINavigationIconColorToken]
     public let pages: [MacUIPage]
+    public let zhulongHomeElements: [MacUIZhulongHomeElement]
     public let dayTodoElements: [MacUIDayTodoElement]
     public let taskPoolElements: [MacUITaskPoolElement]
     public let futurePlanElements: [MacUIFuturePlanElement]
@@ -437,6 +447,7 @@ public struct MacUIDesignContract: Sendable {
         navigationElements: [MacUINavigationElement] = MacUINavigationElement.allCases,
         navigationIconColorTokens: [MacUINavigationIconColorToken] = MacUINavigationIconColorToken.allCases,
         pages: [MacUIPage] = MacUIPage.allCases,
+        zhulongHomeElements: [MacUIZhulongHomeElement] = MacUIZhulongHomeElement.allCases,
         dayTodoElements: [MacUIDayTodoElement] = MacUIDayTodoElement.allCases,
         taskPoolElements: [MacUITaskPoolElement] = MacUITaskPoolElement.allCases,
         futurePlanElements: [MacUIFuturePlanElement] = MacUIFuturePlanElement.allCases,
@@ -458,6 +469,7 @@ public struct MacUIDesignContract: Sendable {
         self.navigationElements = navigationElements
         self.navigationIconColorTokens = navigationIconColorTokens
         self.pages = pages
+        self.zhulongHomeElements = zhulongHomeElements
         self.dayTodoElements = dayTodoElements
         self.taskPoolElements = taskPoolElements
         self.futurePlanElements = futurePlanElements

@@ -6,4 +6,3 @@ scripts/test-integration
 scripts/test-system
 scripts/test-deterministic-sim
 scripts/test-e2e
-NOONMARK_VISUAL_REUSE_SCREENSHOTS=1 scripts/test-visual-regression

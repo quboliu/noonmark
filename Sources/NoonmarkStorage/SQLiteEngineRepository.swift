@@ -539,6 +539,27 @@ private extension SQLiteEngineRepository {
         return try decoder.decode([PlannedSubtask].self, from: data)
     }
 
+    func noteEntriesJSON(_ noteEntries: [TaskNoteEntry]) throws -> String {
+        let data = try JSONEncoder().encode(noteEntries)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue("task note entries JSON encoding failed")
+        }
+        return string
+    }
+
+    func noteEntries(from json: String) throws -> [TaskNoteEntry] {
+        guard let data = json.data(using: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue("task note entries JSON is not UTF-8")
+        }
+        do {
+            return try JSONDecoder().decode([TaskNoteEntry].self, from: data)
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid task note entries JSON: \(error.localizedDescription)"
+            )
+        }
+    }
+
     func validateClassificationStateIntegrity(_ state: TaskClassificationState) throws {
         do {
             let data = try JSONEncoder().encode(state)
@@ -842,7 +863,7 @@ private extension SQLiteEngineRepository {
     func upsert(_ definitions: [TaskDefinition], into database: Database?) throws {
         let sql = """
         INSERT INTO task_definitions(
-            id, chain_id, sequence, title, description_text, note, planned_subtasks_json,
+            id, chain_id, sequence, title, description_text, note_entries_json, planned_subtasks_json,
             created_at, superseded_at, superseded_by_definition_id
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -851,7 +872,7 @@ private extension SQLiteEngineRepository {
             sequence = excluded.sequence,
             title = excluded.title,
             description_text = excluded.description_text,
-            note = excluded.note,
+            note_entries_json = excluded.note_entries_json,
             planned_subtasks_json = excluded.planned_subtasks_json,
             created_at = excluded.created_at,
             superseded_at = excluded.superseded_at,
@@ -864,7 +885,7 @@ private extension SQLiteEngineRepository {
                 bind(definition.sequence, to: 3, in: statement)
                 bind(definition.title, to: 4, in: statement)
                 bind(definition.descriptionText, to: 5, in: statement)
-                bind(definition.note, to: 6, in: statement)
+                bind(try noteEntriesJSON(definition.noteEntries), to: 6, in: statement)
                 bind(try plannedSubtasksJSON(definition.plannedSubtasks), to: 7, in: statement)
                 bind(definition.createdAt, to: 8, in: statement)
                 bind(definition.supersededAt, to: 9, in: statement)
@@ -888,7 +909,7 @@ private extension SQLiteEngineRepository {
     func upsert(_ traces: [DayTrace], into database: Database?) throws {
         let sql = """
         INSERT INTO day_traces(
-            id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note,
+            id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note_entries_json,
             manual_progress_percent, continued_from_trace_id, changed_to_trace_id, created_at, completed_at, settled_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -900,7 +921,7 @@ private extension SQLiteEngineRepository {
             priority = excluded.priority,
             continuation_seq = excluded.continuation_seq,
             description_text = excluded.description_text,
-            note = excluded.note,
+            note_entries_json = excluded.note_entries_json,
             manual_progress_percent = excluded.manual_progress_percent,
             continued_from_trace_id = excluded.continued_from_trace_id,
             changed_to_trace_id = excluded.changed_to_trace_id,
@@ -918,7 +939,7 @@ private extension SQLiteEngineRepository {
                 bind(trace.priority, to: 6, in: statement)
                 bind(trace.continuationSeq, to: 7, in: statement)
                 bind(trace.descriptionText, to: 8, in: statement)
-                bind(trace.note, to: 9, in: statement)
+                bind(try noteEntriesJSON(trace.noteEntries), to: 9, in: statement)
                 bind(trace.manualProgressPercent, to: 10, in: statement)
                 bind(trace.continuedFromTraceID?.rawValue.uuidString, to: 11, in: statement)
                 bind(nil as String?, to: 12, in: statement)
@@ -2810,7 +2831,7 @@ private extension SQLiteEngineRepository {
         try query(
             """
             SELECT
-                id, chain_id, sequence, title, description_text, note, planned_subtasks_json,
+                id, chain_id, sequence, title, description_text, note_entries_json, planned_subtasks_json,
                 created_at, superseded_at, superseded_by_definition_id
             FROM task_definitions
             ORDER BY chain_id, sequence
@@ -2823,7 +2844,7 @@ private extension SQLiteEngineRepository {
                 sequence: int(statement, 2),
                 title: try string(statement, 3),
                 descriptionText: optionalString(statement, 4),
-                note: optionalString(statement, 5),
+                noteEntries: try noteEntries(from: string(statement, 5)),
                 plannedSubtasks: try plannedSubtasks(from: optionalString(statement, 6)),
                 now: try date(statement, 7)
             )
@@ -2838,7 +2859,7 @@ private extension SQLiteEngineRepository {
     func loadTraces(from database: Database?) throws -> [DayTrace] {
         try query(
             """
-            SELECT id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note,
+            SELECT id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note_entries_json,
                    manual_progress_percent, continued_from_trace_id, changed_to_trace_id, created_at, completed_at, settled_at
             FROM day_traces
             ORDER BY date, continuation_seq, priority, created_at
@@ -2857,7 +2878,7 @@ private extension SQLiteEngineRepository {
                 priority: int(statement, 5),
                 continuationSeq: int(statement, 6),
                 descriptionText: optionalString(statement, 7),
-                note: optionalString(statement, 8),
+                noteEntries: try noteEntries(from: string(statement, 8)),
                 manualProgressPercent: optionalInt(statement, 9),
                 continuedFromTraceID: try optionalUUID(statement, 10).map(DayTraceID.init),
                 now: try date(statement, 12)

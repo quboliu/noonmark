@@ -49,7 +49,7 @@ public struct AISuggestionResponseParser: Sendable {
             return .createPoolTask(
                 title: title,
                 descriptionText: operation.descriptionText,
-                note: operation.note
+                initialNoteBody: operation.initialNoteBody
             )
 
         case "updateDailyReview":
@@ -119,7 +119,7 @@ private struct StructuredSuggestionOperation: Decodable {
     var type: String
     var title: String?
     var descriptionText: String?
-    var note: String?
+    var initialNoteBody: String?
     var date: String?
     var chainID: String?
     var label: String?

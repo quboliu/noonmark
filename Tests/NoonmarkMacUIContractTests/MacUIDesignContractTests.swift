@@ -2,8 +2,8 @@
 import XCTest
 
 final class MacUIDesignContractTests: XCTestCase {
-    func testClaudeMacPrototypeContractCoversAllTopLevelPages() {
-        let contract = MacUIDesignContract.claudeMacPrototype20260705
+    func testCurrentContractCoversAllTopLevelPages() {
+        let contract = MacUIDesignContract.current
 
         XCTAssertEqual(
             contract.pages,
@@ -11,10 +11,10 @@ final class MacUIDesignContractTests: XCTestCase {
         )
     }
 
-    func testContractKeepsPrototypeActionsAndModalsExplicit() {
-        let contract = MacUIDesignContract.claudeMacPrototype20260705
+    func testContractKeepsActionsAndModalsExplicit() {
+        let contract = MacUIDesignContract.current
 
-        XCTAssertEqual(contract.taskActions.count, 25)
+        XCTAssertEqual(contract.taskActions.count, 27)
         XCTAssertTrue(contract.taskActions.contains(.continueToDate))
         XCTAssertTrue(contract.taskActions.contains(.changeIntoNewTask))
         XCTAssertTrue(contract.taskActions.contains(.returnToPool))
@@ -37,8 +37,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.modals.contains(.undoUnavailableToast))
     }
 
-    func testContractPreservesNewBackendCapabilitiesFromPrototype() {
-        let contract = MacUIDesignContract.claudeMacPrototype20260705
+    func testContractPreservesRequiredBackendCapabilities() {
+        let contract = MacUIDesignContract.current
 
         XCTAssertTrue(contract.backendCapabilities.contains(.taskDescription))
         XCTAssertTrue(contract.backendCapabilities.contains(.taskNote))
@@ -53,8 +53,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.backendCapabilities.contains(.syncEndpointOptions))
     }
 
-    func testContractCoversEachPrototypePageElements() {
-        let contract = MacUIDesignContract.claudeMacPrototype20260705
+    func testContractCoversEachCurrentPageElement() {
+        let contract = MacUIDesignContract.current
 
         XCTAssertTrue(contract.globalElements.contains(.macWindowChrome))
         XCTAssertTrue(contract.globalElements.contains(.trafficLights))
@@ -73,7 +73,6 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.lowContrastControlSurfaces))
         XCTAssertTrue(contract.globalElements.contains(.borderlessListRows))
         XCTAssertTrue(contract.windowMetrics.contains(.defaultLaunch1320x820))
-        XCTAssertTrue(contract.windowMetrics.contains(.prototypePreview1440x900))
         XCTAssertTrue(contract.windowMetrics.contains(.maxContent1400x880))
         XCTAssertTrue(contract.colorTokens.contains(.accent))
         XCTAssertTrue(contract.colorTokens.contains(.ok))
@@ -175,7 +174,7 @@ final class MacUIDesignContractTests: XCTestCase {
     }
 
     func testZhulongHomeExposesFixedWorkflowsWithoutDecorativeComposerActions() {
-        let contract = MacUIDesignContract.claudeMacPrototype20260705
+        let contract = MacUIDesignContract.current
 
         XCTAssertEqual(Set(contract.zhulongHomeElements), Set(MacUIZhulongHomeElement.allCases))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.freeformIntentComposer))
@@ -205,7 +204,7 @@ final class MacUIDesignContractTests: XCTestCase {
     }
 
     func testDetailAndReviewSectionsAreNotOptional() {
-        let contract = MacUIDesignContract.claudeMacPrototype20260705
+        let contract = MacUIDesignContract.current
 
         XCTAssertTrue(contract.detailElements.contains(.unselectedDayReviewRail))
         XCTAssertTrue(contract.detailElements.contains(.unselectedPageHint))
@@ -227,7 +226,6 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.detailElements.contains(.descriptionWithoutSectionTitle))
         XCTAssertTrue(contract.detailElements.contains(.noteSection))
         XCTAssertTrue(contract.detailElements.contains(.timestampedNoteEntries))
-        XCTAssertTrue(contract.detailElements.contains(.appendOnlyNoteInput))
         XCTAssertTrue(contract.detailElements.contains(.subtaskSection))
         XCTAssertTrue(contract.detailElements.contains(.subtaskCompletionDate))
         XCTAssertTrue(contract.detailElements.contains(.subtaskLockedIcon))
@@ -242,5 +240,20 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.reviewElements.contains(.unfinishedReasonInput))
         XCTAssertTrue(contract.reviewElements.contains(.tomorrowNoteInput))
         XCTAssertTrue(contract.reviewElements.contains(.autosavedIndicator))
+    }
+
+    func testTaskNotesExposeComposeEditAndDeleteCapabilitiesWithoutAppendOnlySemantics() {
+        let contract = MacUIDesignContract.current
+
+        XCTAssertTrue(contract.detailElements.contains(.noteComposerInput))
+        XCTAssertTrue(contract.detailElements.contains(.singleLineNoteComposer))
+        XCTAssertTrue(contract.detailElements.contains(.singleNoteSurface))
+        XCTAssertTrue(contract.detailElements.contains(.noteEntryOverflowMenu))
+        XCTAssertTrue(contract.detailElements.contains(.editableNoteEntries))
+        XCTAssertTrue(contract.detailElements.contains(.deletableNoteEntries))
+        XCTAssertFalse(contract.detailElements.map(\.rawValue).contains("appendOnlyNoteInput"))
+        XCTAssertTrue(contract.taskActions.contains(.addNote))
+        XCTAssertTrue(contract.taskActions.contains(.editNote))
+        XCTAssertTrue(contract.taskActions.contains(.deleteNote))
     }
 }

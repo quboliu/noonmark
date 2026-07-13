@@ -84,7 +84,9 @@ public struct SyncRecordMapper: Sendable {
                 id: "definition:\(definition.id.rawValue.uuidString)",
                 type: .taskDefinition,
                 entityID: definition.id.rawValue.uuidString,
-                modifiedAt: definition.supersededAt ?? definition.createdAt,
+                modifiedAt: definition.noteEntries.reduce(
+                    definition.supersededAt ?? definition.createdAt
+                ) { max($0, $1.updatedAt) },
                 deviceID: deviceID
             ),
             payload: definition
@@ -100,7 +102,9 @@ public struct SyncRecordMapper: Sendable {
                 id: "trace:\(trace.id.rawValue.uuidString)",
                 type: .dayTrace,
                 entityID: trace.id.rawValue.uuidString,
-                modifiedAt: trace.settledAt ?? trace.completedAt ?? trace.createdAt,
+                modifiedAt: trace.noteEntries.reduce(
+                    trace.settledAt ?? trace.completedAt ?? trace.createdAt
+                ) { max($0, $1.updatedAt) },
                 deviceID: deviceID
             ),
             payload: trace

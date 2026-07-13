@@ -66,6 +66,59 @@ final class SyncSnapshotDifferTests: XCTestCase {
         XCTAssertEqual(entries.map(\.entityID).last, "default")
     }
 
+    func testPoolNoteEditAndDeleteBecomeCurrentDefinitionSyncRecord() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "附言 journal",
+            initialNoteBody: "待编辑",
+            now: now
+        )
+        let editedID = try XCTUnwrap(
+            engine.taskPool().first?.definition.activeNoteEntries.first?.id
+        )
+        let deletedID = try engine.appendPoolNote(
+            chainID: chainID,
+            body: "待删除",
+            now: now.addingTimeInterval(10)
+        )
+        let oldSnapshot = engine.snapshot()
+
+        try engine.editPoolNote(
+            chainID: chainID,
+            noteID: editedID,
+            body: "编辑完成",
+            now: now.addingTimeInterval(20)
+        )
+        try engine.deletePoolNote(
+            chainID: chainID,
+            noteID: deletedID,
+            now: now.addingTimeInterval(30)
+        )
+        let newSnapshot = engine.snapshot()
+        let entries = try SyncSnapshotDiffer().journalEntries(
+            from: oldSnapshot,
+            to: newSnapshot,
+            changedAt: later,
+            deviceID: SyncDeviceID("mac-a")
+        )
+
+        XCTAssertEqual(entries.map(\.entityType), [.taskChain, .taskDefinition])
+        let definitionEntry = try XCTUnwrap(
+            entries.first { $0.entityType == .taskDefinition }
+        )
+        let record = try SyncRecordMaterializer().record(
+            for: definitionEntry,
+            in: newSnapshot
+        )
+        let definition = try SyncRecordMapper().decodeTaskDefinition(record)
+
+        XCTAssertEqual(record.modifiedAt, now.addingTimeInterval(30))
+        XCTAssertEqual(definition.activeNoteEntries.map(\.body), ["编辑完成"])
+        XCTAssertNotNil(
+            definition.noteEntries.first(where: { $0.id == deletedID })?.deletedAt
+        )
+    }
+
     func testTraceClassificationSnapshotTravelsAsImmutableEventAndRoundTrips() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "延续时同步轨迹分类快照", now: now)

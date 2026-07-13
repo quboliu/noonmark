@@ -181,6 +181,7 @@ private struct LaunchAutomation {
         append(WorkflowE2EAutomation.fromCommandLine(), to: &actions)
         append(LifecycleE2EAutomation.fromCommandLine(), to: &actions)
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
+        append(TaskNoteE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskTitleDeleteE2EAutomation.fromCommandLine(), to: &actions)
         append(QuickTaskReturnE2EAutomation.fromCommandLine(), to: &actions)
         append(ReportedBugsE2EAutomation.fromCommandLine(), to: &actions)
@@ -470,7 +471,7 @@ private struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                 operation: .createTask(
                     title: "E2E 编辑后的测量",
                     descriptionText: "取得真实数据",
-                    note: "保留第一项并修改",
+                    initialNoteBody: "保留第一项并修改",
                     plannedSubtasks: [],
                     targetDate: nil
                 )
@@ -480,7 +481,7 @@ private struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                 operation: .createTask(
                     title: "E2E 拆分后的验证",
                     descriptionText: "取得真实数据",
-                    note: "由用户拆分新增",
+                    initialNoteBody: "由用户拆分新增",
                     plannedSubtasks: [],
                     targetDate: nil
                 )
@@ -1645,6 +1646,202 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
             withIntermediateDirectories: true
         )
         try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private struct TaskNoteE2EState: Codable {
+    let chainID: TaskChainID
+    let definitionID: TaskDefinitionID
+    let traceID: DayTraceID
+    let editedNoteID: TaskNoteEntryID
+    let deletedNoteID: TaskNoteEntryID
+}
+
+private struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode {
+        case mutate
+        case verify
+    }
+
+    private static let title = "E2E 附言编辑删除"
+    private static let editedBody = "VISIBLE NOTE 7263"
+    private static let deletedBody = "GHOST NOTE 9184"
+
+    private let mode: Mode?
+    let stateURL: URL?
+    let resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> TaskNoteE2EAutomation? {
+        let shouldMutate = CommandLine.arguments.contains("--e2e-task-note-mutate")
+        let shouldVerify = CommandLine.arguments.contains("--e2e-task-note-verify")
+        guard shouldMutate || shouldVerify else { return nil }
+
+        let mode: Mode? = switch (shouldMutate, shouldVerify) {
+        case (true, false): .mutate
+        case (false, true): .verify
+        default: nil
+        }
+        return TaskNoteE2EAutomation(
+            mode: mode,
+            stateURL: NoonmarkStore.commandLineValue(after: "--e2e-task-note-state-url")
+                .map { URL(fileURLWithPath: $0) },
+            resultURL: NoonmarkStore.commandLineValue(after: "--e2e-task-note-result-url")
+                .map { URL(fileURLWithPath: $0) }
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        do {
+            guard let mode, let stateURL, let resultURL else {
+                throw TaskNoteE2EAutomationError.failed("missing or conflicting task-note automation arguments")
+            }
+            switch mode {
+            case .mutate:
+                try mutate(on: store, stateURL: stateURL)
+            case .verify:
+                try verify(on: store, stateURL: stateURL)
+            }
+            try writeResult("ok", to: resultURL)
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)", to: resultURL)
+        }
+    }
+
+    @MainActor
+    private func mutate(on store: NoonmarkStore, stateURL: URL) throws {
+        guard store.engine.chains.isEmpty,
+              store.engine.definitions.isEmpty,
+              store.engine.traces.isEmpty
+        else {
+            throw TaskNoteE2EAutomationError.failed("isolated task-note database was not empty")
+        }
+
+        store.page = .pool
+        store.poolText = Self.title
+        store.addPoolTask()
+        guard let chainID = store.selectedPoolChainID,
+              let initialDefinition = store.currentDefinition(for: chainID),
+              initialDefinition.activeNoteEntries.count == 1
+        else {
+            throw TaskNoteE2EAutomationError.failed("task-note fixture was not created in the task pool")
+        }
+
+        store.detailNoteText = Self.deletedBody
+        store.appendPoolNote(chainID: chainID)
+        guard let definition = store.currentDefinition(for: chainID),
+              definition.activeNoteEntries.count == 2,
+              let editedNoteID = definition.activeNoteEntries.first?.id,
+              let deletedNoteID = definition.activeNoteEntries.last?.id,
+              editedNoteID != deletedNoteID
+        else {
+            throw TaskNoteE2EAutomationError.failed("task-note fixture did not contain two stable entries")
+        }
+
+        store.schedulePoolTask(chainID, date: store.today)
+        guard let traceID = store.selectedTraceID,
+              let scheduledTrace = store.engine.traces[traceID],
+              scheduledTrace.definitionID == definition.id,
+              scheduledTrace.activeNoteEntries.map(\.id) == [editedNoteID, deletedNoteID]
+        else {
+            throw TaskNoteE2EAutomationError.failed("task-note entries were not snapshotted into the Day Todo")
+        }
+
+        store.editTraceNote(traceID: traceID, noteID: editedNoteID, body: Self.editedBody)
+        store.deleteTraceNote(traceID: traceID, noteID: deletedNoteID)
+        guard let mutatedTrace = store.engine.traces[traceID],
+              mutatedTrace.noteEntries.count == 2,
+              mutatedTrace.activeNoteEntries.map(\.id) == [editedNoteID],
+              mutatedTrace.activeNoteEntries.first?.body == Self.editedBody,
+              let deletedEntry = mutatedTrace.noteEntries.first(where: { $0.id == deletedNoteID }),
+              deletedEntry.body.isEmpty,
+              deletedEntry.deletedAt != nil,
+              deletedEntry.updatedAt == deletedEntry.deletedAt
+        else {
+            throw TaskNoteE2EAutomationError.failed("task-note edit/delete mutation did not produce the expected state")
+        }
+
+        store.persist()
+        try writeState(
+            TaskNoteE2EState(
+                chainID: chainID,
+                definitionID: definition.id,
+                traceID: traceID,
+                editedNoteID: editedNoteID,
+                deletedNoteID: deletedNoteID
+            ),
+            to: stateURL
+        )
+    }
+
+    @MainActor
+    private func verify(on store: NoonmarkStore, stateURL: URL) throws {
+        let state = try readState(from: stateURL)
+        guard let chain = store.engine.chains[state.chainID],
+              chain.state == .active,
+              let definition = store.engine.definitions[state.definitionID],
+              definition.chainID == state.chainID,
+              let trace = store.engine.traces[state.traceID],
+              trace.chainID == state.chainID,
+              trace.definitionID == state.definitionID,
+              trace.noteEntries.count == 2,
+              let editedEntry = trace.noteEntries.first(where: { $0.id == state.editedNoteID }),
+              editedEntry.body == Self.editedBody,
+              editedEntry.deletedAt == nil,
+              editedEntry.updatedAt >= editedEntry.createdAt,
+              let deletedEntry = trace.noteEntries.first(where: { $0.id == state.deletedNoteID }),
+              deletedEntry.body.isEmpty,
+              deletedEntry.deletedAt != nil,
+              deletedEntry.updatedAt == deletedEntry.deletedAt,
+              deletedEntry.updatedAt >= deletedEntry.createdAt,
+              trace.activeNoteEntries.map(\.id) == [state.editedNoteID],
+              definition.activeNoteEntries.count == 2,
+              definition.activeNoteEntries.contains(where: {
+                  $0.id == state.deletedNoteID && $0.body == Self.deletedBody
+              })
+        else {
+            throw TaskNoteE2EAutomationError.failed("task-note state did not survive restart exactly")
+        }
+
+        store.page = .day
+        store.selectedDate = store.today
+        store.selectedCalendarDate = store.today
+        store.selectTrace(state.traceID)
+    }
+
+    private func writeState(_ state: TaskNoteE2EState, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(state).write(to: url, options: .atomic)
+    }
+
+    private func readState(from url: URL) throws -> TaskNoteE2EState {
+        try JSONDecoder().decode(TaskNoteE2EState.self, from: Data(contentsOf: url))
+    }
+
+    private func writeResult(_ result: String, to url: URL?) throws {
+        guard let url else { return }
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum TaskNoteE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            message
+        }
     }
 }
 
@@ -3006,7 +3203,11 @@ final class NoonmarkStore: ObservableObject {
         let originalSnapshot = engine.snapshot()
         do {
             pushUndoSnapshot()
-            let chainID = try engine.createPoolTask(title: draft.title, descriptionText: "任务池中的待排期任务。", note: "可以排期到今天、明天或指定日期。")
+            let chainID = try engine.createPoolTask(
+                title: draft.title,
+                descriptionText: "任务池中的待排期任务。",
+                initialNoteBody: "可以排期到今天、明天或指定日期。"
+            )
             let savedWithClassification = try applyTaskDraftLabels(
                 chainID: chainID,
                 labelNames: draft.labelNames
@@ -3279,14 +3480,13 @@ final class NoonmarkStore: ObservableObject {
         reviewAutosaveMessage = "已自动保存"
     }
 
-    func updateTraceText(traceID: DayTraceID, descriptionText: String? = nil, note: String? = nil) {
+    func updateTraceText(traceID: DayTraceID, descriptionText: String) {
         guard let trace = engine.traces[traceID] else { return }
         do {
             pushUndoSnapshotIfAllowed(on: trace.date)
             try engine.updateTraceText(
                 traceID: traceID,
-                descriptionText: descriptionText ?? trace.descriptionText,
-                note: note ?? trace.note,
+                descriptionText: descriptionText,
                 today: today
             )
             objectWillChange.send()
@@ -3325,15 +3525,14 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
-    func updatePoolTaskText(chainID: TaskChainID, descriptionText: String? = nil, note: String? = nil) {
+    func updatePoolTaskText(chainID: TaskChainID, descriptionText: String) {
         guard let definition = currentDefinition(for: chainID) else { return }
         do {
             objectWillChange.send()
             try engine.updatePoolTask(
                 chainID: chainID,
                 title: definition.title,
-                descriptionText: descriptionText ?? definition.descriptionText,
-                note: note ?? definition.note
+                descriptionText: descriptionText
             )
             persist()
         } catch {
@@ -3366,17 +3565,77 @@ final class NoonmarkStore: ObservableObject {
     func appendTraceNote(traceID: DayTraceID) {
         let body = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard body.isEmpty == false, let trace = engine.traces[traceID] else { return }
-        let nextNote = DetailNoteEntryStorage.appending(body, to: trace.note)
-        updateTraceText(traceID: traceID, note: nextNote)
-        detailNoteText = ""
+        do {
+            pushUndoSnapshotIfAllowed(on: trace.date)
+            _ = try engine.appendTraceNote(traceID: traceID, body: body, today: today)
+            detailNoteText = ""
+            objectWillChange.send()
+            persist()
+        } catch {
+            showToast(error.localizedDescription)
+        }
     }
 
     func appendPoolNote(chainID: TaskChainID) {
         let body = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard body.isEmpty == false, let definition = currentDefinition(for: chainID) else { return }
-        let nextNote = DetailNoteEntryStorage.appending(body, to: definition.note)
-        updatePoolTaskText(chainID: chainID, note: nextNote)
-        detailNoteText = ""
+        guard body.isEmpty == false else { return }
+        do {
+            pushUndoSnapshot()
+            _ = try engine.appendPoolNote(chainID: chainID, body: body)
+            detailNoteText = ""
+            objectWillChange.send()
+            persist()
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func editTraceNote(traceID: DayTraceID, noteID: TaskNoteEntryID, body: String) {
+        guard let trace = engine.traces[traceID] else { return }
+        do {
+            pushUndoSnapshotIfAllowed(on: trace.date)
+            try engine.editTraceNote(traceID: traceID, noteID: noteID, body: body, today: today)
+            objectWillChange.send()
+            persist()
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func deleteTraceNote(traceID: DayTraceID, noteID: TaskNoteEntryID) {
+        guard let trace = engine.traces[traceID] else { return }
+        do {
+            pushUndoSnapshotIfAllowed(on: trace.date)
+            try engine.deleteTraceNote(traceID: traceID, noteID: noteID, today: today)
+            objectWillChange.send()
+            persist()
+            showToast("已删除附言")
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func editPoolNote(chainID: TaskChainID, noteID: TaskNoteEntryID, body: String) {
+        do {
+            pushUndoSnapshot()
+            try engine.editPoolNote(chainID: chainID, noteID: noteID, body: body)
+            objectWillChange.send()
+            persist()
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+
+    func deletePoolNote(chainID: TaskChainID, noteID: TaskNoteEntryID) {
+        do {
+            pushUndoSnapshot()
+            try engine.deletePoolNote(chainID: chainID, noteID: noteID)
+            objectWillChange.send()
+            persist()
+            showToast("已删除附言")
+        } catch {
+            showToast(error.localizedDescription)
+        }
     }
 
     func setManualProgress(traceID: DayTraceID, percent: Double) {
@@ -4448,12 +4707,13 @@ final class NoonmarkStore: ObservableObject {
     }
 
     private func seed() {
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        var seedClock = 0
-        func seedNow() -> Date {
-            defer { seedClock += 1 }
-            return now.addingTimeInterval(TimeInterval(seedClock))
-        }
+        let day0 = LocalDate("2026-07-01")
+        let dayMinus3 = LocalDate("2026-07-02")
+        let day1 = LocalDate("2026-07-03")
+        let day2 = LocalDate("2026-07-04")
+        let day3 = today
+        let day4 = LocalDate("2026-07-06")
+        let day5 = LocalDate("2026-07-07")
         func eventTime(_ date: LocalDate, hour: Int, minute: Int) -> Date {
             var components = DateComponents()
             components.year = date.year
@@ -4461,7 +4721,13 @@ final class NoonmarkStore: ObservableObject {
             components.day = date.day
             components.hour = hour
             components.minute = minute
-            return Calendar(identifier: .gregorian).date(from: components) ?? now
+            return Calendar(identifier: .gregorian).date(from: components) ?? .distantPast
+        }
+        let now = eventTime(day0, hour: 8, minute: 0)
+        var seedClock = 0
+        func seedNow() -> Date {
+            defer { seedClock += 1 }
+            return now.addingTimeInterval(TimeInterval(seedClock))
         }
         func setClassification(
             chainID: TaskChainID,
@@ -4488,19 +4754,10 @@ final class NoonmarkStore: ObservableObject {
                 now: timestamp
             )
         }
-        let day0 = LocalDate("2026-07-01")
-        let dayMinus3 = LocalDate("2026-07-02")
-        let day1 = LocalDate("2026-07-03")
-        let day2 = LocalDate("2026-07-04")
-        let day3 = today
-        let day4 = LocalDate("2026-07-06")
-        let day5 = LocalDate("2026-07-07")
-
         do {
             let okr = try engine.createPoolTask(
                 title: "整理 Q3 OKR 草案",
                 descriptionText: "汇总三条产品线负责人给的季度目标，收敛成不超过 3 个 O、每个 O 配 3 个可量化 KR。",
-                note: "[2026-07-05 14:20] 等数据组下午的留存看板再定第 2 个 KR 的口径。",
                 now: seedNow()
             )
             try setClassification(
@@ -4534,6 +4791,12 @@ final class NoonmarkStore: ObservableObject {
             let okrDay1 = try engine.continueTrace(traceID: okrDay0, targetDate: day1, today: day1, now: now)
             let okrToday = try engine.continueTrace(traceID: okrDay1, targetDate: day3, today: day1, now: now)
             try engine.setManualProgress(traceID: okrToday, percent: 30, today: day3)
+            _ = try engine.appendTraceNote(
+                traceID: okrToday,
+                body: "等数据组下午的留存看板再定第 2 个 KR 的口径。",
+                today: day3,
+                now: eventTime(day3, hour: 14, minute: 20)
+            )
 
             let contract = try engine.createPoolTask(title: "回复设计合同邮件", descriptionText: "确认合同条款并回复对方。", now: seedNow())
             let contractTrace = try engine.scheduleFromPool(chainID: contract, date: day1, today: day1, now: now)
@@ -8087,7 +8350,7 @@ struct ZhulongContextModel {
         case .pool:
             let tasks = store.engine.taskPool()
             let contextCount = tasks.filter {
-                ($0.definition.descriptionText ?? "").isEmpty == false || ($0.definition.note ?? "").isEmpty == false
+                ($0.definition.descriptionText ?? "").isEmpty == false || $0.definition.activeNoteEntries.isEmpty == false
             }.count
             let unclassifiedCount = tasks.filter { store.isUnclassified($0.chain.id) }.count
             return ZhulongContextModel(
@@ -8387,12 +8650,12 @@ struct PoolSummaryModel {
         let orderedTasks = store.engine.taskPool()
             .sorted { $0.definition.createdAt < $1.definition.createdAt }
         let contextCount = orderedTasks.filter {
-            ($0.definition.descriptionText ?? "").isEmpty == false || ($0.definition.note ?? "").isEmpty == false
+            ($0.definition.descriptionText ?? "").isEmpty == false || $0.definition.activeNoteEntries.isEmpty == false
         }.count
         let plannedCount = orderedTasks.filter { $0.definition.plannedSubtasks.isEmpty == false }.count
         let needsDetailCount = orderedTasks.filter {
             ($0.definition.descriptionText ?? "").isEmpty &&
-                ($0.definition.note ?? "").isEmpty &&
+                $0.definition.activeNoteEntries.isEmpty &&
                 $0.definition.plannedSubtasks.isEmpty
         }.count
         let unclassifiedCount = orderedTasks.filter { store.isUnclassified($0.chain.id) }.count
@@ -8617,7 +8880,7 @@ struct PoolSummaryQueueRow: View {
 
     var meta: String {
         let hasDescription = (task.definition.descriptionText ?? "").isEmpty == false
-        let hasNote = (task.definition.note ?? "").isEmpty == false
+        let hasNote = task.definition.activeNoteEntries.isEmpty == false
         let plannedSubtaskCount = task.definition.plannedSubtasks.count
         var parts = ["\(PoolSummaryFormatter.createdAtLabel(task.definition.createdAt)) 入池"]
         if store.isUnclassified(task.chain.id) {
@@ -9034,8 +9297,6 @@ struct CompletedRecordDetail: View {
     @EnvironmentObject private var store: NoonmarkStore
     let item: CompletedPoolItem
 
-    var editableText: Bool { item.trace.date >= store.today }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader("任务详情", onClose: { store.clearSelection() }, trailing: {
@@ -9052,7 +9313,7 @@ struct CompletedRecordDetail: View {
                     set: { store.updateTraceText(traceID: item.trace.id, descriptionText: $0) }
                 ),
                 placeholder: "补充这个任务的背景、目标或范围…",
-                editable: editableText
+                editable: false
             )
 
             HStack(spacing: 8) {
@@ -9078,8 +9339,8 @@ struct CompletedRecordDetail: View {
 
             DetailNotesSection(
                 traceID: item.trace.id,
-                noteText: item.trace.note ?? item.definition.note,
-                editable: editableText,
+                entries: item.trace.activeNoteEntries,
+                editable: false,
                 placeholder: "追加附言，回车确认"
             )
         }
@@ -9384,7 +9645,7 @@ struct TaskDetail: View {
             }
             DetailNotesSection(
                 traceID: trace.id,
-                noteText: trace.note ?? definition.note,
+                entries: trace.activeNoteEntries,
                 editable: canEditText,
                 placeholder: "追加附言，回车确认"
             )
@@ -9622,109 +9883,189 @@ struct EditableDetailText: View {
     }
 }
 
-struct DetailNoteEntry: Identifiable {
-    let id: Int
-    let timestamp: String
-    let body: String
-}
-
-enum DetailNoteEntryStorage {
-    private static let linePrefix = "["
-    private static let lineSeparator = "] "
-
-    static func entries(from noteText: String?) -> [DetailNoteEntry] {
-        let lines = (noteText ?? "")
-            .split(whereSeparator: \.isNewline)
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { $0.isEmpty == false }
-
-        return lines.enumerated().map { index, line in
-            guard line.hasPrefix(linePrefix),
-                  let separatorRange = line.range(of: lineSeparator)
-            else {
-                return DetailNoteEntry(id: index, timestamp: "已有附言", body: line)
-            }
-            let timestamp = String(line[line.index(after: line.startIndex)..<separatorRange.lowerBound])
-            let body = String(line[separatorRange.upperBound...])
-            return DetailNoteEntry(id: index, timestamp: timestamp, body: body)
-        }
-    }
-
-    static func appending(_ body: String, to noteText: String?) -> String {
-        let timestamp = noteTimestampFormatter.string(from: Date())
-        let line = "[\(timestamp)] \(body)"
-        let existing = noteText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return existing.isEmpty ? line : "\(existing)\n\(line)"
-    }
-
-    private static let noteTimestampFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_Hans_SG")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        return formatter
-    }()
-}
-
 struct DetailNotesSection: View {
     @EnvironmentObject private var store: NoonmarkStore
     let traceID: DayTraceID
-    let noteText: String?
+    let entries: [TaskNoteEntry]
     let editable: Bool
     let placeholder: String
 
-    var entries: [DetailNoteEntry] {
-        DetailNoteEntryStorage.entries(from: noteText)
+    var body: some View {
+        TaskNoteEntriesSection(
+            entries: entries,
+            editable: editable,
+            placeholder: placeholder,
+            newNoteText: $store.detailNoteText,
+            onAppend: { store.appendTraceNote(traceID: traceID) },
+            onEdit: { noteID, body in
+                store.editTraceNote(traceID: traceID, noteID: noteID, body: body)
+            },
+            onDelete: { noteID in
+                store.deleteTraceNote(traceID: traceID, noteID: noteID)
+            }
+        )
     }
+}
+
+struct TaskNoteEntriesSection: View {
+    let entries: [TaskNoteEntry]
+    let editable: Bool
+    let placeholder: String
+    @Binding var newNoteText: String
+    let onAppend: () -> Void
+    let onEdit: (TaskNoteEntryID, String) -> Void
+    let onDelete: (TaskNoteEntryID) -> Void
+
+    @State private var editingNoteID: TaskNoteEntryID?
+    @State private var editDraft = ""
 
     var body: some View {
         if entries.isEmpty == false || editable {
             DetailSection("附言") {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(entries) { entry in
-                        DetailNoteEntryRow(entry: entry)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        DetailNoteEntryRow(
+                            entry: entry,
+                            editable: editable,
+                            isEditing: editingNoteID == entry.id,
+                            editDraft: $editDraft,
+                            onStartEditing: {
+                                editDraft = entry.body
+                                editingNoteID = entry.id
+                            },
+                            onCancelEditing: {
+                                editDraft = ""
+                                editingNoteID = nil
+                            },
+                            onSaveEditing: {
+                                let body = editDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard body.isEmpty == false else { return }
+                                onEdit(entry.id, body)
+                                editDraft = ""
+                                editingNoteID = nil
+                            },
+                            onDelete: {
+                                onDelete(entry.id)
+                                editDraft = ""
+                                editingNoteID = nil
+                            }
+                        )
+
+                        if index < entries.count - 1 || editable {
+                            Divider()
+                                .overlay(Theme.line)
+                        }
                     }
 
                     if editable {
                         MarkdownEditor(
-                            text: $store.detailNoteText,
-                            placeholder: placeholder.replacingOccurrences(of: "回车确认", with: "⌘↩ 确认"),
-                            style: .body,
+                            text: $newNoteText,
+                            placeholder: placeholder,
+                            style: .compact,
                             warm: true,
-                            onCommit: { store.appendTraceNote(traceID: traceID) }
+                            showsSurface: false,
+                            height: 32,
+                            commitsOnReturn: true,
+                            onCommit: onAppend
                         )
                             .foregroundStyle(Theme.text1)
-                            .frame(minHeight: 76)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
-                            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                            .accessibilityIdentifier("detail.note.composer")
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
             }
         }
     }
 }
 
 struct DetailNoteEntryRow: View {
-    let entry: DetailNoteEntry
+    let entry: TaskNoteEntry
+    let editable: Bool
+    let isEditing: Bool
+    @Binding var editDraft: String
+    let onStartEditing: () -> Void
+    let onCancelEditing: () -> Void
+    let onSaveEditing: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(entry.timestamp)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(Theme.text3)
-                .monospacedDigit()
-            MarkdownText(entry.body)
-                .font(.system(size: 12))
-                .italic()
-                .foregroundStyle(Theme.text2)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(Self.timestampFormatter.string(from: entry.createdAt))
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(Theme.text3)
+                    .monospacedDigit()
+                Spacer(minLength: 0)
+                if editable, !isEditing {
+                    Menu {
+                        Button("编辑附言", systemImage: "pencil", action: onStartEditing)
+                            .accessibilityIdentifier("detail.note.edit.\(entry.id.description)")
+                        Button("删除附言", systemImage: "trash", role: .destructive, action: onDelete)
+                            .accessibilityIdentifier("detail.note.delete.\(entry.id.description)")
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.text3)
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel("附言操作")
+                    .accessibilityIdentifier("detail.note.actions.\(entry.id.description)")
+                }
+            }
+
+            if isEditing {
+                MarkdownEditor(
+                    text: $editDraft,
+                    placeholder: "编辑附言…",
+                    style: .body,
+                    warm: true,
+                    showsSurface: false,
+                    height: 58
+                )
+                    .foregroundStyle(Theme.text1)
+                    .frame(minHeight: 58)
+                    .accessibilityIdentifier("detail.note.editor.\(entry.id.description)")
+
+                HStack(spacing: 10) {
+                    Spacer(minLength: 0)
+                    Button("取消", action: onCancelEditing)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.text3)
+                    Button("保存", action: onSaveEditing)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .disabled(editDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            } else {
+                MarkdownText(entry.body)
+                    .font(.system(size: 12))
+                    .italic()
+                    .foregroundStyle(Theme.text2)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+        .accessibilityIdentifier("detail.note.entry.\(entry.id.description)")
     }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_SG")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter
+    }()
 }
 
 struct TraceContextCard: View {
@@ -9975,7 +10316,7 @@ struct PoolDetail: View {
                     SmallActionButton(store.copy.schedulePickSpecificDate) { store.showingPicker = .schedulePool(task.chain.id) }
                 }
             }
-            PoolNotesSection(chainID: task.chain.id, noteText: task.definition.note)
+            PoolNotesSection(chainID: task.chain.id, entries: task.definition.activeNoteEntries)
         }
     }
 }
@@ -10084,31 +10425,22 @@ struct PlannedSubtaskRow: View {
 struct PoolNotesSection: View {
     @EnvironmentObject private var store: NoonmarkStore
     let chainID: TaskChainID
-    let noteText: String?
-
-    var entries: [DetailNoteEntry] {
-        DetailNoteEntryStorage.entries(from: noteText)
-    }
+    let entries: [TaskNoteEntry]
 
     var body: some View {
-        DetailSection("附言") {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(entries) { entry in
-                    DetailNoteEntryRow(entry: entry)
-                }
-                MarkdownEditor(
-                    text: $store.detailNoteText,
-                    placeholder: "追加附言，⌘↩ 确认",
-                    style: .body,
-                    warm: true,
-                    onCommit: { store.appendPoolNote(chainID: chainID) }
-                )
-                    .foregroundStyle(Theme.text1)
-                    .frame(minHeight: 76)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+        TaskNoteEntriesSection(
+            entries: entries,
+            editable: true,
+            placeholder: "追加附言，⌘↩ 确认",
+            newNoteText: $store.detailNoteText,
+            onAppend: { store.appendPoolNote(chainID: chainID) },
+            onEdit: { noteID, body in
+                store.editPoolNote(chainID: chainID, noteID: noteID, body: body)
+            },
+            onDelete: { noteID in
+                store.deletePoolNote(chainID: chainID, noteID: noteID)
             }
-        }
+        )
     }
 }
 
@@ -10176,7 +10508,7 @@ struct FuturePlanDetail: View {
 
             DetailNotesSection(
                 traceID: trace.id,
-                noteText: trace.note ?? definition.note,
+                entries: trace.activeNoteEntries,
                 editable: true,
                 placeholder: "追加未来计划附言，回车确认"
             )
@@ -10277,7 +10609,7 @@ struct UnfinishedDetail: View {
 
                 DetailNotesSection(
                     traceID: trace.id,
-                    noteText: trace.note ?? item.definition.note,
+                    entries: trace.activeNoteEntries,
                     editable: false,
                     placeholder: "追加附言，回车确认"
                 )

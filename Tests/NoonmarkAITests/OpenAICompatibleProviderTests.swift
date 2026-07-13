@@ -63,7 +63,7 @@ final class OpenAICompatibleProviderTests: XCTestCase {
     }
 
     func testCompleteParsesStructuredSuggestionOperations() async throws {
-        let structured = #"{"summary":"建议先创建任务池任务。","confidence":0.66,"proposedOperations":[{"type":"createPoolTask","title":"整理远程结构化输出","descriptionText":"解析安全操作","note":"确认后落库"}]}"#
+        let structured = #"{"summary":"建议先创建任务池任务。","confidence":0.66,"proposedOperations":[{"type":"createPoolTask","title":"整理远程结构化输出","descriptionText":"解析安全操作","initialNoteBody":"确认后落库"}]}"#
         URLProtocolStub.handler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -95,7 +95,13 @@ final class OpenAICompatibleProviderTests: XCTestCase {
         XCTAssertEqual(response.confidence, 0.66)
         XCTAssertEqual(
             response.proposedOperations,
-            [.createPoolTask(title: "整理远程结构化输出", descriptionText: "解析安全操作", note: "确认后落库")]
+            [
+                .createPoolTask(
+                    title: "整理远程结构化输出",
+                    descriptionText: "解析安全操作",
+                    initialNoteBody: "确认后落库"
+                )
+            ]
         )
     }
 

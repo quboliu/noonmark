@@ -27,8 +27,13 @@ public struct AISuggestionDraftApplier: Sendable {
     ) throws -> AISuggestionApplyResult {
         try require(operation, belongsTo: draft)
         switch operation {
-        case let .createPoolTask(title, descriptionText, note):
-            _ = try engine.createPoolTask(title: title, descriptionText: descriptionText, note: note, now: now)
+        case let .createPoolTask(title, descriptionText, initialNoteBody):
+            _ = try engine.createPoolTask(
+                title: title,
+                descriptionText: descriptionText,
+                initialNoteBody: initialNoteBody,
+                now: now
+            )
             return AISuggestionApplyResult(operation: operation, message: "已创建任务池任务")
 
         case let .addSubtask(traceID, title, difficulty):

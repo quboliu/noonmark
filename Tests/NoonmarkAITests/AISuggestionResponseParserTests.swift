@@ -21,7 +21,7 @@ final class AISuggestionResponseParserTests: XCTestCase {
               "type": "createPoolTask",
               "title": "收敛远程建议解析",
               "descriptionText": "只允许安全草稿操作",
-              "note": "确认后才落库"
+              "initialNoteBody": "确认后才落库"
             },
             {
               "type": "updateDailyReview",
@@ -44,7 +44,7 @@ final class AISuggestionResponseParserTests: XCTestCase {
                 .createPoolTask(
                     title: "收敛远程建议解析",
                     descriptionText: "只允许安全草稿操作",
-                    note: "确认后才落库"
+                    initialNoteBody: "确认后才落库"
                 ),
                 .updateDailyReview(
                     date: LocalDate("2026-07-05"),

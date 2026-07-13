@@ -305,21 +305,42 @@ public struct TaskChain: Codable, Equatable, Sendable {
     }
 }
 
+public struct TaskNoteEntry: Codable, Equatable, Identifiable, Sendable {
+    public var id: TaskNoteEntryID
+    public var body: String
+    public var createdAt: Date
+    public var updatedAt: Date
+    public var deletedAt: Date?
+
+    public init(
+        id: TaskNoteEntryID = TaskNoteEntryID(),
+        body: String,
+        now: Date
+    ) {
+        self.id = id
+        self.body = body
+        self.createdAt = now
+        self.updatedAt = now
+        self.deletedAt = nil
+    }
+
+    public var isDeleted: Bool { deletedAt != nil }
+}
+
 public struct TaskDefinition: Codable, Equatable, Sendable {
     public var id: TaskDefinitionID
     public var chainID: TaskChainID
     public var sequence: Int
     public var title: String
     public var descriptionText: String?
-    public var note: String?
+    public var noteEntries: [TaskNoteEntry]
     public var plannedSubtasks: [PlannedSubtask]
     public var createdAt: Date
     public var supersededAt: Date?
     public var supersededByDefinitionID: TaskDefinitionID?
 
-    public var notes: String? {
-        get { descriptionText }
-        set { descriptionText = newValue }
+    public var activeNoteEntries: [TaskNoteEntry] {
+        noteEntries.filter { !$0.isDeleted }
     }
 
     public init(
@@ -328,8 +349,7 @@ public struct TaskDefinition: Codable, Equatable, Sendable {
         sequence: Int,
         title: String,
         descriptionText: String? = nil,
-        note: String? = nil,
-        notes: String? = nil,
+        noteEntries: [TaskNoteEntry] = [],
         plannedSubtasks: [PlannedSubtask] = [],
         now: Date
     ) {
@@ -337,39 +357,12 @@ public struct TaskDefinition: Codable, Equatable, Sendable {
         self.chainID = chainID
         self.sequence = sequence
         self.title = title
-        self.descriptionText = descriptionText ?? notes
-        self.note = note
+        self.descriptionText = descriptionText
+        self.noteEntries = noteEntries
         self.plannedSubtasks = plannedSubtasks.sorted { $0.position < $1.position }
         self.createdAt = now
         self.supersededAt = nil
         self.supersededByDefinitionID = nil
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case chainID
-        case sequence
-        case title
-        case descriptionText
-        case note
-        case plannedSubtasks
-        case createdAt
-        case supersededAt
-        case supersededByDefinitionID
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(TaskDefinitionID.self, forKey: .id)
-        chainID = try container.decode(TaskChainID.self, forKey: .chainID)
-        sequence = try container.decode(Int.self, forKey: .sequence)
-        title = try container.decode(String.self, forKey: .title)
-        descriptionText = try container.decodeIfPresent(String.self, forKey: .descriptionText)
-        note = try container.decodeIfPresent(String.self, forKey: .note)
-        plannedSubtasks = try container.decode([PlannedSubtask].self, forKey: .plannedSubtasks)
-        createdAt = try container.decode(Date.self, forKey: .createdAt)
-        supersededAt = try container.decodeIfPresent(Date.self, forKey: .supersededAt)
-        supersededByDefinitionID = try container.decodeIfPresent(TaskDefinitionID.self, forKey: .supersededByDefinitionID)
     }
 }
 
@@ -407,13 +400,17 @@ public struct DayTrace: Codable, Equatable, Sendable {
     public var priority: Int
     public var continuationSeq: Int
     public var descriptionText: String?
-    public var note: String?
+    public var noteEntries: [TaskNoteEntry]
     public var manualProgressPercent: Int?
     public var continuedFromTraceID: DayTraceID?
     public var changedToTraceID: DayTraceID?
     public var createdAt: Date
     public var completedAt: Date?
     public var settledAt: Date?
+
+    public var activeNoteEntries: [TaskNoteEntry] {
+        noteEntries.filter { !$0.isDeleted }
+    }
 
     public init(
         id: DayTraceID = DayTraceID(),
@@ -424,7 +421,7 @@ public struct DayTrace: Codable, Equatable, Sendable {
         priority: Int,
         continuationSeq: Int = 0,
         descriptionText: String? = nil,
-        note: String? = nil,
+        noteEntries: [TaskNoteEntry] = [],
         manualProgressPercent: Int? = nil,
         continuedFromTraceID: DayTraceID? = nil,
         now: Date
@@ -437,7 +434,7 @@ public struct DayTrace: Codable, Equatable, Sendable {
         self.priority = priority
         self.continuationSeq = continuationSeq
         self.descriptionText = descriptionText
-        self.note = note
+        self.noteEntries = noteEntries
         self.manualProgressPercent = manualProgressPercent
         self.continuedFromTraceID = continuedFromTraceID
         self.changedToTraceID = nil

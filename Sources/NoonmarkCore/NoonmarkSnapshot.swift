@@ -75,11 +75,47 @@ public extension NoonmarkSnapshot {
         guard traceIDs.count == traces.count else {
             throw NoonmarkError.invalidInput("snapshot contains duplicate trace identities")
         }
+        for definition in definitions {
+            try validateTaskNoteEntries(definition.noteEntries, owner: "task definition")
+        }
+        for trace in traces {
+            try validateTaskNoteEntries(trace.noteEntries, owner: "day trace")
+        }
         try validateClassificationReferences(
             chainIDs: chainIDs,
             traceIDs: traceIDs
         )
         try validateCurrentAndHistoricalClassificationSources(chainIDs: chainIDs)
+    }
+
+    private func validateTaskNoteEntries(
+        _ entries: [TaskNoteEntry],
+        owner: String
+    ) throws {
+        guard Set(entries.map(\.id)).count == entries.count else {
+            throw NoonmarkError.invalidInput("\(owner) contains duplicate task note identities")
+        }
+        for entry in entries {
+            guard entry.createdAt.timeIntervalSinceReferenceDate.isFinite,
+                  entry.updatedAt.timeIntervalSinceReferenceDate.isFinite,
+                  entry.updatedAt >= entry.createdAt
+            else {
+                throw NoonmarkError.invalidInput("\(owner) contains invalid task note timestamps")
+            }
+            if let deletedAt = entry.deletedAt {
+                guard deletedAt.timeIntervalSinceReferenceDate.isFinite,
+                      deletedAt == entry.updatedAt,
+                      entry.body.isEmpty
+                else {
+                    throw NoonmarkError.invalidInput("\(owner) contains an invalid task note tombstone")
+                }
+            } else {
+                let normalizedBody = entry.body.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard normalizedBody.isEmpty == false, normalizedBody == entry.body else {
+                    throw NoonmarkError.invalidInput("\(owner) contains an invalid active task note")
+                }
+            }
+        }
     }
 
     private func validateClassificationReferences(

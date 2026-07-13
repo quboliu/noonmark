@@ -32,7 +32,6 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
 
 public enum MacUIWindowMetric: String, CaseIterable, Sendable {
     case defaultLaunch1320x820
-    case prototypePreview1440x900
     case maxContent1400x880
 }
 
@@ -264,7 +263,12 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case descriptionWithoutSectionTitle
     case noteSection
     case timestampedNoteEntries
-    case appendOnlyNoteInput
+    case noteComposerInput
+    case singleLineNoteComposer
+    case singleNoteSurface
+    case noteEntryOverflowMenu
+    case editableNoteEntries
+    case deletableNoteEntries
     case subtaskSection
     case subtaskCompletionDate
     case subtaskLockedIcon
@@ -325,7 +329,9 @@ public enum MacUITaskAction: String, CaseIterable, Sendable {
     case toggleSubtask
     case cycleSubtaskDifficulty
     case editDescription
+    case addNote
     case editNote
+    case deleteNote
     case dragManualProgress
     case editDailyReview
     case changeTheme
@@ -504,5 +510,5 @@ public struct MacUIDesignContract: Sendable {
         self.backendCapabilities = backendCapabilities
     }
 
-    public static let claudeMacPrototype20260705 = MacUIDesignContract()
+    public static let current = MacUIDesignContract()
 }

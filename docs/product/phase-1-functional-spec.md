@@ -102,7 +102,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - `sequence`
 - `title`
 - `descriptionText`
-- `note`
+- `noteEntries`
 - `createdAt`
 - `supersededAt`
 - `supersededByDefinitionId`
@@ -113,7 +113,27 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 需要改变任务定义时，必须走变更：旧任务标注已变更，新任务开启新的任务链并拥有新定义。
 - 用户要补充任务边界时，优先添加子任务，而不是覆盖原定义。
 - `descriptionText` 表达任务背景、目标或范围；进入 Day Todo 后成为日轨迹快照。
-- `note` 表达临时想法、提醒或补充说明；进入 Day Todo 后成为日轨迹快照。
+- `noteEntries` 表达逐条记录的临时想法、提醒或补充说明；任务在任务池时只能经逐条附言接口追加、编辑或删除，不能整体覆盖数组。
+- 排期时只把当前有效的 `noteEntries` 复制给新 DayTrace；已经存在的 DayTrace 只读取自己的快照，不能回退读取 TaskDefinition。
+
+### TaskNoteEntry
+
+表示一条可独立编辑、删除和同步的任务附言。
+
+关键字段：
+
+- `id`
+- `body`
+- `createdAt`
+- `updatedAt`
+- `deletedAt`
+
+规则：
+
+- `id` 是稳定身份；编辑正文不能更换身份。
+- `createdAt`、`updatedAt` 和 `deletedAt` 必须由 NoonmarkCore 生成或推进，Provider 与 UI 不能自行指定。
+- 删除不做物理移除：正文清空，`deletedAt` 与该版本的 `updatedAt` 相同，以墓碑阻止旧副本复活。
+- 同一 TaskDefinition 或 DayTrace 内不能出现重复条目身份；有效条目正文不能为空。
 
 ### DayTrace
 
@@ -129,7 +149,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - `priority`
 - `continuationSeq`
 - `descriptionText`
-- `note`
+- `noteEntries`
 - `manualProgressPercent`
 - `continuedFromTraceId`
 - `changedToTraceId`
@@ -156,6 +176,8 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 历史未完成只能延续复制或废弃，不能回池。
 - 延续复制会让原 DayTrace 进入已延续，并在目标日期生成新 DayTrace。
 - 变更会让旧 DayTrace 进入已变更，并在当天生成新 DayTrace。
+- 当前日和未来日的 `pending` DayTrace 可以逐条追加、编辑或删除附言；历史、`completed` 和 `unfinished` DayTrace 的附言只读。
+- DayTrace 的 `noteEntries` 是独立快照，不能因条目为空或已删除而回退显示 TaskDefinition 的附言。
 
 ### PlannedTrace
 
@@ -370,8 +392,11 @@ func updatePriority(traceId: TraceID, newPriority: Int) throws
 ### TaskPoolUseCase
 
 ```swift
-func createPoolTask(title: String, descriptionText: String?, note: String?) throws -> TaskChainID
-func updatePoolTask(chainId: TaskChainID, title: String, descriptionText: String?, note: String?) throws
+func createPoolTask(title: String, descriptionText: String?, initialNoteBody: String?) throws -> TaskChainID
+func updatePoolTask(chainId: TaskChainID, title: String, descriptionText: String?) throws
+func appendPoolNote(chainId: TaskChainID, body: String) throws -> TaskNoteEntryID
+func editPoolNote(chainId: TaskChainID, noteId: TaskNoteEntryID, body: String) throws
+func deletePoolNote(chainId: TaskChainID, noteId: TaskNoteEntryID) throws
 func scheduleFromPool(chainId: TaskChainID, date: LocalDate) throws -> TraceID
 func deleteUnscheduledTask(chainId: TaskChainID) throws
 ```
@@ -379,6 +404,7 @@ func deleteUnscheduledTask(chainId: TaskChainID) throws
 约束：
 
 - 只有尚未产生日轨迹的任务才能覆盖编辑。
+- 只要任务当前位于任务池，附言仍可经稳定条目身份逐条追加、编辑或删除；这不等于覆盖任务定义或历史日轨迹。
 - 排期到未来日期后进入未来计划。
 - 排期到当前日期后进入 Day Todo 并生成日轨迹。
 
@@ -389,11 +415,14 @@ func markCompleted(traceId: TraceID, now: Instant) throws
 func undoCompleted(traceId: TraceID, now: Instant) throws
 func returnToPool(traceId: TraceID, now: Instant) throws
 func continueTrace(traceId: TraceID, targetDate: LocalDate, now: Instant) throws -> TraceID
-func changeTrace(traceId: TraceID, newTitle: String, newDescriptionText: String?, newNote: String?, now: Instant) throws -> TraceID
+func changeTrace(traceId: TraceID, newTitle: String, newDescriptionText: String?, initialNoteBody: String?, now: Instant) throws -> TraceID
 func abandonChain(from traceId: TraceID, now: Instant) throws
 func reactivateAbandonedChain(from traceId: TraceID, today: LocalDate, now: Instant) throws -> TraceID
 func copyAsNewTask(from traceId: TraceID, target: NewTaskTarget) throws -> TaskChainID
-func updateTraceText(traceId: TraceID, descriptionText: String?, note: String?) throws
+func updateTraceText(traceId: TraceID, descriptionText: String?) throws
+func appendTraceNote(traceId: TraceID, body: String, today: LocalDate) throws -> TaskNoteEntryID
+func editTraceNote(traceId: TraceID, noteId: TaskNoteEntryID, body: String, today: LocalDate) throws
+func deleteTraceNote(traceId: TraceID, noteId: TaskNoteEntryID, today: LocalDate) throws
 func setManualProgress(traceId: TraceID, percent: Int) throws
 func getTraceProgress(traceId: TraceID) -> TraceProgress
 ```
@@ -405,7 +434,8 @@ func getTraceProgress(traceId: TraceID) -> TraceProgress
 - `continueTrace` 只允许历史未完成或当前待完成，且任务链没有其他活跃日轨迹。
 - `changeTrace` 会生成新任务链、新定义和同日新日轨迹，旧日轨迹保留并指向新日轨迹。
 - `copyAsNewTask` 创建新任务链，不继承延续次数。
-- `updateTraceText` 只允许当前日或未来日的待完成日轨迹，历史日只读。
+- `updateTraceText` 与三项附言操作只允许当前日或未来日的待完成日轨迹；历史、已完成和未完成日轨迹只读。
+- 附言编辑保留条目身份；附言删除写入墓碑，不物理删除条目。
 - `setManualProgress` 只允许没有子任务的当前日待完成日轨迹，并且不能低于进度下限。
 - 有子任务的日轨迹进度由子任务难度权重自动计算。
 
@@ -554,6 +584,8 @@ func canUndoLastLocalAction() -> Bool
 - `ai_suggestion_drafts`
 - `app_preferences`
 - `sync_settings`
+
+`task_definitions` 与 `day_traces` 只用 `note_entries_json` 保存结构化 `TaskNoteEntry` 数组；当前 schema 和 fixture 只接受这一种结构。
 
 数据库约束建议：
 

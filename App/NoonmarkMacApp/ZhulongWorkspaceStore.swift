@@ -288,7 +288,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
                         ZhulongTodoDiffItem(operation: .createTask(
                             title: deliverable,
                             descriptionText: stage.objective,
-                            note: "来自规划阶段：\(stage.title)",
+                            initialNoteBody: "来自规划阶段：\(stage.title)",
                             plannedSubtasks: [],
                             targetDate: nil
                         ))

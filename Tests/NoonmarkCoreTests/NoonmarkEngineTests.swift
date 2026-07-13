@@ -408,22 +408,245 @@ final class NoonmarkEngineTests: XCTestCase {
         let chainID = try engine.createPoolTask(
             title: "整理 OKR",
             descriptionText: "汇总目标",
-            note: "等数据看板",
+            initialNoteBody: "等数据看板",
             now: now
         )
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
 
         XCTAssertEqual(engine.traces[traceID]?.descriptionText, "汇总目标")
-        XCTAssertEqual(engine.traces[traceID]?.note, "等数据看板")
+        let noteID = try XCTUnwrap(engine.traces[traceID]?.activeNoteEntries.first?.id)
+        XCTAssertEqual(engine.traces[traceID]?.activeNoteEntries.map(\.body), ["等数据看板"])
 
-        try engine.updateTraceText(traceID: traceID, descriptionText: "收敛成 3 个 O", note: "下午确认 KR", today: day1)
+        try engine.updateTraceText(traceID: traceID, descriptionText: "收敛成 3 个 O", today: day1)
+        try engine.editTraceNote(
+            traceID: traceID,
+            noteID: noteID,
+            body: "下午确认 KR",
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
         XCTAssertEqual(engine.traces[traceID]?.descriptionText, "收敛成 3 个 O")
+        XCTAssertEqual(engine.traces[traceID]?.activeNoteEntries.map(\.body), ["下午确认 KR"])
         XCTAssertEqual(engine.definitions[engine.traces[traceID]!.definitionID]?.descriptionText, "汇总目标")
 
         engine.settleDays(upTo: day2, now: now)
         XCTAssertThrowsError(
-            try engine.updateTraceText(traceID: traceID, descriptionText: "历史改写", note: nil, today: day2)
+            try engine.updateTraceText(traceID: traceID, descriptionText: "历史改写", today: day2)
         )
+        XCTAssertThrowsError(
+            try engine.deleteTraceNote(
+                traceID: traceID,
+                noteID: noteID,
+                today: day2,
+                now: now.addingTimeInterval(2)
+            )
+        )
+    }
+
+    func testTraceNoteCanBeEditedWithoutChangingEntryIdentity() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "整理 OKR",
+            initialNoteBody: "等数据看板",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let original = try XCTUnwrap(engine.traces[traceID]?.noteEntries.first)
+        let editedAt = now.addingTimeInterval(60)
+
+        try engine.editTraceNote(
+            traceID: traceID,
+            noteID: original.id,
+            body: "下午确认 KR",
+            today: day1,
+            now: editedAt
+        )
+
+        let edited = try XCTUnwrap(engine.traces[traceID]?.noteEntries.first)
+        XCTAssertEqual(edited.id, original.id)
+        XCTAssertEqual(edited.body, "下午确认 KR")
+        XCTAssertEqual(edited.createdAt, original.createdAt)
+        XCTAssertEqual(edited.updatedAt, editedAt)
+    }
+
+    func testDeletingOneTraceNotePreservesOtherEntriesAndCreatesATombstone() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "整理 OKR",
+            initialNoteBody: "等数据看板",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let firstID = try XCTUnwrap(engine.traces[traceID]?.activeNoteEntries.first?.id)
+        let secondID = try engine.appendTraceNote(
+            traceID: traceID,
+            body: "确认 KR 口径",
+            today: day1,
+            now: now.addingTimeInterval(30)
+        )
+        let deletedAt = now.addingTimeInterval(60)
+
+        try engine.deleteTraceNote(
+            traceID: traceID,
+            noteID: firstID,
+            today: day1,
+            now: deletedAt
+        )
+
+        let trace = try XCTUnwrap(engine.traces[traceID])
+        XCTAssertEqual(trace.activeNoteEntries.map(\.id), [secondID])
+        XCTAssertEqual(trace.activeNoteEntries.map(\.body), ["确认 KR 口径"])
+        let tombstone = try XCTUnwrap(trace.noteEntries.first(where: { $0.id == firstID }))
+        XCTAssertEqual(tombstone.body, "")
+        XCTAssertEqual(tombstone.deletedAt, deletedAt)
+        XCTAssertEqual(tombstone.updatedAt, deletedAt)
+    }
+
+    func testPoolNotesCanBeAppendedEditedAndDeletedByStableIdentity() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "整理任务池",
+            initialNoteBody: "先确认范围",
+            now: now
+        )
+        let originalID = try XCTUnwrap(engine.taskPool().first?.definition.activeNoteEntries.first?.id)
+        let secondID = try engine.appendPoolNote(
+            chainID: chainID,
+            body: "再安排日期",
+            now: now.addingTimeInterval(30)
+        )
+
+        try engine.editPoolNote(
+            chainID: chainID,
+            noteID: originalID,
+            body: "先确认最终范围",
+            now: now.addingTimeInterval(60)
+        )
+        try engine.deletePoolNote(
+            chainID: chainID,
+            noteID: secondID,
+            now: now.addingTimeInterval(90)
+        )
+
+        let definition = try XCTUnwrap(engine.taskPool().first?.definition)
+        XCTAssertEqual(definition.activeNoteEntries.map(\.id), [originalID])
+        XCTAssertEqual(definition.activeNoteEntries.map(\.body), ["先确认最终范围"])
+        XCTAssertEqual(definition.noteEntries.first(where: { $0.id == secondID })?.body, "")
+        XCTAssertEqual(
+            definition.noteEntries.first(where: { $0.id == secondID })?.deletedAt,
+            now.addingTimeInterval(90)
+        )
+    }
+
+    func testTaskDefinitionEncodingContainsOnlyStructuredNoteEntries() throws {
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(
+            title: "整理任务池",
+            initialNoteBody: "先确认范围",
+            now: now
+        )
+        let definition = try XCTUnwrap(engine.taskPool().first?.definition)
+
+        let data = try JSONEncoder().encode(definition)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertNotNil(object["noteEntries"])
+        XCTAssertNil(object["note"])
+        XCTAssertNil(object["notes"])
+    }
+
+    func testSnapshotRejectsDuplicateNoteIdentityWithinOneOwner() throws {
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(
+            title: "整理任务池",
+            initialNoteBody: "先确认范围",
+            now: now
+        )
+        var snapshot = engine.snapshot()
+        let note = try XCTUnwrap(snapshot.definitions.first?.noteEntries.first)
+        snapshot.definitions[0].noteEntries.append(note)
+
+        XCTAssertThrowsError(try NoonmarkEngine(snapshot: snapshot)) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidInput("task definition contains duplicate task note identities")
+            )
+        }
+    }
+
+    func testNoteMutationRejectsTimeBeforeTheEntryVersion() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "整理任务池",
+            initialNoteBody: "先确认范围",
+            now: now
+        )
+        let noteID = try XCTUnwrap(engine.taskPool().first?.definition.activeNoteEntries.first?.id)
+
+        XCTAssertThrowsError(
+            try engine.editPoolNote(
+                chainID: chainID,
+                noteID: noteID,
+                body: "倒序修改",
+                now: now.addingTimeInterval(-1)
+            )
+        )
+        XCTAssertEqual(
+            engine.taskPool().first?.definition.activeNoteEntries.map(\.body),
+            ["先确认范围"]
+        )
+    }
+
+    func testAppendingNoteRejectsNonfiniteOrOwnerPredatingTime() throws {
+        let poolEngine = NoonmarkEngine()
+        let poolChainID = try poolEngine.createPoolTask(
+            title: "任务池附言时间",
+            now: now
+        )
+
+        XCTAssertThrowsError(
+            try poolEngine.appendPoolNote(
+                chainID: poolChainID,
+                body: "倒序附言",
+                now: now.addingTimeInterval(-1)
+            )
+        )
+        XCTAssertThrowsError(
+            try poolEngine.appendPoolNote(
+                chainID: poolChainID,
+                body: "无限时间附言",
+                now: Date(timeIntervalSinceReferenceDate: .infinity)
+            )
+        )
+        XCTAssertTrue(poolEngine.taskPool().first?.definition.noteEntries.isEmpty == true)
+
+        let traceEngine = NoonmarkEngine()
+        let traceChainID = try traceEngine.createPoolTask(title: "轨迹附言时间", now: now)
+        let traceID = try traceEngine.scheduleFromPool(
+            chainID: traceChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        XCTAssertThrowsError(
+            try traceEngine.appendTraceNote(
+                traceID: traceID,
+                body: "早于轨迹的附言",
+                today: day1,
+                now: now.addingTimeInterval(-1)
+            )
+        )
+        XCTAssertTrue(traceEngine.traces[traceID]?.noteEntries.isEmpty == true)
     }
 
     func testPoolPlannedSubtasksAreCopiedWhenScheduled() throws {
@@ -603,7 +826,7 @@ final class NoonmarkEngineTests: XCTestCase {
         let chainID = try engine.createPoolTask(
             title: "导出导入数据包",
             descriptionText: "验证 JSON 数据包能恢复核心状态。",
-            note: "第一期手动数据交换。",
+            initialNoteBody: "第一期手动数据交换。",
             now: now
         )
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)

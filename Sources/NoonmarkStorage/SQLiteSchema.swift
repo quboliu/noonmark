@@ -1352,7 +1352,10 @@ public enum SQLiteSchema {
             sequence INTEGER NOT NULL,
             title TEXT NOT NULL CHECK (length(trim(title)) > 0),
             description_text TEXT,
-            note TEXT,
+            note_entries_json TEXT NOT NULL CHECK (
+                json_valid(note_entries_json)
+                AND json_type(note_entries_json) = 'array'
+            ),
             planned_subtasks_json TEXT,
             created_at TEXT NOT NULL,
             superseded_at TEXT,
@@ -1385,7 +1388,10 @@ public enum SQLiteSchema {
             priority INTEGER NOT NULL,
             continuation_seq INTEGER NOT NULL DEFAULT 0,
             description_text TEXT,
-            note TEXT,
+            note_entries_json TEXT NOT NULL CHECK (
+                json_valid(note_entries_json)
+                AND json_type(note_entries_json) = 'array'
+            ),
             manual_progress_percent INTEGER CHECK (
                 manual_progress_percent IS NULL
                 OR (manual_progress_percent >= 0 AND manual_progress_percent <= 100)
@@ -1921,7 +1927,7 @@ public enum SQLiteSchema {
             d.id AS definition_id,
             d.title,
             d.description_text,
-            d.note,
+            d.note_entries_json,
             c.created_at,
             c.updated_at
         FROM task_chains c
@@ -1938,7 +1944,7 @@ public enum SQLiteSchema {
             t.*,
             d.title,
             d.description_text AS definition_description_text,
-            d.note AS definition_note
+            d.note_entries_json AS definition_note_entries_json
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         WHERE t.status = 'pending'
@@ -1949,7 +1955,7 @@ public enum SQLiteSchema {
             t.*,
             d.title,
             d.description_text AS definition_description_text,
-            d.note AS definition_note
+            d.note_entries_json AS definition_note_entries_json
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         WHERE t.status IN ('unfinished', 'continued', 'abandoned')
@@ -1961,7 +1967,7 @@ public enum SQLiteSchema {
             d.id AS definition_id,
             d.title,
             d.description_text,
-            d.note,
+            d.note_entries_json,
             COUNT(u.id) AS unfinished_count,
             MAX(u.date) AS latest_unfinished_date,
             MAX(u.continuation_seq) AS max_continuation_seq,
@@ -1976,7 +1982,7 @@ public enum SQLiteSchema {
               SELECT 1 FROM day_traces done
               WHERE done.chain_id = c.id AND done.status = 'completed'
           )
-        GROUP BY c.id, d.id, d.title, d.description_text, d.note, active.id, active.date
+        GROUP BY c.id, d.id, d.title, d.description_text, d.note_entries_json, active.id, active.date
         """,
         """
         CREATE VIEW IF NOT EXISTS completed_pool_view AS
@@ -1984,7 +1990,7 @@ public enum SQLiteSchema {
             t.*,
             d.title,
             d.description_text AS definition_description_text,
-            d.note AS definition_note,
+            d.note_entries_json AS definition_note_entries_json,
             first_trace.date AS trajectory_start_date,
             t.date AS trajectory_completed_date
         FROM day_traces t
@@ -2089,7 +2095,7 @@ public enum SQLiteSchema {
             t.*,
             d.title,
             d.description_text AS definition_description_text,
-            d.note AS definition_note
+            d.note_entries_json AS definition_note_entries_json
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         """

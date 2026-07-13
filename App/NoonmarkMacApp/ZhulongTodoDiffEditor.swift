@@ -157,7 +157,7 @@ private struct EditableTodoDiffItem: Identifiable {
     enum Kind {
         case createTask(
             descriptionText: String?,
-            note: String?,
+            initialNoteBody: String?,
             plannedSubtasks: [ZhulongPlannedSubtaskDraft]
         )
         case addSubtask(traceID: DayTraceID, difficulty: SubtaskDifficulty)
@@ -186,10 +186,10 @@ private struct EditableTodoDiffItem: Identifiable {
     init(_ item: ZhulongTodoDiffItem) {
         id = item.id
         switch item.operation {
-        case let .createTask(title, descriptionText, note, plannedSubtasks, targetDate):
+        case let .createTask(title, descriptionText, initialNoteBody, plannedSubtasks, targetDate):
             kind = .createTask(
                 descriptionText: descriptionText,
-                note: note,
+                initialNoteBody: initialNoteBody,
                 plannedSubtasks: plannedSubtasks
             )
             self.title = title
@@ -280,12 +280,12 @@ private struct EditableTodoDiffItem: Identifiable {
     }
 
     func splitCopy() -> Self? {
-        guard case let .createTask(descriptionText, note, _) = kind else { return nil }
+        guard case let .createTask(descriptionText, initialNoteBody, _) = kind else { return nil }
         return Self(
             id: ZhulongTodoDiffItemID(),
             kind: .createTask(
                 descriptionText: descriptionText,
-                note: note,
+                initialNoteBody: initialNoteBody,
                 plannedSubtasks: []
             ),
             title: title + "（部分 2）",
@@ -300,11 +300,11 @@ private struct EditableTodoDiffItem: Identifiable {
         }
         let targetDate = try parseTargetDate()
         let operation: ZhulongTodoDiffOperation = switch kind {
-        case let .createTask(descriptionText, note, plannedSubtasks):
+        case let .createTask(descriptionText, initialNoteBody, plannedSubtasks):
             .createTask(
                 title: normalizedTitle,
                 descriptionText: descriptionText,
-                note: note,
+                initialNoteBody: initialNoteBody,
                 plannedSubtasks: plannedSubtasks,
                 targetDate: targetDate
             )

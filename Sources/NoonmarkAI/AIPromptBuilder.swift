@@ -124,9 +124,9 @@ public struct AIPromptBuilder: Sendable {
             parts.append("描述 \(descriptionText)")
         }
 
-        let note = trace.note ?? snapshot.definition.note
-        if let note = guardrail.sanitizeUserText(note), note.isEmpty == false {
-            parts.append("附言 \(note)")
+        let noteBodies = trace.activeNoteEntries.compactMap { guardrail.sanitizeUserText($0.body) }
+        if noteBodies.isEmpty == false {
+            parts.append("附言 \(noteBodies.joined(separator: "；"))")
         }
 
         if snapshot.subtasks.isEmpty == false {
@@ -145,8 +145,9 @@ public struct AIPromptBuilder: Sendable {
         if let descriptionText = guardrail.sanitizeUserText(task.definition.descriptionText), descriptionText.isEmpty == false {
             parts.append("描述：\(descriptionText)")
         }
-        if let note = guardrail.sanitizeUserText(task.definition.note), note.isEmpty == false {
-            parts.append("附言：\(note)")
+        let noteBodies = task.definition.activeNoteEntries.compactMap { guardrail.sanitizeUserText($0.body) }
+        if noteBodies.isEmpty == false {
+            parts.append("附言：\(noteBodies.joined(separator: "；"))")
         }
         return parts.joined(separator: "；")
     }

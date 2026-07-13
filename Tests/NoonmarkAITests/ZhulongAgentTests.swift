@@ -73,6 +73,45 @@ final class ZhulongAgentTests: XCTestCase {
         XCTAssertFalse(request.userPrompt.contains(chainID.description))
     }
 
+    func testPromptBuilderIncludesOnlyActiveStructuredNotes() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "附言提示词边界",
+            initialNoteBody: "DELETED NOTE MUST STAY PRIVATE",
+            now: now
+        )
+        let deletedID = try XCTUnwrap(
+            engine.taskPool().first?.definition.activeNoteEntries.first?.id
+        )
+        _ = try engine.appendPoolNote(
+            chainID: chainID,
+            body: "ACTIVE NOTE VISIBLE",
+            now: now.addingTimeInterval(1)
+        )
+        try engine.deletePoolNote(
+            chainID: chainID,
+            noteID: deletedID,
+            now: now.addingTimeInterval(2)
+        )
+        let scope = AIScopeSnapshot.pools(
+            from: engine,
+            includeTaskPool: true,
+            includeUnfinishedPool: false,
+            includeCompletedPool: false,
+            requestedAt: now.addingTimeInterval(3)
+        )
+        let report = LocalInsightAnalyzer().analyze(scope)
+
+        let request = AIPromptBuilder().buildRequest(
+            task: .habitInsight,
+            scope: scope,
+            report: report
+        )
+
+        XCTAssertTrue(request.userPrompt.contains("ACTIVE NOTE VISIBLE"))
+        XCTAssertFalse(request.userPrompt.contains("DELETED NOTE MUST STAY PRIVATE"))
+    }
+
     func testRegistryRejectsDisabledProvider() async throws {
         let providerID = AIProviderID("disabled-provider")
         let provider = MockAIProvider(
@@ -116,7 +155,10 @@ final class ZhulongAgentTests: XCTestCase {
         let policy = AIDelegationPolicy.confirmEachOperation
 
         XCTAssertFalse(
-            policy.allowsAutomaticExecution(of: .createPoolTask(title: "整理任务池", descriptionText: nil, note: nil), at: now)
+            policy.allowsAutomaticExecution(
+                of: .createPoolTask(title: "整理任务池", descriptionText: nil, initialNoteBody: nil),
+                at: now
+            )
         )
     }
 }

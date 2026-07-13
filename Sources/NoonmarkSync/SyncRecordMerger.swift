@@ -808,12 +808,101 @@ public struct SyncRecordMerger: Sendable {
             return
         }
         guard let existing = context.working.definitions[definition.id] else {
+            guard noteEntriesAreValid(definition.noteEntries) else {
+                context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task definition contains invalid note entries"))
+                return
+            }
             context.working.definitions[definition.id] = definition
             context.applied.append(record.id)
             return
         }
         guard existing != definition else { return }
-        context.conflicts.append(conflict(.taskDefinitionMutation, record: record, detectedAt: context.detectedAt, message: "existing task definitions are not silently overwritten"))
+
+        var localBase = existing
+        localBase.noteEntries = []
+        var incomingBase = definition
+        incomingBase.noteEntries = []
+        guard localBase == incomingBase else {
+            context.conflicts.append(conflict(.taskDefinitionMutation, record: record, detectedAt: context.detectedAt, message: "existing task definition fields other than note entries are immutable"))
+            return
+        }
+        guard let noteEntries = mergedNoteEntries(
+            local: existing.noteEntries,
+            incoming: definition.noteEntries
+        ) else {
+            context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task definition contains invalid or colliding note entries"))
+            return
+        }
+
+        var merged = existing
+        merged.noteEntries = noteEntries
+        guard merged != existing else { return }
+        context.working.definitions[definition.id] = merged
+        context.applied.append(record.id)
+    }
+
+    private func mergedNoteEntries(
+        local: [TaskNoteEntry],
+        incoming: [TaskNoteEntry]
+    ) -> [TaskNoteEntry]? {
+        guard noteEntriesAreValid(local), noteEntriesAreValid(incoming) else {
+            return nil
+        }
+
+        var entriesByID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
+        for remoteEntry in incoming {
+            guard let localEntry = entriesByID[remoteEntry.id] else {
+                entriesByID[remoteEntry.id] = remoteEntry
+                continue
+            }
+            guard localEntry.createdAt == remoteEntry.createdAt else {
+                return nil
+            }
+            entriesByID[remoteEntry.id] = preferredNoteEntry(
+                localEntry,
+                remoteEntry
+            )
+        }
+
+        return entriesByID.values.sorted {
+            if $0.createdAt != $1.createdAt {
+                return $0.createdAt < $1.createdAt
+            }
+            return $0.id.description < $1.id.description
+        }
+    }
+
+    private func preferredNoteEntry(
+        _ lhs: TaskNoteEntry,
+        _ rhs: TaskNoteEntry
+    ) -> TaskNoteEntry {
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt > rhs.updatedAt ? lhs : rhs
+        }
+        if lhs.isDeleted != rhs.isDeleted {
+            return lhs.isDeleted ? lhs : rhs
+        }
+        return lhs.body >= rhs.body ? lhs : rhs
+    }
+
+    private func noteEntriesAreValid(_ entries: [TaskNoteEntry]) -> Bool {
+        guard Set(entries.map(\.id)).count == entries.count else {
+            return false
+        }
+        return entries.allSatisfy { entry in
+            guard entry.createdAt.timeIntervalSinceReferenceDate.isFinite,
+                  entry.updatedAt.timeIntervalSinceReferenceDate.isFinite,
+                  entry.updatedAt >= entry.createdAt
+            else {
+                return false
+            }
+            if let deletedAt = entry.deletedAt {
+                return deletedAt.timeIntervalSinceReferenceDate.isFinite
+                    && deletedAt == entry.updatedAt
+                    && entry.body.isEmpty
+            }
+            return entry.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
     }
 
     private func apply(
@@ -821,6 +910,10 @@ public struct SyncRecordMerger: Sendable {
         record: SyncRecord,
         context: inout MergeContext
     ) {
+        guard noteEntriesAreValid(trace.noteEntries) else {
+            context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "day trace contains invalid note entries"))
+            return
+        }
         guard context.working.chains[trace.chainID] != nil, context.working.definitions[trace.definitionID] != nil else {
             context.conflicts.append(conflict(.missingParent, record: record, detectedAt: context.detectedAt, message: "day trace references a missing chain or definition"))
             return
@@ -863,10 +956,22 @@ public struct SyncRecordMerger: Sendable {
             return
         }
 
-        context.working.traces[trace.id] = trace
+        var merged = trace
+        if let existing, existing.status == .pending, trace.status == .pending {
+            guard let noteEntries = mergedNoteEntries(
+                local: existing.noteEntries,
+                incoming: trace.noteEntries
+            ) else {
+                context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "day trace contains invalid or colliding note entries"))
+                return
+            }
+            merged.noteEntries = noteEntries
+        }
+
+        context.working.traces[trace.id] = merged
         context.working.days[trace.date] = context.working.days[trace.date]
             ?? Day(date: trace.date, now: trace.createdAt)
-        if existing != trace {
+        if existing != merged {
             context.applied.append(record.id)
         }
     }

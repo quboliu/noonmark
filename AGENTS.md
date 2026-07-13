@@ -12,7 +12,7 @@
 ## 当前仓库基线
 
 - 初始化日期：2026-07-05
-- 最新确认日期：2026-07-07
+- 最新确认日期：2026-07-13
 - 当前仓库已经初始化 Git，主分支为 `main`，并已关联 `origin/main`。
 - 当前技术栈为 Swift Package Manager 项目，`Package.swift` 使用 `swift-tools-version: 6.0`，目标平台为 macOS 14。
 - 当前源码模块：
@@ -43,8 +43,8 @@
 - 当前环境取证：
   - `swift build` 通过。
   - `make check` 通过，覆盖 `swift build`、UT、IT、ST、确定性仿真测试、SwiftLint 和 SwiftFormat lint。
-  - `swift test` 通过，当前 74 个 XCTest 全绿。
-  - `scripts/test-visual-regression` 默认覆盖 14 个原型可比场景：7 个顶层页面、6 个详情态和 `day-review-saved`。
+  - `swift test` 通过；测试数量以当前运行报告为准，不在本文固化陈旧计数。
+  - 真实 `.app` E2E 是当前 Mac UI 的运行基线；归档 HTML 原型不得作为默认视觉 oracle。
   - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`。
 - 项目级工具入口：
   - `make build`
@@ -53,7 +53,7 @@
   - `make format-check`
   - `make check`
   - `scripts/test-e2e`
-  - `scripts/test-visual-regression`
+  - `scripts/test-visual-regression`：只接受显式传入、已经由用户确认的真实 App reference 与 actual；当前没有默认 reference，不进入 CI 或 release 门禁。
   - `scripts/test-ai-provider-live`：手动 live AI provider smoke；必须显式设置 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`，不进入默认 `make check`。
   - `scripts/package-dmg release`
   - `scripts/test-dmg-install dist/Noonmark.dmg`
@@ -116,7 +116,7 @@ Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作
 ## 验证
 
 - 有 deployed endpoint 或可运行应用时，验证必须打真实 deployed endpoint 或真实应用入口，并走用户实际路径；禁止用模拟路径或手工补数据自欺。
-- 当前仓库已有真实 Mac App target；涉及 Mac UI 时必须使用真实 `.app` E2E 截图、`scripts/test-visual-regression` 原型量化对比、console / 运行日志和持久化探针等证据补齐。若当前环境未提供 frontend-verify skill，必须明确说明，并用等价自动化证据补齐。
+- 当前仓库已有真实 Mac App target；涉及 Mac UI 时必须使用真实 `.app` E2E 截图、真实交互路径、console / 运行日志和持久化探针等证据补齐。归档 HTML 原型不得作为 ground truth，也不得靠抬高阈值吸收产品演进；只有用户确认过的真实 App 截图才能建立视觉 regression reference。若当前环境未提供 frontend-verify skill，必须明确说明，并用等价自动化证据补齐。
 - 悬浮或 fixed UI 验收必须使用长滚动页面，短页面不能作为充分证据。
 - 隔离前端栈中，`NEXT_PUBLIC_API_URL` 必须烤进镜像；`curl` 后端 200 不等于浏览器实际走了那个后端。
 - 若存在容器化部署配置，每次改完代码后主动部署到隔离容器验证；若当前没有容器或部署入口，必须明确说明，并用当前最高强度的本地运行产物验证补齐。

@@ -9,7 +9,11 @@ final class SyncRecordMergerTests: XCTestCase {
 
     func testTwoDeviceSyncAppliesNewRecordsThroughGenericTransport() async throws {
         let source = NoonmarkEngine()
-        let chainID = try source.createPoolTask(title: "从 Mac 同步到 iPhone", descriptionText: "通用底座记录。", note: nil, now: now)
+        let chainID = try source.createPoolTask(
+            title: "从 Mac 同步到 iPhone",
+            descriptionText: "通用底座记录。",
+            now: now
+        )
         let traceID = try source.scheduleFromPool(chainID: chainID, date: today, today: today, now: now)
         _ = try source.addSubtask(traceID: traceID, title: "写 mock transport 测试", difficulty: .hard, now: now)
 
@@ -25,6 +29,131 @@ final class SyncRecordMergerTests: XCTestCase {
         XCTAssertFalse(result.appliedRecordIDs.isEmpty)
         XCTAssertEqual(restored.snapshot(), source.snapshot())
         XCTAssertEqual(restored.getDayTodo(date: today).traces.first?.id, traceID)
+    }
+
+    func testTaskDefinitionNotesMergeByStableIdentityAndTombstone() throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "跨设备附言",
+            initialNoteBody: "初始附言",
+            now: now
+        )
+        let baseSnapshot = base.snapshot()
+        let originalNoteID = try XCTUnwrap(base.taskPool().first?.definition.activeNoteEntries.first?.id)
+
+        let local = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try local.appendPoolNote(
+            chainID: chainID,
+            body: "本地新增",
+            now: now.addingTimeInterval(10)
+        )
+
+        let remote = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try remote.appendPoolNote(
+            chainID: chainID,
+            body: "远端新增",
+            now: now.addingTimeInterval(20)
+        )
+        try remote.deletePoolNote(
+            chainID: chainID,
+            noteID: originalNoteID,
+            now: now.addingTimeInterval(30)
+        )
+        let remoteDefinition = try XCTUnwrap(remote.taskPool().first?.definition)
+        let mapper = SyncRecordMapper()
+        let record = try mapper.record(
+            for: remoteDefinition,
+            modifiedBy: SyncDeviceID("iphone-b")
+        )
+
+        let result = SyncRecordMerger(mapper: mapper).merge(
+            records: [record],
+            into: local.snapshot(),
+            detectedAt: now.addingTimeInterval(40)
+        )
+        let merged = try NoonmarkEngine(snapshot: result.snapshot)
+        let definition = try XCTUnwrap(merged.taskPool().first?.definition)
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertEqual(definition.activeNoteEntries.map(\.body), ["本地新增", "远端新增"])
+        XCTAssertEqual(
+            definition.noteEntries.first(where: { $0.id == originalNoteID })?.body,
+            ""
+        )
+        XCTAssertEqual(
+            definition.noteEntries.first(where: { $0.id == originalNoteID })?.deletedAt,
+            now.addingTimeInterval(30)
+        )
+    }
+
+    func testPendingTraceNotesMergeByStableIdentityAndTombstone() throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "今日跨设备附言",
+            initialNoteBody: "初始附言",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let baseSnapshot = base.snapshot()
+        let originalNoteID = try XCTUnwrap(
+            base.getDayTodo(date: today).traces.first?.activeNoteEntries.first?.id
+        )
+
+        let local = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try local.appendTraceNote(
+            traceID: traceID,
+            body: "本地新增",
+            today: today,
+            now: now.addingTimeInterval(10)
+        )
+
+        let remote = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try remote.appendTraceNote(
+            traceID: traceID,
+            body: "远端新增",
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+        try remote.deleteTraceNote(
+            traceID: traceID,
+            noteID: originalNoteID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        let remoteTrace = try XCTUnwrap(
+            remote.getDayTodo(date: today).traces.first
+        )
+        let mapper = SyncRecordMapper()
+        let record = try mapper.record(
+            for: remoteTrace,
+            modifiedBy: SyncDeviceID("iphone-b")
+        )
+
+        let result = SyncRecordMerger(mapper: mapper).merge(
+            records: [record],
+            into: local.snapshot(),
+            detectedAt: now.addingTimeInterval(40)
+        )
+        let merged = try NoonmarkEngine(snapshot: result.snapshot)
+        let trace = try XCTUnwrap(
+            merged.getDayTodo(date: today).traces.first
+        )
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertEqual(trace.activeNoteEntries.map(\.body), ["本地新增", "远端新增"])
+        XCTAssertEqual(
+            trace.noteEntries.first(where: { $0.id == originalNoteID })?.body,
+            ""
+        )
+        XCTAssertEqual(
+            trace.noteEntries.first(where: { $0.id == originalNoteID })?.deletedAt,
+            now.addingTimeInterval(30)
+        )
     }
 
     func testMergingOrdinaryRecordPreservesClassificationStateExactly() throws {
@@ -2072,7 +2201,7 @@ final class SyncRecordMergerTests: XCTestCase {
             now: now.addingTimeInterval(2)
         )
         var tampered = try XCTUnwrap(remote.traces[traceID])
-        tampered.note = "伪造的历史内容"
+        tampered.noteEntries = [TaskNoteEntry(body: "伪造的历史内容", now: now.addingTimeInterval(1))]
         let mapper = SyncRecordMapper()
         let chainRecord = try mapper.record(
             for: try XCTUnwrap(remote.chains[chainID]),

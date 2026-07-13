@@ -24,6 +24,9 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_commit_finalizations"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_events"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_event_finalizations"))
+        XCTAssertTrue(schema.contains("note_entries_json TEXT NOT NULL"))
+        XCTAssertTrue(schema.contains("json_type(note_entries_json) = 'array'"))
+        XCTAssertFalse(schema.contains("\n            note TEXT,"))
         XCTAssertTrue(schema.contains("planned_subtasks_json TEXT"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_device_identity"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_metadata"))
@@ -89,7 +92,7 @@ final class SQLiteSchemaTests: XCTestCase {
         let chainID = try engine.createPoolTask(
             title: "持久化核心状态",
             descriptionText: "保存并恢复 Day Todo、子任务和复盘。",
-            note: "稳定 ID 必须保留。",
+            initialNoteBody: "稳定 ID 必须保留。",
             now: now
         )
         _ = try engine.addPlannedSubtask(chainID: chainID, title: "先规划子任务", difficulty: .medium, now: now)
@@ -97,7 +100,32 @@ final class SQLiteSchemaTests: XCTestCase {
         let subtaskID = try engine.addSubtask(traceID: traceID, title: "写 round-trip 测试", difficulty: .hard, now: now)
         try engine.completeSubtask(subtaskID, today: day1, now: now)
         engine.settleDays(upTo: day2, now: now)
-        _ = try engine.continueTrace(traceID: traceID, targetDate: day2, today: day2, now: now)
+        let continuedTraceID = try engine.continueTrace(
+            traceID: traceID,
+            targetDate: day2,
+            today: day2,
+            now: now
+        )
+        let inheritedNoteID = try XCTUnwrap(engine.traces[continuedTraceID]?.activeNoteEntries.first?.id)
+        try engine.editTraceNote(
+            traceID: continuedTraceID,
+            noteID: inheritedNoteID,
+            body: "稳定 ID 和编辑结果必须保留。",
+            today: day2,
+            now: now.addingTimeInterval(30)
+        )
+        let deletedNoteID = try engine.appendTraceNote(
+            traceID: continuedTraceID,
+            body: "这条附言会被删除。",
+            today: day2,
+            now: now.addingTimeInterval(60)
+        )
+        try engine.deleteTraceNote(
+            traceID: continuedTraceID,
+            noteID: deletedNoteID,
+            today: day2,
+            now: now.addingTimeInterval(90)
+        )
 
         let completedChainID = try engine.createPoolTask(title: "完成存储 schema", now: now)
         let completedTraceID = try engine.scheduleFromPool(chainID: completedChainID, date: day2, today: day2, now: now)
@@ -145,6 +173,14 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertEqual(restored.preferences.localFirstSyncPolicy.mode, .automatic)
         XCTAssertEqual(restored.preferences.localFirstSyncPolicy.intervalSeconds, 120)
         XCTAssertEqual(restored.preferences.localFirstSyncPolicy.snapshotRetention.retentionIndexesDaily, 4)
+        XCTAssertEqual(
+            restored.traces[continuedTraceID]?.activeNoteEntries.map(\.body),
+            ["稳定 ID 和编辑结果必须保留。"]
+        )
+        XCTAssertEqual(
+            restored.traces[continuedTraceID]?.noteEntries.first(where: { $0.id == deletedNoteID })?.body,
+            ""
+        )
     }
 }
 

@@ -247,8 +247,11 @@ capture_app_screenshot() {
   local out_dir="$1"
   local screenshot_name="$2"
   local page="$3"
+  local launch_log
   local expected_window_title
   shift 3
+
+  launch_log="${out_dir}/${screenshot_name}.log"
 
   case "$page" in
     day)
@@ -271,7 +274,8 @@ capture_app_screenshot() {
   window_id=""
   for launch_attempt in {1..3}; do
     terminate_e2e_app
-    "$app_executable_path" "$@" --page "$page" >/dev/null 2>&1 &
+    mkdir -p "$out_dir"
+    "$app_executable_path" "$@" --page "$page" >"$launch_log" 2>&1 &
     disown "$!" 2>/dev/null || true
     sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
 
@@ -329,6 +333,192 @@ capture_app_screenshot() {
   echo "E2E ${screenshot_name} screenshot: ${screenshot} (${width}x${height})"
 }
 
+assert_clean_app_log() {
+  local label="$1"
+  local log_path="$2"
+  local failure_pattern='Noonmark persistence (load|save) failed|Fatal error|Assertion failed|Precondition failed'
+
+  if grep -E -n "$failure_pattern" "$log_path" >/dev/null 2>&1; then
+    echo "${label} app log contains a persistence or runtime failure:" >&2
+    grep -E -n "$failure_pattern" "$log_path" >&2
+    exit 1
+  fi
+}
+
+run_task_note_persistence_probe() {
+  local note_dir="artifacts/e2e-task-notes"
+  local note_db="${note_dir}/Noonmark.sqlite"
+  local note_state="${note_dir}/state.json"
+  local mutate_result="${note_dir}/mutate-result.txt"
+  local restart_result="${note_dir}/restart-result.txt"
+  local mutate_log="${note_dir}/mutate.log"
+  local restart_log="${note_dir}/task-note-restart.log"
+  local restart_screenshot="${note_dir}/task-note-restart.png"
+  local restart_ocr="${note_dir}/task-note-restart-ocr.txt"
+  local restart_ocr_log="${note_dir}/task-note-restart-ocr.log"
+  local mutate_pid
+  local note_sql_probe
+
+  rm -rf "$note_dir"
+  mkdir -p "$note_dir"
+
+  "$app_executable_path" \
+    --data-url "$PWD/$note_db" \
+    --page pool \
+    --e2e-task-note-mutate \
+    --e2e-task-note-state-url "$PWD/$note_state" \
+    --e2e-task-note-result-url "$PWD/$mutate_result" \
+    --e2e-quit-after-automation \
+    >"$mutate_log" 2>&1 &
+  mutate_pid=$!
+  for _ in {1..100}; do
+    if ! kill -0 "$mutate_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if kill -0 "$mutate_pid" 2>/dev/null; then
+    terminate_e2e_app
+    wait "$mutate_pid" 2>/dev/null || true
+    echo "task-note mutation automation did not terminate" >&2
+    cat "$mutate_log" >&2
+    exit 1
+  fi
+  if ! wait "$mutate_pid"; then
+    echo "task-note mutation app launch failed:" >&2
+    cat "$mutate_log" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$mutate_result" ]]; then
+    echo "task-note mutation result was not created: $mutate_result" >&2
+    exit 1
+  fi
+  if [[ "$(<"$mutate_result")" != "ok" ]]; then
+    echo "task-note mutation failed: $(<"$mutate_result")" >&2
+    exit 1
+  fi
+  if [[ ! -s "$note_state" ]]; then
+    echo "task-note mutation state was not created: $note_state" >&2
+    exit 1
+  fi
+  assert_clean_app_log "task-note mutation" "$mutate_log"
+
+  capture_app_screenshot \
+    "$note_dir" \
+    "task-note-restart" \
+    day \
+    --data-url "$PWD/$note_db" \
+    --e2e-task-note-verify \
+    --e2e-task-note-state-url "$PWD/$note_state" \
+    --e2e-task-note-result-url "$PWD/$restart_result"
+
+  if [[ ! -f "$restart_result" ]]; then
+    echo "task-note restart result was not created: $restart_result" >&2
+    terminate_e2e_app
+    exit 1
+  fi
+  if [[ "$(<"$restart_result")" != "ok" ]]; then
+    echo "task-note restart verification failed: $(<"$restart_result")" >&2
+    terminate_e2e_app
+    exit 1
+  fi
+  terminate_e2e_app
+  assert_clean_app_log "task-note restart" "$restart_log"
+
+  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$restart_screenshot" swift -e '
+import AppKit
+import Foundation
+import Vision
+
+let environment = ProcessInfo.processInfo.environment
+guard let path = environment["NOONMARK_E2E_OCR_IMAGE"],
+      let image = NSImage(contentsOfFile: path),
+      let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+else {
+    fputs("unable to load task-note screenshot for OCR\n", stderr)
+    exit(1)
+}
+
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.recognitionLanguages = ["en-US"]
+request.usesLanguageCorrection = false
+let handler = VNImageRequestHandler(cgImage: cgImage)
+try handler.perform([request])
+let text = (request.results ?? [])
+    .compactMap { $0.topCandidates(1).first?.string }
+    .joined(separator: "\n")
+print(text)
+' >"$restart_ocr" 2>"$restart_ocr_log"; then
+    echo "task-note restart screenshot OCR failed:" >&2
+    cat "$restart_ocr_log" >&2
+    exit 1
+  fi
+
+  if ! grep -Fq "VISIBLE NOTE 7263" "$restart_ocr"; then
+    echo "task-note edited body was not visible after restart; OCR output:" >&2
+    cat "$restart_ocr" >&2
+    exit 1
+  fi
+  if grep -Fq "GHOST NOTE 9184" "$restart_ocr"; then
+    echo "task-note deleted body reappeared after restart; OCR output:" >&2
+    cat "$restart_ocr" >&2
+    exit 1
+  fi
+
+  note_sql_probe="$(sqlite3 -separator " " "$note_db" "
+    WITH target AS (
+      SELECT
+        trace.note_entries_json AS trace_note_entries_json,
+        definition.note_entries_json AS definition_note_entries_json
+      FROM day_traces AS trace
+      JOIN task_definitions AS definition ON definition.id = trace.definition_id
+      WHERE definition.title = 'E2E 附言编辑删除'
+        AND trace.date = '2026-07-05'
+      LIMIT 1
+    )
+    SELECT
+      json_array_length(trace_note_entries_json),
+      (SELECT count(DISTINCT json_extract(value, '$.id.rawValue'))
+       FROM json_each(trace_note_entries_json)),
+      (SELECT count(*)
+       FROM json_each(trace_note_entries_json)
+       WHERE json_extract(value, '$.body') = 'VISIBLE NOTE 7263'
+         AND json_type(value, '$.deletedAt') IS NULL),
+      (SELECT count(*)
+       FROM json_each(trace_note_entries_json)
+       WHERE json_extract(value, '$.body') = ''
+         AND json_type(value, '$.deletedAt') IN ('integer', 'real')
+         AND json_extract(value, '$.updatedAt') = json_extract(value, '$.deletedAt')),
+      (SELECT count(*)
+       FROM json_each(trace_note_entries_json)
+       WHERE instr(json_extract(value, '$.body'), 'GHOST NOTE 9184') > 0),
+      (SELECT count(*)
+       FROM json_each(definition_note_entries_json)
+       WHERE json_type(value, '$.deletedAt') IS NULL),
+      (SELECT count(*)
+       FROM json_each(trace_note_entries_json)
+       WHERE json_type(value, '$.deletedAt') IS NULL),
+      (SELECT count(*)
+       FROM json_each(trace_note_entries_json)
+       WHERE json_type(value, '$.deletedAt') IN ('integer', 'real'))
+    FROM target;
+  ")"
+
+  if [[ "$note_sql_probe" != "2 2 1 1 0 2 1 1" ]]; then
+    echo "task-note SQLite JSON probe failed: ${note_sql_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E task-note edit/delete restart: $note_db (probe=$note_sql_probe screenshot=$restart_screenshot)"
+}
+
+if [[ "${NOONMARK_E2E_TASK_NOTE_ONLY:-0}" == "1" ]]; then
+  run_task_note_persistence_probe
+  exit 0
+fi
+
 for scenario in "${scenarios[@]}"; do
   IFS="|" read -r screenshot_name page extra_args <<< "$scenario"
   if [[ -n "$extra_args" ]]; then
@@ -346,6 +536,8 @@ if [[ "${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
 fi
 
 terminate_e2e_app
+
+run_task_note_persistence_probe
 
 summary_sidebar_dir="artifacts/e2e-summary-sidebar"
 summary_sidebar_result="${summary_sidebar_dir}/summary-sidebar-result.txt"

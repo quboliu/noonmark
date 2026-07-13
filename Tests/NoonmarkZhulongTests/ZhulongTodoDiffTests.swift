@@ -36,6 +36,23 @@ final class ZhulongTodoDiffTests: XCTestCase {
         UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000002")!
     )
 
+    func testCreateTaskEncodingUsesOnlyCurrentInitialNoteBodyField() throws {
+        let operation = ZhulongTodoDiffOperation.createTask(
+            title: "当前结构",
+            descriptionText: nil,
+            initialNoteBody: "初始附言",
+            plannedSubtasks: [],
+            targetDate: nil
+        )
+
+        let json = try XCTUnwrap(
+            String(data: JSONEncoder().encode(operation), encoding: .utf8)
+        )
+
+        XCTAssertTrue(json.contains("\"initialNoteBody\""))
+        XCTAssertFalse(json.contains("\"note\""))
+    }
+
     func testBatchApplySwapsEngineOnlyAfterEveryOperationSucceeds() throws {
         var engine = NoonmarkEngine()
         let original = engine.snapshot()
@@ -46,7 +63,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
                     operation: .createTask(
                         title: "交付原子批次",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )
@@ -90,7 +107,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
                     operation: .createTask(
                         title: "完成正式三视图",
                         descriptionText: "迁移已确认的会话结构",
-                        note: "保留状态",
+                        initialNoteBody: "保留状态",
                         plannedSubtasks: [
                             try ZhulongPlannedSubtaskDraft(title: "接入 A", difficulty: .medium),
                             try ZhulongPlannedSubtaskDraft(title: "接入 B", difficulty: .hard)
@@ -137,7 +154,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
             operation: .createTask(
                 title: "可信写入",
                 descriptionText: nil,
-                note: nil,
+                initialNoteBody: nil,
                 plannedSubtasks: [],
                 targetDate: nil
             )
@@ -159,7 +176,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
                     operation: .createTask(
                         title: "被篡改的写入",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )
@@ -218,7 +235,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
                     operation: .createTask(
                         title: "会过期的草稿",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )
@@ -265,7 +282,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
             operation: .createTask(
                 title: "用户修订",
                 descriptionText: nil,
-                note: nil,
+                initialNoteBody: nil,
                 plannedSubtasks: [],
                 targetDate: nil
             )
@@ -316,7 +333,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
                     operation: .createTask(
                         title: "原始交付物",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )
@@ -326,7 +343,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
                     operation: .createTask(
                         title: "不再需要的交付物",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )
@@ -342,7 +359,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
                     operation: .createTask(
                         title: "编辑后的第一部分",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )
@@ -352,7 +369,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
                     operation: .createTask(
                         title: "拆分出的第二部分",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )
@@ -395,7 +412,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
                     operation: .createTask(
                         title: "不受界面设置影响",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )

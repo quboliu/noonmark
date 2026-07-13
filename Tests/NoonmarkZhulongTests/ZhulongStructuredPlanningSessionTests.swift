@@ -32,7 +32,7 @@ final class ZhulongStructuredPlanningSessionTests: XCTestCase {
                     operation: .createTask(
                         title: "接入正式三视图",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )
@@ -50,7 +50,7 @@ final class ZhulongStructuredPlanningSessionTests: XCTestCase {
                     operation: .createTask(
                         title: "接入正式 A/B/C 三视图",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )

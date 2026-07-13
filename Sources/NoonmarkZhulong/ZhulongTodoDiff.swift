@@ -50,7 +50,7 @@ public enum ZhulongTodoDiffOperation: Codable, Equatable, Sendable {
     case createTask(
         title: String,
         descriptionText: String?,
-        note: String?,
+        initialNoteBody: String?,
         plannedSubtasks: [ZhulongPlannedSubtaskDraft],
         targetDate: LocalDate?
     )
@@ -216,10 +216,10 @@ public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
 
     private static func isValid(_ operation: ZhulongTodoDiffOperation) -> Bool {
         switch operation {
-        case let .createTask(title, descriptionText, note, plannedSubtasks, _):
+        case let .createTask(title, descriptionText, initialNoteBody, plannedSubtasks, _):
             return hasContent(title) &&
                 optionalContentIsValid(descriptionText) &&
-                optionalContentIsValid(note) &&
+                optionalContentIsValid(initialNoteBody) &&
                 plannedSubtasks.allSatisfy { hasContent($0.title) } &&
                 Set(plannedSubtasks.map(\.title)).count == plannedSubtasks.count
         case let .addSubtask(_, title, _):
@@ -396,11 +396,11 @@ public struct ZhulongTodoDiffApplier: Sendable {
         now: Date
     ) throws -> ZhulongTodoApplyItemResult {
         switch operation {
-        case let .createTask(title, descriptionText, note, plannedSubtasks, targetDate):
+        case let .createTask(title, descriptionText, initialNoteBody, plannedSubtasks, targetDate):
             let chainID = try engine.createPoolTask(
                 title: title,
                 descriptionText: descriptionText,
-                note: note,
+                initialNoteBody: initialNoteBody,
                 now: now
             )
             let plannedSubtaskIDs = try plannedSubtasks.map { subtask in

@@ -1,28 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-configuration="${1:-debug}"
 out_dir="${NOONMARK_VISUAL_OUT_DIR:-artifacts/visual-regression}"
-reference_dir="${NOONMARK_VISUAL_REFERENCE_DIR:-artifacts/prototype-screenshots}"
-actual_dir="${NOONMARK_VISUAL_ACTUAL_DIR:-artifacts/e2e}"
-pages=(${NOONMARK_VISUAL_PAGES:-day day-detail day-manual-detail day-review-saved pool pool-detail future future-detail unfinished unfinished-detail completed completed-detail calendar settings})
+reference="${NOONMARK_VISUAL_REFERENCE:-}"
+actual="${NOONMARK_VISUAL_ACTUAL:-}"
+page="${NOONMARK_VISUAL_PAGE:-custom}"
 
-if [[ "${NOONMARK_VISUAL_REUSE_SCREENSHOTS:-0}" != "1" ]]; then
-  scripts/test-e2e "$configuration"
-fi
-
-single_reference="${NOONMARK_VISUAL_REFERENCE:-}"
-single_actual="${NOONMARK_VISUAL_ACTUAL:-}"
-if [[ -n "$single_reference" || -n "$single_actual" ]]; then
-  if [[ -z "$single_reference" || -z "$single_actual" ]]; then
-    echo "NOONMARK_VISUAL_REFERENCE and NOONMARK_VISUAL_ACTUAL must be set together" >&2
-    exit 1
-  fi
-  pages=(custom)
-  reference_dir=""
-  actual_dir=""
-else
-  NOONMARK_PROTOTYPE_OUT_DIR="$reference_dir" NOONMARK_PROTOTYPE_PAGES="${pages[*]}" scripts/render-prototype-screenshots
+if [[ -z "$reference" || -z "$actual" ]]; then
+  echo "No default visual reference exists." >&2
+  echo "Set NOONMARK_VISUAL_REFERENCE to a user-approved real App screenshot and NOONMARK_VISUAL_ACTUAL to the screenshot under test." >&2
+  exit 1
 fi
 
 rm -rf "$out_dir"
@@ -32,18 +19,11 @@ summary_report="${out_dir}/summary.txt"
 
 compare_page() {
   local page="$1"
-  local reference actual page_dir normalized diff_image report
-
-  if [[ "$page" == "custom" ]]; then
-    reference="$single_reference"
-    actual="$single_actual"
-  else
-    reference="${reference_dir}/${page}.png"
-    actual="${actual_dir}/${page}.png"
-  fi
+  local page_dir normalized_reference normalized_actual diff_image report
 
   page_dir="${out_dir}/${page}"
-  normalized="${page_dir}/actual-normalized.png"
+  normalized_reference="${page_dir}/reference-normalized.png"
+  normalized_actual="${page_dir}/actual-normalized.png"
   diff_image="${page_dir}/diff.png"
   report="${page_dir}/report.txt"
 
@@ -57,9 +37,10 @@ compare_page() {
   fi
 
   mkdir -p "$page_dir"
-  sips -z 900 1440 "$actual" --out "$normalized" >/dev/null
+  sips -z 900 1440 "$reference" --out "$normalized_reference" >/dev/null
+  sips -z 900 1440 "$actual" --out "$normalized_actual" >/dev/null
 
-  NOONMARK_VISUAL_PAGE="$page" python3 - "$reference" "$normalized" "$diff_image" "$report" <<'PY'
+  NOONMARK_VISUAL_PAGE="$page" python3 - "$normalized_reference" "$normalized_actual" "$diff_image" "$report" <<'PY'
 import os
 import struct
 import sys
@@ -189,31 +170,8 @@ for y in range(ref_height):
 changed_ratio = changed_pixels / total_pixels
 mean_delta = sum_delta / total_pixels
 page = os.environ.get("NOONMARK_VISUAL_PAGE", "custom")
-default_changed_ratios = {
-    "day": "0.17",
-    "day-detail": "0.19",
-    "day-manual-detail": "0.19",
-    "day-review-saved": "0.17",
-    "pool": "0.27",
-    "pool-detail": "0.13",
-    "future": "0.27",
-    "future-detail": "0.16",
-    "unfinished": "0.22",
-    "unfinished-detail": "0.18",
-    "completed": "0.31",
-    "completed-detail": "0.27",
-    "calendar": "0.09",
-    "settings": "0.42",
-}
-default_mean_deltas = {
-    "day-detail": "0.030",
-    "day-manual-detail": "0.030",
-    "completed": "0.028",
-    "completed-detail": "0.032",
-    "settings": "0.028",
-}
-default_changed_ratio = default_changed_ratios.get(page, "0.12")
-default_mean_delta = default_mean_deltas.get(page, "0.025")
+default_changed_ratio = "0.02"
+default_mean_delta = "0.005"
 max_changed_ratio = float(os.environ.get(page_env_name("MAX_CHANGED_RATIO"), os.environ.get("NOONMARK_VISUAL_MAX_CHANGED_RATIO", default_changed_ratio)))
 max_mean_delta = float(os.environ.get(page_env_name("MAX_MEAN_DELTA"), os.environ.get("NOONMARK_VISUAL_MAX_MEAN_DELTA", default_mean_delta)))
 enforce = os.environ.get("NOONMARK_VISUAL_ENFORCE", "1") != "0"
@@ -253,8 +211,6 @@ PY
   ' "$report" | tee -a "$summary_report"
 }
 
-for page in "${pages[@]}"; do
-  compare_page "$page"
-done
+compare_page "$page"
 
 echo "Visual regression summary: $summary_report"

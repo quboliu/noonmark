@@ -16,7 +16,7 @@
 - 当前分类可调整；历史主分类快照和标签快照不可改写，只能追加显式更正。
 - 分类库、关系和历史事实从 `AppPreferences` 与 `TaskChain` blob 中拆出，成为独立领域、持久化和同步实体。
 - SQLite 与数据包只接受当前分类格式；空库可直接建立，任何非当前格式都 fail-closed。
-- 真实 `.app` E2E、SQLite 探针、同步乱序／并发测试、视觉回归、DMG 安装启动全部通过。
+- 真实 `.app` E2E 与截图、SQLite 探针、同步乱序／并发测试、DMG 安装启动全部通过。
 
 ## 非目标
 
@@ -306,10 +306,10 @@ SQLite 采用本代首个 schema，`PRAGMA user_version = 1`。初始化只允�
 - 当前分类调整与历史快照并列验证；历史更正保留 original。
 - 长滚动分类管理、搜索、归档、合并预览、过期计划和键盘／无障碍路径。
 - 烛龙逐项排除、用户修订、批量确认、整批失败回滚和事件历史。
-- `scripts/test-visual-regression` 增加分类场景；没有 frontend-verify skill 时，用真实 `.app` 截图、SQLite 探针、console、视觉量化和 DMG 安装启动补齐。
+- 没有 frontend-verify skill 时，用真实 `.app` 分类场景截图、交互断言、SQLite 探针、console 和 DMG 安装启动补齐；归档 HTML 原型不得作为分类 UI 的 ground truth。
 
 ## Cutover 完成条件
 
 - 运行期源码、schema、测试 fixture 与产品 UI 中不存在上一代分类类型、三槽关系、旧表或旧写方法。
-- `make check`、分类 deterministic simulation、真实 `.app` E2E、视觉回归、当前 schema 探针、双设备同步测试、DMG 打包及安装启动全部通过。
+- `make check`、分类 deterministic simulation、真实 `.app` E2E、当前 schema 探针、双设备同步测试、DMG 打包及安装启动全部通过。
 - 当前分类路径是唯一读写入口，不存在双重事实源、兼容 decoder、migration 或 fallback。

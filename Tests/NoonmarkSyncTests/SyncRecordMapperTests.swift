@@ -27,6 +27,40 @@ final class SyncRecordMapperTests: XCTestCase {
         XCTAssertEqual(decodedTrace, try XCTUnwrap(engine.snapshot().traces.first))
     }
 
+    func testNoteMutationTimeDrivesDefinitionAndTraceRecordFreshness() throws {
+        let noteUpdatedAt = now.addingTimeInterval(90)
+        var note = TaskNoteEntry(body: "修改前", now: now)
+        note.body = "修改后"
+        note.updatedAt = noteUpdatedAt
+        let chainID = TaskChainID()
+        let definition = TaskDefinition(
+            chainID: chainID,
+            sequence: 1,
+            title: "附言同步时间",
+            noteEntries: [note],
+            now: now
+        )
+        let trace = DayTrace(
+            chainID: chainID,
+            definitionID: definition.id,
+            date: today,
+            priority: 0,
+            noteEntries: [note],
+            now: now.addingTimeInterval(1)
+        )
+        let mapper = SyncRecordMapper()
+        let deviceID = SyncDeviceID("mac-a")
+
+        let definitionRecord = try mapper.record(
+            for: definition,
+            modifiedBy: deviceID
+        )
+        let traceRecord = try mapper.record(for: trace, modifiedBy: deviceID)
+
+        XCTAssertEqual(definitionRecord.modifiedAt, noteUpdatedAt)
+        XCTAssertEqual(traceRecord.modifiedAt, noteUpdatedAt)
+    }
+
     func testDecodeRejectsMismatchedEntityType() throws {
         let engine = try makeEngine()
         let mapper = SyncRecordMapper()

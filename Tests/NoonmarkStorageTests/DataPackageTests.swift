@@ -462,7 +462,7 @@ final class DataPackageTests: XCTestCase {
         let chainID = try engine.createPoolTask(
             title: "数据包测试",
             descriptionText: "用于导出导入测试。",
-            note: "必须保留引用完整性。",
+            initialNoteBody: "必须保留引用完整性。",
             now: now
         )
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: today, today: today, now: now)

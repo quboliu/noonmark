@@ -30,6 +30,16 @@ public struct TaskDefinitionID: Codable, Hashable, Sendable, CustomStringConvert
     public var description: String { rawValue.uuidString }
 }
 
+public struct TaskNoteEntryID: Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue.uuidString }
+}
+
 public struct DayTraceID: Codable, Hashable, Sendable, CustomStringConvertible {
     public let rawValue: UUID
 

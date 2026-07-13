@@ -87,7 +87,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
                     operation: .createTask(
                         title: "持久化原子批次",
                         descriptionText: nil,
-                        note: nil,
+                        initialNoteBody: nil,
                         plannedSubtasks: [],
                         targetDate: nil
                     )

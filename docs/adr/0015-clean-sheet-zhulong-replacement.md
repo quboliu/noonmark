@@ -9,7 +9,7 @@
 - `NoonmarkCore` 的任务链、日轨迹、历史不可改写规则和用户 Todo 数据继续保留；可安全迁移的 Provider 凭证不得丢失。
 - 旧代码可以在开发期间暂时存在，但不能作为新产品路径、设计基线或运行 fallback；cutover 与旧代码删除在新路径完整验证后同批完成。
 - clean-sheet cutover 同样覆盖烛龙 sidecar 格式；未发布阶段只保留唯一当前 schema，不保留开发期旧格式迁移或兼容测试。
-- cutover 前必须覆盖真实 `.app` 每日收尾路径、持久化、sidecar 加密、权限与事件审计、Provider live smoke、视觉回归和 DMG 安装启动。
+- cutover 前必须覆盖真实 `.app` 每日收尾路径与截图、持久化、sidecar 加密、权限与事件审计、Provider live smoke 和 DMG 安装启动。
 
 ## 风险与回滚
 

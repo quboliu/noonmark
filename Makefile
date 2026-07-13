@@ -1,4 +1,4 @@
-.PHONY: build build-app package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e render-prototype-screenshots test-visual-regression test-ai-provider-live test-all lint format format-check check
+.PHONY: build build-app package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-ai-provider-live test-all lint format format-check check
 
 build:
 	swift build
@@ -32,12 +32,6 @@ test-deterministic-sim:
 
 test-e2e:
 	scripts/test-e2e
-
-render-prototype-screenshots:
-	scripts/render-prototype-screenshots
-
-test-visual-regression:
-	scripts/test-visual-regression
 
 test-ai-provider-live:
 	scripts/test-ai-provider-live

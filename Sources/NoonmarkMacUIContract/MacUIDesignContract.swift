@@ -357,6 +357,28 @@ public enum MacUISettingsElement: String, CaseIterable, Sendable {
     case zhulongEnabledToggle
     case zhulongProviderConfiguration
     case balancedSettingsLayout
+    case compactClassificationSummary
+    case classificationManagerTypeSwitcher
+    case classificationManagerSearch
+    case classificationManagerInlineCreation
+    case classificationManagerLifecycleSections
+    case classificationManagerLifecycleActions
+    case classificationManagerReferenceCounts
+    case classificationManagerHistoryNotice
+}
+
+public enum MacUIClassificationLayout {
+    public static let settingsSummaryHeight = 112.0
+    public static let managerWidth = 480.0
+    public static let managerHeight = 420.0
+    public static let managerRowHeight = 42.0
+}
+
+public enum MacUIClassificationAccessibility {
+    public static let renameActionPrefix = "classification.manager.lifecycle.rename"
+    public static let archiveActionPrefix = "classification.manager.lifecycle.archive"
+    public static let restoreActionPrefix = "classification.manager.lifecycle.restore"
+    public static let discardActionPrefix = "classification.manager.lifecycle.discard"
 }
 
 public enum MacUIBackendCapability: String, CaseIterable, Sendable {

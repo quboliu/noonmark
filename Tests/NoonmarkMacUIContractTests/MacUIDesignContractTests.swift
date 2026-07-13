@@ -136,6 +136,14 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.settingsElements.contains(.zhulongEnabledToggle))
         XCTAssertTrue(contract.settingsElements.contains(.zhulongProviderConfiguration))
         XCTAssertTrue(contract.settingsElements.contains(.balancedSettingsLayout))
+        XCTAssertTrue(contract.settingsElements.contains(.compactClassificationSummary))
+        XCTAssertTrue(contract.settingsElements.contains(.classificationManagerTypeSwitcher))
+        XCTAssertTrue(contract.settingsElements.contains(.classificationManagerSearch))
+        XCTAssertTrue(contract.settingsElements.contains(.classificationManagerInlineCreation))
+        XCTAssertTrue(contract.settingsElements.contains(.classificationManagerLifecycleSections))
+        XCTAssertTrue(contract.settingsElements.contains(.classificationManagerLifecycleActions))
+        XCTAssertTrue(contract.settingsElements.contains(.classificationManagerReferenceCounts))
+        XCTAssertTrue(contract.settingsElements.contains(.classificationManagerHistoryNotice))
         XCTAssertTrue(contract.settingsElements.contains(.iCloudSync))
         XCTAssertTrue(contract.emptyStateElements.contains(.illustration))
         XCTAssertTrue(contract.emptyStateElements.contains(.copy))
@@ -151,6 +159,18 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.completedPoolCopy))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.calendarIllustration))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.calendarCopy))
+    }
+
+    func testClassificationManagementUsesCompactVerifiedMetrics() {
+        XCTAssertLessThanOrEqual(MacUIClassificationLayout.settingsSummaryHeight, 120)
+        XCTAssertEqual(MacUIClassificationLayout.settingsSummaryHeight, 112)
+        XCTAssertEqual(MacUIClassificationLayout.managerWidth, 480)
+        XCTAssertEqual(MacUIClassificationLayout.managerHeight, 420)
+        XCTAssertEqual(MacUIClassificationLayout.managerRowHeight, 42)
+        XCTAssertEqual(MacUIClassificationAccessibility.renameActionPrefix, "classification.manager.lifecycle.rename")
+        XCTAssertEqual(MacUIClassificationAccessibility.archiveActionPrefix, "classification.manager.lifecycle.archive")
+        XCTAssertEqual(MacUIClassificationAccessibility.restoreActionPrefix, "classification.manager.lifecycle.restore")
+        XCTAssertEqual(MacUIClassificationAccessibility.discardActionPrefix, "classification.manager.lifecycle.discard")
     }
 
     func testDetailAndReviewSectionsAreNotOptional() {

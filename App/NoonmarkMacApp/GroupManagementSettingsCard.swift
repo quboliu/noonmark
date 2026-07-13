@@ -1,4 +1,5 @@
 import NoonmarkCore
+import NoonmarkMacUIContract
 import SwiftUI
 
 struct GroupManagementSettingsCard: View {
@@ -9,118 +10,87 @@ struct GroupManagementSettingsCard: View {
     }
 
     private var activeGroups: [ClassificationCatalogItemProjection] {
-        catalog?.categories.filter { $0.lifecycle == .active && $0.mergedIntoID == nil } ?? []
+        catalog?.activeManageableItems(for: .category) ?? []
     }
 
     private var activeLabels: [ClassificationCatalogItemProjection] {
-        catalog?.labels.filter { $0.lifecycle == .active && $0.mergedIntoID == nil } ?? []
+        catalog?.activeManageableItems(for: .label) ?? []
     }
 
     var body: some View {
-        SettingsCard(
-            systemImage: "square.grid.2x2",
-            title: "分组与标签",
-            subtitle: "分组建立任务结构，标签提供可叠加的横向线索。"
-        ) {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 12) {
-                    metric(
-                        title: "分组",
-                        value: activeGroups.count,
-                        detail: "每项任务至多一个",
-                        systemImage: "folder.fill",
-                        color: Theme.accent
-                    )
-                    metric(
-                        title: "标签",
-                        value: activeLabels.count,
-                        detail: "可自由叠加",
-                        systemImage: "number",
-                        color: Theme.ok
-                    )
-                }
+        HStack(spacing: 14) {
+            Image(systemName: "square.grid.2x2")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.navSettings)
+                .frame(width: 36, height: 36)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Theme.chip))
 
-                VStack(alignment: .leading, spacing: 9) {
-                    Text("视觉语义")
-                        .font(.system(size: 10, weight: .bold))
-                        .tracking(0.8)
-                        .foregroundStyle(Theme.text3)
-                    HStack(spacing: 16) {
-                        if let group = activeGroups.first {
-                            groupPreview(group)
-                        }
-                        if let label = activeLabels.first {
-                            labelPreview(label)
-                        }
-                    }
-                }
-
-                HStack {
-                    Text("名称、生命周期和引用保护都在统一浮窗内维护。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text3)
-                    Spacer()
-                    ClassificationManagerButton()
-                }
-                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("分组与标签")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                Text("用一个分组建立结构，再用标签补充横向线索。")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.text3)
+                    .lineLimit(1)
             }
+
+            Spacer(minLength: 12)
+
+            summaryMetric(
+                title: "分组",
+                value: activeGroups.count,
+                systemImage: "folder.fill",
+                color: Theme.accent,
+                accessibilityIdentifier: "settings.groups.category-count"
+            )
+
+            Rectangle()
+                .fill(Theme.line)
+                .frame(width: 1, height: 32)
+
+            summaryMetric(
+                title: "标签",
+                value: activeLabels.count,
+                systemImage: "number",
+                color: Theme.ok,
+                accessibilityIdentifier: "settings.groups.label-count"
+            )
+
+            ClassificationManagerButton(title: "管理分组与标签", prominent: true)
         }
+        .padding(.horizontal, 14)
+        .frame(height: CGFloat(MacUIClassificationLayout.settingsSummaryHeight))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
         .accessibilityIdentifier("settings.groups")
     }
 
-    private func metric(
+    private func summaryMetric(
         title: String,
         value: Int,
-        detail: String,
         systemImage: String,
-        color: Color
+        color: Color,
+        accessibilityIdentifier: String
     ) -> some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 7) {
             Image(systemName: systemImage)
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(color)
-                .frame(width: 34, height: 34)
-                .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.10)))
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(value) 个\(title)")
-                    .font(.system(size: 13, weight: .bold))
+                .frame(width: 22, height: 22)
+                .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.09)))
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(value)")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.text1)
-                Text(detail)
-                    .font(.system(size: 10.5))
+                Text(title)
+                    .font(.system(size: 10))
                     .foregroundStyle(Theme.text3)
             }
-            Spacer()
         }
-        .padding(11)
-        .frame(maxWidth: .infinity)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.controlFill))
-    }
-
-    private func groupPreview(_ group: ClassificationCatalogItemProjection) -> some View {
-        let color = classificationUIColor(group.colorHex)
-        return HStack(spacing: 4) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 10))
-                .foregroundStyle(color)
-            Text(group.name)
-                .font(.system(size: 11, weight: .semibold))
-        }
-        .padding(.horizontal, 5)
-        .background(RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.09)))
-    }
-
-    private func labelPreview(_ label: ClassificationCatalogItemProjection) -> some View {
-        let color = classificationUIColor(label.colorHex)
-        return HStack(spacing: 3) {
-            Text("#").font(.system(size: 9, weight: .black, design: .rounded)).foregroundStyle(color)
-            Text(label.name).font(.system(size: 10.5, weight: .semibold))
-        }
-        .padding(.horizontal, 6)
-        .frame(height: 22)
-        .background(RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.10)))
-        .overlay {
-            RoundedRectangle(cornerRadius: 3)
-                .stroke(color.opacity(0.48), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
-        }
+        .frame(minWidth: 54, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier(accessibilityIdentifier)
+        .accessibilityLabel("\(value) 个\(title)")
     }
 }

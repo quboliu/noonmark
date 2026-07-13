@@ -181,6 +181,7 @@ private struct LaunchAutomation {
         append(LifecycleE2EAutomation.fromCommandLine(), to: &actions)
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskTitleDeleteE2EAutomation.fromCommandLine(), to: &actions)
+        append(QuickTaskReturnE2EAutomation.fromCommandLine(), to: &actions)
         append(ReportedBugsE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewZhulongEntryE2EAutomation.fromCommandLine(), to: &actions)
@@ -1705,6 +1706,40 @@ private enum TaskTitleDeleteE2EAutomationError: LocalizedError {
         case let .failed(message):
             return message
         }
+    }
+}
+
+private struct QuickTaskReturnE2EAutomation: LaunchAutomationRunnable {
+    let resultURL: URL
+    let title: String
+
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        guard CommandLine.arguments.contains("--e2e-add-quick-task-with-return"),
+              let resultPath = SuntraceStore.commandLineValue(
+                  after: "--e2e-add-quick-task-with-return-result-url"
+              )
+        else { return nil }
+        let title = SuntraceStore.commandLineValue(after: "--e2e-add-quick-task-with-return")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return Self(resultURL: URL(fileURLWithPath: resultPath), title: title)
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        store.page = .day
+        store.selectedDate = store.today
+        store.quickText = title
+        let eventSucceeded = MarkdownEditorKeyboardProbe.submitWithReturn {
+            store.addQuickTask()
+        }
+        let taskExists = store.engine.getDayTodo(date: store.today).traces.contains { trace in
+            store.definition(for: trace)?.title == title
+        }
+        let result = eventSucceeded && taskExists && store.quickText.isEmpty
+            ? "ok"
+            : "failed: event=\(eventSucceeded) task=\(taskExists) cleared=\(store.quickText.isEmpty)"
+        try? result.write(to: resultURL, atomically: true, encoding: .utf8)
     }
 }
 
@@ -5501,11 +5536,11 @@ struct NewTaskInlineField: View {
         VStack(alignment: .leading, spacing: 4) {
             MarkdownEditor(
                 text: $text,
-                placeholder: placeholder.replacingOccurrences(of: "回车确认", with: "⌘↩ 确认"),
+                placeholder: placeholder,
                 style: .compact,
+                commitsOnReturn: true,
                 onCommit: onSubmit
             )
-                .frame(minHeight: 44)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line.opacity(0.72)))
 
@@ -9194,11 +9229,11 @@ struct TaskDetail: View {
                     if canAddSubtask {
                         MarkdownEditor(
                             text: $store.detailSubtaskText,
-                            placeholder: "添加子任务，⌘↩ 确认",
+                            placeholder: "添加子任务，回车确认",
                             style: .compact,
+                            commitsOnReturn: true,
                             onCommit: { store.addDetailSubtask(traceID: trace.id) }
                         )
-                            .frame(minHeight: 42)
                             .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                             .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
                     }
@@ -9820,11 +9855,11 @@ struct PoolPlannedSubtasksSection: View {
             }
             MarkdownEditor(
                 text: $store.detailSubtaskText,
-                placeholder: "添加子任务，⌘↩ 确认",
+                placeholder: "添加子任务，回车确认",
                 style: .compact,
+                commitsOnReturn: true,
                 onCommit: { store.addPoolPlannedSubtask(chainID: task.chain.id) }
             )
-                .frame(minHeight: 42)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
         }

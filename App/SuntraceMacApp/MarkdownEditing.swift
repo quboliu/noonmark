@@ -19,7 +19,7 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: 58
         case .body: 86
-        case .compact: 42
+        case .compact: 32
         }
     }
 }
@@ -31,6 +31,7 @@ struct MarkdownEditor: View {
     var warm = false
     var showsSurface = true
     var height: CGFloat?
+    var commitsOnReturn = false
     var onCommit: (() -> Void)?
     var onEndEditing: (() -> Void)?
 
@@ -38,6 +39,7 @@ struct MarkdownEditor: View {
         MarkdownTextViewRepresentable(
             text: $text,
             style: style,
+            commitsOnReturn: commitsOnReturn,
             onCommit: onCommit,
             onEndEditing: onEndEditing
         )
@@ -60,6 +62,7 @@ struct MarkdownEditor: View {
 private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     @Binding var text: String
     let style: MarkdownEditorStyle
+    let commitsOnReturn: Bool
     let onCommit: (() -> Void)?
     let onEndEditing: (() -> Void)?
 
@@ -70,7 +73,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = true
+        scrollView.hasVerticalScroller = style != .compact
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
 
@@ -90,6 +93,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
+        textView.commitsOnReturn = commitsOnReturn
         textView.commitAction = onCommit
         context.coordinator.onEndEditing = onEndEditing
         scrollView.documentView = textView
@@ -106,6 +110,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             )
         }
         textView.font = style.font
+        textView.commitsOnReturn = commitsOnReturn
         textView.commitAction = onCommit
         context.coordinator.text = $text
         context.coordinator.onEndEditing = onEndEditing
@@ -132,6 +137,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
 }
 
 private final class MarkdownNSTextView: NSTextView {
+    var commitsOnReturn = false
     var commitAction: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
@@ -142,12 +148,7 @@ private final class MarkdownNSTextView: NSTextView {
             selectAll(nil)
             return
         }
-        if modifiers.contains(.command), event.keyCode == 36 {
-            commitAction?()
-            return
-        }
-        if modifiers.contains(.shift), event.keyCode == 36 {
-            insertText("  \n", replacementRange: selectedRange())
+        if handleReturn(event, modifiers: modifiers) {
             return
         }
         if modifiers.contains(.command), let key {
@@ -175,6 +176,27 @@ private final class MarkdownNSTextView: NSTextView {
         super.keyDown(with: event)
     }
 
+    private func handleReturn(
+        _ event: NSEvent,
+        modifiers: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard event.keyCode == 36 else { return false }
+        if modifiers.contains(.command) {
+            commitAction?()
+            return true
+        }
+        let returnModifiers: NSEvent.ModifierFlags = [.command, .shift, .control, .option]
+        if commitsOnReturn, returnModifiers.isDisjoint(with: modifiers) {
+            commitAction?()
+            return true
+        }
+        if modifiers.contains(.shift) {
+            insertText("  \n", replacementRange: selectedRange())
+            return true
+        }
+        return false
+    }
+
     private func wrapSelection(prefix: String, suffix: String) {
         let range = selectedRange()
         let selected = (string as NSString).substring(with: range)
@@ -187,12 +209,27 @@ private final class MarkdownNSTextView: NSTextView {
 
 enum MarkdownEditorKeyboardProbe {
     @MainActor
+    static func submitWithReturn(_ action: @escaping () -> Void) -> Bool {
+        let textView = MarkdownNSTextView()
+        textView.string = "new task"
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+        textView.commitsOnReturn = true
+        textView.commitAction = action
+        guard let submit = keyEvent(keyCode: 36, characters: "\r", modifiers: []) else {
+            return false
+        }
+        textView.keyDown(with: submit)
+        return textView.string == "new task"
+    }
+
+    @MainActor
     static func failures() -> [String] {
         let textView = MarkdownNSTextView()
         textView.string = "alpha beta"
         textView.setSelectedRange(NSRange(location: 3, length: 0))
 
-        var failures: [String] = []
+        var failures = compactSubmissionFailures()
+
         if let selectAll = keyEvent(keyCode: 0, characters: "a", modifiers: .control) {
             textView.keyDown(with: selectAll)
             if textView.selectedRange() != NSRange(location: 0, length: textView.string.utf16.count) {
@@ -231,6 +268,23 @@ enum MarkdownEditorKeyboardProbe {
         let blocks = MarkdownBlock.parse("# Heading\n- [x] item\n> quote\n```\ncode\n```")
         if blocks.count != 4 {
             failures.append("block Markdown did not render")
+        }
+        return failures
+    }
+
+    @MainActor
+    private static func compactSubmissionFailures() -> [String] {
+        var failures: [String] = []
+        if MarkdownEditorStyle.compact.minimumHeight > 32 {
+            failures.append("compact editor is taller than a single-line control")
+        }
+
+        var returnCommitCount = 0
+        if submitWithReturn({ returnCommitCount += 1 }) == false {
+            failures.append("Return event could not be created")
+        }
+        if returnCommitCount != 1 {
+            failures.append("Return did not submit the single-line editor")
         }
         return failures
     }

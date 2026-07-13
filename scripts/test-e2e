@@ -671,6 +671,41 @@ fi
 
 echo "E2E quick-add app interaction: $interaction_db (title=$interaction_title definitions=$interaction_definitions traces=$interaction_traces)"
 
+return_interaction_dir="artifacts/e2e-return-interaction"
+return_interaction_db="${return_interaction_dir}/Noonmark.sqlite"
+return_interaction_result="${return_interaction_dir}/result.txt"
+return_interaction_title="E2E 回车新增任务"
+rm -rf "$return_interaction_dir"
+mkdir -p "$return_interaction_dir"
+
+open -W -n "$app_path" --args \
+  --data-url "$PWD/$return_interaction_db" \
+  --page day \
+  --e2e-add-quick-task-with-return "$return_interaction_title" \
+  --e2e-add-quick-task-with-return-result-url "$PWD/$return_interaction_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$return_interaction_result" || "$(cat "$return_interaction_result")" != "ok" ]]; then
+  echo "Return quick-add interaction failed: $(cat "$return_interaction_result" 2>/dev/null || echo missing-result)" >&2
+  exit 1
+fi
+
+return_interaction_count="$(sqlite3 "$return_interaction_db" "
+  SELECT count(*)
+  FROM day_traces
+  JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+  WHERE task_definitions.title = '$return_interaction_title'
+    AND day_traces.date = '2026-07-05'
+    AND day_traces.status = 'pending';
+")"
+
+if [[ "$return_interaction_count" -ne 1 ]]; then
+  echo "Return quick-add persistence probe failed: tasks=$return_interaction_count" >&2
+  exit 1
+fi
+
+echo "E2E Return quick-add interaction: $return_interaction_db (title=$return_interaction_title tasks=$return_interaction_count)"
+
 zhulong_dir="artifacts/e2e-zhulong"
 zhulong_db="${zhulong_dir}/Noonmark.sqlite"
 rm -rf "$zhulong_dir"

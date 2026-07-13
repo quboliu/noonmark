@@ -1216,6 +1216,8 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
             try expect(store.visibleNavigationPages.contains(.zhulong), "enabled zhulong was not visible")
             store.selectPage(.zhulong)
             try expect(store.page == .zhulong, "enabled zhulong selection did not open the page")
+            store.zhulongWorkspace.showHome()
+            try expect(store.shouldShowDetailRail == false, "empty zhulong home kept the detail rail visible")
             try expect(ZhulongHomeIntentResolver.task(for: "结束今天并安排明天") == .dailyReview, "review intent was routed incorrectly")
             try expect(ZhulongHomeIntentResolver.task(for: "给任务池重新排期") == .scheduling, "scheduling intent was routed incorrectly")
             try expect(ZhulongHomeIntentResolver.task(for: "整理标签分类") == .labelClassification, "classification intent was routed incorrectly")
@@ -1249,6 +1251,7 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
                     store.zhulongWorkspace.sessions.count == priorCount + 1,
                     "fixed workflow did not create a session: \(workflow.intent)"
                 )
+                try expect(store.shouldShowDetailRail, "active workflow session did not expose its context rail")
                 try expect(
                     store.zhulongWorkspace.selectedSession?.proposedScopes == workflow.scopes,
                     "fixed workflow proposed incorrect scopes: \(workflow.intent)"
@@ -1264,6 +1267,7 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
                     )
                 }
                 store.zhulongWorkspace.showHome()
+                try expect(store.shouldShowDetailRail == false, "zhulong home did not collapse its context rail")
             }
             let sessionCount = store.zhulongWorkspace.sessions.count
             store.startZhulongWorkspaceSession(intent: "结束今天并安排明天")
@@ -2522,7 +2526,10 @@ final class NoonmarkStore: ObservableObject {
 
     var shouldShowDetailRail: Bool {
         guard page != .calendar && page != .settings else { return false }
-        if page == .zhulong || hasActiveDetailSelection {
+        if page == .zhulong {
+            return zhulongWorkspace.selectedSession != nil
+        }
+        if hasActiveDetailSelection {
             return true
         }
         if page == .day {

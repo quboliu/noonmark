@@ -1,4 +1,5 @@
 import NoonmarkAI
+import NoonmarkMacUIContract
 import NoonmarkZhulong
 import SwiftUI
 
@@ -29,37 +30,29 @@ private struct ZhulongWorkspaceHome: View {
     @State private var intent = ""
     @State private var hoveredWorkflowID: String?
 
-    private var coreWorkflows: [ZhulongHomeWorkflow] {
+    private var workflows: [ZhulongHomeWorkflow] {
         [
             ZhulongHomeWorkflow(
                 id: "task-shaping",
                 title: store.copy.zhulongTaskShapingTitle,
                 detail: store.copy.zhulongTaskShapingDetail,
                 intent: store.copy.zhulongTaskShapingIntent,
-                task: .taskDecomposition,
-                systemImage: "list.bullet.rectangle.portrait"
+                task: .taskDecomposition
             ),
             ZhulongHomeWorkflow(
                 id: "daily-close",
                 title: store.copy.zhulongDailyCloseTitle,
                 detail: store.copy.zhulongDailyCloseDetail,
                 intent: store.copy.zhulongDailyCloseIntent,
-                task: .dailyReview,
-                systemImage: "sun.horizon"
-            )
-        ]
-    }
-
-    private var specialistAssistants: [ZhulongHomeWorkflow] {
-        [
+                task: .dailyReview
+            ),
             ZhulongHomeWorkflow(
                 id: "scheduling",
                 title: store.copy.zhulongSchedulingTitle,
                 detail: store.copy.zhulongSchedulingDetail,
                 intent: store.copy.zhulongSchedulingIntent,
                 task: .scheduling,
-                systemImage: "calendar.badge.clock",
-                badge: store.copy.zhulongSuggestionMode
+                isSuggestion: true
             ),
             ZhulongHomeWorkflow(
                 id: "classification",
@@ -67,8 +60,7 @@ private struct ZhulongWorkspaceHome: View {
                 detail: store.copy.zhulongClassificationDetail,
                 intent: store.copy.zhulongClassificationIntent,
                 task: .labelClassification,
-                systemImage: "tag",
-                badge: store.copy.zhulongSuggestionMode
+                isSuggestion: true
             )
         ]
     }
@@ -83,16 +75,21 @@ private struct ZhulongWorkspaceHome: View {
                 title: store.copy.navZhulong,
                 subtitle: "把模糊的事想清楚，把已经开始的事继续推进。"
             )
+            .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.headerOuterMaxWidth))
+            .frame(maxWidth: .infinity)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
+                VStack(alignment: .leading, spacing: 24) {
                     intentComposer
                     workflowSection
-                    pendingSection
+                    if pendingCount > 0 {
+                        pendingSection
+                            .padding(.top, 10)
+                    }
                 }
-                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.contentMaxWidth), alignment: .leading)
                 .padding(.horizontal, 24)
-                .padding(.top, 20)
+                .padding(.top, 24)
                 .padding(.bottom, 40)
                 .frame(maxWidth: .infinity, alignment: .top)
             }
@@ -102,154 +99,100 @@ private struct ZhulongWorkspaceHome: View {
     }
 
     private var intentComposer: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("你现在想推进什么？")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                Text("先说结果，烛龙会在需要时再说明范围与授权。")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.text2)
-            }
-
-            HStack(alignment: .center, spacing: 10) {
-                MarkdownEditor(
-                    text: $intent,
-                    placeholder: "说说你现在想推进什么……",
-                    style: .compact,
-                    showsSurface: false,
-                    onCommit: startIntent
-                )
-                    .focused($intentIsFocused)
-                    .accessibilityIdentifier("zhulong-home-intent")
-
-                Button(action: startIntent) {
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.text3 : Theme.accent)
-                        .frame(width: 30, height: 30)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .hoverSurface(
-                    cornerRadius: 7,
-                    idleFill: Theme.panel2,
-                    hoverFill: Theme.accentSoft,
-                    idleStroke: Theme.line,
-                    hoverStroke: Theme.accent.opacity(0.28)
-                )
-                .accessibilityLabel("开始梳理")
-                .accessibilityIdentifier("zhulong-home-submit")
-            }
-            .padding(.leading, 14)
-            .padding(.trailing, 12)
-            .frame(height: 62)
-            .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel))
-            .overlay(
-                RoundedRectangle(cornerRadius: 9)
-                    .stroke(intentIsFocused ? Theme.accent.opacity(0.42) : Theme.line, lineWidth: intentIsFocused ? 1.4 : 1)
+        HStack(alignment: .center, spacing: 10) {
+            MarkdownEditor(
+                text: $intent,
+                placeholder: "说说你现在想推进什么……",
+                style: .compact,
+                showsSurface: false,
+                onCommit: startIntent
             )
-            .shadow(color: Theme.text1.opacity(0.035), radius: 14, y: 7)
+            .focused($intentIsFocused)
+            .frame(maxHeight: 38)
+            .accessibilityIdentifier("zhulong-home-intent")
+
+            Button(action: startIntent) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(canSubmitIntent ? Theme.panel : Theme.text3)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(canSubmitIntent ? Theme.text1 : Theme.controlFill))
+                    .overlay(Circle().stroke(canSubmitIntent ? Color.clear : Theme.line))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(canSubmitIntent == false)
+            .accessibilityLabel("开始梳理")
+            .accessibilityIdentifier("zhulong-home-submit")
         }
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
+        .frame(height: CGFloat(MacUIZhulongHomeLayout.composerHeight))
+        .background(
+            RoundedRectangle(cornerRadius: CGFloat(MacUIZhulongHomeLayout.composerCornerRadius))
+                .fill(Theme.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: CGFloat(MacUIZhulongHomeLayout.composerCornerRadius))
+                .stroke(intentIsFocused ? Theme.accent.opacity(0.5) : Theme.line, lineWidth: intentIsFocused ? 1.2 : 1)
+        )
+        .shadow(color: Theme.text1.opacity(0.045), radius: 16, y: 8)
     }
 
     private var workflowSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            workflowGroup(
-                title: store.copy.zhulongFixedWorkflowsTitle,
-                detail: store.copy.zhulongFixedWorkflowsDetail,
-                workflows: coreWorkflows,
-                isCore: true
-            )
-            workflowGroup(
-                title: store.copy.zhulongSpecialistAssistantsTitle,
-                detail: store.copy.zhulongSpecialistAssistantsDetail,
-                workflows: specialistAssistants,
-                isCore: false
-            )
+        VStack(spacing: 0) {
+            ForEach(Array(workflows.enumerated()), id: \.element.id) { index, workflow in
+                workflowButton(workflow)
+                if index < workflows.count - 1 {
+                    Divider()
+                        .padding(.leading, 38)
+                        .overlay(Theme.line.opacity(0.82))
+                }
+            }
         }
         .accessibilityIdentifier("zhulong-home-workflows")
     }
 
-    private func workflowGroup(
-        title: String,
-        detail: String,
-        workflows: [ZhulongHomeWorkflow],
-        isCore: Bool
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                Text(detail)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.text3)
-                Spacer()
-            }
-
-            VStack(spacing: 0) {
-                ForEach(Array(workflows.enumerated()), id: \.element.id) { index, workflow in
-                    workflowButton(workflow, isCore: isCore)
-                    if index < workflows.count - 1 {
-                        Divider()
-                            .padding(.leading, 48)
-                            .overlay(Theme.line)
-                    }
-                }
-            }
-            .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
-        }
-    }
-
-    private func workflowButton(_ workflow: ZhulongHomeWorkflow, isCore: Bool) -> some View {
+    private func workflowButton(_ workflow: ZhulongHomeWorkflow) -> some View {
         Button {
             startWorkflow(workflow)
         } label: {
-            HStack(spacing: 11) {
+            HStack(spacing: 14) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(isCore ? Theme.accentSoft : Theme.controlFill)
-                    Image(systemName: workflow.systemImage)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(isCore ? Theme.accent : Theme.text2)
+                    Circle()
+                        .stroke(hoveredWorkflowID == workflow.id ? Theme.text2 : Theme.line, lineWidth: 1.2)
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(hoveredWorkflowID == workflow.id ? Theme.text1 : Theme.text3)
                 }
-                .frame(width: 30, height: 30)
+                .frame(width: 24, height: 24)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 7) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
                         Text(workflow.title)
-                            .font(.system(size: 12.5, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Theme.text1)
-                        if let badge = workflow.badge {
-                            Text(badge)
+                        if workflow.isSuggestion {
+                            Text(store.copy.zhulongSuggestionMode)
                                 .font(.system(size: 9.5, weight: .medium))
                                 .foregroundStyle(Theme.text3)
-                                .padding(.horizontal, 6)
-                                .frame(height: 18)
-                                .background(Capsule().fill(Theme.chip))
                         }
                     }
                     Text(workflow.detail)
-                        .font(.system(size: 10.8))
+                        .font(.system(size: 11.3))
                         .foregroundStyle(Theme.text2)
                         .lineLimit(1)
                 }
 
-                Spacer(minLength: 12)
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(hoveredWorkflowID == workflow.id ? Theme.accent : Theme.text3)
+                Spacer(minLength: 10)
             }
-            .padding(.horizontal, 11)
-            .frame(height: isCore ? 58 : 54)
+            .padding(.horizontal, 2)
+            .frame(height: CGFloat(MacUIZhulongHomeLayout.workflowRowHeight))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                Rectangle().fill(
+                RoundedRectangle(cornerRadius: 9).fill(
                     hoveredWorkflowID == workflow.id
-                        ? (isCore ? Theme.accentSoft.opacity(0.45) : Theme.panel2)
+                        ? Theme.panel2
                         : .clear
                 )
             )
@@ -272,19 +215,11 @@ private struct ZhulongWorkspaceHome: View {
         VStack(alignment: .leading, spacing: 0) {
             sectionHeader("待你决定", count: pendingCount)
 
-            if pendingCount == 0 {
-                Text("现在没有等待你处理的事项。可以从上方开始一件新工作。")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.text3)
-                    .padding(.vertical, 18)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ForEach(workspace.sessions.filter { $0.workspaceStatus != .archived }, id: \.id) { session in
-                    ZhulongWorkspaceSessionRow(session: session) {
-                        workspace.selectSession(session.id)
-                    }
-                    Divider().overlay(Theme.line)
+            ForEach(workspace.sessions.filter { $0.workspaceStatus != .archived }, id: \.id) { session in
+                ZhulongWorkspaceSessionRow(session: session) {
+                    workspace.selectSession(session.id)
                 }
+                Divider().overlay(Theme.line)
             }
         }
     }
@@ -304,6 +239,10 @@ private struct ZhulongWorkspaceHome: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.line).frame(height: 1)
         }
+    }
+
+    private var canSubmitIntent: Bool {
+        intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     private func startIntent() {
@@ -326,15 +265,7 @@ private struct ZhulongWorkspaceSessionRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 11) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7).fill(Theme.accentSoft)
-                    Image(systemName: "text.append")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                }
-                .frame(width: 28, height: 28)
-
+            HStack(spacing: 14) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.primaryIntent)
                         .font(.system(size: 12.5, weight: .semibold))
@@ -353,7 +284,8 @@ private struct ZhulongWorkspaceSessionRow: View {
                     .font(.system(size: 10.8, weight: .semibold))
                     .foregroundStyle(Theme.accent)
             }
-            .padding(.horizontal, 2)
+            .padding(.leading, 38)
+            .padding(.trailing, 2)
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
@@ -380,8 +312,7 @@ private struct ZhulongHomeWorkflow: Identifiable {
     let detail: String
     let intent: String
     let task: ZhulongTask
-    let systemImage: String
-    let badge: String?
+    let isSuggestion: Bool
 
     init(
         id: String,
@@ -389,30 +320,18 @@ private struct ZhulongHomeWorkflow: Identifiable {
         detail: String,
         intent: String,
         task: ZhulongTask,
-        systemImage: String,
-        badge: String? = nil
+        isSuggestion: Bool = false
     ) {
         self.id = id
         self.title = title
         self.detail = detail
         self.intent = intent
         self.task = task
-        self.systemImage = systemImage
-        self.badge = badge
+        self.isSuggestion = isSuggestion
     }
 }
 
 private extension AppCopy {
-    var zhulongFixedWorkflowsTitle: String { language == .chinese ? "固定工作流" : "Fixed workflows" }
-    var zhulongFixedWorkflowsDetail: String {
-        language == .chinese ? "流程、授权边界与落库方式固定" : "Fixed flow, authorization boundaries, and application"
-    }
-
-    var zhulongSpecialistAssistantsTitle: String { language == .chinese ? "专项助手" : "Specialist assistants" }
-    var zhulongSpecialistAssistantsDetail: String {
-        language == .chinese ? "进入有界会话，所有建议仍需确认" : "Bounded sessions; every suggestion still needs confirmation"
-    }
-
     var zhulongSuggestionMode: String { language == .chinese ? "建议模式" : "Suggestion mode" }
     func zhulongWorkflowAccessibilityLabel(title: String, detail: String) -> String {
         language == .chinese

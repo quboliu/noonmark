@@ -180,10 +180,28 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(Set(contract.zhulongHomeElements), Set(MacUIZhulongHomeElement.allCases))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.freeformIntentComposer))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.verticallyCenteredComposerContent))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.singleVisualAxis))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.capsuleIntentComposer))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.flatWorkflowList))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.quietSuggestionModeLabel))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.collapsedEmptyPendingSection))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.collapsedHomeDetailRail))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.coreWorkflowEntrances))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.specialistAssistantEntrances))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.directWorkflowStart))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.noDecorativeComposerAction))
+    }
+
+    func testZhulongHomeUsesOneSparseVisualAxis() {
+        XCTAssertEqual(MacUIZhulongHomeLayout.contentMaxWidth, 780)
+        XCTAssertEqual(MacUIZhulongHomeLayout.headerOuterMaxWidth, 828)
+        XCTAssertEqual(MacUIZhulongHomeLayout.composerHeight, 58)
+        XCTAssertEqual(MacUIZhulongHomeLayout.composerCornerRadius, 29)
+        XCTAssertEqual(MacUIZhulongHomeLayout.workflowRowHeight, 68)
+        XCTAssertEqual(MacUIZhulongHomeLayout.workflowListCount, 1)
+        XCTAssertEqual(MacUIZhulongHomeLayout.composerActionCount, 1)
+        XCTAssertTrue(MacUIZhulongHomeLayout.collapsesEmptyPendingSection)
+        XCTAssertTrue(MacUIZhulongHomeLayout.collapsesHomeDetailRail)
     }
 
     func testDetailAndReviewSectionsAreNotOptional() {

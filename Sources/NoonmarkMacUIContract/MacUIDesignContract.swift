@@ -108,6 +108,12 @@ public enum MacUIPage: String, CaseIterable, Sendable {
 public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
     case freeformIntentComposer
     case verticallyCenteredComposerContent
+    case singleVisualAxis
+    case capsuleIntentComposer
+    case flatWorkflowList
+    case quietSuggestionModeLabel
+    case collapsedEmptyPendingSection
+    case collapsedHomeDetailRail
     case coreWorkflowEntrances
     case specialistAssistantEntrances
     case directWorkflowStart
@@ -384,6 +390,18 @@ public enum MacUIClassificationLayout {
     public static let managerWidth = 560.0
     public static let managerHeight = 460.0
     public static let managerRowHeight = 42.0
+}
+
+public enum MacUIZhulongHomeLayout {
+    public static let contentMaxWidth = 780.0
+    public static let headerOuterMaxWidth = 828.0
+    public static let composerHeight = 58.0
+    public static let composerCornerRadius = 29.0
+    public static let workflowRowHeight = 68.0
+    public static let workflowListCount = 1
+    public static let composerActionCount = 1
+    public static let collapsesEmptyPendingSection = true
+    public static let collapsesHomeDetailRail = true
 }
 
 public enum MacUIClassificationAccessibility {

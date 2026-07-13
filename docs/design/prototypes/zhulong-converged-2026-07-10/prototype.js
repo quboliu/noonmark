@@ -2,14 +2,13 @@
   "use strict";
 
   const app = document.querySelector("#app");
-  const routeKeys = ["surface", "flow", "step", "panel", "provider", "condition", "settings", "scroll", "variant"];
+  const routeKeys = ["surface", "flow", "step", "panel", "provider", "condition", "settings", "scroll"];
   const valid = {
     surface: ["zhulong", "day", "settings"],
     flow: ["shape", "close"],
     provider: ["online", "local", "failed"],
     condition: ["normal", "scope-expanded", "stale", "long"],
     settings: ["permissions", "memory", "provider", "transparency"],
-    variant: ["A", "B", "C"],
   };
 
   const ui = {
@@ -64,7 +63,6 @@
       condition: valid.condition.includes(query.get("condition")) ? query.get("condition") : "normal",
       settings: valid.settings.includes(query.get("settings")) ? query.get("settings") : "permissions",
       scroll: query.get("scroll") === "bottom" ? "bottom" : "top",
-      variant: valid.variant.includes(query.get("variant")) ? query.get("variant") : "A",
     };
   }
 
@@ -364,108 +362,49 @@
   }
 
   function homeHeader() {
-    return pageHeader(
+    return `<div class="home-header-axis">${pageHeader(
       "烛龙",
       "把模糊的事想清楚，把已经开始的事继续推进。",
-      headerButton("事件历史 · 4", `data-panel="events"`),
-    );
+      "",
+    )}</div>`;
   }
 
-  function homeIntentComposer({ compact = false, heading = true } = {}) {
-    const examples = [
-      "规划一个还很模糊的大任务",
-      "结束今天并安排明天",
-      "梳理一条卡住的 Todo",
-    ];
-    return `<section class="home-intent${compact ? " compact" : ""}">
-      ${heading ? `<div class="home-intent-heading"><h2>你现在想推进什么？</h2><p>先说结果，烛龙会在需要时再询问范围与授权。</p></div>` : ""}
+  function homeIntentComposer() {
+    return `<section class="home-intent">
       <div class="home-intent-field">
-        <span class="home-intent-plus" aria-hidden="true">＋</span>
         <textarea rows="1" data-home-intent aria-label="告诉烛龙想推进什么" placeholder="说说你现在想推进什么……">${escapeHTML(ui.homeIntent)}</textarea>
-        <button class="home-intent-submit" type="button" aria-label="开始梳理" ${routeAttributes({ surface: "zhulong", flow: "shape", step: "scope" })}>→</button>
-      </div>
-      <div class="home-examples" aria-label="可以直接这样说">
-        ${examples.map((example) => `<button type="button" data-action="set-home-intent" data-value="${example}">${example}</button>`).join("")}
+        <button class="home-intent-submit" type="button" aria-label="开始梳理" ${ui.homeIntent.trim() ? "" : "disabled"} ${routeAttributes({ surface: "zhulong", flow: "shape", step: "scope" })}>↑</button>
       </div>
     </section>`;
   }
 
-  function homeDecisionRow({ tone, marker, title, state, next, action, route }) {
-    return `<article class="home-decision-row">
-      <span class="home-decision-marker ${tone}">${marker}</span>
-      <span class="home-decision-copy"><strong>${title}</strong><span>${state}</span><small>下一步：${next}</small></span>
-      <button class="small-action${tone === "accent" ? " accent" : ""}" type="button" ${routeAttributes(route)}>${action}</button>
-    </article>`;
-  }
-
-  function homeDecisionList() {
-    return `<div class="home-decision-list">
-      ${homeDecisionRow({ tone: "accent", marker: "形", title: "重做烛龙 Agent", state: "规划简报 v0.6 已形成，规划尚未开始", next: "审查简报，再决定是否委托", action: "审查简报", route: { surface: "zhulong", flow: "shape", step: "brief" } })}
-      ${homeDecisionRow({ tone: "amber", marker: "收", title: "7 月 9 日收尾", state: "复盘草稿已经完成，没有写入明日 Todo", next: "确认内容，或回到会话修改", action: "审查复盘", route: { surface: "zhulong", flow: "close", step: "review" } })}
-    </div>`;
-  }
-
-  function homeRecentRow({ title, state, route }) {
-    return `<button class="home-recent-row" type="button" ${routeAttributes(route)}>
-      <span><strong>${title}</strong><small>${state}</small></span><b>继续会话 →</b>
+  function homeWorkflowRow({ title, detail, suggestion = false, route }) {
+    return `<button class="home-workflow-row" type="button" ${routeAttributes(route)}>
+      <span class="home-workflow-start" aria-hidden="true">＋</span>
+      <span class="home-workflow-copy">
+        <span class="home-workflow-title"><strong>${title}</strong>${suggestion ? "<small>建议模式</small>" : ""}</span>
+        <span>${detail}</span>
+      </span>
     </button>`;
   }
 
-  function homeVariantA(model) {
-    return `<div class="native-page" data-home-variant="A">
+  function homeWorkflowList() {
+    return `<div class="home-workflow-list" aria-label="烛龙工作流">
+      ${homeWorkflowRow({ title: "把模糊任务变成计划", detail: "澄清目标与约束，形成可审查的规划和 Todo diff", route: { surface: "zhulong", flow: "shape", step: "scope" } })}
+      ${homeWorkflowRow({ title: "结束今天并安排明天", detail: "复盘今日事实，处置未完成任务并形成下一次承诺", route: { surface: "zhulong", flow: "close", step: "facts" } })}
+      ${homeWorkflowRow({ title: "重新安排任务", detail: "基于任务池与未完成任务提出可确认的排期建议", suggestion: true, route: { surface: "zhulong", flow: "shape", step: "scope" } })}
+      ${homeWorkflowRow({ title: "整理分组与标签", detail: "审查现有分类，并提出可确认的整理建议", suggestion: true, route: { surface: "zhulong", flow: "shape", step: "scope" } })}
+    </div>`;
+  }
+
+  function zhulongHome() {
+    return `<div class="native-page">
       ${homeHeader()}
-      <div class="native-columns"><div class="page-scroll"><div class="home-prototype home-a">
+      <div class="native-columns"><div class="page-scroll"><div class="home-prototype">
         ${homeIntentComposer()}
-        <section class="home-section"><div class="home-section-heading"><h2>待你决定</h2><span>2 项</span></div>${homeDecisionList()}</section>
-      </div></div>${model.panel ? r3NativeDetailRail(model, "home") : ""}</div>
+        ${homeWorkflowList()}
+      </div></div></div>
     </div>`;
-  }
-
-  function homeVariantB(model) {
-    return `<div class="native-page" data-home-variant="B">
-      ${homeHeader()}
-      <div class="native-columns"><div class="page-scroll"><div class="home-prototype home-b">
-        <section class="home-focus-card">
-          <div class="home-focus-kicker"><span>现在需要你</span><span class="status-pill amber">运行已暂停</span></div>
-          <h2>决定是否把“重做烛龙 Agent”交给烛龙规划</h2>
-          <p>目标、完成标准和硬约束已经确认。烛龙尚未运行，也没有创建 Todo。</p>
-          <div class="home-focus-next"><span><b>你要做的下一步</b><small>审查规划简报 v0.6，然后确认委托或返回修改。</small></span><button class="small-action accent" type="button" ${routeAttributes({ surface: "zhulong", flow: "shape", step: "brief" })}>审查并决定</button></div>
-        </section>
-        ${homeIntentComposer({ compact: true, heading: false })}
-        <section class="home-section subdued"><div class="home-section-heading"><h2>稍后处理</h2><span>1 项</span></div>
-          ${homeRecentRow({ title: "7 月 9 日收尾", state: "复盘草稿等待你确认", route: { surface: "zhulong", flow: "close", step: "review" } })}
-        </section>
-      </div></div>${model.panel ? r3NativeDetailRail(model, "home") : ""}</div>
-    </div>`;
-  }
-
-  function homeDecisionRail() {
-    return `<aside class="home-decision-rail">
-      <header><div><h2>待你决定</h2><p>只收纳会改变后续行动的决定</p></div><span>2</span></header>
-      <div class="home-decision-rail-body">${homeDecisionList()}</div>
-    </aside>`;
-  }
-
-  function homeVariantC(model) {
-    return `<div class="native-page" data-home-variant="C">
-      ${homeHeader()}
-      <div class="home-split">
-        <div class="page-scroll"><div class="home-prototype home-c">
-          ${homeIntentComposer()}
-          <section class="home-section"><div class="home-section-heading"><h2>最近会话</h2><span>不含待决定事项</span></div>
-            ${homeRecentRow({ title: "整理同步模块的验证证据", state: "已暂停 · 可以从上次位置继续", route: { surface: "zhulong", flow: "shape", step: "focus" } })}
-          </section>
-        </div></div>
-        ${model.panel ? "" : homeDecisionRail()}
-      </div>
-      ${model.panel ? r3NativeDetailRail(model, "home") : ""}
-    </div>`;
-  }
-
-  function zhulongHome(model) {
-    if (model.variant === "B") return homeVariantB(model);
-    if (model.variant === "C") return homeVariantC(model);
-    return homeVariantA(model);
   }
 
   function sessionPhases(model) {
@@ -861,31 +800,13 @@
     return `<span class="eyebrow">白盒原则 · 分层披露</span><h1>主界面克制，历史仍然完整可追溯。</h1><p>情境提示回答“现在发生什么”，事件历史回答“刚才发生什么”，Provider 发送记录回答“实际发送了什么”。</p><section class="settings-section"><h3>事件历史</h3><div class="permission-list"><div class="permission-row"><span class="permission-copy"><strong>保留策略</strong><span>本机 append-only 语义；用户不能修改、重排或逐条删除</span></span><span class="status-pill green">开启</span></div><div class="permission-row"><span class="permission-copy"><strong>清理方式</strong><span>只能清理最近连续时间范围，并留下无正文范围标记</span></span><button class="ghost-button" type="button" data-panel="events">打开事件历史</button></div><div class="permission-row"><span class="permission-copy"><strong>Provider 发送记录</strong><span>凭证脱敏的请求与响应正文保存在对应会话</span></span><span class="status-pill">按会话查看</span></div></div></section>`;
   }
 
-  function prototypeSwitcher(model) {
-    const variants = {
-      A: "单列指令台",
-      B: "下一件事",
-      C: "决定分栏",
-    };
-    const keys = Object.keys(variants);
-    const index = keys.indexOf(model.variant);
-    const previous = keys[(index - 1 + keys.length) % keys.length];
-    const next = keys[(index + 1) % keys.length];
-    return `<div class="prototype-switcher" role="group" aria-label="首页原型方案切换">
-      <button type="button" data-variant="${previous}" aria-label="上一个方案">←</button>
-      <span><b>${model.variant}</b><small>${variants[model.variant]}</small></span>
-      <button type="button" data-variant="${next}" aria-label="下一个方案">→</button>
-    </div>`;
-  }
-
   function render() {
     const model = readModel();
     let content = "";
     if (model.surface === "day") content = dayScreen(model);
     else if (model.surface === "settings") content = settingsScreen(model);
     else content = model.step === "home" ? zhulongHome(model) : sessionScreen(model);
-    const switcher = model.surface === "zhulong" && model.step === "home" ? prototypeSwitcher(model) : "";
-    app.innerHTML = `<div class="mac-window">${sidebar(model)}<main class="app-main">${content}</main>${switcher}${ui.toast ? `<div class="toast">${ui.toast}</div>` : ""}</div>`;
+    app.innerHTML = `<div class="mac-window">${sidebar(model)}<main class="app-main">${content}</main>${ui.toast ? `<div class="toast">${ui.toast}</div>` : ""}</div>`;
     if (model.scroll === "bottom") {
       window.requestAnimationFrame(() => {
         const target = model.panel ? document.querySelector(".detail-rail-scroll") : document.querySelector(".session-scroll") || document.querySelector(".page-scroll");
@@ -907,12 +828,6 @@
   function handleAction(element, action) {
     const value = element.dataset.value;
     if (action === "toggle-scope") ui.excludedScope.has(value) ? ui.excludedScope.delete(value) : ui.excludedScope.add(value);
-    else if (action === "set-home-intent") {
-      ui.homeIntent = value;
-      render();
-      window.requestAnimationFrame(() => document.querySelector("[data-home-intent]")?.focus());
-      return;
-    }
     else if (action === "choose-focus") ui.focusChoice = value;
     else if (action === "choose-r3") {
       const key = `${element.dataset.kind}Choice`;
@@ -1074,20 +989,6 @@
     if (!input) return;
     const key = `${input.dataset.r3Input}Text`;
     if (key in ui.shaping) ui.shaping[key] = input.value;
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    if (target.closest("input, textarea, [contenteditable='true']")) return;
-    const model = readModel();
-    if (model.surface !== "zhulong" || model.step !== "home") return;
-    const keys = ["A", "B", "C"];
-    const offset = event.key === "ArrowLeft" ? -1 : 1;
-    const index = (keys.indexOf(model.variant) + offset + keys.length) % keys.length;
-    event.preventDefault();
-    updateRoute({ variant: keys[index] }, { resetPanel: false, replace: true });
   });
 
   window.addEventListener("popstate", render);

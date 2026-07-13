@@ -1,5 +1,7 @@
 # 发给 Claude Design 的页面设计 Prompt
 
+> 历史设计输入（2026-07-05）：仅保留早期探索来源，不是当前产品规格、UI 实现契约或视觉 oracle。当前实现以 `docs/design/mac-ui-design-contract.md`、真实 `.app` 运行产物和用户即时确认为准；本文中的旧烛龙草稿模型与页面清单不得继续实现或兼容。
+
 你是 Claude Design，请为一个 Mac 首发的 SwiftUI Todo 产品设计第一期界面。产品中文名是“晷迹”，英文名是 “Noonmark”。请只负责产品界面、信息架构、交互和视觉方案，不要设计数据表、同步协议、后端或具体代码实现。
 
 ## 产品一句话

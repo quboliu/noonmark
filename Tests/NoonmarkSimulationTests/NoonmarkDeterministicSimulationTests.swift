@@ -124,7 +124,8 @@ final class NoonmarkDeterministicSimulationTests: XCTestCase {
             try context.engine.setManualProgress(
                 traceID: trace.id,
                 percent: context.rng.nextInt(121) - 10,
-                today: context.today
+                today: context.today,
+                now: context.now
             )
         }
     }
@@ -154,7 +155,7 @@ final class NoonmarkDeterministicSimulationTests: XCTestCase {
 
     private func advanceDay(_ context: inout SimulationContext) throws {
         context.today = offset(context.today, by: 1)
-        context.engine.settleDays(upTo: context.today, now: context.now)
+        try context.engine.settleDays(upTo: context.today, now: context.now)
     }
 
     private func continueTrace(_ context: inout SimulationContext) throws {

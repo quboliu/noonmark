@@ -48,7 +48,7 @@
 - 右侧或下方详情区：
   - 任务详情、子任务、变更记录、延续明细、每日复盘。
 - 烛龙：
-  - provider 配置、复盘分析、任务拆解、排期建议、标签分类建议。
+  - provider 配置、复盘分析、任务拆解、排期建议、分组与标签整理。
 
 UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 
@@ -82,6 +82,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 
 - `id`
 - `state`: `active | abandoned`
+- `noteEntries`
 - `createdAt`
 - `updatedAt`
 
@@ -90,6 +91,8 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 同一任务链同一时间最多一个活跃日轨迹。
 - 活跃日轨迹完成后，该任务链从未完成池移除。
 - 废弃后，该任务链仍显示在未完成池并标注已废弃；它不能直接延续复制，但可以重新启用。
+- `noteEntries` 是任务池附言的稳定 owner；标题重命名或定义换版不得复制、搬迁或丢失附言。
+- 任务在任务池时只能经逐条附言接口追加、编辑或删除，不能整体覆盖数组。
 
 ### TaskDefinition
 
@@ -102,7 +105,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - `sequence`
 - `title`
 - `descriptionText`
-- `noteEntries`
+- `contentUpdatedAt`
 - `createdAt`
 - `supersededAt`
 - `supersededByDefinitionId`
@@ -113,8 +116,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 需要改变任务定义时，必须走变更：旧任务标注已变更，新任务开启新的任务链并拥有新定义。
 - 用户要补充任务边界时，优先添加子任务，而不是覆盖原定义。
 - `descriptionText` 表达任务背景、目标或范围；进入 Day Todo 后成为日轨迹快照。
-- `noteEntries` 表达逐条记录的临时想法、提醒或补充说明；任务在任务池时只能经逐条附言接口追加、编辑或删除，不能整体覆盖数组。
-- 排期时只把当前有效的 `noteEntries` 复制给新 DayTrace；已经存在的 DayTrace 只读取自己的快照，不能回退读取 TaskDefinition。
+- 排期时只把 TaskChain 当前有效的 `noteEntries` 复制给新 DayTrace；已经存在的 DayTrace 只读取自己的快照，不能回退读取 TaskChain。
 
 ### TaskNoteEntry
 
@@ -177,7 +179,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 延续复制会让原 DayTrace 进入已延续，并在目标日期生成新 DayTrace。
 - 变更会让旧 DayTrace 进入已变更，并在当天生成新 DayTrace。
 - 当前日和未来日的 `pending` DayTrace 可以逐条追加、编辑或删除附言；历史、`completed` 和 `unfinished` DayTrace 的附言只读。
-- DayTrace 的 `noteEntries` 是独立快照，不能因条目为空或已删除而回退显示 TaskDefinition 的附言。
+- DayTrace 的 `noteEntries` 是独立快照，不能因条目为空或已删除而回退显示 TaskChain 的附言。
 
 ### PlannedTrace
 
@@ -521,21 +523,22 @@ func updateDailyReview(date: LocalDate, summary: String?, unfinishedReason: Stri
 func listAIProviders() -> [AIProvider]
 func saveAIProvider(_ provider: AIProviderDraft) throws
 func testAIProvider(providerId: AIProviderID) async throws -> AIProviderHealth
-func analyzeDailyReview(date: LocalDate, scope: AIScope) async throws -> AISuggestionDraft
-func analyzeHabits(range: DateRange, scope: AIScope) async throws -> HabitInsightDraft
-func decomposeTask(traceId: TraceID, scope: AIScope) async throws -> AISuggestionDraft
-func suggestSchedule(scope: AIScope) async throws -> AISuggestionDraft
-func suggestLabels(scope: AIScope, mode: LabelSuggestionMode) async throws -> AISuggestionDraft
-func applyAISuggestion(_ draftId: AISuggestionDraftID, selection: AIApplySelection) throws
-func discardAISuggestion(_ draftId: AISuggestionDraftID) throws
+func startZhulongSession(intent: String, purpose: ZhulongSessionPurpose, scopes: Set<ZhulongDataScope>) throws -> ZhulongSessionID
+func authorizeZhulongScopes(sessionId: ZhulongSessionID) throws
+func runZhulongProvider(sessionId: ZhulongSessionID) async throws
+func publishPlanningBrief(sessionId: ZhulongSessionID, draft: ZhulongPlanningBriefDraft) throws
+func grantPlanningDelegation(sessionId: ZhulongSessionID) throws
+func previewTodoDiff(sessionId: ZhulongSessionID) throws -> ZhulongTodoDiffDraft
+func confirmAndApplyTodoDiff(sessionId: ZhulongSessionID) throws -> ZhulongTodoApplyReceipt
+func confirmDailyReview(sessionId: ZhulongSessionID) throws -> ZhulongDailyReviewReceipt
 ```
 
 约束：
 
 - provider 必须支持自定义 endpoint、model 和安全凭证引用。
 - AI provider 未配置、不可用或被用户关闭时，普通清单功能不降级。
-- 烛龙只能生成建议草稿，不能直接写入历史事实。
-- `applyAISuggestion` 必须把建议转成普通领域操作，例如创建任务、添加子任务、排期、延续、写入 label 或保存复盘文本。
+- Provider 产物只能进入当前烛龙会话；没有用户确认能力时不得写 Todo。
+- Todo diff 与每日复盘必须经过绑定当前草稿、证据和授权的确认能力，再转成普通领域操作。
 - 每次发送到远程 provider 前，必须明确数据范围。
 - 详细规格见 `docs/product/zhulong-ai-agent.md`。
 
@@ -578,14 +581,16 @@ func canUndoLastLocalAction() -> Bool
 - `task_definitions`
 - `day_traces`
 - `subtasks`
-- `labels`
-- `task_label_assignments`
-- `ai_providers`
-- `ai_suggestion_drafts`
+- `task_categories`
+- `task_labels`
+- `task_chain_categories`
+- `task_chain_label_relations`
+- `classification_relation_history`
+- `classification_commits`
 - `app_preferences`
 - `sync_settings`
 
-`task_definitions` 与 `day_traces` 只用 `note_entries_json` 保存结构化 `TaskNoteEntry` 数组；当前 schema 和 fixture 只接受这一种结构。
+`task_chains` 与 `day_traces` 只用 `note_entries_json` 保存结构化 `TaskNoteEntry` 数组；`task_definitions` 不存附言。当前 schema 和 fixture 只接受这一种结构。
 
 数据库约束建议：
 
@@ -594,8 +599,8 @@ func canUndoLastLocalAction() -> Bool
 - 同一任务链最多一个活跃日轨迹。
 - 历史日优先级不可修改。
 - 废弃任务链不可新增延续轨迹；重新启用只恢复原日轨迹状态，不新增轨迹。
-- AI 建议草稿不是历史事实，可以丢弃。
-- label assignment 不改变任务状态，也不能改写日轨迹。
+- 烛龙会话、Provider 发送记录、规划草稿和 Todo diff 只进入加密 sidecar，不混入核心 Todo SQLite 或普通数据包。
+- 主分类与标签关系不改变任务状态，也不能改写已冻结的日轨迹分类快照。
 
 查询视图建议：
 
@@ -609,7 +614,6 @@ func canUndoLastLocalAction() -> Bool
 - `completed_subtask_trajectory_detail_view`
 - `day_todo_view`
 - `sync_endpoint_options_view`
-- `label_task_summary_view`
 
 可选：
 
@@ -638,7 +642,7 @@ func canUndoLastLocalAction() -> Bool
 16. 数据包可导出并在空库导入后恢复核心数据。
 17. `Cmd+Z` 只能撤销当前日或计划草稿误操作，不能抹掉历史轨迹事实。
 18. 未配置 AI provider 时，Day Todo、任务池、未来计划、未完成池、已完成池和每日复盘仍完整可用。
-19. 烛龙 可以生成复盘、任务拆解、排期和 label 建议草稿，但不能未经确认写入任务事实。
+19. 烛龙可以在当前会话中形成复盘、规划与 Todo 变更 diff，但不能未经当前版本确认能力写入任务事实。
 20. 烛龙 发送远程请求前，必须展示本次使用的数据范围。
 21. 烛龙的习惯画像必须带证据和置信度，且只表示时间窗口内的分析假设。
 22. 废弃任务链仍在未完成池可见，带已废弃标记；重新启用后只取消废弃标记，不创建今日任务。

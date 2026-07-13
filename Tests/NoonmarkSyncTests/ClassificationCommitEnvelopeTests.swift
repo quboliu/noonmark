@@ -876,11 +876,18 @@ final class ClassificationCommitEnvelopeTests: XCTestCase {
             JSONSerialization.jsonObject(with: firstEncoding) as? [String: Any]
         )
         XCTAssertEqual(topLevel["formatVersion"] as? Int, 1)
-        XCTAssertNotNil(topLevel["delta"])
-        XCTAssertNil(topLevel["setCurrent"])
-        XCTAssertNil(topLevel["createdCategories"])
-        XCTAssertNil(topLevel["snapshot"])
-        XCTAssertNil(topLevel["classificationPlan"])
+        XCTAssertEqual(
+            Set(topLevel.keys),
+            [
+                "formatVersion",
+                "senderBaseRevision",
+                "senderResultRevision",
+                "delta",
+                "changeRecord",
+                "receipt",
+                "integrityDigest"
+            ]
+        )
 
         let result = ClassificationCommitEnvelopeReceiver().apply(
             decoded,
@@ -957,7 +964,7 @@ final class ClassificationCommitEnvelopeTests: XCTestCase {
         var unknownField = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
-        unknownField["classificationPlan"] = ["forbidden": true]
+        unknownField["unexpected"] = ["value": true]
         let unknownFieldData = try JSONSerialization.data(withJSONObject: unknownField)
         XCTAssertThrowsError(
             try ClassificationCommitEnvelope.decode(unknownFieldData)

@@ -58,18 +58,14 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
 
         let root = NoonmarkRootView()
             .environmentObject(store)
-            .frame(
-                minWidth: NoonmarkWindowMetrics.minimumSize.width,
-                minHeight: NoonmarkWindowMetrics.minimumSize.height
-            )
             .preferredColorScheme(.light)
 
         let window = NoonmarkWindow(
             contentRect: NSRect(
                 x: 0,
                 y: 0,
-                width: NoonmarkWindowMetrics.launchSize.width,
-                height: NoonmarkWindowMetrics.launchSize.height
+                width: NoonmarkVisualMetrics.launchSize.width,
+                height: NoonmarkVisualMetrics.launchSize.height
             ),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -82,15 +78,18 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.hasShadow = false
         window.isMovableByWindowBackground = true
-        window.minSize = NoonmarkWindowMetrics.minimumSize
-        window.contentMinSize = NoonmarkWindowMetrics.minimumSize
         window.standardWindowButton(.closeButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.isReleasedWhenClosed = false
         window.isRestorable = false
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.sizingOptions = []
+        hostingView.frame = window.contentView?.bounds ?? .zero
+        hostingView.autoresizingMask = [.width, .height]
+        window.contentView?.addSubview(hostingView)
         window.center()
-        window.contentView = NSHostingView(rootView: root)
+        window.minSize = NoonmarkVisualMetrics.minimumSize
         self.window = window
 
         DispatchQueue.main.async {
@@ -141,11 +140,6 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
     }
 }
 
-private enum NoonmarkWindowMetrics {
-    static let launchSize = NSSize(width: 1320, height: 820)
-    static let minimumSize = NSSize(width: 1180, height: 760)
-}
-
 private struct LaunchAutomation {
     var actions: [@MainActor (NoonmarkStore) -> Void]
     var quitsAfterAutomation: Bool
@@ -164,15 +158,6 @@ private struct LaunchAutomation {
             }
         }
 
-        if CommandLine.arguments.contains("--e2e-open-first-classification-overflow") {
-            actions.append { store in
-                store.page = .pool
-                store.e2eClassificationOverflowChainID = store.engine.taskPool().first(where: { task in
-                    (store.currentClassification(for: task.chain.id)?.labels.count ?? 0) > 2
-                })?.chain.id
-            }
-        }
-
         append(ProviderE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongStreamE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongTodoDiffE2EAutomation.fromCommandLine(), to: &actions)
@@ -180,8 +165,12 @@ private struct LaunchAutomation {
         append(ClassificationE2EAutomation.fromCommandLine(), to: &actions)
         append(WorkflowE2EAutomation.fromCommandLine(), to: &actions)
         append(LifecycleE2EAutomation.fromCommandLine(), to: &actions)
+        append(LifecycleRestartE2EAutomation.fromCommandLine(), to: &actions)
+        append(ReactivationAtomicityE2EAutomation.fromCommandLine(), to: &actions)
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteE2EAutomation.fromCommandLine(), to: &actions)
+        append(TaskNoteMutationAtomicityE2EAutomation.fromCommandLine(), to: &actions)
+        append(TaskNoteMutationAtomicityUIE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskTitleDeleteE2EAutomation.fromCommandLine(), to: &actions)
         append(QuickTaskReturnE2EAutomation.fromCommandLine(), to: &actions)
         append(ReportedBugsE2EAutomation.fromCommandLine(), to: &actions)
@@ -189,14 +178,28 @@ private struct LaunchAutomation {
         append(ReviewZhulongEntryE2EAutomation.fromCommandLine(), to: &actions)
         append(ContextMenuActionsE2EAutomation.fromCommandLine(), to: &actions)
         append(UndoE2EAutomation.fromCommandLine(), to: &actions)
+        append(CopyUndoPersistenceE2EAutomation.fromCommandLine(), to: &actions)
         append(DateStripE2EAutomation.fromCommandLine(), to: &actions)
         append(KeyboardDateNavigationE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongNavigationE2EAutomation.fromCommandLine(), to: &actions)
         append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)
         append(SummarySidebarE2EAutomation.fromCommandLine(), to: &actions)
+        append(PoolListLayoutE2EAutomation.fromCommandLine(), to: &actions)
         append(WindowResizeE2EAutomation.fromCommandLine(), to: &actions)
         append(WindowCloseBehaviorE2EAutomation.fromCommandLine(), to: &actions)
         append(LaunchSelectionE2EAutomation.fromCommandLine(), to: &actions)
+        append(UIEntryE2EAutomation.fromCommandLine(), to: &actions)
+
+        if let seedClockResultPath = NoonmarkStore.commandLineValue(
+            after: "--e2e-seed-clock-result-url"
+        ) {
+            actions.append { store in
+                SeedClockE2EVerifier.run(
+                    on: store,
+                    resultURL: URL(fileURLWithPath: seedClockResultPath)
+                )
+            }
+        }
 
         if CommandLine.arguments.contains("--e2e-expand-first-subtask-trace") {
             actions.append { store in
@@ -243,6 +246,166 @@ private protocol LaunchAutomationRunnable {
     func run(on store: NoonmarkStore)
 }
 
+private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
+    let resultURL: URL
+    let usesMinimumWindowSize: Bool
+
+    @MainActor
+    static func fromCommandLine() -> PoolListLayoutE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-pool-list-layout-probe"),
+              let resultPath = NoonmarkStore.commandLineValue(
+                  after: "--e2e-pool-list-layout-result-url"
+              )
+        else {
+            return nil
+        }
+        return PoolListLayoutE2EAutomation(
+            resultURL: URL(fileURLWithPath: resultPath),
+            usesMinimumWindowSize: CommandLine.arguments.contains(
+                "--e2e-pool-list-layout-minimum-window"
+            )
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        store.page = .pool
+        let adaptiveVisibleLabelCounts: [String: Int]
+        do {
+            adaptiveVisibleLabelCounts = try installAdaptiveProbeTasks(on: store)
+        } catch {
+            finishSetupFailure(error, resultURL: resultURL)
+            return
+        }
+        let expectedWindowSize = usesMinimumWindowSize
+            ? NoonmarkVisualMetrics.minimumSize
+            : NoonmarkVisualMetrics.launchSize
+        if usesMinimumWindowSize, let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }) {
+            let frame = window.frame
+            window.setFrame(
+                NSRect(
+                    x: frame.minX,
+                    y: frame.maxY - expectedWindowSize.height,
+                    width: expectedWindowSize.width,
+                    height: expectedWindowSize.height
+                ),
+                display: true
+            )
+        }
+        let expectations = store.engine.taskPool().map { task in
+            let classification = store.currentClassification(for: task.chain.id)
+            let namespace = TaskClassificationAccessibilityNamespace(
+                surface: "pool-row",
+                instanceID: task.chain.id.description
+            )
+            let rowNamespace = PoolTaskRowE2ENamespace(
+                taskIdentifier: task.chain.id.description
+            )
+            return PoolListLayoutUIE2EExpectation(
+                taskIdentifier: task.chain.id.description,
+                title: task.definition.title,
+                labelNamesByIdentifier: Dictionary(
+                    uniqueKeysWithValues: (classification?.labels ?? []).map {
+                        (namespace.labelIdentifier($0.id), $0.name)
+                    }
+                ),
+                expectedVisibleLabelCount: adaptiveVisibleLabelCounts[
+                    task.chain.id.description
+                ] ?? min(2, classification?.labels.count ?? 0),
+                actionTitlesByIdentifier: [
+                    rowNamespace.scheduleTodayIdentifier: store.copy.scheduleToday,
+                    rowNamespace.scheduleTomorrowIdentifier: store.copy.scheduleTomorrow,
+                    rowNamespace.scheduleDateIdentifier: store.copy.schedulePickDate
+                ]
+            )
+        }
+        PoolListLayoutUIE2EDriver.start(
+            expectations: expectations,
+            expectedWindowSize: expectedWindowSize,
+            resultURL: resultURL
+        )
+    }
+
+    @MainActor
+    private func installAdaptiveProbeTasks(
+        on store: NoonmarkStore
+    ) throws -> [String: Int] {
+        guard let category = store.engine.taskPool().compactMap({ task in
+            store.currentClassification(for: task.chain.id)?.category
+        }).first(where: { $0.name == "学习" }),
+            let categoryUUID = UUID(uuidString: category.id)
+        else {
+            throw PoolListLayoutE2EAutomationError.failed(
+                "缺少用于响应式布局探针的当前学习分组"
+            )
+        }
+        let categoryChoice = TaskCategoryChoice.existing(
+            TaskCategoryID(categoryUUID)
+        )
+
+        func createTask(
+            title: String,
+            labels: [String]
+        ) throws -> String {
+            let chainID = try store.engine.createPoolTask(title: title)
+            try store.replaceTaskClassification(
+                chainID: chainID,
+                category: categoryChoice,
+                labels: labels.map {
+                    .new(name: $0, colorHex: "#7C5CFF")
+                }
+            )
+            return chainID.description
+        }
+
+        let oneLabelTask = try createTask(
+            title: "一级回退布局验证",
+            labels: [
+                "超长响应式标签甲甲甲甲甲甲甲",
+                "超长响应式标签乙乙乙乙乙乙乙",
+                "超长响应式标签丙丙丙丙丙丙丙"
+            ]
+        )
+        let overflowOnlyTask = try createTask(
+            title: "零级回退布局验证",
+            labels: [
+                "极长响应式标签甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲",
+                "极长响应式标签乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙",
+                "极长响应式标签丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙丙"
+            ]
+        )
+        return [
+            oneLabelTask: 1,
+            overflowOnlyTask: 0
+        ]
+    }
+
+    @MainActor
+    private func finishSetupFailure(_ error: Error, resultURL: URL) {
+        try? FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? "failed: 响应式任务池探针准备失败：\(error.localizedDescription)".write(
+            to: resultURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        NSApp.terminate(nil)
+    }
+}
+
+private enum PoolListLayoutE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
 private struct ZhulongE2ESidecarKeySource: ZhulongSidecarKeySource {
     func loadOrCreateKey() throws -> Data {
         Data(repeating: 0x4E, count: 32)
@@ -252,36 +415,25 @@ private struct ZhulongE2ESidecarKeySource: ZhulongSidecarKeySource {
 private struct ZhulongStreamE2EAutomation: LaunchAutomationRunnable {
     let task: ZhulongTask?
     let intent: String?
-    let variant: ZhulongStreamVariant?
     let createsRichSession: Bool
     let completesDailyReview: Bool
     let interruptsDailyReview: Bool
 
     @MainActor
     static func fromCommandLine() -> Self? {
-        let task = NoonmarkStore.commandLineValue(after: "--e2e-generate-zhulong-draft")
+        let task = NoonmarkStore.commandLineValue(after: "--e2e-start-zhulong-workflow")
             .flatMap(ZhulongTask.init(rawValue:))
         let intent = NoonmarkStore.commandLineValue(after: "--e2e-prepare-zhulong-intent")?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let variant: ZhulongStreamVariant? = NoonmarkStore.commandLineValue(after: "--e2e-zhulong-variant")
-            .flatMap { value in
-                switch value.uppercased() {
-                case "A": .dossier
-                case "B": .chapters
-                case "C": .weave
-                default: nil
-                }
-            }
         let createsRichSession = CommandLine.arguments.contains("--e2e-rich-zhulong-session")
         let completesDailyReview = CommandLine.arguments.contains("--e2e-complete-zhulong-daily-review")
         let interruptsDailyReview = CommandLine.arguments.contains("--e2e-interrupt-zhulong-daily-review")
-        guard task != nil || intent?.isEmpty == false || variant != nil || createsRichSession ||
+        guard task != nil || intent?.isEmpty == false || createsRichSession ||
             completesDailyReview || interruptsDailyReview
         else { return nil }
         return Self(
             task: task,
             intent: intent,
-            variant: variant,
             createsRichSession: createsRichSession,
             completesDailyReview: completesDailyReview,
             interruptsDailyReview: interruptsDailyReview
@@ -292,16 +444,13 @@ private struct ZhulongStreamE2EAutomation: LaunchAutomationRunnable {
     func run(on store: NoonmarkStore) {
         store.page = .zhulong
         if let task {
-            let taskIntent = task == .dailyReview
-                ? "结束今天并形成下一次可信承诺"
-                : "梳理一个需要形成计划的任务"
-            store.startZhulongWorkspaceSession(intent: taskIntent)
+            store.startZhulongWorkspaceSession(
+                intent: task.e2eIntent,
+                task: task
+            )
             store.authorizeCurrentZhulongWorkspaceSession()
         } else if let intent, intent.isEmpty == false {
             store.startZhulongWorkspaceSession(intent: intent)
-        }
-        if let variant {
-            store.zhulongWorkspace.variant = variant
         }
         if createsRichSession, store.zhulongWorkspace.selectedSession != nil {
             if store.zhulongWorkspace.selectedSession?.phase == .scopeReview {
@@ -324,6 +473,25 @@ private struct ZhulongStreamE2EAutomation: LaunchAutomationRunnable {
             store.confirmAndSaveCurrentZhulongDailyReview(
                 interruptAfterEnginePersisted: interruptsDailyReview
             )
+        }
+    }
+}
+
+private extension ZhulongTask {
+    var e2eIntent: String {
+        switch self {
+        case .dailyReview:
+            "结束今天并形成下一次可信承诺"
+        case .habitInsight:
+            "分析近期习惯与完成节奏"
+        case .taskDecomposition:
+            "梳理一个需要形成计划的任务"
+        case .scheduling:
+            "重新安排任务池与未完成任务"
+        case .classification:
+            "整理任务的分组与标签"
+        case .theoryAnalysis:
+            "分析当前任务背后的理论与方法"
         }
     }
 }
@@ -691,6 +859,93 @@ private struct LaunchSelectionE2EAutomation: LaunchAutomationRunnable {
     }
 }
 
+private struct UIEntryE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode {
+        case classificationManager(selectsLabels: Bool)
+        case classificationOverflow
+        case zhulongWorkflows
+    }
+
+    private let mode: Mode
+    private let resultURL: URL
+    private let keepsAppOpen: Bool
+
+    @MainActor
+    static func fromCommandLine() -> UIEntryE2EAutomation? {
+        let opensClassificationManager = CommandLine.arguments.contains(
+            "--e2e-classification-manager-via-ui"
+        )
+        let opensClassificationManagerLabels = CommandLine.arguments.contains(
+            "--e2e-classification-manager-labels-via-ui"
+        )
+        let opensClassificationOverflow = CommandLine.arguments.contains(
+            "--e2e-classification-overflow-via-ui"
+        )
+        let opensZhulongWorkflows = CommandLine.arguments.contains(
+            "--e2e-zhulong-workflows-via-ui"
+        )
+        let selectedModeCount = [
+            opensClassificationManager,
+            opensClassificationManagerLabels,
+            opensClassificationOverflow,
+            opensZhulongWorkflows
+        ].filter { $0 }.count
+        guard selectedModeCount == 1 else { return nil }
+
+        let mode: Mode
+        let resultArgument: String
+        if opensClassificationManager || opensClassificationManagerLabels {
+            mode = .classificationManager(selectsLabels: opensClassificationManagerLabels)
+            resultArgument = "--e2e-classification-manager-ui-result-url"
+        } else if opensClassificationOverflow {
+            mode = .classificationOverflow
+            resultArgument = "--e2e-classification-overflow-ui-result-url"
+        } else {
+            mode = .zhulongWorkflows
+            resultArgument = "--e2e-zhulong-workflows-ui-result-url"
+        }
+        guard let resultPath = NoonmarkStore.commandLineValue(after: resultArgument) else {
+            return nil
+        }
+        return UIEntryE2EAutomation(
+            mode: mode,
+            resultURL: URL(fileURLWithPath: resultPath),
+            keepsAppOpen: CommandLine.arguments.contains("--e2e-ui-entry-keep-open")
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        switch mode {
+        case let .classificationManager(selectsLabels):
+            ClassificationManagerUIE2EDriver.start(
+                resultURL: resultURL,
+                keepsAppOpen: keepsAppOpen,
+                selectsLabels: selectsLabels
+            )
+        case .classificationOverflow:
+            guard let task = store.engine.taskPool().first(where: { task in
+                (store.currentClassification(for: task.chain.id)?.labels.count ?? 0) > 2
+            }), let classification = store.currentClassification(for: task.chain.id) else {
+                try? "failed: 当前任务池没有标签溢出的任务".write(
+                    to: resultURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+                return
+            }
+            ClassificationOverflowUIE2EDriver.start(
+                chainIdentifier: task.chain.id.description,
+                labels: classification.labels,
+                resultURL: resultURL,
+                keepsAppOpen: keepsAppOpen
+            )
+        case .zhulongWorkflows:
+            ZhulongWorkflowE2EUIInteractionDriver.start(resultURL: resultURL)
+        }
+    }
+}
+
 private struct ReviewE2EAutomation: LaunchAutomationRunnable {
     var summary: String
 
@@ -792,7 +1047,7 @@ private struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
             )
 
             let historicalUnfinishedID = try makeTrace(title: "E2E 历史未完成", date: past, today: past, store: store)
-            store.engine.settleDays(upTo: today)
+            try store.engine.settleDays(upTo: today)
             try assertActions(
                 store.contextMenuActions(for: try trace(historicalUnfinishedID, in: store)),
                 [.continueTo, .abandonChain],
@@ -872,6 +1127,305 @@ private enum ContextMenuActionsE2EAutomationError: LocalizedError {
     }
 }
 
+private struct CopyUndoPersistenceE2EState: Codable {
+    let sourceChainID: TaskChainID
+    let sourceTraceID: DayTraceID
+    let copiedChainID: TaskChainID
+    let classificationRevision: UInt64
+    let sourceHistoryEventCount: Int
+}
+
+private struct CopyUndoPersistenceE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode {
+        case setup
+        case verify
+    }
+
+    private let mode: Mode?
+    private let stateURL: URL?
+    private let resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        let shouldSetup = CommandLine.arguments.contains(
+            "--e2e-copy-undo-persistence-setup"
+        )
+        let shouldVerify = CommandLine.arguments.contains(
+            "--e2e-copy-undo-persistence-verify"
+        )
+        guard shouldSetup || shouldVerify else { return nil }
+        let mode: Mode? = switch (shouldSetup, shouldVerify) {
+        case (true, false): .setup
+        case (false, true): .verify
+        default: nil
+        }
+        return Self(
+            mode: mode,
+            stateURL: NoonmarkStore.commandLineValue(
+                after: "--e2e-copy-undo-persistence-state-url"
+            ).map { URL(fileURLWithPath: $0) },
+            resultURL: NoonmarkStore.commandLineValue(
+                after: "--e2e-copy-undo-persistence-result-url"
+            ).map { URL(fileURLWithPath: $0) }
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        do {
+            guard let mode, let stateURL, let resultURL else {
+                throw CopyUndoPersistenceE2EError.failed(
+                    "missing or conflicting copy-undo persistence arguments"
+                )
+            }
+            switch mode {
+            case .setup:
+                try setup(on: store, stateURL: stateURL)
+            case .verify:
+                try verify(on: store, stateURL: stateURL)
+            }
+            try writeResult("ok", to: resultURL)
+        } catch {
+            if let resultURL {
+                try? writeResult(
+                    "failed: \(error.localizedDescription)",
+                    to: resultURL
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private func setup(
+        on store: NoonmarkStore,
+        stateURL: URL
+    ) throws {
+        guard store.engine.chains.isEmpty,
+              store.engine.definitions.isEmpty,
+              store.engine.traces.isEmpty
+        else {
+            throw CopyUndoPersistenceE2EError.failed(
+                "isolated copy-undo database was not empty"
+            )
+        }
+
+        let past = NoonmarkStore.offset(store.today, by: -1)
+        let sourceChainID = try store.engine.createPoolTask(
+            title: "E2E 持久化已分类复制来源"
+        )
+        let sourceTraceID = try store.engine.scheduleFromPool(
+            chainID: sourceChainID,
+            date: past,
+            today: past
+        )
+        _ = try store.replaceTaskClassification(
+            chainID: sourceChainID,
+            category: .new(name: "E2E 持久化分类", colorHex: "#2A6FDB"),
+            labels: [.new(name: "E2E 持久化标签", colorHex: "#0E9488")]
+        )
+        try store.engine.markCompleted(traceID: sourceTraceID, today: past)
+        try store.engine.settleDays(upTo: store.today)
+        let beforeCopy = store.engine.snapshot()
+        let sourceChainBefore = store.engine.chains[sourceChainID]
+        let sourceTraceBefore = store.engine.traces[sourceTraceID]
+        let sourceHistoryBefore = try sourceHistory(
+            in: store,
+            traceID: sourceTraceID
+        )
+
+        store.clearUndoHistory()
+        store.copyAsNewTask(sourceTraceID)
+        let copiedChainID = try unwrap(
+            store.engine.taskPool().first?.chain.id,
+            "persisted classified copy"
+        )
+        let copiedBeforeUndo = try taskClassification(
+            in: store,
+            chainID: copiedChainID
+        )
+        guard copiedBeforeUndo.category?.name == "E2E 持久化分类",
+              copiedBeforeUndo.labels.map(\.name) == ["E2E 持久化标签"]
+        else {
+            throw CopyUndoPersistenceE2EError.failed(
+                "persisted copy did not inherit source classification"
+            )
+        }
+
+        store.undo()
+        guard store.toast == "已撤销" else {
+            throw CopyUndoPersistenceE2EError.failed(
+                "persistent copy undo failed: \(store.toast ?? "missing toast")"
+            )
+        }
+        let snapshot = store.engine.snapshot()
+        try snapshot.validateIntegrity()
+        let copiedAfterUndo = try taskClassification(
+            in: store,
+            chainID: copiedChainID
+        )
+        let sourceAfterUndo = try taskClassification(
+            in: store,
+            chainID: sourceChainID
+        )
+        let sourceHistoryAfter = try sourceHistory(
+            in: store,
+            traceID: sourceTraceID
+        )
+        guard store.engine.taskPool().isEmpty,
+              store.engine.chains[copiedChainID]?.state == .abandoned,
+              store.engine.definitions.values.contains(where: {
+                  $0.chainID == copiedChainID
+              }),
+              store.engine.traces.values.contains(where: {
+                  $0.chainID == copiedChainID
+              }) == false,
+              copiedAfterUndo.category == nil,
+              copiedAfterUndo.labels.isEmpty,
+              store.engine.chains[sourceChainID] == sourceChainBefore,
+              store.engine.traces[sourceTraceID] == sourceTraceBefore,
+              sourceAfterUndo.category?.name == "E2E 持久化分类",
+              sourceAfterUndo.labels.map(\.name) == ["E2E 持久化标签"],
+              sourceHistoryAfter == sourceHistoryBefore,
+              snapshot.classifications.changeRecords.starts(
+                  with: beforeCopy.classifications.changeRecords
+              ),
+              snapshot.classifications.revision
+                  == beforeCopy.classifications.revision + 2
+        else {
+            throw CopyUndoPersistenceE2EError.failed(
+                "copy undo did not append a compensating classification fact atomically"
+            )
+        }
+
+        let state = CopyUndoPersistenceE2EState(
+            sourceChainID: sourceChainID,
+            sourceTraceID: sourceTraceID,
+            copiedChainID: copiedChainID,
+            classificationRevision: snapshot.classifications.revision,
+            sourceHistoryEventCount: sourceHistoryAfter.events.count
+        )
+        try writeState(state, to: stateURL)
+    }
+
+    @MainActor
+    private func verify(
+        on store: NoonmarkStore,
+        stateURL: URL
+    ) throws {
+        let state = try readState(from: stateURL)
+        let snapshot = store.engine.snapshot()
+        try snapshot.validateIntegrity()
+        let source = try taskClassification(
+            in: store,
+            chainID: state.sourceChainID
+        )
+        let sourceHistory = try sourceHistory(
+            in: store,
+            traceID: state.sourceTraceID
+        )
+        let copied = try taskClassification(
+            in: store,
+            chainID: state.copiedChainID
+        )
+        guard store.engine.taskPool().isEmpty,
+              store.engine.traces[state.sourceTraceID]?.status == .completed,
+              store.engine.chains[state.copiedChainID]?.state == .abandoned,
+              store.engine.definitions.values.contains(where: {
+                  $0.chainID == state.copiedChainID
+              }),
+              store.engine.traces.values.contains(where: {
+                  $0.chainID == state.copiedChainID
+              }) == false,
+              source.category?.name == "E2E 持久化分类",
+              source.labels.map(\.name) == ["E2E 持久化标签"],
+              sourceHistory.category?.name == "E2E 持久化分类",
+              sourceHistory.labels.map(\.name) == ["E2E 持久化标签"],
+              sourceHistory.events.count == state.sourceHistoryEventCount,
+              copied.category == nil,
+              copied.labels.isEmpty,
+              snapshot.classifications.revision == state.classificationRevision
+        else {
+            throw CopyUndoPersistenceE2EError.failed(
+                "copy undo state did not survive SQLite restart"
+            )
+        }
+    }
+
+    @MainActor
+    private func taskClassification(
+        in store: NoonmarkStore,
+        chainID: TaskChainID
+    ) throws -> TaskClassificationProjection {
+        guard case let .task(projection) = try store.engine.classification(
+            .task(chainID)
+        ) else {
+            throw CopyUndoPersistenceE2EError.failed(
+                "missing task classification projection"
+            )
+        }
+        return projection
+    }
+
+    @MainActor
+    private func sourceHistory(
+        in store: NoonmarkStore,
+        traceID: DayTraceID
+    ) throws -> TraceClassificationProjection {
+        guard case let .history(projection) = try store.engine.classification(
+            .history(traceID)
+        ) else {
+            throw CopyUndoPersistenceE2EError.failed(
+                "missing source classification history"
+            )
+        }
+        return projection
+    }
+
+    private func unwrap<Value>(_ value: Value?, _ label: String) throws -> Value {
+        guard let value else {
+            throw CopyUndoPersistenceE2EError.failed("missing \(label)")
+        }
+        return value
+    }
+
+    private func writeState(
+        _ state: CopyUndoPersistenceE2EState,
+        to url: URL
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try JSONEncoder().encode(state).write(to: url, options: .atomic)
+    }
+
+    private func readState(from url: URL) throws -> CopyUndoPersistenceE2EState {
+        try JSONDecoder().decode(
+            CopyUndoPersistenceE2EState.self,
+            from: Data(contentsOf: url)
+        )
+    }
+
+    private func writeResult(_ result: String, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum CopyUndoPersistenceE2EError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            message
+        }
+    }
+}
+
 private struct UndoE2EAutomation: LaunchAutomationRunnable {
     var resultURL: URL?
 
@@ -887,10 +1441,16 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
     func run(on store: NoonmarkStore) {
         do {
             try verifyPoolAddUndo(on: store)
-            try verifyCurrentContinuationIsNotUndoable(on: store)
-            try verifyCurrentAbandonIsNotUndoable(on: store)
-            try verifyHistoryBoundaryClearsEarlierUndo(on: store)
+            try verifyPoolNoteAppendUndoUsesTombstone(on: store)
+            try verifyPoolNoteEditUndoAdvancesVersion(on: store)
+            try verifyPoolNoteDeleteUndoUsesNewIdentity(on: store)
+            try verifyPoolNoteUndoCompositionKeepsLogicalIdentity(on: store)
+            try verifyTraceNoteUndoCompositionKeepsLogicalIdentity(on: store)
+            try verifyCurrentContinuationUndo(on: store)
+            try verifyCurrentAbandonUndo(on: store)
+            try verifyNoteUndoKeepsEarlierUndo(on: store)
             try verifyFutureRescheduleUndo(on: store)
+            try verifyUnclassifiedCopyAsNewTaskUndo(on: store)
             try verifyCopyAsNewTaskUndo(on: store)
             try verifyHistoricalAbandonIsNotUndoable(on: store)
             try writeResult("ok")
@@ -924,56 +1484,298 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
     }
 
     @MainActor
-    private func verifyCurrentContinuationIsNotUndoable(on store: NoonmarkStore) throws {
+    private func verifyPoolNoteAppendUndoUsesTombstone(
+        on store: NoonmarkStore
+    ) throws {
+        reset(store)
+        let chainID = try store.engine.createPoolTask(title: "E2E 撤销新增附言")
+        store.detailNoteText = "刚新增的附言"
+        store.appendPoolNote(chainID: chainID)
+        let noteID = try unwrap(
+            store.engine.taskPool().first?.chain.activeNoteEntries.first?.id,
+            "appended note identity"
+        )
+
+        store.undo()
+
+        let chain = try unwrap(
+            store.engine.taskPool().first?.chain,
+            "chain after append undo"
+        )
+        guard chain.activeNoteEntries.isEmpty,
+              chain.noteEntries.first(where: { $0.id == noteID })?.isDeleted == true
+        else {
+            throw UndoE2EAutomationError.failed(
+                "note append undo did not preserve a tombstone"
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyPoolNoteEditUndoAdvancesVersion(
+        on store: NoonmarkStore
+    ) throws {
+        reset(store)
+        let chainID = try store.engine.createPoolTask(
+            title: "E2E 撤销编辑附言",
+            initialNoteBody: "编辑前"
+        )
+        let original = try unwrap(
+            store.engine.taskPool().first?.chain.activeNoteEntries.first,
+            "original note"
+        )
+        store.editPoolNote(
+            chainID: chainID,
+            noteID: original.id,
+            body: "编辑后"
+        )
+        let editedAt = try unwrap(
+            store.engine.taskPool().first?.chain.activeNoteEntries.first?.updatedAt,
+            "edited note time"
+        )
+
+        store.undo()
+
+        let restored = try unwrap(
+            store.engine.taskPool().first?.chain.activeNoteEntries.first,
+            "restored note"
+        )
+        guard restored.id == original.id,
+              restored.body == original.body,
+              restored.updatedAt > editedAt
+        else {
+            throw UndoE2EAutomationError.failed(
+                "note edit undo did not create a forward version"
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyPoolNoteDeleteUndoUsesNewIdentity(
+        on store: NoonmarkStore
+    ) throws {
+        reset(store)
+        let chainID = try store.engine.createPoolTask(
+            title: "E2E 撤销删除附言",
+            initialNoteBody: "删除前正文"
+        )
+        let original = try unwrap(
+            store.engine.taskPool().first?.chain.activeNoteEntries.first,
+            "note before delete"
+        )
+        store.deletePoolNote(chainID: chainID, noteID: original.id)
+
+        store.undo()
+
+        let chain = try unwrap(
+            store.engine.taskPool().first?.chain,
+            "chain after delete undo"
+        )
+        let restored = try unwrap(
+            chain.activeNoteEntries.first,
+            "new note after delete undo"
+        )
+        guard restored.id != original.id,
+              restored.body == original.body,
+              chain.noteEntries.first(where: {
+                  $0.id == original.id
+              })?.isDeleted == true
+        else {
+            throw UndoE2EAutomationError.failed(
+                "note delete undo revived the tombstoned identity"
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyPoolNoteUndoCompositionKeepsLogicalIdentity(
+        on store: NoonmarkStore
+    ) throws {
+        reset(store)
+        let chainID = try store.engine.createPoolTask(
+            title: "E2E 任务池附言连续撤销"
+        )
+        store.detailNoteText = "新增正文"
+        store.appendPoolNote(chainID: chainID)
+        let originalID = try unwrap(
+            store.engine.chains[chainID]?.activeNoteEntries.first?.id,
+            "pool note before edit and delete"
+        )
+        store.editPoolNote(
+            chainID: chainID,
+            noteID: originalID,
+            body: "编辑后正文"
+        )
+        store.deletePoolNote(chainID: chainID, noteID: originalID)
+
+        store.undo()
+        let restoredID = try unwrap(
+            store.engine.chains[chainID]?.activeNoteEntries.first?.id,
+            "pool note restored after delete undo"
+        )
+        guard restoredID != originalID,
+              store.engine.chains[chainID]?.activeNoteEntries.first?.body == "编辑后正文"
+        else {
+            throw UndoE2EAutomationError.failed(
+                "pool delete undo did not restore edited note under a fresh storage identity"
+            )
+        }
+
+        store.undo()
+        guard store.engine.chains[chainID]?.activeNoteEntries.first?.id == restoredID,
+              store.engine.chains[chainID]?.activeNoteEntries.first?.body == "新增正文",
+              store.toast == "已撤销"
+        else {
+            throw UndoE2EAutomationError.failed(
+                "pool delete undo lost the logical identity needed by the earlier edit undo"
+            )
+        }
+
+        store.undo()
+        guard let chain = store.engine.chains[chainID],
+              chain.activeNoteEntries.isEmpty,
+              chain.noteEntries.first(where: { $0.id == originalID })?.isDeleted == true,
+              chain.noteEntries.first(where: { $0.id == restoredID })?.isDeleted == true,
+              store.toast == "已撤销"
+        else {
+            throw UndoE2EAutomationError.failed(
+                "pool append undo did not compose after edit and delete undo"
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyTraceNoteUndoCompositionKeepsLogicalIdentity(
+        on store: NoonmarkStore
+    ) throws {
+        reset(store)
+        let traceID = try makeTrace(
+            title: "E2E 日轨迹附言连续撤销",
+            date: store.today,
+            today: store.today,
+            store: store
+        )
+        store.detailNoteText = "轨迹新增正文"
+        store.appendTraceNote(traceID: traceID)
+        let originalID = try unwrap(
+            store.engine.traces[traceID]?.activeNoteEntries.first?.id,
+            "trace note before edit and delete"
+        )
+        store.editTraceNote(
+            traceID: traceID,
+            noteID: originalID,
+            body: "轨迹编辑后正文"
+        )
+        store.deleteTraceNote(traceID: traceID, noteID: originalID)
+
+        store.undo()
+        let restoredID = try unwrap(
+            store.engine.traces[traceID]?.activeNoteEntries.first?.id,
+            "trace note restored after delete undo"
+        )
+        guard restoredID != originalID,
+              store.engine.traces[traceID]?.activeNoteEntries.first?.body == "轨迹编辑后正文"
+        else {
+            throw UndoE2EAutomationError.failed(
+                "trace delete undo did not restore edited note under a fresh storage identity"
+            )
+        }
+
+        store.undo()
+        guard store.engine.traces[traceID]?.activeNoteEntries.first?.id == restoredID,
+              store.engine.traces[traceID]?.activeNoteEntries.first?.body == "轨迹新增正文",
+              store.toast == "已撤销"
+        else {
+            throw UndoE2EAutomationError.failed(
+                "trace delete undo lost the logical identity needed by the earlier edit undo"
+            )
+        }
+
+        store.undo()
+        guard let trace = store.engine.traces[traceID],
+              trace.activeNoteEntries.isEmpty,
+              trace.noteEntries.first(where: { $0.id == originalID })?.isDeleted == true,
+              trace.noteEntries.first(where: { $0.id == restoredID })?.isDeleted == true,
+              store.toast == "已撤销"
+        else {
+            throw UndoE2EAutomationError.failed(
+                "trace append undo did not compose after edit and delete undo"
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyCurrentContinuationUndo(on store: NoonmarkStore) throws {
         reset(store)
         let traceID = try makeTrace(title: "E2E 撤销当前延续", date: store.today, today: store.today, store: store)
+        let chainID = try unwrap(store.engine.traces[traceID]?.chainID, "continuation chain")
+        _ = try store.replaceTaskClassification(
+            chainID: chainID,
+            category: .new(name: "E2E 撤销分类", colorHex: "#2A6FDB"),
+            labels: []
+        )
+        store.clearUndoHistory()
         let tomorrow = NoonmarkStore.offset(store.today, by: 1)
         store.continueTrace(traceID, to: tomorrow)
         guard store.engine.traces.values.contains(where: { $0.date == tomorrow && $0.status == .pending }) else {
             throw UndoE2EAutomationError.failed("continuation did not create tomorrow trace")
         }
-        let continued = store.engine.snapshot()
         store.undo()
-        guard store.engine.snapshot() == continued,
-              store.engine.traces[traceID]?.status == .continued,
-              store.toast == "没有可撤销的操作"
+        guard store.engine.traces[traceID]?.status == .pending,
+              store.engine.traces.values.contains(where: { $0.date == tomorrow }) == false,
+              store.toast == "已撤销"
         else {
-            throw UndoE2EAutomationError.failed("current continuation changed despite immutable history boundary")
+            throw UndoE2EAutomationError.failed("current continuation undo did not restore the source trace")
         }
     }
 
     @MainActor
-    private func verifyCurrentAbandonIsNotUndoable(on store: NoonmarkStore) throws {
+    private func verifyCurrentAbandonUndo(on store: NoonmarkStore) throws {
         reset(store)
         let traceID = try makeTrace(title: "E2E 撤销当前废弃", date: store.today, today: store.today, store: store)
         store.abandon(traceID)
         guard store.engine.traces[traceID]?.status == .abandoned else {
             throw UndoE2EAutomationError.failed("current abandon did not abandon trace")
         }
-        let abandoned = store.engine.snapshot()
         store.undo()
-        guard store.engine.snapshot() == abandoned,
-              store.toast == "没有可撤销的操作"
+        guard let restoredTrace = store.engine.traces[traceID],
+              restoredTrace.status == .pending,
+              store.engine.chains[restoredTrace.chainID]?.state == .active,
+              store.toast == "已撤销"
         else {
-            throw UndoE2EAutomationError.failed("current abandon changed despite immutable history boundary")
+            throw UndoE2EAutomationError.failed("current abandon undo did not reactivate the chain")
         }
     }
 
     @MainActor
-    private func verifyHistoryBoundaryClearsEarlierUndo(on store: NoonmarkStore) throws {
+    private func verifyNoteUndoKeepsEarlierUndo(on store: NoonmarkStore) throws {
         reset(store)
+        let noteChainID = try store.engine.createPoolTask(title: "E2E 附言所属任务")
         store.poolText = "E2E 较早的可撤销操作"
         store.addPoolTask()
-        let traceID = try makeTrace(title: "E2E 历史边界清栈", date: store.today, today: store.today, store: store)
-        store.continueTrace(traceID, to: NoonmarkStore.offset(store.today, by: 1))
-        let continued = store.engine.snapshot()
+        store.detailNoteText = "E2E 后发生的附言操作"
+        store.appendPoolNote(chainID: noteChainID)
+        let noteID = try unwrap(
+            store.engine.chains[noteChainID]?.activeNoteEntries.first?.id,
+            "note appended after earlier undoable action"
+        )
+
+        store.undo()
+        guard store.engine.chains[noteChainID]?.noteEntries.first(where: {
+            $0.id == noteID
+        })?.isDeleted == true else {
+            throw UndoE2EAutomationError.failed("first undo did not tombstone the later note")
+        }
 
         store.undo()
 
-        guard store.engine.snapshot() == continued,
-              store.toast == "没有可撤销的操作"
+        guard store.engine.taskPool().map(\.chain.id) == [noteChainID],
+              store.engine.chains[noteChainID]?.noteEntries.first(where: {
+                  $0.id == noteID
+              })?.isDeleted == true,
+              store.toast == "已撤销"
         else {
-            throw UndoE2EAutomationError.failed("immutable history boundary retained an earlier undo snapshot")
+            throw UndoE2EAutomationError.failed("note undo discarded or poisoned the earlier undo entry")
         }
     }
 
@@ -998,17 +1800,148 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
         reset(store)
         let past = NoonmarkStore.offset(store.today, by: -1)
         let traceID = try makeTrace(title: "E2E 撤销复制新任务", date: past, today: past, store: store)
+        let sourceChainID = try unwrap(
+            store.engine.traces[traceID]?.chainID,
+            "classified copy source chain"
+        )
+        _ = try store.replaceTaskClassification(
+            chainID: sourceChainID,
+            category: .new(name: "E2E 已分类来源", colorHex: "#2A6FDB"),
+            labels: [.new(name: "E2E 复制标签", colorHex: "#0E9488")]
+        )
+        try store.engine.markCompleted(traceID: traceID, today: past)
+        try store.engine.settleDays(upTo: store.today)
+        let beforeCopy = store.engine.snapshot()
+        guard case let .task(sourceClassification) = try store.engine.classification(
+            .task(sourceChainID)
+        ),
+            sourceClassification.category?.name == "E2E 已分类来源",
+            sourceClassification.labels.map(\.name) == ["E2E 复制标签"],
+            case let .history(sourceHistory) = try store.engine.classification(
+                .history(traceID)
+            ),
+            sourceHistory.category?.name == "E2E 已分类来源",
+            sourceHistory.labels.map(\.name) == ["E2E 复制标签"]
+        else {
+            throw UndoE2EAutomationError.failed(
+                "copy source fixture did not contain faithful current and historical classification"
+            )
+        }
+
+        store.clearUndoHistory()
+        store.copyAsNewTask(traceID)
+        let copiedChainID = try unwrap(
+            store.engine.taskPool().first?.chain.id,
+            "classified copied pool task"
+        )
+        guard copiedChainID != sourceChainID,
+              case let .task(copiedClassification) = try store.engine.classification(
+                  .task(copiedChainID)
+              ),
+              copiedClassification.category?.name == "E2E 已分类来源",
+              copiedClassification.labels.map(\.name) == ["E2E 复制标签"]
+        else {
+            throw UndoE2EAutomationError.failed(
+                "copy as new task did not create a classified pool task"
+            )
+        }
+
+        store.undo()
+        let afterUndo = store.engine.snapshot()
+        try afterUndo.validateIntegrity()
+        let copiedAfterUndo = try taskProjection(
+            store.engine.classification(.task(copiedChainID))
+        )
+        let sourceAfterUndo = try taskProjection(
+            store.engine.classification(.task(sourceChainID))
+        )
+        let sourceHistoryAfter = try historyProjection(
+            store.engine.classification(.history(traceID))
+        )
+        guard store.engine.taskPool().isEmpty,
+              store.engine.chains[copiedChainID]?.state == .abandoned,
+              store.engine.definitions.values.contains(where: {
+                  $0.chainID == copiedChainID
+              }),
+              store.engine.traces.values.contains(where: {
+                  $0.chainID == copiedChainID
+              }) == false,
+              store.engine.traces[traceID]?.status == .completed,
+              store.engine.chains[sourceChainID] == beforeCopy.chains.first(where: {
+                  $0.id == sourceChainID
+              }),
+              copiedAfterUndo.category == nil,
+              copiedAfterUndo.labels.isEmpty,
+              sourceAfterUndo.category?.name == sourceClassification.category?.name,
+              sourceAfterUndo.labels.map(\.name) == sourceClassification.labels.map(\.name),
+              sourceHistoryAfter == sourceHistory,
+              afterUndo.classifications.changeRecords.starts(
+                  with: beforeCopy.classifications.changeRecords
+              ),
+              afterUndo.classifications.revision
+                  == beforeCopy.classifications.revision + 2,
+              store.toast == "已撤销"
+        else {
+            throw UndoE2EAutomationError.failed(
+                "classified copy undo did not hide the copy with an append-only compensation"
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyUnclassifiedCopyAsNewTaskUndo(
+        on store: NoonmarkStore
+    ) throws {
+        reset(store)
+        let past = NoonmarkStore.offset(store.today, by: -1)
+        let traceID = try makeTrace(
+            title: "E2E 撤销未分类复制新任务",
+            date: past,
+            today: past,
+            store: store
+        )
         try store.engine.markCompleted(traceID: traceID, today: past)
         store.copyAsNewTask(traceID)
-        guard store.engine.taskPool().count == 1 else {
-            throw UndoE2EAutomationError.failed("copy as new task did not create pool task")
-        }
+        let copiedChainID = try unwrap(
+            store.engine.taskPool().first?.chain.id,
+            "unclassified copied pool task"
+        )
+
         store.undo()
         guard store.engine.taskPool().isEmpty,
-              store.engine.traces[traceID]?.status == .completed
+              store.engine.chains[copiedChainID] == nil,
+              store.engine.definitions.values.contains(where: {
+                  $0.chainID == copiedChainID
+              }) == false,
+              store.engine.traces[traceID]?.status == .completed,
+              store.toast == "已撤销"
         else {
-            throw UndoE2EAutomationError.failed("copy as new task undo did not restore completed history")
+            throw UndoE2EAutomationError.failed(
+                "unclassified copy undo did not delete the isolated copy"
+            )
         }
+    }
+
+    private func taskProjection(
+        _ projection: ClassificationProjection
+    ) throws -> TaskClassificationProjection {
+        guard case let .task(task) = projection else {
+            throw UndoE2EAutomationError.failed(
+                "missing task classification projection"
+            )
+        }
+        return task
+    }
+
+    private func historyProjection(
+        _ projection: ClassificationProjection
+    ) throws -> TraceClassificationProjection {
+        guard case let .history(history) = projection else {
+            throw UndoE2EAutomationError.failed(
+                "missing trace classification projection"
+            )
+        }
+        return history
     }
 
     @MainActor
@@ -1016,7 +1949,7 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
         reset(store)
         let past = NoonmarkStore.offset(store.today, by: -1)
         let traceID = try makeTrace(title: "E2E 历史废弃不可撤销", date: past, today: past, store: store)
-        store.engine.settleDays(upTo: store.today)
+        try store.engine.settleDays(upTo: store.today)
         store.abandon(traceID)
         guard store.engine.traces[traceID]?.status == .abandoned else {
             throw UndoE2EAutomationError.failed("historical abandon did not abandon trace")
@@ -1040,6 +1973,13 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
             withIntermediateDirectories: true
         )
         try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+
+    private func unwrap<Value>(_ value: Value?, _ label: String) throws -> Value {
+        guard let value else {
+            throw UndoE2EAutomationError.failed("missing \(label)")
+        }
+        return value
     }
 }
 
@@ -1221,55 +2161,10 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
             try expect(store.shouldShowDetailRail == false, "empty zhulong home kept the detail rail visible")
             try expect(ZhulongHomeIntentResolver.task(for: "结束今天并安排明天") == .dailyReview, "review intent was routed incorrectly")
             try expect(ZhulongHomeIntentResolver.task(for: "给任务池重新排期") == .scheduling, "scheduling intent was routed incorrectly")
-            try expect(ZhulongHomeIntentResolver.task(for: "整理标签分类") == .labelClassification, "classification intent was routed incorrectly")
-            try expect(ZhulongHomeIntentResolver.task(for: "梳理一个模糊任务") == .taskDecomposition, "fallback intent was routed incorrectly")
+            try expect(ZhulongHomeIntentResolver.task(for: "帮我整理分组") == .classification, "group intent was routed incorrectly")
+            try expect(ZhulongHomeIntentResolver.task(for: "整理标签") == .classification, "label intent was routed incorrectly")
+            try expect(ZhulongHomeIntentResolver.task(for: "梳理一个模糊任务") == .taskDecomposition, "default intent was routed incorrectly")
 
-            let fixedWorkflowCases: [(
-                intent: String,
-                task: ZhulongTask,
-                purpose: ZhulongSessionPurpose,
-                scopes: Set<ZhulongDataScope>
-            )] = [
-                ("Plan a large task that is still fuzzy", .taskDecomposition, .taskShaping, [.currentDayTodo]),
-                ("Close today and arrange tomorrow", .dailyReview, .dailyClose, [.currentDayTodo]),
-                (
-                    "Reschedule tasks from the pool and unfinished work",
-                    .scheduling,
-                    .schedulingAssistance,
-                    [.currentDayTodo, .taskPool, .unfinishedPool]
-                ),
-                (
-                    "Organize task groups and label classifications",
-                    .labelClassification,
-                    .classificationAssistance,
-                    [.currentDayTodo, .taskPool, .unfinishedPool, .completedPool, .taskClassifications]
-                )
-            ]
-            for workflow in fixedWorkflowCases {
-                let priorCount = store.zhulongWorkspace.sessions.count
-                store.startZhulongWorkspaceSession(intent: workflow.intent, task: workflow.task)
-                try expect(
-                    store.zhulongWorkspace.sessions.count == priorCount + 1,
-                    "fixed workflow did not create a session: \(workflow.intent)"
-                )
-                try expect(store.shouldShowDetailRail, "active workflow session did not expose its context rail")
-                try expect(
-                    store.zhulongWorkspace.selectedSession?.proposedScopes == workflow.scopes,
-                    "fixed workflow proposed incorrect scopes: \(workflow.intent)"
-                )
-                try expect(
-                    store.zhulongWorkspace.selectedSession?.purpose == workflow.purpose,
-                    "fixed workflow did not retain its typed purpose: \(workflow.intent)"
-                )
-                if let selectedSession = store.zhulongWorkspace.selectedSession {
-                    try expect(
-                        store.zhulongTask(for: selectedSession) == workflow.task,
-                        "fixed workflow changed task after session creation: \(workflow.intent)"
-                    )
-                }
-                store.zhulongWorkspace.showHome()
-                try expect(store.shouldShowDetailRail == false, "zhulong home did not collapse its context rail")
-            }
             let sessionCount = store.zhulongWorkspace.sessions.count
             store.startZhulongWorkspaceSession(intent: "结束今天并安排明天")
             try expect(store.zhulongWorkspace.sessions.count == sessionCount + 1, "workspace session was not created")
@@ -1399,11 +2294,15 @@ private struct WindowResizeE2EAutomation: LaunchAutomationRunnable {
             guard window.styleMask.contains(.resizable) else {
                 throw WindowResizeE2EAutomationError.failed("window was not resizable")
             }
-            guard window.minSize.width >= 1180, window.minSize.height >= 760 else {
-                throw WindowResizeE2EAutomationError.failed("window minSize was not preserved")
+            guard window.minSize == NoonmarkVisualMetrics.minimumSize else {
+                throw WindowResizeE2EAutomationError.failed(
+                    "window minSize was not preserved: actual=\(NSStringFromSize(window.minSize)) " +
+                        "content=\(NSStringFromSize(window.contentMinSize)) " +
+                        "expected=\(NSStringFromSize(NoonmarkVisualMetrics.minimumSize))"
+                )
             }
-            guard Int(window.frame.width.rounded()) == Int(NoonmarkWindowMetrics.launchSize.width),
-                  Int(window.frame.height.rounded()) == Int(NoonmarkWindowMetrics.launchSize.height)
+            guard Int(window.frame.width.rounded()) == Int(NoonmarkVisualMetrics.launchSize.width),
+                  Int(window.frame.height.rounded()) == Int(NoonmarkVisualMetrics.launchSize.height)
             else {
                 throw WindowResizeE2EAutomationError.failed("window launch size was not preserved")
             }
@@ -1411,13 +2310,13 @@ private struct WindowResizeE2EAutomation: LaunchAutomationRunnable {
             let originalFrame = window.frame
             let resizedFrame = NSRect(
                 x: originalFrame.minX,
-                y: originalFrame.maxY - 800,
-                width: 1240,
-                height: 800
+                y: originalFrame.maxY - NoonmarkVisualMetrics.minimumSize.height,
+                width: NoonmarkVisualMetrics.minimumSize.width,
+                height: NoonmarkVisualMetrics.minimumSize.height
             )
             window.setFrame(resizedFrame, display: true)
-            guard Int(window.frame.width.rounded()) == 1240,
-                  Int(window.frame.height.rounded()) == 800
+            guard Int(window.frame.width.rounded()) == Int(NoonmarkVisualMetrics.minimumSize.width),
+                  Int(window.frame.height.rounded()) == Int(NoonmarkVisualMetrics.minimumSize.height)
             else {
                 throw WindowResizeE2EAutomationError.failed("window frame did not resize")
             }
@@ -1649,7 +2548,7 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
     }
 }
 
-private struct TaskNoteE2EState: Codable {
+struct TaskNoteE2EState: Codable {
     let chainID: TaskChainID
     let definitionID: TaskDefinitionID
     let traceID: DayTraceID
@@ -1661,6 +2560,7 @@ private struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
     private enum Mode {
         case mutate
         case verify
+        case copyContract
     }
 
     private static let title = "E2E 附言编辑删除"
@@ -1675,11 +2575,13 @@ private struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
     static func fromCommandLine() -> TaskNoteE2EAutomation? {
         let shouldMutate = CommandLine.arguments.contains("--e2e-task-note-mutate")
         let shouldVerify = CommandLine.arguments.contains("--e2e-task-note-verify")
-        guard shouldMutate || shouldVerify else { return nil }
+        let shouldVerifyCopy = CommandLine.arguments.contains("--e2e-task-note-copy-contract")
+        guard shouldMutate || shouldVerify || shouldVerifyCopy else { return nil }
 
-        let mode: Mode? = switch (shouldMutate, shouldVerify) {
-        case (true, false): .mutate
-        case (false, true): .verify
+        let mode: Mode? = switch (shouldMutate, shouldVerify, shouldVerifyCopy) {
+        case (true, false, false): .mutate
+        case (false, true, false): .verify
+        case (false, false, true): .copyContract
         default: nil
         }
         return TaskNoteE2EAutomation(
@@ -1699,18 +2601,42 @@ private struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
             }
             switch mode {
             case .mutate:
-                try mutate(on: store, stateURL: stateURL)
+                let state = try prepareUIInteraction(on: store, stateURL: stateURL)
+                TaskNoteE2EUIInteractionDriver.start(
+                    state: state,
+                    editedBody: Self.editedBody,
+                    resultURL: resultURL
+                )
             case .verify:
                 try verify(on: store, stateURL: stateURL)
+                try writeResult("ok", to: resultURL)
+            case .copyContract:
+                try verify(on: store, stateURL: stateURL)
+                store.setLanguage(.english)
+                let state = try readState(from: stateURL)
+                TaskNoteCopyE2EUIInteractionDriver.start(
+                    state: state,
+                    resultURL: resultURL
+                )
             }
-            try writeResult("ok", to: resultURL)
         } catch {
             try? writeResult("failed: \(error.localizedDescription)", to: resultURL)
+            switch mode {
+            case .mutate, .copyContract:
+                DispatchQueue.main.async {
+                    NSApp.terminate(nil)
+                }
+            case .verify, nil:
+                break
+            }
         }
     }
 
     @MainActor
-    private func mutate(on store: NoonmarkStore, stateURL: URL) throws {
+    private func prepareUIInteraction(
+        on store: NoonmarkStore,
+        stateURL: URL
+    ) throws -> TaskNoteE2EState {
         guard store.engine.chains.isEmpty,
               store.engine.definitions.isEmpty,
               store.engine.traces.isEmpty
@@ -1722,18 +2648,19 @@ private struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
         store.poolText = Self.title
         store.addPoolTask()
         guard let chainID = store.selectedPoolChainID,
-              let initialDefinition = store.currentDefinition(for: chainID),
-              initialDefinition.activeNoteEntries.count == 1
+              let initialChain = store.engine.chains[chainID],
+              initialChain.activeNoteEntries.count == 1
         else {
             throw TaskNoteE2EAutomationError.failed("task-note fixture was not created in the task pool")
         }
 
         store.detailNoteText = Self.deletedBody
         store.appendPoolNote(chainID: chainID)
-        guard let definition = store.currentDefinition(for: chainID),
-              definition.activeNoteEntries.count == 2,
-              let editedNoteID = definition.activeNoteEntries.first?.id,
-              let deletedNoteID = definition.activeNoteEntries.last?.id,
+        guard let chain = store.engine.chains[chainID],
+              let definition = store.currentDefinition(for: chainID),
+              chain.activeNoteEntries.count == 2,
+              let editedNoteID = chain.activeNoteEntries.first?.id,
+              let deletedNoteID = chain.activeNoteEntries.last?.id,
               editedNoteID != deletedNoteID
         else {
             throw TaskNoteE2EAutomationError.failed("task-note fixture did not contain two stable entries")
@@ -1748,31 +2675,20 @@ private struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
             throw TaskNoteE2EAutomationError.failed("task-note entries were not snapshotted into the Day Todo")
         }
 
-        store.editTraceNote(traceID: traceID, noteID: editedNoteID, body: Self.editedBody)
-        store.deleteTraceNote(traceID: traceID, noteID: deletedNoteID)
-        guard let mutatedTrace = store.engine.traces[traceID],
-              mutatedTrace.noteEntries.count == 2,
-              mutatedTrace.activeNoteEntries.map(\.id) == [editedNoteID],
-              mutatedTrace.activeNoteEntries.first?.body == Self.editedBody,
-              let deletedEntry = mutatedTrace.noteEntries.first(where: { $0.id == deletedNoteID }),
-              deletedEntry.body.isEmpty,
-              deletedEntry.deletedAt != nil,
-              deletedEntry.updatedAt == deletedEntry.deletedAt
-        else {
-            throw TaskNoteE2EAutomationError.failed("task-note edit/delete mutation did not produce the expected state")
-        }
-
+        store.page = .day
+        store.selectedDate = store.today
+        store.selectedCalendarDate = store.today
+        store.selectTrace(traceID)
         store.persist()
-        try writeState(
-            TaskNoteE2EState(
-                chainID: chainID,
-                definitionID: definition.id,
-                traceID: traceID,
-                editedNoteID: editedNoteID,
-                deletedNoteID: deletedNoteID
-            ),
-            to: stateURL
+        let state = TaskNoteE2EState(
+            chainID: chainID,
+            definitionID: definition.id,
+            traceID: traceID,
+            editedNoteID: editedNoteID,
+            deletedNoteID: deletedNoteID
         )
+        try writeState(state, to: stateURL)
+        return state
     }
 
     @MainActor
@@ -1796,8 +2712,8 @@ private struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
               deletedEntry.updatedAt == deletedEntry.deletedAt,
               deletedEntry.updatedAt >= deletedEntry.createdAt,
               trace.activeNoteEntries.map(\.id) == [state.editedNoteID],
-              definition.activeNoteEntries.count == 2,
-              definition.activeNoteEntries.contains(where: {
+              chain.activeNoteEntries.count == 2,
+              chain.activeNoteEntries.contains(where: {
                   $0.id == state.deletedNoteID && $0.body == Self.deletedBody
               })
         else {
@@ -1835,6 +2751,417 @@ private struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
 }
 
 private enum TaskNoteE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            message
+        }
+    }
+}
+
+struct TaskNoteMutationAtomicityE2EState: Codable {
+    let baseline: NoonmarkSnapshot
+    let poolChainID: TaskChainID
+    let poolEditedNoteID: TaskNoteEntryID
+    let poolDeletedNoteID: TaskNoteEntryID
+    let traceID: DayTraceID
+    let traceEditedNoteID: TaskNoteEntryID
+    let traceDeletedNoteID: TaskNoteEntryID
+}
+
+private struct TaskNoteMutationAtomicityUIE2EAutomation: LaunchAutomationRunnable {
+    let stateURL: URL?
+    let resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> TaskNoteMutationAtomicityUIE2EAutomation? {
+        guard CommandLine.arguments.contains(
+            "--e2e-task-note-atomicity-ui-edit"
+        ) else { return nil }
+        return TaskNoteMutationAtomicityUIE2EAutomation(
+            stateURL: NoonmarkStore.commandLineValue(
+                after: "--e2e-task-note-atomicity-state-url"
+            ).map { URL(fileURLWithPath: $0) },
+            resultURL: NoonmarkStore.commandLineValue(
+                after: "--e2e-task-note-atomicity-result-url"
+            ).map { URL(fileURLWithPath: $0) }
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        do {
+            guard let stateURL, let resultURL else {
+                throw TaskNoteMutationAtomicityE2EError.failed(
+                    "missing task-note atomicity UI arguments"
+                )
+            }
+            let state = try JSONDecoder().decode(
+                TaskNoteMutationAtomicityE2EState.self,
+                from: Data(contentsOf: stateURL)
+            )
+            guard store.engine.snapshot() == state.baseline else {
+                throw TaskNoteMutationAtomicityE2EError.failed(
+                    "task-note atomicity UI fixture did not match the persisted baseline"
+                )
+            }
+            store.page = .day
+            store.selectedDate = store.today
+            store.selectedCalendarDate = store.today
+            store.selectTrace(state.traceID)
+            try store.armPersistenceFailureForE2E()
+            TaskNotePersistenceFailureUIE2EDriver.start(
+                noteID: state.traceEditedNoteID,
+                editedBody: "UNSAVED UI TRACE EDIT 4973",
+                resultURL: resultURL
+            )
+        } catch {
+            store.disarmPersistenceFailureForE2E()
+            if let resultURL {
+                try? FileManager.default.createDirectory(
+                    at: resultURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try? "failed: \(error.localizedDescription)".write(
+                    to: resultURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+            NSApp.terminate(nil)
+        }
+    }
+}
+
+private struct TaskNoteMutationAtomicityE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode {
+        case exerciseFailures
+        case verifyRestart
+    }
+
+    private static let poolOriginalBody = "POOL ORIGINAL NOTE 1832"
+    private static let poolDeleteBody = "POOL DELETE TARGET 5471"
+    private static let traceOriginalBody = "TRACE ORIGINAL NOTE 2604"
+    private static let traceDeleteBody = "TRACE DELETE TARGET 8395"
+
+    private let mode: Mode?
+    let stateURL: URL?
+    let resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> TaskNoteMutationAtomicityE2EAutomation? {
+        let exercisesFailures = CommandLine.arguments.contains(
+            "--e2e-task-note-atomicity-exercise"
+        )
+        let verifiesRestart = CommandLine.arguments.contains(
+            "--e2e-task-note-atomicity-verify"
+        )
+        guard exercisesFailures || verifiesRestart else { return nil }
+
+        let mode: Mode? = switch (exercisesFailures, verifiesRestart) {
+        case (true, false): .exerciseFailures
+        case (false, true): .verifyRestart
+        default: nil
+        }
+        return TaskNoteMutationAtomicityE2EAutomation(
+            mode: mode,
+            stateURL: NoonmarkStore.commandLineValue(
+                after: "--e2e-task-note-atomicity-state-url"
+            ).map { URL(fileURLWithPath: $0) },
+            resultURL: NoonmarkStore.commandLineValue(
+                after: "--e2e-task-note-atomicity-result-url"
+            ).map { URL(fileURLWithPath: $0) }
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        do {
+            guard let mode, let stateURL, let resultURL else {
+                throw TaskNoteMutationAtomicityE2EError.failed(
+                    "missing or conflicting task-note atomicity arguments"
+                )
+            }
+            switch mode {
+            case .exerciseFailures:
+                try exerciseFailures(on: store, stateURL: stateURL)
+            case .verifyRestart:
+                try verifyRestart(on: store, stateURL: stateURL)
+            }
+            try writeResult("ok", to: resultURL)
+        } catch {
+            if let resultURL {
+                try? writeResult("failed: \(error.localizedDescription)", to: resultURL)
+            }
+        }
+    }
+
+    @MainActor
+    private func exerciseFailures(
+        on store: NoonmarkStore,
+        stateURL: URL
+    ) throws {
+        guard store.engine.chains.isEmpty,
+              store.engine.definitions.isEmpty,
+              store.engine.traces.isEmpty
+        else {
+            throw TaskNoteMutationAtomicityE2EError.failed(
+                "isolated task-note atomicity database was not empty"
+            )
+        }
+
+        let base = Date(timeIntervalSinceReferenceDate: 804_600_000)
+        let poolChainID = try store.engine.createPoolTask(
+            title: "E2E 附言保存失败任务池",
+            initialNoteBody: Self.poolOriginalBody,
+            now: base
+        )
+        let poolEditedNoteID = try requiredNoteID(
+            store.engine.chains[poolChainID]?.activeNoteEntries.first?.id,
+            label: "pool edit target"
+        )
+        let poolDeletedNoteID = try store.engine.appendPoolNote(
+            chainID: poolChainID,
+            body: Self.poolDeleteBody,
+            now: base.addingTimeInterval(1)
+        )
+
+        let traceChainID = try store.engine.createPoolTask(
+            title: "E2E 附言保存失败日轨迹",
+            initialNoteBody: Self.traceOriginalBody,
+            now: base.addingTimeInterval(2)
+        )
+        let traceEditedNoteID = try requiredNoteID(
+            store.engine.chains[traceChainID]?.activeNoteEntries.first?.id,
+            label: "trace edit target"
+        )
+        let traceDeletedNoteID = try store.engine.appendPoolNote(
+            chainID: traceChainID,
+            body: Self.traceDeleteBody,
+            now: base.addingTimeInterval(3)
+        )
+        let traceID = try store.engine.scheduleFromPool(
+            chainID: traceChainID,
+            date: store.today,
+            today: store.today,
+            now: base.addingTimeInterval(4)
+        )
+        store.persist()
+
+        let baseline = store.engine.snapshot()
+        try baseline.validateIntegrity()
+        let state = TaskNoteMutationAtomicityE2EState(
+            baseline: baseline,
+            poolChainID: poolChainID,
+            poolEditedNoteID: poolEditedNoteID,
+            poolDeletedNoteID: poolDeletedNoteID,
+            traceID: traceID,
+            traceEditedNoteID: traceEditedNoteID,
+            traceDeletedNoteID: traceDeletedNoteID
+        )
+        try writeState(state, to: stateURL)
+        try verifyPersistedBaseline(baseline)
+
+        var failures: [String] = []
+        failures += rejectionFailures(
+            label: "pool append",
+            store: store,
+            baseline: baseline,
+            composerInput: "UNSAVED POOL APPEND 4136"
+        ) {
+            store.appendPoolNote(chainID: poolChainID)
+        }
+        failures += rejectionFailures(
+            label: "pool edit",
+            store: store,
+            baseline: baseline,
+            composerInput: "UNCHANGED POOL COMPOSER 7870"
+        ) {
+            store.editPoolNote(
+                chainID: poolChainID,
+                noteID: poolEditedNoteID,
+                body: "UNSAVED POOL EDIT 6218"
+            )
+        }
+        failures += rejectionFailures(
+            label: "pool delete",
+            store: store,
+            baseline: baseline,
+            composerInput: "UNCHANGED POOL DELETE COMPOSER 9465"
+        ) {
+            store.deletePoolNote(chainID: poolChainID, noteID: poolDeletedNoteID)
+        }
+        failures += rejectionFailures(
+            label: "trace append",
+            store: store,
+            baseline: baseline,
+            composerInput: "UNSAVED TRACE APPEND 3581"
+        ) {
+            store.appendTraceNote(traceID: traceID)
+        }
+        failures += rejectionFailures(
+            label: "trace edit",
+            store: store,
+            baseline: baseline,
+            composerInput: "UNCHANGED TRACE COMPOSER 1049"
+        ) {
+            store.editTraceNote(
+                traceID: traceID,
+                noteID: traceEditedNoteID,
+                body: "UNSAVED TRACE EDIT 5724"
+            )
+        }
+        failures += rejectionFailures(
+            label: "trace delete",
+            store: store,
+            baseline: baseline,
+            composerInput: "UNCHANGED TRACE DELETE COMPOSER 8357"
+        ) {
+            store.deleteTraceNote(traceID: traceID, noteID: traceDeletedNoteID)
+        }
+
+        guard failures.isEmpty else {
+            throw TaskNoteMutationAtomicityE2EError.failed(
+                failures.joined(separator: "; ")
+            )
+        }
+        try verifyPersistedBaseline(baseline)
+    }
+
+    @MainActor
+    private func rejectionFailures(
+        label: String,
+        store: NoonmarkStore,
+        baseline: NoonmarkSnapshot,
+        composerInput: String,
+        mutation: () -> Void
+    ) -> [String] {
+        var failures: [String] = []
+        store.engine = (try? NoonmarkEngine(snapshot: baseline)) ?? NoonmarkEngine()
+        store.clearUndoHistory()
+        store.detailNoteText = composerInput
+        do {
+            try store.armPersistenceFailureForE2E()
+        } catch {
+            return ["\(label) could not arm isolated save failure: \(error.localizedDescription)"]
+        }
+
+        mutation()
+        store.disarmPersistenceFailureForE2E()
+        if store.engine.snapshot() != baseline {
+            failures.append("\(label) published an unpersisted engine mutation")
+        }
+        if store.detailNoteText != composerInput {
+            failures.append("\(label) cleared user input after save failure")
+        }
+        if store.toast?.hasPrefix("保存失败：") != true {
+            failures.append(
+                "\(label) did not keep the save-failure message: \(store.toast ?? "missing")"
+            )
+        }
+
+        store.engine = (try? NoonmarkEngine(snapshot: baseline)) ?? NoonmarkEngine()
+        do {
+            try store.armPersistenceFailureForE2E()
+            store.undo()
+            store.disarmPersistenceFailureForE2E()
+            if store.toast != "没有可撤销的操作" {
+                failures.append("\(label) changed the undo stack after save failure")
+            }
+        } catch {
+            store.disarmPersistenceFailureForE2E()
+            failures.append("\(label) undo-stack probe failed: \(error.localizedDescription)")
+        }
+
+        store.engine = (try? NoonmarkEngine(snapshot: baseline)) ?? NoonmarkEngine()
+        store.clearUndoHistory()
+        store.detailNoteText = composerInput
+        return failures
+    }
+
+    @MainActor
+    private func verifyRestart(
+        on store: NoonmarkStore,
+        stateURL: URL
+    ) throws {
+        let state = try readState(from: stateURL)
+        let snapshot = store.engine.snapshot()
+        try snapshot.validateIntegrity()
+        guard snapshot == state.baseline,
+              store.engine.chains[state.poolChainID]?.activeNoteEntries.map(\.id) == [
+                  state.poolEditedNoteID,
+                  state.poolDeletedNoteID
+              ],
+              store.engine.traces[state.traceID]?.activeNoteEntries.map(\.id) == [
+                  state.traceEditedNoteID,
+                  state.traceDeletedNoteID
+              ]
+        else {
+            throw TaskNoteMutationAtomicityE2EError.failed(
+                "failed task-note mutations changed restarted state"
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyPersistedBaseline(_ baseline: NoonmarkSnapshot) throws {
+        guard let databasePath = NoonmarkStore.commandLineValue(after: "--data-url") else {
+            throw TaskNoteMutationAtomicityE2EError.failed(
+                "task-note atomicity E2E requires an explicit data URL"
+            )
+        }
+        let persisted = try SQLiteEngineRepository(
+            databaseURL: URL(fileURLWithPath: databasePath)
+        ).load().snapshot()
+        guard persisted == baseline else {
+            throw TaskNoteMutationAtomicityE2EError.failed(
+                "isolated SQLite state diverged from the in-memory baseline"
+            )
+        }
+    }
+
+    private func requiredNoteID(
+        _ noteID: TaskNoteEntryID?,
+        label: String
+    ) throws -> TaskNoteEntryID {
+        guard let noteID else {
+            throw TaskNoteMutationAtomicityE2EError.failed("missing \(label)")
+        }
+        return noteID
+    }
+
+    private func writeState(
+        _ state: TaskNoteMutationAtomicityE2EState,
+        to url: URL
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(state).write(to: url, options: .atomic)
+    }
+
+    private func readState(from url: URL) throws -> TaskNoteMutationAtomicityE2EState {
+        try JSONDecoder().decode(
+            TaskNoteMutationAtomicityE2EState.self,
+            from: Data(contentsOf: url)
+        )
+    }
+
+    private func writeResult(_ result: String, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum TaskNoteMutationAtomicityE2EError: LocalizedError {
     case failed(String)
 
     var errorDescription: String? {
@@ -1902,7 +3229,7 @@ private struct TaskTitleDeleteE2EAutomation: LaunchAutomationRunnable {
 
             let unfinishedChainID = try store.engine.createPoolTask(title: "E2E 未完成旧标题")
             _ = try store.engine.scheduleFromPool(chainID: unfinishedChainID, date: yesterday, today: yesterday)
-            store.engine.settleDays(upTo: today)
+            try store.engine.settleDays(upTo: today)
             try expectThrows {
                 try store.engine.renameTaskTitle(chainID: unfinishedChainID, title: "E2E 未完成新标题", today: today)
             }
@@ -2227,6 +3554,263 @@ private enum LifecycleE2EAutomationError: LocalizedError {
     }
 }
 
+private struct LifecycleRestartE2EAutomation: LaunchAutomationRunnable {
+    var resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        guard CommandLine.arguments.contains("--e2e-lifecycle-restart-verify") else {
+            return nil
+        }
+        let resultURL = NoonmarkStore.commandLineValue(
+            after: "--e2e-lifecycle-result-url"
+        ).map { URL(fileURLWithPath: $0) }
+        return Self(resultURL: resultURL)
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        do {
+            let definition = try required(
+                store.engine.definitions.values.first {
+                    $0.title == "E2E 废弃任务"
+                },
+                "reactivated definition was not loaded after restart"
+            )
+            let trace = try required(
+                store.engine.traces.values.first {
+                    $0.definitionID == definition.id
+                },
+                "reactivated trace was not loaded after restart"
+            )
+            let chain = try required(
+                store.engine.chains[trace.chainID],
+                "reactivated chain was not loaded after restart"
+            )
+            guard chain.state == .active,
+                  trace.status == .pending,
+                  trace.settledAt == nil
+            else {
+                throw LifecycleE2EAutomationError.failed(
+                    "reactivated lifecycle facts changed after restart"
+                )
+            }
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func required<Value>(
+        _ value: Value?,
+        _ message: String
+    ) throws -> Value {
+        guard let value else {
+            throw LifecycleE2EAutomationError.failed(message)
+        }
+        return value
+    }
+
+    private func writeResult(_ result: String) throws {
+        guard let resultURL else { return }
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private struct ReactivationAtomicityE2EState: Codable {
+    let baseline: NoonmarkSnapshot
+    let chainID: TaskChainID
+    let traceID: DayTraceID
+}
+
+private struct ReactivationAtomicityE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode {
+        case exerciseFailure
+        case verifyRestart
+    }
+
+    private let mode: Mode?
+    let stateURL: URL?
+    let resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        let exercisesFailure = CommandLine.arguments.contains(
+            "--e2e-reactivation-atomicity-exercise"
+        )
+        let verifiesRestart = CommandLine.arguments.contains(
+            "--e2e-reactivation-atomicity-verify"
+        )
+        guard exercisesFailure || verifiesRestart else { return nil }
+        let mode: Mode? = switch (exercisesFailure, verifiesRestart) {
+        case (true, false): .exerciseFailure
+        case (false, true): .verifyRestart
+        default: nil
+        }
+        return Self(
+            mode: mode,
+            stateURL: NoonmarkStore.commandLineValue(
+                after: "--e2e-reactivation-atomicity-state-url"
+            ).map { URL(fileURLWithPath: $0) },
+            resultURL: NoonmarkStore.commandLineValue(
+                after: "--e2e-reactivation-atomicity-result-url"
+            ).map { URL(fileURLWithPath: $0) }
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        do {
+            guard let mode, let stateURL, let resultURL else {
+                throw LifecycleE2EAutomationError.failed(
+                    "missing or conflicting reactivation atomicity arguments"
+                )
+            }
+            switch mode {
+            case .exerciseFailure:
+                try exerciseFailure(on: store, stateURL: stateURL)
+            case .verifyRestart:
+                try verifyRestart(on: store, stateURL: stateURL)
+            }
+            try writeResult("ok", to: resultURL)
+        } catch {
+            if let resultURL {
+                try? writeResult("failed: \(error.localizedDescription)", to: resultURL)
+            }
+        }
+    }
+
+    @MainActor
+    private func exerciseFailure(
+        on store: NoonmarkStore,
+        stateURL: URL
+    ) throws {
+        guard store.engine.chains.isEmpty,
+              store.engine.definitions.isEmpty,
+              store.engine.traces.isEmpty
+        else {
+            throw LifecycleE2EAutomationError.failed(
+                "isolated reactivation atomicity database was not empty"
+            )
+        }
+
+        let base = Date(timeIntervalSinceReferenceDate: 804_700_000)
+        let chainID = try store.engine.createPoolTask(
+            title: "E2E 重新启用保存失败",
+            now: base
+        )
+        let traceID = try store.engine.scheduleFromPool(
+            chainID: chainID,
+            date: store.today,
+            today: store.today,
+            now: base.addingTimeInterval(1)
+        )
+        try store.engine.abandonChain(
+            from: traceID,
+            now: base.addingTimeInterval(2)
+        )
+        store.persist()
+        let baseline = store.engine.snapshot()
+        try baseline.validateIntegrity()
+        try writeState(
+            ReactivationAtomicityE2EState(
+                baseline: baseline,
+                chainID: chainID,
+                traceID: traceID
+            ),
+            to: stateURL
+        )
+
+        store.clearUndoHistory()
+        try store.armPersistenceFailureForE2E()
+        let committed = store.reactivateAbandonedChain(from: traceID)
+        store.disarmPersistenceFailureForE2E()
+        guard committed == false,
+              store.engine.snapshot() == baseline,
+              store.toast?.hasPrefix("保存失败：") == true
+        else {
+            throw LifecycleE2EAutomationError.failed(
+                "failed reactivation published state or success feedback"
+            )
+        }
+
+        try store.armPersistenceFailureForE2E()
+        store.undo()
+        store.disarmPersistenceFailureForE2E()
+        guard store.toast == "没有可撤销的操作" else {
+            throw LifecycleE2EAutomationError.failed(
+                "failed reactivation changed the undo stack"
+            )
+        }
+        try verifyPersistedBaseline(baseline)
+    }
+
+    @MainActor
+    private func verifyRestart(
+        on store: NoonmarkStore,
+        stateURL: URL
+    ) throws {
+        let state = try readState(from: stateURL)
+        guard store.engine.snapshot() == state.baseline,
+              store.engine.chains[state.chainID]?.state == .abandoned,
+              store.engine.traces[state.traceID]?.status == .abandoned
+        else {
+            throw LifecycleE2EAutomationError.failed(
+                "failed reactivation changed restarted lifecycle state"
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyPersistedBaseline(_ baseline: NoonmarkSnapshot) throws {
+        guard let databasePath = NoonmarkStore.commandLineValue(after: "--data-url") else {
+            throw LifecycleE2EAutomationError.failed(
+                "reactivation atomicity E2E requires an explicit data URL"
+            )
+        }
+        let persisted = try SQLiteEngineRepository(
+            databaseURL: URL(fileURLWithPath: databasePath)
+        ).load().snapshot()
+        guard persisted == baseline else {
+            throw LifecycleE2EAutomationError.failed(
+                "failed reactivation changed isolated SQLite state"
+            )
+        }
+    }
+
+    private func writeState(
+        _ state: ReactivationAtomicityE2EState,
+        to url: URL
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(state).write(to: url, options: .atomic)
+    }
+
+    private func readState(from url: URL) throws -> ReactivationAtomicityE2EState {
+        try JSONDecoder().decode(
+            ReactivationAtomicityE2EState.self,
+            from: Data(contentsOf: url)
+        )
+    }
+
+    private func writeResult(_ result: String, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
 private struct WorkflowE2EAutomation: LaunchAutomationRunnable {
     var title: String
     var resultURL: URL?
@@ -2442,8 +4026,120 @@ enum TaskClassificationDisplay: Equatable {
     }
 }
 
+private enum PersistenceFailureE2EError: LocalizedError {
+    case injectedSaveFailure
+    case unsafeFailpointRequest
+
+    var errorDescription: String? {
+        switch self {
+        case .injectedSaveFailure:
+            "E2E injected isolated persistence save failure"
+        case .unsafeFailpointRequest:
+            "save failpoint requires the E2E app, an explicit data URL, and its automation flag"
+        }
+    }
+}
+
+private struct EnginePersistenceCommitError: LocalizedError {
+    let underlying: Error
+
+    var errorDescription: String? {
+        "保存失败：\(underlying.localizedDescription)"
+    }
+}
+
 @MainActor
 final class NoonmarkStore: ObservableObject {
+    private enum NoteUndoOwner: Equatable {
+        case trace(DayTraceID)
+        case pool(TaskChainID)
+    }
+
+    private struct NoteIdentityRemap {
+        let owner: NoteUndoOwner
+        let oldID: TaskNoteEntryID
+        let newID: TaskNoteEntryID
+    }
+
+    private enum UndoEntry {
+        case snapshot(NoonmarkSnapshot)
+        case copiedTask(snapshot: NoonmarkSnapshot, chainID: TaskChainID)
+        case traceNoteAppend(traceID: DayTraceID, noteID: TaskNoteEntryID)
+        case traceNoteEdit(
+            traceID: DayTraceID,
+            noteID: TaskNoteEntryID,
+            previousBody: String
+        )
+        case traceNoteDelete(
+            traceID: DayTraceID,
+            noteID: TaskNoteEntryID,
+            deletedBody: String
+        )
+        case poolNoteAppend(chainID: TaskChainID, noteID: TaskNoteEntryID)
+        case poolNoteEdit(
+            chainID: TaskChainID,
+            noteID: TaskNoteEntryID,
+            previousBody: String
+        )
+        case poolNoteDelete(
+            chainID: TaskChainID,
+            noteID: TaskNoteEntryID,
+            deletedBody: String
+        )
+
+        var snapshot: NoonmarkSnapshot? {
+            switch self {
+            case let .snapshot(snapshot), let .copiedTask(snapshot, _):
+                snapshot
+            default:
+                nil
+            }
+        }
+
+        func remappingNoteIdentity(
+            _ remap: NoteIdentityRemap
+        ) -> UndoEntry {
+            switch (remap.owner, self) {
+            case let (.trace(expectedTraceID), .traceNoteAppend(traceID, noteID))
+                where traceID == expectedTraceID && noteID == remap.oldID:
+                .traceNoteAppend(traceID: traceID, noteID: remap.newID)
+            case let (.trace(expectedTraceID), .traceNoteEdit(traceID, noteID, previousBody))
+                where traceID == expectedTraceID && noteID == remap.oldID:
+                .traceNoteEdit(
+                    traceID: traceID,
+                    noteID: remap.newID,
+                    previousBody: previousBody
+                )
+            case let (.trace(expectedTraceID), .traceNoteDelete(traceID, noteID, deletedBody))
+                where traceID == expectedTraceID && noteID == remap.oldID:
+                .traceNoteDelete(
+                    traceID: traceID,
+                    noteID: remap.newID,
+                    deletedBody: deletedBody
+                )
+            case let (.pool(expectedChainID), .poolNoteAppend(chainID, noteID))
+                where chainID == expectedChainID && noteID == remap.oldID:
+                .poolNoteAppend(chainID: chainID, noteID: remap.newID)
+            case let (.pool(expectedChainID), .poolNoteEdit(chainID, noteID, previousBody))
+                where chainID == expectedChainID && noteID == remap.oldID:
+                .poolNoteEdit(
+                    chainID: chainID,
+                    noteID: remap.newID,
+                    previousBody: previousBody
+                )
+            case let (.pool(expectedChainID), .poolNoteDelete(chainID, noteID, deletedBody))
+                where chainID == expectedChainID && noteID == remap.oldID:
+                .poolNoteDelete(
+                    chainID: chainID,
+                    noteID: remap.newID,
+                    deletedBody: deletedBody
+                )
+            default:
+                self
+            }
+        }
+    }
+
     private struct ZhulongWorkflowRoute {
         let task: ZhulongTask
         let purpose: ZhulongSessionPurpose
@@ -2453,7 +4149,7 @@ final class NoonmarkStore: ObservableObject {
         ZhulongWorkflowRoute(task: .dailyReview, purpose: .dailyClose),
         ZhulongWorkflowRoute(task: .taskDecomposition, purpose: .taskShaping),
         ZhulongWorkflowRoute(task: .scheduling, purpose: .schedulingAssistance),
-        ZhulongWorkflowRoute(task: .labelClassification, purpose: .classificationAssistance),
+        ZhulongWorkflowRoute(task: .classification, purpose: .classificationAssistance),
         ZhulongWorkflowRoute(task: .habitInsight, purpose: .habitInsight),
         ZhulongWorkflowRoute(task: .theoryAnalysis, purpose: .theoryAnalysis)
     ]
@@ -2525,19 +4221,19 @@ final class NoonmarkStore: ObservableObject {
 
         init?(commandLineValue: String) {
             switch commandLineValue {
-            case "day", "dayTodo":
+            case "day":
                 self = .day
-            case "pool", "taskPool":
+            case "pool":
                 self = .pool
-            case "future", "futurePlans":
+            case "future":
                 self = .future
-            case "unfinished", "unfinishedPool":
+            case "unfinished":
                 self = .unfinished
-            case "completed", "completedPool":
+            case "completed":
                 self = .completed
             case "calendar":
                 self = .calendar
-            case "zhulong", "ai":
+            case "zhulong":
                 self = .zhulong
             case "settings":
                 self = .settings
@@ -2614,7 +4310,7 @@ final class NoonmarkStore: ObservableObject {
     @Published var showingPicker: DatePickerPurpose?
     @Published var showingFromPoolPicker = false
     @Published var showingChangeDialog = false
-    @Published var showingClassificationManager = CommandLine.arguments.contains("--e2e-open-classification-manager")
+    @Published var showingClassificationManager = false
     @Published var changeText = ""
     @Published var detailSubtaskText = ""
     @Published var detailNoteText = ""
@@ -2623,21 +4319,27 @@ final class NoonmarkStore: ObservableObject {
     @Published var reviewAutosaveMessage: String?
     @Published var isLocalFirstSyncing = false
     @Published var localFirstSyncMessage: String?
-    @Published var e2eClassificationOverflowChainID: TaskChainID?
 
     let today = LocalDate("2026-07-05")
     private let repository: SQLiteEngineRepository?
     private let databaseURL: URL?
     private let syncDeviceID: SyncDeviceID?
+    private let permitsPersistenceFailureE2E: Bool
     lazy var zhulongWorkspace = ZhulongWorkspaceStore(
         directoryURL: zhulongSidecarDirectoryURL,
         keySource: zhulongSidecarKeySource
     )
     private var toastTask: Task<Void, Never>?
     private var localFirstSyncAutomationTask: Task<Void, Never>?
-    private var undoStack: [NoonmarkSnapshot] = []
+    private var undoStack: [UndoEntry] = []
+    private var persistenceFailuresRemainingForE2E = 0
 
     init() {
+        permitsPersistenceFailureE2E = CommandLine.arguments.contains(
+            "--e2e-persistence-failure-automation"
+        )
+            && Self.commandLineValue(after: "--data-url") != nil
+            && Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e"
         if CommandLine.arguments.contains("--ephemeral") {
             repository = nil
             databaseURL = nil
@@ -3368,12 +5070,15 @@ final class NoonmarkStore: ObservableObject {
 
     func continueTrace(_ traceID: DayTraceID, to date: LocalDate) {
         do {
+            if let trace = engine.traces[traceID] {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+            }
             let nextID = try engine.continueTrace(traceID: traceID, targetDate: date, today: today)
             selectedDate = date
             page = .day
             selectTrace(nextID)
             persist()
-            showToast("已延续到 \(Self.displayDate(date))；源轨迹已成为历史，不能撤销")
+            showToast("已延续到 \(Self.displayDate(date))")
         } catch {
             showToast(error.localizedDescription)
         }
@@ -3396,31 +5101,51 @@ final class NoonmarkStore: ObservableObject {
 
     func abandon(_ traceID: DayTraceID) {
         do {
+            if let trace = engine.traces[traceID] {
+                pushUndoSnapshotIfAllowed(on: trace.date)
+            }
             try engine.abandonChain(from: traceID)
             persist()
-            showToast("任务链已废弃；可从未完成池重新启用，历史不会撤销")
+            showToast("任务链已废弃；可从未完成池重新启用")
         } catch {
             showToast(error.localizedDescription)
         }
     }
 
-    func reactivateAbandonedChain(from traceID: DayTraceID) {
+    @discardableResult
+    func reactivateAbandonedChain(from traceID: DayTraceID) -> Bool {
+        let undoSnapshot = engine.snapshot()
         do {
-            pushUndoSnapshot()
-            _ = try engine.reactivateAbandonedChain(from: traceID, today: today)
-            persist()
+            _ = try commitEngineMutation { candidate in
+                try candidate.reactivateAbandonedChain(from: traceID, today: today)
+            }
+            pushUndoEntry(with: .snapshot(undoSnapshot))
             showToast("已取消废弃")
+            return true
         } catch {
             showToast(error.localizedDescription)
+            return false
         }
     }
 
     func copyAsNewTask(_ traceID: DayTraceID) {
+        let undoSnapshot = engine.snapshot()
         do {
-            pushUndoSnapshot()
-            _ = try engine.copyAsNewTask(from: traceID, target: .taskPool, today: today)
+            let candidate = try NoonmarkEngine(snapshot: undoSnapshot)
+            let copiedChainID = try candidate.copyAsNewTask(
+                from: traceID,
+                target: .taskPool,
+                today: today
+            )
+            try save(candidate)
+            engine = candidate
+            pushUndoEntry(
+                with: .copiedTask(
+                    snapshot: undoSnapshot,
+                    chainID: copiedChainID
+                )
+            )
             page = .pool
-            persist()
             showToast("已复制为新任务，放入任务池")
         } catch {
             showToast(error.localizedDescription)
@@ -3554,7 +5279,7 @@ final class NoonmarkStore: ObservableObject {
             case .deleted:
                 "已从任务池删除"
             case .removedKeepingHistory:
-                "已移出任务池；分类与任务历史已保留"
+                "已移出任务池；分组、标签与任务历史已保留"
             }
             showToast(message)
         } catch {
@@ -3562,79 +5287,168 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
-    func appendTraceNote(traceID: DayTraceID) {
+    @discardableResult
+    func appendTraceNote(traceID: DayTraceID) -> Bool {
         let body = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard body.isEmpty == false, let trace = engine.traces[traceID] else { return }
+        guard body.isEmpty == false, engine.traces[traceID] != nil else { return false }
         do {
-            pushUndoSnapshotIfAllowed(on: trace.date)
-            _ = try engine.appendTraceNote(traceID: traceID, body: body, today: today)
+            let noteID = try commitEngineMutation { candidate in
+                try candidate.appendTraceNote(
+                    traceID: traceID,
+                    body: body,
+                    today: today
+                )
+            }
+            pushUndoEntry(
+                with: .traceNoteAppend(traceID: traceID, noteID: noteID)
+            )
             detailNoteText = ""
-            objectWillChange.send()
-            persist()
+            return true
         } catch {
             showToast(error.localizedDescription)
+            return false
         }
     }
 
-    func appendPoolNote(chainID: TaskChainID) {
+    @discardableResult
+    func appendPoolNote(chainID: TaskChainID) -> Bool {
         let body = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard body.isEmpty == false else { return }
+        guard body.isEmpty == false else { return false }
         do {
-            pushUndoSnapshot()
-            _ = try engine.appendPoolNote(chainID: chainID, body: body)
+            let noteID = try commitEngineMutation { candidate in
+                try candidate.appendPoolNote(chainID: chainID, body: body)
+            }
+            pushUndoEntry(
+                with: .poolNoteAppend(chainID: chainID, noteID: noteID)
+            )
             detailNoteText = ""
-            objectWillChange.send()
-            persist()
+            return true
         } catch {
             showToast(error.localizedDescription)
+            return false
         }
     }
 
-    func editTraceNote(traceID: DayTraceID, noteID: TaskNoteEntryID, body: String) {
-        guard let trace = engine.traces[traceID] else { return }
+    @discardableResult
+    func editTraceNote(
+        traceID: DayTraceID,
+        noteID: TaskNoteEntryID,
+        body: String
+    ) -> Bool {
+        guard let trace = engine.traces[traceID],
+              let previousBody = trace.activeNoteEntries.first(where: {
+                  $0.id == noteID
+              })?.body
+        else { return false }
         do {
-            pushUndoSnapshotIfAllowed(on: trace.date)
-            try engine.editTraceNote(traceID: traceID, noteID: noteID, body: body, today: today)
-            objectWillChange.send()
-            persist()
+            try commitEngineMutation { candidate in
+                try candidate.editTraceNote(
+                    traceID: traceID,
+                    noteID: noteID,
+                    body: body,
+                    today: today
+                )
+            }
+            pushUndoEntry(
+                with: .traceNoteEdit(
+                    traceID: traceID,
+                    noteID: noteID,
+                    previousBody: previousBody
+                )
+            )
+            return true
         } catch {
             showToast(error.localizedDescription)
+            return false
         }
     }
 
-    func deleteTraceNote(traceID: DayTraceID, noteID: TaskNoteEntryID) {
-        guard let trace = engine.traces[traceID] else { return }
+    @discardableResult
+    func deleteTraceNote(traceID: DayTraceID, noteID: TaskNoteEntryID) -> Bool {
+        guard let trace = engine.traces[traceID],
+              let deletedBody = trace.activeNoteEntries.first(where: {
+                  $0.id == noteID
+              })?.body
+        else { return false }
         do {
-            pushUndoSnapshotIfAllowed(on: trace.date)
-            try engine.deleteTraceNote(traceID: traceID, noteID: noteID, today: today)
-            objectWillChange.send()
-            persist()
-            showToast("已删除附言")
+            try commitEngineMutation { candidate in
+                try candidate.deleteTraceNote(
+                    traceID: traceID,
+                    noteID: noteID,
+                    today: today
+                )
+            }
+            pushUndoEntry(
+                with: .traceNoteDelete(
+                    traceID: traceID,
+                    noteID: noteID,
+                    deletedBody: deletedBody
+                )
+            )
+            showToast(copy.noteDeletedToast)
+            return true
         } catch {
             showToast(error.localizedDescription)
+            return false
         }
     }
 
-    func editPoolNote(chainID: TaskChainID, noteID: TaskNoteEntryID, body: String) {
+    @discardableResult
+    func editPoolNote(
+        chainID: TaskChainID,
+        noteID: TaskNoteEntryID,
+        body: String
+    ) -> Bool {
+        guard let previousBody = engine.taskPool().first(where: {
+            $0.chain.id == chainID
+        })?.chain.activeNoteEntries.first(where: {
+            $0.id == noteID
+        })?.body else { return false }
         do {
-            pushUndoSnapshot()
-            try engine.editPoolNote(chainID: chainID, noteID: noteID, body: body)
-            objectWillChange.send()
-            persist()
+            try commitEngineMutation { candidate in
+                try candidate.editPoolNote(
+                    chainID: chainID,
+                    noteID: noteID,
+                    body: body
+                )
+            }
+            pushUndoEntry(
+                with: .poolNoteEdit(
+                    chainID: chainID,
+                    noteID: noteID,
+                    previousBody: previousBody
+                )
+            )
+            return true
         } catch {
             showToast(error.localizedDescription)
+            return false
         }
     }
 
-    func deletePoolNote(chainID: TaskChainID, noteID: TaskNoteEntryID) {
+    @discardableResult
+    func deletePoolNote(chainID: TaskChainID, noteID: TaskNoteEntryID) -> Bool {
+        guard let deletedBody = engine.taskPool().first(where: {
+            $0.chain.id == chainID
+        })?.chain.activeNoteEntries.first(where: {
+            $0.id == noteID
+        })?.body else { return false }
         do {
-            pushUndoSnapshot()
-            try engine.deletePoolNote(chainID: chainID, noteID: noteID)
-            objectWillChange.send()
-            persist()
-            showToast("已删除附言")
+            try commitEngineMutation { candidate in
+                try candidate.deletePoolNote(chainID: chainID, noteID: noteID)
+            }
+            pushUndoEntry(
+                with: .poolNoteDelete(
+                    chainID: chainID,
+                    noteID: noteID,
+                    deletedBody: deletedBody
+                )
+            )
+            showToast(copy.noteDeletedToast)
+            return true
         } catch {
             showToast(error.localizedDescription)
+            return false
         }
     }
 
@@ -4199,28 +6013,198 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func undo() {
-        guard let snapshot = undoStack.last else {
+        guard let entry = undoStack.last else {
             showToast("没有可撤销的操作")
             return
         }
-        guard snapshot.classifications == engine.snapshot().classifications else {
-            clearUndoHistory()
-            showToast("该操作已产生不可改写的分类历史，不能撤销")
-            return
-        }
         let candidate: NoonmarkEngine
+        var noteIdentityRemap: NoteIdentityRemap?
         do {
-            candidate = try NoonmarkEngine(snapshot: snapshot)
+            let currentSnapshot = engine.snapshot()
+            switch entry {
+            case let .snapshot(snapshot):
+                candidate = try NoonmarkEngine(snapshot: snapshot)
+                try candidate.prepareSnapshotUndo(
+                    replacing: currentSnapshot,
+                    now: Date()
+                )
+            case let .copiedTask(_, copiedChainID):
+                candidate = try NoonmarkEngine(snapshot: currentSnapshot)
+                _ = try candidate.removeTaskFromPool(
+                    chainID: copiedChainID,
+                    now: try copiedTaskUndoDate(
+                        chainID: copiedChainID,
+                        in: candidate
+                    )
+                )
+            case .traceNoteAppend, .traceNoteEdit, .traceNoteDelete,
+                 .poolNoteAppend, .poolNoteEdit, .poolNoteDelete:
+                candidate = try NoonmarkEngine(snapshot: currentSnapshot)
+                noteIdentityRemap = try applyNoteUndo(entry, to: candidate)
+            }
             try save(candidate)
         } catch {
+            NSLog("Noonmark undo failed: %@", String(describing: error))
             showToast("无法撤销：\(error.localizedDescription)")
             return
         }
         undoStack.removeLast()
+        if let noteIdentityRemap {
+            undoStack = undoStack.map {
+                $0.remappingNoteIdentity(noteIdentityRemap)
+            }
+        }
         engine = candidate
         Theme.apply(engine.preferences.theme)
         normalizeSelection()
         showToast("已撤销")
+    }
+
+    private func copiedTaskUndoDate(
+        chainID: TaskChainID,
+        in candidate: NoonmarkEngine
+    ) throws -> Date {
+        guard let chain = candidate.chains[chainID] else {
+            throw NoonmarkError.notFound("copied task chain")
+        }
+        let chainFrontier = chain.updatedAt.timeIntervalSinceReferenceDate
+        guard chainFrontier.isFinite, chainFrontier.nextUp.isFinite else {
+            throw NoonmarkError.invalidInput("copied task undo time is invalid")
+        }
+        let afterChain = Date(
+            timeIntervalSinceReferenceDate: chainFrontier.nextUp
+        )
+        return max(
+            afterChain,
+            candidate.nextClassificationMutationDate()
+        )
+    }
+
+    private func applyNoteUndo(
+        _ entry: UndoEntry,
+        to candidate: NoonmarkEngine
+    ) throws -> NoteIdentityRemap? {
+        switch entry {
+        case .snapshot, .copiedTask:
+            throw NoonmarkError.invalidTransition("snapshot is not a note undo action")
+        case let .traceNoteAppend(traceID, noteID):
+            let trace = try noteUndoTrace(traceID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            try candidate.deleteTraceNote(
+                traceID: traceID,
+                noteID: noteID,
+                today: today,
+                now: try forwardNoteUndoDate(after: [note.updatedAt])
+            )
+            return nil
+        case let .traceNoteEdit(traceID, noteID, previousBody):
+            let trace = try noteUndoTrace(traceID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            try candidate.editTraceNote(
+                traceID: traceID,
+                noteID: noteID,
+                body: previousBody,
+                today: today,
+                now: try forwardNoteUndoDate(after: [note.updatedAt])
+            )
+            return nil
+        case let .traceNoteDelete(traceID, noteID, deletedBody):
+            let trace = try noteUndoTrace(traceID, in: candidate)
+            let newID = try candidate.appendTraceNote(
+                traceID: traceID,
+                body: deletedBody,
+                today: today,
+                now: try forwardNoteUndoDate(
+                    after: [trace.createdAt] + trace.noteEntries.map(\.updatedAt)
+                )
+            )
+            return NoteIdentityRemap(
+                owner: .trace(traceID),
+                oldID: noteID,
+                newID: newID
+            )
+        case let .poolNoteAppend(chainID, noteID):
+            let chain = try noteUndoChain(chainID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            try candidate.deletePoolNote(
+                chainID: chainID,
+                noteID: noteID,
+                now: try forwardNoteUndoDate(
+                    after: [note.updatedAt, chain.updatedAt]
+                )
+            )
+            return nil
+        case let .poolNoteEdit(chainID, noteID, previousBody):
+            let chain = try noteUndoChain(chainID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            try candidate.editPoolNote(
+                chainID: chainID,
+                noteID: noteID,
+                body: previousBody,
+                now: try forwardNoteUndoDate(
+                    after: [note.updatedAt, chain.updatedAt]
+                )
+            )
+            return nil
+        case let .poolNoteDelete(chainID, noteID, deletedBody):
+            let chain = try noteUndoChain(chainID, in: candidate)
+            let newID = try candidate.appendPoolNote(
+                chainID: chainID,
+                body: deletedBody,
+                now: try forwardNoteUndoDate(
+                    after: [chain.createdAt] + chain.noteEntries.map(\.updatedAt)
+                )
+            )
+            return NoteIdentityRemap(
+                owner: .pool(chainID),
+                oldID: noteID,
+                newID: newID
+            )
+        }
+    }
+
+    private func noteUndoTrace(
+        _ traceID: DayTraceID,
+        in candidate: NoonmarkEngine
+    ) throws -> DayTrace {
+        guard let trace = candidate.traces[traceID] else {
+            throw NoonmarkError.notFound("day trace")
+        }
+        return trace
+    }
+
+    private func noteUndoChain(
+        _ chainID: TaskChainID,
+        in candidate: NoonmarkEngine
+    ) throws -> TaskChain {
+        guard let chain = candidate.chains[chainID] else {
+            throw NoonmarkError.notFound("task chain")
+        }
+        return chain
+    }
+
+    private func noteUndoEntry(
+        _ noteID: TaskNoteEntryID,
+        in entries: [TaskNoteEntry]
+    ) throws -> TaskNoteEntry {
+        guard let note = entries.first(where: {
+            $0.id == noteID && !$0.isDeleted
+        }) else {
+            throw NoonmarkError.notFound("task note")
+        }
+        return note
+    }
+
+    private func forwardNoteUndoDate(after frontiers: [Date]) throws -> Date {
+        let frontier = frontiers.map(\.timeIntervalSinceReferenceDate).max()
+            ?? Date().timeIntervalSinceReferenceDate
+        let current = Date().timeIntervalSinceReferenceDate
+        guard frontier.isFinite, current.isFinite, frontier.nextUp.isFinite else {
+            throw NoonmarkError.invalidInput("task note undo time is invalid")
+        }
+        return Date(
+            timeIntervalSinceReferenceDate: max(frontier.nextUp, current)
+        )
     }
 
     func clearUndoHistory() {
@@ -4334,7 +6318,7 @@ final class NoonmarkStore: ObservableObject {
             [.currentDayTodo]
         case .scheduling:
             [.currentDayTodo, .taskPool, .unfinishedPool]
-        case .labelClassification, .theoryAnalysis:
+        case .classification, .theoryAnalysis:
             [.currentDayTodo, .taskPool, .unfinishedPool, .completedPool, .taskClassifications]
         }
     }
@@ -4436,9 +6420,13 @@ final class NoonmarkStore: ObservableObject {
             )
         case .taskClassifications:
             let classifications = engine.snapshot().classifications
-            let names = classifications.categories.values.map(\.name) +
-                classifications.labels.values.map(\.name)
-            return AIScopeSnapshot(ranges: [], labels: names.sorted())
+            return AIScopeSnapshot(
+                ranges: [],
+                classifications: AIClassificationCatalogSnapshot(
+                    categories: classifications.categories.values.map(\.name).sorted(),
+                    labels: classifications.labels.values.map(\.name).sorted()
+                )
+            )
         }
     }
 
@@ -4457,7 +6445,6 @@ final class NoonmarkStore: ObservableObject {
         case .openAICompatible: .openAICompatible
         case .localModel: .localModel
         case .customHTTP: .customHTTP
-        case .mock: .localModel
         }
         let isLocal = kind == .localModel
         return try ZhulongProviderConfigurationIdentity(
@@ -4557,7 +6544,6 @@ final class NoonmarkStore: ObservableObject {
     func persist() {
         do {
             try save(engine)
-            invalidateUndoHistoryIfClassificationChanged()
         } catch {
             NSLog("Noonmark persistence save failed: %@", String(describing: error))
             showToast("保存失败：\(error.localizedDescription)")
@@ -4660,6 +6646,10 @@ final class NoonmarkStore: ObservableObject {
 
     private func save(_ candidate: NoonmarkEngine) throws {
         guard let repository else { return }
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
         if let syncDeviceID {
             try repository.save(
                 candidate.snapshot(),
@@ -4670,13 +6660,48 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    private func commitEngineMutation<Result>(
+        _ mutation: (NoonmarkEngine) throws -> Result
+    ) throws -> Result {
+        let candidate = try NoonmarkEngine(snapshot: engine.snapshot())
+        let result = try mutation(candidate)
+        do {
+            try save(candidate)
+        } catch {
+            if error is PersistenceFailureE2EError {
+                NSLog("Noonmark E2E injected persistence save failure")
+            } else {
+                NSLog("Noonmark persistence save failed: %@", String(describing: error))
+            }
+            throw EnginePersistenceCommitError(underlying: error)
+        }
+        engine = candidate
+        return result
+    }
+
+    func armPersistenceFailureForE2E(count: Int = 1) throws {
+        guard permitsPersistenceFailureE2E, count > 0 else {
+            throw PersistenceFailureE2EError.unsafeFailpointRequest
+        }
+        persistenceFailuresRemainingForE2E += count
+    }
+
+    func disarmPersistenceFailureForE2E() {
+        persistenceFailuresRemainingForE2E = 0
+    }
+
     private func pushUndoSnapshotIfAllowed(on date: LocalDate) {
         guard date >= today else { return }
         pushUndoSnapshot()
     }
 
     private func pushUndoSnapshot() {
-        undoStack.append(engine.snapshot())
+        pushUndoEntry(with: .snapshot(engine.snapshot()))
+    }
+
+    private func pushUndoEntry(with entry: UndoEntry) {
+        undoStack.append(entry)
         if undoStack.count > 20 {
             undoStack.removeFirst(undoStack.count - 20)
         }
@@ -4684,7 +6709,10 @@ final class NoonmarkStore: ObservableObject {
 
     private func invalidateUndoHistoryIfClassificationChanged() {
         let classifications = engine.snapshot().classifications
-        guard undoStack.contains(where: { $0.classifications != classifications }) else { return }
+        guard undoStack.contains(where: {
+            $0.snapshot?.classifications != nil
+                && $0.snapshot?.classifications != classifications
+        }) else { return }
         clearUndoHistory()
     }
 
@@ -4714,6 +6742,14 @@ final class NoonmarkStore: ObservableObject {
         let day3 = today
         let day4 = LocalDate("2026-07-06")
         let day5 = LocalDate("2026-07-07")
+        // Deterministic fixture timezone: every seeded Date uses this fixed UTC-04 offset
+        // so snapshot and Audit bytes never depend on the host's current time zone.
+        guard let seedTimeZone = TimeZone(secondsFromGMT: -4 * 60 * 60) else {
+            preconditionFailure("Seed time zone must be available")
+        }
+        var seedCalendar = Calendar(identifier: .gregorian)
+        seedCalendar.locale = Locale(identifier: "en_US_POSIX")
+        seedCalendar.timeZone = seedTimeZone
         func eventTime(_ date: LocalDate, hour: Int, minute: Int) -> Date {
             var components = DateComponents()
             components.year = date.year
@@ -4721,13 +6757,32 @@ final class NoonmarkStore: ObservableObject {
             components.day = date.day
             components.hour = hour
             components.minute = minute
-            return Calendar(identifier: .gregorian).date(from: components) ?? .distantPast
+            guard let timestamp = seedCalendar.date(from: components),
+                  timestamp.timeIntervalSinceReferenceDate.isFinite
+            else {
+                preconditionFailure("Seed event time must be a finite Gregorian date")
+            }
+            return timestamp
         }
-        let now = eventTime(day0, hour: 8, minute: 0)
-        var seedClock = 0
-        func seedNow() -> Date {
-            defer { seedClock += 1 }
-            return now.addingTimeInterval(TimeInterval(seedClock))
+        let seedStart = eventTime(day0, hour: 8, minute: 0)
+        var nextSeedSetupTime = seedStart
+        var lastReplayedEventTime: Date?
+        func seedNow(at eventTime: Date? = nil) -> Date {
+            if let eventTime {
+                precondition(eventTime.timeIntervalSinceReferenceDate.isFinite)
+                if let lastReplayedEventTime {
+                    precondition(
+                        eventTime >= lastReplayedEventTime,
+                        "Seed domain events must be replayed in timestamp order"
+                    )
+                }
+                lastReplayedEventTime = eventTime
+                return eventTime
+            }
+            let timestamp = nextSeedSetupTime
+            precondition(timestamp.timeIntervalSinceReferenceDate.isFinite)
+            nextSeedSetupTime = timestamp.addingTimeInterval(1)
+            return timestamp
         }
         func setClassification(
             chainID: TaskChainID,
@@ -4755,6 +6810,9 @@ final class NoonmarkStore: ObservableObject {
             )
         }
         do {
+            // Phase 1: create every setup fact before replaying any domain event. The
+            // setup clock is independent from explicit business time and ends before
+            // the first event at 08:05, so later audit revisions cannot move backwards.
             let okr = try engine.createPoolTask(
                 title: "整理 Q3 OKR 草案",
                 descriptionText: "汇总三条产品线负责人给的季度目标，收敛成不超过 3 个 O、每个 O 配 3 个可量化 KR。",
@@ -4765,116 +6823,54 @@ final class NoonmarkStore: ObservableObject {
                 category: ("复盘", "#0E9488"),
                 labels: []
             )
-            let okrDay0 = try engine.scheduleFromPool(chainID: okr, date: day0, today: day0, now: now)
-
             let launchScript = try engine.createPoolTask(title: "给发布会准备演示脚本", descriptionText: "准备发布会现场演示脚本。", now: seedNow())
-            _ = try engine.scheduleFromPool(chainID: launchScript, date: dayMinus3, today: dayMinus3, now: now)
             let physical = try engine.createPoolTask(title: "预约年度体检", descriptionText: "预约年度体检时间。", now: seedNow())
             try setClassification(
                 chainID: physical,
                 category: ("生活", "#D1477A"),
                 labels: [("健康", "#0E9488"), ("年度", "#E0851B")]
             )
-            let physicalTrace = try engine.scheduleFromPool(chainID: physical, date: dayMinus3, today: dayMinus3, now: now)
-            try engine.returnToPool(traceID: physicalTrace, today: dayMinus3, now: now)
             let wireframe = try engine.createPoolTask(title: "画首页线框图", descriptionText: "日历完成样例任务。", now: seedNow())
-            let wireframeTrace = try engine.scheduleFromPool(chainID: wireframe, date: dayMinus3, today: dayMinus3, now: now)
-            try engine.markCompleted(traceID: wireframeTrace, today: dayMinus3, now: eventTime(dayMinus3, hour: 16, minute: 30))
             let repository = try engine.createPoolTask(title: "搭建项目仓库与 CI", descriptionText: "日历完成样例任务。", now: seedNow())
-            let repositoryTrace = try engine.scheduleFromPool(chainID: repository, date: day0, today: day0, now: now)
-            try engine.markCompleted(traceID: repositoryTrace, today: day0, now: eventTime(day0, hour: 9, minute: 10))
             let rust = try engine.createPoolTask(title: "学习 Rust 基础语法", descriptionText: "废弃样例任务。", now: seedNow())
-            let rustTrace = try engine.scheduleFromPool(chainID: rust, date: day0, today: day0, now: now)
-            try engine.abandonChain(from: rustTrace, now: now)
-
-            engine.settleDays(upTo: day1, now: now)
-            let okrDay1 = try engine.continueTrace(traceID: okrDay0, targetDate: day1, today: day1, now: now)
-            let okrToday = try engine.continueTrace(traceID: okrDay1, targetDate: day3, today: day1, now: now)
-            try engine.setManualProgress(traceID: okrToday, percent: 30, today: day3)
-            _ = try engine.appendTraceNote(
-                traceID: okrToday,
-                body: "等数据组下午的留存看板再定第 2 个 KR 的口径。",
-                today: day3,
-                now: eventTime(day3, hour: 14, minute: 20)
-            )
-
             let contract = try engine.createPoolTask(title: "回复设计合同邮件", descriptionText: "确认合同条款并回复对方。", now: seedNow())
-            let contractTrace = try engine.scheduleFromPool(chainID: contract, date: day1, today: day1, now: now)
-            try engine.markCompleted(traceID: contractTrace, today: day1, now: eventTime(day1, hour: 11, minute: 20))
-
             let iconExport = try engine.createPoolTask(title: "修复图标导出脚本", descriptionText: "修复图标资源导出脚本。", now: seedNow())
             try setClassification(
                 chainID: iconExport,
                 category: ("工程", "#2A6FDB"),
                 labels: []
             )
-            let iconDay2 = try engine.scheduleFromPool(chainID: iconExport, date: day2, today: day2, now: now)
-            try engine.setManualProgress(traceID: iconDay2, percent: 45, today: day2)
-            let iconToday = try engine.continueTrace(traceID: iconDay2, targetDate: day3, today: day2, now: now)
-            try engine.setManualProgress(traceID: iconToday, percent: 45, today: day3)
-
             let weeklyReport = try engine.createPoolTask(title: "写本周周报", descriptionText: "整理本周进展和风险。", now: seedNow())
             try setClassification(
                 chainID: weeklyReport,
                 category: ("复盘", "#0E9488"),
                 labels: []
             )
-            let weeklyDay1 = try engine.scheduleFromPool(chainID: weeklyReport, date: day1, today: day1, now: now)
-            let weeklyDay2 = try engine.continueTrace(traceID: weeklyDay1, targetDate: day2, today: day1, now: now)
-            try engine.markCompleted(traceID: weeklyDay2, today: day2, now: eventTime(day2, hour: 17, minute: 45))
-
             let pricing = try engine.createPoolTask(title: "调研竞品定价", descriptionText: "旧任务范围过大，需要变更为可交付对比表。", now: seedNow())
-            let pricingTrace = try engine.scheduleFromPool(chainID: pricing, date: day2, today: day2, now: now)
-            _ = try engine.changeTrace(traceID: pricingTrace, newTitle: "输出竞品定价对比表", today: day2, now: seedNow())
-
             let visual = try engine.createPoolTask(title: "制作发布会主视觉", descriptionText: "推进发布会主视觉定稿。", now: seedNow())
             try setClassification(
                 chainID: visual,
                 category: ("工程", "#2A6FDB"),
                 labels: []
             )
-            let visualDay1 = try engine.scheduleFromPool(chainID: visual, date: day1, today: day1, now: now)
-            let visualReference = try engine.addSubtask(traceID: visualDay1, title: "收集视觉参考", difficulty: .simple, now: now)
-            _ = try engine.addSubtask(traceID: visualDay1, title: "出 3 版草图", difficulty: .hard, now: now)
-            try engine.completeSubtask(visualReference, today: day1, now: eventTime(day1, hour: 15, minute: 20))
-            let visualDay2 = try engine.continueTrace(traceID: visualDay1, targetDate: day2, today: day1, now: now)
-            if let draftSubtask = engine.subtasks.values.first(where: { $0.traceID == visualDay2 && $0.title == "出 3 版草图" }) {
-                try engine.completeSubtask(draftSubtask.id, today: day2, now: eventTime(day2, hour: 15, minute: 45))
-            }
-            _ = try engine.addSubtask(traceID: visualDay2, title: "定稿并交付", difficulty: .medium, now: now)
-            let visualToday = try engine.continueTrace(traceID: visualDay2, targetDate: day3, today: day2, now: now)
-            if engine.subtasks.values.contains(where: { $0.traceID == visualToday }) == false {
-                _ = try engine.addSubtask(traceID: visualToday, title: "定稿并交付", difficulty: .medium, now: now)
-            }
-
             let onboarding = try engine.createPoolTask(title: "审阅 onboarding 三屏文案", descriptionText: "审阅 onboarding 三屏文案。", now: seedNow())
             try setClassification(
                 chainID: onboarding,
                 category: ("复盘", "#0E9488"),
                 labels: []
             )
-            let onboardingTrace = try engine.scheduleFromPool(chainID: onboarding, date: day3, today: day3, now: now)
-            let headline = try engine.addSubtask(traceID: onboardingTrace, title: "首屏标题与副标题", difficulty: .simple, now: now)
-            _ = try engine.addSubtask(traceID: onboardingTrace, title: "通知权限请求文案", difficulty: .medium, now: now)
-            try engine.completeSubtask(headline, today: day3, now: eventTime(day3, hour: 9, minute: 0))
-
             let running = try engine.createPoolTask(title: "晨跑 5 公里", descriptionText: "完成晨跑。", now: seedNow())
             try setClassification(
                 chainID: running,
                 category: ("生活", "#D1477A"),
                 labels: []
             )
-            let runningTrace = try engine.scheduleFromPool(chainID: running, date: day3, today: day3, now: now)
-            try engine.markCompleted(traceID: runningTrace, today: day3, now: eventTime(day3, hour: 7, minute: 36))
-
             let downloads = try engine.createPoolTask(title: "清理下载文件夹", descriptionText: "清理下载文件夹。", now: seedNow())
             try setClassification(
                 chainID: downloads,
                 category: ("生活", "#D1477A"),
                 labels: []
             )
-            _ = try engine.scheduleFromPool(chainID: downloads, date: day3, today: day3, now: now)
-
             let reading = try engine.createPoolTask(title: "读《卡片笔记写作法》第三章", descriptionText: "任务池样例任务。", now: seedNow())
             try setClassification(
                 chainID: reading,
@@ -4899,41 +6895,319 @@ final class NoonmarkStore: ObservableObject {
                 category: ("复盘", "#0E9488"),
                 labels: []
             )
-            _ = try engine.scheduleFromPool(chainID: standup, date: day4, today: day3, now: now)
             let invoice = try engine.createPoolTask(title: "整理六月发票报销", descriptionText: "未来计划样例任务。", now: seedNow())
             try setClassification(
                 chainID: invoice,
                 category: ("生活", "#D1477A"),
                 labels: []
             )
-            _ = try engine.scheduleFromPool(chainID: invoice, date: day5, today: day3, now: now)
             let dinner = try engine.createPoolTask(title: "预订团队聚餐餐厅", descriptionText: "未来计划样例任务。", now: seedNow())
             try setClassification(
                 chainID: dinner,
                 category: ("生活", "#D1477A"),
                 labels: []
             )
-            _ = try engine.scheduleFromPool(chainID: dinner, date: day4, today: day3, now: now)
 
-            engine.settleDays(upTo: day3, now: now)
+            precondition(
+                nextSeedSetupTime < eventTime(day0, hour: 8, minute: 5),
+                "Seed setup facts must precede the first domain event"
+            )
 
+            // Phase 2: replay domain events in global timestamp order. Calls sharing
+            // one timestamp keep their established relative order for deterministic
+            // priorities, but no explicit business timestamp is globally clamped.
+            let okrDay0 = try engine.scheduleFromPool(
+                chainID: okr,
+                date: day0,
+                today: day0,
+                now: seedNow(at: eventTime(day0, hour: 8, minute: 5))
+            )
+            let repositoryTrace = try engine.scheduleFromPool(
+                chainID: repository,
+                date: day0,
+                today: day0,
+                now: seedNow(at: eventTime(day0, hour: 8, minute: 30))
+            )
+            try engine.markCompleted(
+                traceID: repositoryTrace,
+                today: day0,
+                now: seedNow(at: eventTime(day0, hour: 9, minute: 10))
+            )
+            let rustTrace = try engine.scheduleFromPool(
+                chainID: rust,
+                date: day0,
+                today: day0,
+                now: seedNow(at: eventTime(day0, hour: 10, minute: 0))
+            )
+            try engine.abandonChain(
+                from: rustTrace,
+                now: seedNow(at: eventTime(day0, hour: 10, minute: 1))
+            )
+
+            _ = try engine.scheduleFromPool(
+                chainID: launchScript,
+                date: dayMinus3,
+                today: dayMinus3,
+                now: seedNow(at: eventTime(dayMinus3, hour: 8, minute: 0))
+            )
+            let physicalTrace = try engine.scheduleFromPool(
+                chainID: physical,
+                date: dayMinus3,
+                today: dayMinus3,
+                now: seedNow(at: eventTime(dayMinus3, hour: 9, minute: 0))
+            )
+            try engine.returnToPool(
+                traceID: physicalTrace,
+                today: dayMinus3,
+                now: seedNow(at: eventTime(dayMinus3, hour: 9, minute: 1))
+            )
+            let wireframeTrace = try engine.scheduleFromPool(
+                chainID: wireframe,
+                date: dayMinus3,
+                today: dayMinus3,
+                now: seedNow(at: eventTime(dayMinus3, hour: 9, minute: 5))
+            )
+            try engine.markCompleted(
+                traceID: wireframeTrace,
+                today: dayMinus3,
+                now: seedNow(at: eventTime(dayMinus3, hour: 16, minute: 30))
+            )
+
+            try engine.settleDays(
+                upTo: day1,
+                now: seedNow(at: eventTime(day1, hour: 0, minute: 1))
+            )
+            let okrDay1 = try engine.continueTrace(
+                traceID: okrDay0,
+                targetDate: day1,
+                today: day1,
+                now: seedNow(at: eventTime(day1, hour: 8, minute: 0))
+            )
+            let okrToday = try engine.continueTrace(
+                traceID: okrDay1,
+                targetDate: day3,
+                today: day1,
+                now: seedNow(at: eventTime(day1, hour: 8, minute: 1))
+            )
+            let contractTrace = try engine.scheduleFromPool(
+                chainID: contract,
+                date: day1,
+                today: day1,
+                now: seedNow(at: eventTime(day1, hour: 9, minute: 0))
+            )
+            let weeklyDay1 = try engine.scheduleFromPool(
+                chainID: weeklyReport,
+                date: day1,
+                today: day1,
+                now: seedNow(at: eventTime(day1, hour: 9, minute: 0))
+            )
+            let visualDay1 = try engine.scheduleFromPool(
+                chainID: visual,
+                date: day1,
+                today: day1,
+                now: seedNow(at: eventTime(day1, hour: 9, minute: 0))
+            )
+            let visualReference = try engine.addSubtask(
+                traceID: visualDay1,
+                title: "收集视觉参考",
+                difficulty: .simple,
+                now: seedNow(at: eventTime(day1, hour: 9, minute: 1))
+            )
+            _ = try engine.addSubtask(
+                traceID: visualDay1,
+                title: "出 3 版草图",
+                difficulty: .hard,
+                now: seedNow(at: eventTime(day1, hour: 9, minute: 2))
+            )
+            try engine.markCompleted(
+                traceID: contractTrace,
+                today: day1,
+                now: seedNow(at: eventTime(day1, hour: 11, minute: 20))
+            )
+            try engine.completeSubtask(
+                visualReference,
+                today: day1,
+                now: seedNow(at: eventTime(day1, hour: 15, minute: 20))
+            )
+            let weeklyDay2 = try engine.continueTrace(
+                traceID: weeklyDay1,
+                targetDate: day2,
+                today: day1,
+                now: seedNow(at: eventTime(day1, hour: 18, minute: 0))
+            )
+            let visualDay2 = try engine.continueTrace(
+                traceID: visualDay1,
+                targetDate: day2,
+                today: day1,
+                now: seedNow(at: eventTime(day1, hour: 18, minute: 0))
+            )
+
+            let iconDay2 = try engine.scheduleFromPool(
+                chainID: iconExport,
+                date: day2,
+                today: day2,
+                now: seedNow(at: eventTime(day2, hour: 9, minute: 0))
+            )
+            let pricingTrace = try engine.scheduleFromPool(
+                chainID: pricing,
+                date: day2,
+                today: day2,
+                now: seedNow(at: eventTime(day2, hour: 9, minute: 0))
+            )
+            try engine.setManualProgress(
+                traceID: iconDay2,
+                percent: 45,
+                today: day2,
+                now: seedNow(at: eventTime(day2, hour: 10, minute: 0))
+            )
+            _ = try engine.changeTrace(
+                traceID: pricingTrace,
+                newTitle: "输出竞品定价对比表",
+                today: day2,
+                now: seedNow(at: eventTime(day2, hour: 10, minute: 0))
+            )
+            if let draftSubtask = engine.subtasks.values.first(where: {
+                $0.traceID == visualDay2 && $0.title == "出 3 版草图"
+            }) {
+                try engine.completeSubtask(
+                    draftSubtask.id,
+                    today: day2,
+                    now: seedNow(at: eventTime(day2, hour: 15, minute: 45))
+                )
+            }
+            _ = try engine.addSubtask(
+                traceID: visualDay2,
+                title: "定稿并交付",
+                difficulty: .medium,
+                now: seedNow(at: eventTime(day2, hour: 15, minute: 46))
+            )
+            try engine.markCompleted(
+                traceID: weeklyDay2,
+                today: day2,
+                now: seedNow(at: eventTime(day2, hour: 17, minute: 45))
+            )
+            let iconToday = try engine.continueTrace(
+                traceID: iconDay2,
+                targetDate: day3,
+                today: day2,
+                now: seedNow(at: eventTime(day2, hour: 18, minute: 0))
+            )
+            let visualToday = try engine.continueTrace(
+                traceID: visualDay2,
+                targetDate: day3,
+                today: day2,
+                now: seedNow(at: eventTime(day2, hour: 18, minute: 0))
+            )
+            if engine.subtasks.values.contains(where: { $0.traceID == visualToday }) == false {
+                _ = try engine.addSubtask(
+                    traceID: visualToday,
+                    title: "定稿并交付",
+                    difficulty: .medium,
+                    now: seedNow(at: eventTime(day2, hour: 18, minute: 1))
+                )
+            }
+
+            try engine.settleDays(
+                upTo: day3,
+                now: seedNow(at: eventTime(day3, hour: 0, minute: 1))
+            )
             engine.updateDailyReview(
                 date: day1,
                 summary: "合同邮件处理完毕；OKR 草案低估了工作量，明天优先。",
                 unfinishedReason: "OKR 依赖的数据下午才拿到，被会议切碎。",
-                tomorrowNote: "上午先做 OKR，别先开邮箱。"
+                tomorrowNote: "上午先做 OKR，别先开邮箱。",
+                now: seedNow(at: eventTime(day3, hour: 0, minute: 2))
             )
             engine.updateDailyReview(
                 date: day2,
                 summary: "周报和图标脚本推进顺利；竞品调研范围太大，拆成了对比表任务。",
                 unfinishedReason: "竞品对比表低估了整理时间。",
-                tomorrowNote: "对比表先列框架再填数据。"
+                tomorrowNote: "对比表先列框架再填数据。",
+                now: seedNow(at: eventTime(day3, hour: 0, minute: 3))
+            )
+
+            let runningTrace = try engine.scheduleFromPool(
+                chainID: running,
+                date: day3,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 7, minute: 0))
+            )
+            try engine.markCompleted(
+                traceID: runningTrace,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 7, minute: 36))
+            )
+            let onboardingTrace = try engine.scheduleFromPool(
+                chainID: onboarding,
+                date: day3,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 8, minute: 0))
+            )
+            _ = try engine.scheduleFromPool(
+                chainID: downloads,
+                date: day3,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 8, minute: 0))
+            )
+            let headline = try engine.addSubtask(
+                traceID: onboardingTrace,
+                title: "首屏标题与副标题",
+                difficulty: .simple,
+                now: seedNow(at: eventTime(day3, hour: 8, minute: 1))
+            )
+            _ = try engine.addSubtask(
+                traceID: onboardingTrace,
+                title: "通知权限请求文案",
+                difficulty: .medium,
+                now: seedNow(at: eventTime(day3, hour: 8, minute: 2))
+            )
+            try engine.setManualProgress(
+                traceID: iconToday,
+                percent: 45,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 9, minute: 0))
+            )
+            try engine.completeSubtask(
+                headline,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 9, minute: 0))
+            )
+            _ = try engine.scheduleFromPool(
+                chainID: standup,
+                date: day4,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 10, minute: 0))
+            )
+            _ = try engine.scheduleFromPool(
+                chainID: invoice,
+                date: day5,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 10, minute: 1))
+            )
+            _ = try engine.scheduleFromPool(
+                chainID: dinner,
+                date: day4,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 10, minute: 2))
+            )
+            try engine.setManualProgress(
+                traceID: okrToday,
+                percent: 30,
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 14, minute: 0))
+            )
+            _ = try engine.appendTraceNote(
+                traceID: okrToday,
+                body: "等数据组下午的留存看板再定第 2 个 KR 的口径。",
+                today: day3,
+                now: seedNow(at: eventTime(day3, hour: 14, minute: 20))
             )
             engine.updateDailyReview(
                 date: day3,
                 summary: "",
                 unfinishedReason: "",
-                tomorrowNote: ""
+                tomorrowNote: "",
+                now: seedNow(at: eventTime(day3, hour: 15, minute: 0))
             )
         } catch {
             assertionFailure("Seed data failed: \(error)")
@@ -4963,7 +7237,7 @@ struct NoonmarkRootView: View {
                 VStack {
                     Spacer()
                     Text(toast)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.noonmarkSystem(size: 12, weight: .medium))
                         .foregroundStyle(Theme.background)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
@@ -4971,6 +7245,13 @@ struct NoonmarkRootView: View {
                         .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .padding(.bottom, 30)
+                        .accessibilityIdentifier("app.toast")
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "app.toast",
+                                verificationText: toast
+                            )
+                        }
                 }
             }
 
@@ -4997,6 +7278,7 @@ struct NoonmarkRootView: View {
                 .zIndex(1)
             }
         }
+        .font(.noonmarkSystem(size: 13))
         .animation(.easeOut(duration: 0.16), value: store.showingClassificationManager)
         .sheet(item: Binding(
             get: { store.showingPicker.map(PickerSheetState.init(purpose:)) },
@@ -5092,6 +7374,20 @@ struct AppCopy {
     var openCurrentPending: String { language == .chinese ? "跳转到当前待完成" : "Open current pending" }
     var copyParentAsNewTask: String { language == .chinese ? "复制父任务为新任务" : "Copy parent as new task" }
     var copyParentTask: String { language == .chinese ? "复制父任务" : "Copy parent task" }
+    var noteSectionTitle: String { language == .chinese ? "附言" : "Notes" }
+    var noteComposerPlaceholder: String {
+        language == .chinese ? "追加附言，回车确认" : "Add a note, press Return"
+    }
+
+    var noteActionsAccessibilityLabel: String {
+        language == .chinese ? "附言操作" : "Note actions"
+    }
+
+    var editNoteAction: String { language == .chinese ? "编辑附言" : "Edit note" }
+    var deleteNoteAction: String { language == .chinese ? "删除附言" : "Delete note" }
+    var editNotePlaceholder: String { language == .chinese ? "编辑附言…" : "Edit note…" }
+    var cancel: String { language == .chinese ? "取消" : "Cancel" }
+    var noteDeletedToast: String { language == .chinese ? "已删除附言" : "Note deleted" }
 
     var lockedDayNotice: String {
         language == .chinese
@@ -5277,8 +7573,8 @@ struct AppCopy {
 
     var zhulongSubtitle: String {
         language == .chinese
-            ? "可选 sidecar：复盘分析、任务拆解、排期建议和标签分类建议。"
-            : "Optional sidecar for reviews, decomposition, scheduling, and label suggestions."
+            ? "可选 sidecar：复盘分析、任务拆解、排期建议和分组与标签整理。"
+            : "Optional sidecar for reviews, decomposition, scheduling, and classification."
     }
 
     var analyzeTodayWithZhulong: String {
@@ -5543,7 +7839,7 @@ enum Theme {
 
 struct TrafficLightDots: View {
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 0) {
             trafficLight(
                 color: Color(red: 1, green: 0.451, blue: 0.416),
                 accessibilityLabel: "关闭窗口",
@@ -5560,7 +7856,7 @@ struct TrafficLightDots: View {
                 action: zoomWindow
             )
         }
-        .frame(height: 14)
+        .frame(height: NoonmarkVisualMetrics.trafficLightHitTarget)
     }
 
     private func trafficLight(
@@ -5572,10 +7868,18 @@ struct TrafficLightDots: View {
             Circle()
                 .fill(color)
                 .overlay(Circle().stroke(.black.opacity(0.1), lineWidth: 0.5))
-                .frame(width: 14, height: 14)
+                .frame(
+                    width: NoonmarkVisualMetrics.trafficLightDiameter,
+                    height: NoonmarkVisualMetrics.trafficLightDiameter
+                )
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .frame(
+            width: NoonmarkVisualMetrics.trafficLightHitTarget,
+            height: NoonmarkVisualMetrics.trafficLightHitTarget
+        )
+        .contentShape(Rectangle())
         .accessibilityLabel(accessibilityLabel)
     }
 
@@ -5611,17 +7915,17 @@ struct Sidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             TrafficLightDots()
-                .padding(.horizontal, 18)
-                .padding(.bottom, 24)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 18)
 
-            HStack(spacing: 9) {
+            HStack(spacing: 8) {
                 ClockLogo()
                 Text(store.copy.appName)
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.noonmarkSystem(size: 17, weight: .bold))
                     .tracking(0.2)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 18)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 16)
 
             NavGroupTitle(store.copy.planGroup)
             ForEach(planPages) { page in
@@ -5637,8 +7941,8 @@ struct Sidebar: View {
             Spacer()
             NavItem(page: .settings, label: store.copy.navSettings, count: 0)
         }
-        .frame(width: 240)
-        .padding(.top, 16)
+        .frame(width: NoonmarkVisualMetrics.sidebarWidth)
+        .padding(.top, 10)
         .padding(.bottom, 10)
         .background(Theme.sidebar)
         .overlay(alignment: .trailing) {
@@ -5657,7 +7961,10 @@ struct ClockLogo: View {
                 .offset(y: -3)
             Circle().fill(Theme.accent).frame(width: 4, height: 4)
         }
-        .frame(width: 24, height: 24)
+        .frame(
+            width: NoonmarkVisualMetrics.clockLogoSize,
+            height: NoonmarkVisualMetrics.clockLogoSize
+        )
     }
 }
 
@@ -5670,7 +7977,7 @@ struct NavGroupTitle: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 11.5, weight: .semibold))
+            .font(.noonmarkSystem(size: 11.5, weight: .semibold))
             .foregroundStyle(Theme.text3)
             .tracking(0.4)
             .padding(.horizontal, 20)
@@ -5692,23 +7999,28 @@ struct NavItem: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: page.navigationSystemImage)
-                    .font(.system(size: 15.5, weight: .medium))
-                    .frame(width: 21)
+                    .font(
+                        .noonmarkRenderedSystem(
+                            size: NoonmarkVisualMetrics.navigationIconSize,
+                            weight: .medium
+                        )
+                    )
+                    .frame(width: 19)
                     .foregroundStyle(page.navigationIconColor)
                 Text(label)
-                    .font(.system(size: 14.5, weight: active ? .semibold : .medium))
+                    .font(.noonmarkSystem(size: 14.5, weight: active ? .semibold : .medium))
                     .foregroundStyle(active ? Theme.text1 : Theme.text2)
                 Spacer()
                 if count > 0 {
                     Text("\(count)")
-                        .font(.system(size: 12, weight: active ? .semibold : .regular))
+                        .font(.noonmarkSystem(size: 12, weight: active ? .semibold : .regular))
                         .foregroundStyle(Theme.text2)
                         .padding(.horizontal, 7)
                         .frame(minWidth: 21, minHeight: 18)
                         .background(Capsule().fill(active ? Theme.panel.opacity(0.8) : Theme.chip))
                 }
             }
-            .frame(height: 36)
+            .frame(height: NoonmarkVisualMetrics.navigationRowHeight)
             .padding(.leading, 14)
             .padding(.trailing, 12)
             .hoverSurface(
@@ -5763,7 +8075,7 @@ struct MainSurface: View {
 
             if store.shouldShowDetailRail {
                 DetailRail()
-                    .frame(width: 300)
+                    .frame(width: NoonmarkVisualMetrics.detailRailWidth)
                     .overlay(alignment: .leading) {
                         Rectangle().fill(Theme.line.opacity(0.58)).frame(width: 1)
                     }
@@ -5815,15 +8127,15 @@ struct DayTodoPage: View {
             DayTodoHeader(dayBadge: dayBadge, badgeColor: badgeColor)
 
             DateStrip()
-                .padding(.horizontal, 24)
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
                 .padding(.bottom, 10)
 
             if store.isHistory {
                 Notice(text: store.copy.lockedDayNotice, tone: .locked)
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
             } else if store.isFuture {
                 Notice(text: store.copy.futureDayNotice, tone: .future)
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
             }
 
             TaskSelectionClearingScrollView {
@@ -5844,7 +8156,7 @@ struct DayTodoPage: View {
                         }
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
                 .padding(.top, store.isHistory ? 12 : 14)
                 .padding(.bottom, 20)
             }
@@ -5872,12 +8184,12 @@ struct DayTodoHeader: View {
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             Text(NoonmarkStore.displayFullDate(store.selectedDate))
-                .font(.system(size: 21, weight: .bold))
+                .font(.noonmarkSystem(size: 21, weight: .bold))
                 .foregroundStyle(Theme.text1)
                 .monospacedDigit()
                 .lineLimit(1)
             Text(NoonmarkStore.weekday(store.selectedDate))
-                .font(.system(size: 12))
+                .font(.noonmarkSystem(size: 12))
                 .foregroundStyle(Theme.text3)
                 .lineLimit(1)
             DayStateBadge(text: dayBadge, color: badgeColor, filled: store.selectedDate == store.today)
@@ -5889,7 +8201,7 @@ struct DayTodoHeader: View {
                 HeaderButton(store.copy.chooseDate) { store.showingPicker = .gotoDay }
             }
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
         .padding(.top, 16)
     }
 }
@@ -5901,7 +8213,7 @@ struct DayStateBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.noonmarkSystem(size: 11, weight: .semibold))
             .foregroundStyle(filled ? .white : color)
             .padding(.horizontal, 9)
             .padding(.vertical, 3)
@@ -5955,7 +8267,7 @@ struct NewTaskInlineField: View {
                         } label: {
                             HStack(spacing: 7) {
                                 Text("#")
-                                    .font(.system(size: 10, weight: .black, design: .rounded))
+                                    .font(.noonmarkSystem(size: 10, weight: .black, design: .rounded))
                                     .foregroundStyle(label.color)
                                     .frame(width: 18, height: 18)
                                     .background(RoundedRectangle(cornerRadius: 3).fill(label.color.opacity(0.10)))
@@ -5964,7 +8276,7 @@ struct NewTaskInlineField: View {
                                             .stroke(label.color.opacity(0.48), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
                                     }
                                 Text("#\(label.name)")
-                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .lineLimit(1)
                                 Spacer()
@@ -6009,10 +8321,10 @@ struct DateStrip: View {
                     } label: {
                         VStack(spacing: 4) {
                             Text(NoonmarkStore.weekday(date).replacingOccurrences(of: "周", with: ""))
-                                .font(.system(size: 9.5, weight: .medium))
+                                .font(.noonmarkSystem(size: 9.5, weight: .medium))
                                 .foregroundStyle(Theme.text3)
                             Text("\(date.day)")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.noonmarkSystem(size: 12, weight: .semibold))
                                 .foregroundStyle(selected ? .white : today ? Theme.accent : Theme.text1)
                                 .frame(width: 24, height: 24)
                                 .overlay(Circle().stroke(today && !selected ? Theme.accent : .clear, lineWidth: 1.5))
@@ -6081,15 +8393,18 @@ struct TaskRow: View {
 
                 VStack(alignment: .leading, spacing: 0) {
                     MarkdownInlineText(definition?.title ?? "未命名任务")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.noonmarkSystem(size: 13, weight: .medium))
                         .foregroundStyle(trace.status.uiStyle.titleColor)
                         .strikethrough(trace.status.uiStyle.strikethrough)
 
                     if let classification = store.displayableClassification(for: trace) {
                         TaskClassificationBadges(
                             display: classification,
-                            chainID: trace.chainID,
-                            taskTitle: definition?.title ?? "未命名任务"
+                            taskTitle: definition?.title ?? "未命名任务",
+                            accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                                surface: "day-row",
+                                instanceID: trace.id.description
+                            )
                         )
                         .padding(.top, 4)
                     }
@@ -6106,15 +8421,17 @@ struct TaskRow: View {
                             }
                             .frame(width: 150, height: 4)
                             Text("\(progress.percent)%")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(.noonmarkSystem(size: 10, weight: .semibold))
                                 .foregroundStyle(progress.percent == 100 ? Theme.ok : Theme.accent)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                         .padding(.top, 5)
                     }
 
                     if metaText.isEmpty == false {
                         Text(metaText)
-                            .font(.system(size: 11))
+                            .font(.noonmarkSystem(size: 11))
                             .foregroundStyle(Theme.text3)
                             .padding(.top, 2)
                     }
@@ -6129,6 +8446,7 @@ struct TaskRow: View {
                         .padding(.top, 3)
                     }
                 }
+                .layoutPriority(1)
 
                 Spacer()
 
@@ -6157,7 +8475,7 @@ struct TaskRow: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
 
             if expanded {
                 VStack(spacing: 6) {
@@ -6225,10 +8543,10 @@ struct SubtaskDisclosureLabel: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .bold))
+                .font(.noonmarkSystem(size: 9, weight: .bold))
                 .rotationEffect(.degrees(expanded ? 90 : 0))
             Text("\(count) 子任务")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .monospacedDigit()
         }
         .foregroundStyle(Theme.accent)
@@ -6252,9 +8570,9 @@ struct ChangedTargetButton: View {
                 MarkdownInlineText(title)
                     .lineLimit(1)
                 Image(systemName: "arrow.right")
-                    .font(.system(size: compact ? 8.5 : 9.5, weight: .bold))
+                    .font(.noonmarkSystem(size: compact ? 8.5 : 9.5, weight: .bold))
             }
-            .font(.system(size: compact ? 10.5 : 11, weight: .semibold))
+            .font(.noonmarkSystem(size: compact ? 10.5 : 11, weight: .semibold))
             .foregroundStyle(Theme.accent)
             .padding(.horizontal, compact ? 0 : 7)
             .frame(height: compact ? nil : 22)
@@ -6285,13 +8603,13 @@ struct SubtaskRow: View {
                 RoundedRectangle(cornerRadius: 5)
                     .fill(subtask.status == .completed ? Theme.ok : Theme.panel)
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(subtask.status == .completed ? Theme.ok : Theme.line2, lineWidth: 1.5))
-                    .overlay(Text(subtask.status == .completed ? "✓" : "").font(.system(size: 9)).foregroundStyle(.white))
+                    .overlay(Text(subtask.status == .completed ? "✓" : "").font(.noonmarkSystem(size: 9)).foregroundStyle(.white))
                     .frame(width: 15, height: 15)
             }
             .buttonStyle(.plain)
 
             MarkdownInlineText(subtask.title)
-                .font(.system(size: 12))
+                .font(.noonmarkSystem(size: 12))
                 .foregroundStyle(subtask.status == .completed ? Theme.text3 : Theme.text1)
                 .strikethrough(subtask.status == .completed)
 
@@ -6299,7 +8617,7 @@ struct SubtaskRow: View {
 
             if subtask.completedAt != nil && canMutate == false {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 9))
+                    .font(.noonmarkSystem(size: 9))
                     .foregroundStyle(Theme.text3)
             }
 
@@ -6317,12 +8635,12 @@ struct SubtaskRow: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.noonmarkSystem(size: 9, weight: .semibold))
                     Text(subtask.difficulty.label)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.noonmarkSystem(size: 8, weight: .bold))
                 }
-                .font(.system(size: 9, weight: .bold))
+                .font(.noonmarkSystem(size: 9, weight: .bold))
                 .foregroundStyle(subtask.difficulty == .hard ? Theme.warn : Theme.text2)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
@@ -6417,10 +8735,10 @@ struct TaskPoolPage: View {
                                 VStack(alignment: .leading, spacing: 0) {
                                     HStack(spacing: 8) {
                                         Text(group.title)
-                                            .font(.system(size: 12, weight: .semibold))
+                                            .font(.noonmarkSystem(size: 12, weight: .semibold))
                                             .foregroundStyle(Theme.text2)
                                         Text("\(group.tasks.count)")
-                                            .font(.system(size: 10.5, weight: .semibold))
+                                            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                                             .foregroundStyle(Theme.text3)
                                             .padding(.horizontal, 6)
                                             .frame(height: 18)
@@ -6445,7 +8763,7 @@ struct TaskPoolPage: View {
                         }
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
                 .padding(.top, 12)
                 .padding(.bottom, 20)
             }
@@ -6479,38 +8797,88 @@ struct PoolTaskRow: View {
 
     var body: some View {
         let selected = store.selectedPoolChainID == task.chain.id
-        HStack(spacing: 10) {
+        let e2eNamespace = PoolTaskRowE2ENamespace(
+            taskIdentifier: task.chain.id.description
+        )
+        HStack(alignment: .top, spacing: 10) {
             PoolTaskPlaceholderGlyph()
-            MarkdownInlineText(task.definition.title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.text1)
-                .lineLimit(1)
-            if let classification = store.currentClassification(for: task.chain.id) {
-                TaskClassificationBadges(
-                    display: .current(classification),
-                    chainID: task.chain.id,
-                    taskTitle: task.definition.title,
-                    automaticallyShowsAllLabels: store.e2eClassificationOverflowChainID == task.chain.id
-                )
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    MarkdownInlineText(task.definition.title)
+                        .font(.noonmarkSystem(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.text1)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: e2eNamespace.titleIdentifier,
+                                verificationText: task.definition.title
+                            )
+                        }
+                    if let classification = store.currentClassification(for: task.chain.id) {
+                        TaskClassificationBadges(
+                            display: .current(classification),
+                            taskTitle: task.definition.title,
+                            accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                                surface: "pool-row",
+                                instanceID: task.chain.id.description
+                            ),
+                            showsCategory: false
+                        )
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    SmallActionButton(store.copy.scheduleToday, tone: .accent) {
+                        store.schedulePoolTask(task.chain.id, date: store.today)
+                    }
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: e2eNamespace.scheduleTodayIdentifier,
+                            verificationText: store.copy.scheduleToday
+                        )
+                    }
+                    SmallActionButton(store.copy.scheduleTomorrow) {
+                        store.schedulePoolTask(
+                            task.chain.id,
+                            date: NoonmarkStore.offset(store.today, by: 1)
+                        )
+                    }
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: e2eNamespace.scheduleTomorrowIdentifier,
+                            verificationText: store.copy.scheduleTomorrow
+                        )
+                    }
+                    SmallActionButton(store.copy.schedulePickDate) {
+                        store.showingPicker = .schedulePool(task.chain.id)
+                    }
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: e2eNamespace.scheduleDateIdentifier,
+                            verificationText: store.copy.schedulePickDate
+                        )
+                    }
+                    Button(role: .destructive) {
+                        store.deletePoolTask(task.chain.id)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.noonmarkSystem(size: 11, weight: .semibold))
+                            .frame(width: 22, height: 22)
+                            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.warn)
+                    .help("删除任务")
+                }
             }
-            Spacer()
-            SmallActionButton(store.copy.scheduleToday, tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
-            SmallActionButton(store.copy.scheduleTomorrow) { store.schedulePoolTask(task.chain.id, date: NoonmarkStore.offset(store.today, by: 1)) }
-            SmallActionButton(store.copy.schedulePickDate) { store.showingPicker = .schedulePool(task.chain.id) }
-            Button(role: .destructive) {
-                store.deletePoolTask(task.chain.id)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 22, height: 22)
-                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.warn)
-            .help("删除任务")
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
         .listRowSurface(selected: selected, tint: Theme.navPool, separatorLeadingInset: 40)
         .onTapGesture { store.selectPool(task.chain.id) }
         .accessibilityElement(children: .contain)
@@ -6573,7 +8941,7 @@ struct FuturePlansPage: View {
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 10) {
                                 Text("\(NoonmarkStore.displayDate(date)) · \(NoonmarkStore.weekday(date))")
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(.noonmarkSystem(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .monospacedDigit()
                                 Button(store.copy.openDay) {
@@ -6581,7 +8949,7 @@ struct FuturePlansPage: View {
                                     store.page = .day
                                 }
                                 .buttonStyle(.plain)
-                                .font(.system(size: 11.5))
+                                .font(.noonmarkSystem(size: 11.5))
                                 .foregroundStyle(Theme.accent)
                             }
                             .padding(.bottom, 4)
@@ -6595,7 +8963,7 @@ struct FuturePlansPage: View {
                             .padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
                 .padding(.top, 12)
                 .padding(.bottom, 20)
             }
@@ -6613,14 +8981,17 @@ struct FuturePlanRow: View {
             PlanningGlyph(systemName: "calendar.badge.clock", color: Theme.navFuture)
             VStack(alignment: .leading, spacing: 0) {
                 MarkdownInlineText(item.definition.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.noonmarkSystem(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                     .lineLimit(1)
                 if let classification = store.displayableClassification(for: item.trace) {
                     TaskClassificationBadges(
                         display: classification,
-                        chainID: item.trace.chainID,
-                        taskTitle: item.definition.title
+                        taskTitle: item.definition.title,
+                        accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                            surface: "future-row",
+                            instanceID: item.trace.id.description
+                        )
                     )
                     .padding(.top, 4)
                 }
@@ -6635,7 +9006,7 @@ struct FuturePlanRow: View {
             )
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
         .listRowSurface(selected: selected, tint: Theme.navFuture, separatorLeadingInset: 40)
         .onTapGesture { store.selectTrace(item.trace.id) }
         .contextMenu {
@@ -6667,7 +9038,7 @@ struct PlanningGlyph: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.noonmarkSystem(size: 11, weight: .semibold))
             .foregroundStyle(color)
             .frame(width: 20, height: 20)
             .background(Circle().fill(color.opacity(0.12)))
@@ -6680,7 +9051,7 @@ struct PlanMetaPill: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold))
+            .font(.noonmarkSystem(size: 10, weight: .semibold))
             .foregroundStyle(color)
             .padding(.horizontal, 7)
             .padding(.vertical, 1)
@@ -6705,7 +9076,7 @@ struct UnfinishedPoolPage: View {
                             .padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
                 .padding(.top, 12)
                 .padding(.bottom, 20)
             }
@@ -6747,15 +9118,18 @@ struct UnfinishedRow: View {
                 StatusGlyph(status: item.isAbandoned ? .abandoned : .unfinished)
                 VStack(alignment: .leading, spacing: 0) {
                     MarkdownInlineText(item.definition.title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.noonmarkSystem(size: 13, weight: .semibold))
                         .foregroundStyle(item.isAbandoned ? Theme.text2 : Theme.text1)
                         .lineLimit(1)
                     if let classificationTrace = item.activeTrace ?? item.latestUnfinishedTrace {
                         if let classification = store.displayableClassification(for: classificationTrace) {
                             TaskClassificationBadges(
                                 display: classification,
-                                chainID: item.chain.id,
-                                taskTitle: item.definition.title
+                                taskTitle: item.definition.title,
+                                accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                                    surface: "unfinished-row",
+                                    instanceID: classificationTrace.id.description
+                                )
                             )
                             .padding(.top, 4)
                         }
@@ -6775,18 +9149,18 @@ struct UnfinishedRow: View {
             }
             HStack(spacing: 8) {
                 Text(item.isAbandoned ? "已废弃" : store.copy.unfinishedMissedCount(item.unfinishedTraces.count))
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(item.isAbandoned ? Theme.text2 : Theme.warn)
                     .monospacedDigit()
                 UnfinishedMetaSeparator()
                 Text(store.copy.unfinishedContinuationCount(item.continuationCount))
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
                     .monospacedDigit()
                 if let latestUnfinished = item.latestUnfinishedTrace {
                     UnfinishedMetaSeparator()
                     Text(store.copy.lastMissedDate(NoonmarkStore.displayDate(latestUnfinished.date)))
-                        .font(.system(size: 11))
+                        .font(.noonmarkSystem(size: 11))
                         .foregroundStyle(Theme.text3)
                         .monospacedDigit()
                 }
@@ -6797,7 +9171,7 @@ struct UnfinishedRow: View {
                         store.selectTrace(active.id)
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.noonmarkSystem(size: 10.5, weight: .medium))
                     .foregroundStyle(Theme.accent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 1)
@@ -6812,7 +9186,7 @@ struct UnfinishedRow: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11))
+                .font(.noonmarkSystem(size: 11))
                 .foregroundStyle(Theme.text2)
             }
             .padding(.leading, 28)
@@ -6835,7 +9209,7 @@ struct UnfinishedRow: View {
 struct UnfinishedMetaSeparator: View {
     var body: some View {
         Text("·")
-            .font(.system(size: 11))
+            .font(.noonmarkSystem(size: 11))
             .foregroundStyle(Theme.text3)
     }
 }
@@ -6847,14 +9221,14 @@ struct UnfinishedInlineTrace: View {
         HStack(spacing: 8) {
             StatusGlyph(status: trace.status)
             Text(NoonmarkStore.displayDate(trace.date))
-                .font(.system(size: 11, weight: .medium))
+                .font(.noonmarkSystem(size: 11, weight: .medium))
                 .foregroundStyle(Theme.text2)
                 .frame(width: 74, alignment: .leading)
             Text(statusLabel)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(statusColor)
             Text("第 \(trace.continuationSeq) 次延续")
-                .font(.system(size: 11))
+                .font(.noonmarkSystem(size: 11))
                 .foregroundStyle(Theme.text3)
             Spacer()
         }
@@ -6897,7 +9271,7 @@ struct CompletedPoolPage: View {
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 8) {
                                 Text(groupTitle(for: date))
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(.noonmarkSystem(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .monospacedDigit()
                             }
@@ -6917,7 +9291,7 @@ struct CompletedPoolPage: View {
                             .padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
                 .padding(.top, 12)
                 .padding(.bottom, 20)
             }
@@ -6945,13 +9319,16 @@ struct CompletedRow: View {
                 StatusGlyph(status: .completed)
                 VStack(alignment: .leading, spacing: 0) {
                     MarkdownInlineText(item.definition.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.noonmarkSystem(size: 13, weight: .medium))
                         .lineLimit(1)
                     if let classification = store.displayableClassification(for: item.trace) {
                         TaskClassificationBadges(
                             display: classification,
-                            chainID: item.trace.chainID,
-                            taskTitle: item.definition.title
+                            taskTitle: item.definition.title,
+                            accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                                surface: "completed-row",
+                                instanceID: item.trace.id.description
+                            )
                         )
                         .padding(.top, 4)
                     }
@@ -6973,7 +9350,7 @@ struct CompletedRow: View {
         }
         .frame(minHeight: 52, alignment: .center)
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
         .listRowSurface(selected: isSelected, tint: Theme.accent, separatorLeadingInset: 40)
         .onTapGesture { store.selectCompleted(item.trace.id) }
     }
@@ -6990,17 +9367,20 @@ struct CompletedSubtaskRow: View {
                 StatusGlyph(status: .completed)
                 VStack(alignment: .leading, spacing: 1) {
                     MarkdownInlineText(record.subtask.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.noonmarkSystem(size: 13, weight: .medium))
                         .lineLimit(1)
                     Text("属于「\(record.parentDefinition.title)」")
-                        .font(.system(size: 10.5))
+                        .font(.noonmarkSystem(size: 10.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(1)
                     if let classification = store.displayableClassification(for: record.parentTrace) {
                         TaskClassificationBadges(
                             display: classification,
-                            chainID: record.parentTrace.chainID,
-                            taskTitle: record.parentDefinition.title
+                            taskTitle: record.parentDefinition.title,
+                            accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                                surface: "completed-subtask-row",
+                                instanceID: record.subtask.id.description
+                            )
                         )
                         .padding(.top, 4)
                     }
@@ -7022,7 +9402,7 @@ struct CompletedSubtaskRow: View {
         }
         .frame(minHeight: 66, alignment: .center)
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
         .listRowSurface(selected: isSelected, tint: Theme.accent, separatorLeadingInset: 40)
         .onTapGesture { store.selectCompletedSubtask(record.subtask.id) }
     }
@@ -7034,7 +9414,7 @@ struct CompletionKindPill: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold))
+            .font(.noonmarkSystem(size: 10, weight: .semibold))
             .foregroundStyle(color)
             .padding(.horizontal, 7)
             .padding(.vertical, 1)
@@ -7048,7 +9428,7 @@ struct CompletionTimeText: View {
     var body: some View {
         if let time {
             Text(time)
-                .font(.system(size: 11))
+                .font(.noonmarkSystem(size: 11))
                 .foregroundStyle(Theme.text3)
                 .monospacedDigit()
         }
@@ -7092,12 +9472,12 @@ struct CompletedTrajectoryNodes: View {
                 }
                 HStack(spacing: 4) {
                     Text(node.glyph)
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.noonmarkSystem(size: 9, weight: .bold))
                         .foregroundStyle(node.foreground)
                         .frame(width: 16, height: 16)
                         .background(Circle().fill(node.background))
                     Text(NoonmarkStore.displayDate(node.date))
-                        .font(.system(size: 10.5))
+                        .font(.noonmarkSystem(size: 10.5))
                         .foregroundStyle(Theme.text3)
                         .monospacedDigit()
                 }
@@ -7127,7 +9507,7 @@ struct CalendarPage: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     Text(verbatim: "\(store.selectedCalendarDate.year)年 \(store.selectedCalendarDate.month) 月")
-                        .font(.system(size: 21, weight: .bold))
+                        .font(.noonmarkSystem(size: 21, weight: .bold))
                         .foregroundStyle(Theme.text1)
                         .monospacedDigit()
                     Spacer()
@@ -7141,14 +9521,14 @@ struct CalendarPage: View {
                 }
 
                 Text(store.copy.calendarSubtitle)
-                    .font(.system(size: 12))
+                    .font(.noonmarkSystem(size: 12))
                     .foregroundStyle(Theme.text3)
                     .padding(.top, 4)
 
                 HStack {
                     ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) {
                         Text($0)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.noonmarkSystem(size: 11, weight: .semibold))
                             .foregroundStyle(Theme.text3)
                             .frame(maxWidth: .infinity)
                             .padding(.bottom, 6)
@@ -7181,7 +9561,7 @@ struct CalendarPage: View {
             .padding(.horizontal, 18)
             .padding(.bottom, 18)
             CalendarDetailPanel()
-                .frame(width: 264)
+                .frame(width: NoonmarkVisualMetrics.calendarRailWidth)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(Theme.line.opacity(0.58)).frame(width: 1)
                 }
@@ -7225,7 +9605,7 @@ struct CalendarCell: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 4) {
                 Text(verbatim: "\(date.day)")
-                    .font(.system(size: 12.5, weight: isToday || selected ? .bold : .medium))
+                    .font(.noonmarkSystem(size: 12.5, weight: isToday || selected ? .bold : .medium))
                     .foregroundStyle(selected ? Theme.accent : traces.isEmpty ? Theme.text3 : Theme.text1)
                     .monospacedDigit()
                     .lineLimit(1)
@@ -7250,7 +9630,7 @@ struct CalendarCell: View {
                             .frame(width: 4, height: 4)
                             .fixedSize()
                         MarkdownInlineText(store.definition(for: trace)?.title ?? "")
-                            .font(.system(size: 9.5))
+                            .font(.noonmarkSystem(size: 9.5))
                             .foregroundStyle(titleColor(for: trace.status))
                             .strikethrough(trace.status == .completed || trace.status == .abandoned)
                             .lineLimit(1)
@@ -7259,7 +9639,7 @@ struct CalendarCell: View {
                 }
                 if traces.count > 6 {
                     Text("+\(traces.count - 6)")
-                        .font(.system(size: 9))
+                        .font(.noonmarkSystem(size: 9))
                         .foregroundStyle(Theme.text3)
                         .padding(.leading, 7)
                 }
@@ -7380,12 +9760,12 @@ struct CalendarDayInsightPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("当天分析")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.6)
                 Spacer()
                 Text("\(insight.completionRate)% 完成")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                     .foregroundStyle(insight.completionRate == 100 && insight.stats.total > 0 ? Theme.ok : Theme.accent)
                     .monospacedDigit()
             }
@@ -7408,11 +9788,11 @@ struct CalendarInsightRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 7) {
             Text(label)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 .foregroundStyle(Theme.text3)
                 .frame(width: 28, alignment: .leading)
             Text(text)
-                .font(.system(size: 11.5))
+                .font(.noonmarkSystem(size: 11.5))
                 .foregroundStyle(Theme.text2)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -7445,23 +9825,23 @@ struct CalendarDetailPanel: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(verbatim: "\(store.selectedCalendarDate.year)年\(NoonmarkStore.displayDate(store.selectedCalendarDate))")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.noonmarkSystem(size: 15, weight: .bold))
                         .foregroundStyle(Theme.text1)
                         .monospacedDigit()
                     Text(NoonmarkStore.weekday(store.selectedCalendarDate))
-                        .font(.system(size: 11))
+                        .font(.noonmarkSystem(size: 11))
                         .foregroundStyle(Theme.text3)
                 }
 
                 HStack(spacing: 8) {
                     Text(dayKind.text)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.noonmarkSystem(size: 11, weight: .semibold))
                         .foregroundStyle(dayKind.foreground)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(dayKind.background))
                     Text("\(traces.count) 项任务")
-                        .font(.system(size: 11))
+                        .font(.noonmarkSystem(size: 11))
                         .foregroundStyle(Theme.text3)
                         .monospacedDigit()
                 }
@@ -7472,7 +9852,7 @@ struct CalendarDetailPanel: View {
                     store.page = .day
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11.5))
+                .font(.noonmarkSystem(size: 11.5))
                 .foregroundStyle(Theme.accent)
                 .padding(.top, 9)
             }
@@ -7514,13 +9894,13 @@ struct CalendarDetailRow: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 MarkdownInlineText(store.definition(for: trace)?.title ?? "")
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.noonmarkSystem(size: 12.5, weight: .medium))
                     .foregroundStyle(titleColor)
                     .strikethrough(trace.status == .completed || trace.status == .abandoned)
                     .lineLimit(1)
                 if metaText.isEmpty == false {
                     Text(metaText)
-                        .font(.system(size: 10.5))
+                        .font(.noonmarkSystem(size: 10.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(1)
                 }
@@ -7570,8 +9950,8 @@ struct SettingsPage: View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: store.copy.navSettings, subtitle: store.copy.settingsSubtitle)
             ScrollView {
-                HStack(alignment: .top, spacing: 28) {
-                    VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 14) {
                         SettingsPaneToolbar(selectedPane: $selectedPane)
                         SettingsPaneContent(pane: selectedPane)
                             .frame(maxWidth: 740, alignment: .topLeading)
@@ -7579,12 +9959,12 @@ struct SettingsPage: View {
                     .frame(maxWidth: 780, alignment: .topLeading)
                     if store.engine.preferences.settingsPoemDisplayPolicy.enabled {
                         SettingsPoemAside(text: store.engine.preferences.settingsPoemDisplayPolicy.text)
-                            .frame(width: 310)
-                            .padding(.top, 44)
+                            .frame(width: 300)
+                            .padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 20)
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+                .padding(.vertical, 18)
             }
         }
     }
@@ -7629,21 +10009,21 @@ struct SettingsPaneToolbar: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 ForEach(SettingsPane.allCases) { pane in
                     Button {
                         selectedPane = pane
                     } label: {
-                        HStack(spacing: 7) {
+                        HStack(spacing: 5) {
                             Image(systemName: pane.systemImage)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.noonmarkSystem(size: 11, weight: .semibold))
                             Text(pane.title(copy: store.copy))
-                                .font(.system(size: 12, weight: selectedPane == pane ? .semibold : .medium))
+                                .font(.noonmarkSystem(size: 11.5, weight: selectedPane == pane ? .semibold : .medium))
                                 .lineLimit(1)
                         }
                         .foregroundStyle(selectedPane == pane ? Theme.accent : Theme.text2)
-                        .padding(.horizontal, 11)
-                        .frame(height: 30)
+                        .padding(.horizontal, 7)
+                        .frame(height: 28)
                         .background(
                             RoundedRectangle(cornerRadius: 7)
                                 .fill(selectedPane == pane ? Theme.accentSoft.opacity(0.72) : Theme.controlFill)
@@ -7729,11 +10109,11 @@ struct SettingsPreferenceCard: View {
                 SettingSection(title: store.copy.settingsPoemTitle) {
                     Toggle(store.copy.settingsPoemDisplay, isOn: poemEnabledBinding)
                         .toggleStyle(.checkbox)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(.noonmarkSystem(size: 12.5, weight: .medium))
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
                             Text(store.copy.settingsPoemEditorTitle)
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.noonmarkSystem(size: 11, weight: .semibold))
                                 .foregroundStyle(Theme.text3)
                             Spacer()
                             SmallActionButton(store.copy.resetSettingsPoem) {
@@ -7761,10 +10141,10 @@ struct SettingsPoemAside: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("苦昼短")
-                .font(.custom("Songti SC", size: 18).weight(.semibold))
+                .font(.noonmarkCustom("Songti SC", size: 18).weight(.semibold))
                 .foregroundStyle(Theme.text1.opacity(0.72))
             MarkdownText(text)
-                .font(.custom("Songti SC", size: 15))
+                .font(.noonmarkCustom("Songti SC", size: 15))
                 .lineSpacing(9)
                 .foregroundStyle(Theme.text2.opacity(0.72))
                 .fixedSize(horizontal: false, vertical: true)
@@ -7814,7 +10194,7 @@ struct SettingsSyncCard: View {
                         rightAction: { store.setDataMode(.onlineFirst) }
                     )
                     Text(store.copy.dataModeBoundary)
-                        .font(.system(size: 11.5))
+                        .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -7880,7 +10260,7 @@ struct LocalFirstCloudSyncCard: View {
                             }
                             .disabled(store.isLocalFirstSyncing)
                             Text(policy.endpoint == .iCloud ? store.copy.iCloudSyncReady : store.copy.localFolderSyncReady)
-                                .font(.system(size: 11.5))
+                                .font(.noonmarkSystem(size: 11.5))
                                 .foregroundStyle(Theme.text3)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -7911,7 +10291,7 @@ struct LocalFirstCloudSyncCard: View {
                         }
                         if let message = store.localFirstSyncMessage {
                             Text(message)
-                                .font(.system(size: 11.5, weight: .medium))
+                                .font(.noonmarkSystem(size: 11.5, weight: .medium))
                                 .foregroundStyle(Theme.accent)
                         }
                     }
@@ -7922,7 +10302,7 @@ struct LocalFirstCloudSyncCard: View {
                     Notice(text: store.copy.remoteEndpointPlanned, tone: .locked)
                 }
                 Text(store.copy.localFirstSyncBoundary)
-                    .font(.system(size: 11.5))
+                    .font(.noonmarkSystem(size: 11.5))
                     .foregroundStyle(Theme.text3)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -7952,7 +10332,7 @@ struct ScheduledBackupCard: View {
                     )
                 }
                 Text(store.copy.backupBoundary)
-                    .font(.system(size: 11.5))
+                    .font(.noonmarkSystem(size: 11.5))
                     .foregroundStyle(Theme.text3)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -7969,10 +10349,10 @@ struct SyncOptionsCard: View {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(store.copy.syncTitle(for: option.kind))
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.noonmarkSystem(size: 13, weight: .medium))
                             .foregroundStyle(Theme.text1)
                         Text(store.copy.syncDescription(for: option.kind))
-                            .font(.system(size: 11.5))
+                            .font(.noonmarkSystem(size: 11.5))
                             .foregroundStyle(Theme.text3)
                     }
                     Spacer()
@@ -8015,11 +10395,11 @@ struct SettingsProviderOverviewCard: View {
             title: store.copy.providerTitle,
             subtitle: store.copy.providerSubtitle
         ) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     Toggle("启用烛龙", isOn: $store.zhulongProviderDraft.enabled)
                         .toggleStyle(.checkbox)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(.noonmarkSystem(size: 12.5, weight: .medium))
                     StatusPill(text: status.text, color: status.color)
                     Spacer()
                 }
@@ -8043,7 +10423,7 @@ struct SettingsProviderOverviewCard: View {
                     Image(systemName: store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
                         .foregroundStyle(store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
                     Text(store.zhulongProviderDraft.statusMessage)
-                        .font(.system(size: 11.5))
+                        .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(2)
                     Spacer()
@@ -8099,16 +10479,16 @@ struct SettingsCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.noonmarkSystem(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.navSettings)
                     .frame(width: 22, height: 22)
                     .background(RoundedRectangle(cornerRadius: 7).fill(Theme.chip))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.noonmarkSystem(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.text1)
                     Text(subtitle)
-                        .font(.system(size: 11.5))
+                        .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(2)
                 }
@@ -8133,11 +10513,11 @@ struct SettingsMetricPill: View {
                 .fill(color)
                 .frame(width: 6, height: 6)
             Text(title)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(.noonmarkSystem(size: 11.5, weight: .medium))
                 .foregroundStyle(Theme.text2)
             Spacer()
             Text(value)
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                 .foregroundStyle(color)
         }
         .padding(.horizontal, 10)
@@ -8155,11 +10535,11 @@ struct SettingsInfoRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Text(label)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
                 .frame(width: 62, alignment: .leading)
             Text(value)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(.noonmarkSystem(size: 11.5, weight: .medium))
                 .foregroundStyle(Theme.text2)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -8185,7 +10565,7 @@ struct SettingsBoundaryRow: View {
                 .frame(width: 6, height: 6)
                 .padding(.top, 5)
             Text(text)
-                .font(.system(size: 12))
+                .font(.noonmarkSystem(size: 12))
                 .foregroundStyle(Theme.text2)
                 .lineSpacing(3)
             Spacer(minLength: 0)
@@ -8209,7 +10589,7 @@ struct ZhulongProviderKindPicker: View {
                     selection = kind
                 } label: {
                     Text(label(for: kind))
-                        .font(.system(size: 11.5, weight: selection == kind ? .semibold : .medium))
+                        .font(.noonmarkSystem(size: 11.5, weight: selection == kind ? .semibold : .medium))
                         .foregroundStyle(selection == kind ? Theme.accent : Theme.text2)
                         .frame(maxWidth: .infinity)
                         .frame(height: 28)
@@ -8229,8 +10609,6 @@ struct ZhulongProviderKindPicker: View {
             return "本地模型"
         case .customHTTP:
             return "自定义 HTTP"
-        case .mock:
-            return "Mock"
         }
     }
 }
@@ -8243,11 +10621,11 @@ struct ZhulongProviderTextField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(label)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
             TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5))
+                .font(.noonmarkSystem(size: 12.5))
                 .padding(.horizontal, 10)
                 .frame(height: 30)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
@@ -8264,11 +10642,11 @@ struct ZhulongProviderSecureField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(label)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
             SecureField(placeholder, text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5))
+                .font(.noonmarkSystem(size: 12.5))
                 .padding(.horizontal, 10)
                 .frame(height: 30)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
@@ -8285,11 +10663,11 @@ struct ZhulongProviderField: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
-                .font(.system(size: 11, weight: .medium))
+                .font(.noonmarkSystem(size: 11, weight: .medium))
                 .foregroundStyle(Theme.text3)
                 .frame(width: 74, alignment: .leading)
             Text(value)
-                .font(.system(size: 12))
+                .font(.noonmarkSystem(size: 12))
                 .foregroundStyle(Theme.text2)
             Spacer()
         }
@@ -8309,11 +10687,11 @@ struct ZhulongScopeChip: View {
     var body: some View {
         HStack {
             Text(title)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(.noonmarkSystem(size: 11.5, weight: .medium))
                 .foregroundStyle(Theme.text2)
             Spacer()
             Text(value)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.accent)
         }
         .padding(.horizontal, 10)
@@ -8350,7 +10728,7 @@ struct ZhulongContextModel {
         case .pool:
             let tasks = store.engine.taskPool()
             let contextCount = tasks.filter {
-                ($0.definition.descriptionText ?? "").isEmpty == false || $0.definition.activeNoteEntries.isEmpty == false
+                ($0.definition.descriptionText ?? "").isEmpty == false || $0.chain.activeNoteEntries.isEmpty == false
             }.count
             let unclassifiedCount = tasks.filter { store.isUnclassified($0.chain.id) }.count
             return ZhulongContextModel(
@@ -8359,7 +10737,7 @@ struct ZhulongContextModel {
                 stats: [
                     Stat(title: "未排期", value: "\(tasks.count) 项"),
                     Stat(title: "有说明", value: "\(contextCount) 项"),
-                    Stat(title: "未分类", value: "\(unclassifiedCount) 项")
+                    Stat(title: "未分组", value: "\(unclassifiedCount) 项")
                 ],
                 intent: "给任务池重新排期",
                 recentSession: store.recentZhulongSession(matching: [.taskPool, .unfinishedPool])
@@ -8438,7 +10816,7 @@ struct ZhulongContextRail: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Text("烛龙")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
                 Spacer()
@@ -8447,10 +10825,10 @@ struct ZhulongContextRail: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(model.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.noonmarkSystem(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                 Text(model.subtitle)
-                    .font(.system(size: 12))
+                    .font(.noonmarkSystem(size: 12))
                     .foregroundStyle(Theme.text2)
                     .lineSpacing(3)
             }
@@ -8464,21 +10842,21 @@ struct ZhulongContextRail: View {
             Button(action: openZhulongDestination) {
                 HStack(spacing: 10) {
                     Image(systemName: "sparkles")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.noonmarkSystem(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.accent)
                         .frame(width: 18)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(entryTitle)
-                            .font(.system(size: 12.5, weight: .semibold))
+                            .font(.noonmarkSystem(size: 12.5, weight: .semibold))
                             .foregroundStyle(Theme.text1)
                         Text(entrySubtitle)
-                            .font(.system(size: 11))
+                            .font(.noonmarkSystem(size: 11))
                             .foregroundStyle(Theme.text3)
                             .lineLimit(3)
                     }
                     Spacer()
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.noonmarkSystem(size: 10, weight: .semibold))
                         .foregroundStyle(Theme.text3)
                 }
                 .padding(10)
@@ -8650,12 +11028,12 @@ struct PoolSummaryModel {
         let orderedTasks = store.engine.taskPool()
             .sorted { $0.definition.createdAt < $1.definition.createdAt }
         let contextCount = orderedTasks.filter {
-            ($0.definition.descriptionText ?? "").isEmpty == false || $0.definition.activeNoteEntries.isEmpty == false
+            ($0.definition.descriptionText ?? "").isEmpty == false || $0.chain.activeNoteEntries.isEmpty == false
         }.count
         let plannedCount = orderedTasks.filter { $0.definition.plannedSubtasks.isEmpty == false }.count
         let needsDetailCount = orderedTasks.filter {
             ($0.definition.descriptionText ?? "").isEmpty &&
-                $0.definition.activeNoteEntries.isEmpty &&
+                $0.chain.activeNoteEntries.isEmpty &&
                 $0.definition.plannedSubtasks.isEmpty
         }.count
         let unclassifiedCount = orderedTasks.filter { store.isUnclassified($0.chain.id) }.count
@@ -8739,29 +11117,29 @@ struct PoolSummaryOverviewCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("任务池")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
                 .tracking(0.8)
 
             HStack(alignment: .lastTextBaseline, spacing: 8) {
                 Text("\(model.totalCount)")
-                    .font(.system(size: 32, weight: .semibold))
+                    .font(.noonmarkSystem(size: 32, weight: .semibold))
                     .foregroundStyle(Theme.navPool)
                     .monospacedDigit()
                 Text("未排期")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.noonmarkSystem(size: 13, weight: .medium))
                     .foregroundStyle(Theme.text2)
             }
 
             Text(model.oldestCreatedAt.map { "最早入池 \(PoolSummaryFormatter.createdAtLabel($0))" } ?? "现在是空的。")
-                .font(.system(size: 11.5))
+                .font(.noonmarkSystem(size: 11.5))
                 .foregroundStyle(Theme.text2)
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 PoolSummaryMetric(label: "有说明", value: model.contextCount, color: Theme.navPool)
                 PoolSummaryMetric(label: "已拆分", value: model.plannedCount, color: Theme.accent)
                 PoolSummaryMetric(label: "待补充", value: model.needsDetailCount, color: Theme.warn)
-                PoolSummaryMetric(label: "未分类", value: model.unclassifiedCount, color: Theme.text3)
+                PoolSummaryMetric(label: "未分组", value: model.unclassifiedCount, color: Theme.text3)
             }
         }
         .padding(12)
@@ -8778,10 +11156,10 @@ struct PoolSummaryMetric: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 .foregroundStyle(Theme.text3)
             Text("\(value)")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.noonmarkSystem(size: 18, weight: .semibold))
                 .foregroundStyle(value == 0 ? Theme.text3 : color)
                 .monospacedDigit()
         }
@@ -8825,12 +11203,12 @@ struct PoolSummaryGroupRow: View {
                     .fill(group.color)
                     .frame(width: 7, height: 7)
                 Text(group.title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.noonmarkSystem(size: 12, weight: .medium))
                     .foregroundStyle(Theme.text1)
                     .lineLimit(1)
                 Spacer()
                 Text("\(group.count) 项")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text2)
                     .monospacedDigit()
             }
@@ -8846,7 +11224,7 @@ struct PoolSummaryGroupRow: View {
             .frame(height: 5)
 
             Text(group.leadTitle)
-                .font(.system(size: 10.5))
+                .font(.noonmarkSystem(size: 10.5))
                 .foregroundStyle(Theme.text3)
                 .lineLimit(1)
         }
@@ -8880,11 +11258,11 @@ struct PoolSummaryQueueRow: View {
 
     var meta: String {
         let hasDescription = (task.definition.descriptionText ?? "").isEmpty == false
-        let hasNote = task.definition.activeNoteEntries.isEmpty == false
+        let hasNote = task.chain.activeNoteEntries.isEmpty == false
         let plannedSubtaskCount = task.definition.plannedSubtasks.count
         var parts = ["\(PoolSummaryFormatter.createdAtLabel(task.definition.createdAt)) 入池"]
         if store.isUnclassified(task.chain.id) {
-            parts.append("未分类")
+            parts.append("未分组")
         }
         if hasDescription == false && hasNote == false {
             parts.append("缺说明")
@@ -8899,7 +11277,7 @@ struct PoolSummaryQueueRow: View {
         Button { store.selectPool(task.chain.id) } label: {
             VStack(alignment: .leading, spacing: 4) {
                 MarkdownInlineText(task.definition.title)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.noonmarkSystem(size: 12.5, weight: .medium))
                     .foregroundStyle(Theme.text1)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -8907,14 +11285,17 @@ struct PoolSummaryQueueRow: View {
                 if let classification = store.displayableClassification(for: task.chain.id) {
                     TaskClassificationBadges(
                         display: classification,
-                        chainID: task.chain.id,
-                        taskTitle: task.definition.title
+                        taskTitle: task.definition.title,
+                        accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                            surface: "pool-summary-row",
+                            instanceID: task.chain.id.description
+                        )
                     )
                     .padding(.top, 4)
                 }
 
                 Text(meta)
-                    .font(.system(size: 10.5))
+                    .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
                     .lineLimit(1)
             }
@@ -8941,11 +11322,11 @@ struct SidebarAnalysisRail: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(model.title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
                 Text(model.subtitle)
-                    .font(.system(size: 12))
+                    .font(.noonmarkSystem(size: 12))
                     .foregroundStyle(Theme.text2)
                     .lineSpacing(3)
             }
@@ -8969,10 +11350,10 @@ struct SidebarMetricTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(metric.label)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 .foregroundStyle(Theme.text3)
             Text(metric.value)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.noonmarkSystem(size: 18, weight: .semibold))
                 .foregroundStyle(metric.tone.color)
                 .monospacedDigit()
         }
@@ -8997,7 +11378,7 @@ struct SidebarTextBlock: View {
                             .frame(width: 4, height: 4)
                             .padding(.top, 6)
                         Text(row)
-                            .font(.system(size: 11.5))
+                            .font(.noonmarkSystem(size: 11.5))
                             .foregroundStyle(Theme.text2)
                             .lineSpacing(3)
                     }
@@ -9017,11 +11398,11 @@ struct ZhulongAnalysisHint: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "sparkles")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 18, height: 18)
             Text(text)
-                .font(.system(size: 11.5))
+                .font(.noonmarkSystem(size: 11.5))
                 .foregroundStyle(Theme.text3)
                 .lineSpacing(3)
         }
@@ -9042,7 +11423,7 @@ struct DetailRail: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 if let trace = store.selectedTrace, let definition = store.selectedDefinition {
                     if store.page == .completed, let record = store.selectedCompletedSubtaskRecord {
                         CompletedSubtaskDetail(record: record)
@@ -9068,7 +11449,7 @@ struct DetailRail: View {
                         .padding(.top, 40)
                 }
             }
-            .padding(16)
+            .padding(NoonmarkVisualMetrics.detailPadding)
         }
         .background(Theme.panel)
     }
@@ -9079,7 +11460,7 @@ struct DetailRail: View {
         case .future: "选中计划查看详情，可改期或回池。"
         case .unfinished: "选中任务链查看未完成明细。"
         case .completed: "选中记录可跳转当天或复制为新任务。"
-        case .zhulong: "选择建议草稿后在这里查看证据和待执行操作。"
+        case .zhulong: "选择或继续烛龙会话后，在这里查看授权范围、证据和待确认 Todo diff。"
         default: ""
         }
     }
@@ -9090,7 +11471,7 @@ struct RailHint: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(.noonmarkSystem(size: 12))
             .foregroundStyle(Theme.text3)
             .multilineTextAlignment(.center)
             .lineSpacing(4)
@@ -9118,7 +11499,7 @@ struct DetailHeader<Trailing: View>: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
                 .tracking(0.8)
             Spacer()
@@ -9143,7 +11524,7 @@ struct IconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .frame(width: 22, height: 22)
                 .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
@@ -9161,7 +11542,7 @@ struct IconMenuButton<Content: View>: View {
             menuContent
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.noonmarkSystem(size: 13, weight: .semibold))
                 .frame(width: 22, height: 22)
                 .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
@@ -9183,7 +11564,7 @@ struct DetailTitleRow<Trailing: View>: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             MarkdownText(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.noonmarkSystem(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.text1)
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -9242,7 +11623,7 @@ struct EditableDetailTitleRow<Trailing: View>: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 MarkdownText(title, fallback: "未命名任务")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.noonmarkSystem(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -9319,7 +11700,7 @@ struct CompletedRecordDetail: View {
             HStack(spacing: 8) {
                 StatusChip(status: .completed)
                 Text("\(NoonmarkStore.displayDate(item.trace.date)) \(NoonmarkStore.weekday(item.trace.date))")
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
 
@@ -9341,7 +11722,7 @@ struct CompletedRecordDetail: View {
                 traceID: item.trace.id,
                 entries: item.trace.activeNoteEntries,
                 editable: false,
-                placeholder: "追加附言，回车确认"
+                placeholder: store.copy.noteComposerPlaceholder
             )
         }
     }
@@ -9361,12 +11742,12 @@ struct TraceTimelineSection: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 Text("任务轨迹")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.6)
                 Spacer()
                 MarkdownText(summaryText)
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text2)
                     .monospacedDigit()
                     .lineLimit(1)
@@ -9438,7 +11819,7 @@ struct TraceEndBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
             .foregroundStyle(color)
             .padding(.horizontal, 7)
             .padding(.vertical, 1)
@@ -9465,7 +11846,7 @@ struct CompletedSubtaskDetail: View {
             HStack(spacing: 8) {
                 CompletionKindPill(text: "子任务", color: Theme.accent)
                 Text("\(NoonmarkStore.displayDate(record.date)) \(NoonmarkStore.weekday(record.date))")
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
 
@@ -9487,11 +11868,11 @@ struct CompletedSubtaskDetail: View {
             DetailSection("父任务") {
                 VStack(alignment: .leading, spacing: 7) {
                     MarkdownInlineText(record.parentDefinition.title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.noonmarkSystem(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.text1)
                         .lineLimit(2)
                     MarkdownText(record.parentDefinition.descriptionText ?? "", fallback: "未填写描述")
-                        .font(.system(size: 11.5))
+                        .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(3)
                     SmallActionButton(store.copy.openDay, tone: .accent) { openDay() }
@@ -9534,11 +11915,11 @@ struct CompletionSummaryCard: View {
             ForEach(items, id: \.label) { item in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(item.label)
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                         .foregroundStyle(Theme.text3)
                         .frame(width: 38, alignment: .leading)
                     Text(item.value)
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.noonmarkSystem(size: 11.5, weight: .medium))
                         .foregroundStyle(item.color)
                         .lineLimit(2)
                     Spacer(minLength: 0)
@@ -9600,7 +11981,7 @@ struct TaskDetail: View {
             HStack {
                 StatusChip(status: trace.status)
                 Text("\(NoonmarkStore.displayDate(trace.date)) \(NoonmarkStore.weekday(trace.date))")
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
             TraceContextCard(trace: trace)
@@ -9624,7 +12005,7 @@ struct TaskDetail: View {
                     }
                     if subtasks.isEmpty && !canAddSubtask {
                         Text("暂无子任务")
-                            .font(.system(size: 12))
+                            .font(.noonmarkSystem(size: 12))
                             .foregroundStyle(Theme.text3)
                     }
                     if canAddSubtask {
@@ -9647,7 +12028,7 @@ struct TaskDetail: View {
                 traceID: trace.id,
                 entries: trace.activeNoteEntries,
                 editable: canEditText,
-                placeholder: "追加附言，回车确认"
+                placeholder: store.copy.noteComposerPlaceholder
             )
         }
     }
@@ -9688,7 +12069,7 @@ struct DetailProgressHeader: View {
     var body: some View {
         HStack(spacing: 8) {
             Text("完成进度")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
                 .tracking(0.6)
             Spacer()
@@ -9702,7 +12083,7 @@ struct DetailProgressPercent: View {
 
     var body: some View {
         Text("\(progress.percent)%")
-            .font(.system(size: 13, weight: .bold))
+            .font(.noonmarkSystem(size: 13, weight: .bold))
             .foregroundStyle(progress.percent == 100 ? Theme.ok : Theme.accent)
             .monospacedDigit()
     }
@@ -9732,7 +12113,7 @@ struct DetailProgressControl: View {
                 }
                 if progress.floorPercent > 0 {
                     Text("下限 \(progress.floorPercent)% · 延续后的进度不能回退")
-                        .font(.system(size: 10))
+                        .font(.noonmarkSystem(size: 10))
                         .foregroundStyle(Theme.text3)
                 }
             } else {
@@ -9863,7 +12244,7 @@ struct EditableDetailText: View {
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
         } else {
             MarkdownText(text, fallback: fallback)
-                .font(.system(size: 12))
+                .font(.noonmarkSystem(size: 12))
                 .italic(warm)
                 .foregroundStyle(warm ? Theme.text2 : Theme.text2)
                 .lineSpacing(3)
@@ -9908,20 +12289,22 @@ struct DetailNotesSection: View {
 }
 
 struct TaskNoteEntriesSection: View {
+    @EnvironmentObject private var store: NoonmarkStore
+
     let entries: [TaskNoteEntry]
     let editable: Bool
     let placeholder: String
     @Binding var newNoteText: String
-    let onAppend: () -> Void
-    let onEdit: (TaskNoteEntryID, String) -> Void
-    let onDelete: (TaskNoteEntryID) -> Void
+    let onAppend: () -> Bool
+    let onEdit: (TaskNoteEntryID, String) -> Bool
+    let onDelete: (TaskNoteEntryID) -> Bool
 
     @State private var editingNoteID: TaskNoteEntryID?
     @State private var editDraft = ""
 
     var body: some View {
         if entries.isEmpty == false || editable {
-            DetailSection("附言") {
+            DetailSection(store.copy.noteSectionTitle) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                         DetailNoteEntryRow(
@@ -9940,12 +12323,12 @@ struct TaskNoteEntriesSection: View {
                             onSaveEditing: {
                                 let body = editDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard body.isEmpty == false else { return }
-                                onEdit(entry.id, body)
+                                guard onEdit(entry.id, body) else { return }
                                 editDraft = ""
                                 editingNoteID = nil
                             },
                             onDelete: {
-                                onDelete(entry.id)
+                                guard onDelete(entry.id) else { return }
                                 editDraft = ""
                                 editingNoteID = nil
                             }
@@ -9966,10 +12349,19 @@ struct TaskNoteEntriesSection: View {
                             showsSurface: false,
                             height: 32,
                             commitsOnReturn: true,
-                            onCommit: onAppend
+                            onCommit: {
+                                _ = onAppend()
+                            },
+                            nativeAccessibilityIdentifier: "detail.note.composer"
                         )
                             .foregroundStyle(Theme.text1)
                             .accessibilityIdentifier("detail.note.composer")
+                            .background {
+                                AppE2EViewAnchor(
+                                    identifier: "detail.note.composer.copy",
+                                    verificationText: placeholder
+                                )
+                            }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -9977,11 +12369,20 @@ struct TaskNoteEntriesSection: View {
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
                 .clipShape(RoundedRectangle(cornerRadius: 7))
             }
+            .accessibilityIdentifier("detail.note.section")
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "detail.note.section",
+                    verificationText: store.copy.noteSectionTitle
+                )
+            }
         }
     }
 }
 
 struct DetailNoteEntryRow: View {
+    @EnvironmentObject private var store: NoonmarkStore
+
     let entry: TaskNoteEntry
     let editable: Bool
     let isEditing: Bool
@@ -9995,59 +12396,60 @@ struct DetailNoteEntryRow: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .center, spacing: 8) {
                 Text(Self.timestampFormatter.string(from: entry.createdAt))
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.noonmarkSystem(size: 10.5, weight: .medium))
                     .foregroundStyle(Theme.text3)
                     .monospacedDigit()
                 Spacer(minLength: 0)
                 if editable, !isEditing {
-                    Menu {
-                        Button("编辑附言", systemImage: "pencil", action: onStartEditing)
-                            .accessibilityIdentifier("detail.note.edit.\(entry.id.description)")
-                        Button("删除附言", systemImage: "trash", role: .destructive, action: onDelete)
-                            .accessibilityIdentifier("detail.note.delete.\(entry.id.description)")
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Theme.text3)
-                            .frame(width: 18, height: 18)
-                            .contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .accessibilityLabel("附言操作")
-                    .accessibilityIdentifier("detail.note.actions.\(entry.id.description)")
+                    TaskNoteOverflowControl(
+                        entryID: entry.id,
+                        copy: store.copy,
+                        onEdit: onStartEditing,
+                        onDelete: onDelete
+                    )
+                    .frame(width: 18, height: 18)
                 }
             }
 
             if isEditing {
                 MarkdownEditor(
                     text: $editDraft,
-                    placeholder: "编辑附言…",
+                    placeholder: store.copy.editNotePlaceholder,
                     style: .body,
                     warm: true,
                     showsSurface: false,
-                    height: 58
+                    height: 58,
+                    nativeAccessibilityIdentifier: "detail.note.editor.\(entry.id.description)"
                 )
                     .foregroundStyle(Theme.text1)
                     .frame(minHeight: 58)
                     .accessibilityIdentifier("detail.note.editor.\(entry.id.description)")
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "detail.note.editor.state.\(entry.id.description)",
+                            verificationText: store.copy.editNotePlaceholder
+                        )
+                    }
 
                 HStack(spacing: 10) {
                     Spacer(minLength: 0)
-                    Button("取消", action: onCancelEditing)
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.text3)
-                    Button("保存", action: onSaveEditing)
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .disabled(editDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    TaskNoteTextActionControl(
+                        title: store.copy.cancel,
+                        identifier: "detail.note.cancel.\(entry.id.description)",
+                        emphasis: .secondary,
+                        action: onCancelEditing
+                    )
+                    TaskNoteTextActionControl(
+                        title: store.copy.save,
+                        identifier: "detail.note.save.\(entry.id.description)",
+                        emphasis: .accent,
+                        isEnabled: editDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+                        action: onSaveEditing
+                    )
                 }
             } else {
                 MarkdownText(entry.body)
-                    .font(.system(size: 12))
+                    .font(.noonmarkSystem(size: 12))
                     .italic()
                     .foregroundStyle(Theme.text2)
                     .lineSpacing(3)
@@ -10058,6 +12460,9 @@ struct DetailNoteEntryRow: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("detail.note.entry.\(entry.id.description)")
+        .background {
+            AppE2EViewAnchor(identifier: "detail.note.entry.state.\(entry.id.description)")
+        }
     }
 
     private static let timestampFormatter: DateFormatter = {
@@ -10092,7 +12497,7 @@ struct TraceContextCard: View {
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: 11))
+        .font(.noonmarkSystem(size: 11))
         .foregroundStyle(Theme.text2)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -10145,19 +12550,19 @@ struct Timeline: View {
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(nodeStyle.label)
-                                .font(.system(size: 11.5, weight: .semibold))
+                                .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                                 .foregroundStyle(nodeStyle.labelColor)
                             if isCurrent {
                                 TimelineCurrentBadge()
                             }
                             Spacer(minLength: 0)
                             Text("#\(item.continuationSeq + 1)")
-                                .font(.system(size: 10))
+                                .font(.noonmarkSystem(size: 10))
                                 .foregroundStyle(Theme.text3)
                                 .monospacedDigit()
                         }
                         Text("\(NoonmarkStore.displayDate(item.date)) \(NoonmarkStore.weekday(item.date))")
-                            .font(.system(size: 10.5))
+                            .font(.noonmarkSystem(size: 10.5))
                             .foregroundStyle(Theme.text3)
                         if let changedTarget = store.changedTarget(for: item) {
                             ChangedTargetButton(
@@ -10238,7 +12643,7 @@ struct TimelineNodeGlyph: View {
 
     var body: some View {
         Text(style.glyph)
-            .font(.system(size: 8.5, weight: .bold))
+            .font(.noonmarkSystem(size: 8.5, weight: .bold))
             .foregroundStyle(style.glyphForeground)
             .frame(width: 14, height: 14)
             .background(Circle().fill(style.glyphBackground))
@@ -10249,7 +12654,7 @@ struct TimelineNodeGlyph: View {
 struct TimelineCurrentBadge: View {
     var body: some View {
         Text("当前所在")
-            .font(.system(size: 9, weight: .medium))
+            .font(.noonmarkSystem(size: 9, weight: .medium))
             .foregroundStyle(Theme.accent)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
@@ -10282,7 +12687,7 @@ struct PoolDetail: View {
             HStack {
                 StatusPill(text: "未排期", color: Theme.accent)
                 Text("任务链仍在任务池")
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
             DetailSection("分组与标签") {
@@ -10299,7 +12704,7 @@ struct PoolDetail: View {
                     Text("尚未进入任何 Day Todo。排期后会生成对应日期的日轨迹。")
                     Text(task.chain.state == .active ? "任务链状态：活跃" : "任务链状态：已关闭")
                 }
-                .font(.system(size: 12))
+                .font(.noonmarkSystem(size: 12))
                 .foregroundStyle(Theme.text2)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -10316,7 +12721,7 @@ struct PoolDetail: View {
                     SmallActionButton(store.copy.schedulePickSpecificDate) { store.showingPicker = .schedulePool(task.chain.id) }
                 }
             }
-            PoolNotesSection(chainID: task.chain.id, entries: task.definition.activeNoteEntries)
+            PoolNotesSection(chainID: task.chain.id, entries: task.chain.activeNoteEntries)
         }
     }
 }
@@ -10360,7 +12765,7 @@ struct PlannedSubtaskRow: View {
                 .frame(width: 15, height: 15)
 
             MarkdownInlineText(plannedSubtask.title)
-                .font(.system(size: 12))
+                .font(.noonmarkSystem(size: 12))
                 .foregroundStyle(Theme.text1)
                 .lineLimit(1)
 
@@ -10384,12 +12789,12 @@ struct PlannedSubtaskRow: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.noonmarkSystem(size: 9, weight: .semibold))
                     Text(plannedSubtask.difficulty.label)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.noonmarkSystem(size: 8, weight: .bold))
                 }
-                .font(.system(size: 9, weight: .bold))
+                .font(.noonmarkSystem(size: 9, weight: .bold))
                 .foregroundStyle(plannedSubtask.difficulty == .hard ? Theme.warn : Theme.text2)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
@@ -10402,7 +12807,7 @@ struct PlannedSubtaskRow: View {
                 store.removePoolPlannedSubtask(chainID: chainID, plannedSubtaskID: plannedSubtask.id)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.noonmarkSystem(size: 8, weight: .bold))
                     .foregroundStyle(Theme.text3)
                     .frame(width: 18, height: 18)
             }
@@ -10431,7 +12836,7 @@ struct PoolNotesSection: View {
         TaskNoteEntriesSection(
             entries: entries,
             editable: true,
-            placeholder: "追加附言，⌘↩ 确认",
+            placeholder: store.copy.noteComposerPlaceholder,
             newNoteText: $store.detailNoteText,
             onAppend: { store.appendPoolNote(chainID: chainID) },
             onEdit: { noteID, body in
@@ -10474,7 +12879,7 @@ struct FuturePlanDetail: View {
             HStack(spacing: 8) {
                 PlanMetaPill(text: "计划草稿", color: Theme.navFuture)
                 Text("\(NoonmarkStore.displayDate(trace.date)) \(NoonmarkStore.weekday(trace.date))")
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
 
@@ -10510,7 +12915,7 @@ struct FuturePlanDetail: View {
                 traceID: trace.id,
                 entries: trace.activeNoteEntries,
                 editable: true,
-                placeholder: "追加未来计划附言，回车确认"
+                placeholder: store.copy.noteComposerPlaceholder
             )
         }
     }
@@ -10536,11 +12941,11 @@ struct PlanSummaryCard: View {
             ForEach(items, id: \.label) { item in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(item.label)
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                         .foregroundStyle(Theme.text3)
                         .frame(width: 44, alignment: .leading)
                     Text(item.value)
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.noonmarkSystem(size: 11.5, weight: .medium))
                         .foregroundStyle(item.color)
                     Spacer(minLength: 0)
                 }
@@ -10575,7 +12980,7 @@ struct UnfinishedDetail: View {
                 HStack(spacing: 8) {
                     StatusChip(status: item.isAbandoned ? .abandoned : .unfinished)
                     Text("\(NoonmarkStore.displayDate(trace.date)) \(NoonmarkStore.weekday(trace.date))")
-                        .font(.system(size: 11))
+                        .font(.noonmarkSystem(size: 11))
                         .foregroundStyle(Theme.text3)
                 }
 
@@ -10611,7 +13016,7 @@ struct UnfinishedDetail: View {
                     traceID: trace.id,
                     entries: trace.activeNoteEntries,
                     editable: false,
-                    placeholder: "追加附言，回车确认"
+                    placeholder: store.copy.noteComposerPlaceholder
                 )
             }
         } else {
@@ -10638,7 +13043,7 @@ struct UnfinishedTraceContextCard: View {
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: 11))
+        .font(.noonmarkSystem(size: 11))
         .foregroundStyle(Theme.text2)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -10676,7 +13081,7 @@ struct ReviewRail: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("每日复盘")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
                 if let message = store.reviewAutosaveMessage {
@@ -10684,12 +13089,12 @@ struct ReviewRail: View {
                 }
                 Spacer()
                 Text("\(NoonmarkStore.displayDate(store.selectedDate)) \(NoonmarkStore.weekday(store.selectedDate))")
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
             if store.isHistory {
                 Text("历史日复盘可随时补写")
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.accent)
             }
             if store.selectedDate == store.today {
@@ -10697,7 +13102,7 @@ struct ReviewRail: View {
             }
             if noReview {
                 Text("未来日还没有复盘。到了这一天，复盘会在这里生成。")
-                    .font(.system(size: 12))
+                    .font(.noonmarkSystem(size: 12))
                     .foregroundStyle(Theme.text3)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
@@ -10738,10 +13143,10 @@ struct ReviewSavedIndicator: View {
     var body: some View {
         HStack(spacing: 3) {
             Image(systemName: "checkmark")
-                .font(.system(size: 8.5, weight: .bold))
+                .font(.noonmarkSystem(size: 8.5, weight: .bold))
             Text(text)
         }
-        .font(.system(size: 10))
+        .font(.noonmarkSystem(size: 10))
         .foregroundStyle(Theme.ok.opacity(0.9))
     }
 }
@@ -10755,12 +13160,12 @@ struct ZhulongReviewEntryButton: View {
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                 Text(store.copy.analyzeTodayWithZhulong)
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                 Spacer(minLength: 0)
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.noonmarkSystem(size: 10, weight: .semibold))
             }
             .foregroundStyle(Theme.accent)
             .padding(.horizontal, 10)
@@ -10784,11 +13189,11 @@ struct ReviewStatsCard: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Text("总任务")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                 Spacer()
                 Text("\(stats.total)")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.noonmarkSystem(size: 22, weight: .semibold))
             }
             GeometryReader { proxy in
                 HStack(spacing: 1.5) {
@@ -10840,7 +13245,7 @@ struct ReviewStatsCard: View {
             Spacer()
             Text("\(value)")
         }
-        .font(.system(size: 11))
+        .font(.noonmarkSystem(size: 11))
         .foregroundStyle(value == 0 ? Theme.text3 : Theme.text2)
     }
 }
@@ -10853,7 +13258,7 @@ struct ReviewEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                 .foregroundStyle(Theme.text2)
             MarkdownEditor(text: $text, placeholder: placeholder, style: .body)
                 .frame(minHeight: 92)
@@ -10870,9 +13275,9 @@ struct DatePickerSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(state.purpose.title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.noonmarkSystem(size: 14, weight: .semibold))
             Text(state.purpose.rangeHint)
-                .font(.system(size: 11.5))
+                .font(.noonmarkSystem(size: 11.5))
                 .foregroundStyle(Theme.text3)
                 .fixedSize(horizontal: false, vertical: true)
             ScrollView {
@@ -10883,10 +13288,10 @@ struct DatePickerSheet: View {
                         } label: {
                             HStack {
                                 Text(choice.label)
-                                    .font(.system(size: 12.5))
+                                    .font(.noonmarkSystem(size: 12.5))
                                 Spacer()
                                 Text(choice.subtitle)
-                                    .font(.system(size: 11))
+                                    .font(.noonmarkSystem(size: 11))
                                     .foregroundStyle(Theme.text3)
                             }
                             .padding(.horizontal, 10)
@@ -10911,7 +13316,7 @@ struct FromPoolSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("从任务池排期到这一天")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.noonmarkSystem(size: 14, weight: .semibold))
             if store.selectedDate < store.today {
                 Notice(text: "任务池不能排期到过去日期。请先切到今天或未来日期。", tone: .locked)
             } else {
@@ -10954,12 +13359,12 @@ struct ChangeTaskSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("变更为新任务")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.noonmarkSystem(size: 14, weight: .semibold))
             Text("旧任务会保留在当天并标注已变更，新任务开启新的任务链。")
-                .font(.system(size: 12))
+                .font(.noonmarkSystem(size: 12))
                 .foregroundStyle(Theme.text2)
             MarkdownText(oldTitle)
-                .font(.system(size: 12))
+                .font(.noonmarkSystem(size: 12))
                 .foregroundStyle(Theme.text3)
                 .strikethrough()
                 .padding(8)
@@ -10994,7 +13399,7 @@ struct SettingSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
                 .tracking(0.6)
             content
@@ -11021,7 +13426,7 @@ struct SegmentedPair: View {
     func segment(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                .font(.noonmarkSystem(size: 12, weight: selected ? .semibold : .regular))
                 .padding(.horizontal, 14)
                 .frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Theme.panel : .clear))
@@ -11052,7 +13457,7 @@ struct SegmentedOptionRow<Option: Hashable>: View {
             action(option)
         } label: {
             Text(title(option))
-                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                .font(.noonmarkSystem(size: 12, weight: isSelected ? .semibold : .regular))
                 .padding(.horizontal, 14)
                 .frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 7).fill(isSelected ? Theme.panel : .clear))
@@ -11081,22 +13486,22 @@ struct PageHeader<Trailing: View>: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(title)
-                        .font(.system(size: 21, weight: .bold))
+                        .font(.noonmarkSystem(size: 21, weight: .bold))
                     if let badge {
                         StatusPill(text: badge, color: badgeColor)
                     }
                 }
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 12))
+                        .font(.noonmarkSystem(size: 12))
                         .foregroundStyle(Theme.text3)
                 }
             }
             Spacer()
             trailing
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
+        .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+        .padding(.vertical, 14)
     }
 }
 
@@ -11116,7 +13521,7 @@ struct HeaderButton: View {
                 .fixedSize(horizontal: true, vertical: false)
         }
             .buttonStyle(.plain)
-            .font(.system(size: 12))
+            .font(.noonmarkSystem(size: 12))
             .foregroundStyle(Theme.text2)
             .padding(.horizontal, title.count == 1 ? 8 : 10)
             .frame(height: 26)
@@ -11155,7 +13560,7 @@ struct SmallActionButton: View {
     var body: some View {
         Button(title, action: action)
             .buttonStyle(.plain)
-            .font(.system(size: 11.5))
+            .font(.noonmarkSystem(size: 11.5))
             .foregroundStyle(color)
             .padding(.horizontal, 9)
             .frame(height: 24)
@@ -11300,7 +13705,7 @@ struct PriorityStepper: View {
     func stepButton(systemName: String, enabled: Bool, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 8, weight: .bold))
+                .font(.noonmarkSystem(size: 8, weight: .bold))
                 .foregroundStyle(enabled ? Theme.text2 : Theme.line2)
                 .frame(width: 14, height: 11)
                 .contentShape(Rectangle())
@@ -11317,7 +13722,7 @@ struct StatusPill: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.noonmarkSystem(size: 11, weight: .semibold))
             .foregroundStyle(color)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)
@@ -11450,7 +13855,7 @@ struct StatusGlyph: View {
 
     var body: some View {
         Text(style.glyph)
-            .font(.system(size: scale == .compact ? 10 : 11, weight: .bold))
+            .font(.noonmarkSystem(size: scale == .compact ? 10 : 11, weight: .bold))
             .foregroundStyle(style.glyphForeground)
             .frame(width: scale == .compact ? 16 : 18, height: scale == .compact ? 16 : 18)
             .background(Circle().fill(style.glyphBackground))
@@ -11477,7 +13882,7 @@ struct StatusChip: View {
                 .frame(width: scale == .compact ? 4 : 5, height: scale == .compact ? 4 : 5)
             Text(style.label)
         }
-        .font(.system(size: scale == .compact ? 10.5 : 11, weight: .medium))
+        .font(.noonmarkSystem(size: scale == .compact ? 10.5 : 11, weight: .medium))
         .foregroundStyle(style.foreground)
         .padding(.leading, scale == .compact ? 6 : 8)
         .padding(.trailing, scale == .compact ? 7 : 8)
@@ -11496,7 +13901,7 @@ struct Notice: View {
             Image(systemName: tone == .locked ? "lock.fill" : "calendar.badge.clock")
             Text(text)
         }
-        .font(.system(size: 12))
+        .font(.noonmarkSystem(size: 12))
         .foregroundStyle(tone == .locked ? Theme.text2 : Theme.accent)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -11521,7 +13926,7 @@ struct EmptyState: View {
         VStack(spacing: 14) {
             EmptyStateIllustration()
             Text(text)
-                .font(.system(size: 12.5))
+                .font(.noonmarkSystem(size: 12.5))
                 .foregroundStyle(Theme.text3)
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
@@ -11570,7 +13975,7 @@ struct DetailSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
                 .tracking(0.6)
             content
@@ -11596,12 +14001,15 @@ struct TaskClassificationDetailSection: View {
                 VStack(alignment: .leading, spacing: 7) {
                     TaskClassificationBadges(
                         display: display,
-                        chainID: trace.chainID,
-                        taskTitle: taskTitle
+                        taskTitle: taskTitle,
+                        accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                            surface: "detail",
+                            instanceID: trace.id.description
+                        )
                     )
                     if display.isHistorical {
                         Text("显示这条任务轨迹形成时的分组与标签；历史事实不可改写。")
-                            .font(.system(size: 10.5))
+                            .font(.noonmarkSystem(size: 10.5))
                             .foregroundStyle(Theme.text3)
                     }
                 }
@@ -11612,7 +14020,7 @@ struct TaskClassificationDetailSection: View {
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
             } else {
                 Text("这条任务轨迹形成时未设置分组或标签。")
-                    .font(.system(size: 11.5))
+                    .font(.noonmarkSystem(size: 11.5))
                     .foregroundStyle(Theme.text3)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)

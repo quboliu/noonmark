@@ -24,7 +24,8 @@ public enum SyncEntityType: String, Codable, CaseIterable, Hashable, Sendable {
     case traceClassificationEvent
 
     public var requiresImmutableRecordPayload: Bool {
-        self == .classificationCommit || self == .traceClassificationEvent
+        self == .classificationCommit
+            || self == .traceClassificationEvent
     }
 
     var dependencyOrder: Int {
@@ -75,6 +76,7 @@ public struct SyncRecord: Codable, Equatable, Sendable {
         case modifiedAt
         case modifiedByDeviceID
         case payload
+        case reactivationWitnesses
     }
 
     public var id: SyncRecordID
@@ -84,6 +86,7 @@ public struct SyncRecord: Codable, Equatable, Sendable {
     public var modifiedAt: Date
     public var modifiedByDeviceID: SyncDeviceID
     public var payload: Data
+    public private(set) var reactivationWitnesses: [Data]
 
     public init(
         id: SyncRecordID,
@@ -94,6 +97,28 @@ public struct SyncRecord: Codable, Equatable, Sendable {
         modifiedByDeviceID: SyncDeviceID,
         payload: Data
     ) {
+        self.init(
+            id: id,
+            entityType: entityType,
+            entityID: entityID,
+            operation: operation,
+            modifiedAt: modifiedAt,
+            modifiedByDeviceID: modifiedByDeviceID,
+            payload: payload,
+            reactivationWitnesses: []
+        )
+    }
+
+    init(
+        id: SyncRecordID,
+        entityType: SyncEntityType,
+        entityID: String,
+        operation: SyncOperation = .upsert,
+        modifiedAt: Date,
+        modifiedByDeviceID: SyncDeviceID,
+        payload: Data,
+        reactivationWitnesses: [Data]
+    ) {
         self.id = id
         self.entityType = entityType
         self.entityID = entityID
@@ -101,6 +126,9 @@ public struct SyncRecord: Codable, Equatable, Sendable {
         self.modifiedAt = modifiedAt
         self.modifiedByDeviceID = modifiedByDeviceID
         self.payload = payload
+        self.reactivationWitnesses = Self.canonicalWitnesses(
+            reactivationWitnesses
+        )
     }
 
     public init(from decoder: Decoder) throws {
@@ -127,6 +155,21 @@ public struct SyncRecord: Codable, Equatable, Sendable {
             forKey: .modifiedByDeviceID
         )
         payload = try container.decode(Data.self, forKey: .payload)
+        let reactivationWitnesses = try container.decode(
+            [Data].self,
+            forKey: .reactivationWitnesses
+        )
+        let canonicalWitnesses = Self.canonicalWitnesses(
+            reactivationWitnesses
+        )
+        guard canonicalWitnesses == reactivationWitnesses else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .reactivationWitnesses,
+                in: container,
+                debugDescription: "reactivation witnesses must be unique and canonically ordered"
+            )
+        }
+        self.reactivationWitnesses = canonicalWitnesses
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -150,6 +193,19 @@ public struct SyncRecord: Codable, Equatable, Sendable {
         )
         try container.encode(modifiedByDeviceID, forKey: .modifiedByDeviceID)
         try container.encode(payload, forKey: .payload)
+        try container.encode(
+            reactivationWitnesses,
+            forKey: .reactivationWitnesses
+        )
+    }
+
+    private static func canonicalWitnesses(_ witnesses: [Data]) -> [Data] {
+        var unique: [Data] = []
+        for witness in witnesses.sorted(by: { $0.lexicographicallyPrecedes($1) })
+        where unique.last != witness {
+            unique.append(witness)
+        }
+        return unique
     }
 }
 
@@ -215,8 +271,8 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
     public var state: SyncChangeState
     public var retryCount: Int
     public var lastError: String?
-    /// Immutable classification commit 与 trace classification event 直接随 journal
-    /// 持久化 wire payload。
+    /// Immutable classification commit、trace classification event，以及 task-chain
+    /// reactivation witness 直接随 journal 持久化 wire payload。
     /// 其他实体仍从保存后的 current snapshot 物化，且必须保持为 `nil`。
     public var recordPayload: Data?
 
@@ -233,8 +289,11 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
         recordPayload: Data? = nil
     ) {
         precondition(
-            entityType.requiresImmutableRecordPayload == (recordPayload != nil),
-            "immutable sync journal entries require record payloads, and ordinary entries must not carry one"
+            Self.hasValidRecordPayloadShape(
+                entityType: entityType,
+                recordPayload: recordPayload
+            ),
+            "sync journal record payload shape is invalid"
         )
         self.id = id
         self.entityType = entityType
@@ -252,7 +311,10 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let entityType = try container.decode(SyncEntityType.self, forKey: .entityType)
         let recordPayload = try container.decodeIfPresent(Data.self, forKey: .recordPayload)
-        guard entityType.requiresImmutableRecordPayload == (recordPayload != nil) else {
+        guard Self.hasValidRecordPayloadShape(
+            entityType: entityType,
+            recordPayload: recordPayload
+        ) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .recordPayload,
                 in: container,
@@ -272,6 +334,22 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
     }
 
     var hasValidRecordPayloadInvariant: Bool {
-        entityType.requiresImmutableRecordPayload == (recordPayload != nil)
+        Self.hasValidRecordPayloadShape(
+            entityType: entityType,
+            recordPayload: recordPayload
+        )
+    }
+
+    public static func hasValidRecordPayloadShape(
+        entityType: SyncEntityType,
+        recordPayload: Data?
+    ) -> Bool {
+        if entityType.requiresImmutableRecordPayload {
+            return recordPayload?.isEmpty == false
+        }
+        if entityType == .taskChain {
+            return recordPayload == nil || recordPayload?.isEmpty == false
+        }
+        return recordPayload == nil
     }
 }

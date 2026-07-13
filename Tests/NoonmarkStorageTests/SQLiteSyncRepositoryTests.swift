@@ -929,6 +929,114 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertEqual(try syncRepository.journalEntries(state: .pendingUpload).map(\.entityType), [.day, .subtask])
     }
 
+    func testReactivationRoundTripsExactBoundaryAndPersistsWitness() throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let deviceID = SyncDeviceID("mac-reactivation")
+        let createdAt = Date(timeIntervalSinceReferenceDate: 812_345_678.123_456)
+        let abandonedAt = Date(timeIntervalSinceReferenceDate: 812_345_688.234_567)
+        let reactivatedAt = Date(timeIntervalSinceReferenceDate: 812_345_698.345_678)
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "SQLite 原地重新启用",
+            now: createdAt
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: createdAt
+        )
+        try engine.abandonChain(from: traceID, now: abandonedAt)
+        let abandonedSnapshot = engine.snapshot()
+
+        try engineRepository.save(
+            abandonedSnapshot,
+            recordingChangesFor: deviceID,
+            changedAt: abandonedAt
+        )
+
+        let persistedAbandoned = try engineRepository.load().snapshot()
+        let abandonedChain = try XCTUnwrap(
+            abandonedSnapshot.chains.first { $0.id == chainID }
+        )
+        let abandonedTrace = try XCTUnwrap(
+            abandonedSnapshot.traces.first { $0.id == traceID }
+        )
+        let persistedChain = try XCTUnwrap(
+            persistedAbandoned.chains.first { $0.id == chainID }
+        )
+        let persistedTrace = try XCTUnwrap(
+            persistedAbandoned.traces.first { $0.id == traceID }
+        )
+        XCTAssertEqual(
+            persistedChain.createdAt.timeIntervalSinceReferenceDate.bitPattern,
+            abandonedChain.createdAt.timeIntervalSinceReferenceDate.bitPattern,
+            "task-chain createdAt must survive the SQLite boundary exactly"
+        )
+        XCTAssertEqual(
+            persistedChain.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            abandonedChain.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            "task-chain updatedAt must survive the SQLite boundary exactly"
+        )
+        XCTAssertEqual(
+            persistedTrace.createdAt.timeIntervalSinceReferenceDate.bitPattern,
+            abandonedTrace.createdAt.timeIntervalSinceReferenceDate.bitPattern,
+            "day-trace createdAt must survive the SQLite boundary exactly"
+        )
+        XCTAssertEqual(
+            persistedTrace.contentUpdatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            abandonedTrace.contentUpdatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            "day-trace contentUpdatedAt must survive the SQLite boundary exactly"
+        )
+        XCTAssertEqual(
+            persistedTrace.settledAt?.timeIntervalSinceReferenceDate.bitPattern,
+            abandonedTrace.settledAt?.timeIntervalSinceReferenceDate.bitPattern,
+            "day-trace settledAt must survive the SQLite boundary exactly"
+        )
+
+        _ = try engine.reactivateAbandonedChain(
+            from: traceID,
+            today: today,
+            now: reactivatedAt
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: reactivatedAt
+        )
+
+        let restored = try engineRepository.load().snapshot()
+        XCTAssertEqual(
+            restored.chains.first { $0.id == chainID }?.state,
+            .active
+        )
+        XCTAssertEqual(
+            restored.traces.first { $0.id == traceID }?.status,
+            .pending
+        )
+        XCTAssertNil(
+            restored.traces.first { $0.id == traceID }?.settledAt
+        )
+        let witnessEntry = try XCTUnwrap(
+            syncRepository.journalEntries(state: .pendingUpload).first {
+                $0.entityType == .taskChain
+                    && $0.entityID == chainID.description
+                    && $0.recordPayload != nil
+            }
+        )
+        let materialized = try SyncRecordMaterializer().record(
+            for: witnessEntry,
+            in: restored
+        )
+        XCTAssertEqual(materialized.reactivationWitnesses.count, 1)
+        XCTAssertEqual(
+            try SyncRecordMapper().decodeTaskChain(materialized),
+            restored.chains.first { $0.id == chainID }
+        )
+    }
+
     func testEngineSavePersistsEveryManagementDeltaKindAsImmutableOutboxPayload() throws {
         let databaseURL = makeDatabaseURL()
         let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)

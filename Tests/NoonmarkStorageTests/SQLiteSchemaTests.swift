@@ -3,8 +3,17 @@ import NoonmarkCore
 import XCTest
 
 final class SQLiteSchemaTests: XCTestCase {
-    func testSchemaDeclaresOnlyTheCurrentGenerationStorageContract() {
+    func testSchemaDeclaresOnlyTheCurrentGenerationStorageContract() throws {
         let schema = SQLiteSchema.statements.joined(separator: "\n")
+        let taskChainTable = try XCTUnwrap(
+            SQLiteSchema.statements.first { $0.contains("CREATE TABLE IF NOT EXISTS task_chains") }
+        )
+        let taskDefinitionTable = try XCTUnwrap(
+            SQLiteSchema.statements.first { $0.contains("CREATE TABLE IF NOT EXISTS task_definitions") }
+        )
+        let dayTraceTable = try XCTUnwrap(
+            SQLiteSchema.statements.first { $0.contains("CREATE TABLE IF NOT EXISTS day_traces") }
+        )
 
         XCTAssertEqual(SQLiteSchema.version, 1)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
@@ -24,10 +33,21 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_commit_finalizations"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_events"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_event_finalizations"))
-        XCTAssertTrue(schema.contains("note_entries_json TEXT NOT NULL"))
-        XCTAssertTrue(schema.contains("json_type(note_entries_json) = 'array'"))
-        XCTAssertFalse(schema.contains("\n            note TEXT,"))
-        XCTAssertTrue(schema.contains("planned_subtasks_json TEXT"))
+        XCTAssertTrue(taskChainTable.contains("note_entries_json TEXT NOT NULL"))
+        XCTAssertTrue(taskChainTable.contains("json_type(note_entries_json) = 'array'"))
+        XCTAssertTrue(taskChainTable.contains("state TEXT NOT NULL"))
+        XCTAssertTrue(taskChainTable.contains("created_at TEXT NOT NULL"))
+        XCTAssertTrue(taskChainTable.contains("created_at_bits INTEGER NOT NULL"))
+        XCTAssertTrue(taskChainTable.contains("updated_at TEXT NOT NULL"))
+        XCTAssertTrue(taskChainTable.contains("updated_at_bits INTEGER NOT NULL"))
+        XCTAssertFalse(taskDefinitionTable.contains("note_entries_json"))
+        XCTAssertTrue(taskDefinitionTable.contains("planned_subtasks_json TEXT"))
+        XCTAssertTrue(taskDefinitionTable.contains("content_updated_at TEXT NOT NULL"))
+        XCTAssertTrue(dayTraceTable.contains("created_at_bits INTEGER NOT NULL"))
+        XCTAssertTrue(dayTraceTable.contains("content_updated_at_bits INTEGER NOT NULL"))
+        XCTAssertTrue(dayTraceTable.contains("completed_at_bits INTEGER"))
+        XCTAssertTrue(dayTraceTable.contains("settled_at_bits INTEGER"))
+        XCTAssertTrue(schema.contains("chain_note_entries_json"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_device_identity"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_metadata"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS change_journal"))
@@ -39,8 +59,10 @@ final class SQLiteSchemaTests: XCTestCase {
             "entity_type IN ('classificationCommit', 'traceClassificationEvent')"
         ))
         XCTAssertTrue(schema.contains("record_payload IS NOT NULL"))
+        XCTAssertTrue(schema.contains("entity_type = 'taskChain'"))
+        XCTAssertTrue(schema.contains("record_payload IS NULL OR length(record_payload) > 0"))
         XCTAssertTrue(schema.contains(
-            "entity_type NOT IN ('classificationCommit', 'traceClassificationEvent')"
+            "entity_type NOT IN ('classificationCommit', 'traceClassificationEvent', 'taskChain')"
         ))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_pending_download_records"))
         XCTAssertTrue(
@@ -95,11 +117,24 @@ final class SQLiteSchemaTests: XCTestCase {
             initialNoteBody: "稳定 ID 必须保留。",
             now: now
         )
+        let initialPoolNoteID = try XCTUnwrap(engine.chains[chainID]?.activeNoteEntries.first?.id)
+        try engine.editPoolNote(
+            chainID: chainID,
+            noteID: initialPoolNoteID,
+            body: "链级附言的编辑结果必须保留。",
+            now: now
+        )
+        let deletedPoolNoteID = try engine.appendPoolNote(
+            chainID: chainID,
+            body: "这条链级附言会被删除。",
+            now: now
+        )
+        try engine.deletePoolNote(chainID: chainID, noteID: deletedPoolNoteID, now: now)
         _ = try engine.addPlannedSubtask(chainID: chainID, title: "先规划子任务", difficulty: .medium, now: now)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
         let subtaskID = try engine.addSubtask(traceID: traceID, title: "写 round-trip 测试", difficulty: .hard, now: now)
         try engine.completeSubtask(subtaskID, today: day1, now: now)
-        engine.settleDays(upTo: day2, now: now)
+        try engine.settleDays(upTo: day2, now: now)
         let continuedTraceID = try engine.continueTrace(
             traceID: traceID,
             targetDate: day2,
@@ -173,6 +208,14 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertEqual(restored.preferences.localFirstSyncPolicy.mode, .automatic)
         XCTAssertEqual(restored.preferences.localFirstSyncPolicy.intervalSeconds, 120)
         XCTAssertEqual(restored.preferences.localFirstSyncPolicy.snapshotRetention.retentionIndexesDaily, 4)
+        XCTAssertEqual(
+            restored.chains[chainID]?.activeNoteEntries.map(\.body),
+            ["链级附言的编辑结果必须保留。"]
+        )
+        XCTAssertEqual(
+            restored.chains[chainID]?.noteEntries.first(where: { $0.id == deletedPoolNoteID })?.body,
+            ""
+        )
         XCTAssertEqual(
             restored.traces[continuedTraceID]?.activeNoteEntries.map(\.body),
             ["稳定 ID 和编辑结果必须保留。"]

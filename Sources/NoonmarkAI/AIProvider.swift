@@ -4,7 +4,6 @@ public enum AIProviderKind: String, Codable, Hashable, Sendable {
     case openAICompatible
     case localModel
     case customHTTP
-    case mock
 }
 
 public struct AIProviderCapabilities: Codable, Equatable, Sendable {
@@ -90,19 +89,13 @@ public struct AIRequest: Equatable, Sendable {
 
 public struct AIProviderResponse: Equatable, Sendable {
     public let text: String
-    public let proposedOperations: [AIProposedOperation]
-    public let confidence: Double?
     public let rawContent: String?
 
     public init(
         text: String,
-        proposedOperations: [AIProposedOperation] = [],
-        confidence: Double? = nil,
         rawContent: String? = nil
     ) {
         self.text = text
-        self.proposedOperations = proposedOperations
-        self.confidence = confidence
         self.rawContent = rawContent
     }
 }
@@ -130,88 +123,4 @@ public protocol AIProvider: Sendable {
 
     func complete(_ request: AIRequest) async throws -> AIProviderResponse
     func healthCheck() async -> AIProviderHealth
-}
-
-public enum ZhulongAIError: Error, Equatable, Sendable {
-    case noEnabledProvider
-    case providerUnavailable(AIProviderID)
-    case providerDisabled(AIProviderID)
-    case emptyScope
-}
-
-public struct AIProviderRegistry {
-    private var providers: [AIProviderID: any AIProvider]
-
-    public init(providers: [any AIProvider] = []) {
-        self.providers = [:]
-        for provider in providers {
-            self.providers[provider.config.providerID] = provider
-        }
-    }
-
-    public mutating func register(_ provider: any AIProvider) {
-        providers[provider.config.providerID] = provider
-    }
-
-    public func provider(for providerID: AIProviderID? = nil) throws -> any AIProvider {
-        if let providerID {
-            guard let provider = providers[providerID] else {
-                throw ZhulongAIError.providerUnavailable(providerID)
-            }
-            guard provider.config.enabled else {
-                throw ZhulongAIError.providerDisabled(providerID)
-            }
-            return provider
-        }
-
-        guard let provider = providers.values
-            .filter({ $0.config.enabled })
-            .sorted(by: { $0.config.providerID.rawValue < $1.config.providerID.rawValue })
-            .first
-        else {
-            throw ZhulongAIError.noEnabledProvider
-        }
-        return provider
-    }
-
-    public func allConfigs() -> [AIProviderConfig] {
-        providers.values
-            .map(\.config)
-            .sorted { $0.providerID.rawValue < $1.providerID.rawValue }
-    }
-}
-
-public struct MockAIProvider: AIProvider {
-    public let config: AIProviderConfig
-    private let responder: @Sendable (AIRequest) async throws -> AIProviderResponse
-
-    public init(
-        providerID: AIProviderID = AIProviderID("mock"),
-        enabled: Bool = true,
-        response: AIProviderResponse
-    ) {
-        self.config = AIProviderConfig(
-            providerID: providerID,
-            displayName: "Mock Provider",
-            kind: .mock,
-            enabled: enabled
-        )
-        self.responder = { _ in response }
-    }
-
-    public init(
-        config: AIProviderConfig,
-        responder: @escaping @Sendable (AIRequest) async throws -> AIProviderResponse
-    ) {
-        self.config = config
-        self.responder = responder
-    }
-
-    public func complete(_ request: AIRequest) async throws -> AIProviderResponse {
-        try await responder(request)
-    }
-
-    public func healthCheck() async -> AIProviderHealth {
-        AIProviderHealth(status: config.enabled ? .healthy : .unconfigured)
-    }
 }

@@ -36,7 +36,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
         UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000002")!
     )
 
-    func testCreateTaskEncodingUsesOnlyCurrentInitialNoteBodyField() throws {
+    func testCreateTaskEncodingMatchesTheCurrentOperationShape() throws {
         let operation = ZhulongTodoDiffOperation.createTask(
             title: "当前结构",
             descriptionText: nil,
@@ -45,12 +45,15 @@ final class ZhulongTodoDiffTests: XCTestCase {
             targetDate: nil
         )
 
-        let json = try XCTUnwrap(
-            String(data: JSONEncoder().encode(operation), encoding: .utf8)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(operation)) as? [String: Any]
         )
-
-        XCTAssertTrue(json.contains("\"initialNoteBody\""))
-        XCTAssertFalse(json.contains("\"note\""))
+        XCTAssertEqual(Set(object.keys), ["createTask"])
+        let createTask = try XCTUnwrap(object["createTask"] as? [String: Any])
+        XCTAssertEqual(Set(createTask.keys), ["title", "initialNoteBody", "plannedSubtasks"])
+        XCTAssertEqual(createTask["title"] as? String, "当前结构")
+        XCTAssertEqual(createTask["initialNoteBody"] as? String, "初始附言")
+        XCTAssertEqual((createTask["plannedSubtasks"] as? [Any])?.count, 0)
     }
 
     func testBatchApplySwapsEngineOnlyAfterEveryOperationSucceeds() throws {
@@ -105,7 +108,7 @@ final class ZhulongTodoDiffTests: XCTestCase {
             items: [
                 ZhulongTodoDiffItem(
                     operation: .createTask(
-                        title: "完成正式三视图",
+                        title: "完成正式会话流",
                         descriptionText: "迁移已确认的会话结构",
                         initialNoteBody: "保留状态",
                         plannedSubtasks: [

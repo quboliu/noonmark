@@ -36,7 +36,7 @@
 - `docs/adr/0002-local-first-manual-data-packages-before-sync.md` 明确：一期本地优先，只做手动数据包，不直接同步裸 SQLite。
 - `docs/adr/0004-use-insert-only-relational-model-not-event-sourcing.md` 明确：事实表是事实来源，`change_journal` 只能作为未来同步和诊断辅助流水，不是事实来源。
 - `NoonmarkCore` 已有稳定 ID、日期值对象、任务链、任务定义、日轨迹、子任务、每日复盘和偏好。
-- `NoonmarkStorage` 已有 `SQLiteEngineRepository`、`NoonmarkDataPackage`、`sync_settings` 表和 `sync_endpoint_options_view` 占位；TaskDefinition 与 DayTrace 的结构化附言分别保存在 `note_entries_json`，不是单一文本字段。
+- `NoonmarkStorage` 已有 `SQLiteEngineRepository`、`NoonmarkDataPackage`、`sync_settings` 表和 `sync_endpoint_options_view`；TaskChain 与 DayTrace 的结构化附言分别保存在 `note_entries_json`，不是单一文本字段。TaskDefinition 不存附言。
 - 设置页已展示“自定义同步端点”和“iCloud 云同步”，当前均标记为规划中。
 
 当前缺口：
@@ -207,15 +207,15 @@ Agenda 对外强调支持 iCloud 和 Dropbox，且数据保存在用户个人云
 
 - `TaskChainRecord`
   - recordName：`chain:<uuid>`。
-  - 字段：state、createdAt、updatedAt、modifiedDeviceID。
+  - 字段：state、noteEntriesPayload、createdAt、updatedAt、modifiedDeviceID。
 
 - `TaskDefinitionRecord`
   - recordName：`definition:<uuid>`。
-  - 字段：chainID、sequence、title、descriptionText、noteEntriesPayload、createdAt、supersededAt、supersededByDefinitionID、modifiedDeviceID。
+  - 字段：chainID、sequence、title、descriptionText、createdAt、contentUpdatedAt、supersededAt、supersededByDefinitionID、modifiedDeviceID。
 
 - `DayTraceRecord`
   - recordName：`trace:<uuid>`。
-  - 字段：chainID、definitionID、date、status、priority、continuationSeq、continuedFromTraceID、changedToTraceID、manualProgressPercent、progressMode、descriptionText、noteEntriesPayload、createdAt、updatedAt、completedAt、settledAt、modifiedDeviceID。
+  - 字段：chainID、definitionID、date、status、priority、continuationSeq、continuedFromTraceID、changedToTraceID、manualProgressPercent、progressMode、descriptionText、noteEntriesPayload、createdAt、contentUpdatedAt、completedAt、settledAt、modifiedDeviceID。
 
 `noteEntriesPayload` 是 `TaskNoteEntry` 数组的结构化序列化，每条包含稳定 `id`、`body`、`createdAt`、`updatedAt` 和可选 `deletedAt`；这是同步协议唯一接受的附言形态。
 
@@ -248,7 +248,7 @@ record-per-entity 更适合第一版：
 - 同一 entity 的相同字段、相同值：幂等。
 - `DayRecord` 复盘三字段：按字段级 LWW 合并，但必须保留冲突前值到 `sync_conflicts` 或 `sync_audit_log`，便于恢复。
 - `AppPreferencesRecord`：LWW。
-- TaskDefinition 与当前日 / 未来日 pending trace 的附言：先按条目 `id` 取并集，再按同一条目的 `updatedAt` 选择较新版本；时间相同时删除墓碑胜出，确保删除不会被旧副本复活。不同身份的离线新增都保留。
+- TaskChain 与当前日 / 未来日 pending trace 的附言：先按条目 `id` 取并集，再按同一条目的 `updatedAt` 选择较新版本；时间相同时删除墓碑胜出，确保删除不会被旧副本复活。不同身份的离线新增都保留。
 - 当前日 pending trace 的描述和手动进度：LWW；若本地和远端都在离线期间修改同字段，生成轻量冲突记录。
 
 ### 必须 fail-closed 进入冲突队列

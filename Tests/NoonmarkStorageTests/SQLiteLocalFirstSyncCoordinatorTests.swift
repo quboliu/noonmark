@@ -101,6 +101,395 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         XCTAssertNotNil(try SQLiteSyncRepository(databaseURL: macURL).metadata(for: "localFirst.sync.lastResult"))
     }
 
+    func testTwoSQLiteStoresConvergeConcurrentTaskNoteForksThroughSharedTransport() async throws {
+        let macURL = makeDatabaseURL("note-fork-mac")
+        let phoneURL = makeDatabaseURL("note-fork-phone")
+        let macRepository = SQLiteEngineRepository(databaseURL: macURL)
+        let phoneRepository = SQLiteEngineRepository(databaseURL: phoneURL)
+        let transport = InMemorySyncTransport()
+        let macDevice = SyncDeviceID("mac-note-device")
+        let phoneDevice = SyncDeviceID("phone-note-device")
+
+        let baselineEngine = NoonmarkEngine()
+        let chainID = try baselineEngine.createPoolTask(
+            title: "离线附言收敛",
+            initialNoteBody: "共同旧附言",
+            now: now
+        )
+        let baselineChain = try XCTUnwrap(
+            baselineEngine.snapshot().chains.first { $0.id == chainID }
+        )
+        let oldNoteID = try XCTUnwrap(baselineChain.noteEntries.first?.id)
+        try macRepository.save(
+            baselineEngine.snapshot(),
+            recordingChangesFor: macDevice,
+            changedAt: now
+        )
+        try phoneRepository.save(NoonmarkEngine().snapshot())
+
+        let macSync = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: macURL,
+            transport: transport
+        )
+        let phoneSync = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: phoneURL,
+            transport: transport
+        )
+
+        _ = try await macSync.sync(now: now.addingTimeInterval(10))
+        let baselineDownload = try await phoneSync.sync(now: now.addingTimeInterval(20))
+        XCTAssertEqual(baselineDownload.download.conflictCount, 0)
+        XCTAssertEqual(baselineDownload.download.waitingCount, 0)
+        XCTAssertEqual(
+            try phoneRepository.load().snapshot().definitions,
+            baselineEngine.snapshot().definitions
+        )
+
+        let forkTime = now.addingTimeInterval(100)
+        let macFork = try macRepository.load()
+        let macNoteID = try macFork.appendPoolNote(
+            chainID: chainID,
+            body: "Mac 离线新增",
+            now: forkTime
+        )
+        try macFork.deletePoolNote(
+            chainID: chainID,
+            noteID: oldNoteID,
+            now: forkTime
+        )
+        try macRepository.save(
+            macFork.snapshot(),
+            recordingChangesFor: macDevice,
+            changedAt: forkTime
+        )
+
+        let phoneFork = try phoneRepository.load()
+        let phoneNoteID = try phoneFork.appendPoolNote(
+            chainID: chainID,
+            body: "Phone 离线新增",
+            now: forkTime
+        )
+        try phoneFork.editPoolNote(
+            chainID: chainID,
+            noteID: oldNoteID,
+            body: "Phone 同刻编辑旧附言",
+            now: forkTime
+        )
+        try phoneRepository.save(
+            phoneFork.snapshot(),
+            recordingChangesFor: phoneDevice,
+            changedAt: forkTime
+        )
+
+        for (coordinator, offset) in [
+            (macSync, 110.0),
+            (phoneSync, 120.0),
+            (macSync, 130.0),
+            (phoneSync, 140.0)
+        ] {
+            let result = try await coordinator.sync(now: now.addingTimeInterval(offset))
+            XCTAssertEqual(result.download.conflictCount, 0)
+            XCTAssertEqual(result.download.waitingCount, 0)
+        }
+
+        let remoteRecords = try await transport.fetchAll()
+        let remoteRecord = try XCTUnwrap(remoteRecords.first {
+            $0.entityType == .taskChain
+                && $0.entityID == baselineChain.id.description
+        })
+        let remoteChain = try SyncRecordMapper().decodeTaskChain(remoteRecord)
+        let macChain = try XCTUnwrap(
+            try macRepository.load().snapshot().chains.first {
+                $0.id == baselineChain.id
+            }
+        )
+        let phoneChain = try XCTUnwrap(
+            try phoneRepository.load().snapshot().chains.first {
+                $0.id == baselineChain.id
+            }
+        )
+
+        for chain in [macChain, phoneChain, remoteChain] {
+            assertConvergedNotes(
+                chain.noteEntries,
+                oldNoteID: oldNoteID,
+                macNoteID: macNoteID,
+                phoneNoteID: phoneNoteID,
+                forkTime: forkTime
+            )
+        }
+        XCTAssertEqual(macChain.noteEntries, phoneChain.noteEntries)
+        XCTAssertEqual(phoneChain.noteEntries, remoteChain.noteEntries)
+    }
+
+    func testPoolNoteMutationsRemainVisibleWhenRenameHappensOffline() async throws {
+        for mutation in PoolNoteForkMutation.allCases {
+            let macURL = makeDatabaseURL("rename-note-\(mutation.rawValue)-mac")
+            let phoneURL = makeDatabaseURL("rename-note-\(mutation.rawValue)-phone")
+            let macRepository = SQLiteEngineRepository(databaseURL: macURL)
+            let phoneRepository = SQLiteEngineRepository(databaseURL: phoneURL)
+            let transport = InMemorySyncTransport()
+            let macDevice = SyncDeviceID("mac-rename-device")
+            let phoneDevice = SyncDeviceID("phone-note-device")
+
+            let baseline = NoonmarkEngine()
+            let chainID = try baseline.createPoolTask(
+                title: "重命名前",
+                initialNoteBody: "共同旧附言",
+                now: now
+            )
+            let originalNoteID = try XCTUnwrap(
+                baseline.chains[chainID]?.activeNoteEntries.first?.id
+            )
+            let traceID = try baseline.scheduleFromPool(
+                chainID: chainID,
+                date: today,
+                today: today,
+                now: now
+            )
+            try baseline.returnToPool(
+                traceID: traceID,
+                today: today,
+                now: now.addingTimeInterval(1)
+            )
+            try macRepository.save(
+                baseline.snapshot(),
+                recordingChangesFor: macDevice,
+                changedAt: now.addingTimeInterval(1)
+            )
+            try phoneRepository.save(NoonmarkEngine().snapshot())
+
+            let macSync = SQLiteLocalFirstSyncCoordinator(
+                databaseURL: macURL,
+                transport: transport
+            )
+            let phoneSync = SQLiteLocalFirstSyncCoordinator(
+                databaseURL: phoneURL,
+                transport: transport
+            )
+            _ = try await macSync.sync(now: now.addingTimeInterval(2))
+            _ = try await phoneSync.sync(now: now.addingTimeInterval(3))
+
+            let macFork = try macRepository.load()
+            try macFork.renameTaskTitle(
+                chainID: chainID,
+                title: "重命名后",
+                today: today,
+                now: now.addingTimeInterval(10)
+            )
+            try macRepository.save(
+                macFork.snapshot(),
+                recordingChangesFor: macDevice,
+                changedAt: now.addingTimeInterval(10)
+            )
+
+            let phoneFork = try phoneRepository.load()
+            switch mutation {
+            case .add:
+                _ = try phoneFork.appendPoolNote(
+                    chainID: chainID,
+                    body: "Phone 离线新增附言",
+                    now: now.addingTimeInterval(20)
+                )
+            case .edit:
+                try phoneFork.editPoolNote(
+                    chainID: chainID,
+                    noteID: originalNoteID,
+                    body: "Phone 离线编辑附言",
+                    now: now.addingTimeInterval(20)
+                )
+            case .delete:
+                try phoneFork.deletePoolNote(
+                    chainID: chainID,
+                    noteID: originalNoteID,
+                    now: now.addingTimeInterval(20)
+                )
+            }
+            try phoneRepository.save(
+                phoneFork.snapshot(),
+                recordingChangesFor: phoneDevice,
+                changedAt: now.addingTimeInterval(20)
+            )
+
+            for (coordinator, offset) in [
+                (macSync, 30.0),
+                (phoneSync, 40.0),
+                (macSync, 50.0),
+                (phoneSync, 60.0)
+            ] {
+                let result = try await coordinator.sync(
+                    now: now.addingTimeInterval(offset)
+                )
+                XCTAssertEqual(result.download.conflictCount, 0)
+                XCTAssertEqual(result.download.waitingCount, 0)
+            }
+
+            let remoteRecords = try await transport.fetchAll()
+            let remoteRecord = try XCTUnwrap(
+                remoteRecords.first {
+                    $0.entityType == .taskChain
+                        && $0.entityID == chainID.description
+                }
+            )
+            let remoteChain = try SyncRecordMapper().decodeTaskChain(remoteRecord)
+            let tasks = try [macRepository, phoneRepository].map { repository in
+                try XCTUnwrap(try repository.load().taskPool().first)
+            }
+            for task in tasks {
+                XCTAssertEqual(task.definition.title, "重命名后")
+                XCTAssertEqual(task.chain.noteEntries, remoteChain.noteEntries)
+                switch mutation {
+                case .add:
+                    XCTAssertEqual(
+                        task.chain.activeNoteEntries.map(\.body),
+                        ["共同旧附言", "Phone 离线新增附言"]
+                    )
+                case .edit:
+                    XCTAssertEqual(
+                        task.chain.activeNoteEntries.map(\.body),
+                        ["Phone 离线编辑附言"]
+                    )
+                case .delete:
+                    XCTAssertTrue(task.chain.activeNoteEntries.isEmpty)
+                    XCTAssertTrue(
+                        task.chain.noteEntries.first {
+                            $0.id == originalNoteID
+                        }?.isDeleted == true
+                    )
+                }
+            }
+        }
+    }
+
+    func testLockedDayRejectsAStaleCompletedUndoAcrossTwoSQLiteStores() async throws {
+        let macURL = makeDatabaseURL("locked-undo-mac")
+        let phoneURL = makeDatabaseURL("locked-undo-phone")
+        let macRepository = SQLiteEngineRepository(databaseURL: macURL)
+        let phoneRepository = SQLiteEngineRepository(databaseURL: phoneURL)
+        let transport = InMemorySyncTransport()
+        let macDevice = SyncDeviceID("mac-locked-undo-device")
+        let phoneDevice = SyncDeviceID("phone-locked-undo-device")
+
+        let baseline = NoonmarkEngine()
+        let chainID = try baseline.createPoolTask(
+            title: "锁定后不可撤销完成",
+            now: now
+        )
+        let traceID = try baseline.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        try macRepository.save(
+            baseline.snapshot(),
+            recordingChangesFor: macDevice,
+            changedAt: now
+        )
+        try phoneRepository.save(NoonmarkEngine().snapshot())
+
+        let macSync = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: macURL,
+            transport: transport
+        )
+        let phoneSync = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: phoneURL,
+            transport: transport
+        )
+        _ = try await macSync.sync(now: now.addingTimeInterval(1))
+        _ = try await phoneSync.sync(now: now.addingTimeInterval(2))
+
+        let completedAt = now.addingTimeInterval(10)
+        let macCompleted = try macRepository.load()
+        try macCompleted.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: completedAt
+        )
+        try macRepository.save(
+            macCompleted.snapshot(),
+            recordingChangesFor: macDevice,
+            changedAt: completedAt
+        )
+        _ = try await macSync.sync(now: now.addingTimeInterval(11))
+        _ = try await phoneSync.sync(now: now.addingTimeInterval(12))
+
+        let stalePhoneSnapshot = try phoneRepository.load().snapshot()
+        XCTAssertEqual(
+            stalePhoneSnapshot.traces.first { $0.id == traceID }?.status,
+            .completed
+        )
+        XCTAssertNil(stalePhoneSnapshot.days.first { $0.date == today }?.lockedAt)
+
+        let lockedAt = now.addingTimeInterval(20)
+        let macLocked = try macRepository.load()
+        try macLocked.settleDays(
+            upTo: LocalDate("2026-07-06"),
+            now: lockedAt
+        )
+        try macRepository.save(
+            macLocked.snapshot(),
+            recordingChangesFor: macDevice,
+            changedAt: lockedAt
+        )
+        _ = try await macSync.sync(now: now.addingTimeInterval(21))
+
+        let stalePhone = try phoneRepository.load()
+        try stalePhone.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        try phoneRepository.save(
+            stalePhone.snapshot(),
+            recordingChangesFor: phoneDevice,
+            changedAt: now.addingTimeInterval(30)
+        )
+
+        for (coordinator, offset) in [
+            (phoneSync, 31.0),
+            (macSync, 32.0),
+            (phoneSync, 33.0),
+            (macSync, 34.0)
+        ] {
+            let result = try await coordinator.sync(
+                now: now.addingTimeInterval(offset)
+            )
+            XCTAssertEqual(result.download.conflictCount, 0)
+            XCTAssertEqual(result.download.waitingCount, 0)
+        }
+
+        let remoteRecords = try await transport.fetchAll()
+        let mapper = SyncRecordMapper()
+        let remoteDay = try mapper.decodeDay(
+            XCTUnwrap(remoteRecords.first {
+                $0.entityType == .day && $0.entityID == today.description
+            })
+        )
+        let remoteTrace = try mapper.decodeDayTrace(
+            XCTUnwrap(remoteRecords.first {
+                $0.entityType == .dayTrace
+                    && $0.entityID == traceID.description
+            })
+        )
+        XCTAssertEqual(remoteDay.lockedAt, lockedAt)
+        XCTAssertEqual(remoteTrace.status, .completed)
+        XCTAssertEqual(remoteTrace.completedAt, completedAt)
+
+        for repository in [macRepository, phoneRepository] {
+            let snapshot = try repository.load().snapshot()
+            XCTAssertEqual(
+                snapshot.days.first { $0.date == today }?.lockedAt,
+                lockedAt
+            )
+            let trace = try XCTUnwrap(
+                snapshot.traces.first { $0.id == traceID }
+            )
+            XCTAssertEqual(trace.status, .completed)
+            XCTAssertEqual(trace.completedAt, completedAt)
+        }
+    }
+
     private func commitClassification(
         on engine: NoonmarkEngine,
         chainID: TaskChainID,
@@ -130,6 +519,33 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
     }
 
+    private func assertConvergedNotes(
+        _ notes: [TaskNoteEntry],
+        oldNoteID: TaskNoteEntryID,
+        macNoteID: TaskNoteEntryID,
+        phoneNoteID: TaskNoteEntryID,
+        forkTime: Date,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(
+            Set(notes.map(\.id)),
+            [oldNoteID, macNoteID, phoneNoteID],
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(
+            Set(notes.filter { !$0.isDeleted }.map(\.id)),
+            [macNoteID, phoneNoteID],
+            file: file,
+            line: line
+        )
+        let oldNote = notes.first { $0.id == oldNoteID }
+        XCTAssertEqual(oldNote?.body, "", file: file, line: line)
+        XCTAssertEqual(oldNote?.updatedAt, forkTime, file: file, line: line)
+        XCTAssertEqual(oldNote?.deletedAt, forkTime, file: file, line: line)
+    }
+
     private func makeDatabaseURL(_ name: String) -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("noonmark-local-first-\(name)-\(UUID().uuidString)")
@@ -147,5 +563,11 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return url
+    }
+
+    private enum PoolNoteForkMutation: String, CaseIterable {
+        case add
+        case edit
+        case delete
     }
 }

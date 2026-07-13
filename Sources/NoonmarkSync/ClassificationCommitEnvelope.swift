@@ -4,8 +4,8 @@ import NoonmarkCore
 
 /// 一次已提交分类事实的 current wire format。
 ///
-/// Envelope 只携带 operation-typed exact delta、审计事实与可选 receipt；不携带
-/// `ClassificationPlan`，也不携带整份 `TaskClassificationState` 或 `NoonmarkSnapshot`。
+/// Envelope 携带 operation-typed exact delta、审计事实、可选 receipt 与完整性摘要，
+/// 并以显式 base/result revision 定义一次可重放的分类提交。
 public struct ClassificationCommitEnvelope: Codable, Equatable, Sendable {
     public static let currentFormatVersion = 1
 

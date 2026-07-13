@@ -23,10 +23,10 @@ struct ZhulongTodoDiffEditor: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("审查 Todo 变更")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.noonmarkSystem(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                 Text("基于 v\(version) 建立新修订；原版本继续保留在会话日志中。")
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
             .padding(18)
@@ -40,7 +40,7 @@ struct ZhulongTodoDiffEditor: View {
                     }
                     if let validationMessage {
                         Text(validationMessage)
-                            .font(.system(size: 10.5, weight: .medium))
+                            .font(.noonmarkSystem(size: 10.5, weight: .medium))
                             .foregroundStyle(Theme.warn)
                     }
                 }
@@ -52,7 +52,7 @@ struct ZhulongTodoDiffEditor: View {
 
             HStack(spacing: 8) {
                 Text("保存修订不会写入 Todo；整批应用仍需再次确认。")
-                    .font(.system(size: 10.5))
+                    .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
                 Spacer()
                 Button("取消") { dismiss() }
@@ -76,14 +76,16 @@ struct ZhulongTodoDiffEditor: View {
                 Image(systemName: value.symbolName)
                     .foregroundStyle(Theme.accent)
                 Text(value.kindLabel)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                     .foregroundStyle(Theme.text2)
                 Spacer()
                 if value.canSplit {
                     Button("拆分") { split(value.id) }
                         .buttonStyle(.borderless)
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .accessibilityIdentifier("zhulong-split-todo-diff-item")
+                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
+                        .accessibilityIdentifier(
+                            "zhulong-split-todo-diff-item-\(value.identifierSuffix)"
+                        )
                 }
                 Button {
                     remove(value.id)
@@ -99,22 +101,26 @@ struct ZhulongTodoDiffEditor: View {
             if value.hasEditableTitle {
                 MarkdownEditor(text: item.title, placeholder: "任务标题", style: .title)
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                    .accessibilityIdentifier("zhulong-todo-diff-title")
+                    .accessibilityIdentifier(
+                        "zhulong-todo-diff-title-\(value.identifierSuffix)"
+                    )
             } else {
                 Text(value.fixedDescription)
-                    .font(.system(size: 11))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text2)
             }
 
             if value.hasEditableDate {
                 HStack(spacing: 8) {
                     Text(value.requiresDate ? "目标日期" : "目标日期（可留空）")
-                        .font(.system(size: 10.5))
+                        .font(.noonmarkSystem(size: 10.5))
                         .foregroundStyle(Theme.text3)
                     TextField("YYYY-MM-DD", text: item.targetDateText)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 142)
-                        .accessibilityIdentifier("zhulong-todo-diff-target-date")
+                        .accessibilityIdentifier(
+                            "zhulong-todo-diff-target-date-\(value.identifierSuffix)"
+                        )
                     Spacer()
                 }
             }
@@ -182,6 +188,8 @@ private struct EditableTodoDiffItem: Identifiable {
     var kind: Kind
     var title: String
     var targetDateText: String
+
+    var identifierSuffix: String { id.rawValue.uuidString.lowercased() }
 
     init(_ item: ZhulongTodoDiffItem) {
         id = item.id

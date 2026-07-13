@@ -108,7 +108,7 @@ private struct RecordingAIProvider: AIProvider {
     let config = AIProviderConfig(
         providerID: AIProviderID("recording"),
         displayName: "Recording",
-        kind: .mock
+        kind: .openAICompatible
     )
     let recorder: AIRequestRecorder
     let result: Result<AIProviderResponse, TestProviderError>

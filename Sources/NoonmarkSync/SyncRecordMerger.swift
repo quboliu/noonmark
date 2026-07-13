@@ -3,9 +3,11 @@ import NoonmarkCore
 
 public struct SyncRecordMerger: Sendable {
     private let mapper: SyncRecordMapper
+    private let currentRecordMerger: CurrentSyncRecordMerger
 
     public init(mapper: SyncRecordMapper = SyncRecordMapper()) {
         self.mapper = mapper
+        currentRecordMerger = CurrentSyncRecordMerger(mapper: mapper)
     }
 
     public func merge(
@@ -14,9 +16,16 @@ public struct SyncRecordMerger: Sendable {
         knownTerminalRejections: [SyncTerminalRejection] = [],
         detectedAt: Date = Date()
     ) -> SyncMergeResult {
+        let reactivationAuthorizations = currentRecordMerger
+            .reactivationAuthorizations(
+                existingRecords: reactivationRecords(from: snapshot),
+                incomingRecords: incomingRecords
+            )
         var context = MergeContext(
             working: SnapshotIndex(snapshot),
             knownTerminalRejections: knownTerminalRejections,
+            authorizedReactivationChainIDs: reactivationAuthorizations.chainIDs,
+            authorizedTraceReactivations: reactivationAuthorizations.tracePairs,
             detectedAt: detectedAt
         )
         let plan = orderingPlan(
@@ -46,6 +55,22 @@ public struct SyncRecordMerger: Sendable {
             waitingRecords: context.waiting,
             conflicts: context.conflicts
         )
+    }
+
+    private func reactivationRecords(
+        from snapshot: NoonmarkSnapshot
+    ) -> [SyncRecord] {
+        snapshot.chains.compactMap {
+            try? mapper.record(
+                for: $0,
+                modifiedBy: SyncDeviceID("local-materialized")
+            )
+        } + snapshot.traces.compactMap {
+            try? mapper.record(
+                for: $0,
+                modifiedBy: SyncDeviceID("local-materialized")
+            )
+        }
     }
 
     private func process(
@@ -778,23 +803,89 @@ public struct SyncRecordMerger: Sendable {
 
     private func apply(_ day: Day, record: SyncRecord, context: inout MergeContext) {
         guard let existing = context.working.days[day.date] else {
+            do {
+                try currentRecordMerger.validate(record)
+            } catch {
+                context.conflicts.append(
+                    conflict(
+                        .invalidRecordPayload,
+                        record: record,
+                        detectedAt: context.detectedAt,
+                        message: "day contains invalid current facts"
+                    )
+                )
+                return
+            }
             context.working.days[day.date] = day
             context.applied.append(record.id)
             return
         }
-        guard existing != day, day.updatedAt >= existing.updatedAt else { return }
-        context.working.days[day.date] = day
+        guard existing != day else { return }
+        let merged: Day
+        do {
+            let localRecord = try mapper.record(
+                for: existing,
+                modifiedBy: SyncDeviceID("local-materialized")
+            )
+            let mergedRecord = try currentRecordMerger.merge(
+                existing: localRecord,
+                incoming: record,
+                context: CurrentSyncRecordMergeContext(
+                    authorizedReactivationChainIDs: context
+                        .authorizedReactivationChainIDs
+                )
+            )
+            merged = try mapper.decodeDay(mergedRecord)
+        } catch {
+            context.conflicts.append(
+                conflict(
+                    .invalidRecordPayload,
+                    record: record,
+                    detectedAt: context.detectedAt,
+                    message: "day contains invalid or colliding current facts"
+                )
+            )
+            return
+        }
+        guard merged != existing else { return }
+        context.working.days[day.date] = merged
         context.applied.append(record.id)
     }
 
     private func apply(_ chain: TaskChain, record: SyncRecord, context: inout MergeContext) {
+        guard TaskNoteEntryValidator.firstIssue(in: chain.noteEntries) == nil,
+              taskChainClockIsValid(chain)
+        else {
+            context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task chain contains invalid current facts"))
+            return
+        }
         guard let existing = context.working.chains[chain.id] else {
             context.working.chains[chain.id] = chain
             context.applied.append(record.id)
             return
         }
-        guard existing != chain, chain.updatedAt >= existing.updatedAt else { return }
-        context.working.chains[chain.id] = chain
+        guard existing != chain else { return }
+        let merged: TaskChain
+        do {
+            let localRecord = try mapper.record(
+                for: existing,
+                modifiedBy: SyncDeviceID("local-materialized")
+            )
+            let mergedRecord = try currentRecordMerger.merge(
+                existing: localRecord,
+                incoming: record,
+                context: CurrentSyncRecordMergeContext(
+                    authorizedReactivationChainIDs: context
+                        .authorizedReactivationChainIDs
+                )
+            )
+            merged = try mapper.decodeTaskChain(mergedRecord)
+        } catch {
+            context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task chain contains invalid or colliding current facts"))
+            return
+        }
+        guard merged != existing else { return }
+        context.working.chains[chain.id] = merged
         context.applied.append(record.id)
     }
 
@@ -808,8 +899,8 @@ public struct SyncRecordMerger: Sendable {
             return
         }
         guard let existing = context.working.definitions[definition.id] else {
-            guard noteEntriesAreValid(definition.noteEntries) else {
-                context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task definition contains invalid note entries"))
+            guard definitionContentClockIsValid(definition) else {
+                context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task definition contains invalid current facts"))
                 return
             }
             context.working.definitions[definition.id] = definition
@@ -818,91 +909,32 @@ public struct SyncRecordMerger: Sendable {
         }
         guard existing != definition else { return }
 
-        var localBase = existing
-        localBase.noteEntries = []
-        var incomingBase = definition
-        incomingBase.noteEntries = []
-        guard localBase == incomingBase else {
-            context.conflicts.append(conflict(.taskDefinitionMutation, record: record, detectedAt: context.detectedAt, message: "existing task definition fields other than note entries are immutable"))
+        let merged: TaskDefinition
+        do {
+            let localRecord = try mapper.record(
+                for: existing,
+                modifiedBy: SyncDeviceID("local-materialized")
+            )
+            let mergedRecord = try currentRecordMerger.merge(
+                existing: localRecord,
+                incoming: record
+            )
+            merged = try mapper.decodeTaskDefinition(mergedRecord)
+        } catch {
+            context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task definition contains invalid or colliding current facts"))
             return
         }
-        guard let noteEntries = mergedNoteEntries(
-            local: existing.noteEntries,
-            incoming: definition.noteEntries
+        guard taskDefinitionUpdateIsAllowed(
+            from: existing,
+            to: merged,
+            in: context.working
         ) else {
-            context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task definition contains invalid or colliding note entries"))
+            context.conflicts.append(conflict(.taskDefinitionMutation, record: record, detectedAt: context.detectedAt, message: "existing historical task definition fields are immutable"))
             return
         }
-
-        var merged = existing
-        merged.noteEntries = noteEntries
         guard merged != existing else { return }
         context.working.definitions[definition.id] = merged
         context.applied.append(record.id)
-    }
-
-    private func mergedNoteEntries(
-        local: [TaskNoteEntry],
-        incoming: [TaskNoteEntry]
-    ) -> [TaskNoteEntry]? {
-        guard noteEntriesAreValid(local), noteEntriesAreValid(incoming) else {
-            return nil
-        }
-
-        var entriesByID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
-        for remoteEntry in incoming {
-            guard let localEntry = entriesByID[remoteEntry.id] else {
-                entriesByID[remoteEntry.id] = remoteEntry
-                continue
-            }
-            guard localEntry.createdAt == remoteEntry.createdAt else {
-                return nil
-            }
-            entriesByID[remoteEntry.id] = preferredNoteEntry(
-                localEntry,
-                remoteEntry
-            )
-        }
-
-        return entriesByID.values.sorted {
-            if $0.createdAt != $1.createdAt {
-                return $0.createdAt < $1.createdAt
-            }
-            return $0.id.description < $1.id.description
-        }
-    }
-
-    private func preferredNoteEntry(
-        _ lhs: TaskNoteEntry,
-        _ rhs: TaskNoteEntry
-    ) -> TaskNoteEntry {
-        if lhs.updatedAt != rhs.updatedAt {
-            return lhs.updatedAt > rhs.updatedAt ? lhs : rhs
-        }
-        if lhs.isDeleted != rhs.isDeleted {
-            return lhs.isDeleted ? lhs : rhs
-        }
-        return lhs.body >= rhs.body ? lhs : rhs
-    }
-
-    private func noteEntriesAreValid(_ entries: [TaskNoteEntry]) -> Bool {
-        guard Set(entries.map(\.id)).count == entries.count else {
-            return false
-        }
-        return entries.allSatisfy { entry in
-            guard entry.createdAt.timeIntervalSinceReferenceDate.isFinite,
-                  entry.updatedAt.timeIntervalSinceReferenceDate.isFinite,
-                  entry.updatedAt >= entry.createdAt
-            else {
-                return false
-            }
-            if let deletedAt = entry.deletedAt {
-                return deletedAt.timeIntervalSinceReferenceDate.isFinite
-                    && deletedAt == entry.updatedAt
-                    && entry.body.isEmpty
-            }
-            return entry.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        }
     }
 
     private func apply(
@@ -910,26 +942,75 @@ public struct SyncRecordMerger: Sendable {
         record: SyncRecord,
         context: inout MergeContext
     ) {
-        guard noteEntriesAreValid(trace.noteEntries) else {
+        guard TaskNoteEntryValidator.firstIssue(in: trace.noteEntries) == nil,
+              dayTraceContentClockIsValid(trace)
+        else {
             context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "day trace contains invalid note entries"))
             return
         }
-        guard context.working.chains[trace.chainID] != nil, context.working.definitions[trace.definitionID] != nil else {
+        let existing = context.working.traces[trace.id]
+        let attemptsHistoricalMutation = existing.map {
+            $0 != trace
+                && ($0.status != .pending || $0.settledAt != nil)
+                && isSanctionedHistoricalInverse(
+                    from: $0,
+                    to: trace,
+                    in: context.working,
+                    authorizedTraceReactivations: context
+                        .authorizedTraceReactivations
+                ) == false
+                && isConcurrentPendingNoteBranch(
+                    from: $0,
+                    to: trace
+                ) == false
+        } ?? false
+        if attemptsHistoricalMutation {
+            context.conflicts.append(conflict(.historicalTraceMutation, record: record, detectedAt: context.detectedAt, message: "historical or settled traces cannot be silently overwritten"))
+            return
+        }
+        let merged: DayTrace
+        if let existing {
+            do {
+                let localRecord = try mapper.record(
+                    for: existing,
+                    modifiedBy: SyncDeviceID("local-materialized")
+                )
+                let mergedRecord = try currentRecordMerger.merge(
+                    existing: localRecord,
+                    incoming: record,
+                    context: CurrentSyncRecordMergeContext(
+                        daysByDate: context.working.days,
+                        chainsByID: context.working.chains,
+                        authorizedReactivationChainIDs: context
+                            .authorizedReactivationChainIDs,
+                        authorizedTraceReactivations: context
+                            .authorizedTraceReactivations
+                    )
+                )
+                merged = try mapper.decodeDayTrace(mergedRecord)
+            } catch {
+                context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "day trace contains invalid or colliding current facts"))
+                return
+            }
+        } else {
+            merged = trace
+        }
+        guard context.working.chains[merged.chainID] != nil, context.working.definitions[merged.definitionID] != nil else {
             context.conflicts.append(conflict(.missingParent, record: record, detectedAt: context.detectedAt, message: "day trace references a missing chain or definition"))
             return
         }
-        if let continuedFromTraceID = trace.continuedFromTraceID, context.working.traces[continuedFromTraceID] == nil {
+        if let continuedFromTraceID = merged.continuedFromTraceID, context.working.traces[continuedFromTraceID] == nil {
             context.conflicts.append(conflict(.invalidReference, record: record, detectedAt: context.detectedAt, message: "day trace references a missing continued-from trace"))
             return
         }
-        if let changedToTraceID = trace.changedToTraceID, context.working.traces[changedToTraceID] == nil {
+        if let changedToTraceID = merged.changedToTraceID, context.working.traces[changedToTraceID] == nil {
             context.conflicts.append(conflict(.invalidReference, record: record, detectedAt: context.detectedAt, message: "day trace references a missing changed-to trace"))
             return
         }
         let activeTrace = context.working.traces.values.first {
-            $0.chainID == trace.chainID && $0.status == .pending && $0.id != trace.id
+            $0.chainID == merged.chainID && $0.status == .pending && $0.id != merged.id
         }
-        if trace.status == .pending, let active = activeTrace {
+        if merged.status == .pending, let active = activeTrace {
             context.conflicts.append(
                 conflict(
                     .duplicateActiveTrace,
@@ -941,36 +1022,9 @@ public struct SyncRecordMerger: Sendable {
             )
             return
         }
-        let existing = context.working.traces[trace.id]
-        let mutatesHistoricalTrace = existing.map {
-            $0 != trace
-                && ($0.status != .pending || $0.settledAt != nil)
-                && isSanctionedHistoricalInverse(
-                    from: $0,
-                    to: trace,
-                    in: context.working
-                ) == false
-        } ?? false
-        if mutatesHistoricalTrace {
-            context.conflicts.append(conflict(.historicalTraceMutation, record: record, detectedAt: context.detectedAt, message: "historical or settled traces cannot be silently overwritten"))
-            return
-        }
-
-        var merged = trace
-        if let existing, existing.status == .pending, trace.status == .pending {
-            guard let noteEntries = mergedNoteEntries(
-                local: existing.noteEntries,
-                incoming: trace.noteEntries
-            ) else {
-                context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "day trace contains invalid or colliding note entries"))
-                return
-            }
-            merged.noteEntries = noteEntries
-        }
-
-        context.working.traces[trace.id] = merged
-        context.working.days[trace.date] = context.working.days[trace.date]
-            ?? Day(date: trace.date, now: trace.createdAt)
+        context.working.traces[merged.id] = merged
+        context.working.days[merged.date] = context.working.days[merged.date]
+            ?? Day(date: merged.date, now: merged.createdAt)
         if existing != merged {
             context.applied.append(record.id)
         }
@@ -979,22 +1033,21 @@ public struct SyncRecordMerger: Sendable {
     private func isSanctionedHistoricalInverse(
         from existing: DayTrace,
         to incoming: DayTrace,
-        in snapshot: SnapshotIndex
+        in snapshot: SnapshotIndex,
+        authorizedTraceReactivations: [TraceReactivationAuthorization]
     ) -> Bool {
         guard snapshot.chains[incoming.chainID]?.state == .active else {
             return false
         }
+        guard incoming.contentUpdatedAt > existing.contentUpdatedAt else {
+            return false
+        }
 
         if existing.status == .abandoned {
-            let hasValidIncomingState =
-                (incoming.status == .pending && incoming.settledAt == nil)
-                || (incoming.status == .unfinished && incoming.settledAt != nil)
-            guard hasValidIncomingState else { return false }
-
-            var permitted = existing
-            permitted.status = incoming.status
-            permitted.settledAt = incoming.settledAt
-            return permitted == incoming
+            return authorizedTraceReactivations.contains {
+                $0.abandoned == existing
+                    && $0.restoredSuccessor == incoming
+            }
         }
 
         let isUnlockedCompletionUndo = existing.status == .completed
@@ -1002,15 +1055,132 @@ public struct SyncRecordMerger: Sendable {
             && incoming.status == .pending
             && incoming.completedAt == nil
             && incoming.settledAt == existing.settledAt
-            && snapshot.days[existing.date]?.lockedAt == nil
+            && snapshot.days[existing.date].map { $0.lockedAt == nil } == true
         if isUnlockedCompletionUndo {
             var permitted = existing
             permitted.status = .pending
             permitted.completedAt = nil
-            return permitted == incoming
+            return dayTraceMatchesIgnoringContentClock(permitted, incoming)
         }
 
         return false
+    }
+
+    private func isConcurrentPendingNoteBranch(
+        from historical: DayTrace,
+        to pending: DayTrace
+    ) -> Bool {
+        pending.status == .pending
+            && pending.completedAt == nil
+            && pending.settledAt == nil
+            && pending.contentUpdatedAt < historical.contentUpdatedAt
+            && pending.id == historical.id
+            && pending.chainID == historical.chainID
+            && pending.definitionID == historical.definitionID
+            && pending.date == historical.date
+            && pending.priority == historical.priority
+            && pending.continuationSeq == historical.continuationSeq
+            && pending.descriptionText == historical.descriptionText
+            && pending.manualProgressPercent == historical.manualProgressPercent
+            && pending.continuedFromTraceID == historical.continuedFromTraceID
+            && pending.changedToTraceID == historical.changedToTraceID
+            && pending.createdAt == historical.createdAt
+    }
+
+    private func definitionContentClockIsValid(
+        _ definition: TaskDefinition
+    ) -> Bool {
+        definition.createdAt.timeIntervalSinceReferenceDate.isFinite
+            && definition.contentUpdatedAt.timeIntervalSinceReferenceDate.isFinite
+            && definition.contentUpdatedAt >= definition.createdAt
+            && definition.supersededAt.map {
+                $0.timeIntervalSinceReferenceDate.isFinite
+                    && $0 >= definition.createdAt
+                    && $0 <= definition.contentUpdatedAt
+            } ?? true
+    }
+
+    private func taskChainClockIsValid(_ chain: TaskChain) -> Bool {
+        chain.createdAt.timeIntervalSinceReferenceDate.isFinite
+            && chain.updatedAt.timeIntervalSinceReferenceDate.isFinite
+            && chain.updatedAt >= chain.createdAt
+    }
+
+    private func dayTraceContentClockIsValid(_ trace: DayTrace) -> Bool {
+        trace.createdAt.timeIntervalSinceReferenceDate.isFinite
+            && trace.contentUpdatedAt.timeIntervalSinceReferenceDate.isFinite
+            && trace.contentUpdatedAt >= trace.createdAt
+            && [trace.completedAt, trace.settledAt].compactMap { $0 }.allSatisfy {
+                $0.timeIntervalSinceReferenceDate.isFinite
+                    && $0 >= trace.createdAt
+                    && $0 <= trace.contentUpdatedAt
+            }
+    }
+
+    private func taskDefinitionUpdateIsAllowed(
+        from existing: TaskDefinition,
+        to incoming: TaskDefinition,
+        in snapshot: SnapshotIndex
+    ) -> Bool {
+        if taskDefinitionContentMatches(existing, incoming) {
+            return true
+        }
+        let isHistorical = snapshot.traces.values.contains {
+            $0.definitionID == existing.id
+        }
+        guard isHistorical else { return true }
+        guard existing.supersededAt == nil,
+              existing.supersededByDefinitionID == nil,
+              incoming.supersededAt != nil,
+              incoming.supersededByDefinitionID != nil,
+              incoming.contentUpdatedAt > existing.contentUpdatedAt
+        else {
+            return false
+        }
+        return existing.id == incoming.id
+            && existing.chainID == incoming.chainID
+            && existing.sequence == incoming.sequence
+            && existing.title == incoming.title
+            && existing.descriptionText == incoming.descriptionText
+            && existing.plannedSubtasks == incoming.plannedSubtasks
+            && existing.createdAt == incoming.createdAt
+    }
+
+    private func taskDefinitionContentMatches(
+        _ lhs: TaskDefinition,
+        _ rhs: TaskDefinition
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.chainID == rhs.chainID
+            && lhs.sequence == rhs.sequence
+            && lhs.title == rhs.title
+            && lhs.descriptionText == rhs.descriptionText
+            && lhs.plannedSubtasks == rhs.plannedSubtasks
+            && lhs.createdAt == rhs.createdAt
+            && lhs.contentUpdatedAt == rhs.contentUpdatedAt
+            && lhs.supersededAt == rhs.supersededAt
+            && lhs.supersededByDefinitionID == rhs.supersededByDefinitionID
+    }
+
+    private func dayTraceMatchesIgnoringContentClock(
+        _ lhs: DayTrace,
+        _ rhs: DayTrace
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.chainID == rhs.chainID
+            && lhs.definitionID == rhs.definitionID
+            && lhs.date == rhs.date
+            && lhs.status == rhs.status
+            && lhs.priority == rhs.priority
+            && lhs.continuationSeq == rhs.continuationSeq
+            && lhs.descriptionText == rhs.descriptionText
+            && lhs.noteEntries == rhs.noteEntries
+            && lhs.manualProgressPercent == rhs.manualProgressPercent
+            && lhs.continuedFromTraceID == rhs.continuedFromTraceID
+            && lhs.changedToTraceID == rhs.changedToTraceID
+            && lhs.createdAt == rhs.createdAt
+            && lhs.completedAt == rhs.completedAt
+            && lhs.settledAt == rhs.settledAt
     }
 
     private func apply(
@@ -1382,11 +1552,15 @@ private struct MergeContext {
     var applied: [SyncRecordID]
     var waiting: [SyncWaitingRecord]
     var terminalRejections: [SyncTerminalRecordIdentity: SyncTerminalRejection]
+    var authorizedReactivationChainIDs: Set<TaskChainID>
+    var authorizedTraceReactivations: [TraceReactivationAuthorization]
     var detectedAt: Date
 
     init(
         working: SnapshotIndex,
         knownTerminalRejections: [SyncTerminalRejection],
+        authorizedReactivationChainIDs: Set<TaskChainID>,
+        authorizedTraceReactivations: [TraceReactivationAuthorization],
         detectedAt: Date
     ) {
         self.working = working
@@ -1398,6 +1572,8 @@ private struct MergeContext {
                 $0[$1.identity] = $1
             }
         }
+        self.authorizedReactivationChainIDs = authorizedReactivationChainIDs
+        self.authorizedTraceReactivations = authorizedTraceReactivations
         self.detectedAt = detectedAt
     }
 }

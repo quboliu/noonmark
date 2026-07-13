@@ -25,9 +25,9 @@ scenarios=(
   "day-manual-detail|day|--select manual"
   "day-review-saved|day|--e2e-update-review --e2e-review-summary E2E自动保存反馈"
   "pool|pool|"
-  "pool-classification-overflow|pool|--e2e-open-first-classification-overflow"
-  "pool-classification-manager|pool|--select first --e2e-open-classification-manager"
-  "pool-classification-manager-labels|pool|--select first --e2e-open-classification-manager --e2e-classification-manager-labels"
+  "pool-classification-overflow|pool|--e2e-classification-overflow-via-ui --e2e-classification-overflow-ui-result-url $PWD/artifacts/e2e/pool-classification-overflow-ui.txt --e2e-ui-entry-keep-open"
+  "pool-classification-manager|pool|--select first --e2e-classification-manager-via-ui --e2e-classification-manager-ui-result-url $PWD/artifacts/e2e/pool-classification-manager-ui.txt --e2e-ui-entry-keep-open"
+  "pool-classification-manager-labels|pool|--select first --e2e-classification-manager-labels-via-ui --e2e-classification-manager-ui-result-url $PWD/artifacts/e2e/pool-classification-manager-labels-ui.txt --e2e-ui-entry-keep-open"
   "pool-detail|pool|--select first"
   "pool-detail-classification-edit|pool|--select first --e2e-open-classification-label-editor"
   "future|future|"
@@ -38,11 +38,9 @@ scenarios=(
   "completed-detail|completed|--select first"
   "calendar|calendar|"
   "zhulong|zhulong|--e2e-enable-zhulong"
-  "zhulong-stream-a|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-variant A"
-  "zhulong-stream-b|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-variant B"
-  "zhulong-stream-c|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-variant C"
-  "zhulong-authorized|zhulong|--e2e-zhulong-sidecar-key --e2e-generate-zhulong-draft dailyReview --e2e-zhulong-variant C"
-  "zhulong-todo-diff-editor|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-todo-diff --e2e-open-zhulong-todo-diff-editor --e2e-zhulong-variant C"
+  "zhulong-stream|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session"
+  "zhulong-authorized|zhulong|--e2e-zhulong-sidecar-key --e2e-start-zhulong-workflow dailyReview"
+  "zhulong-todo-diff-editor|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-todo-diff --e2e-open-zhulong-todo-diff-editor"
   "settings|settings|"
   "settings-groups|settings|--e2e-settings-groups"
 )
@@ -158,7 +156,7 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
             let bounds = window[kCGWindowBounds as String] as? [String: Any]
             let width = bounds?["Width"] as? Double ?? 0
             let height = bounds?["Height"] as? Double ?? 0
-            if layer == 0, width >= 1180, height >= 760,
+            if layer == 0, width == 1000, height == 768,
                let number = window[kCGWindowNumber as String]
             {
                 print(number)
@@ -249,7 +247,20 @@ capture_app_screenshot() {
   local page="$3"
   local launch_log
   local expected_window_title
+  local ui_entry_result=""
   shift 3
+
+  local arguments=("$@")
+  for ((index = 0; index < ${#arguments[@]}; index++)); do
+    if [[ "${arguments[$index]}" == "--e2e-classification-manager-ui-result-url" ||
+      "${arguments[$index]}" == "--e2e-classification-overflow-ui-result-url" ]]; then
+      ui_entry_result="${arguments[$((index + 1))]:-}"
+      break
+    fi
+  done
+  if [[ -n "$ui_entry_result" ]]; then
+    rm -f "$ui_entry_result"
+  fi
 
   launch_log="${out_dir}/${screenshot_name}.log"
 
@@ -297,6 +308,23 @@ capture_app_screenshot() {
     echo "Noonmark app window not found for ${page}" >&2
     dump_visible_windows >&2
     exit 1
+  fi
+
+  if [[ -n "$ui_entry_result" ]]; then
+    for _ in {1..80}; do
+      if [[ -f "$ui_entry_result" ]]; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ ! -f "$ui_entry_result" ]]; then
+      echo "UI entry result was not created: $ui_entry_result" >&2
+      exit 1
+    fi
+    if [[ "$(<"$ui_entry_result")" != "ok" ]]; then
+      echo "UI entry failed: $(<"$ui_entry_result")" >&2
+      exit 1
+    fi
   fi
 
   mkdir -p "$out_dir"
@@ -356,6 +384,8 @@ run_task_note_persistence_probe() {
   local restart_screenshot="${note_dir}/task-note-restart.png"
   local restart_ocr="${note_dir}/task-note-restart-ocr.txt"
   local restart_ocr_log="${note_dir}/task-note-restart-ocr.log"
+  local copy_result="${note_dir}/english-copy-result.txt"
+  local copy_log="${note_dir}/english-copy.log"
   local mutate_pid
   local note_sql_probe
 
@@ -368,7 +398,6 @@ run_task_note_persistence_probe() {
     --e2e-task-note-mutate \
     --e2e-task-note-state-url "$PWD/$note_state" \
     --e2e-task-note-result-url "$PWD/$mutate_result" \
-    --e2e-quit-after-automation \
     >"$mutate_log" 2>&1 &
   mutate_pid=$!
   for _ in {1..100}; do
@@ -471,9 +500,10 @@ print(text)
     WITH target AS (
       SELECT
         trace.note_entries_json AS trace_note_entries_json,
-        definition.note_entries_json AS definition_note_entries_json
+        chain.note_entries_json AS chain_note_entries_json
       FROM day_traces AS trace
       JOIN task_definitions AS definition ON definition.id = trace.definition_id
+      JOIN task_chains AS chain ON chain.id = trace.chain_id
       WHERE definition.title = 'E2E 附言编辑删除'
         AND trace.date = '2026-07-05'
       LIMIT 1
@@ -495,7 +525,7 @@ print(text)
        FROM json_each(trace_note_entries_json)
        WHERE instr(json_extract(value, '$.body'), 'GHOST NOTE 9184') > 0),
       (SELECT count(*)
-       FROM json_each(definition_note_entries_json)
+       FROM json_each(chain_note_entries_json)
        WHERE json_type(value, '$.deletedAt') IS NULL),
       (SELECT count(*)
        FROM json_each(trace_note_entries_json)
@@ -511,11 +541,540 @@ print(text)
     exit 1
   fi
 
-  echo "E2E task-note edit/delete restart: $note_db (probe=$note_sql_probe screenshot=$restart_screenshot)"
+  run_terminating_ui_probe \
+    "task-note English copy" \
+    "$copy_result" \
+    "$copy_log" \
+    --data-url "$PWD/$note_db" \
+    --page day \
+    --e2e-task-note-copy-contract \
+    --e2e-task-note-state-url "$PWD/$note_state" \
+    --e2e-task-note-result-url "$PWD/$copy_result"
+
+  echo "E2E task-note edit/delete restart and English copy: $note_db (probe=$note_sql_probe screenshot=$restart_screenshot)"
 }
+
+run_task_note_mutation_atomicity_probe() {
+  local atomicity_dir="artifacts/e2e-task-note-atomicity"
+  local atomicity_db="${atomicity_dir}/Noonmark.sqlite"
+  local atomicity_state="${atomicity_dir}/state.json"
+  local exercise_result="${atomicity_dir}/exercise-result.txt"
+  local ui_result="${atomicity_dir}/ui-result.txt"
+  local restart_result="${atomicity_dir}/restart-result.txt"
+  local exercise_log="${atomicity_dir}/exercise.log"
+  local ui_log="${atomicity_dir}/ui.log"
+  local restart_log="${atomicity_dir}/restart.log"
+  local exercise_marker_count
+  local ui_marker_count
+  local sql_probe
+
+  rm -rf "$atomicity_dir"
+  mkdir -p "$atomicity_dir"
+
+  run_terminating_ui_probe \
+    "task-note mutation atomicity exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$atomicity_db" \
+    --page pool \
+    --e2e-persistence-failure-automation \
+    --e2e-task-note-atomicity-exercise \
+    --e2e-task-note-atomicity-state-url "$PWD/$atomicity_state" \
+    --e2e-task-note-atomicity-result-url "$PWD/$exercise_result" \
+    --e2e-quit-after-automation
+
+  exercise_marker_count="$(grep -cF 'Noonmark E2E injected persistence save failure' "$exercise_log" || true)"
+  if [[ "$exercise_marker_count" -ne 6 ]]; then
+    echo "task-note atomicity exercise did not inject exactly six save failures: $exercise_marker_count" >&2
+    cat "$exercise_log" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "task-note mutation atomicity UI" \
+    "$ui_result" \
+    "$ui_log" \
+    --data-url "$PWD/$atomicity_db" \
+    --page day \
+    --e2e-persistence-failure-automation \
+    --e2e-task-note-atomicity-ui-edit \
+    --e2e-task-note-atomicity-state-url "$PWD/$atomicity_state" \
+    --e2e-task-note-atomicity-result-url "$PWD/$ui_result"
+
+  ui_marker_count="$(grep -cF 'Noonmark E2E injected persistence save failure' "$ui_log" || true)"
+  if [[ "$ui_marker_count" -ne 1 ]]; then
+    echo "task-note atomicity UI did not inject exactly one save failure: $ui_marker_count" >&2
+    cat "$ui_log" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "task-note mutation atomicity restart" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$atomicity_db" \
+    --page day \
+    --e2e-task-note-atomicity-verify \
+    --e2e-task-note-atomicity-state-url "$PWD/$atomicity_state" \
+    --e2e-task-note-atomicity-result-url "$PWD/$restart_result" \
+    --e2e-quit-after-automation
+
+  sql_probe="$(sqlite3 -noheader -separator ' ' "$atomicity_db" "
+    SELECT
+      (SELECT count(*) FROM task_chains),
+      (SELECT count(*) FROM day_traces),
+      (SELECT sum(json_array_length(note_entries_json)) FROM task_chains),
+      (SELECT sum(json_array_length(note_entries_json)) FROM day_traces),
+      (SELECT count(*) FROM task_chains, json_each(task_chains.note_entries_json)
+       WHERE json_type(value, '$.deletedAt') IS NOT NULL)
+        +
+      (SELECT count(*) FROM day_traces, json_each(day_traces.note_entries_json)
+       WHERE json_type(value, '$.deletedAt') IS NOT NULL),
+      (SELECT count(*) FROM task_chains, json_each(task_chains.note_entries_json)
+       WHERE instr(json_extract(value, '$.body'), 'UNSAVED') > 0)
+        +
+      (SELECT count(*) FROM day_traces, json_each(day_traces.note_entries_json)
+       WHERE instr(json_extract(value, '$.body'), 'UNSAVED') > 0),
+      (SELECT count(*) FROM change_journal);
+  ")"
+  if [[ "$sql_probe" != "2 1 4 2 0 0 6" ]]; then
+    echo "task-note mutation atomicity SQLite/restart probe failed: ${sql_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E task-note mutation atomicity UI/SQLite restart: $atomicity_db (probe=$sql_probe)"
+}
+
+run_reactivation_atomicity_probe() {
+  local reactivation_dir="artifacts/e2e-reactivation-atomicity"
+  local reactivation_db="${reactivation_dir}/Noonmark.sqlite"
+  local reactivation_state="${reactivation_dir}/state.json"
+  local exercise_result="${reactivation_dir}/exercise-result.txt"
+  local restart_result="${reactivation_dir}/restart-result.txt"
+  local exercise_log="${reactivation_dir}/exercise.log"
+  local restart_log="${reactivation_dir}/restart.log"
+  local marker_count
+  local sql_probe
+
+  rm -rf "$reactivation_dir"
+  mkdir -p "$reactivation_dir"
+
+  run_terminating_ui_probe \
+    "reactivation atomicity exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$reactivation_db" \
+    --page unfinished \
+    --e2e-persistence-failure-automation \
+    --e2e-reactivation-atomicity-exercise \
+    --e2e-reactivation-atomicity-state-url "$PWD/$reactivation_state" \
+    --e2e-reactivation-atomicity-result-url "$PWD/$exercise_result" \
+    --e2e-quit-after-automation
+
+  marker_count="$(grep -cF 'Noonmark E2E injected persistence save failure' "$exercise_log" || true)"
+  if [[ "$marker_count" -ne 1 ]]; then
+    echo "reactivation atomicity did not inject exactly one save failure: $marker_count" >&2
+    cat "$exercise_log" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "reactivation atomicity restart" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$reactivation_db" \
+    --page unfinished \
+    --e2e-reactivation-atomicity-verify \
+    --e2e-reactivation-atomicity-state-url "$PWD/$reactivation_state" \
+    --e2e-reactivation-atomicity-result-url "$PWD/$restart_result" \
+    --e2e-quit-after-automation
+
+  sql_probe="$(sqlite3 -noheader -separator ' ' "$reactivation_db" "
+    SELECT
+      (SELECT count(*)
+       FROM task_chains
+       JOIN task_definitions ON task_definitions.chain_id = task_chains.id
+       WHERE task_definitions.title = 'E2E 重新启用保存失败'
+         AND task_chains.state = 'abandoned'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 重新启用保存失败'
+         AND day_traces.status = 'abandoned'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 重新启用保存失败'
+         AND day_traces.status = 'pending'),
+      (SELECT count(*) FROM change_journal);
+  ")"
+  if [[ "$sql_probe" != "1 1 0 5" ]]; then
+    echo "reactivation atomicity SQLite/restart probe failed: ${sql_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E reactivation atomicity SQLite restart: $reactivation_db (probe=$sql_probe)"
+}
+
+run_ui_entry_probes() {
+  local entry_dir="artifacts/e2e-ui-entry"
+  local classification_result="${entry_dir}/classification-manager-result.txt"
+  local classification_labels_result="${entry_dir}/classification-manager-labels-result.txt"
+  local zhulong_result="${entry_dir}/zhulong-workflows-result.txt"
+  local classification_log="${entry_dir}/classification-manager.log"
+  local classification_labels_log="${entry_dir}/classification-manager-labels.log"
+  local zhulong_log="${entry_dir}/zhulong-workflows.log"
+
+  rm -rf "$entry_dir"
+  mkdir -p "$entry_dir"
+
+  run_terminating_ui_probe \
+    "classification manager UI entry" \
+    "$classification_result" \
+    "$classification_log" \
+    --ephemeral \
+    --page pool \
+    --select first \
+    --e2e-classification-manager-via-ui \
+    --e2e-classification-manager-ui-result-url "$PWD/$classification_result"
+
+  run_terminating_ui_probe \
+    "classification manager labels UI entry" \
+    "$classification_labels_result" \
+    "$classification_labels_log" \
+    --ephemeral \
+    --page pool \
+    --select first \
+    --e2e-classification-manager-labels-via-ui \
+    --e2e-classification-manager-ui-result-url "$PWD/$classification_labels_result"
+
+  run_terminating_ui_probe \
+    "zhulong workflow UI entry" \
+    "$zhulong_result" \
+    "$zhulong_log" \
+    --ephemeral \
+    --page zhulong \
+    --e2e-zhulong-sidecar-key \
+    --e2e-zhulong-workflows-via-ui \
+    --e2e-zhulong-workflows-ui-result-url "$PWD/$zhulong_result"
+
+  echo "E2E real UI entries: $classification_result $classification_labels_result $zhulong_result"
+}
+
+run_seed_clock_probe() {
+  local seed_dir="artifacts/e2e-seed-clock"
+  local seed_result="${seed_dir}/result.txt"
+  local seed_log="${seed_dir}/launch.log"
+
+  rm -rf "$seed_dir"
+  mkdir -p "$seed_dir"
+
+  run_terminating_ui_probe \
+    "seed event clock" \
+    "$seed_result" \
+    "$seed_log" \
+    --ephemeral \
+    --page day \
+    --e2e-seed-clock-result-url "$PWD/$seed_result" \
+    --e2e-quit-after-automation
+
+  echo "E2E seed event clock: $seed_result"
+}
+
+run_window_resize_probe() {
+  local resize_dir="artifacts/e2e-window-resize"
+  local resize_result="${resize_dir}/result.txt"
+  local resize_log="${resize_dir}/launch.log"
+
+  rm -rf "$resize_dir"
+  mkdir -p "$resize_dir"
+
+  run_terminating_ui_probe \
+    "compact window resize" \
+    "$resize_result" \
+    "$resize_log" \
+    --ephemeral \
+    --page day \
+    --e2e-window-resize-probe \
+    --e2e-window-resize-result-url "$PWD/$resize_result" \
+    --e2e-quit-after-automation
+
+  echo "E2E compact window resize: $resize_result"
+}
+
+run_pool_list_layout_probe() {
+  local layout_dir="artifacts/e2e-pool-list-layout"
+  local default_result="$layout_dir/default-result.txt"
+  local default_log="$layout_dir/default.log"
+  local minimum_result="$layout_dir/minimum-result.txt"
+  local minimum_log="$layout_dir/minimum.log"
+
+  rm -rf "$layout_dir"
+  mkdir -p "$layout_dir"
+
+  run_terminating_ui_probe \
+    "pool list layout at default window" \
+    "$default_result" \
+    "$default_log" \
+    --ephemeral \
+    --page pool \
+    --e2e-pool-list-layout-probe \
+    --e2e-pool-list-layout-result-url "$PWD/$default_result"
+
+  run_terminating_ui_probe \
+    "pool list layout at minimum window" \
+    "$minimum_result" \
+    "$minimum_log" \
+    --ephemeral \
+    --page pool \
+    --e2e-pool-list-layout-probe \
+    --e2e-pool-list-layout-minimum-window \
+    --e2e-pool-list-layout-result-url "$PWD/$minimum_result"
+
+  echo "E2E pool list layout: $default_result $minimum_result"
+}
+
+run_copy_undo_persistence_probe() {
+  local copy_undo_dir="artifacts/e2e-copy-undo-persistence"
+  local copy_undo_db="${copy_undo_dir}/Noonmark.sqlite"
+  local copy_undo_state="${copy_undo_dir}/state.json"
+  local setup_result="${copy_undo_dir}/setup-result.txt"
+  local verify_result="${copy_undo_dir}/verify-result.txt"
+  local setup_log="${copy_undo_dir}/setup.log"
+  local verify_log="${copy_undo_dir}/verify.log"
+  local sql_probe
+
+  rm -rf "$copy_undo_dir"
+  mkdir -p "$copy_undo_dir"
+
+  run_terminating_ui_probe \
+    "classified copy undo persistence setup" \
+    "$setup_result" \
+    "$setup_log" \
+    --data-url "$PWD/$copy_undo_db" \
+    --page day \
+    --e2e-copy-undo-persistence-setup \
+    --e2e-copy-undo-persistence-state-url "$PWD/$copy_undo_state" \
+    --e2e-copy-undo-persistence-result-url "$PWD/$setup_result" \
+    --e2e-quit-after-automation
+
+  run_terminating_ui_probe \
+    "classified copy undo persistence restart" \
+    "$verify_result" \
+    "$verify_log" \
+    --data-url "$PWD/$copy_undo_db" \
+    --page pool \
+    --e2e-copy-undo-persistence-verify \
+    --e2e-copy-undo-persistence-state-url "$PWD/$copy_undo_state" \
+    --e2e-copy-undo-persistence-result-url "$PWD/$verify_result" \
+    --e2e-quit-after-automation
+
+  sql_probe="$(sqlite3 -noheader -separator ' ' "$copy_undo_db" "
+    WITH copied AS (
+      SELECT chain.id
+      FROM task_chains AS chain
+      JOIN task_definitions AS definition ON definition.chain_id = chain.id
+      WHERE definition.title = 'E2E 持久化已分类复制来源'
+        AND chain.state = 'abandoned'
+        AND NOT EXISTS (
+          SELECT 1 FROM day_traces AS trace WHERE trace.chain_id = chain.id
+        )
+    )
+    SELECT
+      (SELECT count(*) FROM copied),
+      (SELECT count(*) FROM task_chain_categories WHERE chain_id IN copied),
+      (SELECT count(*) FROM task_chain_label_relations WHERE chain_id IN copied),
+      (SELECT count(*) FROM classification_relation_history WHERE chain_id IN copied),
+      (SELECT count(*) FROM classification_change_records
+       WHERE source_kind = 'inherited' AND source_from_chain_id IS NOT NULL),
+      (SELECT count(*) FROM classification_change_records
+       WHERE source_kind = 'deterministicDomainAction'
+         AND source_reason = 'task removed from task pool while preserving classification history'
+         AND decision_id IS NULL),
+      (SELECT count(*) FROM change_journal WHERE entity_type = 'classificationCommit');
+  ")"
+  if [[ "$sql_probe" != "1 0 0 2 1 1 3" ]]; then
+    echo "classified copy undo SQLite/sync probe failed: ${sql_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E classified copy undo SQLite restart: $copy_undo_db (probe=$sql_probe)"
+}
+
+run_lifecycle_persistence_probe() {
+  local lifecycle_dir="artifacts/e2e-lifecycle"
+  local lifecycle_db="${lifecycle_dir}/Noonmark.sqlite"
+  local setup_result="${lifecycle_dir}/setup-result.txt"
+  local restart_result="${lifecycle_dir}/restart-result.txt"
+  local setup_log="${lifecycle_dir}/setup.log"
+  local restart_log="${lifecycle_dir}/restart.log"
+  local lifecycle_probe
+
+  rm -rf "$lifecycle_dir"
+  mkdir -p "$lifecycle_dir"
+
+  run_terminating_ui_probe \
+    "lifecycle persistence setup" \
+    "$setup_result" \
+    "$setup_log" \
+    --data-url "$PWD/$lifecycle_db" \
+    --page day \
+    --e2e-lifecycle-workflow \
+    --e2e-lifecycle-result-url "$PWD/$setup_result" \
+    --e2e-quit-after-automation
+
+  run_terminating_ui_probe \
+    "lifecycle persistence restart" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$lifecycle_db" \
+    --page unfinished \
+    --e2e-lifecycle-restart-verify \
+    --e2e-lifecycle-result-url "$PWD/$restart_result" \
+    --e2e-quit-after-automation
+
+  lifecycle_probe="$(sqlite3 -noheader -separator ' ' "$lifecycle_db" "
+    SELECT
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 变更旧任务'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'changed'
+         AND day_traces.changed_to_trace_id IS NOT NULL),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 变更新任务'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'pending'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 回池任务'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'returnedToPool'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       JOIN task_chains ON task_chains.id = day_traces.chain_id
+       WHERE task_definitions.title = 'E2E 废弃任务'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'pending'
+         AND day_traces.settled_at IS NULL
+         AND task_chains.state = 'active'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       JOIN task_chains ON task_chains.id = day_traces.chain_id
+       WHERE task_definitions.title = 'E2E 废弃任务'
+         AND day_traces.status = 'abandoned'
+         AND task_chains.state = 'abandoned'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 废弃任务'),
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'taskChain'
+         AND record_payload IS NOT NULL
+         AND length(record_payload) > 0);
+  ")"
+  if [[ "$lifecycle_probe" != "1 1 1 1 0 1 1" ]]; then
+    echo "lifecycle E2E SQLite/restart probe failed: ${lifecycle_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E lifecycle SQLite restart: $lifecycle_db (probe=$lifecycle_probe)"
+}
+
+run_terminating_ui_probe() {
+  local label="$1"
+  local result="$2"
+  local log="$3"
+  local pid
+  shift 3
+
+  rm -f "$result"
+  "$app_executable_path" "$@" >"$log" 2>&1 &
+  pid=$!
+
+  for _ in {1..120}; do
+    if [[ -f "$result" ]] || ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [[ ! -f "$result" ]]; then
+    terminate_e2e_app
+    wait "$pid" 2>/dev/null || true
+    echo "$label result was not created: $result" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+  if [[ "$(<"$result")" != "ok" ]]; then
+    terminate_e2e_app
+    wait "$pid" 2>/dev/null || true
+    echo "$label failed: $(<"$result")" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+
+  for _ in {1..40}; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    terminate_e2e_app
+    wait "$pid" 2>/dev/null || true
+    echo "$label wrote ok but did not terminate" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+  if ! wait "$pid"; then
+    echo "$label app process failed" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+  assert_clean_app_log "$label" "$log"
+}
+
+if [[ "${NOONMARK_E2E_UI_ENTRY_ONLY:-0}" == "1" ]]; then
+  run_ui_entry_probes
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_SEED_CLOCK_ONLY:-0}" == "1" ]]; then
+  run_seed_clock_probe
+  exit 0
+fi
 
 if [[ "${NOONMARK_E2E_TASK_NOTE_ONLY:-0}" == "1" ]]; then
   run_task_note_persistence_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_TASK_NOTE_ATOMICITY_ONLY:-0}" == "1" ]]; then
+  run_task_note_mutation_atomicity_probe
+  run_reactivation_atomicity_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_COPY_UNDO_ONLY:-0}" == "1" ]]; then
+  run_copy_undo_persistence_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_LIFECYCLE_ONLY:-0}" == "1" ]]; then
+  run_lifecycle_persistence_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_POOL_LIST_LAYOUT_ONLY:-0}" == "1" ]]; then
+  run_pool_list_layout_probe
   exit 0
 fi
 
@@ -538,6 +1097,20 @@ fi
 terminate_e2e_app
 
 run_task_note_persistence_probe
+
+run_task_note_mutation_atomicity_probe
+
+run_reactivation_atomicity_probe
+
+run_copy_undo_persistence_probe
+
+run_ui_entry_probes
+
+run_seed_clock_probe
+
+run_pool_list_layout_probe
+
+run_window_resize_probe
 
 summary_sidebar_dir="artifacts/e2e-summary-sidebar"
 summary_sidebar_result="${summary_sidebar_dir}/summary-sidebar-result.txt"
@@ -908,7 +1481,7 @@ open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_db" \
   --page zhulong \
   --e2e-zhulong-sidecar-key \
-  --e2e-generate-zhulong-draft dailyReview \
+  --e2e-start-zhulong-workflow dailyReview \
   --e2e-rich-zhulong-session \
   --e2e-quit-after-automation
 
@@ -968,7 +1541,7 @@ open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_recovery_db" \
   --page zhulong \
   --e2e-zhulong-sidecar-key \
-  --e2e-generate-zhulong-draft dailyReview \
+  --e2e-start-zhulong-workflow dailyReview \
   --e2e-rich-zhulong-session \
   --e2e-interrupt-zhulong-daily-review \
   --e2e-quit-after-automation
@@ -1214,6 +1787,7 @@ rm -rf "$provider_dir"
 mkdir -p "$provider_dir"
 
 open -W -n "$app_path" --args \
+  --ephemeral \
   --page zhulong \
   --e2e-configure-provider \
   --e2e-provider-name "$provider_name" \
@@ -1223,6 +1797,7 @@ open -W -n "$app_path" --args \
   --e2e-quit-after-automation
 
 open -W -n "$app_path" --args \
+  --ephemeral \
   --page zhulong \
   --e2e-verify-provider \
   --e2e-provider-name "$provider_name" \
@@ -1301,79 +1876,7 @@ fi
 
 echo "E2E domain workflow: $workflow_db (continued=$workflow_continued pending=$workflow_pending review=$workflow_review)"
 
-lifecycle_dir="artifacts/e2e-lifecycle"
-lifecycle_db="${lifecycle_dir}/Noonmark.sqlite"
-lifecycle_result="${lifecycle_dir}/lifecycle-result.txt"
-rm -rf "$lifecycle_dir"
-mkdir -p "$lifecycle_dir"
-
-open -W -n "$app_path" --args \
-  --data-url "$PWD/$lifecycle_db" \
-  --page day \
-  --e2e-lifecycle-workflow \
-  --e2e-lifecycle-result-url "$PWD/$lifecycle_result" \
-  --e2e-quit-after-automation
-
-if [[ ! -f "$lifecycle_result" ]]; then
-  echo "lifecycle e2e result was not created: $lifecycle_result" >&2
-  exit 1
-fi
-
-if [[ "$(cat "$lifecycle_result")" != "ok" ]]; then
-  echo "lifecycle e2e failed: $(cat "$lifecycle_result")" >&2
-  exit 1
-fi
-
-read -r lifecycle_changed lifecycle_new lifecycle_returned lifecycle_reenabled lifecycle_abandoned lifecycle_abandon_total < <(
-  sqlite3 -separator " " "$lifecycle_db" "
-    SELECT
-      (SELECT count(*)
-       FROM day_traces
-       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
-       WHERE task_definitions.title = 'E2E 变更旧任务'
-         AND day_traces.date = '2026-07-05'
-         AND day_traces.status = 'changed'
-         AND day_traces.changed_to_trace_id IS NOT NULL),
-      (SELECT count(*)
-       FROM day_traces
-       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
-       WHERE task_definitions.title = 'E2E 变更新任务'
-         AND day_traces.date = '2026-07-05'
-         AND day_traces.status = 'pending'),
-      (SELECT count(*)
-       FROM day_traces
-       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
-       WHERE task_definitions.title = 'E2E 回池任务'
-         AND day_traces.date = '2026-07-05'
-         AND day_traces.status = 'returnedToPool'),
-      (SELECT count(*)
-       FROM day_traces
-       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
-       JOIN task_chains ON task_chains.id = day_traces.chain_id
-       WHERE task_definitions.title = 'E2E 废弃任务'
-         AND day_traces.date = '2026-07-05'
-         AND day_traces.status = 'pending'
-         AND task_chains.state = 'active'),
-      (SELECT count(*)
-       FROM day_traces
-       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
-       JOIN task_chains ON task_chains.id = day_traces.chain_id
-       WHERE task_definitions.title = 'E2E 废弃任务'
-         AND day_traces.status = 'abandoned'
-         AND task_chains.state = 'abandoned'),
-      (SELECT count(*)
-       FROM day_traces
-       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
-       WHERE task_definitions.title = 'E2E 废弃任务');
-  "
-)
-
-if [[ "$lifecycle_changed" -ne 1 || "$lifecycle_new" -ne 1 || "$lifecycle_returned" -ne 1 || "$lifecycle_reenabled" -ne 1 || "$lifecycle_abandoned" -ne 0 || "$lifecycle_abandon_total" -ne 1 ]]; then
-  echo "lifecycle e2e persistence failed: changed=$lifecycle_changed new=$lifecycle_new returned=$lifecycle_returned reenabled=$lifecycle_reenabled abandoned=$lifecycle_abandoned abandon_total=$lifecycle_abandon_total" >&2
-  exit 1
-fi
-
-echo "E2E lifecycle workflow: $lifecycle_db (changed=$lifecycle_changed new=$lifecycle_new returned=$lifecycle_returned reenabled=$lifecycle_reenabled abandoned=$lifecycle_abandoned abandon_total=$lifecycle_abandon_total)"
+run_lifecycle_persistence_probe
 
 data_package_dir="artifacts/e2e-data-package"
 data_package_db="${data_package_dir}/Noonmark.sqlite"

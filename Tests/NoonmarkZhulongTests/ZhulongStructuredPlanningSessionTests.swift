@@ -30,7 +30,7 @@ final class ZhulongStructuredPlanningSessionTests: XCTestCase {
             items: [
                 ZhulongTodoDiffItem(
                     operation: .createTask(
-                        title: "接入正式三视图",
+                        title: "接入正式会话流",
                         descriptionText: nil,
                         initialNoteBody: nil,
                         plannedSubtasks: [],
@@ -48,7 +48,7 @@ final class ZhulongStructuredPlanningSessionTests: XCTestCase {
                 ZhulongTodoDiffItem(
                     id: draft.items[0].id,
                     operation: .createTask(
-                        title: "接入正式 A/B/C 三视图",
+                        title: "接入正式会话流并完成验证",
                         descriptionText: nil,
                         initialNoteBody: nil,
                         plannedSubtasks: [],

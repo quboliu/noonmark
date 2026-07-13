@@ -20,17 +20,17 @@ struct GroupManagementSettingsCard: View {
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: "square.grid.2x2")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.noonmarkSystem(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.navSettings)
                 .frame(width: 36, height: 36)
                 .background(RoundedRectangle(cornerRadius: 9).fill(Theme.chip))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("分组与标签")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.noonmarkSystem(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                 Text("用一个分组建立结构，再用标签补充横向线索。")
-                    .font(.system(size: 11.5))
+                    .font(.noonmarkSystem(size: 11.5))
                     .foregroundStyle(Theme.text3)
                     .lineLimit(1)
             }
@@ -75,16 +75,16 @@ struct GroupManagementSettingsCard: View {
     ) -> some View {
         HStack(spacing: 7) {
             Image(systemName: systemImage)
-                .font(.system(size: 11, weight: .bold))
+                .font(.noonmarkSystem(size: 11, weight: .bold))
                 .foregroundStyle(color)
                 .frame(width: 22, height: 22)
                 .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.09)))
             VStack(alignment: .leading, spacing: 1) {
                 Text("\(value)")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .font(.noonmarkSystem(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.text1)
                 Text(title)
-                    .font(.system(size: 10))
+                    .font(.noonmarkSystem(size: 10))
                     .foregroundStyle(Theme.text3)
             }
         }

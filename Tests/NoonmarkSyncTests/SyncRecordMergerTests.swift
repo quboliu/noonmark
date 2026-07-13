@@ -31,7 +31,7 @@ final class SyncRecordMergerTests: XCTestCase {
         XCTAssertEqual(restored.getDayTodo(date: today).traces.first?.id, traceID)
     }
 
-    func testTaskDefinitionNotesMergeByStableIdentityAndTombstone() throws {
+    func testTaskChainNotesMergeByStableIdentityAndTombstone() throws {
         let base = NoonmarkEngine()
         let chainID = try base.createPoolTask(
             title: "跨设备附言",
@@ -39,7 +39,7 @@ final class SyncRecordMergerTests: XCTestCase {
             now: now
         )
         let baseSnapshot = base.snapshot()
-        let originalNoteID = try XCTUnwrap(base.taskPool().first?.definition.activeNoteEntries.first?.id)
+        let originalNoteID = try XCTUnwrap(base.taskPool().first?.chain.activeNoteEntries.first?.id)
 
         let local = try NoonmarkEngine(snapshot: baseSnapshot)
         _ = try local.appendPoolNote(
@@ -59,10 +59,10 @@ final class SyncRecordMergerTests: XCTestCase {
             noteID: originalNoteID,
             now: now.addingTimeInterval(30)
         )
-        let remoteDefinition = try XCTUnwrap(remote.taskPool().first?.definition)
+        let remoteChain = try XCTUnwrap(remote.taskPool().first?.chain)
         let mapper = SyncRecordMapper()
         let record = try mapper.record(
-            for: remoteDefinition,
+            for: remoteChain,
             modifiedBy: SyncDeviceID("iphone-b")
         )
 
@@ -72,16 +72,16 @@ final class SyncRecordMergerTests: XCTestCase {
             detectedAt: now.addingTimeInterval(40)
         )
         let merged = try NoonmarkEngine(snapshot: result.snapshot)
-        let definition = try XCTUnwrap(merged.taskPool().first?.definition)
+        let chain = try XCTUnwrap(merged.taskPool().first?.chain)
 
         XCTAssertTrue(result.conflicts.isEmpty)
-        XCTAssertEqual(definition.activeNoteEntries.map(\.body), ["本地新增", "远端新增"])
+        XCTAssertEqual(chain.activeNoteEntries.map(\.body), ["本地新增", "远端新增"])
         XCTAssertEqual(
-            definition.noteEntries.first(where: { $0.id == originalNoteID })?.body,
+            chain.noteEntries.first(where: { $0.id == originalNoteID })?.body,
             ""
         )
         XCTAssertEqual(
-            definition.noteEntries.first(where: { $0.id == originalNoteID })?.deletedAt,
+            chain.noteEntries.first(where: { $0.id == originalNoteID })?.deletedAt,
             now.addingTimeInterval(30)
         )
     }
@@ -154,6 +154,90 @@ final class SyncRecordMergerTests: XCTestCase {
             trace.noteEntries.first(where: { $0.id == originalNoteID })?.deletedAt,
             now.addingTimeInterval(30)
         )
+    }
+
+    func testCompletedTracePreservesConcurrentPendingNoteAndTombstone() throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "完成与附言并发",
+            initialNoteBody: "待删除附言",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let baseSnapshot = base.snapshot()
+        let originalNoteID = try XCTUnwrap(
+            base.traces[traceID]?.activeNoteEntries.first?.id
+        )
+
+        let completed = try NoonmarkEngine(snapshot: baseSnapshot)
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+
+        let pending = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try pending.appendTraceNote(
+            traceID: traceID,
+            body: "并发新增附言",
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        try pending.deleteTraceNote(
+            traceID: traceID,
+            noteID: originalNoteID,
+            today: today,
+            now: now.addingTimeInterval(40)
+        )
+
+        let mapper = SyncRecordMapper()
+        let completedRecord = try mapper.record(
+            for: try XCTUnwrap(completed.traces[traceID]),
+            modifiedBy: SyncDeviceID("completed-device")
+        )
+        let pendingRecord = try mapper.record(
+            for: try XCTUnwrap(pending.traces[traceID]),
+            modifiedBy: SyncDeviceID("pending-device")
+        )
+        var canonicalRecords: [SyncRecord] = []
+
+        for direction in [
+            (snapshot: completed.snapshot(), record: pendingRecord),
+            (snapshot: pending.snapshot(), record: completedRecord)
+        ] {
+            let result = SyncRecordMerger(mapper: mapper).merge(
+                records: [direction.record],
+                into: direction.snapshot,
+                detectedAt: now.addingTimeInterval(50)
+            )
+            let merged = try XCTUnwrap(
+                result.snapshot.traces.first { $0.id == traceID }
+            )
+            let tombstone = try XCTUnwrap(
+                merged.noteEntries.first { $0.id == originalNoteID }
+            )
+
+            XCTAssertEqual(merged.status, .completed)
+            XCTAssertEqual(merged.completedAt, now.addingTimeInterval(20))
+            XCTAssertEqual(
+                merged.activeNoteEntries.map(\.body),
+                ["并发新增附言"]
+            )
+            XCTAssertTrue(tombstone.isDeleted)
+            XCTAssertEqual(tombstone.body, "")
+            XCTAssertEqual(tombstone.deletedAt, now.addingTimeInterval(40))
+            canonicalRecords.append(try mapper.record(
+                for: merged,
+                modifiedBy: SyncDeviceID("canonical-device")
+            ))
+        }
+
+        XCTAssertEqual(canonicalRecords[0], canonicalRecords[1])
     }
 
     func testMergingOrdinaryRecordPreservesClassificationStateExactly() throws {
@@ -1538,7 +1622,8 @@ final class SyncRecordMergerTests: XCTestCase {
             status: .changed,
             priority: 0,
             continuationSeq: 0,
-            now: now
+            now: now,
+            contentUpdatedAt: now.addingTimeInterval(1)
         )
         old.changedToTraceID = targetID
         old.settledAt = now.addingTimeInterval(1)
@@ -1550,7 +1635,8 @@ final class SyncRecordMergerTests: XCTestCase {
             status: .unfinished,
             priority: 1,
             continuationSeq: 1,
-            now: now
+            now: now,
+            contentUpdatedAt: now.addingTimeInterval(2)
         )
         unrelated.settledAt = now.addingTimeInterval(2)
         let target = DayTrace(
@@ -2083,9 +2169,13 @@ final class SyncRecordMergerTests: XCTestCase {
         let traceID = try local.scheduleFromPool(chainID: chainID, date: today, today: today, now: now)
         try local.markCompleted(traceID: traceID, today: today, now: now)
 
-        var remoteTrace = try XCTUnwrap(local.snapshot().traces.first)
-        remoteTrace.status = .pending
-        remoteTrace.completedAt = nil
+        let remote = try NoonmarkEngine(snapshot: local.snapshot())
+        try remote.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let remoteTrace = try XCTUnwrap(remote.snapshot().traces.first)
 
         let mapper = SyncRecordMapper()
         let remoteRecord = try mapper.record(
@@ -2105,6 +2195,43 @@ final class SyncRecordMergerTests: XCTestCase {
         )
     }
 
+    func testMissingDayRejectsCompletedTraceUndo() throws {
+        let local = NoonmarkEngine()
+        let chainID = try local.createPoolTask(title: "缺少日上下文不可撤销", now: now)
+        let traceID = try local.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        try local.markCompleted(traceID: traceID, today: today, now: now)
+        let completedSnapshot = local.snapshot()
+
+        let remote = try NoonmarkEngine(snapshot: completedSnapshot)
+        try remote.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let mapper = SyncRecordMapper()
+        let remoteRecord = try mapper.record(
+            for: try XCTUnwrap(remote.traces[traceID]),
+            modifiedBy: SyncDeviceID("iphone-b")
+        )
+        var missingDaySnapshot = completedSnapshot
+        missingDaySnapshot.days = []
+
+        let result = SyncRecordMerger(mapper: mapper).merge(
+            records: [remoteRecord],
+            into: missingDaySnapshot,
+            detectedAt: now
+        )
+
+        XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        XCTAssertEqual(result.snapshot, missingDaySnapshot)
+    }
+
     func testLockedDayRejectsCompletedTraceUndo() throws {
         let local = NoonmarkEngine()
         let chainID = try local.createPoolTask(title: "锁定历史不可撤销", now: now)
@@ -2115,14 +2242,18 @@ final class SyncRecordMergerTests: XCTestCase {
             now: now
         )
         try local.markCompleted(traceID: traceID, today: today, now: now)
-        local.settleDays(upTo: tomorrow, now: now.addingTimeInterval(60))
+        try local.settleDays(upTo: tomorrow, now: now.addingTimeInterval(60))
         let localSnapshot = local.snapshot()
 
-        var remoteTrace = try XCTUnwrap(
-            localSnapshot.traces.first(where: { $0.id == traceID })
+        let remote = try NoonmarkEngine(snapshot: localSnapshot)
+        try remote.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(120)
         )
-        remoteTrace.status = .pending
-        remoteTrace.completedAt = nil
+        let remoteTrace = try XCTUnwrap(
+            remote.snapshot().traces.first(where: { $0.id == traceID })
+        )
         let mapper = SyncRecordMapper()
         let remoteRecord = try mapper.record(
             for: remoteTrace,
@@ -2138,6 +2269,74 @@ final class SyncRecordMergerTests: XCTestCase {
         XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])
         XCTAssertTrue(result.appliedRecordIDs.isEmpty)
         XCTAssertEqual(result.snapshot, localSnapshot)
+    }
+
+    func testLockedDayMaterializationKeepsLaterOfflineReviewAndRejectsCompletionUndo() throws {
+        let completed = NoonmarkEngine()
+        let chainID = try completed.createPoolTask(
+            title: "锁定日下载离线复盘",
+            now: now
+        )
+        let traceID = try completed.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+
+        let offline = try NoonmarkEngine(snapshot: completed.snapshot())
+        try offline.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        offline.updateDailyReview(
+            date: today,
+            summary: "下载后的离线复盘",
+            unfinishedReason: "下载后的原因",
+            tomorrowNote: "下载后的明日提醒",
+            now: now.addingTimeInterval(100)
+        )
+
+        let locked = try NoonmarkEngine(snapshot: completed.snapshot())
+        try locked.settleDays(
+            upTo: tomorrow,
+            now: now.addingTimeInterval(60)
+        )
+
+        let mapper = SyncRecordMapper()
+        let dayRecord = try mapper.record(
+            for: try XCTUnwrap(offline.days[today]),
+            modifiedBy: SyncDeviceID("offline-review-device")
+        )
+        let undoRecord = try mapper.record(
+            for: try XCTUnwrap(offline.traces[traceID]),
+            modifiedBy: SyncDeviceID("offline-undo-device")
+        )
+        let result = SyncRecordMerger(mapper: mapper).merge(
+            records: [undoRecord, dayRecord],
+            into: locked.snapshot(),
+            detectedAt: now.addingTimeInterval(120)
+        )
+
+        let mergedDay = try XCTUnwrap(
+            result.snapshot.days.first { $0.date == today }
+        )
+        let mergedTrace = try XCTUnwrap(
+            result.snapshot.traces.first { $0.id == traceID }
+        )
+        XCTAssertEqual(mergedDay.lockedAt, now.addingTimeInterval(60))
+        XCTAssertEqual(mergedDay.reviewSummary, "下载后的离线复盘")
+        XCTAssertEqual(mergedDay.reviewUnfinishedReason, "下载后的原因")
+        XCTAssertEqual(mergedDay.reviewTomorrowNote, "下载后的明日提醒")
+        XCTAssertEqual(mergedTrace.status, .completed)
+        XCTAssertEqual(mergedTrace.completedAt, now.addingTimeInterval(20))
+        XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])
     }
 
     func testAbandonedTraceCanReactivateInPlaceAfterParentChainBecomesActive() throws {
@@ -2159,13 +2358,20 @@ final class SyncRecordMergerTests: XCTestCase {
             now: now.addingTimeInterval(2)
         )
         let mapper = SyncRecordMapper()
-        let chainRecord = try mapper.record(
-            for: try XCTUnwrap(remote.chains[chainID]),
-            modifiedBy: SyncDeviceID("iphone-b")
+        let records = try SyncRecordMaterializer(mapper: mapper).records(
+            for: SyncSnapshotDiffer().journalEntries(
+                from: abandoned,
+                to: remote.snapshot(),
+                changedAt: now.addingTimeInterval(2),
+                deviceID: SyncDeviceID("iphone-b")
+            ),
+            in: remote.snapshot()
         )
-        let traceRecord = try mapper.record(
-            for: try XCTUnwrap(remote.traces[traceID]),
-            modifiedBy: SyncDeviceID("iphone-b")
+        let chainRecord = try XCTUnwrap(
+            records.first { $0.entityType == .taskChain }
+        )
+        let traceRecord = try XCTUnwrap(
+            records.first { $0.entityType == .dayTrace }
         )
 
         let result = SyncRecordMerger(mapper: mapper).merge(
@@ -2180,6 +2386,219 @@ final class SyncRecordMergerTests: XCTestCase {
         XCTAssertEqual(result.snapshot.traces.first?.id, traceID)
         XCTAssertEqual(result.snapshot.traces.first?.status, .pending)
         XCTAssertNil(result.snapshot.traces.first?.settledAt)
+    }
+
+    func testReactivationWitnessAuthorizesOfflineNoteSuccessorBeforeFirstSync() throws {
+        let local = NoonmarkEngine()
+        let chainID = try local.createPoolTask(
+            title: "恢复后离线继续编辑",
+            now: now
+        )
+        let traceID = try local.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try local.abandonChain(
+            from: traceID,
+            now: now.addingTimeInterval(20)
+        )
+        let abandoned = local.snapshot()
+
+        let offline = try NoonmarkEngine(snapshot: abandoned)
+        _ = try offline.reactivateAbandonedChain(
+            from: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        let reactivationJournal = try SyncSnapshotDiffer().journalEntries(
+            from: abandoned,
+            to: offline.snapshot(),
+            changedAt: now.addingTimeInterval(30),
+            deviceID: SyncDeviceID("offline-mac")
+        )
+
+        let noteID = try offline.appendTraceNote(
+            traceID: traceID,
+            body: "恢复后、首次同步前新增的附言",
+            today: today,
+            now: now.addingTimeInterval(40)
+        )
+        let mapper = SyncRecordMapper()
+        let records = try SyncRecordMaterializer(mapper: mapper).records(
+            for: reactivationJournal,
+            in: offline.snapshot()
+        )
+        let chainRecord = try XCTUnwrap(
+            records.first { $0.entityType == .taskChain }
+        )
+        let traceRecord = try XCTUnwrap(
+            records.first { $0.entityType == .dayTrace }
+        )
+        XCTAssertFalse(chainRecord.reactivationWitnesses.isEmpty)
+        XCTAssertEqual(
+            try mapper.decodeDayTrace(traceRecord).noteEntries.map(\.id),
+            [noteID]
+        )
+
+        let result = SyncRecordMerger(mapper: mapper).merge(
+            records: [traceRecord, chainRecord],
+            into: abandoned,
+            detectedAt: now.addingTimeInterval(50)
+        )
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertEqual(result.snapshot.chains.first?.state, .active)
+        let mergedTrace = try XCTUnwrap(
+            result.snapshot.traces.first { $0.id == traceID }
+        )
+        XCTAssertEqual(mergedTrace.status, .pending)
+        XCTAssertNil(mergedTrace.settledAt)
+        XCTAssertEqual(mergedTrace.noteEntries.map(\.id), [noteID])
+        XCTAssertEqual(
+            mergedTrace.activeNoteEntries.map(\.body),
+            ["恢复后、首次同步前新增的附言"]
+        )
+    }
+
+    func testStaleCompletionUndoCannotAuthorizeAbandonedChainReactivation() throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "完成撤销不能冒充恢复废弃",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+
+        let abandoned = try NoonmarkEngine(snapshot: base.snapshot())
+        try abandoned.abandonChain(
+            from: traceID,
+            now: now.addingTimeInterval(20)
+        )
+
+        let stale = try NoonmarkEngine(snapshot: base.snapshot())
+        try stale.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        try stale.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(40)
+        )
+
+        let mapper = SyncRecordMapper()
+        let staleRecords = [
+            try mapper.record(
+                for: try XCTUnwrap(stale.chains[chainID]),
+                modifiedBy: SyncDeviceID("stale-chain-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(stale.traces[traceID]),
+                modifiedBy: SyncDeviceID("stale-trace-device")
+            )
+        ]
+        var canonicalResults: [[SyncRecord]] = []
+
+        for records in [staleRecords, staleRecords.reversed()] {
+            let result = SyncRecordMerger(mapper: mapper).merge(
+                records: Array(records),
+                into: abandoned.snapshot(),
+                detectedAt: now.addingTimeInterval(50)
+            )
+            let mergedChain = try XCTUnwrap(
+                result.snapshot.chains.first { $0.id == chainID }
+            )
+            let mergedTrace = try XCTUnwrap(
+                result.snapshot.traces.first { $0.id == traceID }
+            )
+
+            XCTAssertEqual(mergedChain.state, .abandoned)
+            XCTAssertEqual(mergedTrace.status, .abandoned)
+            XCTAssertEqual(mergedTrace.settledAt, now.addingTimeInterval(20))
+            canonicalResults.append([
+                try mapper.record(
+                    for: mergedChain,
+                    modifiedBy: SyncDeviceID("canonical-device")
+                ),
+                try mapper.record(
+                    for: mergedTrace,
+                    modifiedBy: SyncDeviceID("canonical-device")
+                )
+            ])
+        }
+
+        XCTAssertEqual(canonicalResults[0], canonicalResults[1])
+    }
+
+    func testAbandonedChainMaterializationRejectsLaterStaleActiveRenameButMergesNotes() throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "下载时拒绝旧分支复活",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+
+        let abandoned = try NoonmarkEngine(snapshot: base.snapshot())
+        try abandoned.abandonChain(
+            from: traceID,
+            now: now.addingTimeInterval(20)
+        )
+
+        let staleActive = try NoonmarkEngine(snapshot: base.snapshot())
+        try staleActive.renameTaskTitle(
+            chainID: chainID,
+            title: "下载到的旧分支较晚改名",
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        var staleActiveChain = try XCTUnwrap(staleActive.chains[chainID])
+        staleActiveChain.noteEntries.append(
+            try TaskNoteEntry(
+                body: "下载到的旧 active 分支附言",
+                now: now.addingTimeInterval(40)
+            )
+        )
+
+        let mapper = SyncRecordMapper()
+        let chainRecord = try mapper.record(
+            for: staleActiveChain,
+            modifiedBy: SyncDeviceID("stale-active-chain-device")
+        )
+        let traceRecord = try mapper.record(
+            for: try XCTUnwrap(staleActive.traces[traceID]),
+            modifiedBy: SyncDeviceID("stale-active-trace-device")
+        )
+        let result = SyncRecordMerger(mapper: mapper).merge(
+            records: [traceRecord, chainRecord],
+            into: abandoned.snapshot(),
+            detectedAt: now.addingTimeInterval(50)
+        )
+
+        let mergedChain = try XCTUnwrap(
+            result.snapshot.chains.first { $0.id == chainID }
+        )
+        let mergedTrace = try XCTUnwrap(
+            result.snapshot.traces.first { $0.id == traceID }
+        )
+        XCTAssertEqual(mergedChain.state, .abandoned)
+        XCTAssertEqual(
+            mergedChain.activeNoteEntries.map(\.body),
+            ["下载到的旧 active 分支附言"]
+        )
+        XCTAssertEqual(mergedTrace.status, .abandoned)
+        XCTAssertEqual(mergedTrace.settledAt, now.addingTimeInterval(20))
     }
 
     func testAbandonedTraceReactivationRejectsImmutableFactTampering() throws {
@@ -2201,7 +2620,12 @@ final class SyncRecordMergerTests: XCTestCase {
             now: now.addingTimeInterval(2)
         )
         var tampered = try XCTUnwrap(remote.traces[traceID])
-        tampered.noteEntries = [TaskNoteEntry(body: "伪造的历史内容", now: now.addingTimeInterval(1))]
+        tampered.noteEntries = [
+            try TaskNoteEntry(
+                body: "伪造的历史内容",
+                now: now.addingTimeInterval(1)
+            )
+        ]
         let mapper = SyncRecordMapper()
         let chainRecord = try mapper.record(
             for: try XCTUnwrap(remote.chains[chainID]),
@@ -2216,6 +2640,62 @@ final class SyncRecordMergerTests: XCTestCase {
             records: [traceRecord, chainRecord],
             into: abandoned,
             detectedAt: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])
+        XCTAssertFalse(result.appliedRecordIDs.contains(traceRecord.id))
+        XCTAssertEqual(
+            result.snapshot.traces.first(where: { $0.id == traceID }),
+            abandoned.traces.first(where: { $0.id == traceID })
+        )
+    }
+
+    func testAbandonedTraceReactivationRejectsOmittedHistoricalNote() throws {
+        let local = NoonmarkEngine()
+        let chainID = try local.createPoolTask(
+            title: "恢复不可遗漏旧附言",
+            now: now
+        )
+        let traceID = try local.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        _ = try local.appendTraceNote(
+            traceID: traceID,
+            body: "恢复前已经存在的附言",
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try local.abandonChain(
+            from: traceID,
+            now: now.addingTimeInterval(2)
+        )
+        let abandoned = local.snapshot()
+
+        let remote = try NoonmarkEngine(snapshot: abandoned)
+        _ = try remote.reactivateAbandonedChain(
+            from: traceID,
+            today: today,
+            now: now.addingTimeInterval(3)
+        )
+        var omitted = try XCTUnwrap(remote.traces[traceID])
+        omitted.noteEntries = []
+
+        let mapper = SyncRecordMapper()
+        let chainRecord = try mapper.record(
+            for: try XCTUnwrap(remote.chains[chainID]),
+            modifiedBy: SyncDeviceID("iphone-b")
+        )
+        let traceRecord = try mapper.record(
+            for: omitted,
+            modifiedBy: SyncDeviceID("iphone-b")
+        )
+        let result = SyncRecordMerger(mapper: mapper).merge(
+            records: [traceRecord, chainRecord],
+            into: abandoned,
+            detectedAt: now.addingTimeInterval(4)
         )
 
         XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])

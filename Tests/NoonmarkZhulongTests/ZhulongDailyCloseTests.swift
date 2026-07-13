@@ -30,7 +30,7 @@ final class ZhulongDailyCloseTests: XCTestCase {
         XCTAssertNil(engine.days[date]?.lockedAt)
         XCTAssertEqual(engine.traces[traceID]?.status, .pending)
         XCTAssertEqual(before.counts.pending, 1)
-        engine.settleDays(upTo: nextDate, now: now.addingTimeInterval(2))
+        try engine.settleDays(upTo: nextDate, now: now.addingTimeInterval(2))
         let after = try ZhulongDailyCloseSnapshot(
             sessionID: sessionID,
             date: date,

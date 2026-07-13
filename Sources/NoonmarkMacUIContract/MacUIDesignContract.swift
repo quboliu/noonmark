@@ -31,8 +31,42 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
 }
 
 public enum MacUIWindowMetric: String, CaseIterable, Sendable {
-    case defaultLaunch1320x820
-    case maxContent1400x880
+    case defaultLaunch1000x768
+    case minimum960x720
+}
+
+public enum MacUIWindowLayout {
+    public static let defaultWidth = 1000.0
+    public static let defaultHeight = 768.0
+    public static let minimumWidth = 960.0
+    public static let minimumHeight = 720.0
+}
+
+public enum MacUIShellLayout {
+    public static let sidebarWidth = 220.0
+    public static let detailRailWidth = 280.0
+    public static let calendarRailWidth = 248.0
+    public static let pageHorizontalPadding = 20.0
+    public static let taskRowVerticalPadding = 8.0
+    public static let detailPadding = 14.0
+    public static let navigationRowHeight = 34.0
+}
+
+public enum MacUIIconMetrics {
+    public static let trafficLightDiameter = 12.0
+    public static let trafficLightHitTarget = 20.0
+    public static let clockLogoSize = 22.0
+    public static let navigationSize = 14.0
+}
+
+public enum MacUITypographyMetrics {
+    public static let scale = 0.92
+    public static let compactThreshold = 10.5
+
+    public static func compactPointSize(_ baseSize: Double) -> Double {
+        guard baseSize >= compactThreshold else { return baseSize }
+        return (baseSize * scale * 2).rounded() / 2
+    }
 }
 
 public enum MacUIColorToken: String, CaseIterable, Sendable {
@@ -401,9 +435,9 @@ public enum MacUIClassificationLayout {
 public enum MacUIZhulongHomeLayout {
     public static let contentMaxWidth = 780.0
     public static let headerOuterMaxWidth = 828.0
-    public static let composerHeight = 58.0
-    public static let composerCornerRadius = 29.0
-    public static let workflowRowHeight = 68.0
+    public static let composerHeight = 54.0
+    public static let composerCornerRadius = 27.0
+    public static let workflowRowHeight = 62.0
     public static let workflowListCount = 1
     public static let composerActionCount = 1
     public static let collapsesEmptyPendingSection = true

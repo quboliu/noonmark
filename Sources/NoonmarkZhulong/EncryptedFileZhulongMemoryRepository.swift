@@ -10,6 +10,14 @@ public struct EncryptedFileZhulongMemoryRepository: ZhulongMemoryRepository, @un
     private static let magic = Data("NOONMARK-ZHULONG-MEMORY".utf8)
     private static let formatVersion: UInt8 = 1
     private static let fileName = "memory.zhm"
+    private static let currentPlaintextKeys: Set<String> = [
+        "candidateDecisions",
+        "candidates",
+        "conflicts",
+        "isEnabled",
+        "memories",
+        "suppressionRules"
+    ]
 
     public let directoryURL: URL
     private let keySource: any ZhulongSidecarKeySource
@@ -90,10 +98,20 @@ public struct EncryptedFileZhulongMemoryRepository: ZhulongMemoryRepository, @un
             throw ZhulongSidecarRepositoryError.invalidCiphertext
         }
         do {
+            try validateCurrentPlaintextSchema(plaintext)
             let ledger = try decoder.decode(ZhulongMemoryLedger.self, from: plaintext)
             try ledger.validateForPersistence()
             return ledger
         } catch {
+            throw ZhulongSidecarRepositoryError.invalidCiphertext
+        }
+    }
+
+    private func validateCurrentPlaintextSchema(_ plaintext: Data) throws {
+        guard let object = try? JSONSerialization.jsonObject(with: plaintext),
+              let ledger = object as? [String: Any],
+              Set(ledger.keys) == Self.currentPlaintextKeys
+        else {
             throw ZhulongSidecarRepositoryError.invalidCiphertext
         }
     }

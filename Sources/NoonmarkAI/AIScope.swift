@@ -51,6 +51,20 @@ public struct AIUnfinishedPoolSnapshot: Equatable, Sendable {
     }
 }
 
+public struct AIClassificationCatalogSnapshot: Equatable, Sendable {
+    public let categories: [String]
+    public let labels: [String]
+
+    public var isEmpty: Bool {
+        categories.isEmpty && labels.isEmpty
+    }
+
+    public init(categories: [String] = [], labels: [String] = []) {
+        self.categories = categories
+        self.labels = labels
+    }
+}
+
 public struct AIScopeSnapshot: Equatable, Sendable {
     public let requestedAt: Date
     public let ranges: [AIScopeRange]
@@ -58,10 +72,10 @@ public struct AIScopeSnapshot: Equatable, Sendable {
     public let taskPool: [PoolTask]
     public let unfinishedPool: [AIUnfinishedPoolSnapshot]
     public let completedPool: [CompletedPoolItem]
-    public let labels: [String]
+    public let classifications: AIClassificationCatalogSnapshot
 
     public var isEmpty: Bool {
-        dayTodos.isEmpty && taskPool.isEmpty && unfinishedPool.isEmpty && completedPool.isEmpty && labels.isEmpty
+        dayTodos.isEmpty && taskPool.isEmpty && unfinishedPool.isEmpty && completedPool.isEmpty && classifications.isEmpty
     }
 
     public init(
@@ -71,7 +85,7 @@ public struct AIScopeSnapshot: Equatable, Sendable {
         taskPool: [PoolTask] = [],
         unfinishedPool: [AIUnfinishedPoolSnapshot] = [],
         completedPool: [CompletedPoolItem] = [],
-        labels: [String] = []
+        classifications: AIClassificationCatalogSnapshot = AIClassificationCatalogSnapshot()
     ) {
         self.requestedAt = requestedAt
         self.ranges = ranges
@@ -79,7 +93,7 @@ public struct AIScopeSnapshot: Equatable, Sendable {
         self.taskPool = taskPool
         self.unfinishedPool = unfinishedPool
         self.completedPool = completedPool
-        self.labels = labels
+        self.classifications = classifications
     }
 }
 
@@ -148,7 +162,10 @@ public extension AIScopeSnapshot {
             taskPool: scopes.flatMap(\.taskPool),
             unfinishedPool: scopes.flatMap(\.unfinishedPool),
             completedPool: scopes.flatMap(\.completedPool),
-            labels: Array(Set(scopes.flatMap(\.labels))).sorted()
+            classifications: AIClassificationCatalogSnapshot(
+                categories: Array(Set(scopes.flatMap(\.classifications.categories))).sorted(),
+                labels: Array(Set(scopes.flatMap(\.classifications.labels))).sorted()
+            )
         )
     }
 

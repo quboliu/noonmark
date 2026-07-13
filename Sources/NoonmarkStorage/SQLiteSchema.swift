@@ -25,8 +25,14 @@ public enum SQLiteSchema {
         CREATE TABLE IF NOT EXISTS task_chains (
             id TEXT PRIMARY KEY NOT NULL,
             state TEXT NOT NULL CHECK (state IN ('active', 'abandoned')),
+            note_entries_json TEXT NOT NULL CHECK (
+                json_valid(note_entries_json)
+                AND json_type(note_entries_json) = 'array'
+            ),
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
+            updated_at TEXT NOT NULL,
+            updated_at_bits INTEGER NOT NULL CHECK (typeof(updated_at_bits) = 'integer')
         )
         """,
         """
@@ -1352,12 +1358,9 @@ public enum SQLiteSchema {
             sequence INTEGER NOT NULL,
             title TEXT NOT NULL CHECK (length(trim(title)) > 0),
             description_text TEXT,
-            note_entries_json TEXT NOT NULL CHECK (
-                json_valid(note_entries_json)
-                AND json_type(note_entries_json) = 'array'
-            ),
             planned_subtasks_json TEXT,
             created_at TEXT NOT NULL,
+            content_updated_at TEXT NOT NULL,
             superseded_at TEXT,
             superseded_by_definition_id TEXT REFERENCES task_definitions(id),
             UNIQUE (chain_id, sequence)
@@ -1399,8 +1402,19 @@ public enum SQLiteSchema {
             continued_from_trace_id TEXT REFERENCES day_traces(id),
             changed_to_trace_id TEXT REFERENCES day_traces(id),
             created_at TEXT NOT NULL,
+            created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
+            content_updated_at TEXT NOT NULL,
+            content_updated_at_bits INTEGER NOT NULL CHECK (typeof(content_updated_at_bits) = 'integer'),
             completed_at TEXT,
-            settled_at TEXT
+            completed_at_bits INTEGER CHECK (
+                completed_at_bits IS NULL OR typeof(completed_at_bits) = 'integer'
+            ),
+            settled_at TEXT,
+            settled_at_bits INTEGER CHECK (
+                settled_at_bits IS NULL OR typeof(settled_at_bits) = 'integer'
+            ),
+            CHECK ((completed_at IS NULL) = (completed_at_bits IS NULL)),
+            CHECK ((settled_at IS NULL) = (settled_at_bits IS NULL))
         )
         """,
         """
@@ -1809,9 +1823,14 @@ public enum SQLiteSchema {
                 (
                     entity_type IN ('classificationCommit', 'traceClassificationEvent')
                     AND record_payload IS NOT NULL
+                    AND length(record_payload) > 0
                 )
                 OR (
-                    entity_type NOT IN ('classificationCommit', 'traceClassificationEvent')
+                    entity_type = 'taskChain'
+                    AND (record_payload IS NULL OR length(record_payload) > 0)
+                )
+                OR (
+                    entity_type NOT IN ('classificationCommit', 'traceClassificationEvent', 'taskChain')
                     AND record_payload IS NULL
                 )
             )
@@ -1927,7 +1946,7 @@ public enum SQLiteSchema {
             d.id AS definition_id,
             d.title,
             d.description_text,
-            d.note_entries_json,
+            c.note_entries_json,
             c.created_at,
             c.updated_at
         FROM task_chains c
@@ -1944,9 +1963,10 @@ public enum SQLiteSchema {
             t.*,
             d.title,
             d.description_text AS definition_description_text,
-            d.note_entries_json AS definition_note_entries_json
+            c.note_entries_json AS chain_note_entries_json
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
+        JOIN task_chains c ON c.id = t.chain_id
         WHERE t.status = 'pending'
         """,
         """
@@ -1955,9 +1975,10 @@ public enum SQLiteSchema {
             t.*,
             d.title,
             d.description_text AS definition_description_text,
-            d.note_entries_json AS definition_note_entries_json
+            c.note_entries_json AS chain_note_entries_json
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
+        JOIN task_chains c ON c.id = t.chain_id
         WHERE t.status IN ('unfinished', 'continued', 'abandoned')
         """,
         """
@@ -1967,7 +1988,7 @@ public enum SQLiteSchema {
             d.id AS definition_id,
             d.title,
             d.description_text,
-            d.note_entries_json,
+            c.note_entries_json,
             COUNT(u.id) AS unfinished_count,
             MAX(u.date) AS latest_unfinished_date,
             MAX(u.continuation_seq) AS max_continuation_seq,
@@ -1982,7 +2003,7 @@ public enum SQLiteSchema {
               SELECT 1 FROM day_traces done
               WHERE done.chain_id = c.id AND done.status = 'completed'
           )
-        GROUP BY c.id, d.id, d.title, d.description_text, d.note_entries_json, active.id, active.date
+        GROUP BY c.id, d.id, d.title, d.description_text, c.note_entries_json, active.id, active.date
         """,
         """
         CREATE VIEW IF NOT EXISTS completed_pool_view AS
@@ -1990,11 +2011,12 @@ public enum SQLiteSchema {
             t.*,
             d.title,
             d.description_text AS definition_description_text,
-            d.note_entries_json AS definition_note_entries_json,
+            c.note_entries_json AS chain_note_entries_json,
             first_trace.date AS trajectory_start_date,
             t.date AS trajectory_completed_date
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
+        JOIN task_chains c ON c.id = t.chain_id
         JOIN day_traces first_trace ON first_trace.id = (
             SELECT first.id
             FROM day_traces first
@@ -2095,9 +2117,10 @@ public enum SQLiteSchema {
             t.*,
             d.title,
             d.description_text AS definition_description_text,
-            d.note_entries_json AS definition_note_entries_json
+            c.note_entries_json AS chain_note_entries_json
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
+        JOIN task_chains c ON c.id = t.chain_id
         """
     ]
 }

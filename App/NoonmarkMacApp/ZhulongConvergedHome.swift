@@ -59,7 +59,7 @@ private struct ZhulongWorkspaceHome: View {
                 title: store.copy.zhulongClassificationTitle,
                 detail: store.copy.zhulongClassificationDetail,
                 intent: store.copy.zhulongClassificationIntent,
-                task: .labelClassification,
+                task: .classification,
                 isSuggestion: true
             )
         ]
@@ -79,7 +79,7 @@ private struct ZhulongWorkspaceHome: View {
             .frame(maxWidth: .infinity)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 22) {
                     intentComposer
                     workflowSection
                     if pendingCount > 0 {
@@ -88,14 +88,20 @@ private struct ZhulongWorkspaceHome: View {
                     }
                 }
                 .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.contentMaxWidth), alignment: .leading)
-                .padding(.horizontal, 24)
-                .padding(.top, 24)
-                .padding(.bottom, 40)
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+                .padding(.top, 20)
+                .padding(.bottom, 36)
                 .frame(maxWidth: .infinity, alignment: .top)
             }
         }
         .background(Theme.background)
         .accessibilityIdentifier("zhulong-converged-home")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "zhulong-converged-home",
+                verificationText: store.copy.navZhulong
+            )
+        }
     }
 
     private var intentComposer: some View {
@@ -108,14 +114,14 @@ private struct ZhulongWorkspaceHome: View {
                 onCommit: startIntent
             )
             .focused($intentIsFocused)
-            .frame(maxHeight: 38)
+            .frame(maxHeight: 36)
             .accessibilityIdentifier("zhulong-home-intent")
 
             Button(action: startIntent) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.noonmarkSystem(size: 11, weight: .bold))
                     .foregroundStyle(canSubmitIntent ? Theme.panel : Theme.text3)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 32, height: 32)
                     .background(Circle().fill(canSubmitIntent ? Theme.text1 : Theme.controlFill))
                     .overlay(Circle().stroke(canSubmitIntent ? Color.clear : Theme.line))
                     .contentShape(Circle())
@@ -125,8 +131,8 @@ private struct ZhulongWorkspaceHome: View {
             .accessibilityLabel("开始梳理")
             .accessibilityIdentifier("zhulong-home-submit")
         }
-        .padding(.leading, 18)
-        .padding(.trailing, 12)
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
         .frame(height: CGFloat(MacUIZhulongHomeLayout.composerHeight))
         .background(
             RoundedRectangle(cornerRadius: CGFloat(MacUIZhulongHomeLayout.composerCornerRadius))
@@ -145,7 +151,7 @@ private struct ZhulongWorkspaceHome: View {
                 workflowButton(workflow)
                 if index < workflows.count - 1 {
                     Divider()
-                        .padding(.leading, 38)
+                        .padding(.leading, 34)
                         .overlay(Theme.line.opacity(0.82))
                 }
             }
@@ -157,29 +163,29 @@ private struct ZhulongWorkspaceHome: View {
         Button {
             startWorkflow(workflow)
         } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 ZStack {
                     Circle()
                         .stroke(hoveredWorkflowID == workflow.id ? Theme.text2 : Theme.line, lineWidth: 1.2)
                     Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.noonmarkSystem(size: 10, weight: .medium))
                         .foregroundStyle(hoveredWorkflowID == workflow.id ? Theme.text1 : Theme.text3)
                 }
-                .frame(width: 24, height: 24)
+                .frame(width: 22, height: 22)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(workflow.title)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.noonmarkSystem(size: 13, weight: .semibold))
                             .foregroundStyle(Theme.text1)
                         if workflow.isSuggestion {
                             Text(store.copy.zhulongSuggestionMode)
-                                .font(.system(size: 9.5, weight: .medium))
+                                .font(.noonmarkSystem(size: 9.5, weight: .medium))
                                 .foregroundStyle(Theme.text3)
                         }
                     }
                     Text(workflow.detail)
-                        .font(.system(size: 11.3))
+                        .font(.noonmarkSystem(size: 11.3))
                         .foregroundStyle(Theme.text2)
                         .lineLimit(1)
                 }
@@ -209,6 +215,15 @@ private struct ZhulongWorkspaceHome: View {
             )
         )
         .accessibilityIdentifier("zhulong-home-workflow-\(workflow.id)")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "zhulong-home-workflow-\(workflow.id)",
+                verificationText: store.copy.zhulongWorkflowAccessibilityLabel(
+                    title: workflow.title,
+                    detail: workflow.detail
+                )
+            )
+        }
     }
 
     private var pendingSection: some View {
@@ -227,11 +242,11 @@ private struct ZhulongWorkspaceHome: View {
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.noonmarkSystem(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.text1)
             Spacer()
             Text("\(count) 项")
-                .font(.system(size: 10.5))
+                .font(.noonmarkSystem(size: 10.5))
                 .foregroundStyle(Theme.text3)
                 .monospacedDigit()
         }
@@ -268,20 +283,20 @@ private struct ZhulongWorkspaceSessionRow: View {
             HStack(spacing: 14) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.primaryIntent)
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.noonmarkSystem(size: 12.5, weight: .semibold))
                         .foregroundStyle(Theme.text1)
                         .lineLimit(1)
                     Text(sessionStatus)
-                        .font(.system(size: 10.8))
+                        .font(.noonmarkSystem(size: 10.8))
                         .foregroundStyle(Theme.text2)
                     Text("下一步：继续同一条追加式会话流")
-                        .font(.system(size: 10.5))
+                        .font(.noonmarkSystem(size: 10.5))
                         .foregroundStyle(Theme.text3)
                 }
 
                 Spacer(minLength: 10)
                 Text("继续")
-                    .font(.system(size: 10.8, weight: .semibold))
+                    .font(.noonmarkSystem(size: 10.8, weight: .semibold))
                     .foregroundStyle(Theme.accent)
             }
             .padding(.leading, 38)
@@ -375,12 +390,12 @@ private extension AppCopy {
     var zhulongClassificationTitle: String { language == .chinese ? "整理分组与标签" : "Organize groups and labels" }
     var zhulongClassificationDetail: String {
         language == .chinese
-            ? "审查现有分类，并提出可确认的整理建议"
+            ? "审查现有分组与标签，并提出可确认的整理建议"
             : "Review current classifications and suggest confirmable changes"
     }
 
     var zhulongClassificationIntent: String {
-        language == .chinese ? "整理任务的分组与标签分类" : "Organize task groups and label classifications"
+        language == .chinese ? "整理任务的分组与标签" : "Organize task groups and labels"
     }
 }
 
@@ -393,8 +408,8 @@ enum ZhulongHomeIntentResolver {
         if containsAny(["排期", "安排明天", "安排任务", "计划明天"], in: normalized) {
             return .scheduling
         }
-        if containsAny(["标签", "分类", "归类"], in: normalized) {
-            return .labelClassification
+        if containsAny(["分组", "标签", "分类", "归类"], in: normalized) {
+            return .classification
         }
         return .taskDecomposition
     }

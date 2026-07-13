@@ -285,46 +285,217 @@ public struct Day: Codable, Equatable, Sendable {
         self.createdAt = now
         self.updatedAt = now
     }
+
+    mutating func markContentModified(at now: Date) throws {
+        try ContentMutationClock.advance(&updatedAt, to: now)
+    }
 }
 
 public struct TaskChain: Codable, Equatable, Sendable {
     public var id: TaskChainID
     public var state: TaskChainState
+    public var noteEntries: [TaskNoteEntry]
     public var createdAt: Date
     public var updatedAt: Date
+
+    public var activeNoteEntries: [TaskNoteEntry] {
+        noteEntries.filter { !$0.isDeleted }
+    }
 
     public init(
         id: TaskChainID = TaskChainID(),
         state: TaskChainState = .active,
+        noteEntries: [TaskNoteEntry] = [],
         now: Date
     ) {
         self.id = id
         self.state = state
+        self.noteEntries = noteEntries
         self.createdAt = now
         self.updatedAt = now
+    }
+
+    mutating func markContentModified(at now: Date) throws {
+        try ContentMutationClock.advance(&updatedAt, to: now)
+    }
+}
+
+public enum TaskNoteEntryValidationIssue: Equatable, Sendable {
+    case duplicateIdentity
+    case invalidTimestamps
+    case invalidTombstone
+    case invalidActiveBody
+}
+
+public enum TaskNoteEntryValidator {
+    public static func firstIssue(
+        in entries: [TaskNoteEntry]
+    ) -> TaskNoteEntryValidationIssue? {
+        guard Set(entries.map(\.id)).count == entries.count else {
+            return .duplicateIdentity
+        }
+        for entry in entries {
+            guard TaskNoteEntry.isValidMutationTime(
+                entry.updatedAt,
+                notBefore: entry.createdAt
+            ) else {
+                return .invalidTimestamps
+            }
+            if let deletedAt = entry.deletedAt {
+                guard TaskNoteEntry.isValidMutationTime(
+                    deletedAt,
+                    notBefore: entry.createdAt
+                ), deletedAt == entry.updatedAt,
+                      entry.body.isEmpty
+                else {
+                    return .invalidTombstone
+                }
+            } else {
+                guard TaskNoteEntry.normalizedBody(entry.body) == entry.body else {
+                    return .invalidActiveBody
+                }
+            }
+        }
+        return nil
     }
 }
 
 public struct TaskNoteEntry: Codable, Equatable, Identifiable, Sendable {
-    public var id: TaskNoteEntryID
-    public var body: String
-    public var createdAt: Date
-    public var updatedAt: Date
-    public var deletedAt: Date?
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case body
+        case createdAt
+        case updatedAt
+        case deletedAt
+    }
 
-    public init(
+    public let id: TaskNoteEntryID
+    public private(set) var body: String
+    public let createdAt: Date
+    public private(set) var updatedAt: Date
+    public private(set) var deletedAt: Date?
+
+    init(
         id: TaskNoteEntryID = TaskNoteEntryID(),
         body: String,
         now: Date
-    ) {
+    ) throws {
+        guard let normalizedBody = Self.normalizedBody(body) else {
+            throw NoonmarkError.invalidTransition("task note body cannot be empty")
+        }
+        try Self.validateMutationTime(now, notBefore: now)
         self.id = id
-        self.body = body
+        self.body = normalizedBody
         self.createdAt = now
         self.updatedAt = now
         self.deletedAt = nil
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TaskNoteEntryID.self, forKey: .id)
+        body = try container.decode(String.self, forKey: .body)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+
+        if let issue = TaskNoteEntryValidator.firstIssue(in: [self]) {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Invalid task note entry: \(issue)"
+                )
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(body, forKey: .body)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(deletedAt, forKey: .deletedAt)
+    }
+
     public var isDeleted: Bool { deletedAt != nil }
+
+    mutating func edit(body: String, now: Date) throws {
+        guard !isDeleted else {
+            throw NoonmarkError.notFound("task note")
+        }
+        try Self.validateMutationTime(now, notBefore: updatedAt)
+        guard let normalizedBody = Self.normalizedBody(body) else {
+            throw NoonmarkError.invalidTransition("task note body cannot be empty")
+        }
+        self.body = normalizedBody
+        updatedAt = now
+    }
+
+    mutating func delete(now: Date) throws {
+        guard !isDeleted else {
+            throw NoonmarkError.notFound("task note")
+        }
+        try Self.validateMutationTime(now, notBefore: updatedAt)
+        body = ""
+        updatedAt = now
+        deletedAt = now
+    }
+
+    static func validateMutationTime(_ now: Date, notBefore lowerBound: Date) throws {
+        guard isValidMutationTime(now, notBefore: lowerBound) else {
+            throw NoonmarkError.invalidInput("task note mutation time cannot move backwards")
+        }
+    }
+
+    static func isValidMutationTime(_ now: Date, notBefore lowerBound: Date) -> Bool {
+        now.timeIntervalSinceReferenceDate.isFinite
+            && lowerBound.timeIntervalSinceReferenceDate.isFinite
+            && now >= lowerBound
+    }
+
+    static func normalizedBody(_ body: String) -> String? {
+        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalizedBody.isEmpty ? nil : normalizedBody
+    }
+}
+
+extension [TaskNoteEntry] {
+    mutating func editTaskNote(
+        id: TaskNoteEntryID,
+        body: String,
+        now: Date,
+        ownerUpdatedAt: Date? = nil
+    ) throws {
+        try mutateTaskNote(id: id, now: now, ownerUpdatedAt: ownerUpdatedAt) { entry in
+            try entry.edit(body: body, now: now)
+        }
+    }
+
+    mutating func deleteTaskNote(
+        id: TaskNoteEntryID,
+        now: Date,
+        ownerUpdatedAt: Date? = nil
+    ) throws {
+        try mutateTaskNote(id: id, now: now, ownerUpdatedAt: ownerUpdatedAt) { entry in
+            try entry.delete(now: now)
+        }
+    }
+
+    private mutating func mutateTaskNote(
+        id: TaskNoteEntryID,
+        now: Date,
+        ownerUpdatedAt: Date?,
+        mutation: (inout TaskNoteEntry) throws -> Void
+    ) throws {
+        guard let index = firstIndex(where: { $0.id == id && !$0.isDeleted }) else {
+            throw NoonmarkError.notFound("task note")
+        }
+        if let ownerUpdatedAt {
+            try TaskNoteEntry.validateMutationTime(now, notBefore: ownerUpdatedAt)
+        }
+        try mutation(&self[index])
+    }
 }
 
 public struct TaskDefinition: Codable, Equatable, Sendable {
@@ -333,15 +504,11 @@ public struct TaskDefinition: Codable, Equatable, Sendable {
     public var sequence: Int
     public var title: String
     public var descriptionText: String?
-    public var noteEntries: [TaskNoteEntry]
     public var plannedSubtasks: [PlannedSubtask]
     public var createdAt: Date
+    public private(set) var contentUpdatedAt: Date
     public var supersededAt: Date?
     public var supersededByDefinitionID: TaskDefinitionID?
-
-    public var activeNoteEntries: [TaskNoteEntry] {
-        noteEntries.filter { !$0.isDeleted }
-    }
 
     public init(
         id: TaskDefinitionID = TaskDefinitionID(),
@@ -349,20 +516,24 @@ public struct TaskDefinition: Codable, Equatable, Sendable {
         sequence: Int,
         title: String,
         descriptionText: String? = nil,
-        noteEntries: [TaskNoteEntry] = [],
         plannedSubtasks: [PlannedSubtask] = [],
-        now: Date
+        now: Date,
+        contentUpdatedAt: Date? = nil
     ) {
         self.id = id
         self.chainID = chainID
         self.sequence = sequence
         self.title = title
         self.descriptionText = descriptionText
-        self.noteEntries = noteEntries
         self.plannedSubtasks = plannedSubtasks.sorted { $0.position < $1.position }
         self.createdAt = now
+        self.contentUpdatedAt = contentUpdatedAt ?? now
         self.supersededAt = nil
         self.supersededByDefinitionID = nil
+    }
+
+    mutating func markContentModified(at now: Date) throws {
+        try ContentMutationClock.advance(&contentUpdatedAt, to: now)
     }
 }
 
@@ -405,6 +576,7 @@ public struct DayTrace: Codable, Equatable, Sendable {
     public var continuedFromTraceID: DayTraceID?
     public var changedToTraceID: DayTraceID?
     public var createdAt: Date
+    public private(set) var contentUpdatedAt: Date
     public var completedAt: Date?
     public var settledAt: Date?
 
@@ -424,7 +596,8 @@ public struct DayTrace: Codable, Equatable, Sendable {
         noteEntries: [TaskNoteEntry] = [],
         manualProgressPercent: Int? = nil,
         continuedFromTraceID: DayTraceID? = nil,
-        now: Date
+        now: Date,
+        contentUpdatedAt: Date? = nil
     ) {
         self.id = id
         self.chainID = chainID
@@ -439,8 +612,27 @@ public struct DayTrace: Codable, Equatable, Sendable {
         self.continuedFromTraceID = continuedFromTraceID
         self.changedToTraceID = nil
         self.createdAt = now
+        self.contentUpdatedAt = contentUpdatedAt ?? now
         self.completedAt = nil
         self.settledAt = nil
+    }
+
+    mutating func markContentModified(at now: Date) throws {
+        try ContentMutationClock.advance(&contentUpdatedAt, to: now)
+    }
+}
+
+private enum ContentMutationClock {
+    static func advance(_ clock: inout Date, to now: Date) throws {
+        guard clock.timeIntervalSinceReferenceDate.isFinite,
+              now.timeIntervalSinceReferenceDate.isFinite,
+              now >= clock
+        else {
+            throw NoonmarkError.invalidInput(
+                "content mutation time cannot move backwards"
+            )
+        }
+        clock = now
     }
 }
 

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 @testable import NoonmarkZhulong
 import XCTest
@@ -75,6 +76,31 @@ final class EncryptedZhulongMemoryRepositoryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: repository.fileURL.path))
     }
 
+    func testRepositoryRejectsCurrentEnvelopeWithUnknownTopLevelField() throws {
+        let repository = makeRepository(key: key)
+        try repository.save(try makeConfirmedLedger())
+        try rewriteStoredPlaintext(repository: repository) { object in
+            object["unexpectedPayload"] = ["enabled": true]
+        }
+
+        XCTAssertThrowsError(try repository.load()) { error in
+            XCTAssertEqual(error as? ZhulongSidecarRepositoryError, .invalidCiphertext)
+        }
+    }
+
+    func testRepositoryRejectsNoncurrentEnvelopeVersion() throws {
+        let repository = makeRepository(key: key)
+        try repository.save(try makeConfirmedLedger())
+        let magic = Data("NOONMARK-ZHULONG-MEMORY".utf8)
+        var envelope = try Data(contentsOf: repository.fileURL)
+        envelope[magic.count] = 2
+        try envelope.write(to: repository.fileURL, options: .atomic)
+
+        XCTAssertThrowsError(try repository.load()) { error in
+            XCTAssertEqual(error as? ZhulongSidecarRepositoryError, .unsupportedEnvelope)
+        }
+    }
+
     private func makeConfirmedLedger() throws -> ZhulongMemoryLedger {
         var ledger = ZhulongMemoryLedger(isEnabled: true)
         let candidate = try ZhulongMemoryCandidate(
@@ -98,6 +124,42 @@ final class EncryptedZhulongMemoryRepositoryTests: XCTestCase {
             directoryURL: directoryURL,
             keySource: FixedMemoryTestKeySource(key: key)
         )
+    }
+
+    private func rewriteStoredPlaintext(
+        repository: EncryptedFileZhulongMemoryRepository,
+        mutation: (inout [String: Any]) -> Void
+    ) throws {
+        let magic = Data("NOONMARK-ZHULONG-MEMORY".utf8)
+        let formatVersion: UInt8 = 1
+        let envelope = try Data(contentsOf: repository.fileURL)
+        let ciphertext = Data(envelope.dropFirst(magic.count + 1))
+        let sealedBox = try AES.GCM.SealedBox(combined: ciphertext)
+        var authenticatedData = magic
+        authenticatedData.append(formatVersion)
+        authenticatedData.append(Data("noonmark.zhulong.memory".utf8))
+        let plaintext = try AES.GCM.open(
+            sealedBox,
+            using: SymmetricKey(data: key),
+            authenticating: authenticatedData
+        )
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: plaintext) as? [String: Any]
+        )
+        mutation(&object)
+        let forgedPlaintext = try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        )
+        let forgedBox = try AES.GCM.seal(
+            forgedPlaintext,
+            using: SymmetricKey(data: key),
+            authenticating: authenticatedData
+        )
+        var forgedEnvelope = magic
+        forgedEnvelope.append(formatVersion)
+        forgedEnvelope.append(try XCTUnwrap(forgedBox.combined))
+        try forgedEnvelope.write(to: repository.fileURL, options: .atomic)
     }
 }
 

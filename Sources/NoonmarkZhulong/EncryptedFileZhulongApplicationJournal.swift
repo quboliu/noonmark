@@ -45,6 +45,15 @@ public struct ZhulongPendingApplication: Equatable, Sendable {
 public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
     private static let magic = Data("NOONMARK-ZHULONG-APPLICATION".utf8)
     private static let formatVersion: UInt8 = 1
+    private static let currentPlaintextKeys: Set<String> = [
+        "afterSession",
+        "afterSnapshot",
+        "beforeSnapshot",
+        "createdAt",
+        "id",
+        "kind",
+        "sessionID"
+    ]
 
     public let directoryURL: URL
     private let keySource: any ZhulongSidecarKeySource
@@ -118,10 +127,20 @@ public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
             throw ZhulongSidecarRepositoryError.invalidCiphertext
         }
         do {
+            try validateCurrentPlaintextSchema(plaintext)
             return try decoder.decode(ZhulongPendingApplicationRecord.self, from: plaintext).restore()
         } catch let error as ZhulongSidecarRepositoryError {
             throw error
         } catch {
+            throw ZhulongSidecarRepositoryError.invalidCiphertext
+        }
+    }
+
+    private func validateCurrentPlaintextSchema(_ plaintext: Data) throws {
+        guard let object = try? JSONSerialization.jsonObject(with: plaintext),
+              let application = object as? [String: Any],
+              Set(application.keys) == Self.currentPlaintextKeys
+        else {
             throw ZhulongSidecarRepositoryError.invalidCiphertext
         }
     }

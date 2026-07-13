@@ -2,6 +2,7 @@ import Foundation
 
 public enum SyncRecordTransportError: Error, Equatable, Sendable {
     case immutableRecordCollision(recordID: SyncRecordID)
+    case invalidCurrentRecordMerge(recordID: SyncRecordID)
 }
 
 extension SyncRecordTransportError: LocalizedError {
@@ -9,6 +10,8 @@ extension SyncRecordTransportError: LocalizedError {
         switch self {
         case let .immutableRecordCollision(recordID):
             "Immutable sync record collision for id \(recordID.rawValue)"
+        case let .invalidCurrentRecordMerge(recordID):
+            "Current sync records cannot be merged for id \(recordID.rawValue)"
         }
     }
 }
@@ -48,12 +51,27 @@ public extension SyncRecord {
             compareUTF8(entityID, other.entityID),
             compareUTF8(operation.rawValue, other.operation.rawValue),
             compareBytes(payload, other.payload),
+            compareDataArrays(
+                reactivationWitnesses,
+                other.reactivationWitnesses
+            ),
             compareUTF8(id.rawValue, other.id.rawValue)
         ] where order != .equivalent {
             return order
         }
         return .equivalent
     }
+}
+
+private func compareDataArrays(
+    _ lhs: [Data],
+    _ rhs: [Data]
+) -> SyncRecordLWWOrder {
+    for (left, right) in zip(lhs, rhs) {
+        let order = compareBytes(left, right)
+        if order != .equivalent { return order }
+    }
+    return compare(lhs.count, rhs.count)
 }
 
 extension SyncRecord {

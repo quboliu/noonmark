@@ -66,7 +66,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
         XCTAssertEqual(entries.map(\.entityID).last, "default")
     }
 
-    func testPoolNoteEditAndDeleteBecomeCurrentDefinitionSyncRecord() throws {
+    func testPoolNoteEditAndDeleteBecomeCurrentTaskChainSyncRecord() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(
             title: "附言 journal",
@@ -74,7 +74,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
             now: now
         )
         let editedID = try XCTUnwrap(
-            engine.taskPool().first?.definition.activeNoteEntries.first?.id
+            engine.taskPool().first?.chain.activeNoteEntries.first?.id
         )
         let deletedID = try engine.appendPoolNote(
             chainID: chainID,
@@ -102,20 +102,20 @@ final class SyncSnapshotDifferTests: XCTestCase {
             deviceID: SyncDeviceID("mac-a")
         )
 
-        XCTAssertEqual(entries.map(\.entityType), [.taskChain, .taskDefinition])
-        let definitionEntry = try XCTUnwrap(
-            entries.first { $0.entityType == .taskDefinition }
+        XCTAssertEqual(entries.map(\.entityType), [.taskChain])
+        let chainEntry = try XCTUnwrap(
+            entries.first { $0.entityType == .taskChain }
         )
         let record = try SyncRecordMaterializer().record(
-            for: definitionEntry,
+            for: chainEntry,
             in: newSnapshot
         )
-        let definition = try SyncRecordMapper().decodeTaskDefinition(record)
+        let chain = try SyncRecordMapper().decodeTaskChain(record)
 
         XCTAssertEqual(record.modifiedAt, now.addingTimeInterval(30))
-        XCTAssertEqual(definition.activeNoteEntries.map(\.body), ["编辑完成"])
+        XCTAssertEqual(chain.activeNoteEntries.map(\.body), ["编辑完成"])
         XCTAssertNotNil(
-            definition.noteEntries.first(where: { $0.id == deletedID })?.deletedAt
+            chain.noteEntries.first(where: { $0.id == deletedID })?.deletedAt
         )
     }
 
@@ -253,6 +253,68 @@ final class SyncSnapshotDifferTests: XCTestCase {
             merged.waitingRecords.isEmpty,
             "waiting=\(merged.waitingRecords.map { ($0.record.id, $0.dependencies) })"
         )
+        XCTAssertEqual(merged.snapshot, newSnapshot)
+        try merged.snapshot.validateIntegrity()
+    }
+
+    func testClassifiedPoolRemovalSyncsAsDeterministicCommitWithoutReceipt() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "同步移出已分类复制任务",
+            now: now
+        )
+        try commitClassification(
+            engine,
+            chainID: chainID,
+            category: .new(name: "工程", colorHex: "#2A6FDB"),
+            labels: [.new(name: "复制", colorHex: "#0E9488")],
+            ordinal: 9
+        )
+        let oldSnapshot = engine.snapshot()
+
+        XCTAssertEqual(
+            try engine.removeTaskFromPool(
+                chainID: chainID,
+                now: later.addingTimeInterval(20)
+            ),
+            .removedKeepingHistory
+        )
+        let newSnapshot = engine.snapshot()
+        let entries = try SyncSnapshotDiffer().journalEntries(
+            from: oldSnapshot,
+            to: newSnapshot,
+            changedAt: later.addingTimeInterval(20),
+            deviceID: SyncDeviceID("mac-a")
+        )
+        let commitEntry = try XCTUnwrap(entries.first {
+            $0.entityType == .classificationCommit
+        })
+        let envelope = try ClassificationCommitEnvelope.decode(
+            try XCTUnwrap(commitEntry.recordPayload)
+        )
+
+        XCTAssertEqual(
+            envelope.changeRecord.source,
+            .deterministicDomainAction(
+                reason: "task removed from task pool while preserving classification history"
+            )
+        )
+        XCTAssertNil(envelope.changeRecord.decisionID)
+        XCTAssertNil(envelope.receipt)
+        XCTAssertTrue(entries.contains {
+            $0.entityType == .taskChain && $0.entityID == chainID.description
+        })
+
+        let merged = SyncRecordMerger().merge(
+            records: try SyncRecordMaterializer().records(
+                for: entries,
+                in: newSnapshot
+            ),
+            into: oldSnapshot,
+            detectedAt: later.addingTimeInterval(20)
+        )
+        XCTAssertTrue(merged.conflicts.isEmpty, "conflicts=\(merged.conflicts)")
+        XCTAssertTrue(merged.waitingRecords.isEmpty)
         XCTAssertEqual(merged.snapshot, newSnapshot)
         try merged.snapshot.validateIntegrity()
     }

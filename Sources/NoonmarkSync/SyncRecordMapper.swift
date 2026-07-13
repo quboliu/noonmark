@@ -65,16 +65,36 @@ public struct SyncRecordMapper: Sendable {
         )
     }
 
-    public func record(for chain: TaskChain, modifiedBy deviceID: SyncDeviceID) throws -> SyncRecord {
+    public func record(
+        for chain: TaskChain,
+        modifiedBy deviceID: SyncDeviceID
+    ) throws -> SyncRecord {
+        try record(
+            for: chain,
+            modifiedBy: deviceID,
+            reactivationWitnesses: []
+        )
+    }
+
+    func record(
+        for chain: TaskChain,
+        modifiedBy deviceID: SyncDeviceID,
+        reactivationWitnesses: [ChainReactivationEnvelope]
+    ) throws -> SyncRecord {
         try makeRecord(
             header: RecordHeader(
                 id: "chain:\(chain.id.rawValue.uuidString)",
                 type: .taskChain,
                 entityID: chain.id.rawValue.uuidString,
-                modifiedAt: chain.updatedAt,
+                modifiedAt: chain.noteEntries.reduce(chain.updatedAt) {
+                    max($0, $1.updatedAt)
+                },
                 deviceID: deviceID
             ),
-            payload: chain
+            payload: chain,
+            reactivationWitnesses: try reactivationWitnesses.map {
+                try $0.canonicalData()
+            }
         )
     }
 
@@ -84,9 +104,7 @@ public struct SyncRecordMapper: Sendable {
                 id: "definition:\(definition.id.rawValue.uuidString)",
                 type: .taskDefinition,
                 entityID: definition.id.rawValue.uuidString,
-                modifiedAt: definition.noteEntries.reduce(
-                    definition.supersededAt ?? definition.createdAt
-                ) { max($0, $1.updatedAt) },
+                modifiedAt: definition.contentUpdatedAt,
                 deviceID: deviceID
             ),
             payload: definition
@@ -103,7 +121,7 @@ public struct SyncRecordMapper: Sendable {
                 type: .dayTrace,
                 entityID: trace.id.rawValue.uuidString,
                 modifiedAt: trace.noteEntries.reduce(
-                    trace.settledAt ?? trace.completedAt ?? trace.createdAt
+                    trace.contentUpdatedAt
                 ) { max($0, $1.updatedAt) },
                 deviceID: deviceID
             ),
@@ -296,7 +314,8 @@ public struct SyncRecordMapper: Sendable {
 
     private func makeRecord(
         header: RecordHeader,
-        payload: some Codable
+        payload: some Codable,
+        reactivationWitnesses: [Data] = []
     ) throws -> SyncRecord {
         let envelope = CurrentSyncPayloadEnvelope(
             formatVersion: Self.currentOrdinaryPayloadFormatVersion,
@@ -308,7 +327,8 @@ public struct SyncRecordMapper: Sendable {
             entityID: header.entityID,
             modifiedAt: header.modifiedAt,
             modifiedByDeviceID: header.deviceID,
-            payload: try encoder.encode(envelope)
+            payload: try encoder.encode(envelope),
+            reactivationWitnesses: reactivationWitnesses
         )
     }
 

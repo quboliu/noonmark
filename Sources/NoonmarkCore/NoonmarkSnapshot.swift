@@ -75,10 +75,32 @@ public extension NoonmarkSnapshot {
         guard traceIDs.count == traces.count else {
             throw NoonmarkError.invalidInput("snapshot contains duplicate trace identities")
         }
+        for chain in chains {
+            guard chain.createdAt.timeIntervalSinceReferenceDate.isFinite,
+                  chain.updatedAt.timeIntervalSinceReferenceDate.isFinite,
+                  chain.updatedAt >= chain.createdAt
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task chain contains an invalid content clock"
+                )
+            }
+            try validateTaskNoteEntries(chain.noteEntries, owner: "task chain")
+        }
         for definition in definitions {
-            try validateTaskNoteEntries(definition.noteEntries, owner: "task definition")
+            try validateContentClock(
+                createdAt: definition.createdAt,
+                contentUpdatedAt: definition.contentUpdatedAt,
+                terminalDates: [definition.supersededAt],
+                owner: "task definition"
+            )
         }
         for trace in traces {
+            try validateContentClock(
+                createdAt: trace.createdAt,
+                contentUpdatedAt: trace.contentUpdatedAt,
+                terminalDates: [trace.completedAt, trace.settledAt],
+                owner: "day trace"
+            )
             try validateTaskNoteEntries(trace.noteEntries, owner: "day trace")
         }
         try validateClassificationReferences(
@@ -92,28 +114,41 @@ public extension NoonmarkSnapshot {
         _ entries: [TaskNoteEntry],
         owner: String
     ) throws {
-        guard Set(entries.map(\.id)).count == entries.count else {
+        switch TaskNoteEntryValidator.firstIssue(in: entries) {
+        case .none:
+            return
+        case .duplicateIdentity:
             throw NoonmarkError.invalidInput("\(owner) contains duplicate task note identities")
+        case .invalidTimestamps:
+            throw NoonmarkError.invalidInput("\(owner) contains invalid task note timestamps")
+        case .invalidTombstone:
+            throw NoonmarkError.invalidInput("\(owner) contains an invalid task note tombstone")
+        case .invalidActiveBody:
+            throw NoonmarkError.invalidInput("\(owner) contains an invalid active task note")
         }
-        for entry in entries {
-            guard entry.createdAt.timeIntervalSinceReferenceDate.isFinite,
-                  entry.updatedAt.timeIntervalSinceReferenceDate.isFinite,
-                  entry.updatedAt >= entry.createdAt
+    }
+
+    private func validateContentClock(
+        createdAt: Date,
+        contentUpdatedAt: Date,
+        terminalDates: [Date?],
+        owner: String
+    ) throws {
+        guard TaskNoteEntry.isValidMutationTime(
+            contentUpdatedAt,
+            notBefore: createdAt
+        ) else {
+            throw NoonmarkError.invalidInput("\(owner) contains an invalid content clock")
+        }
+        for terminalDate in terminalDates.compactMap({ $0 }) {
+            guard TaskNoteEntry.isValidMutationTime(
+                terminalDate,
+                notBefore: createdAt
+            ), contentUpdatedAt >= terminalDate
             else {
-                throw NoonmarkError.invalidInput("\(owner) contains invalid task note timestamps")
-            }
-            if let deletedAt = entry.deletedAt {
-                guard deletedAt.timeIntervalSinceReferenceDate.isFinite,
-                      deletedAt == entry.updatedAt,
-                      entry.body.isEmpty
-                else {
-                    throw NoonmarkError.invalidInput("\(owner) contains an invalid task note tombstone")
-                }
-            } else {
-                let normalizedBody = entry.body.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard normalizedBody.isEmpty == false, normalizedBody == entry.body else {
-                    throw NoonmarkError.invalidInput("\(owner) contains an invalid active task note")
-                }
+                throw NoonmarkError.invalidInput(
+                    "\(owner) content clock does not cover its terminal state"
+                )
             }
         }
     }

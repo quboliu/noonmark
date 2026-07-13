@@ -41,7 +41,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         let chainID = try local.createPoolTask(title: "本地历史任务", now: now)
         let traceID = try local.scheduleFromPool(chainID: chainID, date: today, today: today, now: now)
         try local.markCompleted(traceID: traceID, today: today, now: now.addingTimeInterval(1))
-        local.settleDays(upTo: LocalDate("2026-07-06"), now: now.addingTimeInterval(2))
+        try local.settleDays(upTo: LocalDate("2026-07-06"), now: now.addingTimeInterval(2))
         let localSnapshot = local.snapshot()
         try engineRepository.save(localSnapshot)
 

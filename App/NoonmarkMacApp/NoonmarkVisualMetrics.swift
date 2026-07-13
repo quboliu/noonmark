@@ -1,0 +1,69 @@
+import AppKit
+import NoonmarkMacUIContract
+import SwiftUI
+
+enum NoonmarkVisualMetrics {
+    static let launchSize = NSSize(
+        width: MacUIWindowLayout.defaultWidth,
+        height: MacUIWindowLayout.defaultHeight
+    )
+    static let minimumSize = NSSize(
+        width: MacUIWindowLayout.minimumWidth,
+        height: MacUIWindowLayout.minimumHeight
+    )
+
+    static let sidebarWidth = CGFloat(MacUIShellLayout.sidebarWidth)
+    static let detailRailWidth = CGFloat(MacUIShellLayout.detailRailWidth)
+    static let calendarRailWidth = CGFloat(MacUIShellLayout.calendarRailWidth)
+    static let pageHorizontalPadding = CGFloat(MacUIShellLayout.pageHorizontalPadding)
+    static let taskRowVerticalPadding = CGFloat(MacUIShellLayout.taskRowVerticalPadding)
+    static let detailPadding = CGFloat(MacUIShellLayout.detailPadding)
+    static let navigationRowHeight = CGFloat(MacUIShellLayout.navigationRowHeight)
+
+    static let trafficLightDiameter = CGFloat(MacUIIconMetrics.trafficLightDiameter)
+    static let trafficLightHitTarget = CGFloat(MacUIIconMetrics.trafficLightHitTarget)
+    static let clockLogoSize = CGFloat(MacUIIconMetrics.clockLogoSize)
+    static let navigationIconSize = CGFloat(MacUIIconMetrics.navigationSize)
+
+    static func compactPointSize(_ baseSize: CGFloat) -> CGFloat {
+        CGFloat(MacUITypographyMetrics.compactPointSize(Double(baseSize)))
+    }
+}
+
+extension Font {
+    static func noonmarkSystem(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default
+    ) -> Font {
+        .system(
+            size: NoonmarkVisualMetrics.compactPointSize(size),
+            weight: weight,
+            design: design
+        )
+    }
+
+    static func noonmarkCustom(_ name: String, size: CGFloat) -> Font {
+        .custom(name, size: NoonmarkVisualMetrics.compactPointSize(size))
+    }
+
+    static func noonmarkRenderedSystem(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default
+    ) -> Font {
+        .system(size: size, weight: weight, design: design)
+    }
+}
+
+extension NSFont {
+    static func noonmarkSystemFont(
+        ofSize size: CGFloat,
+        weight: NSFont.Weight = .regular
+    ) -> NSFont {
+        .systemFont(
+            ofSize: NoonmarkVisualMetrics.compactPointSize(size),
+            weight: weight
+        )
+    }
+}

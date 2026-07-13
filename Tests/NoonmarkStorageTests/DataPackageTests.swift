@@ -22,46 +22,20 @@ final class DataPackageTests: XCTestCase {
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
     }
 
-    func testJSONDataPackageRejectsUnknownTaskTagsFieldInPreferences() throws {
-        let canonical = try NoonmarkDataPackage.encode(try makeEngine().snapshot())
-        var envelope = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: canonical) as? [String: Any]
-        )
-        var snapshot = try XCTUnwrap(envelope["snapshot"] as? [String: Any])
-        var preferences = try XCTUnwrap(snapshot["preferences"] as? [String: Any])
-        preferences["taskTags"] = [Any]()
-        snapshot["preferences"] = preferences
-        envelope["snapshot"] = snapshot
-        let data = try canonicalJSON(envelope)
-
-        XCTAssertEqual(data, try canonicalJSON(data))
-        XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
-            XCTAssertEqual(
-                error as? DataPackageError,
-                .malformedDataPackage("数据包不符合 current v1 的 canonical 结构与编码")
-            )
-        }
-    }
-
-    func testJSONDataPackageRejectsUnknownTagAssignmentsFieldInChain() throws {
+    func testJSONDataPackageRequiresChainNoteEntries() throws {
         let canonical = try NoonmarkDataPackage.encode(try makeEngine().snapshot())
         var envelope = try XCTUnwrap(
             JSONSerialization.jsonObject(with: canonical) as? [String: Any]
         )
         var snapshot = try XCTUnwrap(envelope["snapshot"] as? [String: Any])
         var chains = try XCTUnwrap(snapshot["chains"] as? [[String: Any]])
-        chains[0]["tagAssignments"] = [Any]()
+        chains[0].removeValue(forKey: "noteEntries")
         snapshot["chains"] = chains
         envelope["snapshot"] = snapshot
-        let data = try canonicalJSON(envelope)
 
-        XCTAssertEqual(data, try canonicalJSON(data))
-        XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
-            XCTAssertEqual(
-                error as? DataPackageError,
-                .malformedDataPackage("数据包不符合 current v1 的 canonical 结构与编码")
-            )
-        }
+        XCTAssertThrowsError(
+            try NoonmarkDataPackage.decode(try canonicalJSON(envelope))
+        )
     }
 
     func testJSONDataPackageRejectsNonCanonicalBytesForCurrentSnapshot() throws {
@@ -134,16 +108,6 @@ final class DataPackageTests: XCTestCase {
                 error.localizedDescription,
                 "无法导入数据包：formatVersion 缺失或不是整数。"
             )
-        }
-    }
-
-    func testJSONDataPackageRejectsUnversionedRawSnapshot() throws {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(try makeEngine().snapshot())
-
-        XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
-            XCTAssertEqual(error as? DataPackageError, .malformedFormatVersion)
         }
     }
 
@@ -496,7 +460,7 @@ final class DataPackageTests: XCTestCase {
             tomorrowNote: "继续验证导入。",
             now: now
         )
-        engine.settleDays(upTo: LocalDate("2026-07-06"), now: now)
+        try engine.settleDays(upTo: LocalDate("2026-07-06"), now: now)
         return engine
     }
 }

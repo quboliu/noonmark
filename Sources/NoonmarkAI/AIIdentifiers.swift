@@ -12,15 +12,3 @@ public struct AIProviderID: Codable, Hashable, Sendable, CustomStringConvertible
         rawValue
     }
 }
-
-public struct AISuggestionDraftID: Codable, Hashable, Sendable, CustomStringConvertible {
-    public let rawValue: UUID
-
-    public init(_ rawValue: UUID = UUID()) {
-        self.rawValue = rawValue
-    }
-
-    public var description: String {
-        rawValue.uuidString
-    }
-}

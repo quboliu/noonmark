@@ -1762,12 +1762,7 @@ public extension NoonmarkEngine {
             throw NoonmarkError.invalidInput("classification confirmation does not authorize this plan")
         }
         let decisionID = confirmation.decisionID
-        guard try plan.hasValidDigest() else {
-            throw NoonmarkError.invalidInput("classification plan digest does not match its contents")
-        }
-        guard plan.blockers.isEmpty else {
-            throw NoonmarkError.invalidTransition("classification plan has unresolved blockers")
-        }
+        try validateClassificationCommit(plan)
         if let committed = classificationState.committedReceiptsByInteractionID[plan.interactionID] {
             guard committed.planID == plan.id else {
                 throw NoonmarkError.invalidInput("classification interaction id was already used")
@@ -1787,6 +1782,61 @@ public extension NoonmarkEngine {
             }
             return committed
         }
+        guard let receipt = try applyClassificationCommit(
+            plan,
+            decisionID: decisionID,
+            recordsUserReceipt: true,
+            now: now
+        ) else {
+            throw NoonmarkError.invalidInput(
+                "user-authorized classification commit did not create a receipt"
+            )
+        }
+        return receipt
+    }
+
+    internal func commitDeterministicDomainClassification(
+        _ plan: ClassificationPlan,
+        now: Date = Date()
+    ) throws {
+        guard case .deterministicDomainAction = plan.source else {
+            throw NoonmarkError.invalidInput(
+                "deterministic classification commit requires a domain-action source"
+            )
+        }
+        try validateClassificationCommit(plan)
+        guard classificationState.committedReceiptsByInteractionID[plan.interactionID] == nil,
+              classificationState.changeRecords.contains(where: {
+                  $0.interactionID == plan.interactionID
+              }) == false
+        else {
+            throw NoonmarkError.invalidInput("classification interaction id was already used")
+        }
+        _ = try applyClassificationCommit(
+            plan,
+            decisionID: nil,
+            recordsUserReceipt: false,
+            now: now
+        )
+    }
+
+    private func validateClassificationCommit(
+        _ plan: ClassificationPlan
+    ) throws {
+        guard try plan.hasValidDigest() else {
+            throw NoonmarkError.invalidInput("classification plan digest does not match its contents")
+        }
+        guard plan.blockers.isEmpty else {
+            throw NoonmarkError.invalidTransition("classification plan has unresolved blockers")
+        }
+    }
+
+    private func applyClassificationCommit(
+        _ plan: ClassificationPlan,
+        decisionID: UUID?,
+        recordsUserReceipt: Bool,
+        now: Date
+    ) throws -> ClassificationReceipt? {
         guard plan.baseRevision == classificationState.revision else {
             throw NoonmarkError.invalidTransition("classification plan is stale")
         }
@@ -1823,15 +1873,21 @@ public extension NoonmarkEngine {
         next.changeRecords = try ClassificationAuditCanonicalOrder.changeRecords(
             next.changeRecords + [changeRecord]
         )
-        let receipt = ClassificationReceipt(
-            planID: plan.id,
-            revision: next.revision,
-            notices: plan.notices,
-            changeRecordID: changeRecord.id,
-            decisionID: decisionID,
-            changeRecordIntegrityDigest: changeRecord.integrityDigest
-        )
-        next.committedReceiptsByInteractionID[plan.interactionID] = receipt
+        let receipt: ClassificationReceipt? = if recordsUserReceipt {
+            ClassificationReceipt(
+                planID: plan.id,
+                revision: next.revision,
+                notices: plan.notices,
+                changeRecordID: changeRecord.id,
+                decisionID: decisionID,
+                changeRecordIntegrityDigest: changeRecord.integrityDigest
+            )
+        } else {
+            nil
+        }
+        if let receipt {
+            next.committedReceiptsByInteractionID[plan.interactionID] = receipt
+        }
         classificationState = next
         return receipt
     }

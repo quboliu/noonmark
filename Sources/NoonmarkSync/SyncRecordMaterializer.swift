@@ -60,7 +60,24 @@ public struct SyncRecordMaterializer: Sendable {
         guard let chain = snapshot.chains.first(where: { $0.id.rawValue.uuidString == entry.entityID }) else {
             throw SyncRecordMaterializerError.missingEntity(entry.entityType, entry.entityID)
         }
-        return try mapper.record(for: chain, modifiedBy: entry.deviceID)
+        let witnesses: [ChainReactivationEnvelope]
+        if let payload = entry.recordPayload {
+            do {
+                witnesses = [try ChainReactivationEnvelope.decode(payload)]
+            } catch {
+                throw SyncRecordMaterializerError.invalidImmutablePayload(
+                    entry.entityType,
+                    entry.entityID
+                )
+            }
+        } else {
+            witnesses = []
+        }
+        return try mapper.record(
+            for: chain,
+            modifiedBy: entry.deviceID,
+            reactivationWitnesses: witnesses
+        )
     }
 
     private func definitionRecord(for entry: SyncJournalEntry, in snapshot: NoonmarkSnapshot) throws -> SyncRecord {

@@ -1,6 +1,6 @@
-# 烛龙极简首页视觉基准
+# 烛龙极简首页历史设计记录
 
-> 当前唯一视觉基准。`noonmark-mac-prototype.dc.html` 用于真实 `.app` 截图的量化视觉对比，不提供历史方案或方案切换器。
+> 归档设计材料。它不再是当前产品、测试 fixture 或视觉回归 oracle；当前验收只使用真实 `.app`、`NoonmarkMacUIContract` 与用户确认的真实 App reference。
 
 ## 要回答的问题
 

@@ -1,5 +1,7 @@
 # 烛龙 Agent 框架调研
 
+> 历史研究记录（2026-07-05）：本文保留早期框架取舍的来源证据，已被 ADR-0015 的 clean-sheet cutover 与当前烛龙会话模型取代。文中的 `AIProviderRegistry`、`ZhulongAgent`、`AISuggestionDraft` 和“应用草稿”不是当前接口、测试目标或兼容路径。
+
 本文记录对 `/home/muxunting/WorkSpace/Aranya/CodeStudy/deep-into-agent/exemplar_project/` 下多个 agent 框架的源码调研，并给出晷迹第一版烛龙的框架取舍。
 
 ## 调研对象

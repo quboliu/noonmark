@@ -364,6 +364,1340 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         }
     }
 
+    func testTaskChainNotesConvergeForEveryWritePermutationAcrossTransports() async throws {
+        let fixture = try makeDivergentChainRecords()
+        let mapper = SyncRecordMapper()
+        var expectedRecord: SyncRecord?
+
+        for writes in permutations(of: fixture.records) {
+            let folderURL = makeFolderURL()
+            let local = LocalFolderSyncTransport(rootURL: folderURL)
+            let memory = InMemorySyncTransport()
+            for record in writes {
+                try await local.push([record])
+                try await memory.push([record])
+            }
+
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            let localRecord = try XCTUnwrap(localRecords.only)
+            let memoryRecord = try XCTUnwrap(memoryRecords.only)
+            let chain = try mapper.decodeTaskChain(localRecord)
+
+            XCTAssertEqual(localRecord, memoryRecord)
+            XCTAssertEqual(
+                Set(chain.activeNoteEntries.map(\.body)),
+                ["Mac 离线新增", "Phone 离线新增"]
+            )
+            XCTAssertTrue(
+                try XCTUnwrap(
+                    chain.noteEntries.first { $0.id == fixture.originalNoteID }
+                ).isDeleted
+            )
+            if let expectedRecord {
+                XCTAssertEqual(localRecord, expectedRecord)
+            } else {
+                expectedRecord = localRecord
+            }
+
+            let latestSnapshotID = try String(
+                contentsOf: folderURL.appendingPathComponent("refs/latest"),
+                encoding: .utf8
+            )
+            let snapshots = try await local.fetchSnapshots()
+            let latestSnapshot = try XCTUnwrap(
+                snapshots.first { $0.id == latestSnapshotID }
+            )
+            let expectedSnapshot = try SyncRepositorySnapshotBuilder().snapshot(
+                records: [localRecord],
+                createdAt: latestSnapshot.createdAt,
+                deviceID: latestSnapshot.deviceID
+            )
+            XCTAssertEqual(latestSnapshot.payloadDigest, expectedSnapshot.payloadDigest)
+        }
+    }
+
+    func testPendingTraceNotesConvergeForEveryWritePermutationAcrossTransports() async throws {
+        let fixture = try makeDivergentTraceRecords()
+        let mapper = SyncRecordMapper()
+        var expectedRecord: SyncRecord?
+
+        for writes in permutations(of: fixture.records) {
+            let folderURL = makeFolderURL()
+            let local = LocalFolderSyncTransport(rootURL: folderURL)
+            let memory = InMemorySyncTransport()
+            for record in writes {
+                try await local.push([record])
+                try await memory.push([record])
+            }
+
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            let localRecord = try XCTUnwrap(localRecords.only)
+            let memoryRecord = try XCTUnwrap(memoryRecords.only)
+            let trace = try mapper.decodeDayTrace(localRecord)
+
+            XCTAssertEqual(localRecord, memoryRecord)
+            XCTAssertEqual(trace.status, .pending)
+            XCTAssertEqual(
+                Set(trace.activeNoteEntries.map(\.body)),
+                ["Mac 轨迹新增", "Phone 轨迹新增"]
+            )
+            XCTAssertTrue(
+                try XCTUnwrap(
+                    trace.noteEntries.first { $0.id == fixture.originalNoteID }
+                ).isDeleted
+            )
+            if let expectedRecord {
+                XCTAssertEqual(localRecord, expectedRecord)
+            } else {
+                expectedRecord = localRecord
+            }
+        }
+    }
+
+    func testPoolTitleAndChainNotesPublishAsIndependentCurrentRecords() async throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(title: "共同标题", now: now)
+        let snapshot = base.snapshot()
+
+        let mac = try NoonmarkEngine(snapshot: snapshot)
+        try mac.updatePoolTask(
+            chainID: chainID,
+            title: "Mac 新标题",
+            now: now.addingTimeInterval(10)
+        )
+
+        let phone = try NoonmarkEngine(snapshot: snapshot)
+        try phone.updatePoolTask(
+            chainID: chainID,
+            title: "共同标题",
+            now: now.addingTimeInterval(15)
+        )
+        _ = try phone.appendPoolNote(
+            chainID: chainID,
+            body: "Phone 稍后新增附言",
+            now: now.addingTimeInterval(20)
+        )
+
+        let mapper = SyncRecordMapper()
+        let macDefinitionRecord = try mapper.record(
+            for: try XCTUnwrap(mac.snapshot().definitions.first),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let phoneChainRecord = try mapper.record(
+            for: try XCTUnwrap(phone.snapshot().chains.first),
+            modifiedBy: SyncDeviceID("phone-z")
+        )
+
+        for writes in permutations(of: [macDefinitionRecord, phoneChainRecord]) {
+            let folderURL = makeFolderURL()
+            let local = LocalFolderSyncTransport(rootURL: folderURL)
+            let memory = InMemorySyncTransport()
+            for record in writes {
+                try await local.push([record])
+                try await memory.push([record])
+            }
+
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            XCTAssertEqual(localRecords, memoryRecords)
+            let mergedDefinition = try mapper.decodeTaskDefinition(
+                XCTUnwrap(localRecords.first { $0.entityType == .taskDefinition })
+            )
+            let mergedChain = try mapper.decodeTaskChain(
+                XCTUnwrap(localRecords.first { $0.entityType == .taskChain })
+            )
+            XCTAssertEqual(mergedDefinition.title, "Mac 新标题")
+            XCTAssertEqual(
+                mergedChain.activeNoteEntries.map(\.body),
+                ["Phone 稍后新增附言"]
+            )
+        }
+    }
+
+    func testPendingTraceContentChangeSurvivesLaterNoteOnlyChangeAcrossTransports() async throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(title: "轨迹内容", now: now)
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let snapshot = base.snapshot()
+
+        let mac = try NoonmarkEngine(snapshot: snapshot)
+        try mac.updateTraceText(
+            traceID: traceID,
+            descriptionText: "Mac 新描述",
+            today: today,
+            now: now.addingTimeInterval(10)
+        )
+
+        let phone = try NoonmarkEngine(snapshot: snapshot)
+        _ = try phone.appendTraceNote(
+            traceID: traceID,
+            body: "Phone 稍后新增附言",
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+
+        let mapper = SyncRecordMapper()
+        let macRecord = try mapper.record(
+            for: try XCTUnwrap(mac.traces[traceID]),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let phoneRecord = try mapper.record(
+            for: try XCTUnwrap(phone.traces[traceID]),
+            modifiedBy: SyncDeviceID("phone-z")
+        )
+
+        for writes in permutations(of: [macRecord, phoneRecord]) {
+            let folderURL = makeFolderURL()
+            let local = LocalFolderSyncTransport(rootURL: folderURL)
+            let memory = InMemorySyncTransport()
+            for record in writes {
+                try await local.push([record])
+                try await memory.push([record])
+            }
+
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            let localRecord = try XCTUnwrap(localRecords.only)
+            let memoryRecord = try XCTUnwrap(memoryRecords.only)
+            let merged = try mapper.decodeDayTrace(localRecord)
+
+            XCTAssertEqual(localRecord, memoryRecord)
+            XCTAssertEqual(merged.descriptionText, "Mac 新描述")
+            XCTAssertEqual(merged.activeNoteEntries.map(\.body), ["Phone 稍后新增附言"])
+        }
+    }
+
+    func testCompletedTraceBeatsLaterStalePendingEditAcrossTransports() async throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(title: "完成态优先", now: now)
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let snapshot = base.snapshot()
+
+        let completed = try NoonmarkEngine(snapshot: snapshot)
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+        let stale = try NoonmarkEngine(snapshot: snapshot)
+        try stale.updateTraceText(
+            traceID: traceID,
+            descriptionText: "离线设备的迟到描述",
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+
+        let mapper = SyncRecordMapper()
+        let records = [
+            try mapper.record(
+                for: try XCTUnwrap(completed.traces[traceID]),
+                modifiedBy: SyncDeviceID("completed-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(stale.traces[traceID]),
+                modifiedBy: SyncDeviceID("stale-device")
+            )
+        ]
+
+        for writes in permutations(of: records) {
+            let folderURL = makeFolderURL()
+            let local = LocalFolderSyncTransport(rootURL: folderURL)
+            let memory = InMemorySyncTransport()
+            for record in writes {
+                try await local.push([record])
+                try await memory.push([record])
+            }
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            let localRecord = try XCTUnwrap(localRecords.only)
+            let memoryRecord = try XCTUnwrap(memoryRecords.only)
+            let merged = try mapper.decodeDayTrace(localRecord)
+
+            XCTAssertEqual(localRecord, memoryRecord)
+            XCTAssertEqual(merged.status, .completed)
+            XCTAssertNil(merged.descriptionText)
+            XCTAssertEqual(merged.contentUpdatedAt, now.addingTimeInterval(20))
+        }
+    }
+
+    func testCompletedTracePreservesConcurrentPendingNotesAcrossTransports() async throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "跨 transport 完成与附言并发",
+            initialNoteBody: "待删除附言",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let baseSnapshot = base.snapshot()
+        let originalNoteID = try XCTUnwrap(
+            base.traces[traceID]?.activeNoteEntries.first?.id
+        )
+
+        let completed = try NoonmarkEngine(snapshot: baseSnapshot)
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+
+        let pending = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try pending.appendTraceNote(
+            traceID: traceID,
+            body: "并发新增附言",
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        try pending.deleteTraceNote(
+            traceID: traceID,
+            noteID: originalNoteID,
+            today: today,
+            now: now.addingTimeInterval(40)
+        )
+
+        let mapper = SyncRecordMapper()
+        let completedRecord = try mapper.record(
+            for: try XCTUnwrap(completed.traces[traceID]),
+            modifiedBy: SyncDeviceID("completed-device")
+        )
+        let pendingRecord = try mapper.record(
+            for: try XCTUnwrap(pending.traces[traceID]),
+            modifiedBy: SyncDeviceID("pending-device")
+        )
+        var canonicalRecord: SyncRecord?
+
+        for writes in [
+            [completedRecord, pendingRecord],
+            [pendingRecord, completedRecord]
+        ] {
+            let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+            let memory = InMemorySyncTransport()
+            for record in writes {
+                try await local.push([record])
+                try await memory.push([record])
+            }
+
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            let localRecord = try XCTUnwrap(localRecords.only)
+            let memoryRecord = try XCTUnwrap(memoryRecords.only)
+            let merged = try mapper.decodeDayTrace(localRecord)
+            let tombstone = try XCTUnwrap(
+                merged.noteEntries.first { $0.id == originalNoteID }
+            )
+
+            XCTAssertEqual(localRecord, memoryRecord)
+            XCTAssertEqual(merged.status, .completed)
+            XCTAssertEqual(merged.completedAt, now.addingTimeInterval(20))
+            XCTAssertEqual(
+                merged.activeNoteEntries.map(\.body),
+                ["并发新增附言"]
+            )
+            XCTAssertTrue(tombstone.isDeleted)
+            XCTAssertEqual(tombstone.deletedAt, now.addingTimeInterval(40))
+            if let canonicalRecord {
+                XCTAssertEqual(localRecord, canonicalRecord)
+            } else {
+                canonicalRecord = localRecord
+            }
+        }
+    }
+
+    func testExplicitCompletionUndoBeatsCompletedTraceAcrossTransports() async throws {
+        let completed = NoonmarkEngine()
+        let chainID = try completed.createPoolTask(title: "合法撤销完成", now: now)
+        let traceID = try completed.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+        let restored = try NoonmarkEngine(snapshot: completed.snapshot())
+        try restored.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+
+        let mapper = SyncRecordMapper()
+        let records = [
+            try mapper.record(
+                for: try XCTUnwrap(completed.days[today]),
+                modifiedBy: SyncDeviceID("day-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(completed.traces[traceID]),
+                modifiedBy: SyncDeviceID("completed-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(restored.traces[traceID]),
+                modifiedBy: SyncDeviceID("undo-device")
+            )
+        ]
+
+        for writes in permutations(of: records) {
+            let folderURL = makeFolderURL()
+            let local = LocalFolderSyncTransport(rootURL: folderURL)
+            let memory = InMemorySyncTransport()
+            try await local.push(writes)
+            try await memory.push(writes)
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            let localRecord = try XCTUnwrap(
+                localRecords.first { $0.entityType == .dayTrace }
+            )
+            let merged = try mapper.decodeDayTrace(localRecord)
+
+            XCTAssertEqual(localRecords, memoryRecords)
+            XCTAssertEqual(merged.status, .pending)
+            XCTAssertNil(merged.completedAt)
+            XCTAssertEqual(merged.contentUpdatedAt, now.addingTimeInterval(30))
+        }
+    }
+
+    func testLockedDayRejectsCompletionUndoForEveryBatchOrderAcrossTransports() async throws {
+        let completed = NoonmarkEngine()
+        let chainID = try completed.createPoolTask(title: "锁定日拒绝撤销", now: now)
+        let traceID = try completed.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+
+        let restored = try NoonmarkEngine(snapshot: completed.snapshot())
+        try restored.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        let locked = try NoonmarkEngine(snapshot: completed.snapshot())
+        try locked.settleDays(
+            upTo: LocalDate("2026-07-06"),
+            now: now.addingTimeInterval(60)
+        )
+
+        let mapper = SyncRecordMapper()
+        let records = [
+            try mapper.record(
+                for: try XCTUnwrap(locked.days[today]),
+                modifiedBy: SyncDeviceID("locked-day-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(completed.traces[traceID]),
+                modifiedBy: SyncDeviceID("completed-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(restored.traces[traceID]),
+                modifiedBy: SyncDeviceID("undo-device")
+            )
+        ]
+
+        for writes in permutations(of: records) {
+            let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+            let memory = InMemorySyncTransport()
+            try await local.push(writes)
+            try await memory.push(writes)
+
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            let traceRecord = try XCTUnwrap(
+                localRecords.first { $0.entityType == .dayTrace }
+            )
+            let merged = try mapper.decodeDayTrace(traceRecord)
+
+            XCTAssertEqual(localRecords, memoryRecords)
+            XCTAssertEqual(merged.status, .completed)
+            XCTAssertEqual(merged.completedAt, now.addingTimeInterval(20))
+            XCTAssertEqual(merged.contentUpdatedAt, now.addingTimeInterval(20))
+        }
+    }
+
+    func testExistingLockedDayBeatsIncomingUnlockedDayAndCompletionUndoAcrossTransports() async throws {
+        let completed = NoonmarkEngine()
+        let chainID = try completed.createPoolTask(title: "远端锁定日优先", now: now)
+        let traceID = try completed.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+        let unlockedDay = try XCTUnwrap(completed.days[today])
+
+        let restored = try NoonmarkEngine(snapshot: completed.snapshot())
+        try restored.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        let locked = try NoonmarkEngine(snapshot: completed.snapshot())
+        try locked.settleDays(
+            upTo: LocalDate("2026-07-06"),
+            now: now.addingTimeInterval(60)
+        )
+
+        let mapper = SyncRecordMapper()
+        let baseline = [
+            try mapper.record(
+                for: try XCTUnwrap(locked.days[today]),
+                modifiedBy: SyncDeviceID("locked-day-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(completed.traces[traceID]),
+                modifiedBy: SyncDeviceID("completed-device")
+            )
+        ]
+        let incoming = [
+            try mapper.record(
+                for: unlockedDay,
+                modifiedBy: SyncDeviceID("stale-day-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(restored.traces[traceID]),
+                modifiedBy: SyncDeviceID("undo-device")
+            )
+        ]
+
+        for writes in permutations(of: incoming) {
+            let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+            let memory = InMemorySyncTransport()
+            try await local.push(baseline)
+            try await memory.push(baseline)
+            try await local.push(writes)
+            try await memory.push(writes)
+
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            let traceRecord = try XCTUnwrap(
+                localRecords.first { $0.entityType == .dayTrace }
+            )
+            let merged = try mapper.decodeDayTrace(traceRecord)
+
+            XCTAssertEqual(localRecords, memoryRecords)
+            XCTAssertEqual(merged.status, .completed)
+            XCTAssertEqual(merged.completedAt, now.addingTimeInterval(20))
+        }
+    }
+
+    func testLockedDayKeepsLaterOfflineReviewWithoutAllowingCompletionUndoAcrossTransports() async throws {
+        let completed = NoonmarkEngine()
+        let chainID = try completed.createPoolTask(
+            title: "锁定日合并离线复盘",
+            now: now
+        )
+        let traceID = try completed.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+
+        let offline = try NoonmarkEngine(snapshot: completed.snapshot())
+        try offline.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        offline.updateDailyReview(
+            date: today,
+            summary: "离线补写的复盘",
+            unfinishedReason: "离线原因",
+            tomorrowNote: "离线明日提醒",
+            now: now.addingTimeInterval(100)
+        )
+
+        let locked = try NoonmarkEngine(snapshot: completed.snapshot())
+        try locked.settleDays(
+            upTo: LocalDate("2026-07-06"),
+            now: now.addingTimeInterval(60)
+        )
+
+        let mapper = SyncRecordMapper()
+        let lockedBranch = [
+            try mapper.record(
+                for: try XCTUnwrap(locked.days[today]),
+                modifiedBy: SyncDeviceID("locked-day-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(completed.traces[traceID]),
+                modifiedBy: SyncDeviceID("completed-device")
+            )
+        ]
+        let offlineBranch = [
+            try mapper.record(
+                for: try XCTUnwrap(offline.days[today]),
+                modifiedBy: SyncDeviceID("offline-review-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(offline.traces[traceID]),
+                modifiedBy: SyncDeviceID("offline-undo-device")
+            )
+        ]
+
+        for branches in [
+            (first: lockedBranch, second: offlineBranch),
+            (first: offlineBranch, second: lockedBranch)
+        ] {
+            for firstWrites in permutations(of: branches.first) {
+                for secondWrites in permutations(of: branches.second) {
+                    let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+                    let memory = InMemorySyncTransport()
+                    try await local.push(firstWrites)
+                    try await memory.push(firstWrites)
+                    try await local.push(secondWrites)
+                    try await memory.push(secondWrites)
+
+                    let localRecords = try await local.fetchAll()
+                    let memoryRecords = try await memory.fetchAll()
+                    let mergedDay = try mapper.decodeDay(try XCTUnwrap(
+                        localRecords.first { $0.entityType == .day }
+                    ))
+                    let mergedTrace = try mapper.decodeDayTrace(try XCTUnwrap(
+                        localRecords.first { $0.entityType == .dayTrace }
+                    ))
+
+                    XCTAssertEqual(localRecords, memoryRecords)
+                    XCTAssertEqual(mergedDay.lockedAt, now.addingTimeInterval(60))
+                    XCTAssertEqual(mergedDay.reviewSummary, "离线补写的复盘")
+                    XCTAssertEqual(mergedDay.reviewUnfinishedReason, "离线原因")
+                    XCTAssertEqual(mergedDay.reviewTomorrowNote, "离线明日提醒")
+                    XCTAssertEqual(mergedTrace.status, .completed)
+                    XCTAssertEqual(mergedTrace.completedAt, now.addingTimeInterval(20))
+                    XCTAssertEqual(
+                        mergedTrace.contentUpdatedAt,
+                        now.addingTimeInterval(20)
+                    )
+                }
+            }
+        }
+    }
+
+    func testMissingDayRetainsCompletionWithoutPoisoningAcrossTransports() async throws {
+        let completed = NoonmarkEngine()
+        let chainID = try completed.createPoolTask(title: "缺少日上下文", now: now)
+        let traceID = try completed.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+        let restored = try NoonmarkEngine(snapshot: completed.snapshot())
+        try restored.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+
+        let mapper = SyncRecordMapper()
+        let completedRecord = try mapper.record(
+            for: try XCTUnwrap(completed.traces[traceID]),
+            modifiedBy: SyncDeviceID("completed-device")
+        )
+        let undoRecord = try mapper.record(
+            for: try XCTUnwrap(restored.traces[traceID]),
+            modifiedBy: SyncDeviceID("undo-device")
+        )
+        let dayRecord = try mapper.record(
+            for: try XCTUnwrap(completed.days[today]),
+            modifiedBy: SyncDeviceID("day-device")
+        )
+
+        let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+        let memory = InMemorySyncTransport()
+        try await local.push([completedRecord])
+        try await memory.push([completedRecord])
+
+        try await local.push([undoRecord])
+        try await memory.push([undoRecord])
+        let localAfterMissingContext = try await local.fetchAll()
+        let memoryAfterMissingContext = try await memory.fetchAll()
+        XCTAssertEqual(
+            localAfterMissingContext.first { $0.entityType == .dayTrace },
+            completedRecord
+        )
+        XCTAssertEqual(
+            memoryAfterMissingContext.first { $0.entityType == .dayTrace },
+            completedRecord
+        )
+
+        try await local.push([dayRecord])
+        try await memory.push([dayRecord])
+        let localAfterDay = try await local.fetchAll()
+        let memoryAfterDay = try await memory.fetchAll()
+        XCTAssertEqual(
+            localAfterDay.first { $0.entityType == .dayTrace },
+            completedRecord
+        )
+        XCTAssertEqual(
+            memoryAfterDay.first { $0.entityType == .dayTrace },
+            completedRecord
+        )
+
+        try await local.push([undoRecord])
+        try await memory.push([undoRecord])
+        let localRecords = try await local.fetchAll()
+        let memoryRecords = try await memory.fetchAll()
+        let traceRecord = try XCTUnwrap(
+            localRecords.first { $0.entityType == .dayTrace }
+        )
+        let merged = try mapper.decodeDayTrace(traceRecord)
+
+        XCTAssertEqual(localRecords, memoryRecords)
+        XCTAssertEqual(merged.status, .pending)
+        XCTAssertNil(merged.completedAt)
+    }
+
+    func testImmutableCollisionCannotAuthorizeCompletionUndoAcrossTransports() async throws {
+        let completed = NoonmarkEngine()
+        let chainID = try completed.createPoolTask(title: "CAS 不可授权撤销", now: now)
+        let traceID = try completed.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try completed.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+        let restored = try NoonmarkEngine(snapshot: completed.snapshot())
+        try restored.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+
+        let mapper = SyncRecordMapper()
+        let completedRecord = try mapper.record(
+            for: try XCTUnwrap(completed.traces[traceID]),
+            modifiedBy: SyncDeviceID("completed-device")
+        )
+        let undoRecord = try mapper.record(
+            for: try XCTUnwrap(restored.traces[traceID]),
+            modifiedBy: SyncDeviceID("undo-device")
+        )
+        let dayRecord = try mapper.record(
+            for: try XCTUnwrap(completed.days[today]),
+            modifiedBy: SyncDeviceID("day-device")
+        )
+        let collidingImmutable = immutableRecord(
+            entityType: .classificationCommit,
+            id: dayRecord.id.rawValue,
+            variant: "first"
+        )
+
+        for writes in permutations(of: [undoRecord, dayRecord]) {
+            let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+            let memory = InMemorySyncTransport()
+            try await local.push([completedRecord, collidingImmutable])
+            try await memory.push([completedRecord, collidingImmutable])
+
+            await assertBatchCollision(writes, through: local, recordID: dayRecord.id)
+            await assertBatchCollision(writes, through: memory, recordID: dayRecord.id)
+
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            XCTAssertEqual(localRecords, memoryRecords)
+            XCTAssertEqual(
+                localRecords.first { $0.entityType == .dayTrace },
+                completedRecord
+            )
+        }
+    }
+
+    func testAbandonedInverseRequiresCanonicalActiveChainAcrossTransports() async throws {
+        let abandoned = NoonmarkEngine()
+        let chainID = try abandoned.createPoolTask(title: "恢复废弃任务", now: now)
+        let traceID = try abandoned.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try abandoned.abandonChain(
+            from: traceID,
+            now: now.addingTimeInterval(20)
+        )
+
+        let restored = try NoonmarkEngine(snapshot: abandoned.snapshot())
+        _ = try restored.reactivateAbandonedChain(
+            from: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        let mapper = SyncRecordMapper()
+        let abandonedTrace = try mapper.record(
+            for: try XCTUnwrap(abandoned.traces[traceID]),
+            modifiedBy: SyncDeviceID("abandoned-trace-device")
+        )
+        let restoredTrace = try mapper.record(
+            for: try XCTUnwrap(restored.traces[traceID]),
+            modifiedBy: SyncDeviceID("restored-trace-device")
+        )
+        let abandonedChain = try mapper.record(
+            for: try XCTUnwrap(abandoned.chains[chainID]),
+            modifiedBy: SyncDeviceID("abandoned-chain-device")
+        )
+        let reactivationRecords = try SyncRecordMaterializer(mapper: mapper).records(
+            for: SyncSnapshotDiffer().journalEntries(
+                from: abandoned.snapshot(),
+                to: restored.snapshot(),
+                changedAt: now.addingTimeInterval(30),
+                deviceID: SyncDeviceID("active-chain-device")
+            ),
+            in: restored.snapshot()
+        )
+        let activeChain = try XCTUnwrap(
+            reactivationRecords.first { $0.entityType == .taskChain }
+        )
+        var noteHeavyAbandonedChain = try XCTUnwrap(abandoned.chains[chainID])
+        noteHeavyAbandonedChain.noteEntries.append(
+            try TaskNoteEntry(
+                body: "废弃分支较晚附言",
+                now: now.addingTimeInterval(40)
+            )
+        )
+        let noteHeavyAbandonedChainRecord = try mapper.record(
+            for: noteHeavyAbandonedChain,
+            modifiedBy: SyncDeviceID("note-heavy-abandoned-chain-device")
+        )
+
+        for contextRecords in [[], [abandonedChain]] {
+            for writes in permutations(of: [abandonedTrace, restoredTrace] + contextRecords) {
+                let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+                let memory = InMemorySyncTransport()
+                try await local.push(writes)
+                try await memory.push(writes)
+
+                let localRecords = try await local.fetchAll()
+                let memoryRecords = try await memory.fetchAll()
+                let traceRecord = try XCTUnwrap(
+                    localRecords.first { $0.entityType == .dayTrace }
+                )
+                let merged = try mapper.decodeDayTrace(traceRecord)
+
+                XCTAssertEqual(localRecords, memoryRecords)
+                XCTAssertEqual(merged.status, .abandoned)
+                XCTAssertEqual(merged.settledAt, now.addingTimeInterval(20))
+            }
+        }
+
+        let activeContextRecords = [
+            abandonedTrace,
+            restoredTrace,
+            abandonedChain,
+            activeChain,
+            noteHeavyAbandonedChainRecord
+        ]
+        for writes in permutations(of: activeContextRecords) {
+            let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+            let memory = InMemorySyncTransport()
+            try await local.push(writes)
+            try await memory.push(writes)
+
+            let localRecords = try await local.fetchAll()
+            let memoryRecords = try await memory.fetchAll()
+            let traceRecord = try XCTUnwrap(
+                localRecords.first { $0.entityType == .dayTrace }
+            )
+            let merged = try mapper.decodeDayTrace(traceRecord)
+            let chainRecord = try XCTUnwrap(
+                localRecords.first { $0.entityType == .taskChain }
+            )
+            let mergedChain = try mapper.decodeTaskChain(chainRecord)
+
+            XCTAssertEqual(localRecords, memoryRecords)
+            XCTAssertEqual(merged.status, .pending)
+            XCTAssertNil(merged.settledAt)
+            XCTAssertEqual(mergedChain.state, .active)
+            XCTAssertEqual(
+                mergedChain.activeNoteEntries.map(\.body),
+                ["废弃分支较晚附言"]
+            )
+        }
+    }
+
+    func testAbandonedChainRejectsLaterStaleActiveRenameWhileMergingNotesAcrossTransports() async throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "废弃链拒绝旧分支复活",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+
+        let abandoned = try NoonmarkEngine(snapshot: base.snapshot())
+        try abandoned.abandonChain(
+            from: traceID,
+            now: now.addingTimeInterval(20)
+        )
+
+        let staleActive = try NoonmarkEngine(snapshot: base.snapshot())
+        try staleActive.renameTaskTitle(
+            chainID: chainID,
+            title: "旧分支较晚改名",
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        var staleActiveChain = try XCTUnwrap(staleActive.chains[chainID])
+        staleActiveChain.noteEntries.append(
+            try TaskNoteEntry(
+                body: "旧 active 分支附言仍需合并",
+                now: now.addingTimeInterval(40)
+            )
+        )
+
+        let mapper = SyncRecordMapper()
+        let abandonedBranch = [
+            try mapper.record(
+                for: try XCTUnwrap(abandoned.chains[chainID]),
+                modifiedBy: SyncDeviceID("abandoned-chain-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(abandoned.traces[traceID]),
+                modifiedBy: SyncDeviceID("abandoned-trace-device")
+            )
+        ]
+        let staleActiveBranch = [
+            try mapper.record(
+                for: staleActiveChain,
+                modifiedBy: SyncDeviceID("stale-active-chain-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(staleActive.traces[traceID]),
+                modifiedBy: SyncDeviceID("stale-active-trace-device")
+            )
+        ]
+
+        for branches in [
+            (first: abandonedBranch, second: staleActiveBranch),
+            (first: staleActiveBranch, second: abandonedBranch)
+        ] {
+            for firstWrites in permutations(of: branches.first) {
+                for secondWrites in permutations(of: branches.second) {
+                    let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+                    let memory = InMemorySyncTransport()
+                    try await local.push(firstWrites)
+                    try await memory.push(firstWrites)
+                    try await local.push(secondWrites)
+                    try await memory.push(secondWrites)
+
+                    let localRecords = try await local.fetchAll()
+                    let memoryRecords = try await memory.fetchAll()
+                    let mergedChain = try mapper.decodeTaskChain(try XCTUnwrap(
+                        localRecords.first { $0.entityType == .taskChain }
+                    ))
+                    let mergedTrace = try mapper.decodeDayTrace(try XCTUnwrap(
+                        localRecords.first { $0.entityType == .dayTrace }
+                    ))
+
+                    XCTAssertEqual(localRecords, memoryRecords)
+                    XCTAssertEqual(mergedChain.state, .abandoned)
+                    XCTAssertEqual(
+                        mergedChain.activeNoteEntries.map(\.body),
+                        ["旧 active 分支附言仍需合并"]
+                    )
+                    XCTAssertEqual(mergedTrace.status, .abandoned)
+                    XCTAssertEqual(mergedTrace.settledAt, now.addingTimeInterval(20))
+                }
+            }
+        }
+    }
+
+    func testExplicitReactivationPairWinsAcrossTransportPushOrders() async throws {
+        let abandoned = NoonmarkEngine()
+        let chainID = try abandoned.createPoolTask(
+            title: "合法恢复跨推送顺序",
+            now: now
+        )
+        let traceID = try abandoned.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try abandoned.abandonChain(
+            from: traceID,
+            now: now.addingTimeInterval(20)
+        )
+
+        let restored = try NoonmarkEngine(snapshot: abandoned.snapshot())
+        _ = try restored.reactivateAbandonedChain(
+            from: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        let reactivationJournal = try SyncSnapshotDiffer().journalEntries(
+            from: abandoned.snapshot(),
+            to: restored.snapshot(),
+            changedAt: now.addingTimeInterval(30),
+            deviceID: SyncDeviceID("restored-device")
+        )
+        let offlineNoteID = try restored.appendTraceNote(
+            traceID: traceID,
+            body: "恢复后首次上传前的离线附言",
+            today: today,
+            now: now.addingTimeInterval(40)
+        )
+
+        let mapper = SyncRecordMapper()
+        let abandonedBranch = [
+            try mapper.record(
+                for: try XCTUnwrap(abandoned.chains[chainID]),
+                modifiedBy: SyncDeviceID("abandoned-chain-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(abandoned.traces[traceID]),
+                modifiedBy: SyncDeviceID("abandoned-trace-device")
+            )
+        ]
+        let restoredBranch = try SyncRecordMaterializer(mapper: mapper).records(
+            for: reactivationJournal,
+            in: restored.snapshot()
+        )
+
+        for branches in [
+            (first: abandonedBranch, second: restoredBranch),
+            (first: restoredBranch, second: abandonedBranch)
+        ] {
+            for firstWrites in permutations(of: branches.first) {
+                for secondWrites in permutations(of: branches.second) {
+                    let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+                    let memory = InMemorySyncTransport()
+                    try await local.push(firstWrites)
+                    try await memory.push(firstWrites)
+                    try await local.push(secondWrites)
+                    try await memory.push(secondWrites)
+
+                    let localRecords = try await local.fetchAll()
+                    let memoryRecords = try await memory.fetchAll()
+                    let mergedChain = try mapper.decodeTaskChain(try XCTUnwrap(
+                        localRecords.first { $0.entityType == .taskChain }
+                    ))
+                    let mergedTrace = try mapper.decodeDayTrace(try XCTUnwrap(
+                        localRecords.first { $0.entityType == .dayTrace }
+                    ))
+
+                    XCTAssertEqual(localRecords, memoryRecords)
+                    XCTAssertEqual(mergedChain.state, .active)
+                    XCTAssertEqual(mergedTrace.status, .pending)
+                    XCTAssertNil(mergedTrace.settledAt)
+                    XCTAssertEqual(mergedTrace.noteEntries.map(\.id), [offlineNoteID])
+                    XCTAssertEqual(
+                        mergedTrace.activeNoteEntries.map(\.body),
+                        ["恢复后首次上传前的离线附言"]
+                    )
+
+                    try await local.push(restoredBranch)
+                    try await memory.push(restoredBranch)
+                    let replayedLocalRecords = try await local.fetchAll()
+                    let replayedMemoryRecords = try await memory.fetchAll()
+                    XCTAssertEqual(replayedLocalRecords, localRecords)
+                    XCTAssertEqual(replayedMemoryRecords, memoryRecords)
+                }
+            }
+        }
+    }
+
+    func testStaleCompletionUndoCannotReactivateAbandonedChainAcrossTransports() async throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "跨 transport 拒绝伪造恢复",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+
+        let abandoned = try NoonmarkEngine(snapshot: base.snapshot())
+        try abandoned.abandonChain(
+            from: traceID,
+            now: now.addingTimeInterval(20)
+        )
+
+        let stale = try NoonmarkEngine(snapshot: base.snapshot())
+        try stale.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        try stale.undoCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(40)
+        )
+
+        let mapper = SyncRecordMapper()
+        let abandonedBranch = [
+            try mapper.record(
+                for: try XCTUnwrap(abandoned.chains[chainID]),
+                modifiedBy: SyncDeviceID("abandoned-chain-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(abandoned.traces[traceID]),
+                modifiedBy: SyncDeviceID("abandoned-trace-device")
+            )
+        ]
+        let staleBranch = [
+            try mapper.record(
+                for: try XCTUnwrap(stale.chains[chainID]),
+                modifiedBy: SyncDeviceID("stale-chain-device")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(stale.traces[traceID]),
+                modifiedBy: SyncDeviceID("stale-trace-device")
+            )
+        ]
+        var canonicalResults: [[SyncRecord]] = []
+
+        for branches in [
+            (first: abandonedBranch, second: staleBranch),
+            (first: staleBranch, second: abandonedBranch)
+        ] {
+            for firstWrites in permutations(of: branches.first) {
+                for secondWrites in permutations(of: branches.second) {
+                    let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+                    let memory = InMemorySyncTransport()
+                    try await local.push(firstWrites)
+                    try await memory.push(firstWrites)
+                    try await local.push(secondWrites)
+                    try await memory.push(secondWrites)
+
+                    let localRecords = try await local.fetchAll()
+                    let memoryRecords = try await memory.fetchAll()
+                    let mergedChain = try mapper.decodeTaskChain(try XCTUnwrap(
+                        localRecords.first { $0.entityType == .taskChain }
+                    ))
+                    let mergedTrace = try mapper.decodeDayTrace(try XCTUnwrap(
+                        localRecords.first { $0.entityType == .dayTrace }
+                    ))
+
+                    XCTAssertEqual(localRecords, memoryRecords)
+                    XCTAssertEqual(mergedChain.state, .abandoned)
+                    XCTAssertEqual(mergedTrace.status, .abandoned)
+                    XCTAssertEqual(
+                        mergedTrace.settledAt,
+                        now.addingTimeInterval(20)
+                    )
+                    canonicalResults.append(localRecords)
+                }
+            }
+        }
+
+        for result in canonicalResults.dropFirst() {
+            XCTAssertEqual(result, canonicalResults[0])
+        }
+    }
+
+    func testFirstHistoricalTraceRecordWithDuplicateNoteIdentityFailsClosed() async throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "历史重复附言",
+            initialNoteBody: "唯一附言",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+        var malformed = try XCTUnwrap(engine.traces[traceID])
+        malformed.noteEntries.append(try XCTUnwrap(malformed.noteEntries.first))
+        let record = try SyncRecordMapper().record(
+            for: malformed,
+            modifiedBy: SyncDeviceID("malformed-device")
+        )
+
+        let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
+        let memory = InMemorySyncTransport()
+        await assertInvalidCurrentRecord(record, through: local)
+        await assertInvalidCurrentRecord(record, through: memory)
+        let localRecords = try await local.fetchAll()
+        let memoryRecords = try await memory.fetchAll()
+        XCTAssertTrue(localRecords.isEmpty)
+        XCTAssertTrue(memoryRecords.isEmpty)
+    }
+
+    func testHistoricalTraceKeepsRecordLevelLWWWithoutNoteUnion() async throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "历史轨迹附言",
+            initialNoteBody: "初始附言",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let snapshot = base.snapshot()
+
+        let mac = try NoonmarkEngine(snapshot: snapshot)
+        _ = try mac.appendTraceNote(
+            traceID: traceID,
+            body: "Mac 历史分支",
+            today: today,
+            now: now.addingTimeInterval(10)
+        )
+        try mac.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(40)
+        )
+
+        let phone = try NoonmarkEngine(snapshot: snapshot)
+        _ = try phone.appendTraceNote(
+            traceID: traceID,
+            body: "Phone 历史分支",
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+        try phone.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(50)
+        )
+
+        let mapper = SyncRecordMapper()
+        let macRecord = try mapper.record(
+            for: try XCTUnwrap(mac.traces[traceID]),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let phoneRecord = try mapper.record(
+            for: try XCTUnwrap(phone.traces[traceID]),
+            modifiedBy: SyncDeviceID("phone-b")
+        )
+        let expected = phoneRecord.currentRecordLWWOrder(comparedTo: macRecord) == .after
+            ? phoneRecord
+            : macRecord
+
+        let folderURL = makeFolderURL()
+        let local = LocalFolderSyncTransport(rootURL: folderURL)
+        let memory = InMemorySyncTransport()
+        try await local.push([macRecord, phoneRecord])
+        try await memory.push([macRecord, phoneRecord])
+
+        let localRecords = try await local.fetchAll()
+        let memoryRecords = try await memory.fetchAll()
+        let localRecord = try XCTUnwrap(localRecords.only)
+        let memoryRecord = try XCTUnwrap(memoryRecords.only)
+        let restored = try mapper.decodeDayTrace(localRecord)
+        XCTAssertEqual(localRecord, expected)
+        XCTAssertEqual(memoryRecord, expected)
+        XCTAssertEqual(restored.status, .completed)
+        XCTAssertFalse(
+            Set(restored.activeNoteEntries.map(\.body)).isSuperset(
+                of: ["Mac 历史分支", "Phone 历史分支"]
+            )
+        )
+    }
+
+    func testCurrentNoteIdentityCollisionFailsClosedAcrossTransports() async throws {
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(title: "附言身份冲突", now: now)
+        let chain = try XCTUnwrap(engine.snapshot().chains.first)
+        let collidingID = TaskNoteEntryID()
+        var firstChain = chain
+        firstChain.noteEntries = [
+            try TaskNoteEntry(id: collidingID, body: "first", now: now)
+        ]
+        var secondChain = chain
+        secondChain.noteEntries = [
+            try TaskNoteEntry(
+                id: collidingID,
+                body: "second",
+                now: now.addingTimeInterval(1)
+            )
+        ]
+        let mapper = SyncRecordMapper()
+        let first = try mapper.record(
+            for: firstChain,
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let second = try mapper.record(
+            for: secondChain,
+            modifiedBy: SyncDeviceID("phone-b")
+        )
+
+        let folderURL = makeFolderURL()
+        let local = LocalFolderSyncTransport(rootURL: folderURL)
+        let memory = InMemorySyncTransport()
+        try await local.push([first])
+        try await memory.push([first])
+
+        for transport in [local as any SyncRecordTransport, memory as any SyncRecordTransport] {
+            do {
+                try await transport.push([second])
+                XCTFail("附言 createdAt 冲突应 fail-closed")
+            } catch {
+                XCTAssertEqual(
+                    error as? SyncRecordTransportError,
+                    .invalidCurrentRecordMerge(recordID: first.id)
+                )
+            }
+        }
+        let localRecords = try await local.fetchAll()
+        let memoryRecords = try await memory.fetchAll()
+        XCTAssertEqual(localRecords, [first])
+        XCTAssertEqual(memoryRecords, [first])
+    }
+
     func testLocalFolderRejectsCrossTypeReuseOfImmutableRecordIDInBothDirections() async throws {
         for entityType in immutableEntityTypes {
             let immutableFirstFolder = makeFolderURL()
@@ -415,6 +1749,139 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         let ordinaryFirstRestored = try await ordinaryFirst.fetchAll()
         XCTAssertEqual(immutableFirstRestored, [immutable])
         XCTAssertEqual(ordinaryFirstRestored, [ordinary])
+    }
+
+    private func makeDivergentChainRecords() throws -> (
+        records: [SyncRecord],
+        originalNoteID: TaskNoteEntryID
+    ) {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "任务池离线附言",
+            initialNoteBody: "初始附言",
+            now: now
+        )
+        let baseSnapshot = base.snapshot()
+        let originalNoteID = try XCTUnwrap(
+            base.taskPool().first?.chain.activeNoteEntries.first?.id
+        )
+
+        let mac = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try mac.appendPoolNote(
+            chainID: chainID,
+            body: "Mac 离线新增",
+            now: now.addingTimeInterval(10)
+        )
+        try mac.deletePoolNote(
+            chainID: chainID,
+            noteID: originalNoteID,
+            now: now.addingTimeInterval(30)
+        )
+
+        let phone = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try phone.appendPoolNote(
+            chainID: chainID,
+            body: "Phone 离线新增",
+            now: now.addingTimeInterval(20)
+        )
+        try phone.editPoolNote(
+            chainID: chainID,
+            noteID: originalNoteID,
+            body: "Phone 同刻编辑",
+            now: now.addingTimeInterval(30)
+        )
+
+        let mapper = SyncRecordMapper()
+        let baseChain = try XCTUnwrap(baseSnapshot.chains.first)
+        let macChain = try XCTUnwrap(mac.snapshot().chains.first)
+        let phoneChain = try XCTUnwrap(phone.snapshot().chains.first)
+        return (
+            records: [
+                try mapper.record(
+                    for: baseChain,
+                    modifiedBy: SyncDeviceID("baseline")
+                ),
+                try mapper.record(
+                    for: macChain,
+                    modifiedBy: SyncDeviceID("mac-a")
+                ),
+                try mapper.record(
+                    for: phoneChain,
+                    modifiedBy: SyncDeviceID("phone-z")
+                )
+            ],
+            originalNoteID: originalNoteID
+        )
+    }
+
+    private func makeDivergentTraceRecords() throws -> (
+        records: [SyncRecord],
+        originalNoteID: TaskNoteEntryID
+    ) {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "当前轨迹离线附言",
+            initialNoteBody: "初始附言",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let baseSnapshot = base.snapshot()
+        let originalNoteID = try XCTUnwrap(
+            base.traces[traceID]?.activeNoteEntries.first?.id
+        )
+
+        let mac = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try mac.appendTraceNote(
+            traceID: traceID,
+            body: "Mac 轨迹新增",
+            today: today,
+            now: now.addingTimeInterval(10)
+        )
+        try mac.deleteTraceNote(
+            traceID: traceID,
+            noteID: originalNoteID,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+
+        let phone = try NoonmarkEngine(snapshot: baseSnapshot)
+        _ = try phone.appendTraceNote(
+            traceID: traceID,
+            body: "Phone 轨迹新增",
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+        try phone.editTraceNote(
+            traceID: traceID,
+            noteID: originalNoteID,
+            body: "Phone 同刻编辑",
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+
+        let mapper = SyncRecordMapper()
+        return (
+            records: [
+                try mapper.record(
+                    for: try XCTUnwrap(base.traces[traceID]),
+                    modifiedBy: SyncDeviceID("baseline")
+                ),
+                try mapper.record(
+                    for: try XCTUnwrap(mac.traces[traceID]),
+                    modifiedBy: SyncDeviceID("mac-a")
+                ),
+                try mapper.record(
+                    for: try XCTUnwrap(phone.traces[traceID]),
+                    modifiedBy: SyncDeviceID("phone-z")
+                )
+            ],
+            originalNoteID: originalNoteID
+        )
     }
 
     private var immutableEntityTypes: [SyncEntityType] {
@@ -495,6 +1962,45 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
                 .immutableRecordCollision(recordID: record.id),
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    private func assertBatchCollision(
+        _ records: [SyncRecord],
+        through transport: any SyncRecordTransport,
+        recordID: SyncRecordID,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            try await transport.push(records)
+            XCTFail("immutable batch collision 应 fail-closed", file: file, line: line)
+        } catch {
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .immutableRecordCollision(recordID: recordID),
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    private func assertInvalidCurrentRecord(
+        _ record: SyncRecord,
+        through transport: any SyncRecordTransport,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            try await transport.push([record])
+            XCTFail("invalid current record 应 fail-closed", file: file, line: line)
+        } catch {
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .invalidCurrentRecordMerge(recordID: record.id),
                 file: file,
                 line: line
             )

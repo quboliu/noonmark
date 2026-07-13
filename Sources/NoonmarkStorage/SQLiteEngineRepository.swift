@@ -697,6 +697,24 @@ private extension SQLiteEngineRepository {
         bind(value.map(Self.string(from:)), to: index, in: statement)
     }
 
+    func bindExactDate(
+        _ value: Date?,
+        to index: Int32,
+        in statement: Statement?
+    ) throws {
+        guard let value else {
+            sqlite3_bind_null(statement, index)
+            return
+        }
+        let seconds = value.timeIntervalSinceReferenceDate
+        guard seconds.isFinite else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "domain date must be finite"
+            )
+        }
+        sqlite3_bind_int64(statement, index, Int64(bitPattern: seconds.bitPattern))
+    }
+
     func bind(_ value: Data?, to index: Int32, in statement: Statement?) {
         guard let value else {
             sqlite3_bind_null(statement, index)
@@ -784,6 +802,58 @@ private extension SQLiteEngineRepository {
         return date
     }
 
+    func exactDate(_ statement: Statement?, _ index: Int32) throws -> Date {
+        guard sqlite3_column_type(statement, index) == SQLITE_INTEGER else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "exact date at column \(index) is not an integer bit pattern"
+            )
+        }
+        let seconds = Double(
+            bitPattern: UInt64(bitPattern: sqlite3_column_int64(statement, index))
+        )
+        guard seconds.isFinite else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid exact date at column \(index)"
+            )
+        }
+        return Date(timeIntervalSinceReferenceDate: seconds)
+    }
+
+    func optionalExactDate(
+        _ statement: Statement?,
+        textIndex: Int32,
+        bitsIndex: Int32
+    ) throws -> Date? {
+        let textIsNull = sqlite3_column_type(statement, textIndex) == SQLITE_NULL
+        let bitsIsNull = sqlite3_column_type(statement, bitsIndex) == SQLITE_NULL
+        guard textIsNull == bitsIsNull else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "date projection and exact bit pattern disagree"
+            )
+        }
+        guard textIsNull == false else { return nil }
+        return try validatedExactDate(
+            statement,
+            textIndex: textIndex,
+            bitsIndex: bitsIndex
+        )
+    }
+
+    func validatedExactDate(
+        _ statement: Statement?,
+        textIndex: Int32,
+        bitsIndex: Int32
+    ) throws -> Date {
+        let projected = try string(statement, textIndex)
+        let exact = try exactDate(statement, bitsIndex)
+        guard projected == Self.string(from: exact) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "date projection does not match exact bit pattern"
+            )
+        }
+        return exact
+    }
+
     func classificationChangeDate(_ statement: Statement?, _ index: Int32) throws -> Date {
         let columnType = sqlite3_column_type(statement, index)
         guard columnType == SQLITE_FLOAT || columnType == SQLITE_INTEGER else {
@@ -843,19 +913,28 @@ private extension SQLiteEngineRepository {
 
     func upsert(_ chains: [TaskChain], into database: Database?) throws {
         let chainSQL = """
-        INSERT INTO task_chains(id, state, created_at, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO task_chains(
+            id, state, note_entries_json,
+            created_at, created_at_bits, updated_at, updated_at_bits
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             state = excluded.state,
+            note_entries_json = excluded.note_entries_json,
             created_at = excluded.created_at,
-            updated_at = excluded.updated_at
+            created_at_bits = excluded.created_at_bits,
+            updated_at = excluded.updated_at,
+            updated_at_bits = excluded.updated_at_bits
         """
         for chain in chains {
             try run(chainSQL, on: database) { statement in
                 bind(chain.id.rawValue, to: 1, in: statement)
                 bind(chain.state.rawValue, to: 2, in: statement)
-                bind(chain.createdAt, to: 3, in: statement)
-                bind(chain.updatedAt, to: 4, in: statement)
+                bind(try noteEntriesJSON(chain.noteEntries), to: 3, in: statement)
+                bind(chain.createdAt, to: 4, in: statement)
+                try bindExactDate(chain.createdAt, to: 5, in: statement)
+                bind(chain.updatedAt, to: 6, in: statement)
+                try bindExactDate(chain.updatedAt, to: 7, in: statement)
             }
         }
     }
@@ -863,8 +942,8 @@ private extension SQLiteEngineRepository {
     func upsert(_ definitions: [TaskDefinition], into database: Database?) throws {
         let sql = """
         INSERT INTO task_definitions(
-            id, chain_id, sequence, title, description_text, note_entries_json, planned_subtasks_json,
-            created_at, superseded_at, superseded_by_definition_id
+            id, chain_id, sequence, title, description_text, planned_subtasks_json,
+            created_at, content_updated_at, superseded_at, superseded_by_definition_id
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
@@ -872,9 +951,9 @@ private extension SQLiteEngineRepository {
             sequence = excluded.sequence,
             title = excluded.title,
             description_text = excluded.description_text,
-            note_entries_json = excluded.note_entries_json,
             planned_subtasks_json = excluded.planned_subtasks_json,
             created_at = excluded.created_at,
+            content_updated_at = excluded.content_updated_at,
             superseded_at = excluded.superseded_at,
             superseded_by_definition_id = excluded.superseded_by_definition_id
         """
@@ -885,9 +964,9 @@ private extension SQLiteEngineRepository {
                 bind(definition.sequence, to: 3, in: statement)
                 bind(definition.title, to: 4, in: statement)
                 bind(definition.descriptionText, to: 5, in: statement)
-                bind(try noteEntriesJSON(definition.noteEntries), to: 6, in: statement)
-                bind(try plannedSubtasksJSON(definition.plannedSubtasks), to: 7, in: statement)
-                bind(definition.createdAt, to: 8, in: statement)
+                bind(try plannedSubtasksJSON(definition.plannedSubtasks), to: 6, in: statement)
+                bind(definition.createdAt, to: 7, in: statement)
+                bind(definition.contentUpdatedAt, to: 8, in: statement)
                 bind(definition.supersededAt, to: 9, in: statement)
                 bind(nil as String?, to: 10, in: statement)
             }
@@ -910,9 +989,11 @@ private extension SQLiteEngineRepository {
         let sql = """
         INSERT INTO day_traces(
             id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note_entries_json,
-            manual_progress_percent, continued_from_trace_id, changed_to_trace_id, created_at, completed_at, settled_at
+            manual_progress_percent, continued_from_trace_id, changed_to_trace_id,
+            created_at, created_at_bits, content_updated_at, content_updated_at_bits,
+            completed_at, completed_at_bits, settled_at, settled_at_bits
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             chain_id = excluded.chain_id,
             definition_id = excluded.definition_id,
@@ -926,8 +1007,13 @@ private extension SQLiteEngineRepository {
             continued_from_trace_id = excluded.continued_from_trace_id,
             changed_to_trace_id = excluded.changed_to_trace_id,
             created_at = excluded.created_at,
+            created_at_bits = excluded.created_at_bits,
+            content_updated_at = excluded.content_updated_at,
+            content_updated_at_bits = excluded.content_updated_at_bits,
             completed_at = excluded.completed_at,
-            settled_at = excluded.settled_at
+            completed_at_bits = excluded.completed_at_bits,
+            settled_at = excluded.settled_at,
+            settled_at_bits = excluded.settled_at_bits
         """
         for trace in traces {
             try run(sql, on: database) { statement in
@@ -944,8 +1030,13 @@ private extension SQLiteEngineRepository {
                 bind(trace.continuedFromTraceID?.rawValue.uuidString, to: 11, in: statement)
                 bind(nil as String?, to: 12, in: statement)
                 bind(trace.createdAt, to: 13, in: statement)
-                bind(trace.completedAt, to: 14, in: statement)
-                bind(trace.settledAt, to: 15, in: statement)
+                try bindExactDate(trace.createdAt, to: 14, in: statement)
+                bind(trace.contentUpdatedAt, to: 15, in: statement)
+                try bindExactDate(trace.contentUpdatedAt, to: 16, in: statement)
+                bind(trace.completedAt, to: 17, in: statement)
+                try bindExactDate(trace.completedAt, to: 18, in: statement)
+                bind(trace.settledAt, to: 19, in: statement)
+                try bindExactDate(trace.settledAt, to: 20, in: statement)
             }
         }
 
@@ -2808,7 +2899,10 @@ private extension SQLiteEngineRepository {
     func loadChains(from database: Database?) throws -> [TaskChain] {
         try query(
             """
-            SELECT c.id, c.state, c.created_at, c.updated_at
+            SELECT
+                c.id, c.state, c.note_entries_json,
+                c.created_at, c.created_at_bits,
+                c.updated_at, c.updated_at_bits
             FROM task_chains c
             ORDER BY c.created_at, c.id
             """,
@@ -2820,9 +2914,18 @@ private extension SQLiteEngineRepository {
             var chain = TaskChain(
                 id: TaskChainID(try uuid(statement, 0)),
                 state: state,
-                now: try date(statement, 2)
+                noteEntries: try noteEntries(from: string(statement, 2)),
+                now: try validatedExactDate(
+                    statement,
+                    textIndex: 3,
+                    bitsIndex: 4
+                )
             )
-            chain.updatedAt = try date(statement, 3)
+            chain.updatedAt = try validatedExactDate(
+                statement,
+                textIndex: 5,
+                bitsIndex: 6
+            )
             return chain
         }
     }
@@ -2831,8 +2934,8 @@ private extension SQLiteEngineRepository {
         try query(
             """
             SELECT
-                id, chain_id, sequence, title, description_text, note_entries_json, planned_subtasks_json,
-                created_at, superseded_at, superseded_by_definition_id
+                id, chain_id, sequence, title, description_text, planned_subtasks_json,
+                created_at, content_updated_at, superseded_at, superseded_by_definition_id
             FROM task_definitions
             ORDER BY chain_id, sequence
             """,
@@ -2844,9 +2947,9 @@ private extension SQLiteEngineRepository {
                 sequence: int(statement, 2),
                 title: try string(statement, 3),
                 descriptionText: optionalString(statement, 4),
-                noteEntries: try noteEntries(from: string(statement, 5)),
-                plannedSubtasks: try plannedSubtasks(from: optionalString(statement, 6)),
-                now: try date(statement, 7)
+                plannedSubtasks: try plannedSubtasks(from: optionalString(statement, 5)),
+                now: try date(statement, 6),
+                contentUpdatedAt: try date(statement, 7)
             )
             definition.supersededAt = try optionalDate(statement, 8)
             if let uuid = try optionalUUID(statement, 9) {
@@ -2860,7 +2963,9 @@ private extension SQLiteEngineRepository {
         try query(
             """
             SELECT id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note_entries_json,
-                   manual_progress_percent, continued_from_trace_id, changed_to_trace_id, created_at, completed_at, settled_at
+                   manual_progress_percent, continued_from_trace_id, changed_to_trace_id,
+                   created_at, created_at_bits, content_updated_at, content_updated_at_bits,
+                   completed_at, completed_at_bits, settled_at, settled_at_bits
             FROM day_traces
             ORDER BY date, continuation_seq, priority, created_at
             """,
@@ -2881,11 +2986,28 @@ private extension SQLiteEngineRepository {
                 noteEntries: try noteEntries(from: string(statement, 8)),
                 manualProgressPercent: optionalInt(statement, 9),
                 continuedFromTraceID: try optionalUUID(statement, 10).map(DayTraceID.init),
-                now: try date(statement, 12)
+                now: try validatedExactDate(
+                    statement,
+                    textIndex: 12,
+                    bitsIndex: 13
+                ),
+                contentUpdatedAt: try validatedExactDate(
+                    statement,
+                    textIndex: 14,
+                    bitsIndex: 15
+                )
             )
             trace.changedToTraceID = try optionalUUID(statement, 11).map(DayTraceID.init)
-            trace.completedAt = try optionalDate(statement, 13)
-            trace.settledAt = try optionalDate(statement, 14)
+            trace.completedAt = try optionalExactDate(
+                statement,
+                textIndex: 16,
+                bitsIndex: 17
+            )
+            trace.settledAt = try optionalExactDate(
+                statement,
+                textIndex: 18,
+                bitsIndex: 19
+            )
             return trace
         }
     }
@@ -3155,29 +3277,24 @@ private extension SQLiteEngineRepository {
             guard let exactTime = exactItemTimes[item] else {
                 throw SQLiteRepositoryError.invalidStoredValue("task category exact time is missing")
             }
+            guard let itemMetadata = metadata[item],
+                  let itemNameVersions = nameVersions[item]
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "task category metadata or name versions are missing"
+                )
+            }
             let createdAt = exactTime.createdAt
-            let canonicalKey = metadata[item]?.canonicalKey
-                ?? ClassificationNameCanonicalizer.canonicalKey(name)
-            let canonicalKeyVersion = metadata[item]?.canonicalKeyVersion
-                ?? ClassificationNameCanonicalizer.algorithmVersion
             var category = TaskCategory(
                 id: id,
                 name: name,
                 colorHex: try string(statement, 2),
                 now: createdAt
             )
-            category.canonicalKey = canonicalKey
-            category.canonicalKeyVersion = canonicalKeyVersion
-            category.lifecycle = metadata[item]?.lifecycle ?? .active
-            category.nameVersions = nameVersions[item]?.map(\.version) ?? [
-                ClassificationNameVersion(
-                    id: id.rawValue,
-                    name: name,
-                    canonicalKey: canonicalKey,
-                    canonicalKeyVersion: canonicalKeyVersion,
-                    validFrom: createdAt
-                )
-            ]
+            category.canonicalKey = itemMetadata.canonicalKey
+            category.canonicalKeyVersion = itemMetadata.canonicalKeyVersion
+            category.lifecycle = itemMetadata.lifecycle
+            category.nameVersions = itemNameVersions.map(\.version)
             category.updatedAt = exactTime.updatedAt
             return category
         }
@@ -3204,29 +3321,24 @@ private extension SQLiteEngineRepository {
             guard let exactTime = exactItemTimes[item] else {
                 throw SQLiteRepositoryError.invalidStoredValue("task label exact time is missing")
             }
+            guard let itemMetadata = metadata[item],
+                  let itemNameVersions = nameVersions[item]
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "task label metadata or name versions are missing"
+                )
+            }
             let createdAt = exactTime.createdAt
-            let canonicalKey = metadata[item]?.canonicalKey
-                ?? ClassificationNameCanonicalizer.canonicalKey(name)
-            let canonicalKeyVersion = metadata[item]?.canonicalKeyVersion
-                ?? ClassificationNameCanonicalizer.algorithmVersion
             var label = TaskLabel(
                 id: id,
                 name: name,
                 colorHex: try string(statement, 2),
                 now: createdAt
             )
-            label.canonicalKey = canonicalKey
-            label.canonicalKeyVersion = canonicalKeyVersion
-            label.lifecycle = metadata[item]?.lifecycle ?? .active
-            label.nameVersions = nameVersions[item]?.map(\.version) ?? [
-                ClassificationNameVersion(
-                    id: id.rawValue,
-                    name: name,
-                    canonicalKey: canonicalKey,
-                    canonicalKeyVersion: canonicalKeyVersion,
-                    validFrom: createdAt
-                )
-            ]
+            label.canonicalKey = itemMetadata.canonicalKey
+            label.canonicalKeyVersion = itemMetadata.canonicalKeyVersion
+            label.lifecycle = itemMetadata.lifecycle
+            label.nameVersions = itemNameVersions.map(\.version)
             label.updatedAt = exactTime.updatedAt
             return label
         }

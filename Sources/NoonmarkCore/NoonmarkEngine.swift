@@ -65,6 +65,87 @@ public final class NoonmarkEngine {
         )
     }
 
+    public func prepareSnapshotUndo(
+        replacing currentSnapshot: NoonmarkSnapshot,
+        now: Date = Date()
+    ) throws {
+        try currentSnapshot.validateIntegrity()
+        let currentChains = currentSnapshot.chains.reduce(
+            into: [TaskChainID: TaskChain]()
+        ) { result, chain in
+            result[chain.id] = chain
+        }
+        let currentDefinitions = currentSnapshot.definitions.reduce(
+            into: [TaskDefinitionID: TaskDefinition]()
+        ) { result, definition in
+            result[definition.id] = definition
+        }
+        let currentTraces = currentSnapshot.traces.reduce(
+            into: [DayTraceID: DayTrace]()
+        ) { result, trace in
+            result[trace.id] = trace
+        }
+
+        for (id, storedChain) in chains {
+            var candidate = storedChain
+            guard let current = currentChains[id] else {
+                candidate.updatedAt = max(candidate.updatedAt, now)
+                chains[id] = candidate
+                continue
+            }
+            // Task-note versions are append-only sync facts. A snapshot undo may
+            // restore other chain fields, but it must carry the current note log
+            // forward instead of rolling that log back.
+            candidate.noteEntries = current.noteEntries
+            if candidate.state == current.state {
+                candidate.updatedAt = current.updatedAt
+            } else {
+                candidate.updatedAt = try forwardMutationDate(
+                    after: current.updatedAt,
+                    now: now
+                )
+            }
+            chains[id] = candidate
+        }
+
+        for (id, storedDefinition) in definitions {
+            var candidate = storedDefinition
+            guard let current = currentDefinitions[id] else {
+                try candidate.markContentModified(at: now)
+                definitions[id] = candidate
+                continue
+            }
+            let clock = taskDefinitionContentMatches(candidate, current)
+                ? current.contentUpdatedAt
+                : try forwardMutationDate(after: current.contentUpdatedAt, now: now)
+            try candidate.markContentModified(at: clock)
+            definitions[id] = candidate
+        }
+
+        for (id, storedTrace) in traces {
+            var candidate = storedTrace
+            guard let current = currentTraces[id] else {
+                try candidate.markContentModified(at: now)
+                traces[id] = candidate
+                continue
+            }
+            // See the TaskChain rule above: undo composes with later note
+            // commands by preserving their current version/tombstone history.
+            candidate.noteEntries = current.noteEntries
+            let clock = dayTraceContentMatches(candidate, current)
+                ? current.contentUpdatedAt
+                : try forwardMutationDate(after: current.contentUpdatedAt, now: now)
+            try candidate.markContentModified(at: clock)
+            traces[id] = candidate
+        }
+
+        // Classification commits and captured history are immutable audit facts.
+        // Undo may restore Todo state while carrying the current classification
+        // ledger forward; direct classification edits invalidate the App stack.
+        classificationState = currentSnapshot.classifications
+        try snapshot().validateIntegrity()
+    }
+
     @discardableResult
     public func createPoolTask(
         title: String,
@@ -73,15 +154,14 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws -> TaskChainID {
         let normalizedTitle = try normalizeTitle(title)
-        let chain = TaskChain(now: now)
-        let noteEntries = normalizedOptionalText(initialNoteBody)
-            .map { [TaskNoteEntry(body: $0, now: now)] } ?? []
+        let noteEntries = try normalizedOptionalText(initialNoteBody)
+            .map { [try TaskNoteEntry(body: $0, now: now)] } ?? []
+        let chain = TaskChain(noteEntries: noteEntries, now: now)
         let definition = TaskDefinition(
             chainID: chain.id,
             sequence: 1,
             title: normalizedTitle,
             descriptionText: descriptionText,
-            noteEntries: noteEntries,
             now: now
         )
 
@@ -94,19 +174,27 @@ public final class NoonmarkEngine {
         chainID: TaskChainID,
         title: String,
         descriptionText: String? = nil,
-        plannedSubtasks: [PlannedSubtask]? = nil
+        plannedSubtasks: [PlannedSubtask]? = nil,
+        now: Date = Date()
     ) throws {
         let normalizedTitle = try normalizeTitle(title)
-        let definition = try currentDefinition(for: chainID)
+        var definition = try currentDefinition(for: chainID)
         guard traces.values.contains(where: { $0.chainID == chainID }) == false else {
             throw NoonmarkError.invalidTransition("task definitions with traces cannot be overwritten")
         }
 
-        definitions[definition.id]?.title = normalizedTitle
-        definitions[definition.id]?.descriptionText = descriptionText
-        if let plannedSubtasks {
-            definitions[definition.id]?.plannedSubtasks = plannedSubtasks.sorted { $0.position < $1.position }
-        }
+        let nextPlannedSubtasks = plannedSubtasks?
+            .sorted { $0.position < $1.position } ?? definition.plannedSubtasks
+        guard definition.title != normalizedTitle
+            || definition.descriptionText != descriptionText
+            || definition.plannedSubtasks != nextPlannedSubtasks
+        else { return }
+        try definition.markContentModified(at: now)
+        definition.title = normalizedTitle
+        definition.descriptionText = descriptionText
+        definition.plannedSubtasks = nextPlannedSubtasks
+        definitions[definition.id] = definition
+        try touchChain(chainID, now: now)
     }
 
     @discardableResult
@@ -118,22 +206,11 @@ public final class NoonmarkEngine {
         guard isInTaskPool(chainID) else {
             throw NoonmarkError.invalidTransition("only task-pool tasks can append notes")
         }
-        var definition = try currentDefinition(for: chainID)
-        let chain = try chain(chainID)
-        guard now.timeIntervalSinceReferenceDate.isFinite,
-              now >= chain.updatedAt
-        else {
-            throw NoonmarkError.invalidInput("task note mutation time cannot move backwards")
-        }
-        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedBody.isEmpty == false else {
-            throw NoonmarkError.invalidTransition("task note body cannot be empty")
-        }
-
-        let note = TaskNoteEntry(body: normalizedBody, now: now)
-        definition.noteEntries.append(note)
-        definitions[definition.id] = definition
-        touchChain(chainID, now: now)
+        var chain = try chain(chainID)
+        try TaskNoteEntry.validateMutationTime(now, notBefore: chain.createdAt)
+        let note = try TaskNoteEntry(body: body, now: now)
+        chain.noteEntries.append(note)
+        chains[chain.id] = chain
         return note.id
     }
 
@@ -146,26 +223,14 @@ public final class NoonmarkEngine {
         guard isInTaskPool(chainID) else {
             throw NoonmarkError.invalidTransition("only task-pool tasks can edit notes")
         }
-        var definition = try currentDefinition(for: chainID)
-        let chain = try chain(chainID)
-        guard let index = definition.noteEntries.firstIndex(where: { $0.id == noteID && !$0.isDeleted }) else {
-            throw NoonmarkError.notFound("task note")
-        }
-        guard now.timeIntervalSinceReferenceDate.isFinite,
-              now >= definition.noteEntries[index].updatedAt,
-              now >= chain.updatedAt
-        else {
-            throw NoonmarkError.invalidInput("task note mutation time cannot move backwards")
-        }
-        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedBody.isEmpty == false else {
-            throw NoonmarkError.invalidTransition("task note body cannot be empty")
-        }
-
-        definition.noteEntries[index].body = normalizedBody
-        definition.noteEntries[index].updatedAt = now
-        definitions[definition.id] = definition
-        touchChain(chainID, now: now)
+        var chain = try chain(chainID)
+        try chain.noteEntries.editTaskNote(
+            id: noteID,
+            body: body,
+            now: now,
+            ownerUpdatedAt: chain.createdAt
+        )
+        chains[chain.id] = chain
     }
 
     public func deletePoolNote(
@@ -176,23 +241,13 @@ public final class NoonmarkEngine {
         guard isInTaskPool(chainID) else {
             throw NoonmarkError.invalidTransition("only task-pool tasks can delete notes")
         }
-        var definition = try currentDefinition(for: chainID)
-        let chain = try chain(chainID)
-        guard let index = definition.noteEntries.firstIndex(where: { $0.id == noteID && !$0.isDeleted }) else {
-            throw NoonmarkError.notFound("task note")
-        }
-        guard now.timeIntervalSinceReferenceDate.isFinite,
-              now >= definition.noteEntries[index].updatedAt,
-              now >= chain.updatedAt
-        else {
-            throw NoonmarkError.invalidInput("task note mutation time cannot move backwards")
-        }
-
-        definition.noteEntries[index].body = ""
-        definition.noteEntries[index].updatedAt = now
-        definition.noteEntries[index].deletedAt = now
-        definitions[definition.id] = definition
-        touchChain(chainID, now: now)
+        var chain = try chain(chainID)
+        try chain.noteEntries.deleteTaskNote(
+            id: noteID,
+            now: now,
+            ownerUpdatedAt: chain.createdAt
+        )
+        chains[chain.id] = chain
     }
 
     public func renameTaskTitle(
@@ -202,7 +257,7 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws {
         let normalizedTitle = try normalizeTitle(title)
-        var chain = try chain(chainID)
+        let chain = try chain(chainID)
         guard chain.state == .active else {
             throw NoonmarkError.chainAbandoned
         }
@@ -220,6 +275,7 @@ public final class NoonmarkEngine {
         guard currentDefinition.title != normalizedTitle else { return }
 
         if chainTraces.isEmpty {
+            try currentDefinition.markContentModified(at: now)
             currentDefinition.title = normalizedTitle
             definitions[currentDefinition.id] = currentDefinition
         } else {
@@ -232,25 +288,29 @@ public final class NoonmarkEngine {
                 sequence: nextSequence,
                 title: normalizedTitle,
                 descriptionText: currentDefinition.descriptionText,
-                noteEntries: currentDefinition.noteEntries,
                 plannedSubtasks: currentDefinition.plannedSubtasks,
                 now: now
             )
 
+            try currentDefinition.markContentModified(at: now)
             currentDefinition.supersededAt = now
             currentDefinition.supersededByDefinitionID = renamedDefinition.id
-            definitions[currentDefinition.id] = currentDefinition
-            definitions[renamedDefinition.id] = renamedDefinition
-
+            var renamedTraces: [DayTrace] = []
             for trace in chainTraces where trace.status == .pending {
                 var renamedTrace = trace
+                try renamedTrace.markContentModified(at: now)
                 renamedTrace.definitionID = renamedDefinition.id
+                renamedTraces.append(renamedTrace)
+            }
+
+            definitions[currentDefinition.id] = currentDefinition
+            definitions[renamedDefinition.id] = renamedDefinition
+            for renamedTrace in renamedTraces {
                 traces[renamedTrace.id] = renamedTrace
             }
         }
 
-        chain.updatedAt = now
-        chains[chainID] = chain
+        try touchChain(chainID, now: now)
     }
 
     @discardableResult
@@ -272,9 +332,10 @@ public final class NoonmarkEngine {
             position: definition.plannedSubtasks.count + 1,
             now: now
         )
+        try definition.markContentModified(at: now)
         definition.plannedSubtasks.append(plannedSubtask)
         definitions[definition.id] = definition
-        touchChain(chainID, now: now)
+        try touchChain(chainID, now: now)
         return plannedSubtask.id
     }
 
@@ -291,7 +352,7 @@ public final class NoonmarkEngine {
             throw NoonmarkError.notFound("planned subtask")
         }
 
-        definition.plannedSubtasks = definition.plannedSubtasks
+        let nextPlannedSubtasks = definition.plannedSubtasks
             .filter { $0.id != plannedSubtaskID }
             .enumerated()
             .map { index, plannedSubtask in
@@ -299,8 +360,10 @@ public final class NoonmarkEngine {
                 plannedSubtask.position = index + 1
                 return plannedSubtask
             }
+        try definition.markContentModified(at: now)
+        definition.plannedSubtasks = nextPlannedSubtasks
         definitions[definition.id] = definition
-        touchChain(chainID, now: now)
+        try touchChain(chainID, now: now)
     }
 
     public func updatePlannedSubtaskDifficulty(
@@ -316,10 +379,12 @@ public final class NoonmarkEngine {
         guard let index = definition.plannedSubtasks.firstIndex(where: { $0.id == plannedSubtaskID }) else {
             throw NoonmarkError.notFound("planned subtask")
         }
+        guard definition.plannedSubtasks[index].difficulty != difficulty else { return }
 
+        try definition.markContentModified(at: now)
         definition.plannedSubtasks[index].difficulty = difficulty
         definitions[definition.id] = definition
-        touchChain(chainID, now: now)
+        try touchChain(chainID, now: now)
     }
 
     @discardableResult
@@ -338,13 +403,14 @@ public final class NoonmarkEngine {
         }
 
         let definition = try currentDefinition(for: chainID)
+        let chain = try chain(chainID)
         let trace = DayTrace(
             chainID: chainID,
             definitionID: definition.id,
             date: date,
             priority: nextPriority(on: date),
             descriptionText: definition.descriptionText,
-            noteEntries: definition.activeNoteEntries,
+            noteEntries: chain.activeNoteEntries,
             now: now
         )
         traces[trace.id] = trace
@@ -366,10 +432,10 @@ public final class NoonmarkEngine {
         }
 
         if classificationState.referencesTaskChain(chainID) {
-            try removeCurrentClassificationForRetiredTask(chainID: chainID, now: now)
             var chain = try chain(chainID)
+            try chain.markContentModified(at: now)
+            try removeCurrentClassificationForRetiredTask(chainID: chainID, now: now)
             chain.state = .abandoned
-            chain.updatedAt = now
             chains[chainID] = chain
             return .removedKeepingHistory
         }
@@ -401,8 +467,8 @@ public final class NoonmarkEngine {
         }
 
         var chain = try chain(chainID)
+        try chain.markContentModified(at: now)
         chain.state = .abandoned
-        chain.updatedAt = now
         chains[chainID] = chain
         return .removedKeepingHistory
     }
@@ -430,11 +496,7 @@ public final class NoonmarkEngine {
             interactionID: interactionID,
             now: now
         )
-        _ = try commitClassification(
-            plan,
-            confirmation: .user(confirming: plan, decisionID: interactionID),
-            now: now
-        )
+        try commitDeterministicDomainClassification(plan, now: now)
     }
 
     public func getDayTodo(date: LocalDate, sort: ViewSort = .priority) -> DayTodoView {
@@ -572,10 +634,11 @@ public final class NoonmarkEngine {
             throw NoonmarkError.openSubtasksPreventCompletion
         }
 
+        try trace.markContentModified(at: now)
         trace.status = .completed
         trace.completedAt = now
         traces[trace.id] = trace
-        touchChain(trace.chainID, now: now)
+        try touchChain(trace.chainID, now: now)
     }
 
     public func undoCompleted(traceID: DayTraceID, today: LocalDate, now: Date = Date()) throws {
@@ -587,10 +650,11 @@ public final class NoonmarkEngine {
             throw NoonmarkError.invalidTransition("only completed traces can be undone")
         }
 
+        try trace.markContentModified(at: now)
         trace.status = .pending
         trace.completedAt = nil
         traces[trace.id] = trace
-        touchChain(trace.chainID, now: now)
+        try touchChain(trace.chainID, now: now)
     }
 
     public func returnToPool(traceID: DayTraceID, today: LocalDate, now: Date = Date()) throws {
@@ -600,11 +664,14 @@ public final class NoonmarkEngine {
             guard trace.continuedFromTraceID == nil else {
                 throw NoonmarkError.invalidTransition("continued future traces cannot return to pool without a trace")
             }
+            guard now.timeIntervalSinceReferenceDate.isFinite else {
+                throw NoonmarkError.invalidInput("task chain mutation time is invalid")
+            }
             for subtask in subtasks.values where subtask.traceID == traceID {
                 subtasks.removeValue(forKey: subtask.id)
             }
             traces.removeValue(forKey: traceID)
-            touchChain(trace.chainID, now: now)
+            try touchChain(trace.chainID, now: now)
             return
         }
 
@@ -615,11 +682,12 @@ public final class NoonmarkEngine {
             throw NoonmarkError.invalidTransition("only pending current-day traces can return to pool")
         }
 
+        try trace.markContentModified(at: now)
         trace.status = .returnedToPool
         trace.settledAt = now
         traces[trace.id] = trace
         captureClassificationSnapshot(traceID: trace.id, chainID: trace.chainID, now: now)
-        touchChain(trace.chainID, now: now)
+        try touchChain(trace.chainID, now: now)
     }
 
     public func rescheduleFuturePlan(traceID: DayTraceID, targetDate: LocalDate, today: LocalDate, now: Date = Date()) throws {
@@ -631,6 +699,7 @@ public final class NoonmarkEngine {
             throw NoonmarkError.invalidTransition("only pending future plans can be rescheduled")
         }
 
+        try trace.markContentModified(at: now)
         trace.date = targetDate
         trace.priority = nextPriority(on: targetDate)
         traces[trace.id] = trace
@@ -672,6 +741,7 @@ public final class NoonmarkEngine {
         )
 
         let sourceWasUnfinished = source.status == .unfinished
+        try source.markContentModified(at: now)
         source.status = .continued
         source.settledAt = sourceWasUnfinished ? (source.settledAt ?? now) : nil
         traces[source.id] = source
@@ -680,7 +750,7 @@ public final class NoonmarkEngine {
 
         copyOpenSubtasks(from: source.id, to: nextTrace.id, now: now)
         ensureDay(targetDate, now: now)
-        touchChain(source.chainID, now: now)
+        try touchChain(source.chainID, now: now)
         return nextTrace.id
     }
 
@@ -694,21 +764,20 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws -> DayTraceID {
         let normalizedTitle = try normalizeTitle(newTitle)
-        let noteEntries = normalizedOptionalText(initialNoteBody)
-            .map { [TaskNoteEntry(body: $0, now: now)] } ?? []
+        let noteEntries = try normalizedOptionalText(initialNoteBody)
+            .map { [try TaskNoteEntry(body: $0, now: now)] } ?? []
         var oldTrace = try trace(traceID)
         try ensureActiveChain(oldTrace.chainID)
         guard oldTrace.date == today, oldTrace.status == .pending else {
             throw NoonmarkError.invalidTransition("only pending current-day traces can change definition")
         }
 
-        let newChain = TaskChain(now: now)
+        let newChain = TaskChain(noteEntries: noteEntries, now: now)
         let newDefinition = TaskDefinition(
             chainID: newChain.id,
             sequence: 1,
             title: normalizedTitle,
             descriptionText: newDescriptionText,
-            noteEntries: noteEntries,
             now: now
         )
 
@@ -718,10 +787,11 @@ public final class NoonmarkEngine {
             date: today,
             priority: oldTrace.priority + 1,
             descriptionText: newDefinition.descriptionText,
-            noteEntries: newDefinition.activeNoteEntries,
+            noteEntries: newChain.activeNoteEntries,
             now: now
         )
 
+        try oldTrace.markContentModified(at: now)
         oldTrace.status = .changed
         oldTrace.changedToTraceID = newTrace.id
         oldTrace.settledAt = now
@@ -732,7 +802,7 @@ public final class NoonmarkEngine {
         traces[newTrace.id] = newTrace
         captureClassificationSnapshot(traceID: oldTrace.id, chainID: oldTrace.chainID, now: now)
         try inheritCurrentClassification(from: oldTrace.chainID, to: newChain.id, now: now)
-        touchChain(oldTrace.chainID, now: now)
+        try touchChain(oldTrace.chainID, now: now)
         return newTrace.id
     }
 
@@ -746,10 +816,11 @@ public final class NoonmarkEngine {
             throw NoonmarkError.invalidTransition("only pending or unfinished traces can abandon their chain")
         }
 
+        try trace.markContentModified(at: now)
+        try chain.markContentModified(at: now)
         trace.status = .abandoned
         trace.settledAt = now
         chain.state = .abandoned
-        chain.updatedAt = now
 
         traces[trace.id] = trace
         chains[chain.id] = chain
@@ -771,6 +842,8 @@ public final class NoonmarkEngine {
             throw NoonmarkError.activeTraceAlreadyExists
         }
 
+        try source.markContentModified(at: now)
+        try chain.markContentModified(at: now)
         if source.date >= today {
             source.status = .pending
             source.settledAt = nil
@@ -779,7 +852,6 @@ public final class NoonmarkEngine {
             source.settledAt = source.settledAt ?? now
         }
         chain.state = .active
-        chain.updatedAt = now
 
         traces[source.id] = source
         chains[chain.id] = chain
@@ -907,7 +979,8 @@ public final class NoonmarkEngine {
     public func updateTraceText(
         traceID: DayTraceID,
         descriptionText: String?,
-        today: LocalDate
+        today: LocalDate,
+        now: Date = Date()
     ) throws {
         var trace = try trace(traceID)
         guard trace.status == .pending else {
@@ -917,7 +990,10 @@ public final class NoonmarkEngine {
             throw NoonmarkError.immutableHistory
         }
 
-        trace.descriptionText = normalizedOptionalText(descriptionText)
+        let normalizedDescription = normalizedOptionalText(descriptionText)
+        guard trace.descriptionText != normalizedDescription else { return }
+        try trace.markContentModified(at: now)
+        trace.descriptionText = normalizedDescription
         traces[trace.id] = trace
     }
 
@@ -935,21 +1011,7 @@ public final class NoonmarkEngine {
         guard trace.date >= today else {
             throw NoonmarkError.immutableHistory
         }
-        guard let index = trace.noteEntries.firstIndex(where: { $0.id == noteID && !$0.isDeleted }) else {
-            throw NoonmarkError.notFound("task note")
-        }
-        guard now.timeIntervalSinceReferenceDate.isFinite,
-              now >= trace.noteEntries[index].updatedAt
-        else {
-            throw NoonmarkError.invalidInput("task note mutation time cannot move backwards")
-        }
-        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedBody.isEmpty == false else {
-            throw NoonmarkError.invalidTransition("task note body cannot be empty")
-        }
-
-        trace.noteEntries[index].body = normalizedBody
-        trace.noteEntries[index].updatedAt = now
+        try trace.noteEntries.editTaskNote(id: noteID, body: body, now: now)
         traces[trace.id] = trace
     }
 
@@ -967,17 +1029,8 @@ public final class NoonmarkEngine {
         guard trace.date >= today else {
             throw NoonmarkError.immutableHistory
         }
-        guard now.timeIntervalSinceReferenceDate.isFinite,
-              now >= trace.createdAt
-        else {
-            throw NoonmarkError.invalidInput("task note mutation time cannot move backwards")
-        }
-        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedBody.isEmpty == false else {
-            throw NoonmarkError.invalidTransition("task note body cannot be empty")
-        }
-
-        let note = TaskNoteEntry(body: normalizedBody, now: now)
+        try TaskNoteEntry.validateMutationTime(now, notBefore: trace.createdAt)
+        let note = try TaskNoteEntry(body: body, now: now)
         trace.noteEntries.append(note)
         traces[trace.id] = trace
         return note.id
@@ -996,22 +1049,16 @@ public final class NoonmarkEngine {
         guard trace.date >= today else {
             throw NoonmarkError.immutableHistory
         }
-        guard let index = trace.noteEntries.firstIndex(where: { $0.id == noteID && !$0.isDeleted }) else {
-            throw NoonmarkError.notFound("task note")
-        }
-        guard now.timeIntervalSinceReferenceDate.isFinite,
-              now >= trace.noteEntries[index].updatedAt
-        else {
-            throw NoonmarkError.invalidInput("task note mutation time cannot move backwards")
-        }
-
-        trace.noteEntries[index].body = ""
-        trace.noteEntries[index].updatedAt = now
-        trace.noteEntries[index].deletedAt = now
+        try trace.noteEntries.deleteTaskNote(id: noteID, now: now)
         traces[trace.id] = trace
     }
 
-    public func setManualProgress(traceID: DayTraceID, percent: Int, today: LocalDate) throws {
+    public func setManualProgress(
+        traceID: DayTraceID,
+        percent: Int,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
         var trace = try trace(traceID)
         guard trace.date == today, trace.status == .pending else {
             throw NoonmarkError.immutableHistory
@@ -1022,7 +1069,10 @@ public final class NoonmarkEngine {
 
         let clamped = min(100, max(0, percent))
         let floor = progressFloor(for: trace)
-        trace.manualProgressPercent = max(floor, clamped)
+        let nextProgress = max(floor, clamped)
+        guard trace.manualProgressPercent != nextProgress else { return }
+        try trace.markContentModified(at: now)
+        trace.manualProgressPercent = nextProgress
         traces[trace.id] = trace
     }
 
@@ -1070,17 +1120,40 @@ public final class NoonmarkEngine {
         )
     }
 
-    public func updatePriority(traceID: DayTraceID, newPriority: Int, today: LocalDate) throws {
+    public func updatePriority(
+        traceID: DayTraceID,
+        newPriority: Int,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
         var trace = try trace(traceID)
         guard trace.date >= today else {
             throw NoonmarkError.immutableHistory
         }
+        guard trace.priority != newPriority else { return }
+        try trace.markContentModified(at: now)
         trace.priority = newPriority
         traces[trace.id] = trace
     }
 
-    public func settleDays(upTo today: LocalDate, now: Date = Date()) {
+    public func settleDays(upTo today: LocalDate, now: Date = Date()) throws {
         let dates = Set(traces.values.map(\.date)).filter { $0 < today }
+        for date in dates where days[date]?.lockedAt == nil {
+            if let day = days[date] {
+                guard now.timeIntervalSinceReferenceDate.isFinite,
+                      now >= day.updatedAt
+                else {
+                    throw NoonmarkError.invalidInput(
+                        "day settlement time cannot move backwards"
+                    )
+                }
+            }
+            for trace in traces.values where trace.date == date && trace.status == .pending {
+                var candidate = trace
+                try candidate.markContentModified(at: now)
+            }
+        }
+
         for date in dates {
             ensureDay(date, now: now)
 
@@ -1091,6 +1164,7 @@ public final class NoonmarkEngine {
             var traceIDsNeedingClassificationSnapshot: Set<DayTraceID> = []
             for trace in traces.values where trace.date == date && trace.status == .pending {
                 var settled = trace
+                try settled.markContentModified(at: now)
                 settled.status = .unfinished
                 settled.settledAt = now
                 traces[settled.id] = settled
@@ -1172,6 +1246,51 @@ public final class NoonmarkEngine {
 }
 
 private extension NoonmarkEngine {
+    func forwardMutationDate(after frontier: Date, now: Date) throws -> Date {
+        let frontierSeconds = frontier.timeIntervalSinceReferenceDate
+        let nowSeconds = now.timeIntervalSinceReferenceDate
+        guard frontierSeconds.isFinite, nowSeconds.isFinite,
+              frontierSeconds.nextUp.isFinite
+        else {
+            throw NoonmarkError.invalidInput("undo mutation time is invalid")
+        }
+        return Date(
+            timeIntervalSinceReferenceDate: max(frontierSeconds.nextUp, nowSeconds)
+        )
+    }
+
+    func taskDefinitionContentMatches(
+        _ lhs: TaskDefinition,
+        _ rhs: TaskDefinition
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.chainID == rhs.chainID
+            && lhs.sequence == rhs.sequence
+            && lhs.title == rhs.title
+            && lhs.descriptionText == rhs.descriptionText
+            && lhs.plannedSubtasks == rhs.plannedSubtasks
+            && lhs.createdAt == rhs.createdAt
+            && lhs.supersededAt == rhs.supersededAt
+            && lhs.supersededByDefinitionID == rhs.supersededByDefinitionID
+    }
+
+    func dayTraceContentMatches(_ lhs: DayTrace, _ rhs: DayTrace) -> Bool {
+        lhs.id == rhs.id
+            && lhs.chainID == rhs.chainID
+            && lhs.definitionID == rhs.definitionID
+            && lhs.date == rhs.date
+            && lhs.status == rhs.status
+            && lhs.priority == rhs.priority
+            && lhs.continuationSeq == rhs.continuationSeq
+            && lhs.descriptionText == rhs.descriptionText
+            && lhs.manualProgressPercent == rhs.manualProgressPercent
+            && lhs.continuedFromTraceID == rhs.continuedFromTraceID
+            && lhs.changedToTraceID == rhs.changedToTraceID
+            && lhs.createdAt == rhs.createdAt
+            && lhs.completedAt == rhs.completedAt
+            && lhs.settledAt == rhs.settledAt
+    }
+
     func normalizeTitle(_ title: String) throws -> String {
         let normalized = title
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -1249,8 +1368,13 @@ private extension NoonmarkEngine {
         }
     }
 
-    func touchChain(_ id: TaskChainID, now: Date) {
-        chains[id]?.updatedAt = now
+    func touchChain(_ id: TaskChainID, now: Date) throws {
+        guard now.timeIntervalSinceReferenceDate.isFinite else {
+            throw NoonmarkError.invalidInput("task chain mutation time is invalid")
+        }
+        if let updatedAt = chains[id]?.updatedAt {
+            chains[id]?.updatedAt = max(updatedAt, now)
+        }
     }
 
     func activeTrace(for chainID: TaskChainID) -> DayTrace? {

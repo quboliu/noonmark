@@ -18,7 +18,7 @@
 - 当前源码模块：
   - `NoonmarkMacApp`：SwiftUI Mac App，可通过 SwiftPM executable target 构建出 `.app`。
   - `NoonmarkCore`：Day Todo、任务链、日轨迹、子任务、池化视图等核心领域引擎。
-  - `NoonmarkAI`：烛龙 provider、scope、prompt、local insight、建议草稿和授权模型。
+  - `NoonmarkAI`：当前烛龙使用的 provider、scope、prompt 与 local insight 基础设施。
   - `NoonmarkStorage`：SQLite schema 与领域持久化结构。
   - `NoonmarkMacUIContract`：Mac UI 设计契约的代码化约束。
 - 当前测试模块：

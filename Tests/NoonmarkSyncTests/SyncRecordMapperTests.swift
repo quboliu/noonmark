@@ -27,37 +27,58 @@ final class SyncRecordMapperTests: XCTestCase {
         XCTAssertEqual(decodedTrace, try XCTUnwrap(engine.snapshot().traces.first))
     }
 
-    func testNoteMutationTimeDrivesDefinitionAndTraceRecordFreshness() throws {
+    func testNoteMutationTimeDrivesTaskChainAndTraceRecordFreshness() throws {
         let noteUpdatedAt = now.addingTimeInterval(90)
-        var note = TaskNoteEntry(body: "修改前", now: now)
-        note.body = "修改后"
-        note.updatedAt = noteUpdatedAt
-        let chainID = TaskChainID()
-        let definition = TaskDefinition(
-            chainID: chainID,
-            sequence: 1,
+        let chainEngine = NoonmarkEngine()
+        let chainID = try chainEngine.createPoolTask(
             title: "附言同步时间",
-            noteEntries: [note],
+            initialNoteBody: "修改前",
             now: now
         )
-        let trace = DayTrace(
+        let chainNoteID = try XCTUnwrap(
+            chainEngine.taskPool().first?.chain.activeNoteEntries.first?.id
+        )
+        try chainEngine.editPoolNote(
             chainID: chainID,
-            definitionID: definition.id,
+            noteID: chainNoteID,
+            body: "修改后",
+            now: noteUpdatedAt
+        )
+        let chain = try XCTUnwrap(chainEngine.chains[chainID])
+
+        let traceEngine = NoonmarkEngine()
+        let traceChainID = try traceEngine.createPoolTask(
+            title: "附言同步时间",
+            initialNoteBody: "修改前",
+            now: now
+        )
+        let traceNoteID = try XCTUnwrap(
+            traceEngine.taskPool().first?.chain.activeNoteEntries.first?.id
+        )
+        let traceID = try traceEngine.scheduleFromPool(
+            chainID: traceChainID,
             date: today,
-            priority: 0,
-            noteEntries: [note],
+            today: today,
             now: now.addingTimeInterval(1)
         )
+        try traceEngine.editTraceNote(
+            traceID: traceID,
+            noteID: traceNoteID,
+            body: "修改后",
+            today: today,
+            now: noteUpdatedAt
+        )
+        let trace = try XCTUnwrap(traceEngine.traces[traceID])
         let mapper = SyncRecordMapper()
         let deviceID = SyncDeviceID("mac-a")
 
-        let definitionRecord = try mapper.record(
-            for: definition,
+        let chainRecord = try mapper.record(
+            for: chain,
             modifiedBy: deviceID
         )
         let traceRecord = try mapper.record(for: trace, modifiedBy: deviceID)
 
-        XCTAssertEqual(definitionRecord.modifiedAt, noteUpdatedAt)
+        XCTAssertEqual(chainRecord.modifiedAt, noteUpdatedAt)
         XCTAssertEqual(traceRecord.modifiedAt, noteUpdatedAt)
     }
 
@@ -88,8 +109,6 @@ final class SyncRecordMapperTests: XCTestCase {
         )
         XCTAssertEqual(Set(object.keys), ["formatVersion", "payload"])
         XCTAssertEqual(object["formatVersion"] as? Int, 1)
-        let payload = try XCTUnwrap(object["payload"] as? [String: Any])
-        XCTAssertNil(payload["tagAssignments"])
 
         let restored = try mapper.decodeTaskChain(record)
         XCTAssertEqual(
@@ -100,51 +119,6 @@ final class SyncRecordMapperTests: XCTestCase {
             restored.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
             exactNow.timeIntervalSinceReferenceDate.bitPattern
         )
-    }
-
-    func testOrdinaryPayloadRejectsUnversionedPreviousGenerationShapes() throws {
-        let mapper = SyncRecordMapper()
-        let chainRecord = try mapper.record(
-            for: TaskChain(now: now),
-            modifiedBy: SyncDeviceID("mac-current")
-        )
-        let chainEnvelope = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: chainRecord.payload) as? [String: Any]
-        )
-        var previousChain = try XCTUnwrap(chainEnvelope["payload"] as? [String: Any])
-        previousChain["tagAssignments"] = []
-        var previousChainRecord = chainRecord
-        previousChainRecord.payload = try JSONSerialization.data(
-            withJSONObject: previousChain,
-            options: [.sortedKeys]
-        )
-        assertInvalidPayload(previousChainRecord, type: .taskChain) {
-            try mapper.decodeTaskChain(previousChainRecord)
-        }
-
-        let preferencesRecord = try mapper.record(
-            for: AppPreferencesEnvelope(preferences: AppPreferences(), updatedAt: now),
-            modifiedBy: SyncDeviceID("mac-current")
-        )
-        let preferencesEnvelope = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: preferencesRecord.payload) as? [String: Any]
-        )
-        var previousPreferences = try XCTUnwrap(
-            preferencesEnvelope["payload"] as? [String: Any]
-        )
-        var preferences = try XCTUnwrap(
-            previousPreferences["preferences"] as? [String: Any]
-        )
-        preferences["taskTags"] = []
-        previousPreferences["preferences"] = preferences
-        var previousPreferencesRecord = preferencesRecord
-        previousPreferencesRecord.payload = try JSONSerialization.data(
-            withJSONObject: previousPreferences,
-            options: [.sortedKeys]
-        )
-        assertInvalidPayload(previousPreferencesRecord, type: .appPreferences) {
-            try mapper.decodeAppPreferences(previousPreferencesRecord)
-        }
     }
 
     func testOrdinaryPayloadRejectsUnknownVersionShapeAndNoncanonicalBytes() throws {

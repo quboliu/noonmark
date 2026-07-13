@@ -2,6 +2,43 @@
 import XCTest
 
 final class MacUIDesignContractTests: XCTestCase {
+    func testCurrentWindowLayoutMatchesCompactReference() {
+        XCTAssertEqual(MacUIWindowLayout.defaultWidth, 1000)
+        XCTAssertEqual(MacUIWindowLayout.defaultHeight, 768)
+        XCTAssertEqual(MacUIWindowLayout.minimumWidth, 960)
+        XCTAssertEqual(MacUIWindowLayout.minimumHeight, 720)
+        XCTAssertEqual(
+            Set(MacUIDesignContract.current.windowMetrics),
+            [.defaultLaunch1000x768, .minimum960x720]
+        )
+    }
+
+    func testCurrentShellLayoutMatchesCompactReference() {
+        XCTAssertEqual(MacUIShellLayout.sidebarWidth, 220)
+        XCTAssertEqual(MacUIShellLayout.detailRailWidth, 280)
+        XCTAssertEqual(MacUIShellLayout.calendarRailWidth, 248)
+        XCTAssertEqual(MacUIShellLayout.pageHorizontalPadding, 20)
+        XCTAssertEqual(MacUIShellLayout.taskRowVerticalPadding, 8)
+        XCTAssertEqual(MacUIShellLayout.detailPadding, 14)
+        XCTAssertEqual(MacUIIconMetrics.trafficLightDiameter, 12)
+        XCTAssertEqual(MacUIIconMetrics.trafficLightHitTarget, 20)
+        XCTAssertEqual(MacUIIconMetrics.clockLogoSize, 22)
+        XCTAssertEqual(MacUIIconMetrics.navigationSize, 14)
+        XCTAssertEqual(MacUIShellLayout.navigationRowHeight, 34)
+    }
+
+    func testTypographyCompactsReadableTextWithoutShrinkingMicrocopy() {
+        XCTAssertEqual(MacUITypographyMetrics.scale, 0.92)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(21), 19.5)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(17), 15.5)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(14.5), 13.5)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(13), 12)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(12), 11)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(10.5), 9.5)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(10), 10)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(9), 9)
+    }
+
     func testCurrentContractCoversAllTopLevelPages() {
         let contract = MacUIDesignContract.current
 
@@ -72,8 +109,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.quietSidebarSurface))
         XCTAssertTrue(contract.globalElements.contains(.lowContrastControlSurfaces))
         XCTAssertTrue(contract.globalElements.contains(.borderlessListRows))
-        XCTAssertTrue(contract.windowMetrics.contains(.defaultLaunch1320x820))
-        XCTAssertTrue(contract.windowMetrics.contains(.maxContent1400x880))
+        XCTAssertTrue(contract.windowMetrics.contains(.defaultLaunch1000x768))
+        XCTAssertTrue(contract.windowMetrics.contains(.minimum960x720))
         XCTAssertTrue(contract.colorTokens.contains(.accent))
         XCTAssertTrue(contract.colorTokens.contains(.ok))
         XCTAssertTrue(contract.colorTokens.contains(.warn))
@@ -194,9 +231,9 @@ final class MacUIDesignContractTests: XCTestCase {
     func testZhulongHomeUsesOneSparseVisualAxis() {
         XCTAssertEqual(MacUIZhulongHomeLayout.contentMaxWidth, 780)
         XCTAssertEqual(MacUIZhulongHomeLayout.headerOuterMaxWidth, 828)
-        XCTAssertEqual(MacUIZhulongHomeLayout.composerHeight, 58)
-        XCTAssertEqual(MacUIZhulongHomeLayout.composerCornerRadius, 29)
-        XCTAssertEqual(MacUIZhulongHomeLayout.workflowRowHeight, 68)
+        XCTAssertEqual(MacUIZhulongHomeLayout.composerHeight, 54)
+        XCTAssertEqual(MacUIZhulongHomeLayout.composerCornerRadius, 27)
+        XCTAssertEqual(MacUIZhulongHomeLayout.workflowRowHeight, 62)
         XCTAssertEqual(MacUIZhulongHomeLayout.workflowListCount, 1)
         XCTAssertEqual(MacUIZhulongHomeLayout.composerActionCount, 1)
         XCTAssertTrue(MacUIZhulongHomeLayout.collapsesEmptyPendingSection)
@@ -242,7 +279,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.reviewElements.contains(.autosavedIndicator))
     }
 
-    func testTaskNotesExposeComposeEditAndDeleteCapabilitiesWithoutAppendOnlySemantics() {
+    func testTaskNotesExposeCurrentComposeEditAndDeleteCapabilities() {
         let contract = MacUIDesignContract.current
 
         XCTAssertTrue(contract.detailElements.contains(.noteComposerInput))
@@ -251,7 +288,6 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.detailElements.contains(.noteEntryOverflowMenu))
         XCTAssertTrue(contract.detailElements.contains(.editableNoteEntries))
         XCTAssertTrue(contract.detailElements.contains(.deletableNoteEntries))
-        XCTAssertFalse(contract.detailElements.map(\.rawValue).contains("appendOnlyNoteInput"))
         XCTAssertTrue(contract.taskActions.contains(.addNote))
         XCTAssertTrue(contract.taskActions.contains(.editNote))
         XCTAssertTrue(contract.taskActions.contains(.deleteNote))

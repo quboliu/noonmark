@@ -20,12 +20,12 @@ struct ClassificationManagerButton: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 if prominent {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.noonmarkSystem(size: 8, weight: .bold))
                 }
             }
             .foregroundStyle(prominent ? Theme.accent : Theme.text2)
@@ -50,6 +50,12 @@ struct ClassificationManagerButton: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .accessibilityIdentifier("classification.manager.open")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "classification.manager.open",
+                verificationText: title
+            )
+        }
     }
 }
 
@@ -58,9 +64,7 @@ struct ClassificationManagementDialog: View {
 
     @EnvironmentObject private var store: NoonmarkStore
     let close: () -> Void
-    @State private var kind: ClassificationItemKind = CommandLine.arguments.contains(
-        "--e2e-classification-manager-labels"
-    ) ? .label : .category
+    @State private var kind: ClassificationItemKind = .category
     @State private var search = ""
     @State private var isCreating = false
     @State private var newName = ""
@@ -124,6 +128,12 @@ struct ClassificationManagementDialog: View {
         .background(Theme.panel)
         .defaultFocus($isSearchFocused, true)
         .accessibilityIdentifier("classification.manager.dialog")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "classification.manager.dialog",
+                verificationText: "分组与标签管理"
+            )
+        }
         .onAppear {
             isSearchFocused = true
         }
@@ -136,11 +146,11 @@ struct ClassificationManagementDialog: View {
     private var header: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("分类管理")
-                    .font(.system(size: 15, weight: .bold))
+                Text("分组与标签管理")
+                    .font(.noonmarkSystem(size: 15, weight: .bold))
                     .foregroundStyle(Theme.text1)
-                Text("维护当前分类，不改写任务的历史快照")
-                    .font(.system(size: 10.5))
+                Text("维护当前分组与标签，不改写任务的历史快照")
+                    .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
             }
             Spacer()
@@ -152,11 +162,28 @@ struct ClassificationManagementDialog: View {
             .pickerStyle(.segmented)
             .frame(width: 178)
             .accessibilityIdentifier("classification.manager.kind")
+            .overlay {
+                GeometryReader { proxy in
+                    HStack(spacing: 0) {
+                        classificationKindAnchor(
+                            kind: .category,
+                            width: proxy.size.width / 2,
+                            height: proxy.size.height
+                        )
+                        classificationKindAnchor(
+                            kind: .label,
+                            width: proxy.size.width / 2,
+                            height: proxy.size.height
+                        )
+                    }
+                }
+                .allowsHitTesting(false)
+            }
             Button {
                 close()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.noonmarkSystem(size: 9, weight: .bold))
                     .foregroundStyle(Theme.text3)
                     .frame(width: 26, height: 26)
                     .background(RoundedRectangle(cornerRadius: 7).fill(Theme.controlFill))
@@ -165,28 +192,48 @@ struct ClassificationManagementDialog: View {
             .buttonStyle(.plain)
             .keyboardShortcut(.cancelAction)
             .accessibilityIdentifier("classification.manager.close")
-            .accessibilityLabel("关闭分类管理")
+            .accessibilityLabel("关闭分组与标签管理")
         }
         .padding(.horizontal, 14)
         .frame(height: 52)
+    }
+
+    private func classificationKindAnchor(
+        kind anchorKind: ClassificationItemKind,
+        width: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        ZStack {
+            AppE2EViewAnchor(
+                identifier: "classification.manager.kind.\(anchorKind.rawValue)",
+                verificationText: anchorKind == .category ? "分组" : "标签"
+            )
+            if kind == anchorKind {
+                AppE2EViewAnchor(
+                    identifier: "classification.manager.kind.selected.\(anchorKind.rawValue)",
+                    verificationText: anchorKind == .category ? "已选择分组" : "已选择标签"
+                )
+            }
+        }
+        .frame(width: width, height: height)
     }
 
     private var toolbar: some View {
         HStack(spacing: 8) {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.noonmarkSystem(size: 11, weight: .medium))
                     .foregroundStyle(Theme.text3)
                 TextField(kind == .category ? "搜索分组" : "搜索标签", text: $search)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 11.5))
+                    .font(.noonmarkSystem(size: 11.5))
                     .focused($isSearchFocused)
                 if search.isEmpty == false {
                     Button {
                         search = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 10.5))
+                            .font(.noonmarkSystem(size: 10.5))
                             .foregroundStyle(Theme.text3)
                     }
                     .buttonStyle(.plain)
@@ -206,7 +253,7 @@ struct ClassificationManagementDialog: View {
                 }
             } label: {
                 Label(kind == .category ? "新建分组" : "新建标签", systemImage: isCreating ? "xmark" : "plus")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                     .foregroundStyle(isCreating ? Theme.text2 : Theme.accent)
                     .padding(.horizontal, 10)
                     .frame(height: 32)
@@ -236,7 +283,7 @@ struct ClassificationManagementDialog: View {
             HStack(spacing: 8) {
                 TextField(kind == .category ? "分组名称" : "标签名称", text: $newName)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.noonmarkSystem(size: 11.5, weight: .medium))
                     .padding(.horizontal, 9)
                     .frame(height: 30)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
@@ -245,14 +292,14 @@ struct ClassificationManagementDialog: View {
 
                 Button("创建", action: createItem)
                     .buttonStyle(.plain)
-                    .font(.system(size: 10.5, weight: .bold))
+                    .font(.noonmarkSystem(size: 10.5, weight: .bold))
                     .foregroundStyle(Theme.accent)
                     .disabled(ClassificationNameCanonicalizer.displayName(newName).isEmpty)
             }
 
             HStack(spacing: 9) {
                 Text("颜色")
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 9.5, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                 ForEach(Self.palette, id: \.self) { color in
                     Button {
@@ -273,7 +320,7 @@ struct ClassificationManagementDialog: View {
                 }
                 Spacer()
                 Text(kind == .category ? "任务至多使用一个分组" : "任务可使用多个标签")
-                    .font(.system(size: 9.5))
+                    .font(.noonmarkSystem(size: 9.5))
                     .foregroundStyle(Theme.text3)
             }
         }
@@ -311,11 +358,11 @@ struct ClassificationManagementDialog: View {
     private func sectionHeader(title: String, count: Int) -> some View {
         HStack(spacing: 6) {
             Text(title.uppercased())
-                .font(.system(size: 9.5, weight: .bold))
+                .font(.noonmarkSystem(size: 9.5, weight: .bold))
                 .tracking(0.7)
                 .foregroundStyle(Theme.text3)
             Text("\(count)")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .font(.noonmarkSystem(size: 9, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.text3)
                 .padding(.horizontal, 5)
                 .frame(height: 16)
@@ -335,19 +382,19 @@ struct ClassificationManagementDialog: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.noonmarkSystem(size: 8, weight: .bold))
                     .rotationEffect(.degrees(showsArchived ? 90 : 0))
                 Text("已归档")
-                    .font(.system(size: 9.5, weight: .bold))
+                    .font(.noonmarkSystem(size: 9.5, weight: .bold))
                     .tracking(0.7)
                 Text("\(archivedItems.count)")
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .font(.noonmarkSystem(size: 9, weight: .bold, design: .rounded))
                     .padding(.horizontal, 5)
                     .frame(height: 16)
                     .background(Capsule().fill(Theme.chip))
                 Spacer()
                 Text(showsArchived ? "收起" : "展开")
-                    .font(.system(size: 9.5))
+                    .font(.noonmarkSystem(size: 9.5))
             }
             .foregroundStyle(Theme.text3)
             .padding(.horizontal, 14)
@@ -365,7 +412,7 @@ struct ClassificationManagementDialog: View {
             Image(systemName: "tray")
                 .foregroundStyle(Theme.text3)
             Text(text)
-                .font(.system(size: 11))
+                .font(.noonmarkSystem(size: 11))
                 .foregroundStyle(Theme.text3)
         }
         .frame(maxWidth: .infinity, minHeight: 64)
@@ -378,19 +425,19 @@ struct ClassificationManagementDialog: View {
             if editingID == item.id {
                 TextField("名称", text: $editingName)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.noonmarkSystem(size: 11.5, weight: .medium))
                     .onSubmit { rename(item) }
                 Button("保存") { rename(item) }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                 Button("取消") { editingID = nil }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10.5))
+                    .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
             } else {
                 Text(item.name)
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                     .foregroundStyle(item.lifecycle == .active ? Theme.text1 : Theme.text3)
                     .lineLimit(1)
                 Spacer()
@@ -399,7 +446,7 @@ struct ClassificationManagementDialog: View {
                     Text("·")
                     Text("历史 \(item.historicalUsageCount)")
                 }
-                .font(.system(size: 9.5))
+                .font(.noonmarkSystem(size: 9.5))
                 .foregroundStyle(Theme.text3)
                 .accessibilityIdentifier("classification.manager.references.\(item.id)")
 
@@ -435,7 +482,7 @@ struct ClassificationManagementDialog: View {
                     )
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.noonmarkSystem(size: 11, weight: .bold))
                         .foregroundStyle(Theme.text3)
                         .frame(width: 26, height: 26)
                         .contentShape(Rectangle())
@@ -461,13 +508,13 @@ struct ClassificationManagementDialog: View {
         let color = classificationUIColor(item.colorHex)
         if kind == .category {
             Image(systemName: "folder.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.noonmarkSystem(size: 12, weight: .semibold))
                 .foregroundStyle(color)
                 .frame(width: 26, height: 26)
                 .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.09)))
         } else {
             Text("#")
-                .font(.system(size: 11, weight: .black, design: .rounded))
+                .font(.noonmarkSystem(size: 11, weight: .black, design: .rounded))
                 .foregroundStyle(color)
                 .frame(width: 26, height: 26)
                 .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.09)))
@@ -477,9 +524,9 @@ struct ClassificationManagementDialog: View {
     private var footer: some View {
         HStack(spacing: 7) {
             Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
             Text("名称与生命周期可调整；历史引用始终保留。")
-                .font(.system(size: 10))
+                .font(.noonmarkSystem(size: 10))
                 .lineLimit(1)
             Spacer()
         }
@@ -492,9 +539,9 @@ struct ClassificationManagementDialog: View {
     private func errorBanner(_ message: String) -> some View {
         HStack(spacing: 7) {
             Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
             Text(message)
-                .font(.system(size: 10))
+                .font(.noonmarkSystem(size: 10))
                 .lineLimit(1)
             Spacer()
         }

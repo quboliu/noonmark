@@ -1149,7 +1149,10 @@ private extension SQLiteSyncRepository {
             )
         }
         let recordPayload = optionalData(statement, 10)
-        guard entityType.requiresImmutableRecordPayload == (recordPayload != nil) else {
+        guard SyncJournalEntry.hasValidRecordPayloadShape(
+            entityType: entityType,
+            recordPayload: recordPayload
+        ) else {
             throw SQLiteRepositoryError.invalidStoredValue(
                 "immutable sync journal payload invariant is invalid"
             )

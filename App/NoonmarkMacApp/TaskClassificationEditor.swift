@@ -38,7 +38,7 @@ struct TaskClassificationEditor: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("classification.editor.\(chainID.description)")
-        .accessibilityLabel("任务「\(taskTitle)」的分类编辑器")
+        .accessibilityLabel("任务「\(taskTitle)」的分组与标签编辑器")
         .onAppear(perform: loadDraft)
         .onChange(of: chainID) { _, _ in
             resetTransientEditorState()
@@ -55,7 +55,7 @@ struct TaskClassificationEditor: View {
                     categoryChip(selectedCategory)
                 } else {
                     Text("无分组")
-                        .font(.system(size: 11))
+                        .font(.noonmarkSystem(size: 11))
                         .foregroundStyle(Theme.text3)
                 }
 
@@ -77,7 +77,7 @@ struct TaskClassificationEditor: View {
                         .frame(width: 8, height: 8)
                     TextField("分组名称", text: $newGroupName)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.noonmarkSystem(size: 11.5, weight: .medium))
                         .padding(.horizontal, 8)
                         .frame(height: 28)
                         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.controlFill))
@@ -91,7 +91,7 @@ struct TaskClassificationEditor: View {
                     .foregroundStyle(Theme.text3)
                     Button("创建并加入", action: createAndSelectGroup)
                         .buttonStyle(.plain)
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                         .foregroundStyle(Theme.accent)
                 }
             }
@@ -121,9 +121,9 @@ struct TaskClassificationEditor: View {
             HStack(spacing: 4) {
                 Text(selectedCategoryID == nil ? "选择" : "更换")
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .bold))
+                    .font(.noonmarkSystem(size: 7, weight: .bold))
             }
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
             .foregroundStyle(Theme.accent)
             .padding(.horizontal, 7)
             .frame(height: 24)
@@ -141,10 +141,10 @@ struct TaskClassificationEditor: View {
         let color = classificationUIColor(category.colorHex)
         return HStack(spacing: 5) {
             Image(systemName: "folder.fill")
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 9.5, weight: .semibold))
                 .foregroundStyle(color)
             Text(category.name)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text1)
                 .lineLimit(1)
                 .help(category.name)
@@ -173,7 +173,7 @@ struct TaskClassificationEditor: View {
                             Task { @MainActor in isLabelInputFocused = true }
                         } label: {
                             Label("添加", systemImage: "plus")
-                                .font(.system(size: 10.5, weight: .semibold))
+                                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                                 .foregroundStyle(Theme.accent)
                                 .padding(.horizontal, 7)
                                 .frame(height: 24)
@@ -194,7 +194,7 @@ struct TaskClassificationEditor: View {
                     Color.clear.frame(width: Self.fieldLabelWidth, height: 1)
                     TextField("输入标签名称", text: $labelInput)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 11.5))
+                        .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text1)
                         .padding(.horizontal, 8)
                         .frame(height: 28)
@@ -213,11 +213,11 @@ struct TaskClassificationEditor: View {
                         isAddingLabel = false
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10.5))
+                    .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
                     Button("添加", action: addLabelFromInput)
                         .buttonStyle(.plain)
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                         .foregroundStyle(Theme.accent)
                 }
             }
@@ -230,16 +230,16 @@ struct TaskClassificationEditor: View {
 
     private var savedStatus: some View {
         Image(systemName: "checkmark.circle.fill")
-            .font(.system(size: 10, weight: .semibold))
+            .font(.noonmarkSystem(size: 10, weight: .semibold))
             .foregroundStyle(Theme.ok)
             .frame(width: 14, height: 24)
             .accessibilityIdentifier("classification.editor.save-status.\(chainID.description)")
-            .accessibilityLabel("任务「\(taskTitle)」的分类已保存")
+            .accessibilityLabel("任务「\(taskTitle)」的分组与标签已保存")
     }
 
     private func editorFieldLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
             .foregroundStyle(Theme.text3)
             .frame(width: Self.fieldLabelWidth, height: 24, alignment: .leading)
     }
@@ -288,10 +288,10 @@ struct TaskClassificationEditor: View {
         let color = classificationUIColor(label.colorHex)
         return HStack(spacing: 4) {
             Text("#")
-                .font(.system(size: 9, weight: .black, design: .rounded))
+                .font(.noonmarkSystem(size: 9, weight: .black, design: .rounded))
                 .foregroundStyle(color)
             Text(label.name)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 .foregroundStyle(Theme.text2)
                 .lineLimit(1)
 
@@ -299,7 +299,7 @@ struct TaskClassificationEditor: View {
                 removeLabel(label)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.noonmarkSystem(size: 8, weight: .bold))
                     .foregroundStyle(Theme.text3)
                     .frame(width: 16, height: 16)
                     .contentShape(Rectangle())
@@ -323,7 +323,7 @@ struct TaskClassificationEditor: View {
 
     private func editorError(_ message: String) -> some View {
         Label(message, systemImage: "exclamationmark.circle.fill")
-            .font(.system(size: 10.5, weight: .medium))
+            .font(.noonmarkSystem(size: 10.5, weight: .medium))
             .foregroundStyle(Theme.warn)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel("保存失败：\(message)")
@@ -333,7 +333,7 @@ struct TaskClassificationEditor: View {
         guard let projection = store.currentClassification(for: chainID),
               let catalog = store.classificationCatalog()
         else {
-            categoryError = "无法读取当前分类，请稍后重试。"
+            categoryError = "无法读取当前分组与标签，请稍后重试。"
             return
         }
 
@@ -443,11 +443,11 @@ struct TaskClassificationEditor: View {
         case let .invalidInput(message), let .invalidTransition(message), let .notFound(message):
             message
         case .invalidTitle:
-            "分类名称无效。"
+            "分组或标签名称无效。"
         case .chainAbandoned:
-            "已放弃的任务不能修改分类。"
+            "已放弃的任务不能修改分组与标签。"
         case .immutableHistory:
-            "历史分类不能直接改写。"
+            "历史分组与标签不能直接改写。"
         case .lockedDay:
             "历史日期已经锁定。"
         case .activeTraceAlreadyExists,
@@ -455,7 +455,7 @@ struct TaskClassificationEditor: View {
              .futurePlanCannotComplete,
              .historicalCompletionCannotBeUndone,
              .openSubtasksPreventCompletion:
-            "当前任务状态不允许修改分类。"
+            "当前任务状态不允许修改分组与标签。"
         case nil:
             error.localizedDescription
         }
@@ -472,7 +472,7 @@ private extension TaskClassificationEditor {
         case invalidIdentifier
 
         var errorDescription: String? {
-            "分类资料无效，请重新打开任务后再试。"
+            "分组与标签资料无效，请重新打开任务后再试。"
         }
     }
 

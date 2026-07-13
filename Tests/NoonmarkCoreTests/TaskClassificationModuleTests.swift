@@ -272,7 +272,7 @@ final class TaskClassificationModuleTests: XCTestCase {
             today: day1,
             now: now
         )
-        engine.settleDays(upTo: day2, now: now.addingTimeInterval(30))
+        try engine.settleDays(upTo: day2, now: now.addingTimeInterval(30))
 
         let targetPlan = try engine.prepareClassification(
             .createCategory(name: "统一项目", colorHex: "#7C5CFF"),
@@ -756,7 +756,7 @@ final class TaskClassificationModuleTests: XCTestCase {
             today: day1,
             now: now
         )
-        engine.settleDays(upTo: day2, now: now)
+        try engine.settleDays(upTo: day2, now: now)
 
         try commitIntent(
             .mergeCategory(source: aID, into: bID),
@@ -1334,7 +1334,7 @@ final class TaskClassificationModuleTests: XCTestCase {
             decisionID: "22222222-2222-2222-2222-222222222222"
         )
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
-        engine.settleDays(upTo: day2, now: now)
+        try engine.settleDays(upTo: day2, now: now)
 
         try commit(
             TaskClassificationDraft(
@@ -1385,7 +1385,7 @@ final class TaskClassificationModuleTests: XCTestCase {
             decisionID: "88889999-AAAA-BBBB-CCCC-DDDDEEEEFFFF"
         )
         try engine.markCompleted(traceID: traceID, today: day1, now: now)
-        engine.settleDays(upTo: day2, now: now.addingTimeInterval(120))
+        try engine.settleDays(upTo: day2, now: now.addingTimeInterval(120))
 
         let historical = try historyProjection(from: engine.classification(.history(traceID)))
         XCTAssertEqual(historical.category?.name, "最终完成")
@@ -1621,7 +1621,7 @@ final class TaskClassificationModuleTests: XCTestCase {
         )
         let categoryID = try XCTUnwrap(engine.snapshot().classifications.categories.keys.first)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
-        engine.settleDays(upTo: day2, now: now)
+        try engine.settleDays(upTo: day2, now: now)
 
         let renamePlan = try engine.prepareClassification(
             .renameCategory(categoryID, to: "运动"),
@@ -1920,7 +1920,7 @@ final class TaskClassificationModuleTests: XCTestCase {
         )
         let labelID = try XCTUnwrap(engine.snapshot().classifications.labels.keys.first)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
-        engine.settleDays(upTo: day2, now: now)
+        try engine.settleDays(upTo: day2, now: now)
 
         let renamePlan = try engine.prepareClassification(
             .renameLabel(labelID, to: "下一步"),
@@ -2035,7 +2035,7 @@ final class TaskClassificationModuleTests: XCTestCase {
             decisionID: "88888888-8888-8888-8888-888888888888"
         )
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
-        engine.settleDays(upTo: day2, now: now)
+        try engine.settleDays(upTo: day2, now: now)
 
         let restored = try NoonmarkEngine(snapshot: engine.snapshot())
 
@@ -2501,6 +2501,17 @@ final class TaskClassificationModuleTests: XCTestCase {
 
         let state = engine.snapshot().classifications
         XCTAssertEqual(state.relationHistory.count, 2)
+        let removalRecord = try XCTUnwrap(state.changeRecords.last)
+        XCTAssertEqual(
+            removalRecord.source,
+            .deterministicDomainAction(
+                reason: "task removed from task pool while preserving classification history"
+            )
+        )
+        XCTAssertNil(removalRecord.decisionID)
+        XCTAssertNil(
+            state.committedReceiptsByInteractionID[removalRecord.interactionID]
+        )
         XCTAssertTrue(state.relationHistory.allSatisfy { history in
             history.chainID == chainID
                 && history.removedAt == removedAt

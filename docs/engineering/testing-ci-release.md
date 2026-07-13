@@ -106,13 +106,14 @@ Release：
 
 ## 当前本地取证
 
-- 2026-07-06：`scripts/test-e2e` 通过，17 个演示数据真实 Mac app 截图生成于 `artifacts/e2e/`，截图前会按页面和日期断言真实 `NSWindow.title`；包含 `day-review-saved` 每日复盘自动保存反馈场景、`day-subtasks-expanded` 列表内子任务展开场景和 `day-changed-target` 已变更任务目标跳转入口场景；完整探针覆盖默认汇总侧栏 / 日历分析、当天子任务完成撤回和难度修改、烛龙导航随设置隐藏 / 显示；7 个新用户空数据截图生成于 `artifacts/e2e-blank/`，新增覆盖显式开启后的 `zhulong` 空用户页面，当前默认启动窗口截图尺寸为 2640x1640，对应 1320x820 Retina 截图。
+- 2026-07-06：`scripts/test-e2e` 通过，17 个演示数据真实 Mac app 截图生成于 `artifacts/e2e/`，截图前会按页面和日期断言真实 `NSWindow.title`；包含 `day-review-saved` 每日复盘自动保存反馈场景、`day-subtasks-expanded` 列表内子任务展开场景和 `day-changed-target` 已变更任务目标跳转入口场景；完整探针覆盖默认汇总侧栏 / 日历分析、当天子任务完成撤回和难度修改、烛龙导航随设置隐藏 / 显示；7 个新用户空数据截图生成于 `artifacts/e2e-blank/`，新增覆盖显式开启后的 `zhulong` 空用户页面。
+- 2026-07-13：用户确认当前唯一的紧凑密度：默认启动窗口为 1000×768，最小窗口为 960×720，对应 Retina 截图预期为 2000×1536。
 - 2026-07-13：停止把 2026-07-05 HTML 原型动态渲染为视觉 oracle。六个详情态诊断中有五个已经超过原型阈值，且旧流程曾靠上调阈值容纳产品结构变化，无法证明回归。当前自动化门禁只保留真实 `.app` E2E 与语义证据；待用户确认当前界面后，再从真实 App 截图建立唯一 reference。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 新用户空数据截图探针和正常模式持久化探针，使用 `artifacts/e2e-blank/Noonmark.sqlite` 与 `artifacts/e2e-persistence/Noonmark.sqlite` 验证空库初始化、页面浏览和保存均不灌入演示任务。
-- 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite；同时包含 Day Todo 复盘区烛龙入口探针，验证入口会切到烛龙页并生成 dailyReview 建议草稿。
-- 2026-07-13：`scripts/test-e2e` 新增附言探针，以真实 App 完成任务池附言追加、日轨迹逐条编辑 / 删除、重启回读、窗口 OCR 和 `note_entries_json` 墓碑对账。
+- 2026-07-06：`scripts/test-e2e` 已包含真实 App domain workflow 探针，验证任务池新建、排期到今日、延续到明日和每日复盘编辑均写入 SQLite；Day Todo 复盘区烛龙入口会切到当前每日收尾会话，并验证加密持久化与恢复。
+- 2026-07-13：`scripts/test-e2e` 新增附言探针。fixture 只准备两条附言和当天详情态；探针随后按稳定 view identifier 向真实窗口发送鼠标事件，依次触发可见的 overflow、编辑菜单、编辑器、保存按钮、overflow 和删除菜单，不直接调用控件 action 或 Store 的编辑 / 删除方法；最后执行重启回读、窗口 OCR 和 `note_entries_json` 墓碑对账。
 - 2026-07-07：`scripts/test-e2e` lifecycle 探针补充废弃任务链语义：废弃后必须仍留在未完成池并显示已废弃；重新启用只取消废弃标记，不生成今日任务、不复制子任务、不增加延续轨迹。
-- 2026-07-06：`scripts/test-e2e` 已包含真实 App 右键菜单动作矩阵探针，验证当前待完成、带子任务待完成、当前已完成、历史未完成、历史已完成和未来待完成 trace 只暴露原型允许的上下文动作。
+- 2026-07-06：`scripts/test-e2e` 已包含真实 App 右键菜单动作矩阵探针，验证当前待完成、带子任务待完成、当前已完成、历史未完成、历史已完成和未来待完成 trace 只暴露当前设计契约允许的上下文动作。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 有限撤销探针，验证任务池新增、当前日延续、当前日废弃、未来改期、复制为新任务可撤销，且历史废弃不可撤销。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 日期 strip 选中探针，验证 14 天 strip、今天 index、相邻日期 index 平移和超出 strip 时无选中 pill 映射；并包含方向键日期导航探针，验证 Day Todo 与日历左 / 右按天、上 / 下按周移动。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App lifecycle workflow 探针，验证任务变更保留旧轨迹并创建新任务、回池保留日轨迹、废弃同步终止任务链且仍可在未完成池标记展示。

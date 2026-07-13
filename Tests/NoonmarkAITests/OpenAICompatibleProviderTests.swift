@@ -44,7 +44,7 @@ final class OpenAICompatibleProviderTests: XCTestCase {
             AIRequest(
                 systemPrompt: "系统边界",
                 userPrompt: "授权范围",
-                responseSchemaName: "noonmark.zhulong.suggestion_draft.v1"
+                responseSchemaName: "noonmark.zhulong.conversation"
             )
         )
 
@@ -62,8 +62,8 @@ final class OpenAICompatibleProviderTests: XCTestCase {
         XCTAssertEqual(messages.last?["content"], "授权范围")
     }
 
-    func testCompleteParsesStructuredSuggestionOperations() async throws {
-        let structured = #"{"summary":"建议先创建任务池任务。","confidence":0.66,"proposedOperations":[{"type":"createPoolTask","title":"整理远程结构化输出","descriptionText":"解析安全操作","initialNoteBody":"确认后落库"}]}"#
+    func testCompletePreservesStructuredPlanningOutputForTheCurrentAdapter() async throws {
+        let structured = #"{"kind":"planArtifact","summary":"先取得测量，再交付近期切片。","stages":[]}"#
         URLProtocolStub.handler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -90,19 +90,8 @@ final class OpenAICompatibleProviderTests: XCTestCase {
             AIRequest(systemPrompt: "system", userPrompt: "user", responseSchemaName: "schema")
         )
 
-        XCTAssertEqual(response.text, "建议先创建任务池任务。")
+        XCTAssertEqual(response.text, structured)
         XCTAssertEqual(response.rawContent, structured)
-        XCTAssertEqual(response.confidence, 0.66)
-        XCTAssertEqual(
-            response.proposedOperations,
-            [
-                .createPoolTask(
-                    title: "整理远程结构化输出",
-                    descriptionText: "解析安全操作",
-                    initialNoteBody: "确认后落库"
-                )
-            ]
-        )
     }
 
     func testCompleteFailsClosedWhenConfiguredKeyIsMissing() async throws {

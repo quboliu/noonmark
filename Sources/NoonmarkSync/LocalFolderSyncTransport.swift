@@ -7,6 +7,7 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     private let fileManager: FileManager
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let currentRecordMerger: CurrentSyncRecordMerger
 
     public init(rootURL: URL, fileManager: FileManager = .default) {
         self.rootURL = rootURL
@@ -16,6 +17,7 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        currentRecordMerger = CurrentSyncRecordMerger()
     }
 
     public func push(_ records: [SyncRecord]) async throws {
@@ -23,16 +25,42 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         guard records.isEmpty == false else { return }
 
         try withExclusiveRepositoryLock {
-            var didChangeRecord = false
-            for record in records {
-                let data = try encoder.encode(record)
-                didChangeRecord = try pushRecord(record, data: data) || didChangeRecord
+            let existingRecords = try storedRecords()
+            try ImmutableSyncRecordCASPreflight.validate(
+                existing: try existingRecords.map {
+                    ImmutableSyncRecordCASCandidate(
+                        record: $0,
+                        exactData: try Data(
+                            contentsOf: recordURL(for: $0.id)
+                        )
+                    )
+                },
+                incoming: try records.map {
+                    ImmutableSyncRecordCASCandidate(
+                        record: $0,
+                        exactData: try encoder.encode($0)
+                    )
+                }
+            )
+            let batch = try currentRecordMerger.prepareTransportBatch(
+                existingRecords: existingRecords,
+                incomingRecords: records
+            )
+
+            var publishedRecords: [SyncRecord] = []
+            for record in batch.records {
+                if let published = try pushRecord(
+                    record,
+                    context: batch.mergeContext
+                ) {
+                    publishedRecords.append(published)
+                }
             }
 
-            guard didChangeRecord else { return }
+            guard publishedRecords.isEmpty == false else { return }
             let deviceID = records.first?.modifiedByDeviceID ?? SyncDeviceID("unknown")
             let snapshot = try SyncRepositorySnapshotBuilder().snapshot(
-                records: records,
+                records: publishedRecords,
                 deviceID: deviceID
             )
             try pushSnapshot(snapshot)
@@ -41,6 +69,10 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
 
     public func fetchAll() async throws -> [SyncRecord] {
         try prepareRepository()
+        return try storedRecords()
+    }
+
+    private func storedRecords() throws -> [SyncRecord] {
         let recordDirectory = recordsURL
         guard fileManager.fileExists(atPath: recordDirectory.path) else { return [] }
         return try fileManager.contentsOfDirectory(
@@ -75,16 +107,20 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         try snapshot.id.write(to: latestRefURL, atomically: true, encoding: .utf8)
     }
 
-    private func pushRecord(_ record: SyncRecord, data: Data) throws -> Bool {
+    private func pushRecord(
+        _ record: SyncRecord,
+        context: CurrentSyncRecordMergeContext
+    ) throws -> SyncRecord? {
         let destinationURL = recordURL(for: record.id)
         let stagingURL = recordsURL.appendingPathComponent(
             ".\(UUID().uuidString).staging"
         )
         defer { try? fileManager.removeItem(at: stagingURL) }
 
+        let data = try encoder.encode(record)
         try data.write(to: stagingURL, options: [.atomic])
         guard try publishExclusively(from: stagingURL, to: destinationURL) == false else {
-            return true
+            return record
         }
 
         guard let existingData = try? Data(contentsOf: destinationURL),
@@ -99,14 +135,24 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
             guard record.exactlyMatches(existing), existingData == data else {
                 throw SyncRecordTransportError.immutableRecordCollision(recordID: record.id)
             }
-            return false
+            return nil
         }
 
-        guard record.currentRecordLWWOrder(comparedTo: existing) == .after else {
-            return false
+        let merged: SyncRecord
+        do {
+            merged = try currentRecordMerger.merge(
+                existing: existing,
+                incoming: record,
+                context: context
+            )
+        } catch {
+            throw SyncRecordTransportError.invalidCurrentRecordMerge(recordID: record.id)
         }
-        try data.write(to: destinationURL, options: [.atomic])
-        return true
+        guard merged.exactlyMatches(existing) == false else {
+            return nil
+        }
+        try encoder.encode(merged).write(to: destinationURL, options: [.atomic])
+        return merged
     }
 
     private func publishExclusively(from sourceURL: URL, to destinationURL: URL) throws -> Bool {

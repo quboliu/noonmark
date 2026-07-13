@@ -5,6 +5,7 @@ public enum SyncSnapshotDifferError: Error, Equatable, Sendable {
     case classificationHistoryDiverged
     case classificationCommitsMustBePersistedIndividually(count: Int)
     case unsupportedClassificationTransition(changeRecordID: UUID?, reason: String)
+    case invalidChainReactivationBoundary(chainID: TaskChainID)
 }
 
 public struct SyncSnapshotDiffer: Sendable {
@@ -20,6 +21,10 @@ public struct SyncSnapshotDiffer: Sendable {
             from: oldSnapshot.classifications,
             to: newSnapshot.classifications
         )
+        let reactivationPayloads = try chainReactivationPayloads(
+            from: oldSnapshot,
+            to: newSnapshot
+        )
         var entries = changedEntities(
             from: oldSnapshot,
             to: newSnapshot
@@ -29,7 +34,10 @@ public struct SyncSnapshotDiffer: Sendable {
                 entityID: entity.id,
                 operation: .upsert,
                 changedAt: changedAt,
-                deviceID: deviceID
+                deviceID: deviceID,
+                recordPayload: entity.type == .taskChain
+                    ? reactivationPayloads[entity.id]
+                    : nil
             )
         }
         if let classificationEntry = try classificationCommitEntry(
@@ -48,6 +56,70 @@ public struct SyncSnapshotDiffer: Sendable {
             }
             return $0.entityID < $1.entityID
         }
+    }
+
+    private func chainReactivationPayloads(
+        from oldSnapshot: NoonmarkSnapshot,
+        to newSnapshot: NoonmarkSnapshot
+    ) throws -> [String: Data] {
+        let oldChains = Dictionary(
+            uniqueKeysWithValues: oldSnapshot.chains.map { ($0.id, $0) }
+        )
+        let oldTraces = Dictionary(
+            uniqueKeysWithValues: oldSnapshot.traces.map { ($0.id, $0) }
+        )
+        let newTraces = Dictionary(
+            uniqueKeysWithValues: newSnapshot.traces.map { ($0.id, $0) }
+        )
+
+        let witnesses = try newSnapshot.chains.compactMap { restoredChain -> (
+            String,
+            Data
+        )? in
+            guard let abandonedChain = oldChains[restoredChain.id],
+                  abandonedChain.state == .abandoned,
+                  restoredChain.state == .active
+            else {
+                return nil
+            }
+            let candidates = oldTraces.values.compactMap { abandonedTrace -> (
+                DayTrace,
+                DayTrace
+            )? in
+                guard abandonedTrace.chainID == restoredChain.id,
+                      abandonedTrace.status == .abandoned,
+                      let restoredTrace = newTraces[abandonedTrace.id]
+                else {
+                    return nil
+                }
+                return (abandonedTrace, restoredTrace)
+            }
+            guard candidates.count == 1,
+                  let candidate = candidates.first
+            else {
+                throw SyncSnapshotDifferError.invalidChainReactivationBoundary(
+                    chainID: restoredChain.id
+                )
+            }
+            let envelope: ChainReactivationEnvelope
+            do {
+                envelope = try ChainReactivationEnvelope(
+                    abandonedChain: abandonedChain,
+                    restoredChain: restoredChain,
+                    abandonedTrace: candidate.0,
+                    restoredTrace: candidate.1
+                )
+            } catch {
+                throw SyncSnapshotDifferError.invalidChainReactivationBoundary(
+                    chainID: restoredChain.id
+                )
+            }
+            return (
+                restoredChain.id.rawValue.uuidString,
+                try envelope.canonicalData()
+            )
+        }
+        return Dictionary(uniqueKeysWithValues: witnesses)
     }
 
     private func traceClassificationEventEntries(

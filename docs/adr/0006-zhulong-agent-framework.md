@@ -1,6 +1,8 @@
 # 烛龙 采用证据优先的建议草稿框架
 
-**Status**: Accepted
+**Status**: Superseded by ADR 0015
+
+本 ADR 只保留早期决策记录；其中 `ZhulongAgent`、`AISuggestionDraft` 与 `AIDelegationPolicy` 已在 clean-sheet cutover 时删除，不是当前接口、兼容目标或 fallback。
 
 晷迹第一版的烛龙不采用裸自主工具调用 agent loop，而采用 **本地证据分析 + provider 中立模型调用 + AI 建议草稿 + 用户确认或托管授权落库** 的框架。
 

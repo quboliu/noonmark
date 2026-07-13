@@ -2,38 +2,6 @@ import Foundation
 import NoonmarkCore
 import NoonmarkZhulong
 
-enum ZhulongStreamVariant: String, CaseIterable, Codable, Identifiable {
-    case dossier
-    case chapters
-    case weave
-
-    var id: String { rawValue }
-
-    var shortName: String {
-        switch self {
-        case .dossier: "A"
-        case .chapters: "B"
-        case .weave: "C"
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .dossier: "连续卷宗"
-        case .chapters: "章节手风琴"
-        case .weave: "双轨编织流"
-        }
-    }
-
-    var purpose: String {
-        switch self {
-        case .dossier: "按时间连续阅读全部事实"
-        case .chapters: "按工作阶段收拢长会话"
-        case .weave: "分开查看烛龙工作与用户决定"
-        }
-    }
-}
-
 enum ZhulongStreamActor: Equatable {
     case user
     case zhulong
@@ -66,18 +34,10 @@ struct ZhulongStreamRecord: Identifiable, Equatable {
 
 @MainActor
 final class ZhulongWorkspaceStore: ObservableObject {
-    private static let variantDefaultsKey = "noonmark.zhulong.stream-variant"
-
     @Published private(set) var sessions: [ZhulongSession] = []
     @Published private(set) var selectedSessionID: ZhulongSessionID?
     @Published private(set) var memoryLedger = ZhulongMemoryLedger()
     @Published private(set) var statusMessage: String?
-    @Published var variant: ZhulongStreamVariant {
-        didSet {
-            UserDefaults.standard.set(variant.rawValue, forKey: Self.variantDefaultsKey)
-        }
-    }
-
     private let directoryURL: URL
     private let sessionRepository: EncryptedFileZhulongSessionRepository
     private let memoryRepository: EncryptedFileZhulongMemoryRepository
@@ -100,8 +60,6 @@ final class ZhulongWorkspaceStore: ObservableObject {
             directoryURL: directoryURL,
             keySource: keySource
         )
-        variant = UserDefaults.standard.string(forKey: Self.variantDefaultsKey)
-            .flatMap(ZhulongStreamVariant.init(rawValue:)) ?? .weave
         reload()
     }
 

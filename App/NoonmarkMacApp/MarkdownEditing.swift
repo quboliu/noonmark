@@ -9,9 +9,9 @@ enum MarkdownEditorStyle {
 
     var font: NSFont {
         switch self {
-        case .title: .systemFont(ofSize: 14, weight: .semibold)
-        case .body: .systemFont(ofSize: 12)
-        case .compact: .systemFont(ofSize: 12.5, weight: .medium)
+        case .title: .noonmarkSystemFont(ofSize: 14, weight: .semibold)
+        case .body: .noonmarkSystemFont(ofSize: 12)
+        case .compact: .noonmarkSystemFont(ofSize: 12.5, weight: .medium)
         }
     }
 
@@ -34,6 +34,7 @@ struct MarkdownEditor: View {
     var commitsOnReturn = false
     var onCommit: (() -> Void)?
     var onEndEditing: (() -> Void)?
+    var nativeAccessibilityIdentifier: String?
 
     var body: some View {
         MarkdownTextViewRepresentable(
@@ -41,14 +42,16 @@ struct MarkdownEditor: View {
             style: style,
             commitsOnReturn: commitsOnReturn,
             onCommit: onCommit,
-            onEndEditing: onEndEditing
+            onEndEditing: onEndEditing,
+            accessibilityLabel: placeholder,
+            nativeAccessibilityIdentifier: nativeAccessibilityIdentifier
         )
             .frame(height: height ?? style.minimumHeight)
             .background(showsSurface ? (warm ? Theme.noteBackground : Theme.panel2) : Color.clear)
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
                     Text(placeholder)
-                        .font(.system(size: style == .title ? 14 : 12))
+                        .font(.noonmarkSystem(size: style == .title ? 14 : 12))
                         .foregroundStyle(Theme.text3)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 8)
@@ -65,6 +68,8 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     let commitsOnReturn: Bool
     let onCommit: (() -> Void)?
     let onEndEditing: (() -> Void)?
+    let accessibilityLabel: String
+    let nativeAccessibilityIdentifier: String?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, onEndEditing: onEndEditing)
@@ -95,6 +100,16 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.commitsOnReturn = commitsOnReturn
         textView.commitAction = onCommit
+        scrollView.setAccessibilityLabel(accessibilityLabel)
+        textView.setAccessibilityLabel(accessibilityLabel)
+        if let nativeAccessibilityIdentifier {
+            scrollView.setAccessibilityIdentifier(nativeAccessibilityIdentifier)
+            textView.setAccessibilityIdentifier("\(nativeAccessibilityIdentifier).input")
+            scrollView.identifier = NSUserInterfaceItemIdentifier(nativeAccessibilityIdentifier)
+            textView.identifier = NSUserInterfaceItemIdentifier(
+                "\(nativeAccessibilityIdentifier).input"
+            )
+        }
         context.coordinator.onEndEditing = onEndEditing
         scrollView.documentView = textView
         return scrollView
@@ -112,6 +127,16 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.font = style.font
         textView.commitsOnReturn = commitsOnReturn
         textView.commitAction = onCommit
+        scrollView.setAccessibilityLabel(accessibilityLabel)
+        textView.setAccessibilityLabel(accessibilityLabel)
+        if let nativeAccessibilityIdentifier {
+            scrollView.setAccessibilityIdentifier(nativeAccessibilityIdentifier)
+            textView.setAccessibilityIdentifier("\(nativeAccessibilityIdentifier).input")
+            scrollView.identifier = NSUserInterfaceItemIdentifier(nativeAccessibilityIdentifier)
+            textView.identifier = NSUserInterfaceItemIdentifier(
+                "\(nativeAccessibilityIdentifier).input"
+            )
+        }
         context.coordinator.text = $text
         context.coordinator.onEndEditing = onEndEditing
     }
@@ -358,7 +383,7 @@ struct MarkdownText: View {
         switch block.kind {
         case let .heading(level):
             MarkdownInlineText(block.text)
-                .font(.system(size: max(13, 20 - CGFloat(level * 2)), weight: .bold))
+                .font(.noonmarkSystem(size: max(13, 20 - CGFloat(level * 2)), weight: .bold))
         case .paragraph:
             MarkdownInlineText(block.text)
                 .lineSpacing(3)
@@ -366,12 +391,12 @@ struct MarkdownText: View {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 if let checked {
                     Image(systemName: checked ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.noonmarkSystem(size: 11, weight: .semibold))
                         .foregroundStyle(checked ? Theme.ok : Theme.text3)
                         .frame(width: 13)
                 } else {
                     Text(marker)
-                        .font(.system(size: 10.5, weight: .bold))
+                        .font(.noonmarkSystem(size: 10.5, weight: .bold))
                         .foregroundStyle(Theme.text3)
                         .frame(minWidth: 13)
                 }
@@ -384,7 +409,7 @@ struct MarkdownText: View {
             }
         case .code:
             Text(block.text)
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(.noonmarkSystem(size: 11.5, design: .monospaced))
                 .textSelection(.enabled)
                 .padding(9)
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -1,4 +1,4 @@
-# 晷迹任务分类体系重做规格
+# 晷迹任务分组与标签体系规格
 
 **状态**：已接受设计，实施中  
 **日期**：2026-07-11  
@@ -6,11 +6,11 @@
 
 ## 目标与成功标准
 
-新版任务分类必须提供一个显式可选 **主分类** 和零到多个对等 **标签**，完整覆盖快速捕获、任务详情、任务池分组、跨状态检索、历史轨迹、分类管理和烛龙逐项／批量建议。
+晷迹必须在产品界面提供一个显式可选的 **分组** 和零到多个对等 **标签**，完整覆盖快速捕获、任务详情、任务池分组、跨状态检索、历史轨迹、分组与标签管理和烛龙逐项／批量建议。领域层继续以 **主分类** 表达单值分组身份，技术类型沿用 `TaskCategory` 与 classification，不把内部名词暴露给用户。
 
 成功标准：
 
-- 产品、领域和中文 UI 只使用“分类／主分类”和“标签”，不再显示 `Tag I / II / III`、`Tag` 或 `Label`。
+- 中文 UI 只显示“分组与标签”；领域文档和代码使用“主分类”／`TaskCategory` 表达对应的稳定单值身份，不再向用户显示“分类”、“主分类”、`Tag I / II / III`、`Tag` 或 `Label`。
 - 主分类单值可选；标签没有主次顺序，也没有任意的三个数量限制。
 - 所有任务创建与分类变更原子执行，失败时任务、分类、关系、审计和同步 outbox 全部零增量。
 - 当前分类可调整；历史主分类快照和标签快照不可改写，只能追加显式更正。
@@ -181,22 +181,22 @@ SQLite 采用本代首个 schema，`PRAGMA user_version = 1`。初始化只允�
 
 保存顺序必须由一个 SQLite `BEGIN IMMEDIATE` 事务覆盖：分类身份与名称版本 → 任务链 → 当前关系 → 历史快照／更正 → 变更记录 → commit／outbox。不得先全量删除分类库和关系再重建。
 
-`NoonmarkSnapshot` 必须显式携带独立 classification state。数据包只有一个当前 envelope，`formatVersion = 1` 为必需整数；日期按 `Date.timeIntervalSinceReferenceDate.bitPattern` 精确编码。缺版本、版本不同、原始 snapshot、缺字段、旧日期编码或完整性不成立一律拒绝。
+`NoonmarkSnapshot` 必须显式携带独立 classification state。数据包只有一个当前 envelope，`formatVersion = 1` 为必需整数；日期按 `Date.timeIntervalSinceReferenceDate.bitPattern` 精确编码。缺版本、非当前版本、原始 snapshot、缺字段、非当前日期编码或完整性不成立一律拒绝。
 
-## Clean-cut 边界
+## 唯一当前契约
 
-项目尚无用户，既有本地数据全部是可丢弃测试数据。因此本次换代明确不实施兼容：
+项目尚无已发布用户数据；产品、schema、fixture 和测试只定义一套当前分类契约：
 
-- 删除上一代分类类型、写 API、表、column、fixture、decoder、source variant 与 UI 入口。
-- 不保留 adapter、双写、fallback、一次性 converter、旧库备份或待整理清单。
-- 开发机遇到非当前数据库时，由开发者删除测试数据库后重启；App 必须清楚报告拒绝原因，不能静默清空。
+- Core 只暴露当前分类类型和写 API，SQLite、数据包、同步与 UI 使用同一份事实模型。
+- 不存在 adapter、双写、fallback、converter 或另一份兼容读路。
+- 开发机遇到不符合当前契约的数据库时，由开发者删除测试数库后重启；App 必须清楚报告拒绝原因，不能静默清空。
 - 数据导入只接受当前数据包。测试需要的状态全部由当前公开领域行为重新建立。
-- 普通同步 payload 也只接受 canonical current envelope：顶层必须精确为 `formatVersion = 1` 与 `payload`，原始模型 JSON、未知字段、非当前版本及非 canonical bytes 一律拒绝。
-- 回滚实现只使用 Git，不在产品中保留反向投影或旧 schema 恢复能力。
+- 普通同步 payload 只接受 canonical current envelope：顶层必须精确为 `formatVersion = 1` 与 `payload`，原始模型 JSON、未知字段、非当前版本及非 canonical bytes 一律拒绝。
+- 代码回滚只使用 Git，产品内不保留反向投影或其他 schema 恢复能力。
 
 ## 同步
 
-分类同步不再把上一代分类字段塞入 `AppPreferences` 或 `TaskChain`。普通实体统一使用 byte-canonical、必需 `formatVersion = 1` 的 current envelope；每个分类提交生成 transport-only `ClassificationCommitEnvelope`，携带 typed base/post delta、来源、审计记录、可选用户 receipt 与完整性 digest。`DayTrace` payload 只表达轨迹事实；每条历史分类快照使用唯一 UUID 的 immutable `traceClassificationEvent`，携带自身 revision 与 predecessor。关系表仍是本地事实源。
+分类同步把 classification state 作为独立领域事实，不塞入 `AppPreferences` 或 `TaskChain`。普通实体统一使用 byte-canonical、必需 `formatVersion = 1` 的 current envelope；每个分类提交生成 transport-only `ClassificationCommitEnvelope`，携带 typed base/post delta、来源、审计记录、可选用户 receipt 与完整性 digest。`DayTrace` payload 只表达轨迹事实；每条历史分类快照使用唯一 UUID 的 immutable `traceClassificationEvent`，携带自身 revision 与 predecessor。关系表仍是本地事实源。
 
 同步规则：
 
@@ -223,15 +223,17 @@ SQLite 采用本代首个 schema，`PRAGMA user_version = 1`。初始化只允�
 
 以下 prompt 是实现和视觉评审的前置契约：
 
-> 在晷迹当前 SwiftUI Mac App 的亮色工作台上实现“分类与标签”，严格保持现有 1320×820 默认窗口、约 240pt 左侧导航、主内容区和约 300pt 右侧详情 rail；背景使用现有 `Theme.panel/panel2`，发丝线使用 `Theme.line`，圆角维持 7–8pt，不新增暗色大面板、重阴影或孤立 Dashboard。任务行先显示一个不带 `#` 的主分类 badge：高度 20pt、水平 padding 8pt、6pt 色点、10.5pt semibold、1px 稍强描边；其后显示最多两个带 `#` 的对等标签 chip，再显示同高 `+N` chip，点击以 popover 展开全部，绝不截断数据。快速新增保持 32pt 输入高度，在尾部加入 24pt“分类”图标入口；输入 `#` 时在输入框下方 overlay 最多六条 28pt 标签建议，新项明确写“新建标签”，归档或已合并命中显示阻塞原因，只有完整事务成功后才清空输入。右侧任务详情把旧 Tag 区拆为 34pt 单选分类 picker 与可自动换行的全部标签区，当前／未来任务可编辑，历史任务显示带“当时”标记的冻结值、现名关联及独立“追加更正”入口。设置页增加“分类与标签”pane：顶部 30pt 主分类／标签／已归档 segmented control、32pt 搜索框、44pt 线性列表行、右侧 300pt inspector；改名和颜色是轻操作，归档、硬删除和合并必须先进入完整影响预览 sheet，sheet 基准约 720×560pt，显示任务数、历史数、去重数、逐项展开和明确确认按钮。所有动效使用 160–220ms ease-in-out，列表、popover 和详情切换保留视觉轨迹；键盘建议支持上下选择、Enter 接受、Esc 关闭；每个移除按钮和 badge 都有目标相关 accessibility label。烛龙批量分类沿用已确认流式会话：左侧烛龙工作、右侧用户决定，before/after 与理由逐项展示，重大批量确认块全宽，确认后在原流中追加 receipt 并平滑滚动。
+> 在晷迹当前 SwiftUI Mac App 的亮色工作台上实现“分组与标签”，使用用户确认的当前紧凑密度，严格保持 1000×768 默认窗口、960×720 最小窗口、约 220pt 左侧导航、主内容区和约 280pt 右侧详情 rail；背景使用现有 `Theme.panel/panel2`，发丝线使用 `Theme.line`，圆角维持 7–8pt，不新增暗色大面板、重阴影或孤立 Dashboard。任务行先显示一个不带 `#` 的分组 badge：高度 20pt、水平 padding 8pt、6pt 色点、10.5pt semibold、1px 稍强描边；其后显示最多两个带 `#` 的对等标签 chip，再显示同高 `+N` chip，点击以 popover 展开全部，绝不截断数据。快速新增保持 32pt 输入高度，在尾部加入 24pt“分组与标签”入口；输入 `#` 时在输入框下方 overlay 最多六条 28pt 标签建议，新项明确写“新建标签”，归档或已合并命中显示阻塞原因，只有完整事务成功后才清空输入。右侧任务详情把旧 Tag 区拆为 34pt 单选分组 picker 与可自动换行的全部标签区，当前／未来任务可编辑，历史任务显示带“当时”标记的冻结值、现名关联及独立“追加更正”入口。设置页增加“分组与标签”pane：顶部 30pt 分组／标签／已归档 segmented control、32pt 搜索框、44pt 线性列表行、右侧 280pt inspector；改名和颜色是轻操作，归档、硬删除和合并必须先进入完整影响预览 sheet，sheet 基准约 720×560pt，显示任务数、历史数、去重数、逐项展开和明确确认按钮。所有动效使用 160–220ms ease-in-out，列表、popover 和详情切换保留视觉轨迹；键盘建议支持上下选择、Enter 接受、Esc 关闭；每个移除按钮和 badge 都有目标相关 accessibility label。烛龙批量整理沿用已确认流式会话：左侧烛龙工作、右侧用户决定，before/after 与理由逐项展示，重大批量确认块全宽，确认后在原流中追加 receipt 并平滑滚动。
+
+任务池是上述行内分组 badge 的唯一情境例外：列表已经用分组标题建立归属，行内不再重复同一分组视觉单位，只显示标签；默认窄窗下标签按 `2 → 1 → 0` 个自适应，未显示项统一进入可点击的 `+N`，每个实际显示的 badge 必须保留文字固有宽度。任务池排期操作另起一行并保留完整文案，不得再与标题、标签争抢同一横向空间。
 
 ## UI 行为
 
-- 任务池默认按主分类分组；未分类单独成组。分类标题和 badge 可以点击筛选。
-- 分类与标签筛选是组合视图，不改变任务事实；支持未分类／无标签筛选。
+- 任务池默认按分组排列；未分组单独成组。分组标题和 badge 可以点击筛选。
+- 分组与标签筛选是组合视图，不改变任务事实；支持未分组／无标签筛选。
 - 当前、未来、任务池和未结算任务详情都能编辑当前关系；历史详情只读原快照并允许追加更正。
 - 列表 chip 折叠只是展示；详情、popover、搜索和导出始终可访问全部标签。
-- 分类管理页提供创建、改名、改色、归档、恢复、硬删除、合并、使用量、当前任务和历史入口。
+- 分组与标签管理页提供创建、改名、改色、归档、恢复、硬删除、合并、使用量、当前任务和历史入口。
 - 合并、批量操作、历史更正和所有烛龙建议都使用 plan／confirm；轻量单任务关联也经同一 Module prepare／commit，但 UI 可以自动显示短暂保存反馈。
 - 烛龙批量草稿按新增标签、移除标签、替换主分类、新建分类项分区，允许逐项修改或排除；摘要不能替代逐项展开。
 
@@ -304,12 +306,12 @@ SQLite 采用本代首个 schema，`PRAGMA user_version = 1`。初始化只允�
 - 重复标签、无效名称、持久化失败后无半成品任务。
 - 任务池、今日、未来、未完成、已完成、日历和排期选择器一致展示。
 - 当前分类调整与历史快照并列验证；历史更正保留 original。
-- 长滚动分类管理、搜索、归档、合并预览、过期计划和键盘／无障碍路径。
+- 长滚动分组与标签管理、搜索、归档、合并预览、过期计划和键盘／无障碍路径。
 - 烛龙逐项排除、用户修订、批量确认、整批失败回滚和事件历史。
 - 没有 frontend-verify skill 时，用真实 `.app` 分类场景截图、交互断言、SQLite 探针、console 和 DMG 安装启动补齐；归档 HTML 原型不得作为分类 UI 的 ground truth。
 
-## Cutover 完成条件
+## 当前契约完成条件
 
-- 运行期源码、schema、测试 fixture 与产品 UI 中不存在上一代分类类型、三槽关系、旧表或旧写方法。
+- 运行期源码、schema、测试 fixture 与产品 UI 只存在当前“一个主分类 + 多个平级标签”模型。
 - `make check`、分类 deterministic simulation、真实 `.app` E2E、当前 schema 探针、双设备同步测试、DMG 打包及安装启动全部通过。
 - 当前分类路径是唯一读写入口，不存在双重事实源、兼容 decoder、migration 或 fallback。

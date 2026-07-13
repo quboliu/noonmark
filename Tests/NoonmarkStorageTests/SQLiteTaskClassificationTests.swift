@@ -74,6 +74,47 @@ final class SQLiteTaskClassificationTests: XCTestCase {
         XCTAssertEqual(restored, expected)
     }
 
+    func testRepositoryRejectsCurrentClassificationCatalogMissingRequiredNameVersions() throws {
+        let databaseURL = makeDatabaseURL("classification-missing-name-versions")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let categoryID = TaskCategoryID()
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        _ = try repository.load()
+
+        try executeProbeSQL(
+            """
+            BEGIN IMMEDIATE;
+            INSERT INTO task_categories(id, name, color_hex, created_at, updated_at)
+            VALUES (
+                '\(categoryID.description)', '当前主分类', '#2A6FDB',
+                '2026-07-13T10:00:00.000Z', '2026-07-13T10:00:00.000Z'
+            );
+            INSERT INTO classification_item_metadata(
+                kind, item_id, canonical_key, canonical_key_version, lifecycle
+            )
+            VALUES (
+                'category', '\(categoryID.description)', 'current-category',
+                '\(ClassificationNameCanonicalizer.algorithmVersion)', 'active'
+            );
+            INSERT INTO classification_item_exact_times(kind, item_id, created_at, updated_at)
+            VALUES (
+                'category', '\(categoryID.description)',
+                \(now.timeIntervalSinceReferenceDate), \(now.timeIntervalSinceReferenceDate)
+            );
+            COMMIT;
+            """,
+            at: databaseURL
+        )
+
+        XCTAssertThrowsError(try repository.load()) { error in
+            XCTAssertEqual(
+                error as? SQLiteRepositoryError,
+                .invalidStoredValue("task category metadata or name versions are missing")
+            )
+        }
+    }
+
     func testClassifiedPoolRemovalPersistsHistoryAnchorWithoutRevivingTaskOnRestart() throws {
         let databaseURL = makeDatabaseURL("classified-pool-removal")
         defer { try? FileManager.default.removeItem(at: databaseURL) }
@@ -93,7 +134,12 @@ final class SQLiteTaskClassificationTests: XCTestCase {
         )
 
         let repository = SQLiteEngineRepository(databaseURL: databaseURL)
-        try repository.save(engine)
+        let deviceID = SyncDeviceID("classified-pool-removal-device")
+        try repository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
 
         let firstRestart = try repository.load()
         let removedAt = now.addingTimeInterval(60)
@@ -101,7 +147,11 @@ final class SQLiteTaskClassificationTests: XCTestCase {
             try firstRestart.removeTaskFromPool(chainID: chainID, now: removedAt),
             .removedKeepingHistory
         )
-        try repository.save(firstRestart)
+        try repository.save(
+            firstRestart.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: removedAt
+        )
 
         let secondRestart = try SQLiteEngineRepository(databaseURL: databaseURL).load()
         XCTAssertFalse(secondRestart.taskPool().contains { $0.chain.id == chainID })
@@ -119,6 +169,24 @@ final class SQLiteTaskClassificationTests: XCTestCase {
                 )
         })
         XCTAssertNoThrow(try secondRestart.snapshot().validateIntegrity())
+
+        let classificationEntries = try SQLiteSyncRepository(
+            databaseURL: databaseURL
+        ).journalEntries().filter {
+            $0.entityType == .classificationCommit
+        }
+        XCTAssertEqual(classificationEntries.count, 2)
+        let removalEnvelope = try ClassificationCommitEnvelope.decode(
+            try XCTUnwrap(classificationEntries.last?.recordPayload)
+        )
+        XCTAssertEqual(
+            removalEnvelope.changeRecord.source,
+            .deterministicDomainAction(
+                reason: "task removed from task pool while preserving classification history"
+            )
+        )
+        XCTAssertNil(removalEnvelope.changeRecord.decisionID)
+        XCTAssertNil(removalEnvelope.receipt)
 
         try repository.save(secondRestart)
         let thirdRestart = try repository.load().snapshot()

@@ -93,10 +93,10 @@ public struct TraceClassificationSnapshot: Codable, Equatable, Sendable {
 
 ## 深 Module Interface
 
-外部 seam 放在 `SuntraceEngine`，不为唯一 in-process implementation 虚构 protocol：
+外部 seam 放在 `NoonmarkEngine`，不为唯一 in-process implementation 虚构 protocol：
 
 ```swift
-public final class SuntraceEngine {
+public final class NoonmarkEngine {
     public func classification(
         _ query: ClassificationQuery
     ) throws -> ClassificationProjection
@@ -181,7 +181,7 @@ SQLite 采用本代首个 schema，`PRAGMA user_version = 1`。初始化只允�
 
 保存顺序必须由一个 SQLite `BEGIN IMMEDIATE` 事务覆盖：分类身份与名称版本 → 任务链 → 当前关系 → 历史快照／更正 → 变更记录 → commit／outbox。不得先全量删除分类库和关系再重建。
 
-`SuntraceSnapshot` 必须显式携带独立 classification state。数据包只有一个当前 envelope，`formatVersion = 1` 为必需整数；日期按 `Date.timeIntervalSinceReferenceDate.bitPattern` 精确编码。缺版本、版本不同、原始 snapshot、缺字段、旧日期编码或完整性不成立一律拒绝。
+`NoonmarkSnapshot` 必须显式携带独立 classification state。数据包只有一个当前 envelope，`formatVersion = 1` 为必需整数；日期按 `Date.timeIntervalSinceReferenceDate.bitPattern` 精确编码。缺版本、版本不同、原始 snapshot、缺字段、旧日期编码或完整性不成立一律拒绝。
 
 ## Clean-cut 边界
 

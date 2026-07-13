@@ -7,15 +7,15 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   exit 1
 fi
 
-app_bundle_name="${SUNTRACE_E2E_APP_BUNDLE_NAME:-SuntraceMacAppE2E}"
-app_executable_name="${SUNTRACE_E2E_APP_EXECUTABLE_NAME:-$app_bundle_name}"
-app_bundle_identifier="${SUNTRACE_E2E_BUNDLE_IDENTIFIER:-app.noonmark.mac.e2e}"
-app_display_name="${SUNTRACE_E2E_APP_DISPLAY_NAME:-晷迹 E2E}"
-app_short_name="${SUNTRACE_E2E_APP_SHORT_NAME:-Noonmark E2E}"
+app_bundle_name="${NOONMARK_E2E_APP_BUNDLE_NAME:-NoonmarkMacAppE2E}"
+app_executable_name="${NOONMARK_E2E_APP_EXECUTABLE_NAME:-$app_bundle_name}"
+app_bundle_identifier="${NOONMARK_E2E_BUNDLE_IDENTIFIER:-app.noonmark.mac.e2e}"
+app_display_name="${NOONMARK_E2E_APP_DISPLAY_NAME:-晷迹 E2E}"
+app_short_name="${NOONMARK_E2E_APP_SHORT_NAME:-Noonmark E2E}"
 app_path="dist/${app_bundle_name}.app"
 app_executable_path="${app_path}/Contents/MacOS/${app_executable_name}"
-export SUNTRACE_E2E_APP_EXECUTABLE_NAME="$app_executable_name"
-export SUNTRACE_E2E_APP_DISPLAY_NAME="$app_display_name"
+export NOONMARK_E2E_APP_EXECUTABLE_NAME="$app_executable_name"
+export NOONMARK_E2E_APP_DISPLAY_NAME="$app_display_name"
 
 scenarios=(
   "day|day|"
@@ -46,7 +46,7 @@ scenarios=(
   "settings-groups|settings|--e2e-settings-groups"
 )
 
-requested_scenarios="${SUNTRACE_E2E_SCENARIOS:-}"
+requested_scenarios="${NOONMARK_E2E_SCENARIOS:-}"
 if [[ -n "$requested_scenarios" ]]; then
   filtered_scenarios=()
   for requested in $requested_scenarios; do
@@ -66,11 +66,11 @@ if [[ -n "$requested_scenarios" ]]; then
   scenarios=("${filtered_scenarios[@]}")
 fi
 
-SUNTRACE_APP_BUNDLE_NAME="$app_bundle_name" \
-  SUNTRACE_APP_EXECUTABLE_NAME="$app_executable_name" \
-  SUNTRACE_BUNDLE_IDENTIFIER="$app_bundle_identifier" \
-  SUNTRACE_APP_DISPLAY_NAME="$app_display_name" \
-  SUNTRACE_APP_SHORT_NAME="$app_short_name" \
+NOONMARK_APP_BUNDLE_NAME="$app_bundle_name" \
+  NOONMARK_APP_EXECUTABLE_NAME="$app_executable_name" \
+  NOONMARK_BUNDLE_IDENTIFIER="$app_bundle_identifier" \
+  NOONMARK_APP_DISPLAY_NAME="$app_display_name" \
+  NOONMARK_APP_SHORT_NAME="$app_short_name" \
   scripts/build-mac-app "$configuration"
 
 mkdir -p artifacts/e2e
@@ -111,8 +111,8 @@ visible_e2e_windows() {
 import CoreGraphics
 import Foundation
 
-let expectedOwner = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_EXECUTABLE_NAME"] ?? "SuntraceMacAppE2E"
-let expectedDisplayName = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
+let expectedOwner = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_EXECUTABLE_NAME"] ?? "NoonmarkMacAppE2E"
+let expectedDisplayName = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
 
 if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
     for window in list {
@@ -135,22 +135,22 @@ trap 'terminate_e2e_app >/dev/null 2>&1 || true' EXIT
 
 find_window_id() {
   local expected_title="$1"
-  SUNTRACE_E2E_EXPECTED_WINDOW_TITLE="$expected_title" swift -e '
+  NOONMARK_E2E_EXPECTED_WINDOW_TITLE="$expected_title" swift -e '
 import CoreGraphics
 import Darwin
 import Foundation
 
-let expectedOwner = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_EXECUTABLE_NAME"] ?? "SuntraceMacAppE2E"
-let expectedDisplayName = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
-let expectedTitle = ProcessInfo.processInfo.environment["SUNTRACE_E2E_EXPECTED_WINDOW_TITLE"] ?? "晷迹 · Day Todo — 7月5日"
+let expectedOwner = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_EXECUTABLE_NAME"] ?? "NoonmarkMacAppE2E"
+let expectedDisplayName = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
+let expectedTitle = ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_TITLE"] ?? "晷迹 · Day Todo — 7月5日"
 
 if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
     for window in list {
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         let name = window[kCGWindowName as String] as? String ?? ""
         var allowedOwners = [expectedOwner, expectedDisplayName]
-        if expectedOwner == "SuntraceMacApp" {
-            allowedOwners.append(contentsOf: ["晷迹", "Noonmark", "SuntraceMacApp"])
+        if expectedOwner == "NoonmarkMacApp" {
+            allowedOwners.append(contentsOf: ["晷迹", "Noonmark", "NoonmarkMacApp"])
         }
         if allowedOwners.contains(owner) && name == expectedTitle {
             let layer = window[kCGWindowLayer as String] as? Int ?? -1
@@ -172,13 +172,13 @@ exit(1)
 
 find_auxiliary_window_id() {
   local window_id="$1"
-  SUNTRACE_E2E_WINDOW_ID="$window_id" swift -e '
+  NOONMARK_E2E_WINDOW_ID="$window_id" swift -e '
 import CoreGraphics
 import Foundation
 
-let expectedID = Int(ProcessInfo.processInfo.environment["SUNTRACE_E2E_WINDOW_ID"] ?? "") ?? -1
-let expectedOwner = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_EXECUTABLE_NAME"] ?? "SuntraceMacAppE2E"
-let expectedDisplayName = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
+let expectedID = Int(ProcessInfo.processInfo.environment["NOONMARK_E2E_WINDOW_ID"] ?? "") ?? -1
+let expectedOwner = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_EXECUTABLE_NAME"] ?? "NoonmarkMacAppE2E"
+let expectedDisplayName = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
 
 guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
       let main = list.first(where: { ($0[kCGWindowNumber as String] as? Int) == expectedID }),
@@ -234,7 +234,7 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
     for window in list {
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         let name = window[kCGWindowName as String] as? String ?? ""
-        if owner.contains("Noonmark") || owner.contains("Suntrace") || owner.contains("晷迹") || name.contains("晷迹") {
+        if owner.contains("Noonmark") || owner.contains("晷迹") || name.contains("晷迹") {
             print("window owner=\(owner) title=\(name)")
         }
     }
@@ -272,7 +272,7 @@ capture_app_screenshot() {
     terminate_e2e_app
     "$app_executable_path" "$@" --page "$page" >/dev/null 2>&1 &
     disown "$!" 2>/dev/null || true
-    sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
+    sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
 
     for _ in {1..20}; do
       if window_id="$(find_window_id "$expected_window_title" 2>/dev/null)"; then
@@ -338,9 +338,9 @@ for scenario in "${scenarios[@]}"; do
   fi
 done
 
-if [[ "${SUNTRACE_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
+if [[ "${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
   terminate_e2e_app
-  echo "E2E screenshot-only scenarios: ${SUNTRACE_E2E_SCENARIOS:-all}"
+  echo "E2E screenshot-only scenarios: ${NOONMARK_E2E_SCENARIOS:-all}"
   exit 0
 fi
 
@@ -412,7 +412,7 @@ mkdir -p "$persistence_dir"
 
 "$app_executable_path" --data-url "$PWD/$persistence_db" --e2e-reset-selection --page day >/dev/null 2>&1 &
 disown "$!" 2>/dev/null || true
-sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
+sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
 terminate_e2e_app
 
 if [[ ! -f "$persistence_db" ]]; then

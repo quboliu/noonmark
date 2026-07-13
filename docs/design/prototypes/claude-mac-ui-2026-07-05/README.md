@@ -5,7 +5,7 @@
 来源文件：
 
 - 外部来源：`~/WorkSpace/DataVolume/tmp-to-test/晷迹 Mac 界面设计.zip`
-- 原始 HTML 已重命名为 `suntrace-mac-prototype.dc.html`，避免中文文件名影响工具链。
+- 原始 HTML 已重命名为 `noonmark-mac-prototype.dc.html`，避免中文文件名影响工具链。
 - `macos-window.jsx`、`support.js`、`uploads/` 和 `thumbnail.webp` 是原型运行和视觉检查所需文件。
 
 定位：

@@ -331,7 +331,7 @@
   }
 
   function shapingApplyRail() {
-    return `${railHeader("本次应用授权", "只对当前批次与本次点击有效")}<div class="detail-rail-scroll">${railSection("准确批次", railList([`草稿 ${ui.splitBatch ? "v1-U1" : "v1"}`, `${ui.splitBatch ? "2" : "3"} 项创建`, "目标：任务池", "Base Todo revision #T-221"]))}${railSection("预检", railList(["草稿状态：有效", "selection hash：一致", "领域操作：合法", "写入接口：普通 SuntraceCore"]))}${railSection("原子语义", `<div class="rail-card ok"><p>全部成功，或 0 项写入并完整回滚。</p></div>`)}${railSection("不包含", railList(["未来草稿与跨会话写入", "目标、记忆或 Provider 变更", "长期托管", "承诺快照"]))}</div>`;
+    return `${railHeader("本次应用授权", "只对当前批次与本次点击有效")}<div class="detail-rail-scroll">${railSection("准确批次", railList([`草稿 ${ui.splitBatch ? "v1-U1" : "v1"}`, `${ui.splitBatch ? "2" : "3"} 项创建`, "目标：任务池", "Base Todo revision #T-221"]))}${railSection("预检", railList(["草稿状态：有效", "selection hash：一致", "领域操作：合法", "写入接口：普通 NoonmarkCore"]))}${railSection("原子语义", `<div class="rail-card ok"><p>全部成功，或 0 项写入并完整回滚。</p></div>`)}${railSection("不包含", railList(["未来草稿与跨会话写入", "目标、记忆或 Provider 变更", "长期托管", "承诺快照"]))}</div>`;
   }
 
   function shapingContextRail(model) {

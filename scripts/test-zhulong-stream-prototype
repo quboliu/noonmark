@@ -2,10 +2,10 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-prototype_html="${SUNTRACE_ZHULONG_STREAM_PROTOTYPE_HTML:-${repo_root}/docs/design/prototypes/zhulong-converged-2026-07-10/stream-prototype.html}"
+prototype_html="${NOONMARK_ZHULONG_STREAM_PROTOTYPE_HTML:-${repo_root}/docs/design/prototypes/zhulong-converged-2026-07-10/stream-prototype.html}"
 cdp_harness_source="${repo_root}/scripts/test-zhulong-r3-prototype"
 
-chrome_binary="${SUNTRACE_CHROME_BINARY:-}"
+chrome_binary="${NOONMARK_CHROME_BINARY:-}"
 if [[ -z "$chrome_binary" ]]; then
   if command -v google-chrome >/dev/null 2>&1; then
     chrome_binary="$(command -v google-chrome)"
@@ -24,7 +24,7 @@ if [[ ! -f "$prototype_html" || ! -f "$cdp_harness_source" ]]; then
   exit 1
 fi
 
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/suntrace-zhulong-stream-cdp.XXXXXX")"
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-zhulong-stream-cdp.XXXXXX")"
 profile_dir="${tmp_dir}/chrome-profile"
 chrome_log="${tmp_dir}/chrome.log"
 chrome_pid=""

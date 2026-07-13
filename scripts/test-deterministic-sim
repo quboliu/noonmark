@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ST_SIM_RUNS="${ST_SIM_RUNS:-64}" swift test --filter SuntraceSimulationTests
+ST_SIM_RUNS="${ST_SIM_RUNS:-64}" swift test --filter NoonmarkSimulationTests

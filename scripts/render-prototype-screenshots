@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-prototype_dir="${SUNTRACE_PROTOTYPE_DIR:-docs/design/prototypes/claude-mac-ui-2026-07-05}"
-out_dir="${SUNTRACE_PROTOTYPE_OUT_DIR:-artifacts/prototype-screenshots}"
-window_size="${SUNTRACE_PROTOTYPE_WINDOW_SIZE:-1440,900}"
-render_timeout="${SUNTRACE_PROTOTYPE_RENDER_TIMEOUT:-90}"
-render_attempts="${SUNTRACE_PROTOTYPE_RENDER_ATTEMPTS:-3}"
-pages=(${SUNTRACE_PROTOTYPE_PAGES:-day day-detail day-manual-detail day-review-saved pool pool-detail future future-detail unfinished unfinished-detail completed completed-detail calendar settings})
+prototype_dir="${NOONMARK_PROTOTYPE_DIR:-docs/design/prototypes/claude-mac-ui-2026-07-05}"
+out_dir="${NOONMARK_PROTOTYPE_OUT_DIR:-artifacts/prototype-screenshots}"
+window_size="${NOONMARK_PROTOTYPE_WINDOW_SIZE:-1440,900}"
+render_timeout="${NOONMARK_PROTOTYPE_RENDER_TIMEOUT:-90}"
+render_attempts="${NOONMARK_PROTOTYPE_RENDER_ATTEMPTS:-3}"
+pages=(${NOONMARK_PROTOTYPE_PAGES:-day day-detail day-manual-detail day-review-saved pool pool-detail future future-detail unfinished unfinished-detail completed completed-detail calendar settings})
 
-chrome_binary="${SUNTRACE_CHROME_BINARY:-}"
+chrome_binary="${NOONMARK_CHROME_BINARY:-}"
 if [[ -z "$chrome_binary" ]]; then
   if command -v google-chrome >/dev/null 2>&1; then
     chrome_binary="$(command -v google-chrome)"
@@ -22,7 +22,7 @@ if [[ -z "$chrome_binary" ]]; then
   fi
 fi
 
-prototype_html="${prototype_dir}/suntrace-mac-prototype.dc.html"
+prototype_html="${prototype_dir}/noonmark-mac-prototype.dc.html"
 if [[ ! -f "$prototype_html" ]]; then
   echo "missing prototype HTML: $prototype_html" >&2
   exit 1
@@ -71,7 +71,7 @@ for page in "${pages[@]}"; do
   mkdir -p "$work_dir"
   cp -R "${prototype_dir}/." "$work_dir/"
 
-  page_html="${work_dir}/suntrace-mac-prototype.dc.html"
+  page_html="${work_dir}/noonmark-mac-prototype.dc.html"
   python3 - "$page_html" "$prototype_page" "$prototype_date" "$prototype_selection" "$prototype_review_summary" <<'PY'
 import sys
 

@@ -29,14 +29,14 @@ Neon 的可借鉴点：
 
 - UT：纯领域和纯函数测试，当前入口为 `scripts/test-unit`。
 - IT：跨模块集成测试，当前入口为 `scripts/test-integration`，覆盖 Storage schema、Core 类型契约和 SQLite repository 核心状态 round-trip。
-- 数据包测试：随 Storage IT 运行，覆盖 `SuntraceDataPackage` JSON round-trip、重复键拒绝和断裂引用拒绝。
+- 数据包测试：随 Storage IT 运行，覆盖 `NoonmarkDataPackage` JSON round-trip、重复键拒绝和断裂引用拒绝。
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
-- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，默认会打包并打开隔离测试副本 `dist/SuntraceMacAppE2E.app`，只清理 `SuntraceMacAppE2E` 进程，并在每次切换场景前等待测试副本完全退出，避免打断 `dist/Noonmark.app` 的手动体验窗口或触发 macOS WindowServer 竞态。
-  当前覆盖 `day`、`day-subtasks-expanded`、`day-changed-target`、`day-detail`、`day-manual-detail`、`day-review-saved`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 17 个场景，其中 `day-review-saved` 验证每日复盘输入后的自动保存反馈，`day-subtasks-expanded` 验证列表内子任务展开态，`day-changed-target` 验证已变更任务显示目标任务跳转入口；完整 E2E 还包含默认汇总侧栏 / 日历分析、当天子任务完成撤回和难度修改、废弃任务链留在未完成池、重新启用只取消废弃标记、烛龙导航随设置隐藏 / 显示等真实 App 探针。UI 调试时可用 `SUNTRACE_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `SUNTRACE_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。如需覆盖测试副本名称，可设置 `SUNTRACE_E2E_APP_BUNDLE_NAME`、`SUNTRACE_E2E_APP_EXECUTABLE_NAME`、`SUNTRACE_E2E_BUNDLE_IDENTIFIER` 和 `SUNTRACE_E2E_APP_DISPLAY_NAME`。
-- Prototype render：当前入口为 `scripts/render-prototype-screenshots`，使用 Chrome headless 从归档 HTML 原型生成 `day`、`day-detail`、`day-manual-detail`、`day-review-saved`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`settings` 共 14 个 1440x900 参考图；默认渲染超时为 90 秒，可用 `SUNTRACE_PROTOTYPE_RENDER_TIMEOUT` 覆盖；每页默认最多渲染 3 次，可用 `SUNTRACE_PROTOTYPE_RENDER_ATTEMPTS` 覆盖；脚本会校验截图尺寸和非空白像素，防止 Chrome 超时留下全白参考图；当 Chrome 已写出截图时，脚本先等待 Chrome 自然退出，只有超时后才清理对应进程，避免打断 PNG 写入并减少视觉回归卡死；烛龙是 SwiftUI 新增实现面，当前没有对应 HTML 原型页，只由 E2E 和契约测试覆盖。
-- Visual regression：当前入口为 `scripts/test-visual-regression`，默认先刷新真实 E2E 截图；设置 `SUNTRACE_VISUAL_REUSE_SCREENSHOTS=1` 时复用已有 E2E 截图。脚本会自动生成本次比较页面的原型参考图，并逐页输出 normalized actual、diff 和 report 到 `artifacts/visual-regression/<page>/`。
+- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，默认会打包并打开隔离测试副本 `dist/NoonmarkMacAppE2E.app`，只清理 `NoonmarkMacAppE2E` 进程，并在每次切换场景前等待测试副本完全退出，避免打断 `dist/Noonmark.app` 的手动体验窗口或触发 macOS WindowServer 竞态。
+  当前覆盖 `day`、`day-subtasks-expanded`、`day-changed-target`、`day-detail`、`day-manual-detail`、`day-review-saved`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`zhulong`、`settings` 共 17 个场景，其中 `day-review-saved` 验证每日复盘输入后的自动保存反馈，`day-subtasks-expanded` 验证列表内子任务展开态，`day-changed-target` 验证已变更任务显示目标任务跳转入口；完整 E2E 还包含默认汇总侧栏 / 日历分析、当天子任务完成撤回和难度修改、废弃任务链留在未完成池、重新启用只取消废弃标记、烛龙导航随设置隐藏 / 显示等真实 App 探针。UI 调试时可用 `NOONMARK_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `NOONMARK_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。如需覆盖测试副本名称，可设置 `NOONMARK_E2E_APP_BUNDLE_NAME`、`NOONMARK_E2E_APP_EXECUTABLE_NAME`、`NOONMARK_E2E_BUNDLE_IDENTIFIER` 和 `NOONMARK_E2E_APP_DISPLAY_NAME`。
+- Prototype render：当前入口为 `scripts/render-prototype-screenshots`，使用 Chrome headless 从归档 HTML 原型生成 `day`、`day-detail`、`day-manual-detail`、`day-review-saved`、`pool`、`pool-detail`、`future`、`future-detail`、`unfinished`、`unfinished-detail`、`completed`、`completed-detail`、`calendar`、`settings` 共 14 个 1440x900 参考图；默认渲染超时为 90 秒，可用 `NOONMARK_PROTOTYPE_RENDER_TIMEOUT` 覆盖；每页默认最多渲染 3 次，可用 `NOONMARK_PROTOTYPE_RENDER_ATTEMPTS` 覆盖；脚本会校验截图尺寸和非空白像素，防止 Chrome 超时留下全白参考图；当 Chrome 已写出截图时，脚本先等待 Chrome 自然退出，只有超时后才清理对应进程，避免打断 PNG 写入并减少视觉回归卡死；烛龙是 SwiftUI 新增实现面，当前没有对应 HTML 原型页，只由 E2E 和契约测试覆盖。
+- Visual regression：当前入口为 `scripts/test-visual-regression`，默认先刷新真实 E2E 截图；设置 `NOONMARK_VISUAL_REUSE_SCREENSHOTS=1` 时复用已有 E2E 截图。脚本会自动生成本次比较页面的原型参考图，并逐页输出 normalized actual、diff 和 report 到 `artifacts/visual-regression/<page>/`。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
-- Live AI Provider Smoke：真实 OpenAI-compatible provider 连通性测试，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，必须显式提供 `SUNTRACE_AI_BASE_URL`、`SUNTRACE_AI_MODEL` 和 `SUNTRACE_AI_API_KEY`；一旦手动启用，缺少 key 或 provider 不可达必须失败。
+- Live AI Provider Smoke：真实 OpenAI-compatible provider 连通性测试，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，必须显式提供 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`；一旦手动启用，缺少 key 或 provider 不可达必须失败。
 
 ## 命令
 
@@ -66,19 +66,19 @@ ST_SIM_RUNS=256 make test-deterministic-sim
 真实 AI provider smoke：
 
 ```bash
-SUNTRACE_AI_BASE_URL=https://provider.example/v1 \
-SUNTRACE_AI_MODEL=model-name \
-SUNTRACE_AI_API_KEY=... \
+NOONMARK_AI_BASE_URL=https://provider.example/v1 \
+NOONMARK_AI_MODEL=model-name \
+NOONMARK_AI_API_KEY=... \
 make test-ai-provider-live
 ```
 
 视觉回归报告：
 
 ```bash
-SUNTRACE_E2E_SCENARIOS="day completed" SUNTRACE_E2E_SCREENSHOTS_ONLY=1 scripts/test-e2e
-SUNTRACE_VISUAL_REUSE_SCREENSHOTS=1 make test-visual-regression
-SUNTRACE_VISUAL_ENFORCE=0 make test-visual-regression
-SUNTRACE_VISUAL_PAGES="day completed" make test-visual-regression
+NOONMARK_E2E_SCENARIOS="day completed" NOONMARK_E2E_SCREENSHOTS_ONLY=1 scripts/test-e2e
+NOONMARK_VISUAL_REUSE_SCREENSHOTS=1 make test-visual-regression
+NOONMARK_VISUAL_ENFORCE=0 make test-visual-regression
+NOONMARK_VISUAL_PAGES="day completed" make test-visual-regression
 ```
 
 ## CI 策略
@@ -129,8 +129,8 @@ Release：
 - 2026-07-06：`scripts/test-dmg-install dist/Noonmark.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
 - 2026-07-08：release workflow 已对齐当前产物命名和手动发版入口：发布产物统一为 `Noonmark.dmg` 与 `Noonmark.app.zip`，`workflow_dispatch` 必须显式提供 tag，可选覆盖 title / prerelease；release 过程会复用 E2E 截图继续执行视觉回归门禁，并上传 `dist/`、E2E、视觉回归和 DMG 安装验证 artifact 供 GitHub 排障。
 - 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，新用户空库只初始化并写入 1 条 preferences，不自动灌入演示任务；演示数据只在 `--ephemeral` 测试 / 截图路径使用。
-- 2026-07-06：设置页导出 / 导入已接入 `SuntraceDataPackage` JSON 数据包；`swift test --filter SuntraceStorageTests` 通过 5 个 Storage 测试。
-- 2026-07-06：`SuntraceAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 provider 验证入口为 `scripts/test-ai-provider-live`，缺少 `SUNTRACE_AI_API_KEY` 时 fail-closed。
+- 2026-07-06：设置页导出 / 导入已接入 `NoonmarkDataPackage` JSON 数据包；`swift test --filter NoonmarkStorageTests` 通过 5 个 Storage 测试。
+- 2026-07-06：`NoonmarkAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 provider 验证入口为 `scripts/test-ai-provider-live`，缺少 `NOONMARK_AI_API_KEY` 时 fail-closed。
 
 ## 后续缺口
 

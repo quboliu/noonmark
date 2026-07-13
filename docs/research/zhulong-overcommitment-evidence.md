@@ -35,7 +35,7 @@ Kahneman 与 Lovallo 将过度乐观预测归因于“内部视角”：规划�
 
 NASA-TLX 的原始研究与 NASA 当前官方说明把工作负荷分成心理需求、身体需求、时间需求、表现、努力和挫折六个维度；其要点不是让 Todo 产品直接采用 NASA-TLX，而是说明“难度”不是一个可自然等同于时长或总负荷的单一量。[Hart 与 Staveland（1988）原始研究](https://doi.org/10.1016/S0166-4115(08)62386-9)、[NASA-TLX 官方说明](https://www.nasa.gov/human-systems-integration-division/nasa-task-load-index-tlx/)
 
-因此，两项任务和八项任务谁更重，单凭条数无法判断；一个“难”子任务也没有证据等于三个“简”子任务的工时。晷迹现有领域模型也已经明确把 `子任务难度权重` 定义为进度计算权重，并明确 `_Avoid_: 工时估算`，所以绝不能悄悄复用它来计算容量。[CONTEXT.md](../../CONTEXT.md)、[SuntraceCore Models](../../Sources/SuntraceCore/Models.swift)
+因此，两项任务和八项任务谁更重，单凭条数无法判断；一个“难”子任务也没有证据等于三个“简”子任务的工时。晷迹现有领域模型也已经明确把 `子任务难度权重` 定义为进度计算权重，并明确 `_Avoid_: 工时估算`，所以绝不能悄悄复用它来计算容量。[CONTEXT.md](../../CONTEXT.md)、[NoonmarkCore Models](../../Sources/NoonmarkCore/Models.swift)
 
 可比较工作量必须另建字段。可选方案包括用户预估的专注分钟、个人工作量点数或粗粒度大小档位，但其数值只能在同一用户、同一度量制度内比较。若要声称“时间容量”，还必须记录实际主动投入时长；仅有创建时间和完成时间不能推导实际工时，因为二者之间可能包含等待、睡眠、其他工作和跨日排期。
 
@@ -61,7 +61,7 @@ Gneiting 与 Raftery 指出，概率预测的目标是在保持校准的前提�
 
 ## 当前仓库能证明什么
 
-以下结论来自当前源码和领域定义，不以既有文档中的产品愿望代替运行数据。核心字段位于 [SuntraceCore Models](../../Sources/SuntraceCore/Models.swift)，现有本地证据计算位于 [LocalInsightAnalyzer](../../Sources/SuntraceAI/LocalInsightAnalyzer.swift)。
+以下结论来自当前源码和领域定义，不以既有文档中的产品愿望代替运行数据。核心字段位于 [NoonmarkCore Models](../../Sources/NoonmarkCore/Models.swift)，现有本地证据计算位于 [LocalInsightAnalyzer](../../Sources/NoonmarkAI/LocalInsightAnalyzer.swift)。
 
 | 现有信号 | 可以支持的结论 | 不能支持的结论 |
 | --- | --- | --- |

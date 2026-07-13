@@ -30,7 +30,7 @@ OpenClaw 的 runtime registry 和 auth profile 值得保留：provider/runtime �
 
 ## 敲定框架
 
-烛龙 第一版采用独立 Swift target：`SuntraceAI`。它依赖 `SuntraceCore`，但 `SuntraceCore` 不依赖 `SuntraceAI`。
+烛龙 第一版采用独立 Swift target：`NoonmarkAI`。它依赖 `NoonmarkCore`，但 `NoonmarkCore` 不依赖 `NoonmarkAI`。
 
 框架分层：
 
@@ -42,12 +42,12 @@ OpenClaw 的 runtime registry 和 auth profile 值得保留：provider/runtime �
 - `ZhulongAgent`：协调本地证据、prompt 和 provider 响应，产出 `AI 建议草稿`。
 - `AISuggestionDraft`：只保存建议、证据、置信度和待确认操作，不直接改写任务事实。
 
-建议草稿中的操作只表达普通领域动作，例如创建任务池任务、添加子任务、排期、延续复制、废弃、更新复盘、分配 label。后续 UI 必须逐条预览，用户确认后才调用 `SuntraceCore` 的普通接口。
+建议草稿中的操作只表达普通领域动作，例如创建任务池任务、添加子任务、排期、延续复制、废弃、更新复盘、分配 label。后续 UI 必须逐条预览，用户确认后才调用 `NoonmarkCore` 的普通接口。
 
 ## 后续接入点
 
 - 增加真实 OpenAI-compatible provider adapter，并把 API key 读取限定在 Keychain。
 - 增加建议草稿持久化表，但草稿不是历史事实，可以清理。
-- 增加“应用草稿”服务，把用户确认的建议转换成 `SuntraceCore` 操作。
+- 增加“应用草稿”服务，把用户确认的建议转换成 `NoonmarkCore` 操作。
 - 增加 provider 健康检查 UI 和本地诊断指标。
 - 标签分类建议必须接入普通分类 Module，并在用户确认后保留来源与决定引用。

@@ -12,8 +12,8 @@
 
 **Decision**
 
-- 新增 `SuntraceSync` target，依赖 `SuntraceCore`，不依赖 CloudKit。
-- `SuntraceCore` 不依赖 `SuntraceSync`。
+- 新增 `NoonmarkSync` target，依赖 `NoonmarkCore`，不依赖 CloudKit。
+- `NoonmarkCore` 不依赖 `NoonmarkSync`。
 - 通用层定义：
   - `SyncDeviceID`
   - `SyncRecord`

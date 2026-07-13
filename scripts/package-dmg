@@ -2,10 +2,10 @@
 set -euo pipefail
 
 configuration="${1:-release}"
-product="SuntraceMacApp"
-app_short_name="${SUNTRACE_APP_SHORT_NAME:-Noonmark}"
-app_bundle_name="${SUNTRACE_APP_BUNDLE_NAME:-$app_short_name}"
-volume_name="${SUNTRACE_DMG_VOLUME_NAME:-晷迹}"
+product="NoonmarkMacApp"
+app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
+app_bundle_name="${NOONMARK_APP_BUNDLE_NAME:-$app_short_name}"
+volume_name="${NOONMARK_DMG_VOLUME_NAME:-晷迹}"
 dist_dir="dist"
 app_path="${dist_dir}/${app_bundle_name}.app"
 dmg_root="${dist_dir}/dmg-root"

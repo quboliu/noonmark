@@ -1,6 +1,6 @@
 # 烛龙极简首页原型
 
-> THROWAWAY PROTOTYPE — 三个烛龙首页变体通过既有 `suntrace-mac-prototype.dc.html` 的 `?variant=A|B|C` 切换。用户确认信息层级后，结论应重写为正式 SwiftUI，原型与切换器必须删除。
+> THROWAWAY PROTOTYPE — 三个烛龙首页变体通过既有 `noonmark-mac-prototype.dc.html` 的 `?variant=A|B|C` 切换。用户确认信息层级后，结论应重写为正式 SwiftUI，原型与切换器必须删除。
 
 ## 要回答的问题
 

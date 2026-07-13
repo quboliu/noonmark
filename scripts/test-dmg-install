@@ -2,7 +2,7 @@
 set -euo pipefail
 
 dmg_path="${1:-dist/Noonmark.dmg}"
-app_short_name="${SUNTRACE_APP_SHORT_NAME:-Noonmark}"
+app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
 work_dir="artifacts/dmg-install"
 install_dir="${work_dir}/Applications"
 database_path="${work_dir}/Noonmark.sqlite"
@@ -18,7 +18,7 @@ for tool in "${required_tools[@]}"; do
 done
 
 cleanup() {
-  pkill -x SuntraceMacApp >/dev/null 2>&1 || true
+  pkill -x NoonmarkMacApp >/dev/null 2>&1 || true
   hdiutil detach "$mountpoint" -quiet >/dev/null 2>&1 || true
   rmdir "$mountpoint" >/dev/null 2>&1 || true
 }
@@ -42,7 +42,7 @@ if [[ ! -d "$source_app" ]]; then
 fi
 
 ditto "$source_app" "$installed_app"
-if [[ ! -x "${installed_app}/Contents/MacOS/SuntraceMacApp" ]]; then
+if [[ ! -x "${installed_app}/Contents/MacOS/NoonmarkMacApp" ]]; then
   echo "installed app binary is not executable" >&2
   exit 1
 fi
@@ -56,7 +56,7 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
     for window in list {
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         let name = window[kCGWindowName as String] as? String ?? ""
-        if (owner == "晷迹" || owner == "Noonmark" || owner == "SuntraceMacApp") && name == "晷迹 · Day Todo — 7月5日" {
+        if (owner == "晷迹" || owner == "Noonmark" || owner == "NoonmarkMacApp") && name == "晷迹 · Day Todo — 7月5日" {
             if let number = window[kCGWindowNumber as String] {
                 print(number)
                 exit(0)
@@ -68,9 +68,9 @@ exit(1)
 '
 }
 
-pkill -x SuntraceMacApp >/dev/null 2>&1 || true
+pkill -x NoonmarkMacApp >/dev/null 2>&1 || true
 open -n "$installed_app" --args --data-url "$PWD/$database_path" --page day
-sleep "${SUNTRACE_E2E_STARTUP_WAIT:-3}"
+sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
 
 window_id=""
 for _ in {1..20}; do
@@ -94,7 +94,7 @@ if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 || "${width:-0}" -gt 3000
   exit 1
 fi
 
-pkill -x SuntraceMacApp >/dev/null 2>&1 || true
+pkill -x NoonmarkMacApp >/dev/null 2>&1 || true
 
 if [[ ! -f "$database_path" ]]; then
   echo "installed app did not create persistence database: $database_path" >&2

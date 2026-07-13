@@ -2,27 +2,27 @@
 set -euo pipefail
 
 configuration="${1:-debug}"
-out_dir="${SUNTRACE_VISUAL_OUT_DIR:-artifacts/visual-regression}"
-reference_dir="${SUNTRACE_VISUAL_REFERENCE_DIR:-artifacts/prototype-screenshots}"
-actual_dir="${SUNTRACE_VISUAL_ACTUAL_DIR:-artifacts/e2e}"
-pages=(${SUNTRACE_VISUAL_PAGES:-day day-detail day-manual-detail day-review-saved pool pool-detail future future-detail unfinished unfinished-detail completed completed-detail calendar settings})
+out_dir="${NOONMARK_VISUAL_OUT_DIR:-artifacts/visual-regression}"
+reference_dir="${NOONMARK_VISUAL_REFERENCE_DIR:-artifacts/prototype-screenshots}"
+actual_dir="${NOONMARK_VISUAL_ACTUAL_DIR:-artifacts/e2e}"
+pages=(${NOONMARK_VISUAL_PAGES:-day day-detail day-manual-detail day-review-saved pool pool-detail future future-detail unfinished unfinished-detail completed completed-detail calendar settings})
 
-if [[ "${SUNTRACE_VISUAL_REUSE_SCREENSHOTS:-0}" != "1" ]]; then
+if [[ "${NOONMARK_VISUAL_REUSE_SCREENSHOTS:-0}" != "1" ]]; then
   scripts/test-e2e "$configuration"
 fi
 
-single_reference="${SUNTRACE_VISUAL_REFERENCE:-}"
-single_actual="${SUNTRACE_VISUAL_ACTUAL:-}"
+single_reference="${NOONMARK_VISUAL_REFERENCE:-}"
+single_actual="${NOONMARK_VISUAL_ACTUAL:-}"
 if [[ -n "$single_reference" || -n "$single_actual" ]]; then
   if [[ -z "$single_reference" || -z "$single_actual" ]]; then
-    echo "SUNTRACE_VISUAL_REFERENCE and SUNTRACE_VISUAL_ACTUAL must be set together" >&2
+    echo "NOONMARK_VISUAL_REFERENCE and NOONMARK_VISUAL_ACTUAL must be set together" >&2
     exit 1
   fi
   pages=(custom)
   reference_dir=""
   actual_dir=""
 else
-  SUNTRACE_PROTOTYPE_OUT_DIR="$reference_dir" SUNTRACE_PROTOTYPE_PAGES="${pages[*]}" scripts/render-prototype-screenshots
+  NOONMARK_PROTOTYPE_OUT_DIR="$reference_dir" NOONMARK_PROTOTYPE_PAGES="${pages[*]}" scripts/render-prototype-screenshots
 fi
 
 rm -rf "$out_dir"
@@ -59,7 +59,7 @@ compare_page() {
   mkdir -p "$page_dir"
   sips -z 900 1440 "$actual" --out "$normalized" >/dev/null
 
-  SUNTRACE_VISUAL_PAGE="$page" python3 - "$reference" "$normalized" "$diff_image" "$report" <<'PY'
+  NOONMARK_VISUAL_PAGE="$page" python3 - "$reference" "$normalized" "$diff_image" "$report" <<'PY'
 import os
 import struct
 import sys
@@ -147,9 +147,9 @@ def write_rgb_png(path, width, height, rows):
 
 
 def page_env_name(metric):
-    page = os.environ.get("SUNTRACE_VISUAL_PAGE", "custom")
+    page = os.environ.get("NOONMARK_VISUAL_PAGE", "custom")
     token = "".join(ch if ch.isalnum() else "_" for ch in page.upper())
-    return f"SUNTRACE_VISUAL_{token}_{metric}"
+    return f"NOONMARK_VISUAL_{token}_{metric}"
 
 
 reference_path, actual_path, diff_path, report_path = sys.argv[1:5]
@@ -188,7 +188,7 @@ for y in range(ref_height):
 
 changed_ratio = changed_pixels / total_pixels
 mean_delta = sum_delta / total_pixels
-page = os.environ.get("SUNTRACE_VISUAL_PAGE", "custom")
+page = os.environ.get("NOONMARK_VISUAL_PAGE", "custom")
 default_changed_ratios = {
     "day": "0.17",
     "day-detail": "0.19",
@@ -214,9 +214,9 @@ default_mean_deltas = {
 }
 default_changed_ratio = default_changed_ratios.get(page, "0.12")
 default_mean_delta = default_mean_deltas.get(page, "0.025")
-max_changed_ratio = float(os.environ.get(page_env_name("MAX_CHANGED_RATIO"), os.environ.get("SUNTRACE_VISUAL_MAX_CHANGED_RATIO", default_changed_ratio)))
-max_mean_delta = float(os.environ.get(page_env_name("MAX_MEAN_DELTA"), os.environ.get("SUNTRACE_VISUAL_MAX_MEAN_DELTA", default_mean_delta)))
-enforce = os.environ.get("SUNTRACE_VISUAL_ENFORCE", "1") != "0"
+max_changed_ratio = float(os.environ.get(page_env_name("MAX_CHANGED_RATIO"), os.environ.get("NOONMARK_VISUAL_MAX_CHANGED_RATIO", default_changed_ratio)))
+max_mean_delta = float(os.environ.get(page_env_name("MAX_MEAN_DELTA"), os.environ.get("NOONMARK_VISUAL_MAX_MEAN_DELTA", default_mean_delta)))
+enforce = os.environ.get("NOONMARK_VISUAL_ENFORCE", "1") != "0"
 
 write_rgb_png(diff_path, ref_width, ref_height, diff_rows)
 summary = (

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export SUNTRACE_LIVE_ICLOUD_SYNC=1
+export NOONMARK_LIVE_ICLOUD_SYNC=1
 
 swift test --filter ICloudDriveLocalFirstSyncLiveTests/testTwoSQLiteStoresSyncThroughRealICloudDriveEndpoint

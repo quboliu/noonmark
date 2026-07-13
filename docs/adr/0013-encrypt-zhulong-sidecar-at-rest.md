@@ -25,7 +25,7 @@
 
 ## 灰度策略
 
-1. 先以独立 `SuntraceZhulong` 模块和临时目录完成错误密钥、篡改、权限、重启与真实 Keychain 测试。
+1. 先以独立 `NoonmarkZhulong` 模块和临时目录完成错误密钥、篡改、权限、重启与真实 Keychain 测试。
 2. 再接入内部 App 会话路径，只开放手动授权和手动 Provider 调用，不自动写 Todo。
 3. Provider live smoke、真实 `.app` E2E、持久化探针和 DMG 安装启动全部通过后，才允许 clean-sheet 一次性 cutover。
 

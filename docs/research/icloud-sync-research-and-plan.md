@@ -6,7 +6,7 @@
 
 ## 结论
 
-晷迹推荐采用 **CloudKit private database + CKSyncEngine + 自有 SQLite / SuntraceCore 合并层**。
+晷迹推荐采用 **CloudKit private database + CKSyncEngine + 自有 SQLite / NoonmarkCore 合并层**。
 
 不推荐：
 
@@ -35,8 +35,8 @@
 
 - `docs/adr/0002-local-first-manual-data-packages-before-sync.md` 明确：一期本地优先，只做手动数据包，不直接同步裸 SQLite。
 - `docs/adr/0004-use-insert-only-relational-model-not-event-sourcing.md` 明确：事实表是事实来源，`change_journal` 只能作为未来同步和诊断辅助流水，不是事实来源。
-- `SuntraceCore` 已有稳定 ID、日期值对象、任务链、任务定义、日轨迹、子任务、每日复盘和偏好。
-- `SuntraceStorage` 已有 `SQLiteEngineRepository`、`SuntraceDataPackage`、`sync_settings` 表和 `sync_endpoint_options_view` 占位。
+- `NoonmarkCore` 已有稳定 ID、日期值对象、任务链、任务定义、日轨迹、子任务、每日复盘和偏好。
+- `NoonmarkStorage` 已有 `SQLiteEngineRepository`、`NoonmarkDataPackage`、`sync_settings` 表和 `sync_endpoint_options_view` 占位。
 - 设置页已展示“自定义同步端点”和“iCloud 云同步”，当前均标记为规划中。
 
 当前缺口：
@@ -68,7 +68,7 @@ Apple 给出了三条主路径：
 
    Apple 在 WWDC23 中说明，如果应用自带本地持久化，应该使用 CKSyncEngine。CKSyncEngine 负责大量同步共性问题：调度、推送通知、账号变化、状态跟踪、错误处理和 CloudKit 操作编排；应用侧只需要把本地变化转成 records，并把远端 records 合并回本地。
 
-   这正好匹配晷迹：保留 `SuntraceCore` 与 SQLite 事实模型，只新增 CloudKit adapter 与同步协调器。
+   这正好匹配晷迹：保留 `NoonmarkCore` 与 SQLite 事实模型，只新增 CloudKit adapter 与同步协调器。
 
 ### CloudKit 优势
 
@@ -143,11 +143,11 @@ Agenda 对外强调支持 iCloud 和 Dropbox，且数据保存在用户个人云
 
 ### 总体结构
 
-新增 `SuntraceSync` target：
+新增 `NoonmarkSync` target：
 
-- 依赖：`SuntraceCore`、`SuntraceStorage`、`CloudKit`。
-- 不让 `SuntraceCore` 依赖 `SuntraceSync`。
-- App 层通过 `SuntraceSyncCoordinator` 驱动同步状态、手动同步和设置页 UI。
+- 依赖：`NoonmarkCore`、`NoonmarkStorage`、`CloudKit`。
+- 不让 `NoonmarkCore` 依赖 `NoonmarkSync`。
+- App 层通过 `NoonmarkSyncCoordinator` 驱动同步状态、手动同步和设置页 UI。
 
 建议模块：
 
@@ -166,8 +166,8 @@ Agenda 对外强调支持 iCloud 和 Dropbox，且数据保存在用户个人云
 - `CloudKitSyncAdapter`
   - 封装 CKSyncEngine、custom zone、record changes、account status、retry。
 
-- `SuntraceSyncMerger`
-  - 把远端 records 合并进 `SuntraceEngine` / SQLite。
+- `NoonmarkSyncMerger`
+  - 把远端 records 合并进 `NoonmarkEngine` / SQLite。
   - 负责领域不变量、冲突检测和 fail-closed。
 
 - `SyncConflictStore`
@@ -235,7 +235,7 @@ record-per-entity 更适合第一版：
 
 - 初次同步可直接上传 / 下载当前事实。
 - CloudKit record change 可幂等应用。
-- 与当前 `SuntraceSnapshot` 和 SQLite 表结构贴近。
+- 与当前 `NoonmarkSnapshot` 和 SQLite 表结构贴近。
 - 后续仍可保留 journal 作为增量队列和诊断，不改变事实来源。
 
 ## 冲突策略
@@ -267,7 +267,7 @@ record-per-entity 更适合第一版：
 
 ### 历史不可改写原则
 
-CloudKit 只是传输层。所有 incoming merge 都必须经过 `SuntraceCore` 的领域规则或等价校验，不允许直接 upsert SQLite 后破坏历史规则。
+CloudKit 只是传输层。所有 incoming merge 都必须经过 `NoonmarkCore` 的领域规则或等价校验，不允许直接 upsert SQLite 后破坏历史规则。
 
 ## 同步生命周期
 
@@ -445,7 +445,7 @@ CREATE TABLE sync_audit_log (
 新增类似 `scripts/test-ai-provider-live` 的显式入口：
 
 - `scripts/test-icloud-sync-live`
-- 必须显式设置环境变量，例如 `SUNTRACE_ICLOUD_LIVE=1`。
+- 必须显式设置环境变量，例如 `NOONMARK_ICLOUD_LIVE=1`。
 - 默认不进入 `make check`。
 - 使用专门测试 container 或 development environment。
 - 必须能清理测试 zone / records。
@@ -461,7 +461,7 @@ CREATE TABLE sync_audit_log (
 
 ### M1：本地同步骨架
 
-- 新增 `SuntraceSync` target。
+- 新增 `NoonmarkSync` target。
 - 新增 sync metadata / device identity / change_journal / conflicts schema。
 - Repository 写入路径补 journal。
 - 添加 mapper 和 mock sync adapter。

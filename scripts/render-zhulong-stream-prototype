@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-prototype_dir="${SUNTRACE_ZHULONG_STREAM_PROTOTYPE_DIR:-docs/design/prototypes/zhulong-converged-2026-07-10}"
-out_dir="${SUNTRACE_ZHULONG_STREAM_PROTOTYPE_OUT_DIR:-artifacts/zhulong-stream-prototype}"
+prototype_dir="${NOONMARK_ZHULONG_STREAM_PROTOTYPE_DIR:-docs/design/prototypes/zhulong-converged-2026-07-10}"
+out_dir="${NOONMARK_ZHULONG_STREAM_PROTOTYPE_OUT_DIR:-artifacts/zhulong-stream-prototype}"
 prototype_html="${prototype_dir}/stream-prototype.html"
 
-chrome_binary="${SUNTRACE_CHROME_BINARY:-}"
+chrome_binary="${NOONMARK_CHROME_BINARY:-}"
 if [[ -z "$chrome_binary" ]]; then
   if command -v google-chrome >/dev/null 2>&1; then
     chrome_binary="$(command -v google-chrome)"

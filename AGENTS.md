@@ -16,18 +16,18 @@
 - 当前仓库已经初始化 Git，主分支为 `main`，并已关联 `origin/main`。
 - 当前技术栈为 Swift Package Manager 项目，`Package.swift` 使用 `swift-tools-version: 6.0`，目标平台为 macOS 14。
 - 当前源码模块：
-  - `SuntraceMacApp`：SwiftUI Mac App，可通过 SwiftPM executable target 构建出 `.app`。
-  - `SuntraceCore`：Day Todo、任务链、日轨迹、子任务、池化视图等核心领域引擎。
-  - `SuntraceAI`：烛龙 provider、scope、prompt、local insight、建议草稿和授权模型。
-  - `SuntraceStorage`：SQLite schema 与领域持久化结构。
-  - `SuntraceMacUIContract`：Mac UI 设计契约的代码化约束。
+  - `NoonmarkMacApp`：SwiftUI Mac App，可通过 SwiftPM executable target 构建出 `.app`。
+  - `NoonmarkCore`：Day Todo、任务链、日轨迹、子任务、池化视图等核心领域引擎。
+  - `NoonmarkAI`：烛龙 provider、scope、prompt、local insight、建议草稿和授权模型。
+  - `NoonmarkStorage`：SQLite schema 与领域持久化结构。
+  - `NoonmarkMacUIContract`：Mac UI 设计契约的代码化约束。
 - 当前测试模块：
-  - `SuntraceMacApp` 的真实 App E2E 脚本验证
-  - `SuntraceCoreTests`
-  - `SuntraceAITests`
-  - `SuntraceStorageTests`
-  - `SuntraceMacUIContractTests`
-  - `SuntraceSimulationTests`
+  - `NoonmarkMacApp` 的真实 App E2E 脚本验证
+  - `NoonmarkCoreTests`
+  - `NoonmarkAITests`
+  - `NoonmarkStorageTests`
+  - `NoonmarkMacUIContractTests`
+  - `NoonmarkSimulationTests`
 - 当前文档已包含产品范围、功能规格、烛龙、ADR、研究资料和 Mac UI 设计契约；领域术语以 `CONTEXT.md` 为准。
 - 当前已有可运行 Mac App target 和本地 DMG 打包脚本；尚未发现后端服务、容器部署配置或生产 deployed endpoint。验证应覆盖 Swift Package 的 build/test、真实 `.app` E2E 截图、持久化探针和 DMG 安装启动。
 
@@ -54,7 +54,7 @@
   - `make check`
   - `scripts/test-e2e`
   - `scripts/test-visual-regression`
-  - `scripts/test-ai-provider-live`：手动 live AI provider smoke；必须显式设置 `SUNTRACE_AI_BASE_URL`、`SUNTRACE_AI_MODEL` 和 `SUNTRACE_AI_API_KEY`，不进入默认 `make check`。
+  - `scripts/test-ai-provider-live`：手动 live AI provider smoke；必须显式设置 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`，不进入默认 `make check`。
   - `scripts/package-dmg release`
   - `scripts/test-dmg-install dist/Noonmark.dmg`
 
@@ -139,7 +139,7 @@ Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作
 
 - LLM 凭证只走 shell 替换，绝不 `echo`，绝不落盘明文。
 - CORS 不使用 `credentials: include`，统一使用 Bearer token。
-- `SuntraceAITests` 默认只跑 mock/contract 测试，不需要真实 API key；任何真实 AI provider 验证必须走 `scripts/test-ai-provider-live` 或等价显式 live 入口，缺少 key 时必须失败，不得把 mock 结果描述为 live AI 测试。
+- `NoonmarkAITests` 默认只跑 mock/contract 测试，不需要真实 API key；任何真实 AI provider 验证必须走 `scripts/test-ai-provider-live` 或等价显式 live 入口，缺少 key 时必须失败，不得把 mock 结果描述为 live AI 测试。
 
 ## Git 与文档语言
 

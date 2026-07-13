@@ -5,8 +5,8 @@
 **Consequences**
 
 - 旧工作区卡片、能力按钮、草稿收件箱、context rail 和 App 内固定模板生成逻辑全部废弃。
-- 新实现不以旧 `SuntraceStore` 烛龙状态或既有 AI UI 接口为兼容目标。
-- `SuntraceCore` 的任务链、日轨迹、历史不可改写规则和用户 Todo 数据继续保留；可安全迁移的 Provider 凭证不得丢失。
+- 新实现不以旧 `NoonmarkStore` 烛龙状态或既有 AI UI 接口为兼容目标。
+- `NoonmarkCore` 的任务链、日轨迹、历史不可改写规则和用户 Todo 数据继续保留；可安全迁移的 Provider 凭证不得丢失。
 - 旧代码可以在开发期间暂时存在，但不能作为新产品路径、设计基线或运行 fallback；cutover 与旧代码删除在新路径完整验证后同批完成。
 - cutover 前必须覆盖真实 `.app` 每日收尾路径、持久化、sidecar 加密、权限与事件审计、Provider live smoke、视觉回归和 DMG 安装启动。
 

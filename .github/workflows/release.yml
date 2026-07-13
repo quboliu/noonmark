@@ -43,7 +43,7 @@ jobs:
         run: scripts/test-e2e
       - name: Visual regression
         env:
-          SUNTRACE_VISUAL_REUSE_SCREENSHOTS: "1"
+          NOONMARK_VISUAL_REUSE_SCREENSHOTS: "1"
         run: scripts/test-visual-regression
       - name: Package artifact
         run: |

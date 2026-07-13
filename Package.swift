@@ -8,84 +8,84 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "SuntraceMacApp", targets: ["SuntraceMacApp"]),
-        .library(name: "SuntraceCore", targets: ["SuntraceCore"]),
-        .library(name: "SuntraceAI", targets: ["SuntraceAI"]),
-        .library(name: "SuntraceZhulong", targets: ["SuntraceZhulong"]),
-        .library(name: "SuntraceZhulongAI", targets: ["SuntraceZhulongAI"]),
-        .library(name: "SuntraceMacUIContract", targets: ["SuntraceMacUIContract"]),
-        .library(name: "SuntraceStorage", targets: ["SuntraceStorage"]),
-        .library(name: "SuntraceSync", targets: ["SuntraceSync"])
+        .executable(name: "NoonmarkMacApp", targets: ["NoonmarkMacApp"]),
+        .library(name: "NoonmarkCore", targets: ["NoonmarkCore"]),
+        .library(name: "NoonmarkAI", targets: ["NoonmarkAI"]),
+        .library(name: "NoonmarkZhulong", targets: ["NoonmarkZhulong"]),
+        .library(name: "NoonmarkZhulongAI", targets: ["NoonmarkZhulongAI"]),
+        .library(name: "NoonmarkMacUIContract", targets: ["NoonmarkMacUIContract"]),
+        .library(name: "NoonmarkStorage", targets: ["NoonmarkStorage"]),
+        .library(name: "NoonmarkSync", targets: ["NoonmarkSync"])
     ],
     targets: [
         .executableTarget(
-            name: "SuntraceMacApp",
+            name: "NoonmarkMacApp",
             dependencies: [
-                "SuntraceCore", "SuntraceAI", "SuntraceZhulong", "SuntraceZhulongAI", "SuntraceMacUIContract",
-                "SuntraceStorage", "SuntraceSync"
+                "NoonmarkCore", "NoonmarkAI", "NoonmarkZhulong", "NoonmarkZhulongAI", "NoonmarkMacUIContract",
+                "NoonmarkStorage", "NoonmarkSync"
             ],
-            path: "App/SuntraceMacApp",
+            path: "App/NoonmarkMacApp",
             exclude: ["Resources"]
         ),
-        .target(name: "SuntraceCore"),
+        .target(name: "NoonmarkCore"),
         .target(
-            name: "SuntraceAI",
-            dependencies: ["SuntraceCore"]
+            name: "NoonmarkAI",
+            dependencies: ["NoonmarkCore"]
         ),
         .target(
-            name: "SuntraceZhulong",
-            dependencies: ["SuntraceCore"],
+            name: "NoonmarkZhulong",
+            dependencies: ["NoonmarkCore"],
             linkerSettings: [
                 .linkedFramework("Security")
             ]
         ),
         .target(
-            name: "SuntraceZhulongAI",
-            dependencies: ["SuntraceAI", "SuntraceZhulong"]
+            name: "NoonmarkZhulongAI",
+            dependencies: ["NoonmarkAI", "NoonmarkZhulong"]
         ),
-        .target(name: "SuntraceMacUIContract"),
+        .target(name: "NoonmarkMacUIContract"),
         .target(
-            name: "SuntraceStorage",
-            dependencies: ["SuntraceCore", "SuntraceSync"],
+            name: "NoonmarkStorage",
+            dependencies: ["NoonmarkCore", "NoonmarkSync"],
             linkerSettings: [
                 .linkedLibrary("sqlite3")
             ]
         ),
         .target(
-            name: "SuntraceSync",
-            dependencies: ["SuntraceCore"]
+            name: "NoonmarkSync",
+            dependencies: ["NoonmarkCore"]
         ),
         .testTarget(
-            name: "SuntraceCoreTests",
-            dependencies: ["SuntraceCore"]
+            name: "NoonmarkCoreTests",
+            dependencies: ["NoonmarkCore"]
         ),
         .testTarget(
-            name: "SuntraceAITests",
-            dependencies: ["SuntraceAI", "SuntraceCore"]
+            name: "NoonmarkAITests",
+            dependencies: ["NoonmarkAI", "NoonmarkCore"]
         ),
         .testTarget(
-            name: "SuntraceZhulongTests",
-            dependencies: ["SuntraceZhulong"]
+            name: "NoonmarkZhulongTests",
+            dependencies: ["NoonmarkZhulong"]
         ),
         .testTarget(
-            name: "SuntraceZhulongAITests",
-            dependencies: ["SuntraceZhulongAI", "SuntraceAI", "SuntraceZhulong"]
+            name: "NoonmarkZhulongAITests",
+            dependencies: ["NoonmarkZhulongAI", "NoonmarkAI", "NoonmarkZhulong"]
         ),
         .testTarget(
-            name: "SuntraceMacUIContractTests",
-            dependencies: ["SuntraceMacUIContract"]
+            name: "NoonmarkMacUIContractTests",
+            dependencies: ["NoonmarkMacUIContract"]
         ),
         .testTarget(
-            name: "SuntraceStorageTests",
-            dependencies: ["SuntraceStorage", "SuntraceSync"]
+            name: "NoonmarkStorageTests",
+            dependencies: ["NoonmarkStorage", "NoonmarkSync"]
         ),
         .testTarget(
-            name: "SuntraceSyncTests",
-            dependencies: ["SuntraceSync", "SuntraceCore"]
+            name: "NoonmarkSyncTests",
+            dependencies: ["NoonmarkSync", "NoonmarkCore"]
         ),
         .testTarget(
-            name: "SuntraceSimulationTests",
-            dependencies: ["SuntraceCore"]
+            name: "NoonmarkSimulationTests",
+            dependencies: ["NoonmarkCore"]
         )
     ]
 )

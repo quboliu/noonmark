@@ -2,7 +2,7 @@
 set -euo pipefail
 
 missing=0
-for name in SUNTRACE_AI_BASE_URL SUNTRACE_AI_MODEL SUNTRACE_AI_API_KEY; do
+for name in NOONMARK_AI_BASE_URL NOONMARK_AI_MODEL NOONMARK_AI_API_KEY; do
   if [[ -z "${!name:-}" ]]; then
     echo "missing required environment variable: ${name}" >&2
     missing=1
@@ -10,7 +10,7 @@ for name in SUNTRACE_AI_BASE_URL SUNTRACE_AI_MODEL SUNTRACE_AI_API_KEY; do
 done
 
 if [[ "$missing" -ne 0 ]]; then
-  echo "usage: SUNTRACE_AI_BASE_URL=https://provider.example/v1 SUNTRACE_AI_MODEL=model SUNTRACE_AI_API_KEY=... scripts/test-ai-provider-live" >&2
+  echo "usage: NOONMARK_AI_BASE_URL=https://provider.example/v1 NOONMARK_AI_MODEL=model NOONMARK_AI_API_KEY=... scripts/test-ai-provider-live" >&2
   exit 1
 fi
 
@@ -35,7 +35,7 @@ enum SmokeError: Error, CustomStringConvertible {
         case let .missingEnvironment(name):
             return "missing required environment variable: \(name)"
         case let .invalidURL(value):
-            return "invalid SUNTRACE_AI_BASE_URL: \(value)"
+            return "invalid NOONMARK_AI_BASE_URL: \(value)"
         case let .invalidResponse(path):
             return "\(path) returned a non-HTTP response"
         case let .httpStatus(path, status, body):
@@ -71,10 +71,10 @@ struct LiveAIProviderSmoke {
 
     private static func run() async throws {
         let env = ProcessInfo.processInfo.environment
-        let baseURLText = try required("SUNTRACE_AI_BASE_URL", env: env)
-        let model = try required("SUNTRACE_AI_MODEL", env: env)
-        let apiKey = try required("SUNTRACE_AI_API_KEY", env: env)
-        let timeout = TimeInterval(env["SUNTRACE_AI_TIMEOUT_SECONDS"].flatMap(Double.init) ?? 20)
+        let baseURLText = try required("NOONMARK_AI_BASE_URL", env: env)
+        let model = try required("NOONMARK_AI_MODEL", env: env)
+        let apiKey = try required("NOONMARK_AI_API_KEY", env: env)
+        let timeout = TimeInterval(env["NOONMARK_AI_TIMEOUT_SECONDS"].flatMap(Double.init) ?? 20)
 
         guard let baseURL = URL(string: baseURLText) else {
             throw SmokeError.invalidURL(baseURLText)

@@ -8,7 +8,7 @@
 
 当前入口为 `stream-prototype.html?variant=A|B|C`。连续卷宗、章节手风琴与左右双轨是同一份 append-only 日志的三种正式用户视图，不再以淘汰其中两案为目标；C 默认采用“左侧烛龙工作、右侧用户决定”，重大检查点、历史边界与回执横跨全宽。用户可从 PageHeader 切换视图，选择会保存在本机，且不会改变业务 head、授权、输入或查看位置。业务 head 与查看游标分离；“回看上一检查点”只定位旧检查点，修改必须在流末端追加更正和失效回执。交互式规划采用逐条 durable commit：授权、开始、运行产物、停机条件与 checkpoint 分别形成；用户上滑后只累计新记录数，不抢回 viewport。完整规则、像素级 prompt 与验收矩阵见 [单一纵向工作流设计](STREAM-PROTOTYPE.md)。
 
-原 `suntrace-mac-prototype.dc.html` 保留为多页面 R3 的冻结对照，不再是当前设计方向；待流式方案收敛后删除。
+原 `noonmark-mac-prototype.dc.html` 保留为多页面 R3 的冻结对照，不再是当前设计方向；待流式方案收敛后删除。
 
 ## 本轮问题
 
@@ -42,7 +42,7 @@ R2.1 的固定审批向导与 R2.2 的 A／B／C 候选实现均已退出运行�
 ### 唯一视觉基线
 
 - UI 必须以本轮真实 `.app` 运行产物 `artifacts/e2e/day.png`、`artifacts/e2e/settings.png` 和 `artifacts/e2e/zhulong.png` 为准；旧烛龙的产品结构不复用，但 Noonmark 全局壳层与现有 SwiftUI 组件语言必须复用。
-- 代码基线来自 `App/SuntraceMacApp/SuntraceMacApp.swift` 中的 `Theme`、`Sidebar`、`PageHeader`、`SettingsCard`、`SmallActionButton`、`StatusPill`、列表行 surface 和 `DetailRail`。
+- 代码基线来自 `App/NoonmarkMacApp/NoonmarkMacApp.swift` 中的 `Theme`、`Sidebar`、`PageHeader`、`SettingsCard`、`SmallActionButton`、`StatusPill`、列表行 surface 和 `DetailRail`。
 - 首要验收尺寸为真实启动尺寸 `1320 × 820` CSS px；最小尺寸压测为 App 实际下限 `1180 × 760`，不再使用产品不支持的 `1100 × 700`。
 - 禁止新增独立 Web toolbar、紫色主操作体系、Web Dashboard 卡片语言、浮动输入 dock 或遮罩式抽屉。新功能必须看起来像当前 App 中原本就存在的页面。
 
@@ -176,7 +176,7 @@ scripts/test-zhulong-stream-prototype
 scripts/serve-zhulong-r3-prototype
 ```
 
-浏览器打开 `http://127.0.0.1:4174/suntrace-mac-prototype.dc.html?surface=zhulong&flow=shape&step=focus`。验收场景通过业务动作或明确 URL 状态进入。
+浏览器打开 `http://127.0.0.1:4174/noonmark-mac-prototype.dc.html?surface=zhulong&flow=shape&step=focus`。验收场景通过业务动作或明确 URL 状态进入。
 
 生成 R3 完整截图矩阵：
 

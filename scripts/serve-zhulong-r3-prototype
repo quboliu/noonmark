@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-prototype_dir="${SUNTRACE_ZHULONG_R3_PROTOTYPE_DIR:-docs/design/prototypes/zhulong-converged-2026-07-10}"
-port="${SUNTRACE_ZHULONG_R3_PROTOTYPE_PORT:-4174}"
-prototype_html="${prototype_dir}/suntrace-mac-prototype.dc.html"
-url="http://127.0.0.1:${port}/suntrace-mac-prototype.dc.html?surface=zhulong&flow=shape&step=home&variant=A"
+prototype_dir="${NOONMARK_ZHULONG_R3_PROTOTYPE_DIR:-docs/design/prototypes/zhulong-converged-2026-07-10}"
+port="${NOONMARK_ZHULONG_R3_PROTOTYPE_PORT:-4174}"
+prototype_html="${prototype_dir}/noonmark-mac-prototype.dc.html"
+url="http://127.0.0.1:${port}/noonmark-mac-prototype.dc.html?surface=zhulong&flow=shape&step=home&variant=A"
 prototype_marker="<title>烛龙任务成形 R3 · 收敛原型</title>"
 
 if [[ ! -f "$prototype_html" ]]; then

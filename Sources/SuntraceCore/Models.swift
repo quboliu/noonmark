@@ -50,6 +50,11 @@ public enum NewTaskTarget: Equatable, Sendable {
     case date(LocalDate)
 }
 
+public enum TaskPoolRemovalOutcome: Equatable, Sendable {
+    case deleted
+    case removedKeepingHistory
+}
+
 public enum ViewSort: String, Codable, Hashable, Sendable {
     case priority
     case createdAt
@@ -172,61 +177,6 @@ public struct SettingsPoemDisplayPolicy: Codable, Equatable, Sendable {
     """
 }
 
-public enum TaskTagStatus: String, Codable, Equatable, Sendable, CaseIterable {
-    case active
-    case inactive
-}
-
-public enum TaskTagSlot: Int, Codable, Equatable, Hashable, Sendable, CaseIterable, Comparable {
-    case tagI = 1
-    case tagII = 2
-    case tagIII = 3
-
-    public static func < (lhs: TaskTagSlot, rhs: TaskTagSlot) -> Bool {
-        lhs.rawValue < rhs.rawValue
-    }
-}
-
-public struct TaskTag: Codable, Equatable, Sendable, Identifiable {
-    public var id: TaskTagID
-    public var name: String
-    public var status: TaskTagStatus
-    public var colorHex: String
-    public var createdAt: Date
-    public var updatedAt: Date
-
-    public init(
-        id: TaskTagID = TaskTagID(),
-        name: String,
-        status: TaskTagStatus = .active,
-        colorHex: String = "#2A6FDB",
-        now: Date
-    ) {
-        self.id = id
-        self.name = name
-        self.status = status
-        self.colorHex = colorHex
-        self.createdAt = now
-        self.updatedAt = now
-    }
-}
-
-public struct TaskTagAssignment: Codable, Equatable, Sendable, Identifiable {
-    public var tagID: TaskTagID
-    public var slot: TaskTagSlot
-    public var createdAt: Date
-    public var updatedAt: Date
-
-    public var id: Int { slot.rawValue }
-
-    public init(tagID: TaskTagID, slot: TaskTagSlot, now: Date) {
-        self.tagID = tagID
-        self.slot = slot
-        self.createdAt = now
-        self.updatedAt = now
-    }
-}
-
 public enum SyncEndpointKind: String, Codable, Hashable, Sendable, CaseIterable {
     case customEndpoint
     case iCloud
@@ -261,7 +211,6 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     public var backupPolicy: ScheduledBackupPolicy
     public var localFirstSyncPolicy: LocalFirstCloudSyncPolicy
     public var settingsPoemDisplayPolicy: SettingsPoemDisplayPolicy
-    public var taskTags: [TaskTag]
     public var syncEndpointOptions: [SyncEndpointOption]
 
     public init(
@@ -271,7 +220,6 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         backupPolicy: ScheduledBackupPolicy = ScheduledBackupPolicy(),
         localFirstSyncPolicy: LocalFirstCloudSyncPolicy = LocalFirstCloudSyncPolicy(),
         settingsPoemDisplayPolicy: SettingsPoemDisplayPolicy = SettingsPoemDisplayPolicy(),
-        taskTags: [TaskTag] = [],
         syncEndpointOptions: [SyncEndpointOption] = AppPreferences.defaultSyncEndpointOptions
     ) {
         self.theme = theme
@@ -280,32 +228,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         self.backupPolicy = backupPolicy
         self.localFirstSyncPolicy = localFirstSyncPolicy
         self.settingsPoemDisplayPolicy = settingsPoemDisplayPolicy
-        self.taskTags = taskTags
         self.syncEndpointOptions = syncEndpointOptions
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? .coolGray
-        language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .chinese
-        dataMode = try container.decodeIfPresent(AppDataMode.self, forKey: .dataMode) ?? .localFirst
-        backupPolicy = try container.decodeIfPresent(
-            ScheduledBackupPolicy.self,
-            forKey: .backupPolicy
-        ) ?? ScheduledBackupPolicy()
-        localFirstSyncPolicy = try container.decodeIfPresent(
-            LocalFirstCloudSyncPolicy.self,
-            forKey: .localFirstSyncPolicy
-        ) ?? LocalFirstCloudSyncPolicy()
-        settingsPoemDisplayPolicy = try container.decodeIfPresent(
-            SettingsPoemDisplayPolicy.self,
-            forKey: .settingsPoemDisplayPolicy
-        ) ?? SettingsPoemDisplayPolicy()
-        taskTags = try container.decodeIfPresent([TaskTag].self, forKey: .taskTags) ?? []
-        syncEndpointOptions = try container.decodeIfPresent(
-            [SyncEndpointOption].self,
-            forKey: .syncEndpointOptions
-        ) ?? AppPreferences.defaultSyncEndpointOptions
     }
 
     public static let defaultSyncEndpointOptions: [SyncEndpointOption] = [
@@ -367,23 +290,16 @@ public struct Day: Codable, Equatable, Sendable {
 public struct TaskChain: Codable, Equatable, Sendable {
     public var id: TaskChainID
     public var state: TaskChainState
-    public var tagAssignments: [TaskTagAssignment]
     public var createdAt: Date
     public var updatedAt: Date
-
-    public var primaryTagID: TaskTagID? {
-        tagAssignments.first { $0.slot == .tagI }?.tagID
-    }
 
     public init(
         id: TaskChainID = TaskChainID(),
         state: TaskChainState = .active,
-        tagAssignments: [TaskTagAssignment] = [],
         now: Date
     ) {
         self.id = id
         self.state = state
-        self.tagAssignments = tagAssignments.sorted { $0.slot < $1.slot }
         self.createdAt = now
         self.updatedAt = now
     }
@@ -450,7 +366,7 @@ public struct TaskDefinition: Codable, Equatable, Sendable {
         title = try container.decode(String.self, forKey: .title)
         descriptionText = try container.decodeIfPresent(String.self, forKey: .descriptionText)
         note = try container.decodeIfPresent(String.self, forKey: .note)
-        plannedSubtasks = try container.decodeIfPresent([PlannedSubtask].self, forKey: .plannedSubtasks) ?? []
+        plannedSubtasks = try container.decode([PlannedSubtask].self, forKey: .plannedSubtasks)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         supersededAt = try container.decodeIfPresent(Date.self, forKey: .supersededAt)
         supersededByDefinitionID = try container.decodeIfPresent(TaskDefinitionID.self, forKey: .supersededByDefinitionID)

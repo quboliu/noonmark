@@ -282,5 +282,5 @@
 - Mac SwiftUI 主窗口已覆盖 Day Todo、任务池、未来计划、未完成池、已完成池、日历、烛龙和设置页；`scripts/test-e2e` 已生成真实 macOS 页面截图并验证正常模式持久化。
 - 设置页导出 / 导入入口已接入 `SuntraceDataPackage` JSON 数据包，Storage 测试覆盖 round-trip、重复键和断裂引用拒绝。
 - 烛龙 Provider 配置表单已接入 App：非密配置保存到 UserDefaults，API Key 只进入 Keychain；OpenAI-compatible Provider 已支持 `/chat/completions` 和 `/models` 健康检查。
-- 烛龙本地证据建议草稿和逐条确认应用流已接入 App；确认操作通过普通领域接口落库，`assignLabel` 在核心 label 模型存在前 fail-closed。
+- 烛龙本地证据建议草稿和逐条确认应用流已接入 App；确认后的标签建议通过分类 Module 的 prepare／confirm／commit 落库，并保留草稿、依据与用户决定来源。
 - 待补齐：更深的真实 UI 交互自动化、远程模型结构化操作解析、Apple Developer ID 签名和 notarization。

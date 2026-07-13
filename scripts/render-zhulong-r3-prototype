@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+prototype_dir="${SUNTRACE_ZHULONG_R3_PROTOTYPE_DIR:-docs/design/prototypes/zhulong-converged-2026-07-10}"
+out_dir="${SUNTRACE_ZHULONG_R3_PROTOTYPE_OUT_DIR:-artifacts/zhulong-r3-prototype}"
+
+chrome_binary="${SUNTRACE_CHROME_BINARY:-}"
+if [[ -z "$chrome_binary" ]]; then
+  if command -v google-chrome >/dev/null 2>&1; then
+    chrome_binary="$(command -v google-chrome)"
+  elif command -v chromium >/dev/null 2>&1; then
+    chrome_binary="$(command -v chromium)"
+  elif [[ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
+    chrome_binary="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  else
+    echo "missing Chrome/Chromium for R3 prototype screenshot rendering" >&2
+    exit 1
+  fi
+fi
+
+prototype_html="${prototype_dir}/suntrace-mac-prototype.dc.html"
+if [[ ! -f "$prototype_html" ]]; then
+  echo "missing R3 prototype HTML: $prototype_html" >&2
+  exit 1
+fi
+
+scenarios=(
+  "01-home-a|surface=zhulong&flow=shape&step=home&variant=A|1320|820"
+  "01-home-b|surface=zhulong&flow=shape&step=home&variant=B|1320|820"
+  "01-home-c|surface=zhulong&flow=shape&step=home&variant=C|1320|820"
+  "02-day-entry|surface=day&step=home|1320|820"
+  "03-shape-scope|surface=zhulong&flow=shape&step=scope|1320|820"
+  "04-shape-focus|surface=zhulong&flow=shape&step=focus|1320|820"
+  "05-shape-criteria|surface=zhulong&flow=shape&step=criteria|1320|820"
+  "06-shape-brief|surface=zhulong&flow=shape&step=brief|1320|820"
+  "07-shape-run|surface=zhulong&flow=shape&step=run|1320|820"
+  "08-shape-gate|surface=zhulong&flow=shape&step=gate|1320|820"
+  "09-shape-amendment|surface=zhulong&flow=shape&step=amendment|1320|820"
+  "10-shape-run-resumed|surface=zhulong&flow=shape&step=run-resumed|1320|820"
+  "11-shape-draft|surface=zhulong&flow=shape&step=draft|1320|820"
+  "12-shape-apply|surface=zhulong&flow=shape&step=apply|1320|820"
+  "13-shape-receipt|surface=zhulong&flow=shape&step=receipt|1320|820"
+  "14-close-facts|surface=zhulong&flow=close&step=facts|1320|820"
+  "15-close-cause|surface=zhulong&flow=close&step=cause|1320|820"
+  "16-close-review|surface=zhulong&flow=close&step=review|1320|820"
+  "17-close-tomorrow|surface=zhulong&flow=close&step=tomorrow|1320|820"
+  "18-close-receipt|surface=zhulong&flow=close&step=receipt|1320|820"
+  "19-settings-permissions|surface=settings&settings=permissions&step=home|1320|820"
+  "20-settings-memory|surface=settings&settings=memory&step=home|1320|820"
+  "21-settings-provider|surface=settings&settings=provider&step=home|1320|820"
+  "22-settings-transparency|surface=settings&settings=transparency&step=home|1320|820"
+  "23-event-history|surface=zhulong&flow=shape&step=draft&panel=events|1320|820"
+  "24-local-mode|surface=zhulong&flow=shape&step=focus&provider=local|1320|820"
+  "25-provider-failed|surface=zhulong&flow=shape&step=focus&provider=failed|1320|820"
+  "26-scope-expanded|surface=zhulong&flow=shape&step=scope&condition=scope-expanded|1320|820"
+  "27-draft-stale|surface=zhulong&flow=shape&step=draft&condition=stale|1320|820"
+  "28-long-draft|surface=zhulong&flow=shape&step=draft&condition=long|1320|820"
+  "29-long-events|surface=zhulong&flow=shape&step=draft&condition=long&panel=events|1320|820"
+  "30-focus-minimum|surface=zhulong&flow=shape&step=focus|1180|760"
+  "31-gate-minimum|surface=zhulong&flow=shape&step=gate|1180|760"
+  "32-draft-minimum|surface=zhulong&flow=shape&step=draft|1180|760"
+  "33-long-draft-bottom|surface=zhulong&flow=shape&step=draft&condition=long&scroll=bottom|1320|820"
+  "34-long-events-bottom|surface=zhulong&flow=shape&step=draft&condition=long&panel=events&scroll=bottom|1320|820"
+)
+
+rm -rf "$out_dir"
+mkdir -p "$out_dir"
+
+cleanup() {
+  rm -rf "${out_dir}"/.*-chrome-profile 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+for scenario in "${scenarios[@]}"; do
+  IFS="|" read -r name query width height <<<"$scenario"
+  screenshot="$PWD/${out_dir}/${name}.png"
+  user_data_dir="$PWD/${out_dir}/.${name}-chrome-profile"
+  url="file://$PWD/${prototype_html}?${query}"
+
+  rm -rf "$user_data_dir" "$screenshot"
+  python3 - "$screenshot" "$chrome_binary" \
+    --headless=new \
+    --disable-gpu \
+    --disable-background-networking \
+    --disable-component-update \
+    --disable-extensions \
+    --hide-scrollbars \
+    --no-default-browser-check \
+    --no-first-run \
+    --user-data-dir="$user_data_dir" \
+    --virtual-time-budget=1500 \
+    --screenshot="$screenshot" \
+    --window-size="${width},${height}" \
+    "$url" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+screenshot = sys.argv[1]
+command = sys.argv[2:]
+process = subprocess.Popen(
+    command,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    start_new_session=True,
+)
+
+
+def stop_process():
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        return process.communicate(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return process.communicate(timeout=3)
+
+
+deadline = time.monotonic() + 30
+while process.poll() is None:
+    if os.path.exists(screenshot):
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            stop_process()
+        raise SystemExit(0)
+    if time.monotonic() >= deadline:
+        _, stderr = stop_process()
+        raise SystemExit(f"R3 prototype screenshot timed out after 30s\n{stderr}")
+    time.sleep(0.1)
+
+_, stderr = process.communicate()
+if os.path.exists(screenshot):
+    raise SystemExit(0)
+raise SystemExit(stderr or f"R3 prototype screenshot failed with exit code {process.returncode}")
+PY
+
+  actual_width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
+  actual_height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
+  file_size="$(stat -f %z "$screenshot")"
+  if [[ "$actual_width" -ne "$width" || "$actual_height" -ne "$height" ]]; then
+    echo "invalid R3 screenshot size for ${name}: ${actual_width}x${actual_height}" >&2
+    exit 1
+  fi
+  if [[ "$file_size" -lt 20000 ]]; then
+    echo "R3 screenshot appears blank or truncated for ${name}: ${file_size} bytes" >&2
+    exit 1
+  fi
+
+  echo "rendered ${out_dir}/${name}.png (${actual_width}x${actual_height}, ${file_size} bytes)"
+  rm -rf "$user_data_dir"
+done
+
+echo "rendered ${#scenarios[@]} R3 prototype scenarios into ${out_dir}"

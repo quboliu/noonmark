@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+prototype_dir="${SUNTRACE_ZHULONG_STREAM_PROTOTYPE_DIR:-docs/design/prototypes/zhulong-converged-2026-07-10}"
+port="${SUNTRACE_ZHULONG_STREAM_PROTOTYPE_PORT:-4175}"
+prototype_html="${prototype_dir}/stream-prototype.html"
+url="http://127.0.0.1:${port}/stream-prototype.html?variant=C&scenario=focus"
+
+if [[ ! -f "$prototype_html" ]]; then
+  echo "missing Zhulong stream prototype HTML: $prototype_html" >&2
+  exit 1
+fi
+
+python3 -m http.server "$port" --bind 127.0.0.1 --directory "$prototype_dir" &
+server_pid=$!
+
+cleanup() {
+  kill "$server_pid" 2>/dev/null || true
+  wait "$server_pid" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+for _ in {1..40}; do
+  if curl --silent --fail --output /dev/null "$url"; then
+    open "$url"
+    echo "烛龙单一纵向工作流 prototype: $url"
+    echo "按 Ctrl+C 停止本地服务器。"
+    wait "$server_pid"
+    exit 0
+  fi
+  sleep 0.1
+done
+
+echo "stream prototype server did not become ready at http://127.0.0.1:${port}" >&2
+exit 1

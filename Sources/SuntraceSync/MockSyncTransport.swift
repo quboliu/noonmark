@@ -1,10 +1,5 @@
 import Foundation
 
-public protocol SyncRecordTransport: Sendable {
-    func push(_ records: [SyncRecord]) async throws
-    func fetchAll() async throws -> [SyncRecord]
-}
-
 public actor InMemorySyncTransport: SyncRecordTransport {
     private var records: [SyncRecordID: SyncRecord]
 
@@ -14,6 +9,21 @@ public actor InMemorySyncTransport: SyncRecordTransport {
 
     public func push(_ records: [SyncRecord]) async throws {
         for record in records {
+            if let existing = self.records[record.id] {
+                let requiresImmutableCAS = existing.entityType.requiresImmutableRecordPayload
+                    || record.entityType.requiresImmutableRecordPayload
+                if requiresImmutableCAS {
+                    guard record.exactlyMatches(existing) else {
+                        throw SyncRecordTransportError.immutableRecordCollision(
+                            recordID: record.id
+                        )
+                    }
+                    continue
+                }
+                guard record.currentRecordLWWOrder(comparedTo: existing) == .after else {
+                    continue
+                }
+            }
             self.records[record.id] = record
         }
     }

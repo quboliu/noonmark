@@ -31,6 +31,9 @@ public enum AIProposedOperation: Equatable, Sendable {
 
 public struct AISuggestionDraft: Equatable, Sendable {
     public let id: AISuggestionDraftID
+    public let sessionID: UUID
+    public let version: Int
+    public let evidenceID: UUID
     public let kind: AISuggestionKind
     public let createdAt: Date
     public let sourceScope: AIScopeSnapshot
@@ -41,6 +44,9 @@ public struct AISuggestionDraft: Equatable, Sendable {
 
     public init(
         id: AISuggestionDraftID = AISuggestionDraftID(),
+        sessionID: UUID = UUID(),
+        version: Int = 1,
+        evidenceID: UUID = UUID(),
         kind: AISuggestionKind,
         createdAt: Date = Date(),
         sourceScope: AIScopeSnapshot,
@@ -49,7 +55,11 @@ public struct AISuggestionDraft: Equatable, Sendable {
         proposedOperations: [AIProposedOperation],
         confidence: Double?
     ) {
+        precondition(version > 0, "suggestion draft version must be positive")
         self.id = id
+        self.sessionID = sessionID
+        self.version = version
+        self.evidenceID = evidenceID
         self.kind = kind
         self.createdAt = createdAt
         self.sourceScope = sourceScope

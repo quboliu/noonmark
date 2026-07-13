@@ -20,10 +20,12 @@ public struct AISuggestionDraftApplier: Sendable {
 
     public func applyConfirmed(
         _ operation: AIProposedOperation,
+        from draft: AISuggestionDraft,
         to engine: SuntraceEngine,
         today: LocalDate,
         now: Date = Date()
     ) throws -> AISuggestionApplyResult {
+        try require(operation, belongsTo: draft)
         switch operation {
         case let .createPoolTask(title, descriptionText, note):
             _ = try engine.createPoolTask(title: title, descriptionText: descriptionText, note: note, now: now)
@@ -45,12 +47,10 @@ public struct AISuggestionDraftApplier: Sendable {
             try engine.abandonChain(from: traceID, now: now)
             return AISuggestionApplyResult(operation: operation, message: "任务链已废弃")
 
-        case let .assignLabel(chainID, label):
-            guard let tag = engine.activeTaskTags().first(where: { $0.name.caseInsensitiveCompare(label) == .orderedSame }) else {
-                throw AISuggestionApplyError.unsupportedOperation("tag 尚未创建或已停用")
-            }
-            try engine.setTaskTagAssignment(chainID: chainID, slot: .tagI, tagID: tag.id, now: now)
-            return AISuggestionApplyResult(operation: operation, message: "已更新任务 Tag")
+        case .assignLabel:
+            throw AISuggestionApplyError.unsupportedOperation(
+                "classification operations require confirmation at the user decision boundary"
+            )
 
         case let .updateDailyReview(date, summary, unfinishedReason, tomorrowNote):
             engine.updateDailyReview(
@@ -61,6 +61,57 @@ public struct AISuggestionDraftApplier: Sendable {
                 now: now
             )
             return AISuggestionApplyResult(operation: operation, message: "已更新每日复盘")
+        }
+    }
+
+    public func prepareClassification(
+        _ operation: AIProposedOperation,
+        from draft: AISuggestionDraft,
+        interactionID: UUID,
+        on engine: SuntraceEngine,
+        now: Date = Date()
+    ) throws -> ClassificationPlan {
+        try require(operation, belongsTo: draft)
+        guard case let .assignLabel(chainID, label) = operation else {
+            throw AISuggestionApplyError.unsupportedOperation(
+                "operation does not prepare a classification plan"
+            )
+        }
+
+        let state = engine.snapshot().classifications
+        let current = state.currentByChainID[chainID]
+        let category = current?.categoryID.map(TaskCategoryChoice.existing)
+        var labels = (current?.labelIDs ?? [])
+            .sorted { $0.description < $1.description }
+            .map(TaskLabelChoice.existing)
+        labels.append(.new(name: label, colorHex: "#0E9488"))
+        return try engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: category,
+                    labels: labels
+                )
+            ),
+            source: .zhulongSuggestion(
+                sessionID: draft.sessionID,
+                draftID: draft.id.rawValue,
+                draftVersion: draft.version,
+                evidenceID: draft.evidenceID
+            ),
+            interactionID: interactionID,
+            now: now
+        )
+    }
+
+    private func require(
+        _ operation: AIProposedOperation,
+        belongsTo draft: AISuggestionDraft
+    ) throws {
+        guard draft.proposedOperations.contains(operation) else {
+            throw AISuggestionApplyError.unsupportedOperation(
+                "operation does not belong to the confirmed suggestion draft"
+            )
         }
     }
 }

@@ -1,0 +1,849 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+prototype_html="${SUNTRACE_ZHULONG_R3_PROTOTYPE_HTML:-${repo_root}/docs/design/prototypes/zhulong-converged-2026-07-10/suntrace-mac-prototype.dc.html}"
+
+chrome_binary="${SUNTRACE_CHROME_BINARY:-}"
+if [[ -z "$chrome_binary" ]]; then
+  if command -v google-chrome >/dev/null 2>&1; then
+    chrome_binary="$(command -v google-chrome)"
+  elif command -v chromium >/dev/null 2>&1; then
+    chrome_binary="$(command -v chromium)"
+  elif [[ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
+    chrome_binary="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  else
+    printf '%s\n' '{"status":"FAIL","error":"missing Chrome/Chromium for Zhulong R3 CDP acceptance"}' >&2
+    exit 1
+  fi
+fi
+
+if [[ ! -f "$prototype_html" ]]; then
+  printf '{"status":"FAIL","error":"missing R3 prototype HTML","path":"%s"}\n' "$prototype_html" >&2
+  exit 1
+fi
+
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/suntrace-zhulong-r3-cdp.XXXXXX")"
+profile_dir="${tmp_dir}/chrome-profile"
+chrome_log="${tmp_dir}/chrome.log"
+chrome_pid=""
+
+cleanup() {
+  if [[ -n "$chrome_pid" ]] && kill -0 "$chrome_pid" 2>/dev/null; then
+    kill "$chrome_pid" 2>/dev/null || true
+    wait "$chrome_pid" 2>/dev/null || true
+  fi
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT INT TERM
+
+mkdir -p "$profile_dir"
+"$chrome_binary" \
+  --headless=new \
+  --disable-background-networking \
+  --disable-component-update \
+  --disable-default-apps \
+  --disable-extensions \
+  --disable-gpu \
+  --disable-sync \
+  --hide-scrollbars \
+  --no-default-browser-check \
+  --no-first-run \
+  --remote-allow-origins='*' \
+  --remote-debugging-port=0 \
+  --user-data-dir="$profile_dir" \
+  --window-size=1180,760 \
+  about:blank >"$chrome_log" 2>&1 &
+chrome_pid=$!
+
+devtools_file="${profile_dir}/DevToolsActivePort"
+for _ in {1..200}; do
+  if [[ -s "$devtools_file" ]]; then
+    break
+  fi
+  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+    printf '%s\n' '{"status":"FAIL","error":"Chrome exited before CDP became ready"}' >&2
+    sed -n '1,120p' "$chrome_log" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+
+if [[ ! -s "$devtools_file" ]]; then
+  printf '%s\n' '{"status":"FAIL","error":"Chrome CDP readiness timed out"}' >&2
+  sed -n '1,120p' "$chrome_log" >&2
+  exit 1
+fi
+
+debug_port="$(sed -n '1p' "$devtools_file")"
+
+set +e
+python3 - "$debug_port" "$prototype_html" <<'PY'
+import base64
+import hashlib
+import json
+import os
+import re
+import socket
+import struct
+import sys
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+
+class AcceptanceFailure(RuntimeError):
+    pass
+
+
+class CDPWebSocket:
+    def __init__(self, url):
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "ws":
+            raise AcceptanceFailure(f"unsupported CDP WebSocket URL: {url}")
+        self.socket = socket.create_connection((parsed.hostname, parsed.port), timeout=10)
+        self.socket.settimeout(10)
+        self.buffer = b""
+        self.next_id = 0
+        self.runtime_errors = []
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        path = parsed.path or "/"
+        if parsed.query:
+            path += f"?{parsed.query}"
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {parsed.hostname}:{parsed.port}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "\r\n"
+        ).encode("ascii")
+        self.socket.sendall(request)
+        response = self._read_http_response()
+        status, headers = self._parse_http_response(response)
+        if status != 101:
+            raise AcceptanceFailure(f"CDP WebSocket handshake failed with HTTP {status}")
+        expected = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+        ).decode("ascii")
+        if headers.get("sec-websocket-accept") != expected:
+            raise AcceptanceFailure("CDP WebSocket handshake returned an invalid accept key")
+
+    def _read_http_response(self):
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = self.socket.recv(4096)
+            if not chunk:
+                raise AcceptanceFailure("CDP WebSocket closed during handshake")
+            data += chunk
+            if len(data) > 65536:
+                raise AcceptanceFailure("CDP WebSocket handshake exceeded 64 KiB")
+        head, self.buffer = data.split(b"\r\n\r\n", 1)
+        return head.decode("iso-8859-1")
+
+    @staticmethod
+    def _parse_http_response(response):
+        lines = response.split("\r\n")
+        parts = lines[0].split(" ", 2)
+        if len(parts) < 2 or not parts[1].isdigit():
+            raise AcceptanceFailure("CDP WebSocket returned a malformed HTTP status")
+        headers = {}
+        for line in lines[1:]:
+            if ":" in line:
+                name, value = line.split(":", 1)
+                headers[name.strip().lower()] = value.strip()
+        return int(parts[1]), headers
+
+    def _read_exact(self, size):
+        while len(self.buffer) < size:
+            chunk = self.socket.recv(max(4096, size - len(self.buffer)))
+            if not chunk:
+                raise AcceptanceFailure("CDP WebSocket closed unexpectedly")
+            self.buffer += chunk
+        value, self.buffer = self.buffer[:size], self.buffer[size:]
+        return value
+
+    def _send_frame(self, payload, opcode=0x1):
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        mask = os.urandom(4)
+        length = len(payload)
+        if length < 126:
+            header = bytes((0x80 | opcode, 0x80 | length))
+        elif length < 65536:
+            header = bytes((0x80 | opcode, 0x80 | 126)) + struct.pack("!H", length)
+        else:
+            header = bytes((0x80 | opcode, 0x80 | 127)) + struct.pack("!Q", length)
+        masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        self.socket.sendall(header + mask + masked)
+
+    def _read_frame(self):
+        first, second = self._read_exact(2)
+        final = bool(first & 0x80)
+        opcode = first & 0x0F
+        masked = bool(second & 0x80)
+        length = second & 0x7F
+        if length == 126:
+            length = struct.unpack("!H", self._read_exact(2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", self._read_exact(8))[0]
+        mask = self._read_exact(4) if masked else None
+        payload = self._read_exact(length)
+        if mask:
+            payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        return final, opcode, payload
+
+    def _read_message(self):
+        fragments = []
+        message_opcode = None
+        while True:
+            final, opcode, payload = self._read_frame()
+            if opcode == 0x8:
+                raise AcceptanceFailure("CDP WebSocket sent a close frame")
+            if opcode == 0x9:
+                self._send_frame(payload, opcode=0xA)
+                continue
+            if opcode == 0xA:
+                continue
+            if opcode in (0x1, 0x2):
+                message_opcode = opcode
+                fragments = [payload]
+            elif opcode == 0x0 and message_opcode is not None:
+                fragments.append(payload)
+            else:
+                raise AcceptanceFailure(f"unexpected CDP WebSocket opcode: {opcode}")
+            if final:
+                data = b"".join(fragments)
+                if message_opcode != 0x1:
+                    raise AcceptanceFailure("CDP returned a non-text message")
+                return data.decode("utf-8")
+
+    def command(self, method, params=None):
+        self.next_id += 1
+        command_id = self.next_id
+        self._send_frame(json.dumps({"id": command_id, "method": method, "params": params or {}}))
+        while True:
+            message = json.loads(self._read_message())
+            if message.get("method") == "Runtime.exceptionThrown":
+                details = message.get("params", {}).get("exceptionDetails", {})
+                self.runtime_errors.append(details.get("text", "Runtime.exceptionThrown"))
+            if message.get("id") != command_id:
+                continue
+            if "error" in message:
+                error = message["error"]
+                raise AcceptanceFailure(f"CDP {method} failed: {error.get('message', error)}")
+            return message.get("result", {})
+
+    def close(self):
+        try:
+            self._send_frame(b"", opcode=0x8)
+        except OSError:
+            pass
+        self.socket.close()
+
+
+class ZhulongR3Acceptance:
+    def __init__(self, cdp, prototype_path):
+        self.cdp = cdp
+        self.base_url = Path(prototype_path).resolve().as_uri()
+        self.checks = []
+        self.started_at = time.monotonic()
+        self.geometry = None
+
+    def evaluate(self, expression):
+        response = self.cdp.command(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+                "userGesture": True,
+            },
+        )
+        if "exceptionDetails" in response:
+            details = response["exceptionDetails"]
+            raise AcceptanceFailure(f"browser evaluation failed: {details.get('text', 'unknown exception')}")
+        result = response.get("result", {})
+        if result.get("subtype") == "error":
+            raise AcceptanceFailure(f"browser evaluation returned an error: {result.get('description', result)}")
+        return result.get("value")
+
+    def wait_for(self, expression, description, timeout=8):
+        deadline = time.monotonic() + timeout
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                if self.evaluate(expression):
+                    return
+            except AcceptanceFailure as error:
+                last_error = error
+            time.sleep(0.05)
+        suffix = f": {last_error}" if last_error else ""
+        raise AcceptanceFailure(f"timed out waiting for {description}{suffix}")
+
+    def navigate(self, query):
+        url = f"{self.base_url}?{query}"
+        response = self.cdp.command("Page.navigate", {"url": url})
+        if response.get("errorText"):
+            raise AcceptanceFailure(f"navigation failed: {response['errorText']}")
+        self.wait_for(
+            "document.readyState === 'complete' && Boolean(document.querySelector('#app .mac-window'))",
+            f"R3 page {query}",
+        )
+
+    def click(self, selector):
+        result = self.evaluate(
+            "(() => {"
+            f"const element = document.querySelector({json.dumps(selector)});"
+            "if (!element) return {found:false};"
+            "if (element.disabled) return {found:true,disabled:true};"
+            "element.click();"
+            "return {found:true,disabled:false};"
+            "})()"
+        )
+        if not result or not result.get("found"):
+            raise AcceptanceFailure(f"required browser control not found: {selector}")
+        if result.get("disabled"):
+            raise AcceptanceFailure(f"required browser control is disabled: {selector}")
+
+    def input(self, selector, value):
+        result = self.evaluate(
+            "(() => {"
+            f"const element = document.querySelector({json.dumps(selector)});"
+            "if (!element) return false;"
+            f"element.value = {json.dumps(value)};"
+            "element.dispatchEvent(new Event('input', {bubbles:true}));"
+            "return true;"
+            "})()"
+        )
+        if not result:
+            raise AcceptanceFailure(f"required browser input not found: {selector}")
+
+    def step(self):
+        return self.evaluate("new URLSearchParams(location.search).get('step')")
+
+    def text(self, selector="body"):
+        return self.evaluate(
+            f"document.querySelector({json.dumps(selector)})?.innerText || ''"
+        )
+
+    def count(self, selector):
+        return self.evaluate(f"document.querySelectorAll({json.dumps(selector)}).length")
+
+    def check(self, name, condition, detail=""):
+        if not condition:
+            message = f"acceptance check failed: {name}"
+            if detail:
+                message += f" ({detail})"
+            raise AcceptanceFailure(message)
+        self.checks.append(name)
+
+    def assert_step(self, expected, name):
+        actual = self.step()
+        self.check(name, actual == expected, f"expected step={expected}, got {actual}")
+
+    def run(self):
+        self.cdp.command("Runtime.enable")
+        self.cdp.command("Page.enable")
+        self.cdp.command(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": 1180,
+                "height": 760,
+                "deviceScaleFactor": 1,
+                "mobile": False,
+            },
+        )
+
+        self.navigate("surface=zhulong&flow=shape&step=focus")
+        self.click('[data-action="confirm-r3-field"][data-kind="path"]')
+        self.check(
+            "focus-empty-fail-closed",
+            self.step() == "focus" and "不会用空回答继续" in self.text(),
+        )
+
+        self.click('[data-action="choose-r3"][data-kind="path"][data-value="compare"]')
+        self.click('[data-action="confirm-r3-field"][data-kind="path"]')
+        comparison = self.text(".r3-comparison")
+        self.check(
+            "compare-keeps-blocking-gap-open",
+            self.step() == "focus"
+            and "每日收尾" in comparison
+            and "任务成形" in comparison
+            and "用户取舍仍是阻塞缺口" in self.text(),
+        )
+
+        self.click('[data-action="choose-r3"][data-kind="path"][data-value="shape"]')
+        self.click('[data-action="confirm-r3-field"][data-kind="path"]')
+        self.assert_step("criteria", "shape-choice-advances-to-criteria")
+
+        self.click('[data-action="confirm-r3-field"][data-kind="criteria"]')
+        self.check(
+            "criteria-empty-fail-closed",
+            self.step() == "criteria" and "不会用空回答继续" in self.text(),
+        )
+        self.click('[data-action="choose-r3"][data-kind="criteria"][data-value="both"]')
+        self.click('[data-action="confirm-r3-field"][data-kind="criteria"]')
+        brief = self.text(".r3-brief")
+        self.check(
+            "shape-and-both-propagate-into-brief",
+            self.step() == "brief"
+            and "先完整交付任务成形" in brief
+            and "端到端可用，并且所有关键决定与写入都可追溯" in brief,
+            brief,
+        )
+
+        self.click('button[data-step="run"]')
+        run_text = self.text(".r3-run")
+        self.check(
+            "brief-delegation-enters-bounded-run",
+            self.step() == "run"
+            and "有界规划运行" in run_text
+            and "Todo 写入" in run_text
+            and "未授权" in run_text,
+        )
+        self.click('button[data-step="gate"]')
+        self.assert_step("gate", "run-stops-at-decision-gate")
+
+        self.click('[data-action="confirm-r3-gate"]')
+        self.check(
+            "gate-empty-fail-closed",
+            self.step() == "gate" and "不会自行继续" in self.text(),
+        )
+        self.click('[data-action="choose-r3"][data-kind="gate"][data-value="unresolved"]')
+        self.click('[data-action="confirm-r3-gate"]')
+        self.check(
+            "gate-unresolved-without-evidence-stays-paused",
+            self.step() == "gate" and "规划运行继续暂停" in self.text(),
+        )
+        self.click('[data-action="choose-r3"][data-kind="gate"][data-value="range"]')
+        self.click('[data-action="confirm-r3-gate"]')
+        self.check(
+            "gate-range-without-user-evidence-fail-closed",
+            self.step() == "gate" and "不会补造这个依据" in self.text(),
+        )
+        self.click('[data-action="choose-r3"][data-kind="gate"][data-value="investigate"]')
+        self.click('[data-action="confirm-r3-gate"]')
+        amendment = self.text(".r3-brief")
+        self.check(
+            "investigate-creates-amendment-and-invalidates-old-delegation",
+            self.step() == "amendment"
+            and "旧委托已经失效" in amendment
+            and "重新确认" in amendment,
+        )
+
+        self.click('button[data-step="run-resumed"]')
+        resumed = self.text(".r3-run")
+        self.check(
+            "amendment-redelegation-resumes-run",
+            self.step() == "run-resumed"
+            and "新委托绑定规划简报 v0.7" in resumed
+            and "不生成具体日期、点数或概率" in resumed,
+        )
+        self.click('button[data-step="draft"]')
+        self.assert_step("draft", "run-resumed-produces-reviewable-draft")
+
+        ordering = self.evaluate(
+            "(() => {"
+            "const plan = document.querySelector('.r3-stage-map');"
+            "const diff = document.querySelector('.r3-diff-table');"
+            "return Boolean(plan && diff && (plan.compareDocumentPosition(diff) & Node.DOCUMENT_POSITION_FOLLOWING));"
+            "})()"
+        )
+        draft = self.text(".r3-draft")
+        concrete_dates = re.findall(
+            r"(?:"
+            r"20\d{2}[-/.年]\s*\d{1,2}(?:[-/.月]\s*\d{1,2}日?)?"
+            r"|\d{1,2}\s*月\s*\d{1,2}\s*日"
+            r"|(?<![\d.])(?:0?[1-9]|1[0-2])[-/](?:0?[1-9]|[12]\d|3[01])(?![\d.])"
+            r"|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+            r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+            r"Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+20\d{2})?"
+            r")",
+            draft,
+            re.I,
+        )
+        point_values = re.findall(
+            r"(?:"
+            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?\s*(?:点|story\s*points?|pts?)\b"
+            r"|[一二两三四五六七八九十百]+(?:个)?点(?:数)?"
+            r")",
+            draft,
+            re.I,
+        )
+        percentages = re.findall(
+            r"(?:\d+(?:\.\d+)?\s*[%％]|百分之\s*(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百千]+))",
+            draft,
+        )
+        self.check(
+            "structured-plan-precedes-todo-diff",
+            ordering
+            and "依赖与滚动触发" in draft
+            and "从近期 slice 派生的 Todo 变更 diff" in draft,
+        )
+        self.check(
+            "draft-has-no-fabricated-date-points-or-percentage",
+            not concrete_dates
+            and not point_values
+            and not percentages
+            and "证据不足" in draft,
+            f"dates={concrete_dates}, points={point_values}, percentages={percentages}",
+        )
+
+        self.click('button[data-step="apply"]')
+        apply_text = self.text(".r3-apply")
+        self.check(
+            "todo-apply-requires-independent-one-shot-authorization",
+            self.step() == "apply"
+            and "与规划委托分离" in apply_text
+            and "仅本次点击" in apply_text
+            and "全部成功，或 0 项写入" in apply_text,
+        )
+        self.click('button[data-step="receipt"]')
+        receipt = self.text(".r3-receipt")
+        self.check(
+            "receipt-ends-write-authority-without-side-effects",
+            self.step() == "receipt"
+            and "没有生成承诺快照" in receipt
+            and "没有确认长期记忆" in receipt
+            and "没有保留未来写入授权" in receipt,
+        )
+
+        self.click('.page-header [data-panel="events"]')
+        rail_text = self.text(".detail-rail")
+        self.check(
+            "event-history-opens-in-native-detail-rail",
+            self.count(".detail-rail") == 1
+            and "烛龙事件历史" in rail_text
+            and self.count(".detail-rail-scroll") == 1,
+        )
+
+        self.navigate("surface=zhulong&flow=shape&step=focus&provider=local")
+        local_text = self.text()
+        self.check(
+            "local-provider-mode-blocks-new-generation",
+            "当前为烛龙本地模式" in local_text
+            and "新的追问与规划生成等待 Provider" in local_text
+            and self.count('[data-action="confirm-r3-field"]') == 0,
+        )
+        self.navigate("surface=zhulong&flow=shape&step=focus&provider=failed")
+        failed_text = self.text()
+        self.check(
+            "failed-provider-mode-does-not-silently-switch",
+            "Provider 无响应" in failed_text
+            and "系统没有静默切换 Provider" in failed_text
+            and self.count('[data-action="confirm-r3-field"]') == 0,
+        )
+
+        self.navigate("surface=zhulong&flow=shape&step=focus")
+        self.geometry = self.evaluate(
+            "(() => {"
+            "const sidebar = document.querySelector('.sidebar').getBoundingClientRect();"
+            "const rail = document.querySelector('.detail-rail').getBoundingClientRect();"
+            "const main = document.querySelector('.app-main');"
+            "const session = document.querySelector('.session-scroll');"
+            "const railScroll = document.querySelector('.detail-rail-scroll');"
+            "return {"
+            "innerWidth: window.innerWidth,"
+            "innerHeight: window.innerHeight,"
+            "documentScrollWidth: document.documentElement.scrollWidth,"
+            "bodyScrollWidth: document.body.scrollWidth,"
+            "mainClientWidth: main.clientWidth,"
+            "mainScrollWidth: main.scrollWidth,"
+            "sessionClientWidth: session.clientWidth,"
+            "sessionScrollWidth: session.scrollWidth,"
+            "railScrollClientWidth: railScroll.clientWidth,"
+            "railScrollWidth: railScroll.scrollWidth,"
+            "sidebarWidth: sidebar.width,"
+            "railWidth: rail.width"
+            "};"
+            "})()"
+        )
+        self.navigate("surface=zhulong&flow=shape&step=home&variant=A")
+        self.check(
+            "home-a-is-single-command-surface",
+            self.count('[data-home-variant="A"]') == 1
+            and self.count("[data-home-intent]") == 1
+            and self.count(".home-decision-row") == 2
+            and "Provider" not in self.text(".home-prototype"),
+        )
+        example = "规划一个还很模糊的大任务"
+        self.click(f'[data-action="set-home-intent"][data-value="{example}"]')
+        self.wait_for(
+            "document.activeElement === document.querySelector('[data-home-intent]')",
+            "home example to focus the intent composer",
+        )
+        intent_state = self.evaluate(
+            "(() => {"
+            "const input = document.querySelector('[data-home-intent]');"
+            "return {value: input.value, focused: document.activeElement === input};"
+            "})()"
+        )
+        self.check(
+            "home-example-populates-and-focuses-composer",
+            intent_state["value"] == example and intent_state["focused"],
+            json.dumps(intent_state, ensure_ascii=False, sort_keys=True),
+        )
+        self.evaluate(
+            "document.querySelector('[data-home-intent]').dispatchEvent("
+            "new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))"
+        )
+        self.check(
+            "home-arrow-key-does-not-switch-while-composer-focused",
+            self.count('[data-home-variant="A"]') == 1,
+        )
+        self.evaluate("document.querySelector('[data-home-intent]').blur(); document.body.focus()")
+        self.evaluate(
+            "document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))"
+        )
+        self.check(
+            "home-arrow-key-switches-to-next-variant",
+            self.count('[data-home-variant="B"]') == 1
+            and self.evaluate("new URLSearchParams(location.search).get('variant')") == "B",
+        )
+        self.evaluate(
+            "document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))"
+        )
+        self.check(
+            "home-c-separates-user-decisions-into-rail",
+            self.count('[data-home-variant="C"]') == 1
+            and self.count(".home-decision-rail") == 1
+            and self.count(".home-decision-rail .home-decision-row") == 2,
+        )
+        variant_geometry = self.evaluate(
+            "(() => {"
+            "const page = document.querySelector('.page-scroll');"
+            "const split = document.querySelector('.home-split');"
+            "return {"
+            "pageClientWidth: page.clientWidth,"
+            "pageScrollWidth: page.scrollWidth,"
+            "splitClientWidth: split.clientWidth,"
+            "splitScrollWidth: split.scrollWidth,"
+            "pageOverflowY: getComputedStyle(page).overflowY"
+            "};"
+            "})()"
+        )
+        self.check(
+            "home-variants-preserve-continuous-scroll-container",
+            variant_geometry["pageScrollWidth"] <= variant_geometry["pageClientWidth"]
+            and variant_geometry["splitScrollWidth"] <= variant_geometry["splitClientWidth"]
+            and variant_geometry["pageOverflowY"] == "auto",
+            json.dumps(variant_geometry, ensure_ascii=False, sort_keys=True),
+        )
+        long_home = self.evaluate(
+            "(() => {"
+            "const page = document.querySelector('.page-scroll');"
+            "const content = page.querySelector('.home-prototype');"
+            "content.style.minHeight = `${page.clientHeight + 320}px`;"
+            "page.scrollTop = page.scrollHeight;"
+            "return {"
+            "hasOverflow: page.scrollHeight > page.clientHeight,"
+            "atBottom: Math.abs(page.scrollHeight - page.clientHeight - page.scrollTop) <= 2"
+            "};"
+            "})()"
+        )
+        self.check(
+            "home-long-content-bottom-remains-reachable",
+            long_home["hasOverflow"] and long_home["atBottom"],
+            json.dumps(long_home, ensure_ascii=False, sort_keys=True),
+        )
+        self.click('.prototype-switcher [aria-label="下一个方案"]')
+        self.check(
+            "home-switcher-wraps-from-c-to-a",
+            self.count('[data-home-variant="A"]') == 1
+            and self.evaluate("new URLSearchParams(location.search).get('variant')") == "A",
+        )
+        self.geometry.update(
+            self.evaluate(
+                "(() => {"
+                "const page = document.querySelector('.page-scroll');"
+                "return {"
+                "pageClientWidth: page.clientWidth,"
+                "pageScrollWidth: page.scrollWidth"
+                "};"
+                "})()"
+            )
+        )
+        self.check(
+            "minimum-window-has-no-horizontal-overflow-and-keeps-native-geometry",
+            self.geometry["innerWidth"] == 1180
+            and self.geometry["innerHeight"] == 760
+            and self.geometry["documentScrollWidth"] <= 1180
+            and self.geometry["bodyScrollWidth"] <= 1180
+            and self.geometry["mainScrollWidth"] <= self.geometry["mainClientWidth"]
+            and self.geometry["sessionScrollWidth"] <= self.geometry["sessionClientWidth"]
+            and self.geometry["railScrollWidth"] <= self.geometry["railScrollClientWidth"]
+            and self.geometry["pageScrollWidth"] <= self.geometry["pageClientWidth"]
+            and abs(self.geometry["sidebarWidth"] - 240) < 0.1
+            and abs(self.geometry["railWidth"] - 300) < 0.1,
+            json.dumps(self.geometry, ensure_ascii=False, sort_keys=True),
+        )
+
+        self.navigate("surface=zhulong&flow=shape&step=draft&condition=long&panel=events")
+        bottom = self.evaluate(
+            "(() => {"
+            "const scroll = document.querySelector('.detail-rail-scroll');"
+            "scroll.scrollTop = scroll.scrollHeight;"
+            "const clear = document.querySelector('.rail-clear').getBoundingClientRect();"
+            "const viewport = scroll.getBoundingClientRect();"
+            "return {"
+            "atBottom: Math.abs(scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop) <= 2,"
+            "clearVisible: clear.top < viewport.bottom && clear.bottom <= viewport.bottom + 2,"
+            "eventCount: document.querySelectorAll('.native-event').length"
+            "};"
+            "})()"
+        )
+        self.check(
+            "long-event-history-bottom-remains-reachable",
+            bottom["atBottom"] and bottom["clearVisible"] and bottom["eventCount"] >= 19,
+            json.dumps(bottom, ensure_ascii=False, sort_keys=True),
+        )
+
+        correction_text = "更正：第一条路径必须先完整验证任务成形。"
+        self.navigate("surface=zhulong&flow=shape&step=draft")
+        self.click('.page-header [data-panel="session"]')
+        self.click('.detail-rail [data-action="toggle-correction"]')
+        self.click('[data-action="confirm-correction"]')
+        self.check(
+            "empty-session-correction-fail-closed",
+            self.step() == "draft"
+            and self.count(".r3-correction-panel") == 1
+            and "空更正不会进入历史" in self.text(),
+        )
+        self.input('[data-correction-input="true"]', correction_text)
+        self.click('[data-action="confirm-correction"]')
+        self.check(
+            "draft-correction-invalidates-draft-and-returns-to-focus",
+            self.step() == "focus"
+            and correction_text in self.text(".r3-correction-receipt")
+            and "当前委托或草稿已停用" in self.text()
+            and self.count(".r3-draft") == 0
+            and self.count('button[data-step="apply"]') == 0,
+        )
+        reopened = self.evaluate(
+            "(() => new Promise((resolve) => {"
+            "let timer;"
+            "let settled = false;"
+            "const finish = (popstateReceived) => {"
+            "if (settled) return;"
+            "settled = true;"
+            "clearTimeout(timer);"
+            "requestAnimationFrame(() => {"
+            "const apply = document.querySelector('button[data-step=\"apply\"]');"
+            "resolve({"
+            "popstateReceived,"
+            "step: new URLSearchParams(location.search).get('step'),"
+            "draftVisible: Boolean(document.querySelector('.r3-draft')) ,"
+            "applyAvailable: Boolean(apply && !apply.disabled),"
+            "text: document.body.innerText"
+            "});"
+            "});"
+            "};"
+            "window.addEventListener('popstate', () => finish(true), {once:true});"
+            "timer = setTimeout(() => finish(false), 2000);"
+            "history.back();"
+            "}))()"
+        )
+        self.check(
+            "reopened-invalidated-draft-cannot-be-applied",
+            reopened["popstateReceived"]
+            and reopened["step"] == "draft"
+            and reopened["draftVisible"]
+            and not reopened["applyAvailable"]
+            and (
+                "停用" in reopened["text"]
+                or "失效" in reopened["text"]
+                or "过期" in reopened["text"]
+            ),
+            json.dumps(reopened, ensure_ascii=False, sort_keys=True),
+        )
+        self.click('.r3-correction-receipt [data-panel="events"]')
+        corrected_events = self.text(".detail-rail")
+        self.check(
+            "submitted-correction-is-appended-to-event-history",
+            "用户追加会话更正" in corrected_events
+            and correction_text in corrected_events
+            and "系统与用户都不能逐条改写" in corrected_events,
+        )
+
+        self.evaluate("true")
+        self.check(
+            "browser-runtime-has-no-uncaught-exceptions",
+            not self.cdp.runtime_errors,
+            "; ".join(self.cdp.runtime_errors),
+        )
+
+        version = self.cdp.command("Browser.getVersion")
+        return {
+            "status": "PASS",
+            "suite": "zhulong-r3-prototype-only-cdp",
+            "scope": "throwaway prototype only; not real .app acceptance",
+            "checks": len(self.checks),
+            "passed": self.checks,
+            "browser": version.get("product", "unknown"),
+            "viewport": self.geometry,
+            "duration_seconds": round(time.monotonic() - self.started_at, 3),
+        }
+
+
+def page_websocket_url(port):
+    deadline = time.monotonic() + 8
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=1) as response:
+                targets = json.load(response)
+            for target in targets:
+                if target.get("type") == "page" and target.get("webSocketDebuggerUrl"):
+                    return target["webSocketDebuggerUrl"]
+        except (OSError, ValueError) as error:
+            last_error = error
+        time.sleep(0.05)
+    suffix = f": {last_error}" if last_error else ""
+    raise AcceptanceFailure(f"CDP page target did not become ready{suffix}")
+
+
+def main():
+    if len(sys.argv) != 3:
+        raise AcceptanceFailure("expected CDP port and prototype HTML path")
+    port = int(sys.argv[1])
+    prototype_path = sys.argv[2]
+    websocket = CDPWebSocket(page_websocket_url(port))
+    try:
+        result = ZhulongR3Acceptance(websocket, prototype_path).run()
+    finally:
+        websocket.close()
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+
+
+try:
+    main()
+except Exception as error:
+    print(
+        json.dumps(
+            {
+                "status": "FAIL",
+                "suite": "zhulong-r3-prototype-only-cdp",
+                "scope": "throwaway prototype only; not real .app acceptance",
+                "error": str(error),
+                "error_type": type(error).__name__,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+test_status=$?
+set -e
+
+if [[ "$test_status" -ne 0 ]]; then
+  if [[ -s "$chrome_log" ]]; then
+    printf '%s\n' '{"status":"DIAGNOSTIC","source":"Chrome stderr (tail before isolated cleanup)"}' >&2
+    tail -n 120 "$chrome_log" >&2
+  fi
+  exit "$test_status"
+fi

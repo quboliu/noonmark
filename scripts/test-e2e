@@ -25,6 +25,9 @@ scenarios=(
   "day-manual-detail|day|--select manual"
   "day-review-saved|day|--e2e-update-review --e2e-review-summary E2E自动保存反馈"
   "pool|pool|"
+  "pool-classification-overflow|pool|--e2e-open-first-classification-overflow"
+  "pool-classification-manager|pool|--select first --e2e-open-classification-manager"
+  "pool-classification-manager-labels|pool|--select first --e2e-open-classification-manager --e2e-classification-manager-labels"
   "pool-detail|pool|--select first"
   "future|future|"
   "future-detail|future|--select first"
@@ -34,7 +37,13 @@ scenarios=(
   "completed-detail|completed|--select first"
   "calendar|calendar|"
   "zhulong|zhulong|--e2e-enable-zhulong"
+  "zhulong-stream-a|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-variant A"
+  "zhulong-stream-b|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-variant B"
+  "zhulong-stream-c|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-variant C"
+  "zhulong-authorized|zhulong|--e2e-zhulong-sidecar-key --e2e-generate-zhulong-draft dailyReview --e2e-zhulong-variant C"
+  "zhulong-todo-diff-editor|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-todo-diff --e2e-open-zhulong-todo-diff-editor --e2e-zhulong-variant C"
   "settings|settings|"
+  "settings-groups|settings|--e2e-settings-groups"
 )
 
 requested_scenarios="${SUNTRACE_E2E_SCENARIOS:-}"
@@ -144,12 +153,73 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
             allowedOwners.append(contentsOf: ["晷迹", "Noonmark", "SuntraceMacApp"])
         }
         if allowedOwners.contains(owner) && name == expectedTitle {
-            if let number = window[kCGWindowNumber as String] {
+            let layer = window[kCGWindowLayer as String] as? Int ?? -1
+            let bounds = window[kCGWindowBounds as String] as? [String: Any]
+            let width = bounds?["Width"] as? Double ?? 0
+            let height = bounds?["Height"] as? Double ?? 0
+            if layer == 0, width >= 1180, height >= 760,
+               let number = window[kCGWindowNumber as String]
+            {
                 print(number)
                 exit(0)
             }
         }
     }
+}
+exit(1)
+'
+}
+
+find_auxiliary_window_id() {
+  local window_id="$1"
+  SUNTRACE_E2E_WINDOW_ID="$window_id" swift -e '
+import CoreGraphics
+import Foundation
+
+let expectedID = Int(ProcessInfo.processInfo.environment["SUNTRACE_E2E_WINDOW_ID"] ?? "") ?? -1
+let expectedOwner = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_EXECUTABLE_NAME"] ?? "SuntraceMacAppE2E"
+let expectedDisplayName = ProcessInfo.processInfo.environment["SUNTRACE_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
+
+guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
+      let main = list.first(where: { ($0[kCGWindowNumber as String] as? Int) == expectedID }),
+      let mainBounds = main[kCGWindowBounds as String] as? [String: Any],
+      let mainX = mainBounds["X"] as? Double,
+      let mainY = mainBounds["Y"] as? Double,
+      let mainWidth = mainBounds["Width"] as? Double,
+      let mainHeight = mainBounds["Height"] as? Double
+else {
+    exit(1)
+}
+
+var best: (id: Int, area: Double)?
+for window in list {
+    guard let number = window[kCGWindowNumber as String] as? Int,
+          number != expectedID,
+          let owner = window[kCGWindowOwnerName as String] as? String,
+          owner == expectedOwner || owner == expectedDisplayName,
+          (window[kCGWindowLayer as String] as? Int ?? -1) == 0,
+          let bounds = window[kCGWindowBounds as String] as? [String: Any],
+          let x = bounds["X"] as? Double,
+          let y = bounds["Y"] as? Double,
+          let width = bounds["Width"] as? Double,
+          let height = bounds["Height"] as? Double,
+          width >= 100,
+          height >= 80,
+          width < mainWidth,
+          height < mainHeight,
+          x < mainX + mainWidth,
+          x + width > mainX,
+          y < mainY + mainHeight,
+          y + height > mainY
+    else { continue }
+    let area = width * height
+    if best == nil || area > best!.area {
+        best = (number, area)
+    }
+}
+if let best {
+    print(best.id)
+    exit(0)
 }
 exit(1)
 '
@@ -226,7 +296,27 @@ capture_app_screenshot() {
 
   mkdir -p "$out_dir"
   screenshot="${out_dir}/${screenshot_name}.png"
-  screencapture -x -l "$window_id" "$screenshot"
+  if [[ "$screenshot_name" == "pool-classification-overflow" || "$screenshot_name" == "pool-classification-manager" || "$screenshot_name" == "pool-classification-manager-labels" ]]; then
+    auxiliary_window_id=""
+    for _ in {1..20}; do
+      if auxiliary_window_id="$(find_auxiliary_window_id "$window_id" 2>/dev/null)"; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ -z "$auxiliary_window_id" ]]; then
+      echo "classification overflow popover window not found" >&2
+      dump_visible_windows >&2
+      exit 1
+    fi
+    screencapture -x -l "$auxiliary_window_id" "$screenshot"
+  else
+    warmup_screenshot="${screenshot}.warmup.png"
+    screencapture -x -l "$window_id" "$warmup_screenshot"
+    sleep 0.25
+    screencapture -x -l "$window_id" "$screenshot"
+    rm -f "$warmup_screenshot"
+  fi
   width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
   height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
 
@@ -349,6 +439,199 @@ fi
 
 echo "E2E blank persistence database: $persistence_db (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"
 
+classification_dir="artifacts/e2e-classification"
+classification_db="${classification_dir}/Noonmark.sqlite"
+classification_edit_result="${classification_dir}/edit-result.txt"
+classification_restart_result="${classification_dir}/restart-result.txt"
+classification_title="E2E 分类持久化"
+rm -rf "$classification_dir"
+mkdir -p "$classification_dir"
+
+open -W -n "$app_path" --args \
+  --data-url "$PWD/$classification_db" \
+  --page pool \
+  --e2e-classification-edit \
+  --e2e-classification-title "$classification_title" \
+  --e2e-classification-result-url "$PWD/$classification_edit_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$classification_edit_result" ]]; then
+  echo "classification edit automation failed: missing result" >&2
+  exit 1
+fi
+if [[ "$(<"$classification_edit_result")" != "ok" ]]; then
+  echo "classification edit automation failed: $(<"$classification_edit_result")" >&2
+  exit 1
+fi
+
+capture_app_screenshot \
+  "$classification_dir" \
+  "classification-restart" \
+  pool \
+  --data-url "$PWD/$classification_db" \
+  --e2e-classification-verify \
+  --e2e-classification-title "$classification_title" \
+  --e2e-classification-result-url "$PWD/$classification_restart_result"
+
+if [[ ! -f "$classification_restart_result" ]]; then
+  echo "classification restart automation failed: missing result" >&2
+  terminate_e2e_app
+  exit 1
+fi
+if [[ "$(<"$classification_restart_result")" != "ok" ]]; then
+  echo "classification restart automation failed: $(<"$classification_restart_result")" >&2
+  terminate_e2e_app
+  exit 1
+fi
+terminate_e2e_app
+
+read -r \
+  classification_category_count \
+  classification_label_count \
+  classification_expected_label_count \
+  classification_metadata_count \
+  classification_name_version_count \
+  classification_revision \
+  classification_record_count \
+  classification_plan_digest_count \
+  classification_integrity_digest_count \
+  classification_record_finalization_count \
+  classification_valid_after_count \
+  classification_after_count \
+  classification_commit_count \
+  classification_receipt_count \
+  classification_receipt_digest_count \
+  classification_commit_finalization_count \
+  classification_crosscheck_count < <(
+  sqlite3 -separator " " "$classification_db" "
+    WITH target AS (
+      SELECT task_chains.id AS chain_id
+      FROM task_chains
+      JOIN task_definitions ON task_definitions.chain_id = task_chains.id
+      WHERE task_definitions.title = '$classification_title'
+        AND task_definitions.superseded_at IS NULL
+      LIMIT 1
+    ), target_category AS (
+      SELECT relation.category_id AS item_id
+      FROM task_chain_categories AS relation
+      WHERE relation.chain_id = (SELECT chain_id FROM target)
+    ), target_labels AS (
+      SELECT relation.label_id AS item_id
+      FROM task_chain_label_relations AS relation
+      WHERE relation.chain_id = (SELECT chain_id FROM target)
+    ), target_change AS (
+      SELECT record.record_id
+      FROM classification_change_records AS record
+      JOIN classification_change_record_changes AS record_change
+        ON record_change.record_id = record.record_id
+      WHERE record_change.kind = 'setCurrent'
+        AND record_change.chain_id = (SELECT chain_id FROM target)
+    )
+    SELECT
+      (SELECT count(*)
+       FROM target_category
+       JOIN task_categories ON task_categories.id = target_category.item_id
+       WHERE task_categories.name = '验证'),
+      (SELECT count(*) FROM target_labels),
+      (SELECT count(*)
+       FROM target_labels
+       JOIN task_labels ON task_labels.id = target_labels.item_id
+       WHERE task_labels.name IN ('SQLite', '重启', '白盒')),
+      (SELECT count(*)
+       FROM classification_item_metadata AS metadata
+       WHERE metadata.lifecycle = 'active'
+         AND (
+           (metadata.kind = 'category' AND metadata.item_id IN (SELECT item_id FROM target_category))
+           OR (metadata.kind = 'label' AND metadata.item_id IN (SELECT item_id FROM target_labels))
+         )),
+      (SELECT count(*)
+       FROM classification_name_versions AS version
+       WHERE (version.kind = 'category' AND version.item_id IN (SELECT item_id FROM target_category))
+          OR (version.kind = 'label' AND version.item_id IN (SELECT item_id FROM target_labels))),
+      (SELECT revision FROM classification_state WHERE id = 1),
+      (SELECT count(*) FROM target_change),
+      (SELECT count(*)
+       FROM classification_change_record_plan_digests
+       WHERE record_id = (SELECT record_id FROM target_change)
+         AND length(digest) = 64),
+      (SELECT count(*)
+       FROM classification_change_record_integrity_digests
+       WHERE record_id = (SELECT record_id FROM target_change)
+         AND length(digest) = 64),
+      (SELECT count(*)
+       FROM classification_change_record_finalizations
+       WHERE record_id = (SELECT record_id FROM target_change)
+         AND change_count = 1
+         AND notice_count = 0),
+      (SELECT count(*)
+       FROM classification_change_selection_items AS item
+       WHERE item.record_id = (SELECT record_id FROM target_change)
+         AND item.selection_side = 'after'
+         AND item.resolution = 'new'
+         AND (
+           (item.item_kind = 'category' AND item.name = '验证')
+           OR (item.item_kind = 'label' AND item.name IN ('SQLite', '重启', '白盒'))
+         )),
+      (SELECT count(*)
+       FROM classification_change_selection_items AS item
+       WHERE item.record_id = (SELECT record_id FROM target_change)
+         AND item.selection_side = 'after'),
+      (SELECT count(*) FROM classification_commits),
+      (SELECT count(*) FROM classification_commit_receipt_metadata),
+      (SELECT count(*)
+       FROM classification_commit_receipt_integrity_digests AS digest
+       JOIN classification_change_records AS record
+         ON record.interaction_id = digest.interaction_id
+       WHERE record.record_id = (SELECT record_id FROM target_change)
+         AND length(digest.digest) = 64),
+      (SELECT count(*)
+       FROM classification_commit_finalizations AS finalization
+       JOIN classification_change_records AS record
+         ON record.interaction_id = finalization.interaction_id
+       WHERE record.record_id = (SELECT record_id FROM target_change)
+         AND finalization.notice_count = 0),
+      (SELECT count(*)
+       FROM classification_change_records AS record
+       JOIN classification_change_record_changes AS record_change
+         ON record_change.record_id = record.record_id
+       JOIN classification_commits AS commit_record
+         ON commit_record.interaction_id = record.interaction_id
+        AND commit_record.plan_id = record.plan_id
+        AND commit_record.revision = record.revision
+       JOIN classification_commit_receipt_metadata AS receipt
+         ON receipt.interaction_id = record.interaction_id
+        AND receipt.change_record_id = record.record_id
+        AND receipt.decision_id = record.decision_id
+       WHERE record_change.kind = 'setCurrent'
+         AND record_change.chain_id = (SELECT chain_id FROM target)
+         AND record.source_kind = 'userDirect'
+         AND record.decision_id IS NOT NULL);
+  "
+)
+
+if [[ "$classification_category_count" -ne 1 \
+  || "$classification_label_count" -ne 3 \
+  || "$classification_expected_label_count" -ne 3 \
+  || "$classification_metadata_count" -ne 4 \
+  || "$classification_name_version_count" -ne 4 \
+  || "$classification_revision" -ne 1 \
+  || "$classification_record_count" -ne 1 \
+  || "$classification_plan_digest_count" -ne 1 \
+  || "$classification_integrity_digest_count" -ne 1 \
+  || "$classification_record_finalization_count" -ne 1 \
+  || "$classification_valid_after_count" -ne 4 \
+  || "$classification_after_count" -ne 4 \
+  || "$classification_commit_count" -ne 1 \
+  || "$classification_receipt_count" -ne 1 \
+  || "$classification_receipt_digest_count" -ne 1 \
+  || "$classification_commit_finalization_count" -ne 1 \
+  || "$classification_crosscheck_count" -ne 1 ]]; then
+  echo "classification persistence probe failed: category=$classification_category_count labels=$classification_label_count expected_labels=$classification_expected_label_count metadata=$classification_metadata_count name_versions=$classification_name_version_count revision=$classification_revision records=$classification_record_count plan_digests=$classification_plan_digest_count integrity_digests=$classification_integrity_digest_count record_finalizations=$classification_record_finalization_count valid_after=$classification_valid_after_count after=$classification_after_count commits=$classification_commit_count receipts=$classification_receipt_count receipt_digests=$classification_receipt_digest_count commit_finalizations=$classification_commit_finalization_count crosscheck=$classification_crosscheck_count" >&2
+  exit 1
+fi
+
+echo "E2E classification edit and restart: $classification_db (category=$classification_category_count labels=$classification_label_count revision=$classification_revision records=$classification_record_count crosscheck=$classification_crosscheck_count)"
+
 interaction_dir="artifacts/e2e-interaction"
 interaction_db="${interaction_dir}/Noonmark.sqlite"
 interaction_title="E2E 快速新增任务"
@@ -396,8 +679,9 @@ mkdir -p "$zhulong_dir"
 open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_db" \
   --page zhulong \
+  --e2e-zhulong-sidecar-key \
   --e2e-generate-zhulong-draft dailyReview \
-  --e2e-apply-first-zhulong-operation \
+  --e2e-rich-zhulong-session \
   --e2e-quit-after-automation
 
 if [[ ! -f "$zhulong_db" ]]; then
@@ -405,21 +689,122 @@ if [[ ! -f "$zhulong_db" ]]; then
   exit 1
 fi
 
-read -r zhulong_review_count < <(
-  sqlite3 "$zhulong_db" "
-    SELECT count(*)
-    FROM days
-    WHERE date = '2026-07-05'
-      AND review_summary LIKE '今日共%';
-  "
-)
-
-if [[ "$zhulong_review_count" -ne 1 ]]; then
-  echo "zhulong draft apply failed: review_count=$zhulong_review_count" >&2
+zhulong_sidecar_dir="${zhulong_dir}/ZhulongSidecar"
+zhulong_session_count="$(find "$zhulong_sidecar_dir" -type f -name '*.zhs' | wc -l | tr -d ' ')"
+if [[ "$zhulong_session_count" -ne 1 ]]; then
+  echo "zhulong encrypted session was not persisted: sessions=$zhulong_session_count" >&2
   exit 1
 fi
 
-echo "E2E zhulong draft apply: $zhulong_db (review_count=$zhulong_review_count)"
+if grep -a -q "结束今天并形成下一次可信承诺" "$zhulong_sidecar_dir"/*.zhs; then
+  echo "zhulong session leaked plaintext intent" >&2
+  exit 1
+fi
+
+zhulong_persistence_result="${zhulong_dir}/persistence-result.txt"
+open -W -n "$app_path" --args \
+  --data-url "$PWD/$zhulong_db" \
+  --page zhulong \
+  --e2e-zhulong-sidecar-key \
+  --e2e-verify-zhulong-persistence-result-url "$PWD/$zhulong_persistence_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$zhulong_persistence_result" || "$(cat "$zhulong_persistence_result")" != "ok" ]]; then
+  echo "zhulong encrypted session did not recover after relaunch" >&2
+  exit 1
+fi
+
+printf 'invalid encrypted sidecar' > "$zhulong_sidecar_dir/invalid.zhs"
+zhulong_corruption_result="${zhulong_dir}/corruption-result.txt"
+open -W -n "$app_path" --args \
+  --data-url "$PWD/$zhulong_db" \
+  --page zhulong \
+  --e2e-zhulong-sidecar-key \
+  --e2e-verify-zhulong-persistence-result-url "$PWD/$zhulong_corruption_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$zhulong_corruption_result" || "$(cat "$zhulong_corruption_result")" != "corruption-detected" ]]; then
+  echo "zhulong corrupted sidecar was not reported fail-closed" >&2
+  exit 1
+fi
+
+echo "E2E zhulong encrypted persistence and corruption detection: $zhulong_sidecar_dir (sessions=$zhulong_session_count)"
+
+zhulong_recovery_dir="artifacts/e2e-zhulong-recovery"
+zhulong_recovery_db="${zhulong_recovery_dir}/Noonmark.sqlite"
+zhulong_recovery_result="${zhulong_recovery_dir}/recovery-result.txt"
+rm -rf "$zhulong_recovery_dir"
+mkdir -p "$zhulong_recovery_dir"
+
+open -W -n "$app_path" --args \
+  --data-url "$PWD/$zhulong_recovery_db" \
+  --page zhulong \
+  --e2e-zhulong-sidecar-key \
+  --e2e-generate-zhulong-draft dailyReview \
+  --e2e-rich-zhulong-session \
+  --e2e-interrupt-zhulong-daily-review \
+  --e2e-quit-after-automation
+
+zhulong_recovery_journal="${zhulong_recovery_dir}/ZhulongSidecar/pending-application.zhj"
+if [[ ! -f "$zhulong_recovery_journal" ]]; then
+  echo "zhulong interrupted application journal was not persisted" >&2
+  exit 1
+fi
+
+open -W -n "$app_path" --args \
+  --data-url "$PWD/$zhulong_recovery_db" \
+  --page zhulong \
+  --e2e-zhulong-sidecar-key \
+  --e2e-expect-zhulong-recovery \
+  --e2e-verify-zhulong-persistence-result-url "$PWD/$zhulong_recovery_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$zhulong_recovery_result" || "$(cat "$zhulong_recovery_result")" != "ok" ]]; then
+  echo "zhulong interrupted cross-store application did not recover" >&2
+  exit 1
+fi
+if [[ -f "$zhulong_recovery_journal" ]]; then
+  echo "zhulong recovery journal was not cleared after successful recovery" >&2
+  exit 1
+fi
+zhulong_recovery_review_count="$(sqlite3 "$zhulong_recovery_db" "SELECT count(*) FROM days WHERE review_summary = 'E2E 已确认的每日复盘';")"
+if [[ "$zhulong_recovery_review_count" -ne 1 ]]; then
+  echo "zhulong recovered daily review was not applied exactly once: count=$zhulong_recovery_review_count" >&2
+  exit 1
+fi
+
+echo "E2E zhulong interrupted cross-store recovery: $zhulong_recovery_result (review_count=$zhulong_recovery_review_count)"
+
+zhulong_todo_diff_dir="artifacts/e2e-zhulong-todo-diff"
+zhulong_todo_diff_db="${zhulong_todo_diff_dir}/Noonmark.sqlite"
+zhulong_todo_diff_result="${zhulong_todo_diff_dir}/result.txt"
+rm -rf "$zhulong_todo_diff_dir"
+mkdir -p "$zhulong_todo_diff_dir"
+
+open -W -n "$app_path" --args \
+  --data-url "$PWD/$zhulong_todo_diff_db" \
+  --page zhulong \
+  --e2e-zhulong-sidecar-key \
+  --e2e-prepare-zhulong-todo-diff \
+  --e2e-zhulong-todo-diff-result-url "$PWD/$zhulong_todo_diff_result"
+
+if [[ ! -f "$zhulong_todo_diff_result" || "$(cat "$zhulong_todo_diff_result")" != "ok" ]]; then
+  echo "zhulong Todo diff edit/remove/split probe failed: $(cat "$zhulong_todo_diff_result" 2>/dev/null || echo missing)" >&2
+  exit 1
+fi
+zhulong_todo_diff_task_count="$(sqlite3 "$zhulong_todo_diff_db" "
+  SELECT count(*)
+  FROM task_definitions
+  WHERE superseded_at IS NULL
+    AND title IN ('E2E 编辑后的测量', 'E2E 拆分后的验证');
+")"
+if [[ "$zhulong_todo_diff_task_count" -ne 2 \
+  || -f "${zhulong_todo_diff_dir}/ZhulongSidecar/pending-application.zhj" ]]; then
+  echo "zhulong Todo diff SQLite/journal crosscheck failed: tasks=$zhulong_todo_diff_task_count" >&2
+  exit 1
+fi
+
+echo "E2E zhulong Todo diff edit/remove/split and atomic apply: $zhulong_todo_diff_result (tasks=$zhulong_todo_diff_task_count)"
 
 review_zhulong_dir="artifacts/e2e-review-zhulong-entry"
 review_zhulong_result="${review_zhulong_dir}/review-zhulong-result.txt"
@@ -429,6 +814,7 @@ mkdir -p "$review_zhulong_dir"
 open -W -n "$app_path" --args \
   --ephemeral \
   --page day \
+  --e2e-zhulong-sidecar-key \
   --e2e-review-zhulong-entry \
   --e2e-review-zhulong-result-url "$PWD/$review_zhulong_result" \
   --e2e-quit-after-automation
@@ -573,6 +959,7 @@ mkdir -p "$zhulong_navigation_dir"
 open -W -n "$app_path" --args \
   --ephemeral \
   --page zhulong \
+  --e2e-zhulong-sidecar-key \
   --e2e-zhulong-navigation \
   --e2e-zhulong-navigation-result-url "$PWD/$zhulong_navigation_result" \
   --e2e-quit-after-automation

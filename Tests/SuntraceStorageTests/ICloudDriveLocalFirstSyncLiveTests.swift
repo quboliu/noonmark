@@ -27,12 +27,21 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
 
         let macEngine = SuntraceEngine()
         let chainID = try macEngine.createPoolTask(title: "真实 iCloud 同步测试", now: now)
-        let projectTagID = try macEngine.createTaskTag(name: "项目", colorHex: "#0E9488", now: now)
-        let reviewTagID = try macEngine.createTaskTag(name: "复盘", colorHex: "#7C5CFF", now: now)
-        try macEngine.setTaskTagAssignment(chainID: chainID, slot: .tagI, tagID: projectTagID, now: now)
-        try macEngine.setTaskTagAssignment(chainID: chainID, slot: .tagII, tagID: reviewTagID, now: now)
         let traceID = try macEngine.scheduleFromPool(chainID: chainID, date: today, today: today, now: now)
         try macRepository.save(macEngine.snapshot(), recordingChangesFor: macDevice, changedAt: now)
+        let decisionID = UUID(uuidString: "42000000-0000-0000-0000-000000000002")!
+        try commitClassification(
+            on: macEngine,
+            chainID: chainID,
+            interactionID: UUID(uuidString: "42000000-0000-0000-0000-000000000001")!,
+            decisionID: decisionID,
+            now: now.addingTimeInterval(1)
+        )
+        try macRepository.save(
+            macEngine.snapshot(),
+            recordingChangesFor: macDevice,
+            changedAt: now.addingTimeInterval(1)
+        )
         try phoneRepository.save(SuntraceEngine().snapshot())
 
         let macSync = SQLiteLocalFirstSyncCoordinator(
@@ -52,11 +61,58 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
         let restoredPhone = try phoneRepository.load()
 
         XCTAssertGreaterThan(phoneResult.download.appliedCount, 0)
+        XCTAssertEqual(phoneResult.download.waitingCount, 0)
+        XCTAssertEqual(phoneResult.download.conflictCount, 0)
         XCTAssertEqual(restoredPhone.getDayTodo(date: today).traces.first?.id, traceID)
-        XCTAssertEqual(Set(restoredPhone.preferences.taskTags.map(\.name)), ["项目", "复盘"])
-        XCTAssertEqual(restoredPhone.chains[chainID]?.tagAssignments.map(\.tagID), [projectTagID, reviewTagID])
-        XCTAssertEqual(restoredPhone.chains[chainID]?.tagAssignments.map(\.slot), [.tagI, .tagII])
+        let phoneClassification = restoredPhone.snapshot().classifications
+        let macClassification = macEngine.snapshot().classifications
+        XCTAssertEqual(phoneClassification, macClassification)
+        let current = try XCTUnwrap(
+            phoneClassification.currentByChainID[chainID]
+        )
+        let categoryID = try XCTUnwrap(current.categoryID)
+        XCTAssertEqual(
+            phoneClassification.categories[categoryID]?.name,
+            "项目"
+        )
+        XCTAssertEqual(
+            Set(current.labelIDs.compactMap {
+                phoneClassification.labels[$0]?.name
+            }),
+            ["同步", "复盘"]
+        )
+        XCTAssertEqual(current.category?.decisionID, decisionID)
+        XCTAssertTrue(current.labels.allSatisfy { $0.source == .userDirect })
         XCTAssertNotNil(try SQLiteSyncRepository(databaseURL: phoneURL).metadata(for: "localFirst.sync.lastResult"))
+    }
+
+    private func commitClassification(
+        on engine: SuntraceEngine,
+        chainID: TaskChainID,
+        interactionID: UUID,
+        decisionID: UUID,
+        now: Date
+    ) throws {
+        let plan = try engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: .new(name: "项目", colorHex: "#2A6FDB"),
+                    labels: [
+                        .new(name: "同步", colorHex: "#0E9488"),
+                        .new(name: "复盘", colorHex: "#7C5CFF")
+                    ]
+                )
+            ),
+            source: .userDirect,
+            interactionID: interactionID,
+            now: now
+        )
+        _ = try engine.commitClassification(
+            plan,
+            confirmation: .user(decisionID: decisionID),
+            now: now
+        )
     }
 
     private func makeDatabaseURL(_ name: String) -> URL {

@@ -14,7 +14,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: today, today: today, now: now)
         _ = try engine.addSubtask(traceID: traceID, title: "新增子任务", difficulty: .medium, now: now)
 
-        let entries = SyncSnapshotDiffer().journalEntries(
+        let entries = try SyncSnapshotDiffer().journalEntries(
             from: oldSnapshot,
             to: engine.snapshot(),
             changedAt: later,
@@ -35,7 +35,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
         let snapshot = engine.snapshot()
 
         XCTAssertTrue(
-            SyncSnapshotDiffer().journalEntries(
+            try SyncSnapshotDiffer().journalEntries(
                 from: snapshot,
                 to: snapshot,
                 changedAt: later,
@@ -55,7 +55,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
         try engine.updateSubtaskDifficulty(subtaskID, difficulty: .hard, today: today)
         engine.updateTheme(.warmPaper)
 
-        let entries = SyncSnapshotDiffer().journalEntries(
+        let entries = try SyncSnapshotDiffer().journalEntries(
             from: oldSnapshot,
             to: engine.snapshot(),
             changedAt: later,
@@ -65,4 +65,550 @@ final class SyncSnapshotDifferTests: XCTestCase {
         XCTAssertEqual(entries.map(\.entityType), [.day, .subtask, .appPreferences])
         XCTAssertEqual(entries.map(\.entityID).last, "default")
     }
+
+    func testTraceClassificationSnapshotTravelsAsImmutableEventAndRoundTrips() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "延续时同步轨迹分类快照", now: now)
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let oldSnapshot = engine.snapshot()
+        let tomorrow = LocalDate("2026-07-06")
+        _ = try engine.continueTrace(
+            traceID: sourceTraceID,
+            targetDate: tomorrow,
+            today: today,
+            now: later
+        )
+        let newSnapshot = engine.snapshot()
+
+        let entries = try SyncSnapshotDiffer().journalEntries(
+            from: oldSnapshot,
+            to: newSnapshot,
+            changedAt: later,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        XCTAssertFalse(entries.contains { $0.entityType == .classificationCommit })
+        let sourceEntry = try XCTUnwrap(entries.first {
+            $0.entityType == .dayTrace && $0.entityID == sourceTraceID.description
+        })
+        let sourceRecord = try SyncRecordMaterializer().record(
+            for: sourceEntry,
+            in: newSnapshot
+        )
+        let trace = try SyncRecordMapper().decodeDayTrace(sourceRecord)
+        XCTAssertEqual(trace.status, .continued)
+        let tracePayload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: sourceRecord.payload) as? [String: Any]
+        )
+        let traceFacts = try XCTUnwrap(tracePayload["payload"] as? [String: Any])
+        XCTAssertNil(traceFacts["classificationEvents"])
+        XCTAssertNil(traceFacts["classificationRevision"])
+
+        let eventEntry = try XCTUnwrap(entries.first {
+            $0.entityType == .traceClassificationEvent
+        })
+        let eventPayload = try XCTUnwrap(eventEntry.recordPayload)
+        let eventEnvelope = try TraceClassificationEventEnvelope.decode(eventPayload)
+        XCTAssertEqual(
+            eventEnvelope.event,
+            newSnapshot.classifications.snapshotEventsByTraceID[sourceTraceID]?.last
+        )
+        XCTAssertNil(eventEnvelope.predecessorEventID)
+        XCTAssertEqual(try eventEnvelope.canonicalData(), eventPayload)
+
+        let records = try SyncRecordMaterializer().records(
+            for: entries,
+            in: newSnapshot
+        )
+        let merged = SyncRecordMerger().merge(
+            records: records,
+            into: oldSnapshot,
+            detectedAt: later
+        )
+        XCTAssertTrue(merged.conflicts.isEmpty, "conflicts=\(merged.conflicts)")
+        XCTAssertTrue(
+            merged.waitingRecords.isEmpty,
+            "waiting=\(merged.waitingRecords.map { ($0.record.id, $0.dependencies) })"
+        )
+        XCTAssertEqual(merged.snapshot, newSnapshot)
+        try merged.snapshot.validateIntegrity()
+    }
+
+    func testTraceSnapshotAndInheritedClassificationCommitSyncAtomically() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "变更前任务", now: now)
+        try commitClassification(
+            engine,
+            chainID: chainID,
+            category: .new(name: "工程", colorHex: "#2A6FDB"),
+            labels: [.new(name: "继承", colorHex: "#0E9488")],
+            ordinal: 7
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let oldSnapshot = engine.snapshot()
+        _ = try engine.changeTrace(
+            traceID: traceID,
+            newTitle: "变更后任务",
+            today: today,
+            now: later
+        )
+        let newSnapshot = engine.snapshot()
+
+        let entries = try SyncSnapshotDiffer().journalEntries(
+            from: oldSnapshot,
+            to: newSnapshot,
+            changedAt: later,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        let commitEntry = try XCTUnwrap(entries.first {
+            $0.entityType == .classificationCommit
+        })
+        let envelope = try ClassificationCommitEnvelope.decode(
+            try XCTUnwrap(commitEntry.recordPayload)
+        )
+        guard case .inherited = envelope.changeRecord.source else {
+            return XCTFail("任务变更应产生 inherited 分类提交")
+        }
+        XCTAssertNil(envelope.receipt)
+        XCTAssertTrue(entries.contains {
+            $0.entityType == .dayTrace && $0.entityID == traceID.description
+        })
+        XCTAssertTrue(entries.contains {
+            $0.entityType == .traceClassificationEvent
+        })
+
+        let records = try SyncRecordMaterializer().records(
+            for: entries,
+            in: newSnapshot
+        )
+        let merged = SyncRecordMerger().merge(
+            records: records,
+            into: oldSnapshot,
+            detectedAt: later
+        )
+        XCTAssertTrue(merged.conflicts.isEmpty, "conflicts=\(merged.conflicts)")
+        XCTAssertTrue(
+            merged.waitingRecords.isEmpty,
+            "waiting=\(merged.waitingRecords.map { ($0.record.id, $0.dependencies) })"
+        )
+        XCTAssertEqual(merged.snapshot, newSnapshot)
+        try merged.snapshot.validateIntegrity()
+    }
+
+    func testSingleSetCurrentCommitBecomesImmutableJournalPayload() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "同步 first-class 分类", now: now)
+        let oldSnapshot = engine.snapshot()
+        let interactionID = UUID(uuidString: "31000000-0000-0000-0000-000000000001")!
+        let decisionID = UUID(uuidString: "31000000-0000-0000-0000-000000000002")!
+        let plan = try engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: .new(name: "工程", colorHex: "#2A6FDB"),
+                    labels: [
+                        .new(name: "同步", colorHex: "#0E9488"),
+                        .new(name: "复盘", colorHex: "#7C5CFF")
+                    ]
+                )
+            ),
+            source: .userDirect,
+            interactionID: interactionID,
+            now: later
+        )
+        let receipt = try engine.commitClassification(
+            plan,
+            confirmation: .user(decisionID: decisionID),
+            now: later
+        )
+
+        let entries = try SyncSnapshotDiffer().journalEntries(
+            from: oldSnapshot,
+            to: engine.snapshot(),
+            changedAt: later,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        let entry = try XCTUnwrap(entries.only)
+        let payload = try XCTUnwrap(entry.recordPayload)
+        let envelope = try ClassificationCommitEnvelope.decode(payload)
+
+        XCTAssertEqual(entry.entityType, .classificationCommit)
+        XCTAssertEqual(entry.entityID, receipt.changeRecordID.uuidString)
+        XCTAssertEqual(entry.changedAt, later)
+        XCTAssertEqual(envelope.changeRecord.id, receipt.changeRecordID)
+        XCTAssertEqual(envelope.receipt, receipt)
+        XCTAssertEqual(try envelope.canonicalData(), payload)
+    }
+
+    func testMultipleUnpersistedClassificationCommitsFailClosed() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "逐笔落盘", now: now)
+        let oldSnapshot = engine.snapshot()
+        try commitClassification(
+            engine,
+            chainID: chainID,
+            category: .new(name: "工程", colorHex: "#2A6FDB"),
+            labels: [.new(name: "同步", colorHex: "#0E9488")],
+            ordinal: 1
+        )
+        let categoryID = try XCTUnwrap(engine.snapshot().classifications.currentByChainID[chainID]?.categoryID)
+        try commitClassification(
+            engine,
+            chainID: chainID,
+            category: .existing(categoryID),
+            labels: [.new(name: "复盘", colorHex: "#7C5CFF")],
+            ordinal: 2
+        )
+
+        XCTAssertThrowsError(
+            try SyncSnapshotDiffer().journalEntries(
+                from: oldSnapshot,
+                to: engine.snapshot(),
+                changedAt: later,
+                deviceID: SyncDeviceID("mac-a")
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncSnapshotDifferError,
+                .classificationCommitsMustBePersistedIndividually(count: 2)
+            )
+        }
+    }
+
+    func testClassificationManagementCommitBecomesImmutableJournalPayload() throws {
+        let engine = SuntraceEngine()
+        let oldSnapshot = engine.snapshot()
+        let plan = try engine.prepareClassification(
+            .createLabel(name: "独立标签", colorHex: "#0E9488"),
+            source: .userDirect,
+            interactionID: UUID(uuidString: "33000000-0000-0000-0000-000000000001")!,
+            now: later
+        )
+        let receipt = try engine.commitClassification(
+            plan,
+            confirmation: .user(
+                decisionID: UUID(uuidString: "33000000-0000-0000-0000-000000000002")!
+            ),
+            now: later
+        )
+        let newSnapshot = engine.snapshot()
+
+        let entries = try SyncSnapshotDiffer().journalEntries(
+            from: oldSnapshot,
+            to: newSnapshot,
+            changedAt: later,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        let entry = try XCTUnwrap(entries.only)
+        let payload = try XCTUnwrap(entry.recordPayload)
+        let envelope = try ClassificationCommitEnvelope.decode(payload)
+
+        XCTAssertEqual(entry.entityType, .classificationCommit)
+        XCTAssertEqual(entry.entityID, receipt.changeRecordID.uuidString)
+        XCTAssertEqual(envelope.changeRecord.id, receipt.changeRecordID)
+        guard case .create = envelope.delta else {
+            return XCTFail("独立标签创建必须编码为 create delta")
+        }
+
+        let records = try SyncRecordMaterializer().records(
+            for: entries,
+            in: newSnapshot
+        )
+        let merged = SyncRecordMerger().merge(
+            records: records,
+            into: oldSnapshot,
+            detectedAt: later
+        )
+        XCTAssertTrue(merged.conflicts.isEmpty, "conflicts=\(merged.conflicts)")
+        XCTAssertTrue(merged.waitingRecords.isEmpty)
+        XCTAssertEqual(merged.snapshot, newSnapshot)
+    }
+
+    func testNoOpCommitUsesIdentityDeltaWhenCanonicalAuditOrderChanges() throws {
+        let engine = SuntraceEngine()
+        let createPlan = try engine.prepareClassification(
+            .createCategory(name: "不变名称", colorHex: "#2A6FDB"),
+            source: .userDirect,
+            interactionID: UUID(uuidString: "34000000-0000-0000-0000-000000000001")!,
+            now: later
+        )
+        _ = try engine.commitClassification(
+            createPlan,
+            confirmation: .user(
+                decisionID: UUID(uuidString: "34000000-0000-0000-0000-000000000002")!
+            ),
+            now: later
+        )
+        let oldSnapshot = engine.snapshot()
+        let categoryID = try XCTUnwrap(oldSnapshot.classifications.categories.keys.first)
+
+        let renamePlan = try engine.prepareClassification(
+            .renameCategory(categoryID, to: "不变名称"),
+            source: .userDirect,
+            interactionID: UUID(uuidString: "34000000-0000-0000-0000-000000000003")!,
+            now: now
+        )
+        let receipt = try engine.commitClassification(
+            renamePlan,
+            confirmation: .user(
+                decisionID: UUID(uuidString: "34000000-0000-0000-0000-000000000004")!
+            ),
+            now: now
+        )
+        let newSnapshot = engine.snapshot()
+
+        XCTAssertEqual(newSnapshot.classifications.revision, oldSnapshot.classifications.revision)
+        XCTAssertEqual(newSnapshot.classifications.changeRecords.first?.id, receipt.changeRecordID)
+
+        let entries = try SyncSnapshotDiffer().journalEntries(
+            from: oldSnapshot,
+            to: newSnapshot,
+            changedAt: now,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        let entry = try XCTUnwrap(entries.only)
+        let envelope = try ClassificationCommitEnvelope.decode(
+            try XCTUnwrap(entry.recordPayload)
+        )
+        XCTAssertEqual(envelope.senderBaseRevision, envelope.senderResultRevision)
+        guard case .rename = envelope.delta else {
+            return XCTFail("精确重命名 no-op 必须保持 rename typed delta")
+        }
+
+        let merged = SyncRecordMerger().merge(
+            records: try SyncRecordMaterializer().records(for: entries, in: newSnapshot),
+            into: oldSnapshot,
+            detectedAt: later
+        )
+        XCTAssertTrue(merged.conflicts.isEmpty)
+        XCTAssertTrue(merged.waitingRecords.isEmpty)
+        XCTAssertEqual(merged.snapshot, newSnapshot)
+    }
+
+    func testEveryManagementDeltaKindRoundTripsThroughJournalRecordAndMerge() throws {
+        let categoryRename = SuntraceEngine()
+        _ = try commitIntent(
+            .createCategory(name: "改名前", colorHex: "#2A6FDB"),
+            to: categoryRename,
+            ordinal: 101
+        )
+        let renameCategoryID = try XCTUnwrap(
+            categoryRename.snapshot().classifications.categories.keys.first
+        )
+        try assertIntentRoundTrip(
+            .renameCategory(renameCategoryID, to: "改名后"),
+            in: categoryRename,
+            ordinal: 102
+        )
+
+        let labelRename = SuntraceEngine()
+        _ = try commitIntent(
+            .createLabel(name: "标签改名前", colorHex: "#0E9488"),
+            to: labelRename,
+            ordinal: 103
+        )
+        let renameLabelID = try XCTUnwrap(
+            labelRename.snapshot().classifications.labels.keys.first
+        )
+        try assertIntentRoundTrip(
+            .renameLabel(renameLabelID, to: "标签改名后"),
+            in: labelRename,
+            ordinal: 104
+        )
+
+        let categoryLifecycle = SuntraceEngine()
+        _ = try commitIntent(
+            .createCategory(name: "待归档主分类", colorHex: "#7C5CFF"),
+            to: categoryLifecycle,
+            ordinal: 105
+        )
+        let lifecycleCategoryID = try XCTUnwrap(
+            categoryLifecycle.snapshot().classifications.categories.keys.first
+        )
+        try assertIntentRoundTrip(
+            .archiveCategory(lifecycleCategoryID),
+            in: categoryLifecycle,
+            ordinal: 106
+        )
+
+        let labelLifecycle = SuntraceEngine()
+        _ = try commitIntent(
+            .createLabel(name: "待归档标签", colorHex: "#D1477A"),
+            to: labelLifecycle,
+            ordinal: 107
+        )
+        let lifecycleLabelID = try XCTUnwrap(
+            labelLifecycle.snapshot().classifications.labels.keys.first
+        )
+        try assertIntentRoundTrip(
+            .archiveLabel(lifecycleLabelID),
+            in: labelLifecycle,
+            ordinal: 108
+        )
+
+        let categoryMerge = SuntraceEngine()
+        _ = try commitIntent(
+            .createCategory(name: "合并来源", colorHex: "#2A6FDB"),
+            to: categoryMerge,
+            ordinal: 109
+        )
+        _ = try commitIntent(
+            .createCategory(name: "合并目标", colorHex: "#0E9488"),
+            to: categoryMerge,
+            ordinal: 110
+        )
+        let categories = categoryMerge.snapshot().classifications.categories
+        let sourceCategoryID = try XCTUnwrap(categories.values.first { $0.name == "合并来源" }?.id)
+        let targetCategoryID = try XCTUnwrap(categories.values.first { $0.name == "合并目标" }?.id)
+        try assertIntentRoundTrip(
+            .mergeCategory(source: sourceCategoryID, into: targetCategoryID),
+            in: categoryMerge,
+            ordinal: 111
+        )
+
+        let labelMerge = SuntraceEngine()
+        _ = try commitIntent(
+            .createLabel(name: "标签合并来源", colorHex: "#2A6FDB"),
+            to: labelMerge,
+            ordinal: 112
+        )
+        _ = try commitIntent(
+            .createLabel(name: "标签合并目标", colorHex: "#0E9488"),
+            to: labelMerge,
+            ordinal: 113
+        )
+        let labels = labelMerge.snapshot().classifications.labels
+        let sourceLabelID = try XCTUnwrap(labels.values.first { $0.name == "标签合并来源" }?.id)
+        let targetLabelID = try XCTUnwrap(labels.values.first { $0.name == "标签合并目标" }?.id)
+        try assertIntentRoundTrip(
+            .mergeLabel(source: sourceLabelID, into: targetLabelID),
+            in: labelMerge,
+            ordinal: 114
+        )
+
+        let categoryDelete = SuntraceEngine()
+        _ = try commitIntent(
+            .createCategory(name: "待删除主分类", colorHex: "#AA5500"),
+            to: categoryDelete,
+            ordinal: 115
+        )
+        let deleteCategoryID = try XCTUnwrap(
+            categoryDelete.snapshot().classifications.categories.keys.first
+        )
+        try assertIntentRoundTrip(
+            .hardDeleteCategory(deleteCategoryID),
+            in: categoryDelete,
+            ordinal: 116
+        )
+
+        let labelDelete = SuntraceEngine()
+        _ = try commitIntent(
+            .createLabel(name: "待删除标签", colorHex: "#AA5501"),
+            to: labelDelete,
+            ordinal: 117
+        )
+        let deleteLabelID = try XCTUnwrap(
+            labelDelete.snapshot().classifications.labels.keys.first
+        )
+        try assertIntentRoundTrip(
+            .hardDeleteLabel(deleteLabelID),
+            in: labelDelete,
+            ordinal: 118
+        )
+    }
+
+    @discardableResult
+    private func commitIntent(
+        _ intent: ClassificationIntent,
+        to engine: SuntraceEngine,
+        ordinal: Int
+    ) throws -> ClassificationReceipt {
+        let time = later.addingTimeInterval(TimeInterval(ordinal))
+        let plan = try engine.prepareClassification(
+            intent,
+            source: .userDirect,
+            interactionID: UUID(
+                uuidString: String(format: "35%06d-0000-0000-0000-000000000001", ordinal)
+            )!,
+            now: time
+        )
+        return try engine.commitClassification(
+            plan,
+            confirmation: .user(
+                decisionID: UUID(
+                    uuidString: String(format: "35%06d-0000-0000-0000-000000000002", ordinal)
+                )!
+            ),
+            now: time
+        )
+    }
+
+    private func assertIntentRoundTrip(
+        _ intent: ClassificationIntent,
+        in engine: SuntraceEngine,
+        ordinal: Int
+    ) throws {
+        let before = engine.snapshot()
+        let receipt = try commitIntent(intent, to: engine, ordinal: ordinal)
+        let after = engine.snapshot()
+        let entries = try SyncSnapshotDiffer().journalEntries(
+            from: before,
+            to: after,
+            changedAt: later.addingTimeInterval(TimeInterval(ordinal)),
+            deviceID: SyncDeviceID("mac-a")
+        )
+        let entry = try XCTUnwrap(entries.only)
+        XCTAssertEqual(entry.entityType, .classificationCommit)
+        XCTAssertEqual(entry.entityID, receipt.changeRecordID.uuidString)
+        let records = try SyncRecordMaterializer().records(for: entries, in: after)
+        let merged = SyncRecordMerger().merge(records: records, into: before)
+        XCTAssertTrue(merged.conflicts.isEmpty, "conflicts=\(merged.conflicts)")
+        XCTAssertTrue(merged.waitingRecords.isEmpty)
+        XCTAssertEqual(merged.snapshot, after)
+    }
+
+    private func commitClassification(
+        _ engine: SuntraceEngine,
+        chainID: TaskChainID,
+        category: TaskCategoryChoice?,
+        labels: [TaskLabelChoice],
+        ordinal: Int
+    ) throws {
+        let plan = try engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: category,
+                    labels: labels
+                )
+            ),
+            source: .userDirect,
+            interactionID: UUID(
+                uuidString: String(format: "32%06d-0000-0000-0000-000000000001", ordinal)
+            )!,
+            now: later
+        )
+        _ = try engine.commitClassification(
+            plan,
+            confirmation: .user(
+                decisionID: UUID(
+                    uuidString: String(format: "32%06d-0000-0000-0000-000000000002", ordinal)
+                )!
+            ),
+            now: later.addingTimeInterval(TimeInterval(ordinal))
+        )
+    }
+}
+
+private extension Array {
+    var only: Element? { count == 1 ? self[0] : nil }
 }

@@ -70,7 +70,7 @@ public struct AIPromptBuilder: Sendable {
         }
 
         if scope.labels.isEmpty == false {
-            sections.append("Label 候选：\(scope.labels.joined(separator: "，"))")
+            sections.append("标签候选：\(scope.labels.joined(separator: "，"))")
         }
 
         sections.append("请输出：事实摘要、推断、建议草稿、需要用户确认的操作。")

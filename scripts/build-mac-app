@@ -11,7 +11,6 @@ bundle_name="${SUNTRACE_APP_BUNDLE_NAME:-$bundle_short_name}"
 icon_source="${SUNTRACE_APP_ICON_SOURCE:-App/SuntraceMacApp/Resources/AppIcon.icns}"
 icon_name="${SUNTRACE_APP_ICON_NAME:-AppIcon}"
 bundle_dir="dist/${bundle_name}.app"
-legacy_bundle_dir="dist/${product}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
@@ -19,9 +18,6 @@ resources_dir="${contents_dir}/Resources"
 swift build -c "$configuration" --product "$product"
 
 rm -rf "$bundle_dir"
-if [[ -z "${SUNTRACE_APP_BUNDLE_NAME+x}" && "$bundle_dir" != "$legacy_bundle_dir" ]]; then
-  rm -rf "$legacy_bundle_dir"
-fi
 mkdir -p "$macos_dir" "$resources_dir"
 
 binary_path=".build/arm64-apple-macosx/${configuration}/${product}"

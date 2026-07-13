@@ -32,7 +32,7 @@ public final class SQLiteSyncUploadCoordinator {
     }
 
     public func uploadPending(limit: Int = 100) async throws -> SQLiteSyncUploadResult {
-        let pendingEntries = try syncRepository.journalEntries(state: .pendingUpload, limit: limit)
+        let pendingEntries = try uploadCandidates(limit: limit)
         guard pendingEntries.isEmpty == false else {
             return SQLiteSyncUploadResult(pendingCount: 0, uploadedCount: 0, failedCount: 0)
         }
@@ -59,6 +59,67 @@ public final class SQLiteSyncUploadCoordinator {
         } catch {
             try markFailed(materialized.uploadableEntries, action: "uploadFailed", error: error)
             throw error
+        }
+    }
+
+    private func uploadCandidates(limit: Int) throws -> [SyncJournalEntry] {
+        guard limit > 0 else { return [] }
+        var retryableEntries: [SyncJournalEntry] = []
+        for state in [SyncChangeState.pendingUpload, .failed] {
+            retryableEntries.append(
+                contentsOf: try syncRepository.journalEntries(state: state)
+            )
+        }
+        return Array(
+            retryableEntries
+                .sorted(by: uploadCandidateComesBefore)
+                .prefix(limit)
+        )
+    }
+
+    private func uploadCandidateComesBefore(
+        _ lhs: SyncJournalEntry,
+        _ rhs: SyncJournalEntry
+    ) -> Bool {
+        let lhsOrder = uploadDependencyOrder(lhs.entityType)
+        let rhsOrder = uploadDependencyOrder(rhs.entityType)
+        if lhsOrder != rhsOrder {
+            return lhsOrder < rhsOrder
+        }
+        let lhsSeconds = lhs.changedAt.timeIntervalSinceReferenceDate
+        let rhsSeconds = rhs.changedAt.timeIntervalSinceReferenceDate
+        if lhsSeconds != rhsSeconds {
+            return lhsSeconds < rhsSeconds
+        }
+        let lhsBits = lhsSeconds.bitPattern
+        let rhsBits = rhsSeconds.bitPattern
+        if lhsBits != rhsBits {
+            return lhsBits < rhsBits
+        }
+        if lhs.entityID != rhs.entityID {
+            return lhs.entityID < rhs.entityID
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    private func uploadDependencyOrder(_ entityType: SyncEntityType) -> Int {
+        switch entityType {
+        case .taskChain:
+            0
+        case .taskDefinition:
+            1
+        case .day:
+            2
+        case .classificationCommit:
+            3
+        case .dayTrace:
+            4
+        case .traceClassificationEvent:
+            5
+        case .subtask:
+            6
+        case .appPreferences:
+            7
         }
     }
 

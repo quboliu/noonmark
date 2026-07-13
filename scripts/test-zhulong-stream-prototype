@@ -1,0 +1,2063 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+prototype_html="${SUNTRACE_ZHULONG_STREAM_PROTOTYPE_HTML:-${repo_root}/docs/design/prototypes/zhulong-converged-2026-07-10/stream-prototype.html}"
+cdp_harness_source="${repo_root}/scripts/test-zhulong-r3-prototype"
+
+chrome_binary="${SUNTRACE_CHROME_BINARY:-}"
+if [[ -z "$chrome_binary" ]]; then
+  if command -v google-chrome >/dev/null 2>&1; then
+    chrome_binary="$(command -v google-chrome)"
+  elif command -v chromium >/dev/null 2>&1; then
+    chrome_binary="$(command -v chromium)"
+  elif [[ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
+    chrome_binary="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  else
+    printf '%s\n' '{"status":"FAIL","error":"missing Chrome/Chromium for Zhulong stream CDP acceptance"}' >&2
+    exit 1
+  fi
+fi
+
+if [[ ! -f "$prototype_html" || ! -f "$cdp_harness_source" ]]; then
+  printf '%s\n' '{"status":"FAIL","error":"missing stream prototype or shared CDP harness source"}' >&2
+  exit 1
+fi
+
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/suntrace-zhulong-stream-cdp.XXXXXX")"
+profile_dir="${tmp_dir}/chrome-profile"
+chrome_log="${tmp_dir}/chrome.log"
+chrome_pid=""
+
+cleanup() {
+  if [[ -n "$chrome_pid" ]] && kill -0 "$chrome_pid" 2>/dev/null; then
+    kill "$chrome_pid" 2>/dev/null || true
+    wait "$chrome_pid" 2>/dev/null || true
+  fi
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT INT TERM
+
+mkdir -p "$profile_dir"
+"$chrome_binary" \
+  --headless=new \
+  --disable-background-networking \
+  --disable-background-timer-throttling \
+  --disable-backgrounding-occluded-windows \
+  --disable-component-update \
+  --disable-default-apps \
+  --disable-extensions \
+  --disable-gpu \
+  --disable-renderer-backgrounding \
+  --disable-sync \
+  --hide-scrollbars \
+  --no-default-browser-check \
+  --no-first-run \
+  --remote-allow-origins='*' \
+  --remote-debugging-port=0 \
+  --user-data-dir="$profile_dir" \
+  --window-size=1180,760 \
+  about:blank >"$chrome_log" 2>&1 &
+chrome_pid=$!
+
+devtools_file="${profile_dir}/DevToolsActivePort"
+for _ in {1..200}; do
+  [[ -s "$devtools_file" ]] && break
+  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+    printf '%s\n' '{"status":"FAIL","error":"Chrome exited before CDP became ready"}' >&2
+    sed -n '1,120p' "$chrome_log" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+
+if [[ ! -s "$devtools_file" ]]; then
+  printf '%s\n' '{"status":"FAIL","error":"Chrome CDP readiness timed out"}' >&2
+  sed -n '1,120p' "$chrome_log" >&2
+  exit 1
+fi
+
+debug_port="$(sed -n '1p' "$devtools_file")"
+
+set +e
+python3 - "$debug_port" "$prototype_html" "$cdp_harness_source" <<'PY'
+import json
+import re
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+
+def load_shared_cdp(harness_path):
+    source = Path(harness_path).read_text()
+    marker = "python3 - \"$debug_port\" \"$prototype_html\" <<'PY'\n"
+    if marker not in source:
+        raise RuntimeError("shared CDP harness marker not found")
+    embedded = source.split(marker, 1)[1].split("\nPY\ntest_status=", 1)[0]
+    prefix = embedded.split("\nclass ZhulongR3Acceptance:", 1)[0]
+    namespace = {}
+    exec(prefix, namespace)
+    return namespace["AcceptanceFailure"], namespace["CDPWebSocket"]
+
+
+AcceptanceFailure, CDPWebSocket = load_shared_cdp(sys.argv[3])
+
+
+def page_websocket_url(port):
+    deadline = time.monotonic() + 8
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=1) as response:
+                targets = json.load(response)
+            for target in targets:
+                if target.get("type") == "page" and target.get("webSocketDebuggerUrl"):
+                    return target["webSocketDebuggerUrl"]
+        except (OSError, ValueError) as error:
+            last_error = error
+        time.sleep(0.05)
+    raise AcceptanceFailure(f"CDP page target did not become ready: {last_error}")
+
+
+class StreamAcceptance:
+    def __init__(self, cdp, prototype_path):
+        self.cdp = cdp
+        self.base_url = Path(prototype_path).resolve().as_uri()
+        self.checks = []
+        self.started_at = time.monotonic()
+        self.geometry = None
+
+    def evaluate(self, expression):
+        response = self.cdp.command(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+                "userGesture": True,
+            },
+        )
+        if "exceptionDetails" in response:
+            details = response["exceptionDetails"]
+            raise AcceptanceFailure(f"browser evaluation failed: {details.get('text', 'unknown exception')}")
+        result = response.get("result", {})
+        if result.get("subtype") == "error":
+            raise AcceptanceFailure(f"browser evaluation returned an error: {result.get('description', result)}")
+        return result.get("value")
+
+    def wait_for(self, expression, description, timeout=8):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.evaluate(expression):
+                return
+            time.sleep(0.05)
+        raise AcceptanceFailure(f"timed out waiting for {description}")
+
+    def navigate(self, query):
+        response = self.cdp.command("Page.navigate", {"url": f"{self.base_url}?{query}"})
+        if response.get("errorText"):
+            raise AcceptanceFailure(f"navigation failed: {response['errorText']}")
+        self.wait_for(
+            "document.readyState === 'complete' && Boolean(document.querySelector('[data-stream-session]'))",
+            f"stream page {query}",
+        )
+
+    def click(self, selector):
+        result = self.evaluate(
+            "(() => {"
+            f"const element = document.querySelector({json.dumps(selector)});"
+            "if (!element) return {found:false};"
+            "if (element.disabled) return {found:true,disabled:true};"
+            "element.click();"
+            "return {found:true,disabled:false};"
+            "})()"
+        )
+        if not result or not result.get("found"):
+            raise AcceptanceFailure(f"required browser control not found: {selector}")
+        if result.get("disabled"):
+            raise AcceptanceFailure(f"required browser control is disabled: {selector}")
+
+    def physical_click(self, selector):
+        point = self.evaluate(
+            "(() => {"
+            f"const element=document.querySelector({json.dumps(selector)});"
+            "if(!element||element.disabled) return null;const rect=element.getBoundingClientRect();"
+            "return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};})()"
+        )
+        if not point:
+            raise AcceptanceFailure(f"required physical browser control not found or disabled: {selector}")
+        self.cdp.command(
+            "Input.dispatchMouseEvent",
+            {"type": "mousePressed", "x": point["x"], "y": point["y"], "button": "left", "clickCount": 1},
+        )
+        self.cdp.command(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseReleased", "x": point["x"], "y": point["y"], "button": "left", "clickCount": 1},
+        )
+
+    def choose_layout(self, variant):
+        if not self.count('[data-layout-menu]'):
+            self.physical_click('[data-layout-trigger]')
+            self.wait_for(
+                "Boolean(document.querySelector('[data-layout-menu]'))"
+                " && document.querySelector('[data-layout-trigger]')?.getAttribute('aria-expanded')==='true'",
+                "layout menu to open",
+            )
+        self.physical_click(f'[data-layout-option][data-value="{variant}"]')
+        try:
+            self.wait_for(
+                f"Boolean(document.querySelector('[data-variant-view={json.dumps(variant)}]'))"
+                f" && new URLSearchParams(location.search).get('variant')==={json.dumps(variant)}"
+                " && !document.querySelector('[data-layout-menu]')",
+                f"layout {variant} to render from the formal menu",
+            )
+        except AcceptanceFailure as error:
+            probe = self.evaluate(
+                "(() => ({url:new URLSearchParams(location.search).get('variant')||'',"
+                "rendered:document.querySelector('.mac-window')?.dataset.variant||'',"
+                "menu:Boolean(document.querySelector('[data-layout-menu]')),"
+                "active:document.activeElement?.outerHTML||''}))()"
+            )
+            raise AcceptanceFailure(f"{error}; probe={json.dumps(probe, ensure_ascii=False, sort_keys=True)}")
+        self.wait_for(
+            "document.activeElement===document.querySelector('[data-layout-trigger]')",
+            f"layout {variant} selection to restore PageHeader trigger focus",
+        )
+
+    def physical_double_click(self, selector):
+        point = self.evaluate(
+            "(() => {"
+            f"const element=document.querySelector({json.dumps(selector)});"
+            "if(!element) return null;const rect=element.getBoundingClientRect();"
+            "return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};})()"
+        )
+        if not point:
+            raise AcceptanceFailure(f"required physical browser control not found: {selector}")
+        for click_count in [1, 2]:
+            self.cdp.command(
+                "Input.dispatchMouseEvent",
+                {"type": "mousePressed", "x": point["x"], "y": point["y"], "button": "left", "clickCount": click_count},
+            )
+            self.cdp.command(
+                "Input.dispatchMouseEvent",
+                {"type": "mouseReleased", "x": point["x"], "y": point["y"], "button": "left", "clickCount": click_count},
+            )
+
+    def physical_wheel(self, selector, delta_y):
+        point = self.evaluate(
+            "(() => {"
+            f"const element=document.querySelector({json.dumps(selector)});"
+            "if(!element) return null;const rect=element.getBoundingClientRect();"
+            "return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};})()"
+        )
+        if not point:
+            raise AcceptanceFailure(f"required wheel target not found: {selector}")
+        self.cdp.command(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseWheel", "x": point["x"], "y": point["y"], "deltaX": 0, "deltaY": delta_y},
+        )
+
+    def install_painted_commit_probe(self):
+        self.evaluate(
+            """(() => {
+              window.__streamPaintProbe?.observer?.disconnect();
+              const samples=[];
+              const read=()=>({
+                t:performance.now(),
+                count:document.querySelectorAll('[data-stream-node]').length,
+                runState:document.querySelector('[data-stream-session]')?.dataset.runState||'',
+                currentStage:document.querySelector('[data-stream-node][data-state="current"]')?.dataset.stage||'',
+                unseen:Number(document.querySelector('[data-return-current]')?.dataset.unseenCount||0),
+                unreadVisible:document.querySelector('[data-return-current]')?.classList.contains('visible')||false,
+                unreadLabel:document.querySelector('[data-return-current]')?.innerText||'',
+                motionState:document.querySelector('[data-stream-scroll]')?.dataset.scrollMotionState||'',
+                fingerprints:[...document.querySelectorAll('[data-stream-node]')].map((node)=>({
+                  id:node.dataset.nodeId,stage:node.dataset.stage,kind:node.dataset.kind,branch:node.dataset.branch,
+                  dependsOn:node.dataset.dependsOn,resolves:node.dataset.resolves,authorityId:node.dataset.authorityId,
+                  contractId:node.dataset.contractId,runId:node.dataset.runId,runStatus:node.dataset.runStatus,
+                  runOrdinal:node.dataset.runOrdinal,activityType:node.dataset.activityType,artifactType:node.dataset.artifactType,
+                  invalidates:node.dataset.invalidates,diffHash:node.dataset.diffHash,idempotencyKey:node.dataset.idempotencyKey,
+                  payload:node.querySelector('[data-node-payload]')?.textContent||''
+                }))
+              });
+              let scheduled=false;
+              const sampleAfterPaint=()=>{
+                if(scheduled) return;
+                scheduled=true;
+                requestAnimationFrame(()=>requestAnimationFrame(()=>{samples.push(read());scheduled=false;}));
+              };
+              const log=document.querySelector('[data-stream-log]');
+              const observer=new MutationObserver(sampleAfterPaint);
+              observer.observe(log,{childList:true,subtree:true});
+              samples.push(read());
+              window.__streamPaintProbe={observer,samples};
+              return true;
+            })()"""
+        )
+
+    def painted_commit_samples(self):
+        time.sleep(0.08)
+        return self.evaluate("window.__streamPaintProbe?.samples || []")
+
+    def input(self, selector, value):
+        result = self.evaluate(
+            "(() => {"
+            f"const element = document.querySelector({json.dumps(selector)});"
+            "if (!element) return false;"
+            f"element.value = {json.dumps(value)};"
+            "element.dispatchEvent(new Event('input', {bubbles:true}));"
+            "return true;"
+            "})()"
+        )
+        if not result:
+            raise AcceptanceFailure(f"required browser input not found: {selector}")
+
+    def text(self, selector="body"):
+        return self.evaluate(f"document.querySelector({json.dumps(selector)})?.innerText || ''")
+
+    def count(self, selector):
+        return self.evaluate(f"document.querySelectorAll({json.dumps(selector)}).length")
+
+    def trace_scroll_action(self, action_selector, source_selector, target_selector, semantic_expression):
+        time.sleep(0.08)
+        initial = self.evaluate(
+            "(() => {"
+            "const scroller=document.querySelector('[data-stream-scroll]');"
+            "window.__streamTraceScroller=scroller;"
+            f"const source=document.querySelector({json.dumps(source_selector)});"
+            "const rect=scroller.getBoundingClientRect();"
+            "const sidebar=document.querySelector('.sidebar').getBoundingClientRect();"
+            "const header=document.querySelector('.page-header').getBoundingClientRect();"
+            "const rail=document.querySelector('.detail-rail').getBoundingClientRect();"
+            "return {beforeTop:scroller.scrollTop,sourceId:source?.dataset.nodeId||'',"
+            "sourceBeforeY:source?source.getBoundingClientRect().top-rect.top:null,"
+            "shellBefore:[sidebar.x,sidebar.y,sidebar.width,sidebar.height,header.x,header.y,header.width,header.height,rail.x,rail.y,rail.width,rail.height]};})()"
+        )
+        self.click(action_selector)
+        samples = []
+        stable = 0
+        last_top = None
+        started = time.monotonic()
+        while time.monotonic() - started <= 2.2:
+            sample = self.evaluate(
+                "(() => {"
+                "const scroller=document.querySelector('[data-stream-scroll]');"
+                "const rect=scroller.getBoundingClientRect();"
+                f"const sourceId={json.dumps(initial['sourceId'])};"
+                "const source=sourceId?document.getElementById(sourceId):null;"
+                f"const target=document.querySelector({json.dumps(target_selector)});"
+                "const targetRect=target?.getBoundingClientRect();"
+                "const visibleHeight=targetRect?Math.max(0,Math.min(targetRect.bottom,rect.bottom)-Math.max(targetRect.top,rect.top)):0;"
+                "const actionButton=target?.querySelector('[data-current-action] .primary-button, .primary-button')||"
+                "(target?.matches('[data-state=\"current\"]')?target.querySelector('.primary-button'):null);"
+                "let actionHit=true;if(actionButton){const box=actionButton.getBoundingClientRect();"
+                "const hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);actionHit=hit===actionButton||actionButton.contains(hit);}"
+                "const sidebar=document.querySelector('.sidebar').getBoundingClientRect();"
+                "const header=document.querySelector('.page-header').getBoundingClientRect();"
+                "const rail=document.querySelector('.detail-rail').getBoundingClientRect();"
+                f"return {{t:{(time.monotonic() - started) * 1000},top:scroller.scrollTop,"
+                "sourceY:source&&source.offsetParent!==null?source.getBoundingClientRect().top-rect.top:null,"
+                "targetRatio:targetRect&&targetRect.height?visibleHeight/targetRect.height:0,actionHit,"
+                "sameScroller:scroller===window.__streamTraceScroller,"
+                "state:scroller.dataset.scrollMotionState||'',"
+                "motionStart:scroller.dataset.scrollMotionStart||'',motionTarget:scroller.dataset.scrollMotionTarget||'',"
+                "motionDirection:scroller.dataset.scrollMotionDirection||'',"
+                "controllerMaxStep:Number(scroller.dataset.scrollMotionMaxStep||0),clientHeight:scroller.clientHeight,"
+                "shell:[sidebar.x,sidebar.y,sidebar.width,sidebar.height,header.x,header.y,header.width,header.height,rail.x,rail.y,rail.width,rail.height],"
+                f"semanticDone:Boolean({semantic_expression})}};}})()"
+            )
+            samples.append(sample)
+            stable = stable + 1 if last_top is not None and abs(sample["top"] - last_top) <= 0.75 else 0
+            last_top = sample["top"]
+            moved = abs(sample["top"] - initial["beforeTop"]) > 8
+            if sample["semanticDone"] and moved and sample["state"] in ["settled", "idle"] and stable >= 4:
+                return {**initial, "samples": samples}
+            time.sleep(0.016)
+        return {**initial, "samples": samples, "error": "timeout"}
+
+    def assert_scroll_trace(self, name, trace, direction, require_action_hit=False):
+        samples = trace.get("samples", []) if trace else []
+        positions = [sample["top"] for sample in samples]
+        start = positions[0] if positions else (trace.get("beforeTop", 0) if trace else 0)
+        end = positions[-1] if positions else start
+        total = abs(end - start)
+        epsilon = 0.75
+        intermediates = []
+        for position in positions:
+            if abs(position - start) > epsilon and abs(position - end) > epsilon:
+                if not intermediates or abs(position - intermediates[-1]) > epsilon:
+                    intermediates.append(position)
+        deltas = [positions[index] - positions[index - 1] for index in range(1, len(positions))]
+        reverse = sum(max(0, delta if direction == "backward" else -delta) for delta in deltas)
+        max_step = max((abs(delta) for delta in deltas), default=0)
+        moving_times = [sample["t"] for sample in samples if abs(sample["top"] - start) > epsilon]
+        settled_time = next((sample["t"] for sample in samples if sample["state"] in ["settled", "idle"]), None)
+        duration = (settled_time - moving_times[0]) if moving_times and settled_time is not None else 0
+        first_travel = next((sample for sample in samples if sample["state"] == "traveling"), None)
+        early_samples = [
+            sample for sample in samples
+            if first_travel and first_travel["t"] <= sample["t"] <= first_travel["t"] + 100
+        ]
+        early_displacement = max((abs(sample["top"] - first_travel["top"]) for sample in early_samples), default=0)
+        client_height = samples[-1]["clientHeight"] if samples else 0
+        controller_max_step = samples[-1]["controllerMaxStep"] if samples else 999
+        first_source_y = next((sample["sourceY"] for sample in samples if sample["sourceY"] is not None), None)
+        source_drift = abs(first_source_y - trace.get("sourceBeforeY", first_source_y or 0)) if first_source_y is not None else 999
+        shell_before = trace.get("shellBefore", []) if trace else []
+        shell_drift = max(
+            (abs(value - shell_before[index]) for sample in samples for index, value in enumerate(sample["shell"]) if index < len(shell_before)),
+            default=999,
+        )
+        direction_ok = (end < start - 120) if direction == "backward" else (end > start + 120)
+        detail = json.dumps(
+            {
+                "error": trace.get("error") if trace else "missing trace",
+                "start": start,
+                "end": end,
+                "total": total,
+                "intermediates": len(intermediates),
+                "duration": duration,
+                "reverse": reverse,
+                "maxStep": max_step,
+                "controllerMaxStep": controller_max_step,
+                "earlyDisplacement": early_displacement,
+                "clientHeight": client_height,
+                "sourceDrift": source_drift,
+                "shellDrift": shell_drift,
+                "samples": len(samples),
+                "last": samples[-1] if samples else {},
+            },
+            sort_keys=True,
+        )
+        self.check(
+            name,
+            # A CDP poll can span more than one painted frame; controllerMaxStep is the exact per-frame guard.
+            not trace.get("error")
+            and direction_ok
+            and len(intermediates) >= 4
+            and 64 <= duration <= 850
+            and reverse <= 4
+            and max_step <= client_height * 0.48
+            and controller_max_step <= client_height * 0.18
+            and early_displacement <= client_height * 0.45
+            and source_drift <= 12
+            and shell_drift <= 1
+            and all(sample["sameScroller"] for sample in samples)
+            and samples[-1]["targetRatio"] >= 0.6
+            and (not require_action_hit or samples[-1]["actionHit"]),
+            detail,
+        )
+
+    def snapshot(self):
+        return self.evaluate(
+            "(() => ({"
+            "active: document.querySelector('[data-stream-session]')?.dataset.activeNodeId || '',"
+            "planState: document.querySelector('[data-stream-session]')?.dataset.planState || '',"
+            "nodes: [...document.querySelectorAll('[data-stream-node]')].map((node) => ({"
+            "id: node.dataset.nodeId, stage: node.dataset.stage, kind: node.dataset.kind,"
+            "state: node.dataset.state, invalidatedBy: node.dataset.invalidatedBy || '',"
+            "semantic: [node.dataset.dependsOn,node.dataset.resolves,node.dataset.authorityId,node.dataset.invalidates,node.dataset.diffHash,node.dataset.idempotencyKey].join('|'),"
+            "payload: node.querySelector('[data-node-payload]')?.textContent || ''"
+            "}))"
+            "}))()"
+        )
+
+    def check(self, name, condition, detail=""):
+        if not condition:
+            message = f"acceptance check failed: {name}"
+            if detail:
+                message += f" ({detail})"
+            raise AcceptanceFailure(message)
+        self.checks.append(name)
+
+    def assert_append_only(self, before, after, name):
+        old_ids = [node["id"] for node in before["nodes"]]
+        new_ids = [node["id"] for node in after["nodes"]]
+        old_payload = [node["payload"] for node in before["nodes"]]
+        new_payload = [node["payload"] for node in after["nodes"][: len(old_payload)]]
+        old_semantic = [node["semantic"] for node in before["nodes"]]
+        new_semantic = [node["semantic"] for node in after["nodes"][: len(old_semantic)]]
+        mismatches = [
+            {"id": old_ids[index], "before": old_payload[index], "after": new_payload[index]}
+            for index in range(min(len(old_payload), len(new_payload)))
+            if old_payload[index] != new_payload[index]
+        ]
+        self.check(
+            name,
+            len(new_ids) > len(old_ids)
+            and new_ids[: len(old_ids)] == old_ids
+            and new_payload == old_payload
+            and new_semantic == old_semantic,
+            json.dumps({"before": len(old_ids), "after": len(new_ids), "payloadMismatches": mismatches, "semanticMatch": new_semantic == old_semantic}, ensure_ascii=False),
+        )
+
+    def assert_single_tail_current(self, name):
+        result = self.evaluate(
+            "(() => { const nodes=[...document.querySelectorAll('[data-stream-node]')];"
+            "const current=nodes.filter((node)=>node.dataset.state==='current');"
+            "return {count:current.length, atTail:current.length===1 && current[0]===nodes.at(-1),"
+            "active:document.querySelector('[data-stream-session]').dataset.activeNodeId,"
+            "currentId:current[0]?.dataset.nodeId || ''}; })()"
+        )
+        self.check(name, result["count"] == 1 and result["atTail"] and result["active"] == result["currentId"], json.dumps(result))
+
+    def choose_and_confirm(self, kind, value):
+        before = self.snapshot()
+        self.click(f'[data-action="choose"][data-kind="{kind}"][data-value="{value}"]')
+        self.click('[data-action="confirm-current"]')
+        after = self.snapshot()
+        self.assert_append_only(before, after, f"{kind}-{value}-appends-without-rewriting-prefix")
+        self.assert_single_tail_current(f"{kind}-{value}-leaves-one-tail-checkpoint")
+        return after
+
+    def confirm_simple(self, expected_stage):
+        before = self.snapshot()
+        self.check(f"current-stage-is-{expected_stage}", before["nodes"][-1]["stage"] == expected_stage)
+        self.click('[data-action="confirm-current"]')
+        if expected_stage in ["run", "amendment"]:
+            destination = "gate" if expected_stage == "run" else "draft"
+            self.wait_for(
+                "document.querySelector('[data-stream-session]')?.dataset.runState==='idle'"
+                f" && document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.stage==={json.dumps(destination)}",
+                f"record-by-record {expected_stage} run to settle at {destination}",
+            )
+        after = self.snapshot()
+        self.assert_append_only(before, after, f"{expected_stage}-action-appends-without-rewriting-prefix")
+        self.assert_single_tail_current(f"{expected_stage}-action-leaves-one-tail-checkpoint")
+        return after
+
+    def run(self):
+        self.cdp.command("Runtime.enable")
+        self.cdp.command("Page.enable")
+        self.cdp.command("Page.bringToFront")
+        self.cdp.command(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 1180, "height": 760, "deviceScaleFactor": 1, "mobile": False},
+        )
+        self.cdp.command(
+            "Emulation.setEmulatedMedia",
+            {"features": [{"name": "prefers-reduced-motion", "value": "no-preference"}]},
+        )
+
+        self.navigate("scenario=focus&preference-case=bootstrap")
+        self.evaluate("localStorage.removeItem('noonmark.zhulong.stream-layout')")
+        self.navigate("scenario=focus&preference-case=fresh")
+        self.check(
+            "first-visit-without-url-or-preference-renders-c",
+            self.evaluate("document.querySelector('.mac-window')?.dataset.variant") == "C"
+            and self.count('[data-variant-view="C"]') == 1
+            and self.evaluate("document.querySelector('[data-layout-trigger]')?.innerText.includes('双轨')")
+            and self.count('[data-prototype-switcher]') == 0,
+        )
+        self.wait_for(
+            "(() => {const current=document.querySelector('[data-stream-node][data-state=\"current\"]');"
+            "const action=current?.querySelector('[data-current-action] .primary-button');const scroller=document.querySelector('[data-stream-scroll]');"
+            "if(!current||!action||!scroller)return false;const actionBox=action.getBoundingClientRect();const scrollBox=scroller.getBoundingClientRect();"
+            "return actionBox.top>=scrollBox.top+41&&actionBox.bottom<=scrollBox.bottom"
+            "&&!document.querySelector('[data-return-current]').classList.contains('visible')"
+            "&&document.querySelector('.stream-detail-rail').innerText.includes(current.dataset.nodeId);})()",
+            "minimum C first paint to remain on the visible current decision",
+        )
+        current_decision_geometry = self.evaluate(
+            "(() => {const action=document.querySelector('[data-current-action] .primary-button');"
+            "const actionBox=action.getBoundingClientRect();const hit=document.elementFromPoint(actionBox.left+actionBox.width/2,actionBox.top+actionBox.height/2);"
+            "return {returnVisible:document.querySelector('[data-return-current]').classList.contains('visible'),"
+            "actionHit:hit===action||action.contains(hit),rail:document.querySelector('.stream-detail-rail .rail-header p')?.innerText||''};})()"
+        )
+        self.check(
+            "minimum-c-visible-current-action-does-not-enter-history-mode-or-show-an-overlapping-return-pill",
+            not current_decision_geometry["returnVisible"]
+            and current_decision_geometry["actionHit"]
+            and "当前" in current_decision_geometry["rail"],
+            json.dumps(current_decision_geometry, ensure_ascii=False, sort_keys=True),
+        )
+        shell_before_menu = self.evaluate(
+            "(() => {const rect=(selector)=>{const box=document.querySelector(selector).getBoundingClientRect();return [box.x,box.y,box.width,box.height]};"
+            "return {sidebar:rect('.sidebar'),header:rect('.page-header'),rail:rect('.detail-rail')};})()"
+        )
+        self.physical_click('[data-layout-trigger]')
+        self.wait_for("Boolean(document.querySelector('[data-layout-menu]'))", "formal layout menu")
+        layout_menu = self.evaluate(
+            "(() => {const menu=document.querySelector('[data-layout-menu]');const box=menu.getBoundingClientRect();"
+            "const action=document.querySelector('[data-current-action] .primary-button');const actionBox=action.getBoundingClientRect();"
+            "const actionHit=document.elementFromPoint(actionBox.left+actionBox.width/2,actionBox.top+actionBox.height/2);"
+            "const rect=(selector)=>{const value=document.querySelector(selector).getBoundingClientRect();return [value.x,value.y,value.width,value.height]};"
+            "return {left:box.left,top:box.top,right:box.right,bottom:box.bottom,options:document.querySelectorAll('[data-layout-option]').length,"
+            "pressed:document.querySelectorAll('[data-layout-option][aria-pressed=\"true\"]').length,expanded:document.querySelector('[data-layout-trigger]').getAttribute('aria-expanded'),"
+            "overlapsAction:!(box.right<=actionBox.left||box.left>=actionBox.right||box.bottom<=actionBox.top||box.top>=actionBox.bottom),"
+            "actionHit:actionHit===action||action.contains(actionHit),"
+            "sidebar:rect('.sidebar'),header:rect('.page-header'),rail:rect('.detail-rail'),docWidth:document.documentElement.scrollWidth,bodyWidth:document.body.scrollWidth};})()"
+        )
+        self.check(
+            "page-header-layout-menu-replaces-prototype-chrome-without-shell-shift",
+            layout_menu["options"] == 3
+            and layout_menu["pressed"] == 1
+            and layout_menu["expanded"] == "true"
+            and layout_menu["left"] >= 0
+            and layout_menu["top"] >= 0
+            and layout_menu["right"] <= 1180
+            and layout_menu["bottom"] <= 760
+            and layout_menu["docWidth"] <= 1180
+            and layout_menu["bodyWidth"] <= 1180
+            and not layout_menu["overlapsAction"]
+            and layout_menu["actionHit"]
+            and all(abs(layout_menu[key][index] - shell_before_menu[key][index]) <= 1 for key in ["sidebar", "header", "rail"] for index in range(4)),
+            json.dumps(layout_menu, ensure_ascii=False, sort_keys=True),
+        )
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape"})
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape"})
+        self.wait_for(
+            "!document.querySelector('[data-layout-menu]') && document.activeElement===document.querySelector('[data-layout-trigger]')",
+            "Escape to close layout menu and restore trigger focus",
+        )
+        self.choose_layout("A")
+        self.check(
+            "layout-menu-selection-updates-url-and-local-preference",
+            self.evaluate("localStorage.getItem('noonmark.zhulong.stream-layout')") == "A"
+            and self.evaluate("new URLSearchParams(location.search).get('variant')") == "A",
+        )
+        self.navigate("variant=B&scenario=focus&preference-case=explicit")
+        self.check(
+            "explicit-url-wins-without-overwriting-user-preference",
+            self.count('[data-variant-view="B"]') == 1
+            and self.evaluate("localStorage.getItem('noonmark.zhulong.stream-layout')") == "A",
+        )
+        self.navigate("scenario=focus&preference-case=remembered")
+        self.check(
+            "url-free-navigation-restores-user-layout-preference",
+            self.count('[data-variant-view="A"]') == 1,
+        )
+        self.navigate("variant=INVALID&scenario=focus&preference-case=invalid-url")
+        self.check(
+            "invalid-url-falls-back-to-valid-user-layout-preference",
+            self.count('[data-variant-view="A"]') == 1
+            and self.evaluate("localStorage.getItem('noonmark.zhulong.stream-layout')") == "A",
+        )
+        self.evaluate("localStorage.setItem('noonmark.zhulong.stream-layout','INVALID')")
+        self.navigate("variant=INVALID&scenario=focus&preference-case=invalid")
+        self.check(
+            "invalid-url-and-preference-fail-safe-to-c",
+            self.count('[data-variant-view="C"]') == 1,
+        )
+        self.evaluate("localStorage.removeItem('noonmark.zhulong.stream-layout')")
+
+        self.navigate("variant=C&scenario=run&menu-case=live-append")
+        self.click('[data-action="confirm-current"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-session]')?.dataset.runState==='authorized'",
+            "authorized live run before opening layout menu",
+        )
+        self.click('[data-layout-trigger]')
+        self.wait_for(
+            "Boolean(document.querySelector('[data-layout-menu]')) && document.activeElement?.matches('[data-layout-option]')",
+            "layout menu and focused option during live run",
+        )
+        self.evaluate(
+            "window.__liveMenu=document.querySelector('[data-layout-menu]');"
+            "window.__liveFocusedOption=document.activeElement;"
+            "window.__liveFocusedValue=document.activeElement?.dataset.value||''"
+        )
+        menu_open_count = self.count('[data-stream-node]')
+        self.wait_for(
+            f"document.querySelectorAll('[data-stream-node]').length>{menu_open_count}"
+            " && Boolean(document.querySelector('[data-layout-menu]'))"
+            " && document.querySelector('[data-layout-trigger]')?.getAttribute('aria-expanded')==='true'"
+            " && document.querySelector('[data-layout-menu]')===window.__liveMenu"
+            " && document.activeElement===window.__liveFocusedOption"
+            " && document.activeElement?.dataset.value===window.__liveFocusedValue",
+            "live append to preserve the open layout menu",
+        )
+        self.check(
+            "live-append-does-not-dismiss-the-user-opened-layout-menu",
+            self.count('[data-layout-option]') == 3
+            and self.evaluate("document.activeElement===window.__liveFocusedOption") is True
+            and self.evaluate("window.__liveFocusedValue") == "C",
+        )
+        live_menu_node_count = self.count('[data-stream-node]')
+        self.click('.page-header-copy')
+        self.wait_for(
+            "!document.querySelector('[data-layout-menu]')"
+            f" && document.querySelector('.page-header-copy p')?.innerText.includes('{live_menu_node_count} 条流式记录')",
+            "outside click to close the layout menu and refresh deferred Header state",
+        )
+
+        self.navigate("variant=A&scenario=run")
+        self.install_painted_commit_probe()
+        live_before = self.snapshot()
+        self.physical_double_click('[data-action="confirm-current"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-session]')?.dataset.runState==='idle'"
+            " && document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.stage==='gate'",
+            "physical double-click run to settle once at gate",
+        )
+        painted_samples = self.painted_commit_samples()
+        painted_transitions = list(zip(painted_samples, painted_samples[1:]))
+        growth_pairs = []
+        previous_sample = painted_samples[0]
+        for sample in painted_samples[1:]:
+            if sample["count"] > previous_sample["count"]:
+                growth_pairs.append((previous_sample, sample))
+            previous_sample = sample
+        self.check(
+            "live-run-uses-distinct-painted-single-entry-commits",
+            len(growth_pairs) == 5
+            and all(after["count"] == before["count"] + 1 for before, after in growth_pairs)
+            and len({after["t"] for _, after in growth_pairs}) == len(growth_pairs),
+            json.dumps({"samples": len(painted_samples), "growth": [after["count"] - before["count"] for before, after in growth_pairs]}, sort_keys=True),
+        )
+        self.check(
+            "every-painted-commit-is-monotonic-and-prefix-stable",
+            all(
+                (after["count"] == before["count"] and after["fingerprints"] == before["fingerprints"])
+                or (
+                    after["count"] == before["count"] + 1
+                    and after["fingerprints"][: before["count"]] == before["fingerprints"]
+                )
+                for before, after in painted_transitions
+            ),
+            json.dumps(
+                [{"before": before["count"], "after": after["count"]} for before, after in painted_transitions],
+                sort_keys=True,
+            ),
+        )
+        run_nodes = self.evaluate(
+            "[...document.querySelectorAll('[data-stream-node][data-run-id]')].filter((node)=>node.dataset.runId).map((node)=>({"
+            "id:node.dataset.nodeId,dependsOn:node.dataset.dependsOn,runId:node.dataset.runId,status:node.dataset.runStatus,ordinal:Number(node.dataset.runOrdinal),"
+            "authorityId:node.dataset.authorityId,contractId:node.dataset.contractId}))"
+        )
+        self.check(
+            "physical-double-start-creates-exactly-one-ordered-producer",
+            len(run_nodes) == 5
+            and len({node["runId"] for node in run_nodes}) == 1
+            and len({node["authorityId"] for node in run_nodes}) == 1
+            and len({node["contractId"] for node in run_nodes}) == 1
+            and bool(run_nodes[0]["authorityId"])
+            and self.count(f'#{run_nodes[0]["contractId"]}[data-activity-type="run-contract"]') == 1
+            and [node["status"] for node in run_nodes] == ["authorized", "started", "running", "finishing", "completed"]
+            and [node["ordinal"] for node in run_nodes] == list(range(5))
+            and all(run_nodes[index]["dependsOn"] == run_nodes[index - 1]["id"] for index in range(1, len(run_nodes))),
+            json.dumps(run_nodes, ensure_ascii=False, sort_keys=True),
+        )
+        self.assert_append_only(live_before, self.snapshot(), "live-run-completion-preserves-pre-run-prefix")
+        self.assert_single_tail_current("live-run-completion-settles-one-gate-checkpoint")
+
+        self.navigate("variant=A&scenario=run")
+        self.install_painted_commit_probe()
+        self.click('[data-action="confirm-current"]')
+        time.sleep(0.22)
+        self.physical_double_click('.page-header [data-action="pause-session"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-session]')?.dataset.runState==='paused'",
+            "durable live run pause",
+        )
+        time.sleep(0.08)
+        paused_count = self.count('[data-stream-node]')
+        paused_snapshot = self.snapshot()
+        paused_probe_count = self.evaluate("window.__streamPaintProbe.samples.length")
+        paused_head = self.evaluate(
+            "(() => {const node=document.querySelector('[data-stream-node][data-state=\"current\"]');"
+            "return {status:node?.dataset.runStatus||'',activity:node?.querySelector('[data-node-payload]')?.innerText||''};})()"
+        )
+        time.sleep(1.2)
+        self.check(
+            "paused-run-has-a-durable-receipt-and-emits-nothing",
+            paused_head["status"] == "paused"
+            and "不会追加新的规划步骤" in paused_head["activity"]
+            and self.count('[data-stream-node]') == paused_count,
+            json.dumps({"pausedCount": paused_count, "afterWindow": self.count('[data-stream-node]'), "head": paused_head}, ensure_ascii=False, sort_keys=True),
+        )
+        self.check(
+            "paused-window-has-zero-painted-domain-commits-or-rewrites",
+            self.snapshot() == paused_snapshot
+            and self.evaluate("window.__streamPaintProbe.samples.length") == paused_probe_count,
+        )
+        paused_run_id = self.evaluate("document.querySelector('[data-stream-session]').dataset.runId")
+        for layout in ["C", "B", "A"]:
+            self.choose_layout(layout)
+            self.check(
+                f"paused-run-layout-{layout.lower()}-preserves-one-producer",
+                self.snapshot() == paused_snapshot
+                and self.evaluate("document.querySelector('[data-stream-session]').dataset.runState") == "paused"
+                and self.evaluate("document.querySelector('[data-stream-session]').dataset.runId") == paused_run_id,
+            )
+        self.physical_double_click('.page-header [data-action="resume-run"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-session]')?.dataset.runState==='idle'"
+            " && document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.stage==='gate'",
+            "paused run to resume from the next unexecuted step",
+        )
+        paused_run_nodes = self.evaluate(
+            "[...document.querySelectorAll('[data-stream-node]')].filter((node)=>node.dataset.runId).map((node)=>({"
+            "id:node.dataset.nodeId,dependsOn:node.dataset.dependsOn,runId:node.dataset.runId,status:node.dataset.runStatus,ordinal:Number(node.dataset.runOrdinal)}))"
+        )
+        self.check(
+            "resume-keeps-one-run-identity-and-contiguous-dependency-chain",
+            [node["ordinal"] for node in paused_run_nodes] == list(range(len(paused_run_nodes)))
+            and len({node["runId"] for node in paused_run_nodes}) == 1
+            and sum(node["status"] == "paused" for node in paused_run_nodes) == 1
+            and sum(node["status"] == "resumed" for node in paused_run_nodes) == 1
+            and all(paused_run_nodes[index]["dependsOn"] == paused_run_nodes[index - 1]["id"] for index in range(1, len(paused_run_nodes))),
+            json.dumps(paused_run_nodes, ensure_ascii=False, sort_keys=True),
+        )
+
+        self.navigate("variant=A&scenario=run")
+        self.click('[data-action="confirm-current"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-session]')?.dataset.runState==='authorized'",
+            "cancellable run authorization",
+        )
+        first_cancelled_run_id = self.evaluate("document.querySelector('[data-stream-session]').dataset.runId")
+        self.click('[data-action="open-session"]')
+        self.click('.detail-rail [data-action="cancel-run"]')
+        self.wait_for(
+            "document.querySelectorAll('[data-stream-node][data-run-status=\"cancelling\"]').length>=2",
+            "cancellation receipt while terminal checkpoint is pending",
+        )
+        self.check(
+            "cancelling-phase-never-reopens-pause-or-cancel-controls",
+            self.count('.page-header [data-action="pause-session"]:not([disabled])') == 0
+            and self.count('.detail-rail [data-action="cancel-run"]') == 0,
+        )
+        self.wait_for(
+            "document.querySelector('[data-stream-session]')?.dataset.runState==='idle'"
+            " && document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.stage==='run'",
+            "cancelled run recovery checkpoint",
+        )
+        cancelled_run_nodes = self.evaluate(
+            f"[...document.querySelectorAll('[data-stream-node][data-run-id={json.dumps(first_cancelled_run_id)}]')].map((node)=>({{"
+            "id:node.dataset.nodeId,dependsOn:node.dataset.dependsOn,status:node.dataset.runStatus,ordinal:Number(node.dataset.runOrdinal)}))"
+        )
+        self.check(
+            "cancel-discards-unexecuted-steps-and-forms-a-recovery-checkpoint",
+            [node["status"] for node in cancelled_run_nodes] == ["authorized", "cancelling", "cancelling", "cancelled"]
+            and [node["ordinal"] for node in cancelled_run_nodes] == list(range(4))
+            and all(cancelled_run_nodes[index]["dependsOn"] == cancelled_run_nodes[index - 1]["id"] for index in range(1, len(cancelled_run_nodes)))
+            and self.count('[data-stream-node][data-activity-type="planning-step"]') == 0
+            and self.evaluate("document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.nodeId") == cancelled_run_nodes[-1]["id"],
+            json.dumps(cancelled_run_nodes, ensure_ascii=False, sort_keys=True),
+        )
+        self.click('[data-action="confirm-current"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-session]')?.dataset.runState==='idle'"
+            " && document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.stage==='gate'",
+            "fresh run after cancellation",
+        )
+        run_ids_after_restart = self.evaluate(
+            "[...new Set([...document.querySelectorAll('[data-stream-node]')].map((node)=>node.dataset.runId).filter(Boolean))]"
+        )
+        cancelled_run_after_restart = self.evaluate(
+            f"[...document.querySelectorAll('[data-stream-node][data-run-id={json.dumps(first_cancelled_run_id)}]')].map((node)=>({{"
+            "id:node.dataset.nodeId,dependsOn:node.dataset.dependsOn,status:node.dataset.runStatus,ordinal:Number(node.dataset.runOrdinal)}))"
+        )
+        self.check(
+            "restart-after-cancel-uses-a-new-run-identity",
+            len(run_ids_after_restart) == 2
+            and first_cancelled_run_id in run_ids_after_restart
+            and cancelled_run_after_restart == cancelled_run_nodes,
+            json.dumps(run_ids_after_restart, sort_keys=True),
+        )
+
+        self.navigate("variant=A&scenario=gate")
+        self.click('[data-action="choose"][data-kind="gate"][data-value="investigate"]')
+        self.click('[data-action="confirm-current"]')
+        self.check(
+            "live-draft-fixture-starts-at-amendment-checkpoint",
+            self.evaluate("document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.stage") == "amendment",
+        )
+        self.install_painted_commit_probe()
+        self.click('[data-action="confirm-current"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-session]')?.dataset.runState==='authorized'",
+            "draft live run authorization",
+        )
+        time.sleep(0.08)
+        self.physical_wheel('[data-stream-scroll]', -620)
+        time.sleep(0.12)
+        away_probe_index = self.evaluate("Math.max(0,window.__streamPaintProbe.samples.length-1)")
+        away = self.evaluate(
+            "(() => {const scroller=document.querySelector('[data-stream-scroll]');const box=scroller.getBoundingClientRect();"
+            "const anchor=[...document.querySelectorAll('[data-stream-node]')].find((node)=>{const rect=node.getBoundingClientRect();return rect.bottom>box.top+20&&rect.top<box.bottom-20;});"
+            "return {count:document.querySelectorAll('[data-stream-node]').length,scrollTop:scroller.scrollTop,anchorId:anchor?.dataset.nodeId||'',anchorY:anchor?anchor.getBoundingClientRect().top-box.top:null};})()"
+        )
+        self.wait_for(
+            "document.querySelector('[data-stream-session]')?.dataset.runState==='idle'"
+            " && document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.stage==='draft'",
+            "draft live run to finish while user owns scroll",
+        )
+        away_after = self.evaluate(
+            "(() => {const scroller=document.querySelector('[data-stream-scroll]');const box=scroller.getBoundingClientRect();"
+            f"const anchor=document.getElementById({json.dumps(away['anchorId'])});"
+            "return {count:document.querySelectorAll('[data-stream-node]').length,scrollTop:scroller.scrollTop,anchorY:anchor?anchor.getBoundingClientRect().top-box.top:null,"
+            "unseen:Number(document.querySelector('[data-return-current]')?.dataset.unseenCount||0),label:document.querySelector('[data-return-current]')?.innerText||'',"
+            "visible:document.querySelector('[data-return-current]')?.classList.contains('visible')||false};})()"
+        )
+        away_painted_samples = self.painted_commit_samples()[away_probe_index:]
+        away_growth = [
+            after
+            for before, after in zip(away_painted_samples, away_painted_samples[1:])
+            if after["count"] == before["count"] + 1
+        ]
+        appended_while_away = away_after["count"] - away["count"]
+        self.check(
+            "manual-wheel-scroll-away-is-not-stolen-by-live-appends",
+            away["anchorId"]
+            and appended_while_away >= 4
+            and abs(away_after["scrollTop"] - away["scrollTop"]) <= 3
+            and abs(away_after["anchorY"] - away["anchorY"]) <= 3,
+            json.dumps({"before": away, "after": away_after}, ensure_ascii=False, sort_keys=True),
+        )
+        self.check(
+            "scroll-away-shows-exact-unread-live-record-count",
+            away_after["visible"]
+            and away_after["unseen"] == appended_while_away
+            and f"{appended_while_away} 条新运行记录" in away_after["label"],
+            json.dumps({"appended": appended_while_away, "indicator": away_after}, ensure_ascii=False, sort_keys=True),
+        )
+        self.check(
+            "unread-indicator-increments-on-every-painted-live-commit",
+            len(away_growth) == appended_while_away
+            and [sample["unseen"] for sample in away_growth] == list(range(1, appended_while_away + 1))
+            and all(sample["unreadVisible"] for sample in away_growth)
+            and all(f"{index} 条新运行记录" in sample["unreadLabel"] for index, sample in enumerate(away_growth, 1)),
+            json.dumps(
+                [{"count": sample["count"], "unseen": sample["unseen"], "label": sample["unreadLabel"]} for sample in away_growth],
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
+        draft_chain = self.evaluate(
+            "(() => {const nodes=[...document.querySelectorAll('[data-stream-node]')];"
+            "const complete=nodes.find((node)=>node.dataset.activityType==='planning-complete');"
+            "const plan=nodes.find((node)=>node.dataset.stage==='draft'&&node.dataset.artifactType==='plan');"
+            "const checkpoint=nodes.find((node)=>node.dataset.stage==='draft'&&node.dataset.kind==='checkpoint');"
+            "return {completeId:complete?.dataset.nodeId||'',planId:plan?.dataset.nodeId||'',planDepends:plan?.dataset.dependsOn||'',"
+            "checkpointId:checkpoint?.dataset.nodeId||'',checkpointDepends:checkpoint?.dataset.dependsOn||'',"
+            "tailId:nodes.at(-1)?.dataset.nodeId||'',currentId:nodes.find((node)=>node.dataset.state==='current')?.dataset.nodeId||'',"
+            "currentCount:nodes.filter((node)=>node.dataset.state==='current').length,"
+            "activeId:document.querySelector('[data-stream-session]')?.dataset.activeNodeId||''};})()"
+        )
+        self.check(
+            "live-delegated-planning-produces-one-plan-and-one-review-checkpoint",
+            self.count('[data-stream-node][data-stage="draft"][data-kind="artifact"]') == 1
+            and self.count('[data-stream-node][data-stage="draft"][data-kind="checkpoint"]') == 1
+            and draft_chain["planDepends"] == draft_chain["completeId"]
+            and draft_chain["checkpointDepends"] == draft_chain["planId"]
+            and draft_chain["currentCount"] == 1
+            and draft_chain["checkpointId"] == draft_chain["tailId"] == draft_chain["currentId"] == draft_chain["activeId"],
+            json.dumps(draft_chain, ensure_ascii=False, sort_keys=True),
+        )
+        unread_before_return = away_after["unseen"]
+        self.click('[data-action="return-current"]')
+        self.check(
+            "return-current-keeps-unread-before-visual-travel",
+            self.evaluate("Number(document.querySelector('[data-return-current]')?.dataset.unseenCount||0)") == unread_before_return,
+        )
+        self.wait_for(
+            "document.querySelector('[data-stream-scroll]')?.dataset.scrollMotionState==='traveling'",
+            "return-to-current visual travel to begin",
+        )
+        self.check(
+            "return-current-keeps-unread-during-visual-travel",
+            self.evaluate("Number(document.querySelector('[data-return-current]')?.dataset.unseenCount||0)") == unread_before_return,
+        )
+        self.wait_for(
+            "document.querySelector('[data-return-current]')?.dataset.unseenCount==='0'"
+            " && ['settled','idle'].includes(document.querySelector('[data-stream-scroll]')?.dataset.scrollMotionState)"
+            " && document.querySelector('[data-stream-node][data-state=\"current\"]')?.getBoundingClientRect().bottom <= document.querySelector('[data-stream-scroll]').getBoundingClientRect().bottom",
+            "explicit return to current after unread live records",
+        )
+        self.check(
+            "explicit-return-reenables-follow-only-after-visible-travel",
+            self.evaluate("document.querySelector('[data-return-current]')?.dataset.unseenCount") == "0",
+        )
+
+        self.navigate("variant=A&scenario=focus")
+        initial = self.snapshot()
+        self.assert_single_tail_current("initial-stream-has-one-tail-checkpoint")
+        self.click('[data-action="confirm-current"]')
+        empty = self.snapshot()
+        self.check(
+            "focus-empty-fail-closed-without-appending",
+            initial["nodes"] == empty["nodes"] and "空回答不会追加" in self.text(),
+        )
+
+        compared = self.choose_and_confirm("focus", "compare")
+        self.check(
+            "compare-adds-material-but-keeps-focus-open",
+            compared["nodes"][-1]["stage"] == "focus" and "仍需用户选择第一条完整路径" in self.text(),
+        )
+        self.choose_and_confirm("focus", "shape")
+
+        criteria_before = self.snapshot()
+        self.click('[data-action="confirm-current"]')
+        self.check(
+            "criteria-empty-fail-closed-without-appending",
+            self.snapshot()["nodes"] == criteria_before["nodes"] and "不会替你猜一个标准" in self.text(),
+        )
+        self.choose_and_confirm("criteria", "both")
+        self.confirm_simple("brief")
+        self.confirm_simple("run")
+
+        gate_before = self.snapshot()
+        self.click('[data-action="confirm-current"]')
+        self.check(
+            "gate-empty-fail-closed-without-appending",
+            self.snapshot()["nodes"] == gate_before["nodes"] and "不会自行继续" in self.text(),
+        )
+        self.click('[data-action="choose"][data-kind="gate"][data-value="range"]')
+        self.click('[data-action="confirm-current"]')
+        self.check(
+            "gate-range-without-user-evidence-fail-closed",
+            self.snapshot()["nodes"] == gate_before["nodes"] and "不会补造这个依据" in self.text(),
+        )
+        self.choose_and_confirm("gate", "investigate")
+        self.confirm_simple("amendment")
+
+        draft = self.snapshot()
+        stages = [node["stage"] for node in draft["nodes"]]
+        draft_text = self.text("[data-stream-log]")
+        self.check(
+            "complete-history-remains-in-one-stream-through-draft",
+            all(stage in stages for stage in ["scope", "focus", "criteria", "brief", "run", "gate", "amendment", "draft"])
+            and stages[-1] == "draft",
+        )
+        self.check(
+            "draft-retains-scientific-no-false-precision-boundary",
+            "不生成日期、点数或正式概率" in draft_text
+            and not re.search(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}", draft_text)
+            and not re.search(r"\d+(?:\.\d+)?\s*[%％]", draft_text),
+        )
+
+        self.confirm_simple("draft")
+        self.check(
+            "todo-write-is-a-separate-enabled-current-capability",
+            self.count('[data-capability="todo-write"]:not([disabled])') == 1
+            and "只对 diff v1、hash D-301 与本次点击有效" in self.text(),
+        )
+        self.confirm_simple("apply")
+        receipt_text = self.text("[data-stream-log]")
+        self.check(
+            "receipt-ends-write-authority-without-hidden-side-effects",
+            self.count('[data-capability="todo-write"]:not([disabled])') == 0
+            and "没有生成承诺快照" in receipt_text
+            and "没有确认长期记忆" in receipt_text
+            and "没有保留未来写入授权" in receipt_text,
+        )
+
+        receipt_a = self.snapshot()
+        self.choose_layout("B")
+        receipt_b = self.snapshot()
+        self.check(
+            "variant-b-preserves-session-records-and-head",
+            receipt_a["nodes"] == receipt_b["nodes"] and receipt_a["active"] == receipt_b["active"]
+            and self.count('[data-variant-view="B"]') == 1,
+        )
+        self.choose_layout("C")
+        receipt_c = self.snapshot()
+        self.check(
+            "variant-c-preserves-session-records-and-head",
+            receipt_b["nodes"] == receipt_c["nodes"] and receipt_b["active"] == receipt_c["active"]
+            and self.count('[data-variant-view="C"]') == 1,
+        )
+
+        self.navigate("variant=A&scenario=receipt")
+        receipt_before_correction = self.snapshot()
+        original_receipt_id = next(
+            node["id"] for node in receipt_before_correction["nodes"] if node["stage"] == "receipt" and node["kind"] == "artifact"
+        )
+        self.check(
+            "consumed-apply-checkpoint-cannot-be-reopened-directly",
+            self.count('[data-stream-node][data-stage="apply"][data-kind="checkpoint"] [data-action="start-correction"]') == 0
+            and self.count('[data-capability="todo-write"]:not([disabled])') == 0,
+        )
+        self.click('[data-stream-node][data-stage="focus"][data-kind="checkpoint"] [data-action="start-correction"]')
+        self.input('[data-correction-input]', "已应用结果保留；新决定只能形成补偿性变更。")
+        self.click('[data-action="confirm-correction"]')
+        post_receipt_correction = self.snapshot()
+        original_receipt = next(node for node in post_receipt_correction["nodes"] if node["id"] == original_receipt_id)
+        self.check(
+            "post-receipt-correction-preserves-occurrence-fact",
+            original_receipt["state"] == "complete"
+            and post_receipt_correction["planState"] == "consumed"
+            and post_receipt_correction["nodes"][-2]["kind"] == "invalidation"
+            and post_receipt_correction["nodes"][-2]["semantic"].split("|")[3] == ""
+            and "已发生的 Todo 应用事实不会被回滚" in post_receipt_correction["nodes"][-2]["payload"]
+            and self.count('[data-capability="todo-write"]:not([disabled])') == 0,
+        )
+        self.choose_and_confirm("focus", "shape")
+        self.choose_and_confirm("criteria", "both")
+        self.confirm_simple("brief")
+        self.confirm_simple("run")
+        self.choose_and_confirm("gate", "investigate")
+        self.confirm_simple("amendment")
+        self.confirm_simple("draft")
+        self.check(
+            "new-branch-write-binds-new-diff-and-base-revision",
+            self.count('[data-stream-node][data-kind="artifact"][data-diff-hash="D-302"]') == 1
+            and "Base Todo revision #T-222" in self.text("[data-stream-log]")
+            and self.count('[data-capability="todo-write"]:not([disabled])') == 1,
+        )
+        branch_two_diff_id = self.evaluate("document.querySelector('[data-stream-node][data-kind=\"artifact\"][data-diff-hash=\"D-302\"]')?.dataset.nodeId || ''")
+        second_correction_before = self.snapshot()
+        self.click('[data-stream-node][data-stage="focus"][data-kind="checkpoint"] [data-action="start-correction"]')
+        self.input('[data-correction-input]', "再次更正：未消费的补偿草稿也必须停用。")
+        self.click('[data-action="confirm-correction"]')
+        second_corrected = self.snapshot()
+        branch_two_diff = next(node for node in second_corrected["nodes"] if node["id"] == branch_two_diff_id)
+        original_receipt = next(node for node in second_corrected["nodes"] if node["id"] == original_receipt_id)
+        self.assert_append_only(second_correction_before, second_corrected, "second-post-receipt-correction-remains-append-only")
+        self.check(
+            "second-post-receipt-correction-invalidates-only-unconsumed-tail",
+            branch_two_diff["state"] == "invalidated"
+            and original_receipt["state"] == "complete"
+            and second_corrected["nodes"][-1]["stage"] == "focus"
+            and self.count('[data-capability="todo-write"]:not([disabled])') == 0,
+        )
+        self.choose_and_confirm("focus", "shape")
+        self.choose_and_confirm("criteria", "both")
+        self.confirm_simple("brief")
+        self.confirm_simple("run")
+        self.choose_and_confirm("gate", "investigate")
+        self.confirm_simple("amendment")
+        self.confirm_simple("draft")
+        self.check(
+            "conversation-branch-does-not-invent-storage-revision",
+            self.count('[data-stream-node][data-kind="artifact"][data-diff-hash="D-303"]') == 1
+            and "Base Todo revision #T-222" in self.text("[data-stream-node][data-diff-hash=\"D-303\"]")
+            and "Base Todo revision #T-223" not in self.text("[data-stream-node][data-diff-hash=\"D-303\"]")
+            and self.count('[data-capability="todo-write"]:not([disabled])') == 1,
+        )
+        self.confirm_simple("apply")
+        receipt_hashes = self.evaluate(
+            "[...document.querySelectorAll('[data-stream-node][data-kind=\"artifact\"][data-stage=\"receipt\"]')].map((node)=>node.dataset.diffHash)"
+        )
+        self.check(
+            "new-compensating-application-uses-distinct-idempotency-chain",
+            receipt_hashes == ["D-301", "D-303"]
+            and self.count('[data-capability="todo-write"]:not([disabled])') == 0
+            and self.count('[data-stream-node][data-stage="apply"][data-kind="checkpoint"] [data-action="start-correction"]') == 0,
+            json.dumps(receipt_hashes),
+        )
+
+        self.navigate("variant=A&scenario=draft")
+        before_view = self.snapshot()
+        self.click('.page-header [data-action="visit-previous"]')
+        self.wait_for("document.querySelector('[data-return-current]')?.classList.contains('visible')", "return-current affordance after locating previous checkpoint")
+        after_view = self.snapshot()
+        view_probe = {
+            "same": before_view == after_view,
+            "located": self.count("[data-stream-node].is-located"),
+            "returnVisible": self.count("[data-return-current].visible"),
+        }
+        self.check(
+            "return-previous-only-moves-view-cursor",
+            view_probe["same"] and view_probe["located"] == 1 and view_probe["returnVisible"] == 1,
+            json.dumps(view_probe),
+        )
+        self.click('[data-action="return-current"]')
+        self.check(
+            "return-current-restores-tail-without-changing-work-head",
+            self.snapshot() == before_view and self.count("[data-stream-node].is-located") == 0,
+        )
+
+        self.navigate("variant=B&scenario=draft&panel=events")
+        before_b_link = self.snapshot()
+        b_linked_entry = self.evaluate("document.querySelector('.native-event:last-child [data-action=\"inspect-entry\"]')?.dataset.entryId || ''")
+        self.click('.native-event:last-child [data-action="inspect-entry"]')
+        self.wait_for(
+            f"document.getElementById({json.dumps(b_linked_entry)})?.offsetParent !== null",
+            "Variant B linked entry chapter expansion",
+        )
+        self.check(
+            "variant-b-event-link-expands-hidden-entry-without-moving-head",
+            self.snapshot() == before_b_link
+            and self.evaluate("document.querySelector('[data-stream-node].is-located')?.dataset.nodeId") == b_linked_entry
+            and self.evaluate("new URLSearchParams(location.search).get('entry')") == b_linked_entry,
+        )
+
+        self.navigate("variant=A&scenario=draft")
+        self.evaluate(
+            "(() => { const query=new URLSearchParams(location.search);query.set('panel','events');"
+            "history.pushState({},'',location.pathname+'?'+query.toString());window.dispatchEvent(new PopStateEvent('popstate'));return true; })()"
+        )
+        self.wait_for("document.querySelector('.rail-header')?.innerText.includes('烛龙事件历史')", "event panel from URL popstate")
+        panel_after_back = self.evaluate(
+            "(() => new Promise((resolve) => { window.addEventListener('popstate',()=>setTimeout(()=>resolve({"
+            "panel:new URLSearchParams(location.search).get('panel')||'',title:document.querySelector('.rail-header')?.innerText||''"
+            "}),50),{once:true});history.back(); }))()"
+        )
+        self.check(
+            "popstate-to-url-without-panel-clears-event-panel",
+            panel_after_back["panel"] == "" and "烛龙事件历史" not in panel_after_back["title"],
+            json.dumps(panel_after_back, ensure_ascii=False),
+        )
+
+        before_correction = self.snapshot()
+        old_draft_id = before_correction["active"]
+        self.click('[data-stream-node][data-stage="focus"][data-kind="checkpoint"] [data-action="start-correction"]')
+        self.wait_for(
+            "document.activeElement?.matches('[data-correction-input]')",
+            "correction composer receives focus",
+        )
+        correction_open = self.snapshot()
+        self.check(
+            "correction-opens-at-tail-with-explicit-textarea-focus",
+            self.evaluate("document.activeElement?.matches('[data-correction-input]')"),
+        )
+        self.click('[data-action="confirm-correction"]')
+        self.check(
+            "empty-correction-fail-closed",
+            self.snapshot()["nodes"] == correction_open["nodes"] and "空更正不会进入历史" in self.text(),
+        )
+        correction_text = "更正：第一条路径必须先完整验证任务成形。"
+        self.input("[data-correction-input]", correction_text)
+        self.click('[data-action="confirm-correction"]')
+        corrected = self.snapshot()
+        self.assert_append_only(before_correction, corrected, "correction-appends-without-rewriting-old-payload")
+        self.check(
+            "correction-appends-invalidation-and-reopened-checkpoint",
+            corrected["nodes"][-3]["kind"] == "correction"
+            and corrected["nodes"][-2]["kind"] == "invalidation"
+            and corrected["nodes"][-1]["kind"] == "checkpoint"
+            and corrected["nodes"][-1]["stage"] == "focus"
+            and correction_text in corrected["nodes"][-3]["payload"],
+        )
+        self.check(
+            "old-plan-and-descendants-remain-visible-but-fail-closed",
+            any(node["stage"] == "draft" and node["state"] == "invalidated" for node in corrected["nodes"])
+            and corrected["planState"] == "invalidated"
+            and self.count('[data-capability="todo-write"]:not([disabled])') == 0,
+        )
+        old_anchor = self.evaluate(
+            "(() => new Promise((resolve) => {"
+            f"const entry={json.dumps(old_draft_id)};"
+            "const query=new URLSearchParams(location.search);query.set('entry',entry);"
+            "history.pushState({},'',location.pathname+'?'+query.toString());"
+            "window.dispatchEvent(new PopStateEvent('popstate'));"
+            "setTimeout(()=>resolve({"
+            "active:document.querySelector('[data-stream-session]').dataset.activeNodeId,"
+            "entry:new URLSearchParams(location.search).get('entry'),"
+            "located:document.querySelector('[data-stream-node].is-located')?.dataset.nodeId||'',"
+            "oldState:document.getElementById(entry)?.dataset.state||'',"
+            "writes:document.querySelectorAll('[data-capability=\"todo-write\"]:not([disabled])').length"
+            "}),50);"
+            "}))()"
+        )
+        self.check(
+            "old-entry-anchor-only-moves-view-cursor",
+            old_anchor["active"] == corrected["active"]
+            and old_anchor["entry"] == old_draft_id
+            and old_anchor["located"] == old_draft_id
+            and old_anchor["oldState"] == "invalidated"
+            and old_anchor["writes"] == 0,
+            json.dumps(old_anchor),
+        )
+        reopened_after_back = self.evaluate(
+            "(() => new Promise((resolve) => {"
+            "let done=false; const finish=(popped)=>{if(done)return;done=true;"
+            "setTimeout(()=>resolve({popped,active:document.querySelector('[data-stream-session]').dataset.activeNodeId,"
+            "corrections:document.querySelectorAll('[data-kind=\"correction\"]').length,"
+            "invalidDrafts:document.querySelectorAll('[data-stage=\"draft\"][data-state=\"invalidated\"]').length,"
+            "writes:document.querySelectorAll('[data-capability=\"todo-write\"]:not([disabled])').length,"
+            "entry:new URLSearchParams(location.search).get('entry')||'',located:document.querySelectorAll('[data-stream-node].is-located').length}),50);};"
+            "window.addEventListener('popstate',()=>finish(true),{once:true});"
+            "setTimeout(()=>finish(false),2000); history.back();"
+            "}))()"
+        )
+        self.check(
+            "browser-back-cannot-revive-invalidated-work",
+            reopened_after_back["popped"]
+            and reopened_after_back["active"] == corrected["active"]
+            and reopened_after_back["corrections"] == 1
+            and reopened_after_back["invalidDrafts"] > 0
+            and reopened_after_back["writes"] == 0
+            and reopened_after_back["entry"] == ""
+            and reopened_after_back["located"] == 0,
+            json.dumps(reopened_after_back),
+        )
+        reopened_after_forward = self.evaluate(
+            "(() => new Promise((resolve) => {"
+            "let done=false; const finish=(popped)=>{if(done)return;done=true;"
+            "setTimeout(()=>resolve({popped,active:document.querySelector('[data-stream-session]').dataset.activeNodeId,"
+            "corrections:document.querySelectorAll('[data-kind=\"correction\"]').length,"
+            "invalidDrafts:document.querySelectorAll('[data-stage=\"draft\"][data-state=\"invalidated\"]').length,"
+            "writes:document.querySelectorAll('[data-capability=\"todo-write\"]:not([disabled])').length,"
+            "entry:new URLSearchParams(location.search).get('entry')||'',located:document.querySelector('[data-stream-node].is-located')?.dataset.nodeId||''}),50);};"
+            "window.addEventListener('popstate',()=>finish(true),{once:true});"
+            "setTimeout(()=>finish(false),2000); history.forward();"
+            "}))()"
+        )
+        self.check(
+            "browser-forward-cannot-revive-invalidated-work",
+            reopened_after_forward["popped"]
+            and reopened_after_forward["active"] == corrected["active"]
+            and reopened_after_forward["corrections"] == 1
+            and reopened_after_forward["invalidDrafts"] > 0
+            and reopened_after_forward["writes"] == 0
+            and reopened_after_forward["entry"] == old_draft_id
+            and reopened_after_forward["located"] == old_draft_id,
+            json.dumps(reopened_after_forward),
+        )
+        self.click('[data-action="open-events"]')
+        correction_events = self.text(".detail-rail")
+        self.check(
+            "correction-is-linked-from-append-only-event-history",
+            correction_text in correction_events
+            and "事件不能逐条修改或删除" in correction_events
+            and self.count('.detail-rail [data-action="inspect-entry"]') > 0,
+        )
+
+        self.navigate("variant=C&scenario=focus")
+        self.input('[data-response-input="focus"]', "方向键输入保护")
+        input_key = self.evaluate(
+            "(() => { const input=document.querySelector('[data-response-input=\"focus\"]');"
+            "input.focus(); input.setSelectionRange(0,0); window.__streamArrowDefaultPrevented=null;"
+            "document.addEventListener('keydown',(event)=>{if(event.key==='ArrowRight')window.__streamArrowDefaultPrevented=event.defaultPrevented;},{once:true});"
+            "return true; })()"
+        )
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyDown", "key": "ArrowRight", "code": "ArrowRight", "windowsVirtualKeyCode": 39, "nativeVirtualKeyCode": 124})
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyUp", "key": "ArrowRight", "code": "ArrowRight", "windowsVirtualKeyCode": 39, "nativeVirtualKeyCode": 124})
+        protected = self.evaluate(
+            "(() => { const input=document.querySelector('[data-response-input=\"focus\"]');"
+            "return {variant:new URLSearchParams(location.search).get('variant'),value:input.value,selection:input.selectionStart,defaultPrevented:window.__streamArrowDefaultPrevented}; })()"
+        )
+        self.check(
+            "arrow-key-does-not-switch-variant-inside-input",
+            input_key
+            and protected["variant"] == "C"
+            and protected["value"] == "方向键输入保护"
+            and protected["selection"] == 1
+            and not protected["defaultPrevented"],
+            json.dumps(protected, ensure_ascii=False),
+        )
+        preference_before_global_arrow = self.evaluate("localStorage.getItem('noonmark.zhulong.stream-layout')")
+        self.evaluate("document.body.tabIndex=0; document.body.focus()")
+        self.evaluate(
+            "window.__streamBodyArrowDefaultPrevented=null;document.addEventListener('keydown',(event)=>{"
+            "if(event.key==='ArrowRight')window.__streamBodyArrowDefaultPrevented=event.defaultPrevented;},{once:true})"
+        )
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyDown", "key": "ArrowRight", "code": "ArrowRight"})
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyUp", "key": "ArrowRight", "code": "ArrowRight"})
+        self.check(
+            "global-arrow-key-never-switches-layout-or-prevents-default",
+            self.evaluate("new URLSearchParams(location.search).get('variant')") == "C"
+            and self.evaluate("document.querySelector('[data-response-input=\"focus\"]')?.value") == "方向键输入保护"
+            and self.evaluate("window.__streamBodyArrowDefaultPrevented") is False
+            and self.evaluate("localStorage.getItem('noonmark.zhulong.stream-layout')") == preference_before_global_arrow,
+        )
+        input_layout_snapshot = self.snapshot()
+        self.evaluate(
+            "(() => {const input=document.querySelector('[data-response-input=\"focus\"]');"
+            "input.focus();input.setSelectionRange(2,5,'forward');input.dispatchEvent(new Event('select',{bubbles:true}));return true;})()"
+        )
+        for layout in ["A", "B", "C"]:
+            self.choose_layout(layout)
+            preserved_input = self.evaluate(
+                "(() => {const input=document.querySelector('[data-response-input=\"focus\"]');return {"
+                "value:input?.value||'',start:input?.selectionStart,end:input?.selectionEnd};})()"
+            )
+            self.check(
+                f"layout-{layout.lower()}-preserves-uncommitted-input-selection-and-head",
+                self.snapshot() == input_layout_snapshot
+                and preserved_input == {"value": "方向键输入保护", "start": 2, "end": 5},
+                json.dumps(preserved_input, ensure_ascii=False, sort_keys=True),
+            )
+        self.physical_click('[data-layout-trigger]')
+        self.wait_for(
+            "document.activeElement?.matches('[data-layout-option][data-value=\"C\"]')",
+            "selected layout option to receive menu focus",
+        )
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyDown", "key": "ArrowDown", "code": "ArrowDown"})
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyUp", "key": "ArrowDown", "code": "ArrowDown"})
+        self.check(
+            "layout-menu-arrow-navigation-only-moves-menu-focus",
+            self.evaluate("document.activeElement?.dataset.value") == "A"
+            and self.evaluate("new URLSearchParams(location.search).get('variant')") == "C",
+        )
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "code": "Enter"})
+        self.cdp.command("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter"})
+        self.wait_for("Boolean(document.querySelector('[data-variant-view=\"A\"]'))", "Enter to choose focused layout")
+        self.check(
+            "layout-menu-enter-selects-focused-option",
+            self.evaluate("new URLSearchParams(location.search).get('variant')") == "A"
+            and self.evaluate("localStorage.getItem('noonmark.zhulong.stream-layout')") == "A",
+        )
+
+        self.navigate("variant=C&scenario=long")
+        c_semantics = self.evaluate(
+            "(() => {const entries=[...document.querySelectorAll('.woven-entry')];"
+            "const zhulong=entries.filter((entry)=>entry.dataset.wovenLane==='zhulong');"
+            "const user=entries.filter((entry)=>entry.dataset.wovenLane==='user');"
+            "const full=entries.filter((entry)=>entry.dataset.wovenLane==='full');"
+            "const spineCenter=(entry)=>{const box=entry.querySelector('.woven-spine').getBoundingClientRect();return box.left+box.width/2};"
+            "const cardBox=(entry)=>entry.querySelector('.woven-card').getBoundingClientRect();"
+            "const entryBox=(entry)=>entry.getBoundingClientRect();"
+            "const expected=(entry)=>{const actor=entry.classList.contains('actor-user')?'user':'zhulong';"
+            "const majorActivity=['run-contract','stop-condition','run-failed','run-cancelled'].includes(entry.dataset.activityType);"
+            "const role=entry.dataset.kind==='checkpoint'?'checkpoint':['correction','invalidation'].includes(entry.dataset.kind)?'history-boundary':"
+            "entry.dataset.artifactType==='receipt'?'receipt':majorActivity?'system-boundary':actor;"
+            "const lane=['checkpoint','history-boundary','receipt','system-boundary'].includes(role)?'full':role;"
+            "const milestone=role==='checkpoint'?'共同决策点':role==='history-boundary'?'历史边界':role==='receipt'?'结果回执':"
+            "role==='system-boundary'&&['stop-condition','run-failed','run-cancelled'].includes(entry.dataset.activityType)?'运行边界':"
+            "role==='system-boundary'?'系统边界':'';return {role,lane,milestone}};"
+            "const mismatches=entries.map((entry)=>({id:entry.dataset.nodeId,actual:{role:entry.dataset.wovenRole,lane:entry.dataset.wovenLane,milestone:entry.dataset.wovenMilestone||''},expected:expected(entry)}))"
+            ".filter((item)=>JSON.stringify(item.actual)!==JSON.stringify(item.expected));"
+            "return {labels:[...document.querySelectorAll('.woven-labels>span')].map((label)=>label.innerText),"
+            "zhulongCount:zhulong.length,userCount:user.length,fullCount:full.length,"
+            "systemOnZhulong:zhulong.filter((entry)=>entry.classList.contains('actor-system')).length,"
+            "zhulongActorsValid:zhulong.every((entry)=>!entry.classList.contains('actor-user')),"
+            "userActorsValid:user.every((entry)=>entry.classList.contains('actor-user')),"
+            "zhulongLeft:zhulong.every((entry)=>cardBox(entry).right<=spineCenter(entry)+1),"
+            "userRight:user.every((entry)=>cardBox(entry).left>=spineCenter(entry)-1),"
+            "fullSpans:full.every((entry)=>Math.abs(cardBox(entry).left-entryBox(entry).left)<=1&&Math.abs(cardBox(entry).right-entryBox(entry).right)<=1),"
+            "fullRoles:full.map((entry)=>entry.dataset.wovenRole),"
+            "checkpointRoles:entries.filter((entry)=>entry.dataset.kind==='checkpoint').map((entry)=>entry.dataset.wovenRole),"
+            "mismatches,"
+            "compactUser:document.querySelector('.woven-entry.lane-user.is-compact-user')?.dataset.nodeId||'',"
+            "compactToggle:Boolean(document.querySelector('.woven-entry.lane-user.is-compact-user [data-action=\"toggle-entry\"]'))};})()"
+        )
+        self.check(
+            "variant-c-is-a-stable-left-zhulong-right-user-dual-track-with-major-full-width-records",
+            c_semantics["labels"] == ["烛龙\n分析、选项与执行", "你\n决定与授权"]
+            and c_semantics["zhulongCount"] > 0
+            and c_semantics["userCount"] > 0
+            and c_semantics["fullCount"] > 0
+            and c_semantics["systemOnZhulong"] > 0
+            and c_semantics["zhulongActorsValid"]
+            and c_semantics["userActorsValid"]
+            and c_semantics["zhulongLeft"]
+            and c_semantics["userRight"]
+            and c_semantics["fullSpans"]
+            and set(c_semantics["fullRoles"]).issubset({"checkpoint", "history-boundary", "receipt", "system-boundary"})
+            and c_semantics["checkpointRoles"]
+            and set(c_semantics["checkpointRoles"]) == {"checkpoint"}
+            and not c_semantics["mismatches"]
+            and bool(c_semantics["compactUser"])
+            and c_semantics["compactToggle"],
+            json.dumps(c_semantics, ensure_ascii=False, sort_keys=True),
+        )
+        compact_user_snapshot = self.snapshot()
+        compact_user_height = self.evaluate(
+            f"document.getElementById({json.dumps(c_semantics['compactUser'])}).getBoundingClientRect().height"
+        )
+        self.click(
+            f'#{c_semantics["compactUser"]} [data-action="toggle-entry"]'
+        )
+        expanded_user = self.evaluate(
+            f"(() => {{const entry=document.getElementById({json.dumps(c_semantics['compactUser'])});return {{"
+            "compact:entry.classList.contains('is-compact-user'),height:entry.getBoundingClientRect().height,"
+            "expanded:entry.querySelector('[data-action=\"toggle-entry\"]')?.getAttribute('aria-expanded')};})()"
+        )
+        self.check(
+            "variant-c-long-user-decision-can-expand-without-changing-session",
+            self.snapshot() == compact_user_snapshot
+            and not expanded_user["compact"]
+            and expanded_user["height"] > compact_user_height
+            and expanded_user["expanded"] == "true",
+            json.dumps(expanded_user, sort_keys=True),
+        )
+
+        self.evaluate(
+            "(() => {const scroller=document.querySelector('[data-stream-scroll]');"
+            "const target=[...document.querySelectorAll('.woven-entry[data-activity-type=\"long-fixture\"]')][7];"
+            "const scrollerBox=scroller.getBoundingClientRect();const targetBox=target.getBoundingClientRect();"
+            "scroller.style.scrollBehavior='auto';scroller.scrollTop+=targetBox.top-scrollerBox.top;"
+            "window.__layoutScroller=scroller;return target.dataset.nodeId;})()"
+        )
+        layout_wheel_point = self.evaluate(
+            "(() => {const box=document.querySelector('[data-stream-scroll]').getBoundingClientRect();"
+            "return {x:box.left+box.width/2,y:box.top+box.height/2};})()"
+        )
+        self.cdp.command(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseWheel", "x": layout_wheel_point["x"], "y": layout_wheel_point["y"], "deltaX": 0, "deltaY": 82},
+        )
+        self.wait_for(
+            "document.querySelector('[data-return-current]')?.classList.contains('visible')",
+            "physical wheel to transfer long-stream ownership before layout switch",
+        )
+        stable_layout_scroll = 0
+        last_layout_scroll = None
+        layout_scroll_deadline = time.monotonic() + 1.0
+        while time.monotonic() < layout_scroll_deadline and stable_layout_scroll < 3:
+            current_layout_scroll = self.evaluate("document.querySelector('[data-stream-scroll]').scrollTop")
+            stable_layout_scroll = stable_layout_scroll + 1 if last_layout_scroll is not None and abs(current_layout_scroll - last_layout_scroll) <= 0.75 else 0
+            last_layout_scroll = current_layout_scroll
+            time.sleep(0.05)
+        self.check(
+            "physical-layout-anchor-wheel-settles-before-view-switch",
+            stable_layout_scroll >= 3,
+            json.dumps({"scrollTop": last_layout_scroll, "stableSamples": stable_layout_scroll}, sort_keys=True),
+        )
+        layout_anchor = self.evaluate(
+            "(() => {const scroller=document.querySelector('[data-stream-scroll]');const box=scroller.getBoundingClientRect();"
+            "const inset=document.querySelector('.mac-window').dataset.variant==='C'?42:0;const visibleTop=box.top+inset;"
+            "const target=[...document.querySelectorAll('[data-stream-node]')].find((node)=>{const rect=node.getBoundingClientRect();"
+            "return node.offsetParent!==null&&rect.bottom>visibleTop+1&&rect.top<box.bottom-1});const rect=target.getBoundingClientRect();"
+            "return {id:target.dataset.nodeId,visibleOffset:rect.top-visibleTop,scrollTop:scroller.scrollTop};})()"
+        )
+        anchor_snapshot = self.snapshot()
+        anchor_samples = []
+        for layout in ["A", "B", "C"]:
+            self.choose_layout(layout)
+            sample = self.evaluate(
+                f"(() => {{const scroller=document.querySelector('[data-stream-scroll]');"
+                f"const target=document.getElementById({json.dumps(layout_anchor['id'])});"
+                "const scrollerBox=scroller.getBoundingClientRect();const targetBox=target.getBoundingClientRect();"
+                "const inset=document.querySelector('.mac-window').dataset.variant==='C'?42:0;const visibleTop=scrollerBox.top+inset;return {"
+                "variant:document.querySelector('.mac-window').dataset.variant,id:target.dataset.nodeId,"
+                "visible:target.offsetParent!==null&&targetBox.bottom>visibleTop+1&&targetBox.top<scrollerBox.bottom-1,"
+                "visibleOffset:targetBox.top-visibleTop,sameScroller:scroller===window.__layoutScroller,"
+                "userOwns:document.querySelector('[data-return-current]').classList.contains('visible')};})()"
+            )
+            anchor_samples.append(sample)
+            self.check(
+                f"layout-{layout.lower()}-preserves-the-long-stream-viewport-anchor",
+                self.snapshot() == anchor_snapshot
+                and sample["variant"] == layout
+                and sample["id"] == layout_anchor["id"]
+                and sample["visible"]
+                and sample["sameScroller"]
+                and sample["userOwns"]
+                and abs(sample["visibleOffset"] - layout_anchor["visibleOffset"]) <= 8,
+                json.dumps({"origin": layout_anchor, "sample": sample}, sort_keys=True),
+            )
+
+        for source_layout in ["A", "B"]:
+            self.navigate(f"variant={source_layout}&scenario=long&anchor-origin={source_layout}")
+            if source_layout == "B":
+                self.click('.stream-chapter:not(.current) .chapter-heading')
+            source_anchor = self.evaluate(
+                "(() => {const scroller=document.querySelector('[data-stream-scroll]');"
+                "const nodes=[...document.querySelectorAll('[data-stream-node]')].filter((node)=>node.offsetParent!==null);"
+                "const target=nodes[Math.min(2,nodes.length-1)];const box=scroller.getBoundingClientRect();"
+                "scroller.style.scrollBehavior='auto';scroller.scrollTop+=target.getBoundingClientRect().top-box.top;"
+                "window.__layoutScroller=scroller;const settled=target.getBoundingClientRect();"
+                "return {id:target.dataset.nodeId,visibleOffset:settled.top-box.top};})()"
+            )
+            source_snapshot = self.snapshot()
+            self.choose_layout("C")
+            c_from_source = self.evaluate(
+                f"(() => {{const scroller=document.querySelector('[data-stream-scroll]');const box=scroller.getBoundingClientRect();"
+                f"const target=document.getElementById({json.dumps(source_anchor['id'])});const rect=target.getBoundingClientRect();return {{"
+                "id:target.dataset.nodeId,visibleOffset:rect.top-(box.top+42),rawOffset:rect.top-box.top,"
+                "visible:target.offsetParent!==null&&rect.bottom>box.top+43&&rect.top<box.bottom-1,"
+                "sameScroller:scroller===window.__layoutScroller};})()"
+            )
+            self.check(
+                f"layout-{source_layout.lower()}-origin-to-c-keeps-anchor-below-sticky-track-labels",
+                self.snapshot() == source_snapshot
+                and c_from_source["id"] == source_anchor["id"]
+                and c_from_source["visible"]
+                and c_from_source["sameScroller"]
+                and c_from_source["rawOffset"] >= 41
+                and abs(c_from_source["visibleOffset"] - source_anchor["visibleOffset"]) <= 8,
+                json.dumps({"origin": source_anchor, "sample": c_from_source}, sort_keys=True),
+            )
+
+        history_snapshot = self.snapshot()
+        history_preference = self.evaluate("localStorage.getItem('noonmark.zhulong.stream-layout')")
+        self.evaluate(
+            "(() => {const query=new URLSearchParams(location.search);query.set('variant','A');"
+            "history.pushState({},'',location.pathname+'?'+query.toString());window.dispatchEvent(new PopStateEvent('popstate'));})()"
+        )
+        self.wait_for("Boolean(document.querySelector('[data-variant-view=\"A\"]'))", "history-pushed layout A")
+        self.evaluate(
+            "(() => {const query=new URLSearchParams(location.search);query.set('variant','B');"
+            "history.pushState({},'',location.pathname+'?'+query.toString());window.dispatchEvent(new PopStateEvent('popstate'));})()"
+        )
+        self.wait_for("Boolean(document.querySelector('[data-variant-view=\"B\"]'))", "history-pushed layout B")
+        layout_back = self.evaluate(
+            "(() => new Promise((resolve)=>{window.addEventListener('popstate',()=>setTimeout(()=>resolve(document.querySelector('.mac-window').dataset.variant),50),{once:true});history.back();}))()"
+        )
+        layout_forward = self.evaluate(
+            "(() => new Promise((resolve)=>{window.addEventListener('popstate',()=>setTimeout(()=>resolve(document.querySelector('.mac-window').dataset.variant),50),{once:true});history.forward();}))()"
+        )
+        self.check(
+            "browser-history-can-revisit-layouts-without-changing-session-or-user-preference",
+            layout_back == "A"
+            and layout_forward == "B"
+            and self.snapshot() == history_snapshot
+            and self.evaluate("localStorage.getItem('noonmark.zhulong.stream-layout')") == history_preference,
+            json.dumps({"back": layout_back, "forward": layout_forward, "preference": history_preference}, sort_keys=True),
+        )
+
+        self.navigate("variant=C&scenario=corrected&role-case=history-boundary")
+        history_boundary_roles = self.evaluate(
+            "[...document.querySelectorAll('[data-kind=\"correction\"],[data-kind=\"invalidation\"]')].map((entry)=>({"
+            "kind:entry.dataset.kind,lane:entry.dataset.wovenLane,role:entry.dataset.wovenRole,milestone:entry.dataset.wovenMilestone||''}))"
+        )
+        self.check(
+            "variant-c-correction-and-invalidation-are-explicit-full-width-history-boundaries",
+            len(history_boundary_roles) == 2
+            and all(item["lane"] == "full" and item["role"] == "history-boundary" and item["milestone"] == "历史边界" for item in history_boundary_roles),
+            json.dumps(history_boundary_roles, ensure_ascii=False, sort_keys=True),
+        )
+        self.navigate("variant=C&scenario=receipt&role-case=receipt")
+        receipt_roles = self.evaluate(
+            "[...document.querySelectorAll('[data-artifact-type=\"receipt\"]')].map((entry)=>({"
+            "lane:entry.dataset.wovenLane,role:entry.dataset.wovenRole,milestone:entry.dataset.wovenMilestone||''}))"
+        )
+        self.check(
+            "variant-c-todo-receipt-is-an-explicit-full-width-result-boundary",
+            len(receipt_roles) == 1
+            and receipt_roles[0] == {"lane": "full", "role": "receipt", "milestone": "结果回执"},
+            json.dumps(receipt_roles, ensure_ascii=False, sort_keys=True),
+        )
+
+        self.navigate("variant=A&scenario=long")
+        self.check(
+            "stream-node-dom-ids-are-globally-unique",
+            self.evaluate("(() => { const ids=[...document.querySelectorAll('[data-stream-node]')].map((node)=>node.id); return ids.length===new Set(ids).size; })()"),
+        )
+        before_a_bundle_link = self.snapshot()
+        a_bundled_entry = self.evaluate(
+            "document.querySelector('.activity-bundle-body[hidden] [data-stream-node]')?.dataset.nodeId || ''"
+        )
+        self.evaluate(
+            f"(() => {{ const query=new URLSearchParams(location.search);query.set('entry',{json.dumps(a_bundled_entry)});"
+            "history.pushState({},'',location.pathname+'?'+query.toString());window.dispatchEvent(new PopStateEvent('popstate'));return true; })()"
+        )
+        self.wait_for(
+            f"document.getElementById({json.dumps(a_bundled_entry)})?.offsetParent !== null"
+            f" && document.querySelector('[data-stream-node].is-located')?.dataset.nodeId === {json.dumps(a_bundled_entry)}",
+            "Variant A linked activity bundle expansion",
+        )
+        self.check(
+            "variant-a-entry-anchor-expands-hidden-activity-bundle-without-moving-head",
+            bool(a_bundled_entry)
+            and self.snapshot() == before_a_bundle_link
+            and self.evaluate("new URLSearchParams(location.search).get('entry')") == a_bundled_entry
+            and self.count('.activity-bundle.expanded') >= 1,
+        )
+        self.click('[data-action="return-current"]')
+        self.wait_for(
+            "!new URLSearchParams(location.search).get('entry') && !document.querySelector('[data-stream-node].is-located')",
+            "return to current after Variant A bundle anchor",
+        )
+        self.geometry = self.evaluate(
+            "(() => { const sidebar=document.querySelector('.sidebar').getBoundingClientRect();"
+            "const rail=document.querySelector('.detail-rail').getBoundingClientRect();"
+            "const header=document.querySelector('.page-header').getBoundingClientRect();"
+            "const stream=document.querySelector('[data-stream-scroll]'); stream.style.scrollBehavior='auto'; const before=header.top;"
+            "stream.scrollTop=0; const topHeader=document.querySelector('.page-header').getBoundingClientRect().top;"
+            "stream.scrollTop=stream.scrollHeight; const bottomHeader=document.querySelector('.page-header').getBoundingClientRect().top;"
+            "const action=document.querySelector('[data-current-action] .primary-button');"
+            "const rect=action.getBoundingClientRect(); const hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);"
+            "return {innerWidth,innerHeight,docWidth:document.documentElement.scrollWidth,bodyWidth:document.body.scrollWidth,"
+            "streamClientWidth:stream.clientWidth,streamScrollWidth:stream.scrollWidth,streamClientHeight:stream.clientHeight,streamScrollHeight:stream.scrollHeight,"
+            "atBottom:Math.abs(stream.scrollHeight-stream.clientHeight-stream.scrollTop)<=2,sidebarWidth:sidebar.width,railWidth:rail.width,"
+            "headerStable:Math.abs(before-topHeader)<=1&&Math.abs(before-bottomHeader)<=1,actionVisible:rect.top>=header.bottom&&rect.bottom<=innerHeight,"
+            "actionHit:hit===action||action.contains(hit)}; })()"
+        )
+        self.check(
+            "minimum-long-stream-keeps-native-geometry-and-current-action-reachable",
+            self.geometry["innerWidth"] == 1180
+            and self.geometry["innerHeight"] == 760
+            and self.geometry["docWidth"] <= 1180
+            and self.geometry["bodyWidth"] <= 1180
+            and self.geometry["streamScrollWidth"] <= self.geometry["streamClientWidth"]
+            and self.geometry["streamScrollHeight"] > self.geometry["streamClientHeight"]
+            and self.geometry["atBottom"]
+            and abs(self.geometry["sidebarWidth"] - 240) < 0.1
+            and abs(self.geometry["railWidth"] - 300) < 0.1
+            and self.geometry["headerStable"]
+            and self.geometry["actionVisible"]
+            and self.geometry["actionHit"],
+            json.dumps(self.geometry, sort_keys=True),
+        )
+
+        for variant in ["B", "C"]:
+            self.navigate(f"variant={variant}&scenario=long")
+            variant_geometry = self.evaluate(
+                "(() => { const stream=document.querySelector('[data-stream-scroll]');stream.style.scrollBehavior='auto';"
+                "stream.scrollTop=stream.scrollHeight;const action=document.querySelector('[data-current-action] .primary-button');"
+                "const rect=action.getBoundingClientRect();const hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);"
+                "return {docWidth:document.documentElement.scrollWidth,bodyWidth:document.body.scrollWidth,clientWidth:stream.clientWidth,"
+                "scrollWidth:stream.scrollWidth,clientHeight:stream.clientHeight,scrollHeight:stream.scrollHeight,"
+                "atBottom:Math.abs(stream.scrollHeight-stream.clientHeight-stream.scrollTop)<=2,"
+                "actionVisible:rect.top>=document.querySelector('.page-header').getBoundingClientRect().bottom&&rect.bottom<=innerHeight,"
+                "actionHit:hit===action||action.contains(hit)};})()"
+            )
+            self.check(
+                f"variant-{variant.lower()}-minimum-long-stream-action-remains-reachable",
+                variant_geometry["docWidth"] <= 1180
+                and variant_geometry["bodyWidth"] <= 1180
+                and variant_geometry["scrollWidth"] <= variant_geometry["clientWidth"]
+                and variant_geometry["scrollHeight"] > variant_geometry["clientHeight"]
+                and variant_geometry["atBottom"]
+                and variant_geometry["actionVisible"]
+                and variant_geometry["actionHit"],
+                json.dumps(variant_geometry, sort_keys=True),
+            )
+
+        self.navigate("variant=C&scenario=long&scroll=top&context-case=passive")
+        top_visible_entry = self.evaluate(
+            "(() => {const scroller=document.querySelector('[data-stream-scroll]');const box=scroller.getBoundingClientRect();"
+            "const visibleTop=box.top+42;return [...document.querySelectorAll('[data-stream-node]')].find((node)=>{"
+            "const rect=node.getBoundingClientRect();return node.offsetParent!==null&&rect.bottom>visibleTop+1&&rect.top<box.bottom-1})?.dataset.nodeId||'';})()"
+        )
+        self.wait_for(
+            f"document.querySelector('.stream-detail-rail .rail-header p')?.innerText.includes({json.dumps(top_visible_entry)})"
+            " && document.querySelector('[data-return-current]')?.classList.contains('visible')",
+            "top fixture to project the actually visible historical context",
+        )
+        top_context = self.evaluate(
+            "(() => {const button=document.querySelector('[data-return-current]');const box=button.getBoundingClientRect();"
+            "const hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);return {"
+            "rail:document.querySelector('.stream-detail-rail .rail-header p')?.innerText||'',"
+            "current:document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.nodeId||'',"
+            "buttonHit:hit===button||button.contains(hit),bottomGap:innerHeight-box.bottom};})()"
+        )
+        self.check(
+            "c-long-top-projects-visible-history-and-keeps-the-return-control-reachable",
+            bool(top_visible_entry)
+            and top_visible_entry in top_context["rail"]
+            and top_context["current"] not in top_context["rail"]
+            and top_context["buttonHit"]
+            and top_context["bottomGap"] >= 56,
+            json.dumps({"visible": top_visible_entry, **top_context}, ensure_ascii=False, sort_keys=True),
+        )
+
+        self.navigate("variant=A&scenario=long")
+        self.click('[data-action="open-events"]')
+        event_rail = self.text(".detail-rail")
+        self.check(
+            "event-history-is-a-linked-summary-not-a-second-workflow",
+            "跨功能摘要" in event_rail
+            and "会话正文仍留在中央流" in event_rail
+            and self.count(".detail-rail [data-action=\"inspect-entry\"]") > 0
+            and self.count("[data-stream-session]") == 1,
+        )
+        before_event_link = self.snapshot()
+        linked_entry_id = self.evaluate("document.querySelector('.detail-rail [data-action=\"inspect-entry\"]')?.dataset.entryId || ''")
+        self.click('.detail-rail [data-action="inspect-entry"]')
+        try:
+            self.wait_for(
+                f"document.querySelector('[data-stream-node].is-located')?.dataset.nodeId === {json.dumps(linked_entry_id)}"
+                f" && document.querySelector('[data-return-current]')?.classList.contains('visible')"
+                f" && new URLSearchParams(location.search).get('entry') === {json.dumps(linked_entry_id)}",
+                "event-history linked stream entry",
+            )
+        except AcceptanceFailure as error:
+            probe = self.evaluate(
+                "(() => ({located:document.querySelector('[data-stream-node].is-located')?.dataset.nodeId||'',"
+                "returnVisible:document.querySelector('[data-return-current]')?.classList.contains('visible')||false,"
+                "entry:new URLSearchParams(location.search).get('entry')||'',"
+                "panel:new URLSearchParams(location.search).get('panel')||''}))()"
+            )
+            raise AcceptanceFailure(f"{error}; probe={json.dumps(probe, ensure_ascii=False, sort_keys=True)}")
+        self.check(
+            "event-history-link-only-moves-view-cursor",
+            self.snapshot() == before_event_link
+            and self.count('[data-return-current].visible') == 1
+            and self.evaluate("new URLSearchParams(location.search).get('entry')") == linked_entry_id,
+        )
+
+        for variant in ["A", "B", "C"]:
+            motion_query = f"variant={variant}&scenario=long" + ("&demo=motion" if variant == "A" else "")
+            self.navigate(motion_query)
+            if variant == "A":
+                demo_geometry = self.evaluate(
+                    "(() => {const scroller=document.querySelector('[data-stream-scroll]');return {"
+                    "ratio:scroller.scrollHeight/scroller.clientHeight,expanded:document.querySelectorAll('.activity-bundle.expanded').length,"
+                    "label:document.querySelector('.page-header-copy p')?.innerText||''};})()"
+                )
+                self.check(
+                    "motion-demo-exposes-at-least-three-viewports-of-real-stream",
+                    demo_geometry["ratio"] >= 3
+                    and demo_geometry["expanded"] >= 1
+                    and "滚动轨迹演示" in demo_geometry["label"],
+                    json.dumps(demo_geometry, ensure_ascii=False, sort_keys=True),
+                )
+            self.evaluate(
+                "(() => {const scroller=document.querySelector('[data-stream-scroll]');"
+                "scroller.style.scrollBehavior='auto';scroller.scrollTop=scroller.scrollHeight;return scroller.scrollTop;})()"
+            )
+            motion_snapshot = self.snapshot()
+            active_before_motion = motion_snapshot["active"]
+            previous_trace = self.trace_scroll_action(
+                '.page-header [data-action="visit-previous"]',
+                '[data-stream-node][data-state="current"]',
+                '[data-stream-node].is-located',
+                "new URLSearchParams(location.search).get('entry') && document.querySelectorAll('[data-stream-node].is-located').length===1",
+            )
+            self.assert_scroll_trace(
+                f"variant-{variant.lower()}-visit-previous-has-continuous-upward-visual-track",
+                previous_trace,
+                "backward",
+            )
+            if variant == "A":
+                final_motion_sample = previous_trace["samples"][-1]
+                motion_distance = abs(float(final_motion_sample["motionTarget"]) - float(final_motion_sample["motionStart"]))
+                self.check(
+                    "motion-demo-actually-traverses-at-least-three-viewports",
+                    motion_distance >= final_motion_sample["clientHeight"] * 3,
+                    json.dumps({"distance": motion_distance, "clientHeight": final_motion_sample["clientHeight"]}, sort_keys=True),
+                )
+            self.check(
+                f"variant-{variant.lower()}-visit-previous-motion-keeps-canonical-head",
+                self.snapshot() == motion_snapshot
+                and self.evaluate("document.querySelector('[data-stream-session]').dataset.activeNodeId") == active_before_motion,
+            )
+            return_trace = self.trace_scroll_action(
+                '[data-action="return-current"]',
+                '[data-stream-node].is-located',
+                '[data-stream-node][data-state="current"]',
+                "!new URLSearchParams(location.search).get('entry') && document.querySelectorAll('[data-stream-node].is-located').length===0",
+            )
+            self.assert_scroll_trace(
+                f"variant-{variant.lower()}-return-current-has-continuous-downward-visual-track",
+                return_trace,
+                "forward",
+                require_action_hit=True,
+            )
+            self.check(
+                f"variant-{variant.lower()}-return-current-motion-keeps-canonical-head",
+                self.snapshot() == motion_snapshot
+                and self.evaluate("document.querySelector('[data-stream-session]').dataset.activeNodeId") == active_before_motion,
+            )
+
+        self.navigate("variant=C&scenario=long&demo=motion&menu-case=motion")
+        self.evaluate(
+            "(() => {const scroller=document.querySelector('[data-stream-scroll]');scroller.style.scrollBehavior='auto';"
+            "scroller.scrollTop=scroller.scrollHeight;window.__motionMenuScroller=scroller;})()"
+        )
+        motion_menu_snapshot = self.snapshot()
+        self.click('.page-header [data-action="visit-previous"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-scroll]').dataset.scrollMotionState==='traveling'",
+            "visit-previous motion before opening layout menu",
+        )
+        self.click('[data-layout-trigger]')
+        self.check(
+            "opening-layout-menu-does-not-cancel-an-active-scroll-trajectory",
+            self.count('[data-layout-menu]') == 1
+            and self.evaluate("document.querySelector('[data-stream-scroll]').dataset.scrollMotionState") == "traveling"
+            and self.evaluate("document.querySelector('[data-stream-scroll]')===window.__motionMenuScroller"),
+        )
+        self.click('[data-layout-option][data-value="C"]')
+        self.wait_for(
+            "!document.querySelector('[data-layout-menu]')"
+            " && Boolean(new URLSearchParams(location.search).get('entry'))"
+            " && Boolean(document.querySelector('[data-stream-node].is-located'))"
+            " && ['settled','idle'].includes(document.querySelector('[data-stream-scroll]').dataset.scrollMotionState)",
+            "same-layout re-selection to let the original visit motion settle",
+        )
+        self.check(
+            "reselecting-current-layout-keeps-navigation-intent-and-domain-state",
+            self.snapshot() == motion_menu_snapshot
+            and self.evaluate("document.querySelector('[data-stream-scroll]')===window.__motionMenuScroller")
+            and self.count('[data-return-current].visible') == 1,
+        )
+        self.click('[data-action="return-current"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-scroll]').dataset.scrollMotionState==='traveling'",
+            "return-current motion before changing layout",
+        )
+        self.click('[data-layout-trigger]')
+        self.click('[data-layout-option][data-value="A"]')
+        self.wait_for(
+            "Boolean(document.querySelector('[data-variant-view=\"A\"]'))"
+            " && document.querySelector('[data-stream-scroll]').dataset.scrollMotionState==='traveling'",
+            "cross-layout switch to resume the return-current trajectory",
+        )
+        cross_layout_initial = self.evaluate(
+            "(() => {const scroller=document.querySelector('[data-stream-scroll]');"
+            "const sidebar=document.querySelector('.sidebar').getBoundingClientRect();const header=document.querySelector('.page-header').getBoundingClientRect();"
+            "const rail=document.querySelector('.detail-rail').getBoundingClientRect();return {top:scroller.scrollTop,"
+            "shell:[sidebar.x,sidebar.y,sidebar.width,sidebar.height,header.x,header.y,header.width,header.height,rail.x,rail.y,rail.width,rail.height]};})()"
+        )
+        cross_layout_samples = []
+        cross_layout_stable = 0
+        cross_layout_last = None
+        cross_layout_started = time.monotonic()
+        while time.monotonic() - cross_layout_started <= 2.2:
+            sample = self.evaluate(
+                "(() => {const scroller=document.querySelector('[data-stream-scroll]');const target=document.querySelector('[data-stream-node][data-state=\"current\"]');"
+                "const scrollerBox=scroller.getBoundingClientRect();const targetBox=target.getBoundingClientRect();"
+                "const visibleHeight=Math.max(0,Math.min(targetBox.bottom,scrollerBox.bottom)-Math.max(targetBox.top,scrollerBox.top));"
+                "const action=target.querySelector('[data-current-action] .primary-button');const actionBox=action.getBoundingClientRect();"
+                "const hit=document.elementFromPoint(actionBox.left+actionBox.width/2,actionBox.top+actionBox.height/2);"
+                "const sidebar=document.querySelector('.sidebar').getBoundingClientRect();const header=document.querySelector('.page-header').getBoundingClientRect();"
+                "const rail=document.querySelector('.detail-rail').getBoundingClientRect();return {top:scroller.scrollTop,state:scroller.dataset.scrollMotionState||'',"
+                "sameScroller:scroller===window.__motionMenuScroller,controllerMaxStep:Number(scroller.dataset.scrollMotionMaxStep||0),"
+                "clientHeight:scroller.clientHeight,targetRatio:targetBox.height?visibleHeight/targetBox.height:0,actionHit:hit===action||action.contains(hit),"
+                "semanticDone:!new URLSearchParams(location.search).get('entry')&&!document.querySelector('[data-stream-node].is-located')"
+                "&&!document.querySelector('[data-return-current]').classList.contains('visible'),"
+                "shell:[sidebar.x,sidebar.y,sidebar.width,sidebar.height,header.x,header.y,header.width,header.height,rail.x,rail.y,rail.width,rail.height]};})()"
+            )
+            cross_layout_samples.append(sample)
+            cross_layout_stable = cross_layout_stable + 1 if cross_layout_last is not None and abs(sample["top"] - cross_layout_last) <= 0.75 else 0
+            cross_layout_last = sample["top"]
+            if sample["semanticDone"] and sample["state"] in ["settled", "idle"] and cross_layout_stable >= 4:
+                break
+            time.sleep(0.016)
+        cross_positions = [sample["top"] for sample in cross_layout_samples]
+        cross_start = cross_positions[0] if cross_positions else cross_layout_initial["top"]
+        cross_end = cross_positions[-1] if cross_positions else cross_start
+        cross_intermediates = []
+        for position in cross_positions:
+            if abs(position - cross_start) > 0.75 and abs(position - cross_end) > 0.75:
+                if not cross_intermediates or abs(position - cross_intermediates[-1]) > 0.75:
+                    cross_intermediates.append(position)
+        cross_deltas = [cross_positions[index] - cross_positions[index - 1] for index in range(1, len(cross_positions))]
+        cross_reverse = sum(max(0, -delta) for delta in cross_deltas)
+        cross_max_step = max((abs(delta) for delta in cross_deltas), default=0)
+        cross_shell_drift = max(
+            (abs(value - cross_layout_initial["shell"][index]) for sample in cross_layout_samples for index, value in enumerate(sample["shell"])),
+            default=999,
+        )
+        cross_last = cross_layout_samples[-1] if cross_layout_samples else {}
+        self.check(
+            "changing-layout-mid-return-resumes-the-trajectory-without-a-stuck-return-state",
+            self.snapshot() == motion_menu_snapshot
+            and self.evaluate("document.querySelector('[data-stream-scroll]')===window.__motionMenuScroller")
+            and cross_end > cross_start + 120
+            and len(cross_intermediates) >= 4
+            and cross_reverse <= 4
+            and cross_max_step <= cross_last.get("clientHeight", 0) * 0.48
+            and cross_last.get("controllerMaxStep", 999) <= cross_last.get("clientHeight", 0) * 0.18
+            and cross_shell_drift <= 1
+            and all(sample["sameScroller"] for sample in cross_layout_samples)
+            and cross_last.get("semanticDone")
+            and cross_last.get("state") in ["settled", "idle"]
+            and cross_last.get("targetRatio", 0) >= 0.6
+            and cross_last.get("actionHit"),
+            json.dumps({"start": cross_start, "end": cross_end, "intermediates": len(cross_intermediates), "reverse": cross_reverse,
+                        "maxStep": cross_max_step, "shellDrift": cross_shell_drift, "samples": len(cross_layout_samples), "last": cross_last}, sort_keys=True),
+        )
+
+        self.navigate("variant=A&scenario=long")
+        self.evaluate(
+            "(() => {const scroller=document.querySelector('[data-stream-scroll]');"
+            "scroller.style.scrollBehavior='auto';scroller.scrollTop=scroller.scrollHeight;return scroller.scrollTop;})()"
+        )
+        interrupted_snapshot = self.snapshot()
+        self.click('.page-header [data-action="visit-previous"]')
+        self.wait_for(
+            "document.querySelector('[data-stream-scroll]').dataset.scrollMotionState==='traveling'"
+            " && Number(document.querySelector('[data-stream-scroll]').dataset.scrollMotionStart)-document.querySelector('[data-stream-scroll]').scrollTop>48",
+            "scroll motion to begin before wheel interruption",
+        )
+        interrupted_at = self.evaluate("document.querySelector('[data-stream-scroll]').scrollTop")
+        wheel_point = self.evaluate(
+            "(() => {const rect=document.querySelector('[data-stream-scroll]').getBoundingClientRect();"
+            "return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};})()"
+        )
+        self.cdp.command(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseWheel", "x": wheel_point["x"], "y": wheel_point["y"], "deltaX": 0, "deltaY": 180},
+        )
+        self.wait_for(
+            "document.querySelector('[data-stream-scroll]').dataset.scrollMotionState==='cancelled'",
+            "wheel interruption cancels programmatic scroll",
+        )
+        wheel_positions = []
+        stable_wheel_samples = 0
+        last_wheel_position = None
+        wheel_deadline = time.monotonic() + 1.0
+        while time.monotonic() < wheel_deadline and stable_wheel_samples < 4:
+            wheel_position = self.evaluate("document.querySelector('[data-stream-scroll]').scrollTop")
+            wheel_positions.append(wheel_position)
+            stable_wheel_samples = stable_wheel_samples + 1 if last_wheel_position is not None and abs(wheel_position - last_wheel_position) <= 0.75 else 0
+            last_wheel_position = wheel_position
+            time.sleep(0.05)
+        interrupted_after = wheel_positions[-1]
+        cancelled_at = self.evaluate("Number(document.querySelector('[data-stream-scroll]').dataset.scrollMotionCancelTop)")
+        interrupted_target = self.evaluate("Number(document.querySelector('[data-stream-scroll]').dataset.scrollMotionTarget)")
+        self.check(
+            "wheel-interruption-takes-control-without-snapback",
+            interrupted_after > interrupted_at + 20
+            and interrupted_after >= cancelled_at
+            and stable_wheel_samples >= 4
+            and abs(interrupted_after - interrupted_target) > 12
+            and self.snapshot() == interrupted_snapshot
+            and self.count('[data-return-current].visible') == 1,
+            json.dumps({"beforeDispatch": interrupted_at, "cancelledAt": cancelled_at, "positions": wheel_positions, "target": interrupted_target}, sort_keys=True),
+        )
+
+        for variant in ["A", "B", "C"]:
+            self.navigate(f"variant={variant}&scenario=focus")
+            self.click('[data-action="choose"][data-kind="focus"][data-value="shape"]')
+            before_advance_motion = self.snapshot()
+            advance_trace = self.trace_scroll_action(
+                '[data-action="confirm-current"]',
+                '[data-stream-node][data-state="current"]',
+                '[data-stream-node][data-state="current"]',
+                "document.querySelector('[data-stream-session]').dataset.activeNodeId!==sourceId && document.querySelector('[data-stream-node][data-state=\"current\"]')?.dataset.stage==='criteria'",
+            )
+            self.assert_scroll_trace(
+                f"variant-{variant.lower()}-confirming-current-has-continuous-downward-track-to-next-checkpoint",
+                advance_trace,
+                "forward",
+                require_action_hit=True,
+            )
+            self.assert_append_only(
+                before_advance_motion,
+                self.snapshot(),
+                f"variant-{variant.lower()}-animated-advance-remains-append-only",
+            )
+
+        self.evaluate("true")
+        self.check(
+            "browser-runtime-has-no-uncaught-exceptions",
+            not self.cdp.runtime_errors,
+            "; ".join(self.cdp.runtime_errors),
+        )
+
+        version = self.cdp.command("Browser.getVersion")
+        return {
+            "status": "PASS",
+            "suite": "zhulong-stream-prototype-only-cdp",
+            "scope": "throwaway HTML prototype only; not real .app acceptance",
+            "checks": len(self.checks),
+            "unique_checks": len(set(self.checks)),
+            "repeated_check_executions": len(self.checks) - len(set(self.checks)),
+            "passed": self.checks,
+            "browser": version.get("product", "unknown"),
+            "viewport": self.geometry,
+            "duration_seconds": round(time.monotonic() - self.started_at, 3),
+        }
+
+
+def main():
+    port = int(sys.argv[1])
+    websocket = CDPWebSocket(page_websocket_url(port))
+    try:
+        result = StreamAcceptance(websocket, sys.argv[2]).run()
+    finally:
+        websocket.close()
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+
+
+try:
+    main()
+except Exception as error:
+    print(
+        json.dumps(
+            {
+                "status": "FAIL",
+                "suite": "zhulong-stream-prototype-only-cdp",
+                "scope": "throwaway HTML prototype only; not real .app acceptance",
+                "error": str(error),
+                "error_type": type(error).__name__,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+test_status=$?
+set -e
+
+if [[ "$test_status" -ne 0 ]]; then
+  if [[ -s "$chrome_log" ]]; then
+    printf '%s\n' '{"status":"DIAGNOSTIC","source":"Chrome stderr (tail before isolated cleanup)"}' >&2
+    tail -n 120 "$chrome_log" >&2
+  fi
+  exit "$test_status"
+fi

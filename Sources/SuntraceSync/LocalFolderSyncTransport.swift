@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 public actor LocalFolderSyncTransport: SyncRecordTransport {
@@ -19,15 +20,23 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
 
     public func push(_ records: [SyncRecord]) async throws {
         try prepareRepository()
-        for record in records {
-            let data = try encoder.encode(record)
-            try data.write(to: recordURL(for: record.id), options: [.atomic])
-        }
-
         guard records.isEmpty == false else { return }
-        let deviceID = records.first?.modifiedByDeviceID ?? SyncDeviceID("unknown")
-        let snapshot = try SyncRepositorySnapshotBuilder().snapshot(records: records, deviceID: deviceID)
-        try pushSnapshot(snapshot)
+
+        try withExclusiveRepositoryLock {
+            var didChangeRecord = false
+            for record in records {
+                let data = try encoder.encode(record)
+                didChangeRecord = try pushRecord(record, data: data) || didChangeRecord
+            }
+
+            guard didChangeRecord else { return }
+            let deviceID = records.first?.modifiedByDeviceID ?? SyncDeviceID("unknown")
+            let snapshot = try SyncRepositorySnapshotBuilder().snapshot(
+                records: records,
+                deviceID: deviceID
+            )
+            try pushSnapshot(snapshot)
+        }
     }
 
     public func fetchAll() async throws -> [SyncRecord] {
@@ -66,6 +75,96 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         try snapshot.id.write(to: latestRefURL, atomically: true, encoding: .utf8)
     }
 
+    private func pushRecord(_ record: SyncRecord, data: Data) throws -> Bool {
+        let destinationURL = recordURL(for: record.id)
+        let stagingURL = recordsURL.appendingPathComponent(
+            ".\(UUID().uuidString).staging"
+        )
+        defer { try? fileManager.removeItem(at: stagingURL) }
+
+        try data.write(to: stagingURL, options: [.atomic])
+        guard try publishExclusively(from: stagingURL, to: destinationURL) == false else {
+            return true
+        }
+
+        guard let existingData = try? Data(contentsOf: destinationURL),
+              let existing = try? decoder.decode(SyncRecord.self, from: existingData)
+        else {
+            throw SyncRecordTransportError.immutableRecordCollision(recordID: record.id)
+        }
+
+        let requiresImmutableCAS = existing.entityType.requiresImmutableRecordPayload
+            || record.entityType.requiresImmutableRecordPayload
+        if requiresImmutableCAS {
+            guard record.exactlyMatches(existing), existingData == data else {
+                throw SyncRecordTransportError.immutableRecordCollision(recordID: record.id)
+            }
+            return false
+        }
+
+        guard record.currentRecordLWWOrder(comparedTo: existing) == .after else {
+            return false
+        }
+        try data.write(to: destinationURL, options: [.atomic])
+        return true
+    }
+
+    private func publishExclusively(from sourceURL: URL, to destinationURL: URL) throws -> Bool {
+        let failureCode = sourceURL.withUnsafeFileSystemRepresentation { sourcePath in
+            destinationURL.withUnsafeFileSystemRepresentation { destinationPath in
+                guard let sourcePath, let destinationPath else { return EINVAL }
+                guard renamex_np(sourcePath, destinationPath, UInt32(RENAME_EXCL)) != 0 else {
+                    return 0
+                }
+                return errno
+            }
+        }
+
+        switch failureCode {
+        case 0:
+            return true
+        case EEXIST:
+            return false
+        default:
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(failureCode),
+                userInfo: [
+                    NSFilePathErrorKey: destinationURL.path
+                ]
+            )
+        }
+    }
+
+    private func withExclusiveRepositoryLock<Result>(
+        _ operation: () throws -> Result
+    ) throws -> Result {
+        let descriptor = repositoryLockURL.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return open(path, O_CREAT | O_RDWR, mode_t(S_IRUSR | S_IWUSR))
+        }
+        guard descriptor >= 0 else {
+            throw posixError(code: errno, path: repositoryLockURL.path)
+        }
+        defer { close(descriptor) }
+
+        while flock(descriptor, LOCK_EX) != 0 {
+            guard errno == EINTR else {
+                throw posixError(code: errno, path: repositoryLockURL.path)
+            }
+        }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        return try operation()
+    }
+
+    private func posixError(code: Int32, path: String) -> NSError {
+        NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(code),
+            userInfo: [NSFilePathErrorKey: path]
+        )
+    }
+
     private func prepareRepository() throws {
         try fileManager.createDirectory(at: recordsURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: indexesURL, withIntermediateDirectories: true)
@@ -86,6 +185,10 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
 
     private var latestRefURL: URL {
         refsURL.appendingPathComponent("latest")
+    }
+
+    private var repositoryLockURL: URL {
+        rootURL.appendingPathComponent(".repository.lock")
     }
 
     private func recordURL(for id: SyncRecordID) -> URL {

@@ -1,8 +1,11 @@
 import AppKit
+import CryptoKit
 import SuntraceAI
-import SuntraceCore
+@_spi(ClassificationUserDecision) import SuntraceCore
 import SuntraceStorage
 import SuntraceSync
+import SuntraceZhulong
+import SuntraceZhulongAI
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -160,25 +163,25 @@ private struct LaunchAutomation {
             }
         }
 
-        let zhulongTaskName = SuntraceStore.commandLineValue(after: "--e2e-generate-zhulong-draft")
-        if let zhulongTaskName, let task = ZhulongTask(rawValue: zhulongTaskName) {
-            let applyFirstOperation = CommandLine.arguments.contains("--e2e-apply-first-zhulong-operation")
+        if CommandLine.arguments.contains("--e2e-open-first-classification-overflow") {
             actions.append { store in
-                store.page = .zhulong
-                store.zhulongProviderDraft.enabled = true
-                store.generateZhulongDraft(task: task)
-                guard applyFirstOperation else { return }
-                guard let draft = store.zhulongDrafts.first else { return }
-                guard draft.proposedOperations.isEmpty == false else { return }
-                store.applyZhulongOperation(draftID: draft.id, operationIndex: 0)
+                store.page = .pool
+                store.e2eClassificationOverflowChainID = store.engine.taskPool().first(where: { task in
+                    (store.currentClassification(for: task.chain.id)?.labels.count ?? 0) > 2
+                })?.chain.id
             }
         }
 
         append(ProviderE2EAutomation.fromCommandLine(), to: &actions)
+        append(ZhulongStreamE2EAutomation.fromCommandLine(), to: &actions)
+        append(ZhulongTodoDiffE2EAutomation.fromCommandLine(), to: &actions)
+        append(ZhulongPersistenceE2EAutomation.fromCommandLine(), to: &actions)
+        append(ClassificationE2EAutomation.fromCommandLine(), to: &actions)
         append(WorkflowE2EAutomation.fromCommandLine(), to: &actions)
         append(LifecycleE2EAutomation.fromCommandLine(), to: &actions)
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskTitleDeleteE2EAutomation.fromCommandLine(), to: &actions)
+        append(ReportedBugsE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewZhulongEntryE2EAutomation.fromCommandLine(), to: &actions)
         append(ContextMenuActionsE2EAutomation.fromCommandLine(), to: &actions)
@@ -237,6 +240,436 @@ private protocol LaunchAutomationRunnable {
     func run(on store: SuntraceStore)
 }
 
+private struct ZhulongE2ESidecarKeySource: ZhulongSidecarKeySource {
+    func loadOrCreateKey() throws -> Data {
+        Data(repeating: 0x4E, count: 32)
+    }
+}
+
+private struct ZhulongStreamE2EAutomation: LaunchAutomationRunnable {
+    let task: ZhulongTask?
+    let intent: String?
+    let variant: ZhulongStreamVariant?
+    let createsRichSession: Bool
+    let completesDailyReview: Bool
+    let interruptsDailyReview: Bool
+
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        let task = SuntraceStore.commandLineValue(after: "--e2e-generate-zhulong-draft")
+            .flatMap(ZhulongTask.init(rawValue:))
+        let intent = SuntraceStore.commandLineValue(after: "--e2e-prepare-zhulong-intent")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let variant: ZhulongStreamVariant? = SuntraceStore.commandLineValue(after: "--e2e-zhulong-variant")
+            .flatMap { value in
+                switch value.uppercased() {
+                case "A": .dossier
+                case "B": .chapters
+                case "C": .weave
+                default: nil
+                }
+            }
+        let createsRichSession = CommandLine.arguments.contains("--e2e-rich-zhulong-session")
+        let completesDailyReview = CommandLine.arguments.contains("--e2e-complete-zhulong-daily-review")
+        let interruptsDailyReview = CommandLine.arguments.contains("--e2e-interrupt-zhulong-daily-review")
+        guard task != nil || intent?.isEmpty == false || variant != nil || createsRichSession ||
+            completesDailyReview || interruptsDailyReview
+        else { return nil }
+        return Self(
+            task: task,
+            intent: intent,
+            variant: variant,
+            createsRichSession: createsRichSession,
+            completesDailyReview: completesDailyReview,
+            interruptsDailyReview: interruptsDailyReview
+        )
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        store.page = .zhulong
+        if let task {
+            let taskIntent = task == .dailyReview
+                ? "结束今天并形成下一次可信承诺"
+                : "梳理一个需要形成计划的任务"
+            store.startZhulongWorkspaceSession(intent: taskIntent)
+            store.authorizeCurrentZhulongWorkspaceSession()
+        } else if let intent, intent.isEmpty == false {
+            store.startZhulongWorkspaceSession(intent: intent)
+        }
+        if let variant {
+            store.zhulongWorkspace.variant = variant
+        }
+        if createsRichSession, store.zhulongWorkspace.selectedSession != nil {
+            if store.zhulongWorkspace.selectedSession?.phase == .scopeReview {
+                store.authorizeCurrentZhulongWorkspaceSession()
+            }
+            store.zhulongWorkspace.appendToCurrentSession(
+                author: .zhulong,
+                kind: .statement,
+                content: "已读取授权范围，并建立每日收尾事实基线。"
+            )
+            store.zhulongWorkspace.pauseCurrentSession()
+            store.zhulongWorkspace.resumeCurrentSession()
+            store.zhulongWorkspace.captureDailyClose(date: store.today, from: store.engine)
+        }
+        if completesDailyReview || interruptsDailyReview {
+            store.publishCurrentZhulongDailyReview(
+                summary: "E2E 已确认的每日复盘",
+                tomorrowNote: "E2E 明日只保留一个可信承诺"
+            )
+            store.confirmAndSaveCurrentZhulongDailyReview(
+                interruptAfterEnginePersisted: interruptsDailyReview
+            )
+        }
+    }
+}
+
+private struct ZhulongTodoDiffE2EProvider: ZhulongProvider {
+    let configurationIdentity: ZhulongProviderConfigurationIdentity
+
+    func complete(_ request: ZhulongProviderRequest) async -> ZhulongProviderResult {
+        .success(ZhulongProviderResponse(content: Self.planArtifact, draftVersion: 1))
+    }
+
+    private static let planArtifact = """
+    {
+      "kind":"planArtifact",
+      "summary":"先取得测量，再交付近期切片。",
+      "stages":[
+        {
+          "id":"measure",
+          "title":"工程测量",
+          "objective":"取得真实数据",
+          "horizon":"nearTerm",
+          "dependencyIDs":[],
+          "deliverables":["测量记录","验证记录"],
+          "triggerCondition":null
+        },
+        {
+          "id":"delivery",
+          "title":"交付切片",
+          "objective":"完成任务成形闭环",
+          "horizon":"later",
+          "dependencyIDs":["measure"],
+          "deliverables":[],
+          "triggerCondition":"测量记录已审查"
+        }
+      ],
+      "decisionExplanations":[
+        {
+          "subject":"为何先测量",
+          "userDecisions":["先完成 Mac 版"],
+          "assumptions":[],
+          "dataScopes":["currentDayTodo"],
+          "evidence":["当前没有同度量工程数据"],
+          "constraints":["普通 Todo 必须离线可用"],
+          "alternatives":[
+            {"title":"直接排期","tradeoffs":["快，但没有证据"]},
+            {"title":"先测量","tradeoffs":["较慢，但可校准"]}
+          ],
+          "counterexamples":["直接排期会隐藏证据缺口"],
+          "rationale":"测量后才能形成可信承诺。",
+          "uncertainties":["测量结果尚未知"],
+          "expectedImpacts":["近期只生成调查任务"],
+          "requiredAuthorizations":["todoWrite"]
+        }
+      ],
+      "precisionClaims":[]
+    }
+    """
+}
+
+private struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
+    let resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        guard CommandLine.arguments.contains("--e2e-prepare-zhulong-todo-diff") else {
+            return nil
+        }
+        return Self(
+            resultURL: SuntraceStore.commandLineValue(
+                after: "--e2e-zhulong-todo-diff-result-url"
+            ).map(URL.init(fileURLWithPath:))
+        )
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            store.page = .zhulong
+            let identity = try ZhulongProviderConfigurationIdentity(
+                providerID: "e2e-todo-diff",
+                kind: .localModel,
+                baseURL: nil,
+                location: .local,
+                model: "deterministic-plan",
+                dataCapabilities: [.structuredOutput, .taskContext]
+            )
+            store.zhulongWorkspace.createSession(
+                intent: "审查并形成可信的 Todo 变更",
+                scopes: [.currentDayTodo]
+            )
+            store.zhulongWorkspace.authorizeCurrentSession(providerIdentity: identity)
+            guard let sourceEntryID = store.zhulongWorkspace.selectedSession?.entries.first?.id else {
+                return
+            }
+            store.zhulongWorkspace.publishPlanningBrief(
+                try ZhulongPlanningBriefDraft(
+                    goal: "发布稳定版",
+                    successCriteria: ["真实 App E2E 通过"],
+                    hardConstraints: ["普通 Todo 必须离线可用"],
+                    userDecisions: ["先完成 Mac 版"],
+                    delegatedActivities: [.taskDecomposition, .sequencing, .riskReview],
+                    assumptions: [],
+                    openQuestions: [],
+                    dataScopes: [.currentDayTodo],
+                    sourceEntryIDs: [sourceEntryID]
+                )
+            )
+            store.zhulongWorkspace.reviewCurrentPlanningBrief()
+            store.zhulongWorkspace.delegateCurrentPlanningBrief()
+            let payload = try ZhulongProviderPayload(
+                systemPrompt: "只返回符合规划协议的结构化产物。",
+                userPrompt: "规划发布新版",
+                contextVersion: "e2e-todo-diff-v1",
+                scopeContent: [.currentDayTodo: "E2E 当前 Day Todo 摘要"]
+            )
+            let provider = ZhulongTodoDiffE2EProvider(configurationIdentity: identity)
+            Task { @MainActor in
+                await store.zhulongWorkspace.runCurrentPlanningSession(
+                    payload: payload,
+                    provider: provider
+                )
+                store.publishCurrentZhulongTodoDiff()
+                guard let resultURL else { return }
+                let result = exerciseRevisionAndApply(on: store)
+                try? result.write(to: resultURL, atomically: true, encoding: .utf8)
+                store.persist()
+                NSApp.terminate(nil)
+            }
+        } catch {
+            store.zhulongWorkspace.reportUIError("E2E Todo diff 准备失败：\(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func exerciseRevisionAndApply(on store: SuntraceStore) -> String {
+        guard let original = store.zhulongWorkspace.selectedSession?.currentTodoDiff,
+              original.items.count == 2
+        else { return "failed: missing original diff" }
+        let editedID = original.items[0].id
+        let removedID = original.items[1].id
+        let splitID = ZhulongTodoDiffItemID()
+        let items = [
+            ZhulongTodoDiffItem(
+                id: editedID,
+                operation: .createTask(
+                    title: "E2E 编辑后的测量",
+                    descriptionText: "取得真实数据",
+                    note: "保留第一项并修改",
+                    plannedSubtasks: [],
+                    targetDate: nil
+                )
+            ),
+            ZhulongTodoDiffItem(
+                id: splitID,
+                operation: .createTask(
+                    title: "E2E 拆分后的验证",
+                    descriptionText: "取得真实数据",
+                    note: "由用户拆分新增",
+                    plannedSubtasks: [],
+                    targetDate: nil
+                )
+            )
+        ]
+        guard store.zhulongWorkspace.reviseCurrentTodoDiff(items: items),
+              let revision = store.zhulongWorkspace.selectedSession?.currentTodoDiff,
+              case let .userRevision(parentID, modifiedIDs) = revision.source,
+              parentID == original.id,
+              revision.version == 2,
+              Set(modifiedIDs) == [editedID, removedID, splitID]
+        else { return "failed: revision audit mismatch" }
+
+        store.confirmAndApplyCurrentZhulongTodoDiff()
+        let titles = Set(store.engine.definitions.values.map(\.title))
+        guard titles == ["E2E 编辑后的测量", "E2E 拆分后的验证"],
+              store.zhulongWorkspace.selectedSession?.todoApplyReceipts.count == 1,
+              store.zhulongWorkspace.selectedSession?.events.suffix(3).map(\.kind) == [
+                  .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied
+              ]
+        else { return "failed: atomic application mismatch" }
+        return "ok"
+    }
+}
+
+private struct ZhulongPersistenceE2EAutomation: LaunchAutomationRunnable {
+    let resultURL: URL
+    let expectsRecovery: Bool
+
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        guard let path = SuntraceStore.commandLineValue(
+            after: "--e2e-verify-zhulong-persistence-result-url"
+        ), path.isEmpty == false else { return nil }
+        return Self(
+            resultURL: URL(fileURLWithPath: path),
+            expectsRecovery: CommandLine.arguments.contains("--e2e-expect-zhulong-recovery")
+        )
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        let sessions = store.zhulongWorkspace.sessions
+        let latest = sessions.first
+        let baseRecovered = sessions.count == 1 &&
+            latest?.authorization != nil &&
+            latest?.dailyCloseSnapshots.count == 1 &&
+            latest?.events.contains(where: { $0.kind == .sessionPaused }) == true &&
+            latest?.events.contains(where: { $0.kind == .sessionResumed }) == true
+        let recovered = baseRecovered && (expectsRecovery
+            ? latest?.dailyReviewReceipts.count == 1 &&
+                store.zhulongWorkspace.statusMessage?.contains("已恢复") == true
+            : store.zhulongWorkspace.statusMessage == nil)
+        let detectedCorruption = sessions.count == 1 &&
+            store.zhulongWorkspace.statusMessage?.contains("无法验证") == true
+        let result = recovered
+            ? "ok"
+            : (detectedCorruption
+                ? "corruption-detected"
+                : "failed: \(store.zhulongWorkspace.statusMessage ?? "missing status")")
+        try? result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private struct ClassificationE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode {
+        case edit
+        case verify
+    }
+
+    private static let categoryName = "验证"
+    private static let labelNames = ["SQLite", "重启", "白盒"]
+    private static let interactionID = UUID(uuidString: "8312940E-8B19-4D05-94FB-6FE92D7BBE63")
+
+    private let mode: Mode
+    private let title: String
+    private let resultURL: URL
+
+    @MainActor
+    static func fromCommandLine() -> ClassificationE2EAutomation? {
+        let edits = CommandLine.arguments.contains("--e2e-classification-edit")
+        let verifies = CommandLine.arguments.contains("--e2e-classification-verify")
+        guard edits != verifies else { return nil }
+        guard let title = SuntraceStore.commandLineValue(after: "--e2e-classification-title")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            title.isEmpty == false,
+            let resultPath = SuntraceStore.commandLineValue(after: "--e2e-classification-result-url")
+        else {
+            return nil
+        }
+        return ClassificationE2EAutomation(
+            mode: edits ? .edit : .verify,
+            title: title,
+            resultURL: URL(fileURLWithPath: resultPath)
+        )
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        do {
+            switch mode {
+            case .edit:
+                try edit(on: store)
+            case .verify:
+                try verify(on: store)
+            }
+            try writeResult("ok")
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func edit(on store: SuntraceStore) throws {
+        guard let interactionID = Self.interactionID else {
+            throw ClassificationE2EAutomationError.failed("invalid fixed interaction ID")
+        }
+        store.page = .pool
+        store.poolText = title
+        store.addPoolTask()
+        guard let task = store.engine.taskPool().first(where: { $0.definition.title == title }) else {
+            throw ClassificationE2EAutomationError.failed("task was not created")
+        }
+
+        let receipt = try store.replaceTaskClassification(
+            chainID: task.chain.id,
+            category: .new(name: Self.categoryName, colorHex: "#6F5FF7"),
+            labels: [
+                .new(name: Self.labelNames[0], colorHex: "#3276E8"),
+                .new(name: Self.labelNames[1], colorHex: "#E78B1F"),
+                .new(name: Self.labelNames[2], colorHex: "#0E9488")
+            ],
+            interactionID: interactionID
+        )
+        guard receipt.revision == 1,
+              receipt.decisionID == interactionID,
+              receipt.changeRecordID != receipt.planID
+        else {
+            throw ClassificationE2EAutomationError.failed("classification receipt is incomplete")
+        }
+        try verifyProjection(for: task.chain.id, in: store)
+    }
+
+    @MainActor
+    private func verify(on store: SuntraceStore) throws {
+        guard let task = store.engine.taskPool().first(where: { $0.definition.title == title }) else {
+            throw ClassificationE2EAutomationError.failed("task was not restored after restart")
+        }
+        try verifyProjection(for: task.chain.id, in: store)
+
+        let state = store.engine.snapshot().classifications
+        guard state.changeRecords.count == 1,
+              state.committedReceiptsByInteractionID.count == 1
+        else {
+            throw ClassificationE2EAutomationError.failed("audit trail duplicated or disappeared after restart")
+        }
+        store.page = .pool
+        store.selectPool(task.chain.id)
+    }
+
+    @MainActor
+    private func verifyProjection(for chainID: TaskChainID, in store: SuntraceStore) throws {
+        guard let projection = store.currentClassification(for: chainID),
+              projection.category?.name == Self.categoryName,
+              Set(projection.labels.map(\.name)) == Set(Self.labelNames),
+              projection.revision == 1
+        else {
+            throw ClassificationE2EAutomationError.failed("classification projection does not match")
+        }
+    }
+
+    private func writeResult(_ result: String) throws {
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum ClassificationE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
 private struct LaunchSelectionE2EAutomation: LaunchAutomationRunnable {
     var selectionName: String
 
@@ -293,7 +726,8 @@ private struct ReviewZhulongEntryE2EAutomation: LaunchAutomationRunnable {
         store.requestZhulongDailyReviewFromReviewRail()
 
         guard store.page == .zhulong,
-              store.selectedZhulongDraft?.kind == .dailyReview
+              store.zhulongWorkspace.selectedSession?.phase == .scopeReview,
+              store.zhulongWorkspace.selectedSession?.proposedScopes == [.currentDayTodo]
         else {
             try? writeResult("failed")
             return
@@ -450,8 +884,9 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
     func run(on store: SuntraceStore) {
         do {
             try verifyPoolAddUndo(on: store)
-            try verifyCurrentContinuationUndo(on: store)
-            try verifyCurrentAbandonUndo(on: store)
+            try verifyCurrentContinuationIsNotUndoable(on: store)
+            try verifyCurrentAbandonIsNotUndoable(on: store)
+            try verifyHistoryBoundaryClearsEarlierUndo(on: store)
             try verifyFutureRescheduleUndo(on: store)
             try verifyCopyAsNewTaskUndo(on: store)
             try verifyHistoricalAbandonIsNotUndoable(on: store)
@@ -486,7 +921,7 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
     }
 
     @MainActor
-    private func verifyCurrentContinuationUndo(on store: SuntraceStore) throws {
+    private func verifyCurrentContinuationIsNotUndoable(on store: SuntraceStore) throws {
         reset(store)
         let traceID = try makeTrace(title: "E2E 撤销当前延续", date: store.today, today: store.today, store: store)
         let tomorrow = SuntraceStore.offset(store.today, by: 1)
@@ -494,25 +929,48 @@ private struct UndoE2EAutomation: LaunchAutomationRunnable {
         guard store.engine.traces.values.contains(where: { $0.date == tomorrow && $0.status == .pending }) else {
             throw UndoE2EAutomationError.failed("continuation did not create tomorrow trace")
         }
+        let continued = store.engine.snapshot()
         store.undo()
-        guard store.engine.traces.count == 1,
-              store.engine.traces[traceID]?.status == .pending
+        guard store.engine.snapshot() == continued,
+              store.engine.traces[traceID]?.status == .continued,
+              store.toast == "没有可撤销的操作"
         else {
-            throw UndoE2EAutomationError.failed("current continuation undo did not restore source trace")
+            throw UndoE2EAutomationError.failed("current continuation changed despite immutable history boundary")
         }
     }
 
     @MainActor
-    private func verifyCurrentAbandonUndo(on store: SuntraceStore) throws {
+    private func verifyCurrentAbandonIsNotUndoable(on store: SuntraceStore) throws {
         reset(store)
         let traceID = try makeTrace(title: "E2E 撤销当前废弃", date: store.today, today: store.today, store: store)
         store.abandon(traceID)
         guard store.engine.traces[traceID]?.status == .abandoned else {
             throw UndoE2EAutomationError.failed("current abandon did not abandon trace")
         }
+        let abandoned = store.engine.snapshot()
         store.undo()
-        guard store.engine.traces[traceID]?.status == .pending else {
-            throw UndoE2EAutomationError.failed("current abandon undo did not restore pending trace")
+        guard store.engine.snapshot() == abandoned,
+              store.toast == "没有可撤销的操作"
+        else {
+            throw UndoE2EAutomationError.failed("current abandon changed despite immutable history boundary")
+        }
+    }
+
+    @MainActor
+    private func verifyHistoryBoundaryClearsEarlierUndo(on store: SuntraceStore) throws {
+        reset(store)
+        store.poolText = "E2E 较早的可撤销操作"
+        store.addPoolTask()
+        let traceID = try makeTrace(title: "E2E 历史边界清栈", date: store.today, today: store.today, store: store)
+        store.continueTrace(traceID, to: SuntraceStore.offset(store.today, by: 1))
+        let continued = store.engine.snapshot()
+
+        store.undo()
+
+        guard store.engine.snapshot() == continued,
+              store.toast == "没有可撤销的操作"
+        else {
+            throw UndoE2EAutomationError.failed("immutable history boundary retained an earlier undo snapshot")
         }
     }
 
@@ -748,19 +1206,29 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
         do {
             store.zhulongProviderDraft.enabled = false
             store.ensureVisiblePage()
-            try expect(store.visibleNavigationPages.contains(.zhulong) == false, "disabled zhulong remained visible")
+            try expect(store.visibleNavigationPages.contains(.zhulong), "local-mode zhulong entry was hidden")
             store.selectPage(.zhulong)
-            try expect(store.page == .day, "disabled zhulong selection did not fall back to Day Todo")
+            try expect(store.page == .zhulong, "local-mode zhulong selection did not open the page")
 
             store.zhulongProviderDraft.enabled = true
             try expect(store.visibleNavigationPages.contains(.zhulong), "enabled zhulong was not visible")
             store.selectPage(.zhulong)
             try expect(store.page == .zhulong, "enabled zhulong selection did not open the page")
+            try expect(ZhulongHomeIntentResolver.task(for: "结束今天并安排明天") == .dailyReview, "review intent was routed incorrectly")
+            try expect(ZhulongHomeIntentResolver.task(for: "给任务池重新排期") == .scheduling, "scheduling intent was routed incorrectly")
+            try expect(ZhulongHomeIntentResolver.task(for: "整理标签分类") == .labelClassification, "classification intent was routed incorrectly")
+            try expect(ZhulongHomeIntentResolver.task(for: "梳理一个模糊任务") == .taskDecomposition, "fallback intent was routed incorrectly")
+            let sessionCount = store.zhulongWorkspace.sessions.count
+            store.startZhulongWorkspaceSession(intent: "结束今天并安排明天")
+            try expect(store.zhulongWorkspace.sessions.count == sessionCount + 1, "workspace session was not created")
+            try expect(store.zhulongWorkspace.selectedSession?.phase == .scopeReview, "new session bypassed scope review")
+            store.authorizeCurrentZhulongWorkspaceSession()
+            try expect(store.zhulongWorkspace.selectedSession?.phase == .readyForProvider, "scope authorization was not persisted")
 
             store.zhulongProviderDraft.enabled = false
             store.ensureVisiblePage()
-            try expect(store.visibleNavigationPages.contains(.zhulong) == false, "disabled zhulong remained visible after closing")
-            try expect(store.page == .day, "closing zhulong while active did not move to Day Todo")
+            try expect(store.visibleNavigationPages.contains(.zhulong), "local-mode zhulong entry was hidden")
+            try expect(store.page == .zhulong, "local mode unexpectedly left the zhulong workspace")
 
             try writeResult("ok")
         } catch {
@@ -1022,11 +1490,10 @@ private struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
             store.page = .pool
             store.clearSelection()
             store.zhulongProviderDraft.enabled = false
-            guard store.shouldShowDetailRail == false else {
-                throw SummarySidebarE2EAutomationError.failed("pool rail stayed visible while zhulong was disabled")
+            guard store.usesZhulongContextRail, store.shouldShowDetailRail else {
+                throw SummarySidebarE2EAutomationError.failed("local-mode context rail was unavailable")
             }
 
-            store.zhulongProviderDraft.enabled = true
             for page in [SuntraceStore.Page.pool, .future, .unfinished, .completed] {
                 store.page = page
                 store.clearSelection()
@@ -1035,13 +1502,12 @@ private struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
                 }
             }
 
-            store.zhulongProviderDraft.enabled = false
             store.page = .pool
             if let task = store.engine.taskPool().first {
                 store.selectPool(task.chain.id)
             }
             guard store.hasActiveDetailSelection, store.shouldShowDetailRail else {
-                throw SummarySidebarE2EAutomationError.failed("selection detail rail did not override zhulong gating")
+                throw SummarySidebarE2EAutomationError.failed("selection detail rail did not override local analysis")
             }
 
             store.page = .calendar
@@ -1150,8 +1616,9 @@ private struct TaskTitleDeleteE2EAutomation: LaunchAutomationRunnable {
             let yesterday = SuntraceStore.offset(today, by: -1)
 
             let poolChainID = try store.engine.createPoolTask(title: "E2E 任务池旧标题")
-            store.renamePoolTask(chainID: poolChainID, title: "E2E 任务池新标题")
-            try expect(store.engine.taskPool().first?.definition.title == "E2E 任务池新标题", "pool title did not rename")
+            let markdownTitle = "**E2E 任务池**\n软换行  \n硬换行"
+            store.renamePoolTask(chainID: poolChainID, title: markdownTitle)
+            try expect(store.engine.taskPool().first?.definition.title == markdownTitle, "pool title did not preserve Markdown lines")
 
             let deleteChainID = try store.engine.createPoolTask(title: "E2E 任务池删除")
             store.deletePoolTask(deleteChainID)
@@ -1237,6 +1704,145 @@ private enum TaskTitleDeleteE2EAutomationError: LocalizedError {
         switch self {
         case let .failed(message):
             return message
+        }
+    }
+}
+
+private struct ReportedBugsE2EAutomation: LaunchAutomationRunnable {
+    let resultURL: URL
+
+    @MainActor
+    static func fromCommandLine() -> Self? {
+        guard CommandLine.arguments.contains("--e2e-reported-bugs"),
+              let path = SuntraceStore.commandLineValue(after: "--e2e-reported-bugs-result-url")
+        else { return nil }
+        return Self(resultURL: URL(fileURLWithPath: path))
+    }
+
+    @MainActor
+    func run(on store: SuntraceStore) {
+        var failures: [String] = []
+        failures.append(contentsOf: MarkdownEditorKeyboardProbe.failures())
+        exerciseTitleAndCompletion(on: store, failures: &failures)
+        exerciseClassification(on: store, failures: &failures)
+        exerciseGroupLifecycle(on: store, failures: &failures)
+        let result = failures.isEmpty ? "ok" : "failed: " + failures.joined(separator: " | ")
+        try? result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+
+    @MainActor
+    private func exerciseTitleAndCompletion(
+        on store: SuntraceStore,
+        failures: inout [String]
+    ) {
+        guard let trace = store.engine.getDayTodo(date: store.today).traces.first(where: {
+            store.definition(for: $0)?.title == "制作发布会主视觉"
+        }) else {
+            failures.append("missing subtask fixture")
+            return
+        }
+        store.renameTraceTitle(traceID: trace.id, title: "第一行\n第二行\r\n第三行")
+        let actualTitle = store.engine.traces[trace.id].flatMap(store.definition(for:))?.title
+        if actualTitle != "第一行\n第二行\n第三行" {
+            failures.append("title line breaks were not preserved: \(actualTitle ?? "nil")")
+        }
+
+        store.toggleComplete(trace.id)
+        if store.engine.traces[trace.id]?.status != .pending {
+            failures.append("parent with open subtasks completed")
+        }
+        if store.toast != "还有未完成子任务，完成全部子任务后才能完成父任务" {
+            failures.append("parent completion leaked raw error: \(store.toast ?? "nil")")
+        }
+    }
+
+    @MainActor
+    private func exerciseClassification(
+        on store: SuntraceStore,
+        failures: inout [String]
+    ) {
+        guard let task = store.engine.taskPool().first(where: {
+            $0.definition.title == "预约年度体检"
+        }), let current = store.currentClassification(for: task.chain.id),
+        let category = current.category,
+        current.labels.count == 2,
+        let categoryID = UUID(uuidString: category.id),
+        let remainingLabelID = UUID(uuidString: current.labels[1].id)
+        else {
+            failures.append("missing classification fixture")
+            return
+        }
+        do {
+            _ = try store.replaceTaskClassification(
+                chainID: task.chain.id,
+                category: .existing(TaskCategoryID(categoryID)),
+                labels: [.existing(TaskLabelID(remainingLabelID))]
+            )
+        } catch {
+            failures.append("label removal failed: \(error.localizedDescription)")
+            return
+        }
+
+        guard let alternate = store.classificationCatalog()?.categories.first(where: {
+            $0.lifecycle == .active && $0.id != category.id
+        }), let alternateID = UUID(uuidString: alternate.id) else {
+            failures.append("missing alternate group")
+            return
+        }
+        do {
+            _ = try store.replaceTaskClassification(
+                chainID: task.chain.id,
+                category: .existing(TaskCategoryID(alternateID)),
+                labels: [.existing(TaskLabelID(remainingLabelID))]
+            )
+        } catch {
+            failures.append("group switch failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func exerciseGroupLifecycle(
+        on store: SuntraceStore,
+        failures: inout [String]
+    ) {
+        do {
+            _ = try store.applyClassificationIntent(
+                .createCategory(name: "临时分组", colorHex: "#D87831")
+            )
+            guard let created = store.classificationCatalog()?.categories.first(where: {
+                $0.name == "临时分组"
+            }), let rawID = UUID(uuidString: created.id) else {
+                failures.append("group creation was not projected")
+                return
+            }
+            let id = TaskCategoryID(rawID)
+            _ = try store.applyClassificationIntent(.renameCategory(id, to: "已重命名分组"))
+            _ = try store.applyClassificationIntent(.archiveCategory(id))
+            _ = try store.applyClassificationIntent(.restoreCategory(id))
+            _ = try store.applyClassificationIntent(.hardDeleteCategory(id))
+            if store.classificationCatalog()?.categories.contains(where: { $0.id == created.id }) == true {
+                failures.append("unused group was not discarded")
+            }
+
+            _ = try store.applyClassificationIntent(
+                .createLabel(name: "临时标签", colorHex: "#0E9488")
+            )
+            guard let createdLabel = store.classificationCatalog()?.labels.first(where: {
+                $0.name == "临时标签"
+            }), let rawLabelID = UUID(uuidString: createdLabel.id) else {
+                failures.append("label creation was not projected")
+                return
+            }
+            let labelID = TaskLabelID(rawLabelID)
+            _ = try store.applyClassificationIntent(.renameLabel(labelID, to: "已重命名标签"))
+            _ = try store.applyClassificationIntent(.archiveLabel(labelID))
+            _ = try store.applyClassificationIntent(.restoreLabel(labelID))
+            _ = try store.applyClassificationIntent(.hardDeleteLabel(labelID))
+            if store.classificationCatalog()?.labels.contains(where: { $0.id == createdLabel.id }) == true {
+                failures.append("unused label was not discarded")
+            }
+        } catch {
+            failures.append("group lifecycle failed: \(error.localizedDescription)")
         }
     }
 }
@@ -1521,6 +2127,38 @@ final class SuntraceWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
+enum TaskClassificationDisplay: Equatable {
+    case current(TaskClassificationProjection)
+    case historical(TraceClassificationProjection)
+
+    var category: ClassificationItemProjection? {
+        switch self {
+        case let .current(projection):
+            projection.category
+        case let .historical(projection):
+            projection.category
+        }
+    }
+
+    var labels: [ClassificationItemProjection] {
+        switch self {
+        case let .current(projection):
+            projection.labels
+        case let .historical(projection):
+            projection.labels
+        }
+    }
+
+    var isHistorical: Bool {
+        if case .historical = self { return true }
+        return false
+    }
+
+    var isEmpty: Bool {
+        category == nil && labels.isEmpty
+    }
+}
+
 @MainActor
 final class SuntraceStore: ObservableObject {
     enum TraceContextAction: String, Equatable {
@@ -1684,17 +2322,19 @@ final class SuntraceStore: ObservableObject {
     @Published var detailNoteText = ""
     @Published var toast: String?
     @Published var zhulongProviderDraft = ZhulongProviderSettingsStore.load()
-    @Published var zhulongDrafts: [AISuggestionDraft] = []
-    @Published var selectedZhulongDraftID: AISuggestionDraftID?
-    @Published var appliedZhulongOperationKeys: Set<String> = []
     @Published var reviewAutosaveMessage: String?
     @Published var isLocalFirstSyncing = false
     @Published var localFirstSyncMessage: String?
+    @Published var e2eClassificationOverflowChainID: TaskChainID?
 
     let today = LocalDate("2026-07-05")
     private let repository: SQLiteEngineRepository?
     private let databaseURL: URL?
     private let syncDeviceID: SyncDeviceID?
+    lazy var zhulongWorkspace = ZhulongWorkspaceStore(
+        directoryURL: zhulongSidecarDirectoryURL,
+        keySource: zhulongSidecarKeySource
+    )
     private var toastTask: Task<Void, Never>?
     private var localFirstSyncAutomationTask: Task<Void, Never>?
     private var undoStack: [SuntraceSnapshot] = []
@@ -1712,6 +2352,7 @@ final class SuntraceStore: ObservableObject {
             syncDeviceID = Self.loadOrCreateSyncDeviceID(databaseURL: configuredDatabaseURL)
             loadOrSeed()
         }
+        recoverPendingZhulongApplication()
         Theme.apply(engine.preferences.theme)
         restartLocalFirstSyncAutomation()
     }
@@ -1765,13 +2406,8 @@ final class SuntraceStore: ObservableObject {
         return engine.unfinishedPool().first { $0.chain.id == selectedUnfinishedChainID }
     }
 
-    var selectedZhulongDraft: AISuggestionDraft? {
-        guard let selectedZhulongDraftID else { return zhulongDrafts.first }
-        return zhulongDrafts.first { $0.id == selectedZhulongDraftID }
-    }
-
     var isZhulongEnabled: Bool {
-        zhulongProviderDraft.enabled
+        true
     }
 
     var hasActiveDetailSelection: Bool {
@@ -2054,164 +2690,80 @@ final class SuntraceStore: ObservableObject {
         detailSubtaskText = ""
     }
 
-    func tag(for tagID: TaskTagID) -> TaskTag? {
-        engine.preferences.taskTags.first { $0.id == tagID }
+    func isUnclassified(_ chainID: TaskChainID) -> Bool {
+        guard let classification = currentClassification(for: chainID) else { return true }
+        return classification.category == nil && classification.labels.isEmpty
     }
 
-    func tags(for chain: TaskChain) -> [(assignment: TaskTagAssignment, tag: TaskTag)] {
-        chain.tagAssignments.compactMap { assignment in
-            tag(for: assignment.tagID).map { (assignment, $0) }
-        }
-        .sorted { $0.assignment.slot < $1.assignment.slot }
-    }
-
-    func tags(for chainID: TaskChainID) -> [(assignment: TaskTagAssignment, tag: TaskTag)] {
-        guard let chain = engine.chains[chainID] else { return [] }
-        return tags(for: chain)
-    }
-
-    func primaryTagName(for chain: TaskChain) -> String {
-        guard let tagID = chain.primaryTagID, let tag = tag(for: tagID) else {
-            return "未标记"
-        }
-        return tag.name
-    }
-
-    func appendInlineTag(chainID: TaskChainID, name: String) {
-        guard let chain = engine.chains[chainID] else { return }
-        guard let slot = TaskTagSlot.allCases.first(where: { slot in
-            chain.tagAssignments.contains { $0.slot == slot } == false
-        }) else {
-            showToast("最多 3 个 Tag")
-            return
-        }
-        assignTagByNameOrCreate(chainID: chainID, slot: slot, name: name)
-    }
-
-    func removeInlineTag(chainID: TaskChainID, slot: TaskTagSlot) {
-        guard let chain = engine.chains[chainID] else { return }
-        let remainingTagIDs = chain.tagAssignments
-            .filter { $0.slot != slot }
-            .sorted { $0.slot < $1.slot }
-            .map(\.tagID)
-        do {
-            objectWillChange.send()
-            for slot in TaskTagSlot.allCases {
-                try engine.setTaskTagAssignment(chainID: chainID, slot: slot, tagID: nil)
-            }
-            for (index, tagID) in remainingTagIDs.prefix(TaskTagSlot.allCases.count).enumerated() {
-                try engine.setTaskTagAssignment(chainID: chainID, slot: TaskTagSlot.allCases[index], tagID: tagID)
-            }
-            persist()
-            showToast("任务 Tag 已更新")
-        } catch {
-            showToast(error.localizedDescription)
-        }
-    }
-
-    func inlineTagSuggestions(for chain: TaskChain, query: String) -> [TaskTag] {
-        let assignedTagIDs = Set(chain.tagAssignments.map(\.tagID))
-        return orderedActiveTagSuggestions(query: query, excluding: assignedTagIDs)
-    }
-
-    func newTaskTagSuggestions(for draft: String) -> [TaskTag] {
-        let tagNames = Set(parsedTaskDraft(draft).tagNames.map { $0.lowercased() })
-        let excludedTagIDs = Set(engine.activeTaskTags().filter { tagNames.contains($0.name.lowercased()) }.map(\.id))
-        return orderedActiveTagSuggestions(query: lastHashQuery(in: draft), excluding: excludedTagIDs)
-    }
-
-    func primaryNewTaskSuggestionCount(for draft: String) -> Int {
-        let primaryTagIDs = Set(engine.taskTagsCommonlyUsed(in: .tagI).map(\.id))
-        return newTaskTagSuggestions(for: draft).prefix { primaryTagIDs.contains($0.id) }.count
-    }
-
-    func shouldShowNewTaskTagSuggestions(for draft: String) -> Bool {
-        draft.contains("#") && lastHashQuery(in: draft) != nil && newTaskTagSuggestions(for: draft).isEmpty == false
-    }
-
-    func completeLastHashToken(in draft: String, with tagName: String) -> String {
-        guard let hashIndex = draft.lastIndex(of: "#") else {
-            return "\(draft) #\(tagName)"
-        }
-        let prefix = draft[..<hashIndex]
-        return "\(prefix)#\(tagName) "
-    }
-
-    private func orderedActiveTagSuggestions(query: String?, excluding excludedTagIDs: Set<TaskTagID>) -> [TaskTag] {
-        let primaryTags = engine.taskTagsCommonlyUsed(in: .tagI)
-        let primaryTagIDs = Set(primaryTags.map(\.id))
-        let orderedTags = primaryTags + engine.activeTaskTags().filter { primaryTagIDs.contains($0.id) == false }
-        let normalizedQuery = query?.trimmingCharacters(in: CharacterSet(charactersIn: "#").union(.whitespacesAndNewlines)) ?? ""
-        return orderedTags.filter { tag in
-            guard excludedTagIDs.contains(tag.id) == false else { return false }
-            guard normalizedQuery.isEmpty == false else { return true }
-            return tag.name.localizedStandardContains(normalizedQuery)
-        }
-    }
-
-    func primaryInlineSuggestionCount(for chain: TaskChain, query: String) -> Int {
-        let primaryTagIDs = Set(engine.taskTagsCommonlyUsed(in: .tagI).map(\.id))
-        return inlineTagSuggestions(for: chain, query: query).prefix { primaryTagIDs.contains($0.id) }.count
-    }
-
-    private func assignTagByNameOrCreate(chainID: TaskChainID, slot: TaskTagSlot, name: String) {
-        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        guard normalizedName.isEmpty == false else { return }
-        do {
-            objectWillChange.send()
-            let tagID = try tagIDByNameOrCreate(name: normalizedName, slot: slot)
-            try engine.setTaskTagAssignment(chainID: chainID, slot: slot, tagID: tagID)
-            persist()
-            showToast("任务 Tag 已更新")
-        } catch {
-            showToast(error.localizedDescription)
-        }
-    }
-
-    private func applyTaskDraftTags(chainID: TaskChainID, tagNames: [String]) throws {
-        for (index, tagName) in tagNames.prefix(TaskTagSlot.allCases.count).enumerated() {
-            let slot = TaskTagSlot.allCases[index]
-            let tagID = try tagIDByNameOrCreate(name: tagName, slot: slot)
-            try engine.setTaskTagAssignment(chainID: chainID, slot: slot, tagID: tagID)
-        }
-    }
-
-    private func tagIDByNameOrCreate(name: String, slot: TaskTagSlot) throws -> TaskTagID {
-        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        guard normalizedName.isEmpty == false else {
-            throw SuntraceError.invalidInput("tag name cannot be empty")
-        }
-        if let existing = engine.activeTaskTags().first(where: {
-            $0.name.caseInsensitiveCompare(normalizedName) == .orderedSame
-        }) {
-            return existing.id
-        }
-        return try engine.createTaskTag(
-            name: normalizedName,
-            colorHex: defaultTagColorHex(for: slot)
+    func newTaskLabelSuggestions(for draft: String) -> [ClassificationCatalogItemProjection] {
+        let selectedKeys = Set(parsedTaskDraft(draft).labelNames.map(ClassificationNameCanonicalizer.canonicalKey))
+        return orderedActiveLabelSuggestions(
+            query: lastHashQuery(in: draft),
+            excludingCanonicalKeys: selectedKeys
         )
     }
 
-    private func defaultTagColorHex(for slot: TaskTagSlot) -> String {
-        switch slot {
-        case .tagI:
-            return "#2A6FDB"
-        case .tagII:
-            return "#0E9488"
-        case .tagIII:
-            return "#7C5CFF"
+    func shouldShowNewTaskLabelSuggestions(for draft: String) -> Bool {
+        draft.contains("#")
+            && lastHashQuery(in: draft) != nil
+            && newTaskLabelSuggestions(for: draft).isEmpty == false
+    }
+
+    func completeLastHashToken(in draft: String, with labelName: String) -> String {
+        guard let hashIndex = draft.lastIndex(of: "#") else {
+            return "\(draft) #\(labelName)"
+        }
+        let prefix = draft[..<hashIndex]
+        return "\(prefix)#\(labelName) "
+    }
+
+    private func orderedActiveLabelSuggestions(
+        query: String?,
+        excludingCanonicalKeys: Set<String>
+    ) -> [ClassificationCatalogItemProjection] {
+        let normalizedQuery = query?.trimmingCharacters(in: CharacterSet(charactersIn: "#").union(.whitespacesAndNewlines)) ?? ""
+        return (classificationCatalog()?.labels ?? [])
+            .filter { $0.lifecycle == .active }
+            .filter { label in
+                guard excludingCanonicalKeys.contains(ClassificationNameCanonicalizer.canonicalKey(label.name)) == false else {
+                    return false
+                }
+                guard normalizedQuery.isEmpty == false else { return true }
+                return label.name.localizedStandardContains(normalizedQuery)
+            }
+            .sorted { lhs, rhs in
+                if lhs.currentUsageCount != rhs.currentUsageCount {
+                    return lhs.currentUsageCount > rhs.currentUsageCount
+                }
+                return ClassificationNameCanonicalizer.canonicalKey(lhs.name)
+                    < ClassificationNameCanonicalizer.canonicalKey(rhs.name)
+            }
+    }
+
+    private func taskLabelChoices(for names: [String]) -> [TaskLabelChoice] {
+        let activeLabels = (classificationCatalog()?.labels ?? []).filter { $0.lifecycle == .active }
+        var seenKeys: Set<String> = []
+        return names.compactMap { rawName in
+            let name = ClassificationNameCanonicalizer.displayName(
+                rawName.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+            )
+            let key = ClassificationNameCanonicalizer.canonicalKey(name)
+            guard name.isEmpty == false, seenKeys.insert(key).inserted else { return nil }
+            if let existing = activeLabels.first(where: {
+                ClassificationNameCanonicalizer.canonicalKey($0.name) == key
+            }), let id = UUID(uuidString: existing.id) {
+                return .existing(TaskLabelID(id))
+            }
+            return .new(name: name, colorHex: "#0E9488")
         }
     }
 
-    func commonlyUsedTags(in slot: TaskTagSlot) -> [TaskTag] {
-        engine.taskTagsCommonlyUsed(in: slot)
-    }
-
-    func otherActiveTags(for slot: TaskTagSlot) -> [TaskTag] {
-        let commonIDs = Set(commonlyUsedTags(in: slot).map(\.id))
-        return engine.activeTaskTags().filter { commonIDs.contains($0.id) == false }
+    @discardableResult
+    private func applyTaskDraftLabels(chainID: TaskChainID, labelNames: [String]) throws -> Bool {
+        let choices = taskLabelChoices(for: labelNames)
+        guard choices.isEmpty == false else { return false }
+        _ = try replaceTaskClassification(chainID: chainID, category: nil, labels: choices)
+        return true
     }
 
     func selectUnfinished(_ chainID: TaskChainID) {
@@ -2321,15 +2873,25 @@ final class SuntraceStore: ObservableObject {
     func addQuickTask() {
         let draft = parsedTaskDraft(quickText)
         guard draft.title.isEmpty == false else { return }
+        let originalSnapshot = engine.snapshot()
         do {
             pushUndoSnapshotIfAllowed(on: selectedDate)
             let chainID = try engine.createPoolTask(title: draft.title, descriptionText: "快速记录自 Day Todo。", now: Date())
-            try applyTaskDraftTags(chainID: chainID, tagNames: draft.tagNames)
             _ = try engine.scheduleFromPool(chainID: chainID, date: selectedDate, today: today)
+            let savedWithClassification = try applyTaskDraftLabels(
+                chainID: chainID,
+                labelNames: draft.labelNames
+            )
+            if savedWithClassification == false {
+                try save(engine)
+            }
+            invalidateUndoHistoryIfClassificationChanged()
             quickText = ""
-            persist()
             showToast("已添加「\(draft.title)」")
         } catch {
+            if let restored = try? SuntraceEngine(snapshot: originalSnapshot) {
+                engine = restored
+            }
             showToast(error.localizedDescription)
         }
     }
@@ -2337,20 +2899,30 @@ final class SuntraceStore: ObservableObject {
     func addPoolTask() {
         let draft = parsedTaskDraft(poolText)
         guard draft.title.isEmpty == false else { return }
+        let originalSnapshot = engine.snapshot()
         do {
             pushUndoSnapshot()
             let chainID = try engine.createPoolTask(title: draft.title, descriptionText: "任务池中的待排期任务。", note: "可以排期到今天、明天或指定日期。")
-            try applyTaskDraftTags(chainID: chainID, tagNames: draft.tagNames)
+            let savedWithClassification = try applyTaskDraftLabels(
+                chainID: chainID,
+                labelNames: draft.labelNames
+            )
+            if savedWithClassification == false {
+                try save(engine)
+            }
+            invalidateUndoHistoryIfClassificationChanged()
             selectedPoolChainID = chainID
             poolText = ""
-            persist()
             showToast("已加入任务池")
         } catch {
+            if let restored = try? SuntraceEngine(snapshot: originalSnapshot) {
+                engine = restored
+            }
             showToast(error.localizedDescription)
         }
     }
 
-    private func parsedTaskDraft(_ rawText: String) -> (title: String, tagNames: [String]) {
+    private func parsedTaskDraft(_ rawText: String) -> (title: String, labelNames: [String]) {
         let raw = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard raw.isEmpty == false else { return ("", []) }
         let pattern = #"#([^\s#]+)"#
@@ -2359,10 +2931,10 @@ final class SuntraceStore: ObservableObject {
         }
         let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
         let matches = regex.matches(in: raw, range: range)
-        let tagNames = matches.compactMap { match -> String? in
+        let labelNames = matches.compactMap { match -> String? in
             guard let range = Range(match.range(at: 1), in: raw) else { return nil }
-            let tagName = String(raw[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-            return tagName.isEmpty ? nil : tagName
+            let labelName = String(raw[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return labelName.isEmpty ? nil : labelName
         }
         let title = regex.stringByReplacingMatches(
             in: raw,
@@ -2371,7 +2943,7 @@ final class SuntraceStore: ObservableObject {
         )
         .split(whereSeparator: \.isWhitespace)
         .joined(separator: " ")
-        return (title, tagNames)
+        return (title, labelNames)
     }
 
     private func lastHashQuery(in text: String) -> String? {
@@ -2400,6 +2972,11 @@ final class SuntraceStore: ObservableObject {
 
     func toggleComplete(_ traceID: DayTraceID) {
         guard let trace = engine.traces[traceID] else { return }
+        let hasOpenSubtasks = engine.subtaskProgress(for: traceID).canCompleteParent == false
+        if trace.status == .pending && hasOpenSubtasks {
+            showToast(SuntraceError.openSubtasksPreventCompletion.localizedDescription)
+            return
+        }
         do {
             pushUndoSnapshotIfAllowed(on: trace.date)
             if trace.status == .completed {
@@ -2486,15 +3063,12 @@ final class SuntraceStore: ObservableObject {
 
     func continueTrace(_ traceID: DayTraceID, to date: LocalDate) {
         do {
-            if let trace = engine.traces[traceID] {
-                pushUndoSnapshotIfAllowed(on: trace.date)
-            }
             let nextID = try engine.continueTrace(traceID: traceID, targetDate: date, today: today)
             selectedDate = date
             page = .day
             selectTrace(nextID)
             persist()
-            showToast("已延续到 \(Self.displayDate(date))")
+            showToast("已延续到 \(Self.displayDate(date))；源轨迹已成为历史，不能撤销")
         } catch {
             showToast(error.localizedDescription)
         }
@@ -2502,14 +3076,14 @@ final class SuntraceStore: ObservableObject {
 
     func returnToPool(_ traceID: DayTraceID) {
         do {
-            if let trace = engine.traces[traceID] {
+            if let trace = engine.traces[traceID], trace.date > today {
                 pushUndoSnapshotIfAllowed(on: trace.date)
             }
             try engine.returnToPool(traceID: traceID, today: today)
             page = .pool
             clearSelection()
             persist()
-            showToast("已回池，轨迹保留在当天")
+            showToast("已回池；当天轨迹会永久保留")
         } catch {
             showToast(error.localizedDescription)
         }
@@ -2517,12 +3091,9 @@ final class SuntraceStore: ObservableObject {
 
     func abandon(_ traceID: DayTraceID) {
         do {
-            if let trace = engine.traces[traceID] {
-                pushUndoSnapshotIfAllowed(on: trace.date)
-            }
             try engine.abandonChain(from: traceID)
             persist()
-            showToast("任务链已废弃")
+            showToast("任务链已废弃；可从未完成池重新启用，历史不会撤销")
         } catch {
             showToast(error.localizedDescription)
         }
@@ -2570,15 +3141,12 @@ final class SuntraceStore: ObservableObject {
         let title = changeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.isEmpty == false else { return }
         do {
-            if let trace = engine.traces[selectedTraceID] {
-                pushUndoSnapshotIfAllowed(on: trace.date)
-            }
             let newID = try engine.changeTrace(traceID: selectedTraceID, newTitle: title, today: today)
             showingChangeDialog = false
             changeText = ""
             selectTrace(newID)
             persist()
-            showToast("已变更，新任务已加入当天")
+            showToast("已变更；原轨迹已成为历史，不能撤销")
         } catch {
             showToast(error.localizedDescription)
         }
@@ -2671,16 +3239,23 @@ final class SuntraceStore: ObservableObject {
 
     func deletePoolTask(_ chainID: TaskChainID) {
         do {
-            pushUndoSnapshot()
-            try engine.removeTaskFromPool(chainID: chainID)
+            let workingEngine = try SuntraceEngine(snapshot: engine.snapshot())
+            let outcome = try workingEngine.removeTaskFromPool(chainID: chainID)
+            try save(workingEngine)
+            engine = workingEngine
+            clearUndoHistory()
             if selectedPoolChainID == chainID {
                 clearSelection()
             }
-            objectWillChange.send()
-            persist()
-            showToast("已从任务池删除")
+            let message = switch outcome {
+            case .deleted:
+                "已从任务池删除"
+            case .removedKeepingHistory:
+                "已移出任务池；分类与任务历史已保留"
+            }
+            showToast(message)
         } catch {
-            showToast(error.localizedDescription)
+            showToast("移出任务池失败：\(error.localizedDescription)")
         }
     }
 
@@ -2991,7 +3566,7 @@ final class SuntraceStore: ObservableObject {
         let snapshot = try SuntraceDataPackage.read(from: url)
 
         pushUndoSnapshot()
-        engine = SuntraceEngine(snapshot: snapshot)
+        engine = try SuntraceEngine(snapshot: snapshot)
         Theme.apply(engine.preferences.theme)
         selectedDate = today
         selectedCalendarDate = today
@@ -3060,143 +3635,163 @@ final class SuntraceStore: ObservableObject {
         }
     }
 
-    func generateZhulongDraft(task: ZhulongTask) {
-        guard zhulongProviderDraft.enabled else {
-            showToast("烛龙已在设置中关闭")
-            return
-        }
-        let scope = zhulongScope(for: task)
-        guard scope.isEmpty == false else {
-            showToast("授权范围为空，无法生成建议草稿")
-            return
-        }
+    func startZhulongWorkspaceSession(intent: String) {
+        let task = ZhulongHomeIntentResolver.task(for: intent)
+        zhulongWorkspace.createSession(intent: intent, scopes: zhulongDataScopes(for: task))
+    }
 
-        let report = LocalInsightAnalyzer().analyze(scope)
-        let draft = AISuggestionDraft(
-            kind: task.suggestionKind,
-            createdAt: Date(),
-            sourceScope: scope,
-            localReport: report,
-            summary: zhulongSummary(for: task, report: report),
-            proposedOperations: zhulongOperations(for: task),
-            confidence: zhulongConfidence(for: task)
+    func recentZhulongSession(matching scopes: Set<ZhulongDataScope>) -> ZhulongSession? {
+        zhulongWorkspace.sessions.first { session in
+            session.workspaceStatus != .archived && scopes.isSubset(of: session.proposedScopes)
+        }
+    }
+
+    func zhulongWorkspaceStatus(_ session: ZhulongSession) -> String {
+        if session.workspaceStatus == .paused { return "已暂停" }
+        if session.workspaceStatus == .archived { return "已归档" }
+        return switch session.phase {
+        case .scopeReview: "等待范围确认"
+        case .readyForProvider: "范围已确认"
+        case .providerRunning: "Provider 正在运行"
+        case .decisionGate: "等待用户决定"
+        case .draftReview: "草稿待审"
+        }
+    }
+
+    func authorizeCurrentZhulongWorkspaceSession() {
+        do {
+            zhulongWorkspace.authorizeCurrentSession(
+                providerIdentity: try zhulongProviderIdentity()
+            )
+        } catch {
+            showToast("无法确认烛龙范围：\(error.localizedDescription)")
+        }
+    }
+
+    func runCurrentZhulongProvider() {
+        Task { @MainActor in
+            await runCurrentZhulongProviderRequest()
+        }
+    }
+
+    func runCurrentZhulongPlanningProvider() {
+        Task { @MainActor in
+            await runCurrentZhulongPlanningProviderRequest()
+        }
+    }
+
+    func captureCurrentZhulongDailyClose() {
+        zhulongWorkspace.captureDailyClose(date: today, from: engine)
+    }
+
+    func publishCurrentZhulongTodoDiff() {
+        zhulongWorkspace.publishTodoDiff(from: engine, planningDate: today)
+    }
+
+    func confirmAndApplyCurrentZhulongTodoDiff() {
+        if zhulongWorkspace.hasActiveTodoAuthorization == false {
+            zhulongWorkspace.authorizeCurrentTodoDiff(against: engine, today: today)
+        }
+        guard zhulongWorkspace.hasActiveTodoAuthorization else { return }
+        guard let updatedEngine = zhulongWorkspace.applyCurrentTodoDiff(
+            to: engine,
+            today: today,
+            persistEngine: { [self] candidate in try save(candidate) }
+        ) else { return }
+        engine = updatedEngine
+        invalidateUndoHistoryIfClassificationChanged()
+        normalizeSelection()
+        showToast("已原子应用 Todo diff")
+    }
+
+    func publishCurrentZhulongDailyReview(summary: String?, tomorrowNote: String?) {
+        zhulongWorkspace.publishDailyReviewDraft(
+            summary: summary,
+            tomorrowNote: tomorrowNote
         )
+    }
 
-        zhulongDrafts.insert(draft, at: 0)
-        selectedZhulongDraftID = draft.id
-        showToast("已生成建议草稿，等待用户确认")
+    func confirmAndSaveCurrentZhulongDailyReview(
+        interruptAfterEnginePersisted: Bool = false
+    ) {
+        if zhulongWorkspace.hasActiveDailyReviewAuthorization == false {
+            zhulongWorkspace.authorizeCurrentDailyReview(against: engine)
+        }
+        guard zhulongWorkspace.hasActiveDailyReviewAuthorization else { return }
+        guard let updatedEngine = zhulongWorkspace.applyCurrentDailyReview(
+            to: engine,
+            persistEngine: { [self] candidate in try save(candidate) },
+            interruptAfterEnginePersisted: interruptAfterEnginePersisted
+        ) else { return }
+        engine = updatedEngine
+        normalizeSelection()
+        showToast("已保存用户确认的每日复盘")
+    }
+
+    private func recoverPendingZhulongApplication() {
+        guard repository != nil else { return }
+        engine = zhulongWorkspace.recoverPendingApplication(
+            currentEngine: engine,
+            persistEngine: { [self] candidate in try save(candidate) }
+        )
+    }
+
+    private func runCurrentZhulongProviderRequest() async {
+        do {
+            guard let session = zhulongWorkspace.selectedSession else {
+                throw ZhulongProviderUIError.missingSession
+            }
+            let payload = try zhulongProviderPayload(for: session)
+            await zhulongWorkspace.runCurrentSession(
+                payload: payload,
+                provider: try makeZhulongAIProviderAdapter()
+            )
+        } catch {
+            showToast("无法运行 Provider：\(error.localizedDescription)")
+        }
+    }
+
+    private func runCurrentZhulongPlanningProviderRequest() async {
+        do {
+            guard let session = zhulongWorkspace.selectedSession,
+                  session.activePlanningDelegation != nil
+            else {
+                throw ZhulongProviderUIError.missingPlanningDelegation
+            }
+            let payload = try zhulongPlanningProviderPayload(for: session)
+            await zhulongWorkspace.runCurrentPlanningSession(
+                payload: payload,
+                provider: try makeZhulongAIProviderAdapter()
+            )
+        } catch {
+            showToast("无法运行规划 Provider：\(error.localizedDescription)")
+        }
+    }
+
+    private func makeZhulongAIProviderAdapter() throws -> ZhulongAIProviderAdapter {
+        guard zhulongProviderDraft.enabled else {
+            throw ZhulongProviderUIError.providerDisabled
+        }
+        guard zhulongProviderDraft.kind == .openAICompatible else {
+            throw ZhulongProviderUIError.unsupportedProviderKind
+        }
+        let config = try ZhulongProviderSettingsStore.makeConfig(from: zhulongProviderDraft)
+        let upstream = OpenAICompatibleProvider(
+            config: config,
+            apiKeyResolver: { ref in
+                guard ref == ZhulongProviderKeychain.keyRef else { return nil }
+                return try ZhulongProviderKeychain.readAPIKey()
+            }
+        )
+        return ZhulongAIProviderAdapter(
+            configurationIdentity: try zhulongProviderIdentity(),
+            upstream: upstream
+        )
     }
 
     func requestZhulongDailyReviewFromReviewRail() {
         page = .zhulong
-        generateZhulongDraft(task: .dailyReview)
-    }
-
-    func applyZhulongOperation(draftID: AISuggestionDraftID, operationIndex: Int) {
-        guard let draft = zhulongDrafts.first(where: { $0.id == draftID }),
-              draft.proposedOperations.indices.contains(operationIndex)
-        else {
-            showToast("建议操作不存在")
-            return
-        }
-
-        let key = zhulongOperationKey(draftID: draftID, operationIndex: operationIndex)
-        guard appliedZhulongOperationKeys.contains(key) == false else {
-            showToast("这条建议已应用")
-            return
-        }
-
-        do {
-            let result = try AISuggestionDraftApplier().applyConfirmed(
-                draft.proposedOperations[operationIndex],
-                to: engine,
-                today: today
-            )
-            appliedZhulongOperationKeys.insert(key)
-            normalizeSelection()
-            persist()
-            showToast(result.message)
-        } catch {
-            showToast("应用建议失败：\(error.localizedDescription)")
-        }
-    }
-
-    func zhulongOperationKey(draftID: AISuggestionDraftID, operationIndex: Int) -> String {
-        "\(draftID.description)-\(operationIndex)"
-    }
-
-    private func zhulongScope(for task: ZhulongTask) -> AIScopeSnapshot {
-        switch task {
-        case .dailyReview, .habitInsight, .taskDecomposition:
-            return AIScopeSnapshot.day(date: today, from: engine, isCurrentDay: true)
-        case .scheduling:
-            let day = AIScopeSnapshot.day(date: today, from: engine, isCurrentDay: true)
-            let pools = AIScopeSnapshot.pools(from: engine, includeTaskPool: true, includeUnfinishedPool: true, includeCompletedPool: false)
-            return AIScopeSnapshot.combined([day, pools])
-        case .labelClassification, .theoryAnalysis:
-            let day = AIScopeSnapshot.day(date: today, from: engine, isCurrentDay: true)
-            let pools = AIScopeSnapshot.pools(from: engine, includeTaskPool: true, includeUnfinishedPool: true, includeCompletedPool: true)
-            return AIScopeSnapshot.combined([day, pools])
-        }
-    }
-
-    private func zhulongSummary(for task: ZhulongTask, report: LocalInsightReport) -> String {
-        let facts = report.facts.isEmpty ? "当前范围暂无明显风险信号。" : report.facts.joined(separator: " ")
-        switch task {
-        case .dailyReview:
-            return "事实：\(facts) 建议：先补一段复盘草稿，区分事实、原因和明日注意。"
-        case .habitInsight:
-            return "事实：\(facts) 推断：当前只作为时间窗口内的假设，不写入用户身份。"
-        case .taskDecomposition:
-            return "事实：\(facts) 建议：为当前待完成任务补充一个可验收子任务，先收敛边界。"
-        case .scheduling:
-            return "事实：\(facts) 建议：优先把任务池中的一项排到明天，避免继续堆积。"
-        case .labelClassification:
-            return "事实：\(facts) 建议：先预览 label 候选；核心 label 模型落库前不自动写入。"
-        case .theoryAnalysis:
-            return "事实：\(facts) 建议：理论只能作为镜头，最终仍回到你的日轨迹证据。"
-        }
-    }
-
-    private func zhulongOperations(for task: ZhulongTask) -> [AIProposedOperation] {
-        switch task {
-        case .dailyReview:
-            let stats = engine.dailyReviewStats(date: today)
-            return [
-                .updateDailyReview(
-                    date: today,
-                    summary: "今日共 \(stats.total) 项任务，完成 \(stats.completed) 项，未完成 \(stats.unfinished) 项。",
-                    unfinishedReason: stats.unfinished > 0 ? "先记录真实阻塞，再决定延续、废弃或拆解。" : nil,
-                    tomorrowNote: "明天优先保留一个最小可完成承诺。"
-                )
-            ]
-        case .taskDecomposition:
-            guard let trace = selectedTrace ?? engine.getDayTodo(date: today).traces.first(where: { $0.status == .pending }) else {
-                return []
-            }
-            return [.addSubtask(traceID: trace.id, title: "补充验收标准", difficulty: .medium)]
-        case .scheduling:
-            if let task = engine.taskPool().first {
-                return [.scheduleFromPool(chainID: task.chain.id, targetDate: Self.offset(today, by: 1))]
-            }
-            if let item = engine.unfinishedPool().first, item.activeTrace == nil, let trace = item.unfinishedTraces.last {
-                return [.continueTrace(traceID: trace.id, targetDate: Self.offset(today, by: 1))]
-            }
-            return []
-        case .habitInsight, .labelClassification, .theoryAnalysis:
-            return []
-        }
-    }
-
-    private func zhulongConfidence(for task: ZhulongTask) -> Double {
-        switch task {
-        case .dailyReview, .scheduling:
-            return 0.74
-        case .taskDecomposition:
-            return 0.68
-        case .habitInsight, .labelClassification, .theoryAnalysis:
-            return 0.56
-        }
+        startZhulongWorkspaceSession(intent: "结束今天并形成下一次可信承诺")
     }
 
     func performDateChoice(_ date: LocalDate) {
@@ -3221,14 +3816,27 @@ final class SuntraceStore: ObservableObject {
     }
 
     func undo() {
-        guard let snapshot = undoStack.popLast() else {
+        guard let snapshot = undoStack.last else {
             showToast("没有可撤销的操作")
             return
         }
-        engine = SuntraceEngine(snapshot: snapshot)
+        guard snapshot.classifications == engine.snapshot().classifications else {
+            clearUndoHistory()
+            showToast("该操作已产生不可改写的分类历史，不能撤销")
+            return
+        }
+        let candidate: SuntraceEngine
+        do {
+            candidate = try SuntraceEngine(snapshot: snapshot)
+            try save(candidate)
+        } catch {
+            showToast("无法撤销：\(error.localizedDescription)")
+            return
+        }
+        undoStack.removeLast()
+        engine = candidate
         Theme.apply(engine.preferences.theme)
         normalizeSelection()
-        persist()
         showToast("已撤销")
     }
 
@@ -3318,6 +3926,162 @@ final class SuntraceStore: ObservableObject {
         return defaultDatabaseURL()
     }
 
+    private var zhulongSidecarDirectoryURL: URL {
+        if let databaseURL {
+            return databaseURL.deletingLastPathComponent()
+                .appendingPathComponent("ZhulongSidecar", isDirectory: true)
+        }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-zhulong-ephemeral-\(ProcessInfo.processInfo.processIdentifier)",
+                isDirectory: true
+            )
+    }
+
+    private var zhulongSidecarKeySource: any ZhulongSidecarKeySource {
+        guard CommandLine.arguments.contains("--e2e-zhulong-sidecar-key") else {
+            return KeychainZhulongSidecarKeySource()
+        }
+        return ZhulongE2ESidecarKeySource()
+    }
+
+    private func zhulongDataScopes(for task: ZhulongTask) -> Set<ZhulongDataScope> {
+        switch task {
+        case .dailyReview, .habitInsight, .taskDecomposition:
+            [.currentDayTodo]
+        case .scheduling:
+            [.currentDayTodo, .taskPool, .unfinishedPool]
+        case .labelClassification, .theoryAnalysis:
+            [.currentDayTodo, .taskPool, .unfinishedPool, .completedPool, .taskClassifications]
+        }
+    }
+
+    private func zhulongProviderPayload(for session: ZhulongSession) throws -> ZhulongProviderPayload {
+        let task = ZhulongHomeIntentResolver.task(for: session.primaryIntent)
+        var scopeContent: [ZhulongDataScope: String] = [:]
+        var systemPrompt: String?
+        for scope in session.proposedScopes.sorted(by: { $0.rawValue < $1.rawValue }) {
+            let snapshot = zhulongScopeSnapshot(for: scope)
+            let request = AIPromptBuilder().buildRequest(
+                task: task,
+                scope: snapshot,
+                report: LocalInsightAnalyzer().analyze(snapshot)
+            )
+            systemPrompt = systemPrompt ?? request.systemPrompt
+            scopeContent[scope] = request.userPrompt
+        }
+        let digestMaterial = scopeContent
+            .sorted { $0.key.rawValue < $1.key.rawValue }
+            .map { "\($0.key.rawValue):\($0.value)" }
+            .joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(digestMaterial.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return try ZhulongProviderPayload(
+            systemPrompt: systemPrompt ?? "你是晷迹的烛龙，只能处理用户授权的数据。",
+            userPrompt: "本次主要意图：\(session.primaryIntent)",
+            contextVersion: "sha256:\(digest)",
+            scopeContent: scopeContent
+        )
+    }
+
+    private func zhulongPlanningProviderPayload(
+        for session: ZhulongSession
+    ) throws -> ZhulongProviderPayload {
+        guard let brief = session.currentPlanningBrief else {
+            throw ZhulongProviderUIError.missingPlanningBrief
+        }
+        let base = try zhulongProviderPayload(for: session)
+        let systemPrompt = """
+        你是晷迹的烛龙。你正在执行用户对当前规划简报授予的一次性规划委托。
+        只能使用授权数据，不得声称已经写入 Todo，不得改写历史事实。
+        只返回一个 JSON 对象，不要 Markdown。若缺少关键决定，kind 必须为 decisionGate；否则为 planArtifact。
+        decisionGate 仅允许 kind、summary、prompt、reason、evidenceGaps、options；每个 option 仅允许 id、title、impact。
+        planArtifact 仅允许 kind、summary、stages、decisionExplanations、precisionClaims。
+        每个 stage 仅允许 id、title、objective、horizon、dependencyIDs、deliverables、triggerCondition。
+        每个 decisionExplanation 仅允许 subject、userDecisions、assumptions、dataScopes、evidence、constraints、alternatives、counterexamples、rationale、uncertainties、expectedImpacts、requiredAuthorizations。
+        每个 alternative 仅允许 title、tradeoffs。每个 precisionClaim 仅允许 kind、dateValue、numericValue、basisSource、basis、basisValue、dataScope。
+        """
+        let briefText = """
+        规划简报 v\(brief.version)
+        目标：\(brief.goal)
+        成功标准：\(brief.successCriteria.joined(separator: "；"))
+        硬约束：\(brief.hardConstraints.joined(separator: "；"))
+        用户决定：\(brief.userDecisions.joined(separator: "；"))
+        显式假设：\(brief.assumptions.joined(separator: "；"))
+        授权活动：\(brief.delegatedActivities.map(\.rawValue).sorted().joined(separator: "，"))
+        """
+        return try ZhulongProviderPayload(
+            systemPrompt: systemPrompt,
+            userPrompt: briefText,
+            contextVersion: base.contextVersion,
+            scopeContent: base.scopeContent
+        )
+    }
+
+    private func zhulongScopeSnapshot(for scope: ZhulongDataScope) -> AIScopeSnapshot {
+        switch scope {
+        case .currentDayTodo:
+            return AIScopeSnapshot.day(date: today, from: engine, isCurrentDay: true)
+        case .taskPool:
+            return AIScopeSnapshot.pools(
+                from: engine,
+                includeTaskPool: true,
+                includeUnfinishedPool: false,
+                includeCompletedPool: false
+            )
+        case .unfinishedPool:
+            return AIScopeSnapshot.pools(
+                from: engine,
+                includeTaskPool: false,
+                includeUnfinishedPool: true,
+                includeCompletedPool: false
+            )
+        case .completedPool:
+            return AIScopeSnapshot.pools(
+                from: engine,
+                includeTaskPool: false,
+                includeUnfinishedPool: false,
+                includeCompletedPool: true
+            )
+        case .taskClassifications:
+            let classifications = engine.snapshot().classifications
+            let names = classifications.categories.values.map(\.name) +
+                classifications.labels.values.map(\.name)
+            return AIScopeSnapshot(ranges: [], labels: names.sorted())
+        }
+    }
+
+    private func zhulongProviderIdentity() throws -> ZhulongProviderConfigurationIdentity {
+        guard zhulongProviderDraft.enabled else {
+            return try ZhulongProviderConfigurationIdentity(
+                providerID: "noonmark-local-evidence",
+                kind: .localModel,
+                baseURL: nil,
+                location: .local,
+                model: "local-evidence-v1",
+                dataCapabilities: [.structuredOutput, .taskContext, .memoryContext]
+            )
+        }
+        let kind: ZhulongProviderKind = switch zhulongProviderDraft.kind {
+        case .openAICompatible: .openAICompatible
+        case .localModel: .localModel
+        case .customHTTP: .customHTTP
+        case .mock: .localModel
+        }
+        let isLocal = kind == .localModel
+        return try ZhulongProviderConfigurationIdentity(
+            providerID: zhulongProviderDraft.normalizedDisplayName,
+            kind: kind,
+            baseURL: isLocal ? nil : zhulongProviderDraft.normalizedBaseURL,
+            location: isLocal ? .local : .remote,
+            model: zhulongProviderDraft.normalizedModel.isEmpty
+                ? "local-evidence-v1"
+                : zhulongProviderDraft.normalizedModel,
+            dataCapabilities: [.structuredOutput, .taskContext, .sessionSummary, .memoryContext]
+        )
+    }
+
     static func defaultDatabaseURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
@@ -3401,17 +4165,118 @@ final class SuntraceStore: ObservableObject {
     }
 
     func persist() {
-        guard let repository else { return }
-
         do {
-            if let syncDeviceID {
-                try repository.save(engine.snapshot(), recordingChangesFor: syncDeviceID)
-            } else {
-                try repository.save(engine)
-            }
+            try save(engine)
+            invalidateUndoHistoryIfClassificationChanged()
         } catch {
             NSLog("Suntrace persistence save failed: %@", String(describing: error))
             showToast("保存失败：\(error.localizedDescription)")
+        }
+    }
+
+    func currentClassification(for chainID: TaskChainID) -> TaskClassificationProjection? {
+        guard case let .task(projection) = try? engine.classification(.task(chainID)) else {
+            return nil
+        }
+        return projection
+    }
+
+    func displayableClassification(
+        for chainID: TaskChainID
+    ) -> TaskClassificationDisplay? {
+        guard let projection = currentClassification(for: chainID),
+              projection.isEmpty == false
+        else { return nil }
+        return .current(projection)
+    }
+
+    func displayableClassification(
+        for trace: DayTrace
+    ) -> TaskClassificationDisplay? {
+        if case let .history(projection) = try? engine.classification(.history(trace.id)) {
+            if projection.category != nil || projection.labels.isEmpty == false {
+                return .historical(projection)
+            }
+        }
+        return displayableClassification(for: trace.chainID)
+    }
+
+    func classificationCatalog() -> ClassificationCatalogProjection? {
+        guard case let .catalog(projection) = try? engine.classification(.catalog) else {
+            return nil
+        }
+        return projection
+    }
+
+    @discardableResult
+    func replaceTaskClassification(
+        chainID: TaskChainID,
+        category: TaskCategoryChoice?,
+        labels: [TaskLabelChoice],
+        interactionID: UUID = UUID()
+    ) throws -> ClassificationReceipt {
+        let workingEngine = try SuntraceEngine(snapshot: engine.snapshot())
+        let mutationDate = workingEngine.nextClassificationMutationDate()
+        let plan = try workingEngine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: category,
+                    labels: labels
+                )
+            ),
+            source: .userDirect,
+            interactionID: interactionID,
+            now: mutationDate
+        )
+        let receipt = try workingEngine.commitClassification(
+            plan,
+            confirmation: .confirmedByUser(confirming: plan, decisionID: interactionID),
+            now: mutationDate
+        )
+
+        try save(workingEngine)
+        engine = workingEngine
+        invalidateUndoHistoryIfClassificationChanged()
+        return receipt
+    }
+
+    @discardableResult
+    func applyClassificationIntent(
+        _ intent: ClassificationIntent,
+        interactionID: UUID = UUID()
+    ) throws -> ClassificationReceipt {
+        let workingEngine = try SuntraceEngine(snapshot: engine.snapshot())
+        let mutationDate = workingEngine.nextClassificationMutationDate()
+        let plan = try workingEngine.prepareClassification(
+            intent,
+            source: .userDirect,
+            interactionID: interactionID,
+            now: mutationDate
+        )
+        guard plan.blockers.isEmpty else {
+            throw SuntraceError.invalidTransition("这个分组仍被任务或历史引用，不能废弃；可改为归档。")
+        }
+        let receipt = try workingEngine.commitClassification(
+            plan,
+            confirmation: .confirmedByUser(confirming: plan, decisionID: interactionID),
+            now: mutationDate
+        )
+        try save(workingEngine)
+        engine = workingEngine
+        invalidateUndoHistoryIfClassificationChanged()
+        return receipt
+    }
+
+    private func save(_ candidate: SuntraceEngine) throws {
+        guard let repository else { return }
+        if let syncDeviceID {
+            try repository.save(
+                candidate.snapshot(),
+                recordingChangesFor: syncDeviceID
+            )
+        } else {
+            try repository.save(candidate)
         }
     }
 
@@ -3425,6 +4290,12 @@ final class SuntraceStore: ObservableObject {
         if undoStack.count > 20 {
             undoStack.removeFirst(undoStack.count - 20)
         }
+    }
+
+    private func invalidateUndoHistoryIfClassificationChanged() {
+        let classifications = engine.snapshot().classifications
+        guard undoStack.contains(where: { $0.classifications != classifications }) else { return }
+        clearUndoHistory()
     }
 
     private func normalizeSelection() {
@@ -3461,6 +4332,31 @@ final class SuntraceStore: ObservableObject {
             components.minute = minute
             return Calendar(identifier: .gregorian).date(from: components) ?? now
         }
+        func setClassification(
+            chainID: TaskChainID,
+            category: (name: String, colorHex: String),
+            labels: [(name: String, colorHex: String)]
+        ) throws {
+            let interactionID = UUID()
+            let timestamp = seedNow()
+            let plan = try engine.prepareClassification(
+                .setCurrent(
+                    TaskClassificationDraft(
+                        chainID: chainID,
+                        category: .new(name: category.name, colorHex: category.colorHex),
+                        labels: labels.map { .new(name: $0.name, colorHex: $0.colorHex) }
+                    )
+                ),
+                source: .userDirect,
+                interactionID: interactionID,
+                now: timestamp
+            )
+            _ = try engine.commitClassification(
+                plan,
+                confirmation: .confirmedByUser(confirming: plan, decisionID: interactionID),
+                now: timestamp
+            )
+        }
         let day0 = LocalDate("2026-07-01")
         let dayMinus3 = LocalDate("2026-07-02")
         let day1 = LocalDate("2026-07-03")
@@ -3470,23 +4366,27 @@ final class SuntraceStore: ObservableObject {
         let day5 = LocalDate("2026-07-07")
 
         do {
-            let engineeringTag = try engine.createTaskTag(name: "工程", colorHex: "#2A6FDB", now: seedNow())
-            let reviewTag = try engine.createTaskTag(name: "复盘", colorHex: "#0E9488", now: seedNow())
-            let lifeTag = try engine.createTaskTag(name: "生活", colorHex: "#D1477A", now: seedNow())
-
             let okr = try engine.createPoolTask(
                 title: "整理 Q3 OKR 草案",
                 descriptionText: "汇总三条产品线负责人给的季度目标，收敛成不超过 3 个 O、每个 O 配 3 个可量化 KR。",
                 note: "[2026-07-05 14:20] 等数据组下午的留存看板再定第 2 个 KR 的口径。",
                 now: seedNow()
             )
-            try engine.setTaskTagAssignment(chainID: okr, slot: .tagI, tagID: reviewTag, now: seedNow())
+            try setClassification(
+                chainID: okr,
+                category: ("复盘", "#0E9488"),
+                labels: []
+            )
             let okrDay0 = try engine.scheduleFromPool(chainID: okr, date: day0, today: day0, now: now)
 
             let launchScript = try engine.createPoolTask(title: "给发布会准备演示脚本", descriptionText: "准备发布会现场演示脚本。", now: seedNow())
             _ = try engine.scheduleFromPool(chainID: launchScript, date: dayMinus3, today: dayMinus3, now: now)
             let physical = try engine.createPoolTask(title: "预约年度体检", descriptionText: "预约年度体检时间。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: physical, slot: .tagI, tagID: lifeTag, now: seedNow())
+            try setClassification(
+                chainID: physical,
+                category: ("生活", "#D1477A"),
+                labels: [("健康", "#0E9488"), ("年度", "#E0851B")]
+            )
             let physicalTrace = try engine.scheduleFromPool(chainID: physical, date: dayMinus3, today: dayMinus3, now: now)
             try engine.returnToPool(traceID: physicalTrace, today: dayMinus3, now: now)
             let wireframe = try engine.createPoolTask(title: "画首页线框图", descriptionText: "日历完成样例任务。", now: seedNow())
@@ -3509,14 +4409,22 @@ final class SuntraceStore: ObservableObject {
             try engine.markCompleted(traceID: contractTrace, today: day1, now: eventTime(day1, hour: 11, minute: 20))
 
             let iconExport = try engine.createPoolTask(title: "修复图标导出脚本", descriptionText: "修复图标资源导出脚本。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: iconExport, slot: .tagI, tagID: engineeringTag, now: seedNow())
+            try setClassification(
+                chainID: iconExport,
+                category: ("工程", "#2A6FDB"),
+                labels: []
+            )
             let iconDay2 = try engine.scheduleFromPool(chainID: iconExport, date: day2, today: day2, now: now)
             try engine.setManualProgress(traceID: iconDay2, percent: 45, today: day2)
             let iconToday = try engine.continueTrace(traceID: iconDay2, targetDate: day3, today: day2, now: now)
             try engine.setManualProgress(traceID: iconToday, percent: 45, today: day3)
 
             let weeklyReport = try engine.createPoolTask(title: "写本周周报", descriptionText: "整理本周进展和风险。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: weeklyReport, slot: .tagI, tagID: reviewTag, now: seedNow())
+            try setClassification(
+                chainID: weeklyReport,
+                category: ("复盘", "#0E9488"),
+                labels: []
+            )
             let weeklyDay1 = try engine.scheduleFromPool(chainID: weeklyReport, date: day1, today: day1, now: now)
             let weeklyDay2 = try engine.continueTrace(traceID: weeklyDay1, targetDate: day2, today: day1, now: now)
             try engine.markCompleted(traceID: weeklyDay2, today: day2, now: eventTime(day2, hour: 17, minute: 45))
@@ -3526,7 +4434,11 @@ final class SuntraceStore: ObservableObject {
             _ = try engine.changeTrace(traceID: pricingTrace, newTitle: "输出竞品定价对比表", today: day2, now: seedNow())
 
             let visual = try engine.createPoolTask(title: "制作发布会主视觉", descriptionText: "推进发布会主视觉定稿。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: visual, slot: .tagI, tagID: engineeringTag, now: seedNow())
+            try setClassification(
+                chainID: visual,
+                category: ("工程", "#2A6FDB"),
+                labels: []
+            )
             let visualDay1 = try engine.scheduleFromPool(chainID: visual, date: day1, today: day1, now: now)
             let visualReference = try engine.addSubtask(traceID: visualDay1, title: "收集视觉参考", difficulty: .simple, now: now)
             _ = try engine.addSubtask(traceID: visualDay1, title: "出 3 版草图", difficulty: .hard, now: now)
@@ -3542,35 +4454,71 @@ final class SuntraceStore: ObservableObject {
             }
 
             let onboarding = try engine.createPoolTask(title: "审阅 onboarding 三屏文案", descriptionText: "审阅 onboarding 三屏文案。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: onboarding, slot: .tagI, tagID: reviewTag, now: seedNow())
+            try setClassification(
+                chainID: onboarding,
+                category: ("复盘", "#0E9488"),
+                labels: []
+            )
             let onboardingTrace = try engine.scheduleFromPool(chainID: onboarding, date: day3, today: day3, now: now)
             let headline = try engine.addSubtask(traceID: onboardingTrace, title: "首屏标题与副标题", difficulty: .simple, now: now)
             _ = try engine.addSubtask(traceID: onboardingTrace, title: "通知权限请求文案", difficulty: .medium, now: now)
             try engine.completeSubtask(headline, today: day3, now: eventTime(day3, hour: 9, minute: 0))
 
             let running = try engine.createPoolTask(title: "晨跑 5 公里", descriptionText: "完成晨跑。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: running, slot: .tagI, tagID: lifeTag, now: seedNow())
+            try setClassification(
+                chainID: running,
+                category: ("生活", "#D1477A"),
+                labels: []
+            )
             let runningTrace = try engine.scheduleFromPool(chainID: running, date: day3, today: day3, now: now)
             try engine.markCompleted(traceID: runningTrace, today: day3, now: eventTime(day3, hour: 7, minute: 36))
 
             let downloads = try engine.createPoolTask(title: "清理下载文件夹", descriptionText: "清理下载文件夹。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: downloads, slot: .tagI, tagID: lifeTag, now: seedNow())
+            try setClassification(
+                chainID: downloads,
+                category: ("生活", "#D1477A"),
+                labels: []
+            )
             _ = try engine.scheduleFromPool(chainID: downloads, date: day3, today: day3, now: now)
 
             let reading = try engine.createPoolTask(title: "读《卡片笔记写作法》第三章", descriptionText: "任务池样例任务。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: reading, slot: .tagI, tagID: reviewTag, now: seedNow())
+            try setClassification(
+                chainID: reading,
+                category: ("学习", "#7C5CFF"),
+                labels: [
+                    ("阅读", "#0E9488"),
+                    ("卡片笔记", "#2A6FDB"),
+                    ("写作", "#D1477A"),
+                    ("第三章", "#E0851B")
+                ]
+            )
             let animationAPI = try engine.createPoolTask(title: "调研 SwiftUI 动画 API", descriptionText: "任务池样例任务。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: animationAPI, slot: .tagI, tagID: engineeringTag, now: seedNow())
-            try engine.setTaskTagAssignment(chainID: animationAPI, slot: .tagII, tagID: reviewTag, now: seedNow())
+            try setClassification(
+                chainID: animationAPI,
+                category: ("工程", "#2A6FDB"),
+                labels: [("SwiftUI", "#7C5CFF"), ("动画", "#0E9488")]
+            )
 
             let standup = try engine.createPoolTask(title: "准备周一站会要点", descriptionText: "未来计划样例任务。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: standup, slot: .tagI, tagID: reviewTag, now: seedNow())
+            try setClassification(
+                chainID: standup,
+                category: ("复盘", "#0E9488"),
+                labels: []
+            )
             _ = try engine.scheduleFromPool(chainID: standup, date: day4, today: day3, now: now)
             let invoice = try engine.createPoolTask(title: "整理六月发票报销", descriptionText: "未来计划样例任务。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: invoice, slot: .tagI, tagID: lifeTag, now: seedNow())
+            try setClassification(
+                chainID: invoice,
+                category: ("生活", "#D1477A"),
+                labels: []
+            )
             _ = try engine.scheduleFromPool(chainID: invoice, date: day5, today: day3, now: now)
             let dinner = try engine.createPoolTask(title: "预订团队聚餐餐厅", descriptionText: "未来计划样例任务。", now: seedNow())
-            try engine.setTaskTagAssignment(chainID: dinner, slot: .tagI, tagID: lifeTag, now: seedNow())
+            try setClassification(
+                chainID: dinner,
+                category: ("生活", "#D1477A"),
+                labels: []
+            )
             _ = try engine.scheduleFromPool(chainID: dinner, date: day4, today: day3, now: now)
 
             engine.settleDays(upTo: day3, now: now)
@@ -3891,7 +4839,7 @@ struct AppCopy {
 
     var zhulongSubtitle: String {
         language == .chinese
-            ? "可选 sidecar：复盘分析、任务拆解、排期建议和 label 分类建议。"
+            ? "可选 sidecar：复盘分析、任务拆解、排期建议和标签分类建议。"
             : "Optional sidecar for reviews, decomposition, scheduling, and label suggestions."
     }
 
@@ -3945,7 +4893,7 @@ struct AppCopy {
             [
                 "发送远程请求前必须展示授权范围。",
                 "不发送数据库文件、内部 ID、Keychain 值或同步端点配置。",
-                "创建、排期、变更、延续、废弃或 label 写入都必须由用户确认。",
+                "创建、排期、变更、延续、废弃或标签写入都必须由用户确认。",
                 "Provider 失败不影响 Day Todo、任务池、日历和数据包。"
             ]
         case .english:
@@ -4545,42 +5493,39 @@ struct NewTaskInlineField: View {
     @Binding var text: String
     let onSubmit: () -> Void
 
-    var suggestions: [TaskTag] {
-        store.newTaskTagSuggestions(for: text)
-    }
-
-    var primarySuggestionCount: Int {
-        store.primaryNewTaskSuggestionCount(for: text)
+    var suggestions: [ClassificationCatalogItemProjection] {
+        store.newTaskLabelSuggestions(for: text)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            TextField(placeholder, text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .padding(.horizontal, 12)
-                .frame(height: 32)
+            MarkdownEditor(
+                text: $text,
+                placeholder: placeholder.replacingOccurrences(of: "回车确认", with: "⌘↩ 确认"),
+                style: .compact,
+                onCommit: onSubmit
+            )
+                .frame(minHeight: 44)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line.opacity(0.72)))
-                .onSubmit(onSubmit)
 
-            if store.shouldShowNewTaskTagSuggestions(for: text) {
+            if store.shouldShowNewTaskLabelSuggestions(for: text) {
                 VStack(spacing: 0) {
-                    ForEach(Array(suggestions.prefix(6).enumerated()), id: \.element.id) { index, tag in
-                        if index == primarySuggestionCount, primarySuggestionCount > 0 {
-                            Rectangle()
-                                .fill(Theme.line)
-                                .frame(height: 1)
-                                .padding(.vertical, 2)
-                        }
+                    ForEach(suggestions.prefix(6)) { label in
                         Button {
-                            text = store.completeLastHashToken(in: text, with: tag.name)
+                            text = store.completeLastHashToken(in: text, with: label.name)
                         } label: {
                             HStack(spacing: 7) {
-                                Circle()
-                                    .fill(tag.color)
-                                    .frame(width: 7, height: 7)
-                                Text("#\(tag.name)")
+                                Text("#")
+                                    .font(.system(size: 10, weight: .black, design: .rounded))
+                                    .foregroundStyle(label.color)
+                                    .frame(width: 18, height: 18)
+                                    .background(RoundedRectangle(cornerRadius: 3).fill(label.color.opacity(0.10)))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .stroke(label.color.opacity(0.48), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                                    }
+                                Text("#\(label.name)")
                                     .font(.system(size: 11.5, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .lineLimit(1)
@@ -4697,12 +5642,19 @@ struct TaskRow: View {
                 .disabled(trace.status != .pending && trace.status != .completed)
 
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(definition?.title ?? "未命名任务")
+                    MarkdownInlineText(definition?.title ?? "未命名任务")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(trace.status.uiStyle.titleColor)
                         .strikethrough(trace.status.uiStyle.strikethrough)
 
-                    TaskTagStrip(tags: store.tags(for: trace.chainID))
+                    if let classification = store.displayableClassification(for: trace) {
+                        TaskClassificationBadges(
+                            display: classification,
+                            chainID: trace.chainID,
+                            taskTitle: definition?.title ?? "未命名任务"
+                        )
+                        .padding(.top, 4)
+                    }
 
                     if showsProgress {
                         HStack(spacing: 6) {
@@ -4859,7 +5811,7 @@ struct ChangedTargetButton: View {
             HStack(spacing: 4) {
                 Text("被变更为：")
                     .foregroundStyle(Theme.text3)
-                Text(title)
+                MarkdownInlineText(title)
                     .lineLimit(1)
                 Image(systemName: "arrow.right")
                     .font(.system(size: compact ? 8.5 : 9.5, weight: .bold))
@@ -4900,7 +5852,7 @@ struct SubtaskRow: View {
             }
             .buttonStyle(.plain)
 
-            Text(subtask.title)
+            MarkdownInlineText(subtask.title)
                 .font(.system(size: 12))
                 .foregroundStyle(subtask.status == .completed ? Theme.text3 : Theme.text1)
                 .strikethrough(subtask.status == .completed)
@@ -4994,17 +5946,20 @@ struct TaskPoolPage: View {
 
     var tasks: [PoolTask] { store.engine.taskPool() }
     var groups: [PoolTaskGroup] {
-        Dictionary(grouping: tasks, by: { store.primaryTagName(for: $0.chain) })
+        Dictionary(grouping: tasks, by: {
+            store.currentClassification(for: $0.chain.id)?.category?.name ?? "未分组"
+        })
             .map { PoolTaskGroup(title: $0.key, tasks: $0.value.sorted { $0.definition.createdAt < $1.definition.createdAt }) }
             .sorted {
-                if $0.title == "未标记" { return false }
-                if $1.title == "未标记" { return true }
-                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                if $0.title == "未分组" { return false }
+                if $1.title == "未分组" { return true }
+                return ClassificationNameCanonicalizer.canonicalKey($0.title)
+                    < ClassificationNameCanonicalizer.canonicalKey($1.title)
             }
     }
 
     var shouldShowGroups: Bool {
-        groups.count > 1 || groups.contains { $0.title != "未标记" }
+        groups.count > 1 || groups.contains { $0.title != "未分组" }
     }
 
     var body: some View {
@@ -5088,12 +6043,17 @@ struct PoolTaskRow: View {
         let selected = store.selectedPoolChainID == task.chain.id
         HStack(spacing: 10) {
             PoolTaskPlaceholderGlyph()
-            Text(task.definition.title)
+            MarkdownInlineText(task.definition.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.text1)
                 .lineLimit(1)
-            ForEach(store.tags(for: task.chain), id: \.assignment.id) { tagged in
-                TaskTagChip(tag: tagged.tag, slot: tagged.assignment.slot)
+            if let classification = store.currentClassification(for: task.chain.id) {
+                TaskClassificationBadges(
+                    display: .current(classification),
+                    chainID: task.chain.id,
+                    taskTitle: task.definition.title,
+                    automaticallyShowsAllLabels: store.e2eClassificationOverflowChainID == task.chain.id
+                )
             }
             Spacer()
             SmallActionButton(store.copy.scheduleToday, tone: .accent) { store.schedulePoolTask(task.chain.id, date: store.today) }
@@ -5115,67 +6075,38 @@ struct PoolTaskRow: View {
         .padding(.vertical, 9)
         .listRowSurface(selected: selected, tint: Theme.navPool, separatorLeadingInset: 40)
         .onTapGesture { store.selectPool(task.chain.id) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("pool.task.\(task.chain.id.description)")
+        .accessibilityLabel("任务「\(task.definition.title)」")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { store.selectPool(task.chain.id) }
     }
 }
 
-struct TaskTagStrip: View {
-    let tags: [(assignment: TaskTagAssignment, tag: TaskTag)]
-
-    var body: some View {
-        if tags.isEmpty == false {
-            HStack(spacing: 6) {
-                ForEach(tags, id: \.assignment.id) { tagged in
-                    TaskTagChip(tag: tagged.tag, slot: tagged.assignment.slot)
-                }
-            }
-            .padding(.top, 4)
-        }
+private extension TaskClassificationProjection {
+    var isEmpty: Bool {
+        category == nil && labels.isEmpty
     }
 }
 
-struct TaskTagChip: View {
-    let tag: TaskTag
-    let slot: TaskTagSlot
-
-    var body: some View {
-        let active = tag.status == .active
-        HStack(spacing: 5) {
-            Circle()
-                .fill(active ? tag.color : Theme.text3)
-                .frame(width: 6, height: 6)
-            Text("#\(tag.name)")
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(active ? Theme.text2 : Theme.text3)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 8)
-        .frame(height: 20)
-        .background(Capsule().fill(active ? tag.color.opacity(0.10) : Theme.chip))
-        .overlay(Capsule().stroke(active ? tag.color.opacity(0.24) : Theme.line))
-    }
-}
-
-private extension TaskTagSlot {
-    var shortTitle: String {
-        switch self {
-        case .tagI:
-            return "I"
-        case .tagII:
-            return "II"
-        case .tagIII:
-            return "III"
-        }
-    }
-}
-
-private extension TaskTag {
+private extension ClassificationItemProjection {
     var color: Color {
-        let raw = colorHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        guard raw.count == 6, let value = Int(raw, radix: 16) else {
-            return Theme.navPool
-        }
-        return Theme.hex(value)
+        classificationColor(colorHex)
     }
+}
+
+private extension ClassificationCatalogItemProjection {
+    var color: Color {
+        classificationColor(colorHex)
+    }
+}
+
+private func classificationColor(_ colorHex: String) -> Color {
+    let raw = colorHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+    guard raw.count == 6, let value = Int(raw, radix: 16) else {
+        return Theme.navPool
+    }
+    return Theme.hex(value)
 }
 
 struct PoolTaskPlaceholderGlyph: View {
@@ -5243,11 +6174,18 @@ struct FuturePlanRow: View {
         HStack(spacing: 10) {
             PlanningGlyph(systemName: "calendar.badge.clock", color: Theme.navFuture)
             VStack(alignment: .leading, spacing: 0) {
-                Text(item.definition.title)
+                MarkdownInlineText(item.definition.title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                     .lineLimit(1)
-                TaskTagStrip(tags: store.tags(for: item.trace.chainID))
+                if let classification = store.displayableClassification(for: item.trace) {
+                    TaskClassificationBadges(
+                        display: classification,
+                        chainID: item.trace.chainID,
+                        taskTitle: item.definition.title
+                    )
+                    .padding(.top, 4)
+                }
             }
             Spacer()
             StatusChip(status: item.trace.status, scale: .compact)
@@ -5370,11 +6308,20 @@ struct UnfinishedRow: View {
             HStack(alignment: .top, spacing: 10) {
                 StatusGlyph(status: item.isAbandoned ? .abandoned : .unfinished)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(item.definition.title)
+                    MarkdownInlineText(item.definition.title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(item.isAbandoned ? Theme.text2 : Theme.text1)
                         .lineLimit(1)
-                    TaskTagStrip(tags: store.tags(for: item.chain))
+                    if let classificationTrace = item.activeTrace ?? item.latestUnfinishedTrace {
+                        if let classification = store.displayableClassification(for: classificationTrace) {
+                            TaskClassificationBadges(
+                                display: classification,
+                                chainID: item.chain.id,
+                                taskTitle: item.definition.title
+                            )
+                            .padding(.top, 4)
+                        }
+                    }
                 }
                 Spacer()
                 if item.activeTrace == nil, let source = item.unfinishedTraces.last {
@@ -5559,10 +6506,17 @@ struct CompletedRow: View {
             HStack(spacing: 10) {
                 StatusGlyph(status: .completed)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(item.definition.title)
+                    MarkdownInlineText(item.definition.title)
                         .font(.system(size: 13, weight: .medium))
                         .lineLimit(1)
-                    TaskTagStrip(tags: store.tags(for: item.trace.chainID))
+                    if let classification = store.displayableClassification(for: item.trace) {
+                        TaskClassificationBadges(
+                            display: classification,
+                            chainID: item.trace.chainID,
+                            taskTitle: item.definition.title
+                        )
+                        .padding(.top, 4)
+                    }
                 }
                 Spacer()
                 CompletionTimeText(time: SuntraceStore.displayTime(item.trace.completedAt))
@@ -5597,14 +6551,21 @@ struct CompletedSubtaskRow: View {
             HStack(spacing: 10) {
                 StatusGlyph(status: .completed)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(record.subtask.title)
+                    MarkdownInlineText(record.subtask.title)
                         .font(.system(size: 13, weight: .medium))
                         .lineLimit(1)
                     Text("属于「\(record.parentDefinition.title)」")
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(1)
-                    TaskTagStrip(tags: store.tags(for: record.parentTrace.chainID))
+                    if let classification = store.displayableClassification(for: record.parentTrace) {
+                        TaskClassificationBadges(
+                            display: classification,
+                            chainID: record.parentTrace.chainID,
+                            taskTitle: record.parentDefinition.title
+                        )
+                        .padding(.top, 4)
+                    }
                 }
                 Spacer()
                 CompletionKindPill(text: "子任务", color: Theme.accent)
@@ -5850,7 +6811,7 @@ struct CalendarCell: View {
                             .fill(dotColor(for: trace.status))
                             .frame(width: 4, height: 4)
                             .fixedSize()
-                        Text(store.definition(for: trace)?.title ?? "")
+                        MarkdownInlineText(store.definition(for: trace)?.title ?? "")
                             .font(.system(size: 9.5))
                             .foregroundStyle(titleColor(for: trace.status))
                             .strikethrough(trace.status == .completed || trace.status == .abandoned)
@@ -6114,7 +7075,7 @@ struct CalendarDetailRow: View {
             StatusGlyph(status: trace.status, scale: .compact)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(store.definition(for: trace)?.title ?? "")
+                MarkdownInlineText(store.definition(for: trace)?.title ?? "")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(titleColor)
                     .strikethrough(trace.status == .completed || trace.status == .abandoned)
@@ -6158,7 +7119,14 @@ struct CalendarDetailRow: View {
 
 struct SettingsPage: View {
     @EnvironmentObject private var store: SuntraceStore
-    @State private var selectedPane: SettingsPane = .general
+    @State private var selectedPane: SettingsPane
+
+    init() {
+        let initialPane: SettingsPane = CommandLine.arguments.contains("--e2e-settings-groups")
+            ? .groups
+            : .general
+        _selectedPane = State(initialValue: initialPane)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -6186,6 +7154,7 @@ struct SettingsPage: View {
 
 enum SettingsPane: String, CaseIterable, Identifiable {
     case general
+    case groups
     case data
     case sync
     case zhulong
@@ -6196,6 +7165,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     func title(copy: AppCopy) -> String {
         switch self {
         case .general: copy.preferencesTitle
+        case .groups: "组织"
         case .data: copy.dataSectionTitle
         case .sync: copy.syncTitle
         case .zhulong: copy.providerTitle
@@ -6206,6 +7176,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .general: "slider.horizontal.3"
+        case .groups: "square.grid.2x2"
         case .data: "square.and.arrow.up.on.square"
         case .sync: "arrow.triangle.2.circlepath"
         case .zhulong: "sparkles"
@@ -6260,6 +7231,8 @@ struct SettingsPaneContent: View {
             switch pane {
             case .general:
                 SettingsPreferenceCard()
+            case .groups:
+                GroupManagementSettingsCard()
             case .data:
                 SettingsDataCard()
             case .sync:
@@ -6329,12 +7302,12 @@ struct SettingsPreferenceCard: View {
                                 store.resetSettingsPoemText()
                             }
                         }
-                        TextEditor(text: poemTextBinding)
-                            .font(.custom("Songti SC", size: 13))
-                            .lineSpacing(5)
-                            .scrollContentBackground(.hidden)
-                            .padding(8)
-                            .frame(minHeight: 150)
+                        MarkdownEditor(
+                            text: poemTextBinding,
+                            placeholder: "输入诗文或 Markdown",
+                            style: .body,
+                            height: 150
+                        )
                             .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
                     }
@@ -6352,7 +7325,7 @@ struct SettingsPoemAside: View {
             Text("苦昼短")
                 .font(.custom("Songti SC", size: 18).weight(.semibold))
                 .foregroundStyle(Theme.text1.opacity(0.72))
-            Text(text)
+            MarkdownText(text)
                 .font(.custom("Songti SC", size: 15))
                 .lineSpacing(9)
                 .foregroundStyle(Theme.text2.opacity(0.72))
@@ -6783,86 +7756,8 @@ struct SettingsBoundaryRow: View {
 }
 
 struct ZhulongPage: View {
-    @EnvironmentObject private var store: SuntraceStore
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navZhulong, subtitle: store.copy.zhulongSubtitle)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ZhulongWorkbenchCard()
-                    ZhulongScopeCard()
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("建议入口")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Theme.text3)
-                            .tracking(0.6)
-                        ForEach(zhulongCapabilities, id: \.title) { capability in
-                            ZhulongCapabilityRow(capability: capability)
-                        }
-                    }
-
-                    ZhulongDraftsCard()
-                }
-                .padding(20)
-            }
-        }
-    }
-
-    var zhulongCapabilities: [ZhulongCapability] {
-        [
-            ZhulongCapability(task: .dailyReview, title: "复盘分析", scope: "当前 Day Todo + 每日复盘", evidence: "\(store.engine.dailyReviewStats(date: store.today).total) 项今日任务"),
-            ZhulongCapability(task: .taskDecomposition, title: "任务拆解", scope: "用户选中的任务链", evidence: "生成子任务草稿，用户确认后添加"),
-            ZhulongCapability(task: .scheduling, title: "排期建议", scope: "任务池 + 未来计划 + 未完成池", evidence: "\(store.engine.taskPool().count) 项未排期任务"),
-            ZhulongCapability(task: .labelClassification, title: "Tag 建议", scope: "任务标题、状态和轨迹摘要", evidence: "只建议已有活跃 Tag，不自动写入")
-        ]
-    }
-}
-
-struct ZhulongWorkbenchCard: View {
-    @EnvironmentObject private var store: SuntraceStore
-
-    var status: (text: String, color: Color) {
-        if store.zhulongProviderDraft.isConfigured {
-            return ("可生成草稿", Theme.accent)
-        }
-        return ("待配置", Theme.warn)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("工作区")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                    Text("Provider 和《苦昼短》都留在设置；这里只处理草稿生成、筛选和确认。")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(Theme.text2)
-                }
-                Spacer()
-                StatusPill(text: status.text, color: status.color)
-                SmallActionButton(store.copy.navSettings) {
-                    store.page = .settings
-                }
-            }
-
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ZhulongScopeChip(
-                    title: "Provider",
-                    value: store.zhulongProviderDraft.isConfigured ? store.zhulongProviderDraft.normalizedDisplayName : "未配置"
-                )
-                ZhulongScopeChip(
-                    title: "Model",
-                    value: store.zhulongProviderDraft.isConfigured ? store.zhulongProviderDraft.normalizedModel : "未配置"
-                )
-                ZhulongScopeChip(title: "草稿", value: "\(store.zhulongDrafts.count) 条")
-                ZhulongScopeChip(title: "已应用", value: "\(store.appliedZhulongOperationKeys.count) 条")
-            }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+        ZhulongConvergedHome()
     }
 }
 
@@ -6969,30 +7864,6 @@ struct ZhulongProviderField: View {
     }
 }
 
-struct ZhulongScopeCard: View {
-    @EnvironmentObject private var store: SuntraceStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("当前可见范围")
-                .font(.system(size: 13, weight: .semibold))
-            Text("这里只显示会进入草稿分析的当前范围。")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text2)
-                .lineSpacing(3)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ZhulongScopeChip(title: "当前 Day Todo", value: "\(store.engine.getDayTodo(date: store.today).traces.count) 项")
-                ZhulongScopeChip(title: "任务池", value: "\(store.engine.taskPool().count) 项")
-                ZhulongScopeChip(title: "未完成池", value: "\(store.engine.unfinishedPool().count) 条链")
-                ZhulongScopeChip(title: "已完成池", value: "\(store.engine.completedPool().count) 条记录")
-            }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-    }
-}
-
 struct ZhulongScopeChip: View {
     let title: String
     let value: String
@@ -7014,401 +7885,11 @@ struct ZhulongScopeChip: View {
     }
 }
 
-struct ZhulongCapability {
-    let task: ZhulongTask
-    let title: String
-    let scope: String
-    let evidence: String
-}
-
-struct ZhulongCapabilityRow: View {
-    @EnvironmentObject private var store: SuntraceStore
-    let capability: ZhulongCapability
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(capability.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                    Spacer(minLength: 12)
-                    Text(capability.evidence)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text2)
-                        .lineLimit(1)
-                }
-                Text(capability.scope)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.text3)
-                    .lineLimit(1)
-            }
-            SmallActionButton("生成", tone: .accent) { store.generateZhulongDraft(task: capability.task) }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-    }
-}
-
-struct ZhulongDraftsCard: View {
-    @EnvironmentObject private var store: SuntraceStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("草稿收件箱")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                StatusPill(text: "\(store.zhulongDrafts.count) 条", color: Theme.accent)
-            }
-
-            if store.zhulongDrafts.isEmpty {
-                Text("还没有草稿。从上方入口生成后，右侧会显示证据和待确认操作。")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.text3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(store.zhulongDrafts.enumerated()), id: \.element.id) { index, draft in
-                        ZhulongDraftListRow(draft: draft)
-                        if index < store.zhulongDrafts.count - 1 {
-                            Rectangle()
-                                .fill(Theme.line)
-                                .frame(height: 1)
-                        }
-                    }
-                }
-                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-            }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-    }
-}
-
-struct ZhulongDraftListRow: View {
-    @EnvironmentObject private var store: SuntraceStore
-    let draft: AISuggestionDraft
-
-    var selected: Bool {
-        if let selectedZhulongDraftID = store.selectedZhulongDraftID {
-            return selectedZhulongDraftID == draft.id
-        }
-        return store.zhulongDrafts.first?.id == draft.id
-    }
-
-    var body: some View {
-        Button {
-            store.selectedZhulongDraftID = draft.id
-        } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    StatusPill(text: zhulongKindLabel(draft.kind), color: Theme.accent)
-                    if let confidence = draft.confidence {
-                        Text("置信度 \(Int((confidence * 100).rounded()))%")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(Theme.text3)
-                    }
-                    Spacer()
-                    Text(SuntraceStore.displayTime(draft.createdAt) ?? "")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.text3)
-                }
-
-                Text(draft.summary)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(Theme.text1)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(2)
-
-                HStack(spacing: 8) {
-                    ZhulongMetaPill(title: "证据", value: "\(draft.localReport.facts.count)")
-                    ZhulongMetaPill(title: "操作", value: "\(draft.proposedOperations.count)")
-                    Spacer()
-                    if selected {
-                        Text("当前")
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(Theme.accent)
-                    }
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-        .padding(4)
-        .hoverSurface(
-            active: selected,
-            cornerRadius: 8,
-            idleFill: .clear,
-            hoverFill: Theme.panel,
-            activeFill: Theme.accentSoft.opacity(0.55),
-            idleStroke: .clear,
-            hoverStroke: Theme.line,
-            activeStroke: Theme.accent.opacity(0.18),
-            activeLineWidth: 1
-        )
-    }
-}
-
-struct ZhulongMetaPill: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Text(title)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(Theme.text3)
-            Text(value)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(Theme.text2)
-                .monospacedDigit()
-        }
-        .padding(.horizontal, 7)
-        .frame(height: 20)
-        .background(Capsule().fill(Theme.chip))
-        .overlay(Capsule().stroke(Theme.line))
-    }
-}
-
-func zhulongKindLabel(_ kind: AISuggestionKind) -> String {
-    switch kind {
-    case .dailyReview:
-        return "复盘分析"
-    case .habitInsight:
-        return "习惯画像"
-    case .taskDecomposition:
-        return "任务拆解"
-    case .scheduling:
-        return "排期建议"
-    case .labelClassification:
-        return "Tag 建议"
-    case .theoryAnalysis:
-        return "理论参照"
-    }
-}
-
-func zhulongOperationLabel(_ operation: AIProposedOperation) -> String {
-    switch operation {
-    case let .createPoolTask(title, _, _):
-        return "创建任务池任务：\(title)"
-    case let .addSubtask(_, title, difficulty):
-        return "添加子任务：\(title)（\(difficulty.label)）"
-    case let .scheduleFromPool(_, targetDate):
-        return "从任务池排期到 \(targetDate)"
-    case let .continueTrace(_, targetDate):
-        return "延续到 \(targetDate)"
-    case .abandonChain:
-        return "废弃任务链"
-    case let .assignLabel(_, label):
-        return "写入 Tag I：\(label)"
-    case let .updateDailyReview(date, _, _, _):
-        return "更新 \(date) 的每日复盘"
-    }
-}
-
-struct ZhulongOperationRow: View {
-    @EnvironmentObject private var store: SuntraceStore
-    let draft: AISuggestionDraft
-    let operationIndex: Int
-    let operation: AIProposedOperation
-
-    var isApplied: Bool {
-        store.appliedZhulongOperationKeys.contains(store.zhulongOperationKey(draftID: draft.id, operationIndex: operationIndex))
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: isApplied ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isApplied ? Theme.ok : Theme.text3)
-            Text(zhulongOperationLabel(operation))
-                .font(.system(size: 11.5))
-                .foregroundStyle(Theme.text2)
-            Spacer()
-            SmallActionButton(isApplied ? "已应用" : "确认应用", tone: isApplied ? .normal : .accent) {
-                store.applyZhulongOperation(draftID: draft.id, operationIndex: operationIndex)
-            }
-            .disabled(isApplied)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-    }
-}
-
 struct ZhulongRail: View {
     @EnvironmentObject private var store: SuntraceStore
 
     var body: some View {
-        if let draft = store.selectedZhulongDraft {
-            ZhulongDraftInspector(draft: draft)
-        } else {
-            ZhulongEmptyRail()
-        }
-    }
-}
-
-struct ZhulongDraftInspector: View {
-    let draft: AISuggestionDraft
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                Text("当前草稿")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.8)
-                Spacer()
-                Text(SuntraceStore.displayTime(draft.createdAt) ?? "")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.text3)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    StatusPill(text: zhulongKindLabel(draft.kind), color: Theme.accent)
-                    if let confidence = draft.confidence {
-                        Text("置信度 \(Int((confidence * 100).rounded()))%")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.text3)
-                    }
-                }
-                Text(draft.summary)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.text2)
-                    .lineSpacing(4)
-            }
-
-            if draft.localReport.facts.isEmpty == false {
-                DetailSection("证据") {
-                    VStack(alignment: .leading, spacing: 7) {
-                        ForEach(Array(draft.localReport.facts.prefix(5).enumerated()), id: \.offset) { _, fact in
-                            HStack(alignment: .top, spacing: 7) {
-                                Circle()
-                                    .fill(Theme.accent)
-                                    .frame(width: 4, height: 4)
-                                    .padding(.top, 6)
-                                Text(fact)
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(Theme.text2)
-                                    .lineSpacing(3)
-                            }
-                        }
-                    }
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-                }
-            }
-
-            DetailSection("待确认操作") {
-                VStack(alignment: .leading, spacing: 6) {
-                    if draft.proposedOperations.isEmpty {
-                        Text("这条草稿只提供分析，不包含写入操作。")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Theme.text3)
-                    } else {
-                        ForEach(Array(draft.proposedOperations.enumerated()), id: \.offset) { index, operation in
-                            ZhulongOperationRow(draft: draft, operationIndex: index, operation: operation)
-                        }
-                    }
-                }
-            }
-
-            DetailSection("写入护栏") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("不自动改写历史日。")
-                    Text("不发送数据库文件、内部 ID 或 Keychain 值。")
-                    Text("普通清单仍可以独立使用。")
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text2)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            }
-        }
-    }
-}
-
-struct ZhulongEmptyRail: View {
-    @EnvironmentObject private var store: SuntraceStore
-
-    var status: (text: String, color: Color) {
-        if store.zhulongProviderDraft.isConfigured {
-            return ("可生成草稿", Theme.accent)
-        }
-        return ("待配置", Theme.warn)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                Text("草稿检视")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.8)
-                Spacer()
-                StatusPill(text: status.text, color: status.color)
-            }
-
-            Text(store.zhulongProviderDraft.isConfigured
-                ? "从左侧入口生成草稿，右侧会在这里显示证据和待确认操作。"
-                : "Provider 还没配完整。先去设置补齐，再在这里生成草稿。")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text2)
-                .lineSpacing(3)
-
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ZhulongScopeChip(
-                    title: "Provider",
-                    value: store.zhulongProviderDraft.isConfigured ? store.zhulongProviderDraft.normalizedDisplayName : "未配置"
-                )
-                ZhulongScopeChip(
-                    title: "Model",
-                    value: store.zhulongProviderDraft.isConfigured ? store.zhulongProviderDraft.normalizedModel : "未配置"
-                )
-                ZhulongScopeChip(title: "草稿", value: "\(store.zhulongDrafts.count) 条")
-                ZhulongScopeChip(title: "已应用", value: "\(store.appliedZhulongOperationKeys.count) 条")
-            }
-
-            if store.zhulongProviderDraft.isConfigured == false {
-                SmallActionButton(store.copy.navSettings, tone: .accent) {
-                    store.page = .settings
-                }
-            }
-
-            DetailSection("写入护栏") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("不自动改写历史日。")
-                    Text("不发送数据库文件、内部 ID 或 Keychain 值。")
-                    Text("Provider 失败不影响普通清单。")
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text2)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            }
-        }
+        ZhulongWorkspaceRail(workspace: store.zhulongWorkspace)
     }
 }
 
@@ -7422,7 +7903,8 @@ struct ZhulongContextModel {
     let title: String
     let subtitle: String
     let stats: [Stat]
-    let recentDraft: AISuggestionDraft?
+    let intent: String
+    let recentSession: ZhulongSession?
 
     @MainActor
     static func make(for page: SuntraceStore.Page, store: SuntraceStore) -> ZhulongContextModel? {
@@ -7432,16 +7914,17 @@ struct ZhulongContextModel {
             let contextCount = tasks.filter {
                 ($0.definition.descriptionText ?? "").isEmpty == false || ($0.definition.note ?? "").isEmpty == false
             }.count
-            let untaggedCount = tasks.filter { $0.chain.primaryTagID == nil }.count
+            let unclassifiedCount = tasks.filter { store.isUnclassified($0.chain.id) }.count
             return ZhulongContextModel(
                 title: "任务池排期",
                 subtitle: "任务池不再单独给本地汇总解释；只把当前队列交给烛龙统一生成排期草稿。",
                 stats: [
                     Stat(title: "未排期", value: "\(tasks.count) 项"),
                     Stat(title: "有说明", value: "\(contextCount) 项"),
-                    Stat(title: "未标记", value: "\(untaggedCount) 项")
+                    Stat(title: "未分类", value: "\(unclassifiedCount) 项")
                 ],
-                recentDraft: store.zhulongDrafts.first { $0.kind == .scheduling }
+                intent: "给任务池重新排期",
+                recentSession: store.recentZhulongSession(matching: [.taskPool, .unfinishedPool])
             )
         case .future:
             let plans = store.engine.futurePlans(today: store.today)
@@ -7455,7 +7938,8 @@ struct ZhulongContextModel {
                     Stat(title: "覆盖日期", value: "\(coveredDates) 天"),
                     Stat(title: "延续任务", value: "\(continued) 项")
                 ],
-                recentDraft: store.zhulongDrafts.first { $0.kind == .scheduling }
+                intent: "检查未来安排并调整承诺",
+                recentSession: store.recentZhulongSession(matching: [.taskPool, .unfinishedPool])
             )
         case .unfinished:
             let items = store.engine.unfinishedPool()
@@ -7469,7 +7953,8 @@ struct ZhulongContextModel {
                     Stat(title: "未完成次", value: "\(missed) 次"),
                     Stat(title: "已延续", value: "\(active) 条")
                 ],
-                recentDraft: store.zhulongDrafts.first { $0.kind == .scheduling }
+                intent: "梳理未完成任务的下一步",
+                recentSession: store.recentZhulongSession(matching: [.unfinishedPool])
             )
         case .completed:
             let completed = store.engine.completedPool()
@@ -7483,9 +7968,8 @@ struct ZhulongContextModel {
                     Stat(title: "子任务", value: "\(subtaskRecords.count) 条"),
                     Stat(title: "覆盖日期", value: "\(coveredDates) 天")
                 ],
-                recentDraft: store.zhulongDrafts.first { draft in
-                    draft.kind == .habitInsight || draft.kind == .theoryAnalysis || draft.kind == .labelClassification
-                }
+                intent: "复看完成轨迹并提取可复用证据",
+                recentSession: store.recentZhulongSession(matching: [.completedPool])
             )
         case .day, .calendar, .zhulong, .settings:
             return nil
@@ -7498,21 +7982,18 @@ struct ZhulongContextRail: View {
     let model: ZhulongContextModel
 
     var statusText: String {
-        store.zhulongProviderDraft.isConfigured ? "已启用" : "待配置"
+        store.zhulongProviderDraft.isConfigured ? "Provider 已启用" : "本地模式"
     }
 
     var entryTitle: String {
-        model.recentDraft == nil ? "进入烛龙" : "查看最近草稿"
+        model.recentSession == nil ? "交给烛龙" : "继续最近会话"
     }
 
     var entrySubtitle: String {
-        if store.zhulongProviderDraft.isConfigured == false {
-            return "当前只打开入口。完成 Provider 配置后，再在烛龙页生成草稿。"
+        if let recentSession = model.recentSession {
+            return "\(recentSession.primaryIntent) · \(store.zhulongWorkspaceStatus(recentSession))"
         }
-        if let recentDraft = model.recentDraft {
-            return "\(zhulongKindLabel(recentDraft.kind)) · \(recentDraft.summary)"
-        }
-        return "在烛龙页统一生成草稿、查看证据并逐条确认写入。"
+        return "建立加密会话，先确认本次范围；没有 Provider 时仍可使用本地证据。"
     }
 
     var body: some View {
@@ -7523,7 +8004,7 @@ struct ZhulongContextRail: View {
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
                 Spacer()
-                StatusPill(text: statusText, color: store.zhulongProviderDraft.isConfigured ? Theme.accent : Theme.text3)
+                StatusPill(text: statusText, color: store.zhulongProviderDraft.isConfigured ? Theme.accent : Theme.ok)
             }
 
             VStack(alignment: .leading, spacing: 5) {
@@ -7572,14 +8053,12 @@ struct ZhulongContextRail: View {
     }
 
     private func openZhulongDestination() {
-        if store.zhulongProviderDraft.isConfigured == false {
-            store.page = .settings
-            return
-        }
-        if let recentDraft = model.recentDraft {
-            store.selectedZhulongDraftID = recentDraft.id
-        }
         store.page = .zhulong
+        if let recentSession = model.recentSession {
+            store.zhulongWorkspace.selectSession(recentSession.id)
+        } else {
+            store.startZhulongWorkspaceSession(intent: model.intent)
+        }
     }
 }
 
@@ -7722,7 +8201,7 @@ struct PoolSummaryModel {
     let contextCount: Int
     let plannedCount: Int
     let needsDetailCount: Int
-    let untaggedCount: Int
+    let unclassifiedCount: Int
     let groups: [Group]
 
     var totalCount: Int { orderedTasks.count }
@@ -7741,13 +8220,13 @@ struct PoolSummaryModel {
                 ($0.definition.note ?? "").isEmpty &&
                 $0.definition.plannedSubtasks.isEmpty
         }.count
-        let untaggedCount = orderedTasks.filter { $0.chain.primaryTagID == nil }.count
+        let unclassifiedCount = orderedTasks.filter { store.isUnclassified($0.chain.id) }.count
 
         var groups: [Group] = []
         var groupIndexes: [String: Int] = [:]
         for task in orderedTasks {
-            let primaryTag = store.tags(for: task.chain).first { $0.assignment.slot == .tagI }?.tag
-            let id = primaryTag?.id.description ?? "untagged"
+            let category = store.currentClassification(for: task.chain.id)?.category
+            let id = category?.id ?? "no-primary-category"
             if let index = groupIndexes[id] {
                 groups[index].count += 1
             } else {
@@ -7755,8 +8234,8 @@ struct PoolSummaryModel {
                 groups.append(
                     Group(
                         id: id,
-                        title: primaryTag?.name ?? "未标记",
-                        color: primaryTag?.color ?? Theme.text3,
+                        title: category?.name ?? "未分组",
+                        color: category?.color ?? Theme.text3,
                         count: 1,
                         leadTitle: task.definition.title
                     )
@@ -7769,7 +8248,7 @@ struct PoolSummaryModel {
             contextCount: contextCount,
             plannedCount: plannedCount,
             needsDetailCount: needsDetailCount,
-            untaggedCount: untaggedCount,
+            unclassifiedCount: unclassifiedCount,
             groups: groups
         )
     }
@@ -7844,7 +8323,7 @@ struct PoolSummaryOverviewCard: View {
                 PoolSummaryMetric(label: "有说明", value: model.contextCount, color: Theme.navPool)
                 PoolSummaryMetric(label: "已拆分", value: model.plannedCount, color: Theme.accent)
                 PoolSummaryMetric(label: "待补充", value: model.needsDetailCount, color: Theme.warn)
-                PoolSummaryMetric(label: "未标记", value: model.untaggedCount, color: Theme.text3)
+                PoolSummaryMetric(label: "未分类", value: model.unclassifiedCount, color: Theme.text3)
             }
         }
         .padding(12)
@@ -7966,8 +8445,8 @@ struct PoolSummaryQueueRow: View {
         let hasNote = (task.definition.note ?? "").isEmpty == false
         let plannedSubtaskCount = task.definition.plannedSubtasks.count
         var parts = ["\(PoolSummaryFormatter.createdAtLabel(task.definition.createdAt)) 入池"]
-        if task.chain.primaryTagID == nil {
-            parts.append("未标记")
+        if store.isUnclassified(task.chain.id) {
+            parts.append("未分类")
         }
         if hasDescription == false && hasNote == false {
             parts.append("缺说明")
@@ -7981,13 +8460,20 @@ struct PoolSummaryQueueRow: View {
     var body: some View {
         Button { store.selectPool(task.chain.id) } label: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(task.definition.title)
+                MarkdownInlineText(task.definition.title)
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Theme.text1)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
 
-                TaskTagStrip(tags: store.tags(for: task.chain))
+                if let classification = store.displayableClassification(for: task.chain.id) {
+                    TaskClassificationBadges(
+                        display: classification,
+                        chainID: task.chain.id,
+                        taskTitle: task.definition.title
+                    )
+                    .padding(.top, 4)
+                }
 
                 Text(meta)
                     .font(.system(size: 10.5))
@@ -8258,7 +8744,7 @@ struct DetailTitleRow<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Text(title)
+            MarkdownText(title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.text1)
                 .lineLimit(3)
@@ -8285,7 +8771,6 @@ struct EditableDetailTitleRow<Trailing: View>: View {
     let onCommit: (String) -> Void
     @ViewBuilder let trailing: Trailing
     @State private var draft: String
-    @FocusState private var focused: Bool
 
     init(
         _ title: String,
@@ -8303,33 +8788,24 @@ struct EditableDetailTitleRow<Trailing: View>: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if editable {
-                TextField("任务标题", text: $draft)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                    .lineLimit(2)
-                    .focused($focused)
-                    .onSubmit(commitDraft)
-                    .onChange(of: focused) { oldValue, newValue in
-                        if oldValue, newValue == false {
-                            commitDraft()
-                        }
-                    }
+                MarkdownEditor(
+                    text: $draft,
+                    placeholder: "任务标题",
+                    style: .title,
+                    showsSurface: false,
+                    onCommit: commitDraft,
+                    onEndEditing: commitDraft
+                )
                     .onChange(of: title) { _, newValue in
-                        if focused == false {
+                        if draft != newValue {
                             draft = newValue
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(focused ? Theme.accent.opacity(0.65) : Theme.line))
             } else {
-                Text(title)
+                MarkdownText(title, fallback: "未命名任务")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.text1)
-                    .lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
@@ -8417,6 +8893,12 @@ struct CompletedRecordDetail: View {
                 editable: false
             )
 
+            TaskClassificationDetailSection(
+                trace: item.trace,
+                taskTitle: item.definition.title,
+                editable: false
+            )
+
             TraceTimelineSection(trace: item.trace)
 
             DetailNotesSection(
@@ -8447,7 +8929,7 @@ struct TraceTimelineSection: View {
                     .foregroundStyle(Theme.text3)
                     .tracking(0.6)
                 Spacer()
-                Text(summaryText)
+                MarkdownText(summaryText)
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text2)
                     .monospacedDigit()
@@ -8560,13 +9042,19 @@ struct CompletedSubtaskDetail: View {
 
             Notice(text: "子任务完成事实独立展示，父任务轨迹仍保留在当天。", tone: .locked)
 
+            TaskClassificationDetailSection(
+                trace: record.parentTrace,
+                taskTitle: record.parentDefinition.title,
+                editable: false
+            )
+
             DetailSection("父任务") {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(record.parentDefinition.title)
+                    MarkdownInlineText(record.parentDefinition.title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.text1)
                         .lineLimit(2)
-                    Text(record.parentDefinition.descriptionText ?? "未填写描述")
+                    MarkdownText(record.parentDefinition.descriptionText ?? "", fallback: "未填写描述")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(3)
@@ -8688,6 +9176,11 @@ struct TaskDetail: View {
                 progress: progress,
                 editable: canEditManualProgress
             )
+            TaskClassificationDetailSection(
+                trace: trace,
+                taskTitle: definition.title,
+                editable: canEditText
+            )
             DetailSection("子任务") {
                 VStack(spacing: 6) {
                     ForEach(subtasks, id: \.id) { subtask in
@@ -8699,14 +9192,15 @@ struct TaskDetail: View {
                             .foregroundStyle(Theme.text3)
                     }
                     if canAddSubtask {
-                        TextField("添加子任务，回车确认", text: $store.detailSubtaskText)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .padding(.horizontal, 10)
-                            .frame(height: 28)
+                        MarkdownEditor(
+                            text: $store.detailSubtaskText,
+                            placeholder: "添加子任务，⌘↩ 确认",
+                            style: .compact,
+                            onCommit: { store.addDetailSubtask(traceID: trace.id) }
+                        )
+                            .frame(minHeight: 42)
                             .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                             .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                            .onSubmit { store.addDetailSubtask(traceID: trace.id) }
                     }
                 }
             }
@@ -8920,28 +9414,19 @@ struct EditableDetailText: View {
 
     var body: some View {
         if editable {
-            TextEditor(text: normalizedBinding)
-                .font(.system(size: 12))
+            MarkdownEditor(
+                text: normalizedBinding,
+                placeholder: placeholder,
+                style: .body,
+                warm: warm
+            )
                 .italic(warm)
                 .foregroundStyle(warm ? Theme.text2 : Theme.text1)
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
-                .frame(height: 66)
+                .frame(minHeight: 86)
                 .background(RoundedRectangle(cornerRadius: 7).fill(warm ? Theme.noteBackground : Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                .overlay(alignment: .topLeading) {
-                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(placeholder)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.text3)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 9)
-                            .allowsHitTesting(false)
-                    }
-                }
         } else {
-            Text(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallback : text)
+            MarkdownText(text, fallback: fallback)
                 .font(.system(size: 12))
                 .italic(warm)
                 .foregroundStyle(warm ? Theme.text2 : Theme.text2)
@@ -9025,15 +9510,17 @@ struct DetailNotesSection: View {
                     }
 
                     if editable {
-                        TextField(placeholder, text: $store.detailNoteText)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
+                        MarkdownEditor(
+                            text: $store.detailNoteText,
+                            placeholder: placeholder.replacingOccurrences(of: "回车确认", with: "⌘↩ 确认"),
+                            style: .body,
+                            warm: true,
+                            onCommit: { store.appendTraceNote(traceID: traceID) }
+                        )
                             .foregroundStyle(Theme.text1)
-                            .padding(.horizontal, 10)
-                            .frame(height: 30)
+                            .frame(minHeight: 76)
                             .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
                             .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                            .onSubmit { store.appendTraceNote(traceID: traceID) }
                     }
                 }
             }
@@ -9050,7 +9537,7 @@ struct DetailNoteEntryRow: View {
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(Theme.text3)
                 .monospacedDigit()
-            Text(entry.body)
+            MarkdownText(entry.body)
                 .font(.system(size: 12))
                 .italic()
                 .foregroundStyle(Theme.text2)
@@ -9282,8 +9769,11 @@ struct PoolDetail: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text3)
             }
-            DetailSection("Tag") {
-                TaskTagInlineEditor(chain: task.chain)
+            DetailSection("分组与标签") {
+                TaskClassificationEditor(
+                    chainID: task.chain.id,
+                    taskTitle: task.definition.title
+                )
             }
             DetailSection("子任务") {
                 PoolPlannedSubtasksSection(task: task)
@@ -9328,14 +9818,15 @@ struct PoolPlannedSubtasksSection: View {
             ForEach(plannedSubtasks) { plannedSubtask in
                 PlannedSubtaskRow(chainID: task.chain.id, plannedSubtask: plannedSubtask)
             }
-            TextField("添加子任务，回车确认", text: $store.detailSubtaskText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .padding(.horizontal, 10)
-                .frame(height: 28)
+            MarkdownEditor(
+                text: $store.detailSubtaskText,
+                placeholder: "添加子任务，⌘↩ 确认",
+                style: .compact,
+                onCommit: { store.addPoolPlannedSubtask(chainID: task.chain.id) }
+            )
+                .frame(minHeight: 42)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                .onSubmit { store.addPoolPlannedSubtask(chainID: task.chain.id) }
         }
     }
 }
@@ -9352,7 +9843,7 @@ struct PlannedSubtaskRow: View {
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.line2, lineWidth: 1.5))
                 .frame(width: 15, height: 15)
 
-            Text(plannedSubtask.title)
+            MarkdownInlineText(plannedSubtask.title)
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text1)
                 .lineLimit(1)
@@ -9430,150 +9921,19 @@ struct PoolNotesSection: View {
                 ForEach(entries) { entry in
                     DetailNoteEntryRow(entry: entry)
                 }
-                TextField("追加附言，回车确认", text: $store.detailNoteText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
+                MarkdownEditor(
+                    text: $store.detailNoteText,
+                    placeholder: "追加附言，⌘↩ 确认",
+                    style: .body,
+                    warm: true,
+                    onCommit: { store.appendPoolNote(chainID: chainID) }
+                )
                     .foregroundStyle(Theme.text1)
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
+                    .frame(minHeight: 76)
                     .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                    .onSubmit { store.appendPoolNote(chainID: chainID) }
             }
         }
-    }
-}
-
-struct TaskTagInlineEditor: View {
-    @EnvironmentObject private var store: SuntraceStore
-    let chain: TaskChain
-    @State private var draft = ""
-
-    var tags: [(assignment: TaskTagAssignment, tag: TaskTag)] {
-        store.tags(for: chain)
-    }
-
-    var normalizedQuery: String {
-        let tail = draft.split(separator: "#", omittingEmptySubsequences: false).last.map(String.init) ?? draft
-        return tail.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    var suggestions: [TaskTag] {
-        store.inlineTagSuggestions(for: chain, query: normalizedQuery)
-    }
-
-    var primarySuggestionCount: Int {
-        store.primaryInlineSuggestionCount(for: chain, query: normalizedQuery)
-    }
-
-    var showsSuggestions: Bool {
-        draft.contains("#") && suggestions.isEmpty == false && tags.count < TaskTagSlot.allCases.count
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                ForEach(tags, id: \.assignment.id) { item in
-                    InlineTaskTagChip(tag: item.tag) {
-                        store.removeInlineTag(chainID: chain.id, slot: item.assignment.slot)
-                    }
-                }
-                if tags.count < TaskTagSlot.allCases.count {
-                    TextField("#", text: $draft)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                        .lineLimit(1)
-                        .onSubmit(commitDraft)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 9)
-            .frame(minHeight: 34)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-
-            if showsSuggestions {
-                VStack(spacing: 0) {
-                    ForEach(Array(suggestions.prefix(6).enumerated()), id: \.element.id) { index, tag in
-                        if index == primarySuggestionCount, primarySuggestionCount > 0 {
-                            Rectangle()
-                                .fill(Theme.line)
-                                .frame(height: 1)
-                                .padding(.vertical, 2)
-                        }
-                        Button {
-                            add(tag.name)
-                        } label: {
-                            HStack(spacing: 7) {
-                                Circle()
-                                    .fill(tag.color)
-                                    .frame(width: 7, height: 7)
-                                Text("#\(tag.name)")
-                                    .font(.system(size: 11.5, weight: .semibold))
-                                    .foregroundStyle(Theme.text1)
-                                    .lineLimit(1)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 9)
-                            .frame(height: 28)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
-            }
-        }
-    }
-
-    private func commitDraft() {
-        let names = draft
-            .split(separator: "#")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { $0.isEmpty == false }
-        if names.isEmpty {
-            add(normalizedQuery)
-        } else {
-            names.forEach(add)
-        }
-    }
-
-    private func add(_ name: String) {
-        store.appendInlineTag(chainID: chain.id, name: name)
-        draft = ""
-    }
-}
-
-struct InlineTaskTagChip: View {
-    let tag: TaskTag
-    let onRemove: () -> Void
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(tag.status == .active ? tag.color : Theme.text3)
-                .frame(width: 6, height: 6)
-            Text("#\(tag.name)")
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(tag.status == .active ? Theme.text1 : Theme.text3)
-                .lineLimit(1)
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 7.5, weight: .bold))
-                    .foregroundStyle(Theme.text3)
-                    .frame(width: 12, height: 12)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.leading, 8)
-        .padding(.trailing, 5)
-        .frame(height: 22)
-        .background(Capsule().fill(tag.status == .active ? tag.color.opacity(0.10) : Theme.chip))
-        .overlay(Capsule().stroke(tag.status == .active ? tag.color.opacity(0.24) : Theme.line))
     }
 }
 
@@ -9618,6 +9978,12 @@ struct FuturePlanDetail: View {
             ])
 
             Notice(text: "未来计划可改期、排序或回池；到达当天前不能标记完成。", tone: .locked)
+
+            TaskClassificationDetailSection(
+                trace: trace,
+                taskTitle: definition.title,
+                editable: true
+            )
 
             DetailSection("计划操作") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -9721,6 +10087,12 @@ struct UnfinishedDetail: View {
                 DetailProgressSection(
                     traceID: trace.id,
                     progress: store.engine.traceProgress(for: trace.id),
+                    editable: false
+                )
+
+                TaskClassificationDetailSection(
+                    trace: trace,
+                    taskTitle: item.definition.title,
                     editable: false
                 )
 
@@ -9976,22 +10348,10 @@ struct ReviewEditor: View {
             Text(title)
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(Theme.text2)
-            TextEditor(text: $text)
-                .font(.system(size: 12))
-                .scrollContentBackground(.hidden)
-                .padding(6)
-                .frame(height: 76)
+            MarkdownEditor(text: $text, placeholder: placeholder, style: .body)
+                .frame(minHeight: 92)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                .overlay(alignment: .topLeading) {
-                    if text.isEmpty {
-                        Text(placeholder)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.text3)
-                            .padding(12)
-                            .allowsHitTesting(false)
-                    }
-                }
         }
     }
 }
@@ -10054,7 +10414,7 @@ struct FromPoolSheet: View {
                         store.showingFromPoolPicker = false
                     } label: {
                         HStack {
-                            Text(task.definition.title)
+                            MarkdownInlineText(task.definition.title)
                             Spacer()
                             Text("排期")
                                 .foregroundStyle(Theme.accent)
@@ -10091,7 +10451,7 @@ struct ChangeTaskSheet: View {
             Text("旧任务会保留在当天并标注已变更，新任务开启新的任务链。")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text2)
-            Text(oldTitle)
+            MarkdownText(oldTitle)
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text3)
                 .strikethrough()
@@ -10099,10 +10459,13 @@ struct ChangeTaskSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            TextField("新的任务标题", text: $store.changeText)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 12)
-                .frame(height: 32)
+            MarkdownEditor(
+                text: $store.changeText,
+                placeholder: "新的任务标题",
+                style: .title,
+                onCommit: { store.changeSelectedTrace() }
+            )
+                .frame(minHeight: 58)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent))
             HStack {
@@ -10704,6 +11067,52 @@ struct DetailSection<Content: View>: View {
                 .foregroundStyle(Theme.text3)
                 .tracking(0.6)
             content
+        }
+    }
+}
+
+struct TaskClassificationDetailSection: View {
+    @EnvironmentObject private var store: SuntraceStore
+
+    let trace: DayTrace
+    let taskTitle: String
+    let editable: Bool
+
+    var body: some View {
+        DetailSection("分组与标签") {
+            if editable {
+                TaskClassificationEditor(
+                    chainID: trace.chainID,
+                    taskTitle: taskTitle
+                )
+            } else if let display = store.displayableClassification(for: trace) {
+                VStack(alignment: .leading, spacing: 7) {
+                    TaskClassificationBadges(
+                        display: display,
+                        chainID: trace.chainID,
+                        taskTitle: taskTitle
+                    )
+                    if display.isHistorical {
+                        Text("显示这条任务轨迹形成时的分组与标签；历史事实不可改写。")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.text3)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            } else {
+                Text("这条任务轨迹形成时未设置分组或标签。")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.text3)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            }
         }
     }
 }

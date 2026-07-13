@@ -7,6 +7,7 @@ public final class SuntraceEngine {
     public private(set) var traces: [DayTraceID: DayTrace]
     public private(set) var subtasks: [SubtaskID: Subtask]
     public private(set) var preferences: AppPreferences
+    var classificationState: TaskClassificationState
 
     public init() {
         self.days = [:]
@@ -15,16 +16,19 @@ public final class SuntraceEngine {
         self.traces = [:]
         self.subtasks = [:]
         self.preferences = AppPreferences()
+        self.classificationState = TaskClassificationState()
     }
 
-    public convenience init(snapshot: SuntraceSnapshot) {
+    public convenience init(snapshot: SuntraceSnapshot) throws {
         self.init()
+        try snapshot.validateIntegrity()
         days = Dictionary(uniqueKeysWithValues: snapshot.days.map { ($0.date, $0) })
         chains = Dictionary(uniqueKeysWithValues: snapshot.chains.map { ($0.id, $0) })
         definitions = Dictionary(uniqueKeysWithValues: snapshot.definitions.map { ($0.id, $0) })
         traces = Dictionary(uniqueKeysWithValues: snapshot.traces.map { ($0.id, $0) })
         subtasks = Dictionary(uniqueKeysWithValues: snapshot.subtasks.map { ($0.id, $0) })
         preferences = snapshot.preferences
+        classificationState = snapshot.classifications
     }
 
     public func snapshot() -> SuntraceSnapshot {
@@ -56,7 +60,8 @@ public final class SuntraceEngine {
                 }
                 return $0.id.description < $1.id.description
             },
-            preferences: preferences
+            preferences: preferences,
+            classifications: classificationState
         )
     }
 
@@ -121,7 +126,7 @@ public final class SuntraceEngine {
 
         let chainTraces = traces.values.filter { $0.chainID == chainID }
         let editableStatuses: Set<TraceStatus> = [.pending, .returnedToPool]
-        guard chainTraces.allSatisfy({ editableStatuses.contains($0.status) }) else {
+        guard chainTraces.isEmpty || chainTraces.contains(where: { editableStatuses.contains($0.status) }) else {
             throw SuntraceError.invalidTransition("completed and unfinished task facts cannot be renamed")
         }
         guard chainTraces.allSatisfy({ $0.status != .pending || $0.date >= today }) else {
@@ -235,98 +240,6 @@ public final class SuntraceEngine {
     }
 
     @discardableResult
-    public func createTaskTag(
-        name: String,
-        colorHex: String = "#2A6FDB",
-        now: Date = Date()
-    ) throws -> TaskTagID {
-        let normalizedName = try normalizeTagName(name)
-        guard preferences.taskTags.contains(where: { $0.name.caseInsensitiveCompare(normalizedName) == .orderedSame }) == false else {
-            throw SuntraceError.invalidInput("tag already exists")
-        }
-        let tag = TaskTag(name: normalizedName, colorHex: normalizedColorHex(colorHex), now: now)
-        preferences.taskTags.append(tag)
-        preferences.taskTags.sort { $0.createdAt < $1.createdAt }
-        return tag.id
-    }
-
-    public func updateTaskTag(
-        tagID: TaskTagID,
-        name: String,
-        status: TaskTagStatus,
-        colorHex: String,
-        now: Date = Date()
-    ) throws {
-        let normalizedName = try normalizeTagName(name)
-        guard let index = preferences.taskTags.firstIndex(where: { $0.id == tagID }) else {
-            throw SuntraceError.notFound("task tag")
-        }
-        guard preferences.taskTags.contains(where: {
-            $0.id != tagID && $0.name.caseInsensitiveCompare(normalizedName) == .orderedSame
-        }) == false else {
-            throw SuntraceError.invalidInput("tag already exists")
-        }
-        preferences.taskTags[index].name = normalizedName
-        preferences.taskTags[index].status = status
-        preferences.taskTags[index].colorHex = normalizedColorHex(colorHex)
-        preferences.taskTags[index].updatedAt = now
-    }
-
-    public func setTaskTagAssignment(
-        chainID: TaskChainID,
-        slot: TaskTagSlot,
-        tagID: TaskTagID?,
-        now: Date = Date()
-    ) throws {
-        guard var chain = chains[chainID] else {
-            throw SuntraceError.notFound("task chain")
-        }
-        if let tagID {
-            guard let tag = preferences.taskTags.first(where: { $0.id == tagID }) else {
-                throw SuntraceError.notFound("task tag")
-            }
-            guard tag.status == .active || chain.tagAssignments.contains(where: { $0.slot == slot && $0.tagID == tagID }) else {
-                throw SuntraceError.invalidTransition("inactive tags cannot be newly assigned")
-            }
-            guard chain.tagAssignments.contains(where: { $0.tagID == tagID && $0.slot != slot }) == false else {
-                throw SuntraceError.invalidTransition("same tag cannot be assigned twice")
-            }
-            chain.tagAssignments.removeAll { $0.slot == slot }
-            chain.tagAssignments.append(TaskTagAssignment(tagID: tagID, slot: slot, now: now))
-        } else {
-            chain.tagAssignments.removeAll { $0.slot == slot }
-        }
-        chain.tagAssignments.sort { $0.slot < $1.slot }
-        chain.updatedAt = now
-        chains[chainID] = chain
-    }
-
-    public func activeTaskTags() -> [TaskTag] {
-        preferences.taskTags
-            .filter { $0.status == .active }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-
-    public func taskTagsCommonlyUsed(in slot: TaskTagSlot) -> [TaskTag] {
-        let activeTagsByID = Dictionary(uniqueKeysWithValues: activeTaskTags().map { ($0.id, $0) })
-        let latestUseByTagID = chains.values.reduce(into: [TaskTagID: Date]()) { partial, chain in
-            guard let assignment = chain.tagAssignments.first(where: { $0.slot == slot }),
-                  activeTagsByID[assignment.tagID] != nil
-            else { return }
-            partial[assignment.tagID] = max(partial[assignment.tagID] ?? .distantPast, assignment.updatedAt)
-        }
-        return latestUseByTagID
-            .compactMap { tagID, lastUsed in activeTagsByID[tagID].map { (tag: $0, lastUsed: lastUsed) } }
-            .sorted {
-                if $0.lastUsed != $1.lastUsed {
-                    return $0.lastUsed > $1.lastUsed
-                }
-                return $0.tag.name.localizedStandardCompare($1.tag.name) == .orderedAscending
-            }
-            .map(\.tag)
-    }
-
-    @discardableResult
     public func scheduleFromPool(
         chainID: TaskChainID,
         date: LocalDate,
@@ -357,20 +270,40 @@ public final class SuntraceEngine {
         return trace.id
     }
 
-    public func deleteUnscheduledTask(chainID: TaskChainID) throws {
+    @discardableResult
+    public func deleteUnscheduledTask(
+        chainID: TaskChainID,
+        now: Date = Date()
+    ) throws -> TaskPoolRemovalOutcome {
         guard traces.values.contains(where: { $0.chainID == chainID }) == false else {
             throw SuntraceError.invalidTransition("scheduled tasks cannot be deleted")
         }
-        guard chains.removeValue(forKey: chainID) != nil else {
+        guard chains[chainID] != nil else {
             throw SuntraceError.notFound("task chain")
         }
+
+        if classificationState.referencesTaskChain(chainID) {
+            try removeCurrentClassificationForRetiredTask(chainID: chainID, now: now)
+            var chain = try chain(chainID)
+            chain.state = .abandoned
+            chain.updatedAt = now
+            chains[chainID] = chain
+            return .removedKeepingHistory
+        }
+
+        chains.removeValue(forKey: chainID)
 
         for definition in definitions.values where definition.chainID == chainID {
             definitions.removeValue(forKey: definition.id)
         }
+        return .deleted
     }
 
-    public func removeTaskFromPool(chainID: TaskChainID, now: Date = Date()) throws {
+    @discardableResult
+    public func removeTaskFromPool(
+        chainID: TaskChainID,
+        now: Date = Date()
+    ) throws -> TaskPoolRemovalOutcome {
         guard isInTaskPool(chainID) else {
             throw SuntraceError.invalidTransition("only task-pool tasks can be removed")
         }
@@ -381,14 +314,44 @@ public final class SuntraceEngine {
         }
 
         guard chainTraces.isEmpty == false else {
-            try deleteUnscheduledTask(chainID: chainID)
-            return
+            return try deleteUnscheduledTask(chainID: chainID, now: now)
         }
 
         var chain = try chain(chainID)
         chain.state = .abandoned
         chain.updatedAt = now
         chains[chainID] = chain
+        return .removedKeepingHistory
+    }
+
+    private func removeCurrentClassificationForRetiredTask(
+        chainID: TaskChainID,
+        now: Date
+    ) throws {
+        guard let current = classificationState.currentByChainID[chainID],
+              current.category != nil || current.labels.isEmpty == false
+        else { return }
+
+        let interactionID = UUID()
+        let plan = try prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: nil,
+                    labels: []
+                )
+            ),
+            source: .deterministicDomainAction(
+                reason: "task removed from task pool while preserving classification history"
+            ),
+            interactionID: interactionID,
+            now: now
+        )
+        _ = try commitClassification(
+            plan,
+            confirmation: .user(confirming: plan, decisionID: interactionID),
+            now: now
+        )
     }
 
     public func getDayTodo(date: LocalDate, sort: ViewSort = .priority) -> DayTodoView {
@@ -523,7 +486,7 @@ public final class SuntraceEngine {
             throw SuntraceError.invalidTransition("only pending traces can be completed")
         }
         guard subtaskProgress(for: traceID).canCompleteParent else {
-            throw SuntraceError.invalidTransition("parent trace cannot complete while subtasks are still open")
+            throw SuntraceError.openSubtasksPreventCompletion
         }
 
         trace.status = .completed
@@ -572,6 +535,7 @@ public final class SuntraceEngine {
         trace.status = .returnedToPool
         trace.settledAt = now
         traces[trace.id] = trace
+        captureClassificationSnapshot(traceID: trace.id, chainID: trace.chainID, now: now)
         touchChain(trace.chainID, now: now)
     }
 
@@ -629,6 +593,7 @@ public final class SuntraceEngine {
         source.settledAt = sourceWasUnfinished ? (source.settledAt ?? now) : nil
         traces[source.id] = source
         traces[nextTrace.id] = nextTrace
+        captureClassificationSnapshot(traceID: source.id, chainID: source.chainID, now: now)
 
         copyOpenSubtasks(from: source.id, to: nextTrace.id, now: now)
         ensureDay(targetDate, now: now)
@@ -682,6 +647,8 @@ public final class SuntraceEngine {
         definitions[newDefinition.id] = newDefinition
         traces[oldTrace.id] = oldTrace
         traces[newTrace.id] = newTrace
+        captureClassificationSnapshot(traceID: oldTrace.id, chainID: oldTrace.chainID, now: now)
+        try inheritCurrentClassification(from: oldTrace.chainID, to: newChain.id, now: now)
         touchChain(oldTrace.chainID, now: now)
         return newTrace.id
     }
@@ -703,6 +670,7 @@ public final class SuntraceEngine {
 
         traces[trace.id] = trace
         chains[chain.id] = chain
+        captureClassificationSnapshot(traceID: trace.id, chainID: trace.chainID, now: now)
     }
 
     @discardableResult
@@ -732,6 +700,9 @@ public final class SuntraceEngine {
 
         traces[source.id] = source
         chains[chain.id] = chain
+        if source.status == .unfinished {
+            captureClassificationSnapshot(traceID: source.id, chainID: source.chainID, now: now)
+        }
         return source.id
     }
 
@@ -755,6 +726,7 @@ public final class SuntraceEngine {
             _ = try scheduleFromPool(chainID: newChainID, date: date, today: today, now: now)
         }
 
+        try inheritCurrentClassification(from: source.chainID, to: newChainID, now: now)
         return newChainID
     }
 
@@ -941,12 +913,23 @@ public final class SuntraceEngine {
                 continue
             }
 
+            var traceIDsNeedingClassificationSnapshot: Set<DayTraceID> = []
             for trace in traces.values where trace.date == date && trace.status == .pending {
                 var settled = trace
                 settled.status = .unfinished
                 settled.settledAt = now
                 traces[settled.id] = settled
+                traceIDsNeedingClassificationSnapshot.insert(settled.id)
                 settleOpenSubtasks(on: settled.id, now: now)
+            }
+
+            for trace in traces.values where trace.date == date && trace.status == .completed {
+                traceIDsNeedingClassificationSnapshot.insert(trace.id)
+            }
+
+            for traceID in traceIDsNeedingClassificationSnapshot {
+                guard let trace = traces[traceID] else { continue }
+                captureClassificationSnapshot(traceID: trace.id, chainID: trace.chainID, now: now)
             }
 
             days[date]?.lockedAt = now
@@ -1015,35 +998,19 @@ public final class SuntraceEngine {
 
 private extension SuntraceEngine {
     func normalizeTitle(_ title: String) throws -> String {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else {
+        let normalized = title
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.isEmpty == false else {
             throw SuntraceError.invalidTitle
         }
-        return trimmed
+        return normalized
     }
 
     func normalizedOptionalText(_ text: String?) -> String? {
         let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == true ? nil : trimmed
-    }
-
-    func normalizeTagName(_ name: String) throws -> String {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else {
-            throw SuntraceError.invalidInput("tag name cannot be empty")
-        }
-        guard trimmed.count <= 24 else {
-            throw SuntraceError.invalidInput("tag name is too long")
-        }
-        return trimmed
-    }
-
-    func normalizedColorHex(_ colorHex: String) -> String {
-        let trimmed = colorHex.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.range(of: #"^#[0-9A-Fa-f]{6}$"#, options: .regularExpression) != nil else {
-            return "#2A6FDB"
-        }
-        return trimmed.uppercased()
     }
 
     func sorted(_ traces: [DayTrace], by sort: ViewSort) -> [DayTrace] {

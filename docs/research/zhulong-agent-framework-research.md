@@ -50,4 +50,4 @@ OpenClaw 的 runtime registry 和 auth profile 值得保留：provider/runtime �
 - 增加建议草稿持久化表，但草稿不是历史事实，可以清理。
 - 增加“应用草稿”服务，把用户确认的建议转换成 `SuntraceCore` 操作。
 - 增加 provider 健康检查 UI 和本地诊断指标。
-- 增加 label 模型后，把 label 分类建议接入普通 label 接口。
+- 标签分类建议必须接入普通分类 Module，并在用户确认后保留来源与决定引用。

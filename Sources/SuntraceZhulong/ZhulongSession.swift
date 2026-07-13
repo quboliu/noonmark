@@ -522,12 +522,18 @@ public struct ZhulongSession: Equatable, Sendable {
             reference: .providerRun(runID),
             now: now
         )
+        let expectedPlanArtifactVersion: Int? = switch purpose {
+        case .conversation: nil
+        case .delegatedPlanning, .migratedLegacyPlanning:
+            (planArtifacts.last?.version ?? 0) + 1
+        }
         return ZhulongProviderRequest(
             runID: runID,
             sessionID: id,
             providerIdentity: providerIdentity,
             payload: payload,
             purpose: purpose,
+            expectedPlanArtifactVersion: expectedPlanArtifactVersion,
             startedAt: now
         )
     }

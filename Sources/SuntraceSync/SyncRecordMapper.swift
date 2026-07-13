@@ -4,18 +4,34 @@ import SuntraceCore
 public enum SyncRecordMapperError: Error, Equatable, Sendable {
     case entityTypeMismatch(expected: SyncEntityType, actual: SyncEntityType)
     case invalidPayload(SyncEntityType)
+    case classificationStateRequiresCommitRecords
 }
 
 public struct SyncRecordMapper: Sendable {
+    public static let currentOrdinaryPayloadFormatVersion = 1
+
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
     public init() {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(date.timeIntervalSinceReferenceDate.bitPattern)
+        }
         encoder.outputFormatting = [.sortedKeys]
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let seconds = Double(bitPattern: try container.decode(UInt64.self))
+            guard seconds.isFinite else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "sync payload date is not finite"
+                )
+            }
+            return Date(timeIntervalSinceReferenceDate: seconds)
+        }
         self.encoder = encoder
         self.decoder = decoder
     }
@@ -25,7 +41,10 @@ public struct SyncRecordMapper: Sendable {
         modifiedBy deviceID: SyncDeviceID,
         preferencesUpdatedAt: Date = Date(timeIntervalSince1970: 0)
     ) throws -> [SyncRecord] {
-        try snapshot.days.map { try record(for: $0, modifiedBy: deviceID) }
+        guard snapshot.classifications == TaskClassificationState() else {
+            throw SyncRecordMapperError.classificationStateRequiresCommitRecords
+        }
+        return try snapshot.days.map { try record(for: $0, modifiedBy: deviceID) }
             + snapshot.chains.map { try record(for: $0, modifiedBy: deviceID) }
             + snapshot.definitions.map { try record(for: $0, modifiedBy: deviceID) }
             + snapshot.traces.map { try record(for: $0, modifiedBy: deviceID) }
@@ -34,7 +53,7 @@ public struct SyncRecordMapper: Sendable {
     }
 
     public func record(for day: Day, modifiedBy deviceID: SyncDeviceID) throws -> SyncRecord {
-        try makeRecord(
+        return try makeRecord(
             header: RecordHeader(
                 id: "day:\(day.date.description)",
                 type: .day,
@@ -72,8 +91,11 @@ public struct SyncRecordMapper: Sendable {
         )
     }
 
-    public func record(for trace: DayTrace, modifiedBy deviceID: SyncDeviceID) throws -> SyncRecord {
-        try makeRecord(
+    public func record(
+        for trace: DayTrace,
+        modifiedBy deviceID: SyncDeviceID
+    ) throws -> SyncRecord {
+        return try makeRecord(
             header: RecordHeader(
                 id: "trace:\(trace.id.rawValue.uuidString)",
                 type: .dayTrace,
@@ -111,64 +133,178 @@ public struct SyncRecordMapper: Sendable {
         )
     }
 
+    public func record(
+        for envelope: ClassificationCommitEnvelope,
+        modifiedBy deviceID: SyncDeviceID
+    ) throws -> SyncRecord {
+        return SyncRecord(
+            id: SyncRecordID("classification-commit:\(envelope.changeRecord.id.uuidString)"),
+            entityType: .classificationCommit,
+            entityID: envelope.changeRecord.id.uuidString,
+            modifiedAt: envelope.changeRecord.committedAt,
+            modifiedByDeviceID: deviceID,
+            payload: try envelope.canonicalData()
+        )
+    }
+
+    public func record(
+        for envelope: TraceClassificationEventEnvelope,
+        modifiedBy deviceID: SyncDeviceID
+    ) throws -> SyncRecord {
+        SyncRecord(
+            id: SyncRecordID(
+                "trace-classification-event:\(envelope.event.id.uuidString)"
+            ),
+            entityType: .traceClassificationEvent,
+            entityID: envelope.event.id.uuidString,
+            modifiedAt: envelope.event.capturedAt,
+            modifiedByDeviceID: deviceID,
+            payload: try envelope.canonicalData()
+        )
+    }
+
     public func payload(from record: SyncRecord) throws -> SyncRecordPayload {
         switch record.entityType {
         case .day:
-            return .day(try decode(Day.self, from: record))
+            return .day(try decodeDay(record))
         case .taskChain:
-            return .taskChain(try decode(TaskChain.self, from: record))
+            return .taskChain(try decodeTaskChain(record))
         case .taskDefinition:
-            return .taskDefinition(try decode(TaskDefinition.self, from: record))
+            return .taskDefinition(try decodeTaskDefinition(record))
         case .dayTrace:
-            return .dayTrace(try decode(DayTrace.self, from: record))
+            return .dayTrace(try decodeDayTrace(record))
         case .subtask:
-            return .subtask(try decode(Subtask.self, from: record))
+            return .subtask(try decodeSubtask(record))
         case .appPreferences:
-            return .appPreferences(try decode(AppPreferencesEnvelope.self, from: record))
+            return .appPreferences(try decodeAppPreferences(record))
+        case .classificationCommit:
+            return .classificationCommit(try decodeClassificationCommit(record))
+        case .traceClassificationEvent:
+            return .traceClassificationEvent(
+                try decodeTraceClassificationEvent(record)
+            )
         }
     }
 
     public func decodeDay(_ record: SyncRecord) throws -> Day {
         try require(record, type: .day)
-        return try decode(Day.self, from: record)
+        let day = try decode(Day.self, from: record)
+        try requireIdentity(
+            record,
+            id: "day:\(day.date.description)",
+            entityID: day.date.description
+        )
+        return day
     }
 
     public func decodeTaskChain(_ record: SyncRecord) throws -> TaskChain {
         try require(record, type: .taskChain)
-        return try decode(TaskChain.self, from: record)
+        let chain = try decode(TaskChain.self, from: record)
+        try requireIdentity(
+            record,
+            id: "chain:\(chain.id.description)",
+            entityID: chain.id.description
+        )
+        return chain
     }
 
     public func decodeTaskDefinition(_ record: SyncRecord) throws -> TaskDefinition {
         try require(record, type: .taskDefinition)
-        return try decode(TaskDefinition.self, from: record)
+        let definition = try decode(TaskDefinition.self, from: record)
+        try requireIdentity(
+            record,
+            id: "definition:\(definition.id.description)",
+            entityID: definition.id.description
+        )
+        return definition
     }
 
     public func decodeDayTrace(_ record: SyncRecord) throws -> DayTrace {
         try require(record, type: .dayTrace)
-        return try decode(DayTrace.self, from: record)
+        let trace = try decode(DayTrace.self, from: record)
+        try requireIdentity(
+            record,
+            id: "trace:\(trace.id.description)",
+            entityID: trace.id.description
+        )
+        return trace
     }
 
     public func decodeSubtask(_ record: SyncRecord) throws -> Subtask {
         try require(record, type: .subtask)
-        return try decode(Subtask.self, from: record)
+        let subtask = try decode(Subtask.self, from: record)
+        try requireIdentity(
+            record,
+            id: "subtask:\(subtask.id.description)",
+            entityID: subtask.id.description
+        )
+        return subtask
     }
 
     public func decodeAppPreferences(_ record: SyncRecord) throws -> AppPreferencesEnvelope {
         try require(record, type: .appPreferences)
-        return try decode(AppPreferencesEnvelope.self, from: record)
+        let envelope = try decode(AppPreferencesEnvelope.self, from: record)
+        try requireIdentity(record, id: "preferences:default", entityID: "default")
+        return envelope
+    }
+
+    public func decodeClassificationCommit(
+        _ record: SyncRecord
+    ) throws -> ClassificationCommitEnvelope {
+        try require(record, type: .classificationCommit)
+        do {
+            let envelope = try ClassificationCommitEnvelope.decode(record.payload)
+            guard try envelope.canonicalData() == record.payload,
+                  record.entityID == envelope.changeRecord.id.uuidString,
+                  record.id.rawValue == "classification-commit:\(record.entityID)"
+            else {
+                throw SyncRecordMapperError.invalidPayload(.classificationCommit)
+            }
+            return envelope
+        } catch let error as SyncRecordMapperError {
+            throw error
+        } catch {
+            throw SyncRecordMapperError.invalidPayload(.classificationCommit)
+        }
+    }
+
+    public func decodeTraceClassificationEvent(
+        _ record: SyncRecord
+    ) throws -> TraceClassificationEventEnvelope {
+        try require(record, type: .traceClassificationEvent)
+        do {
+            let envelope = try TraceClassificationEventEnvelope.decode(record.payload)
+            guard record.entityID == envelope.event.id.uuidString,
+                  record.id.rawValue
+                  == "trace-classification-event:\(record.entityID)"
+            else {
+                throw SyncRecordMapperError.invalidPayload(
+                    .traceClassificationEvent
+                )
+            }
+            return envelope
+        } catch let error as SyncRecordMapperError {
+            throw error
+        } catch {
+            throw SyncRecordMapperError.invalidPayload(.traceClassificationEvent)
+        }
     }
 
     private func makeRecord(
         header: RecordHeader,
-        payload: some Encodable
+        payload: some Codable
     ) throws -> SyncRecord {
-        SyncRecord(
+        let envelope = CurrentSyncPayloadEnvelope(
+            formatVersion: Self.currentOrdinaryPayloadFormatVersion,
+            payload: payload
+        )
+        return SyncRecord(
             id: SyncRecordID(header.id),
             entityType: header.type,
             entityID: header.entityID,
             modifiedAt: header.modifiedAt,
             modifiedByDeviceID: header.deviceID,
-            payload: try encoder.encode(payload)
+            payload: try encoder.encode(envelope)
         )
     }
 
@@ -178,13 +314,39 @@ public struct SyncRecordMapper: Sendable {
         }
     }
 
-    private func decode<T: Decodable>(_ type: T.Type, from record: SyncRecord) throws -> T {
+    private func requireIdentity(
+        _ record: SyncRecord,
+        id: String,
+        entityID: String
+    ) throws {
+        guard record.id.rawValue == id, record.entityID == entityID else {
+            throw SyncRecordMapperError.invalidPayload(record.entityType)
+        }
+    }
+
+    private func decode<T: Codable>(_ type: T.Type, from record: SyncRecord) throws -> T {
         do {
-            return try decoder.decode(type, from: record.payload)
+            let envelope = try decoder.decode(
+                CurrentSyncPayloadEnvelope<T>.self,
+                from: record.payload
+            )
+            guard envelope.formatVersion == Self.currentOrdinaryPayloadFormatVersion,
+                  try encoder.encode(envelope) == record.payload
+            else {
+                throw SyncRecordMapperError.invalidPayload(record.entityType)
+            }
+            return envelope.payload
+        } catch let error as SyncRecordMapperError {
+            throw error
         } catch {
             throw SyncRecordMapperError.invalidPayload(record.entityType)
         }
     }
+}
+
+private struct CurrentSyncPayloadEnvelope<Payload: Codable>: Codable {
+    let formatVersion: Int
+    let payload: Payload
 }
 
 private struct RecordHeader {

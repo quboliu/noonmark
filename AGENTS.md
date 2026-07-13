@@ -58,6 +58,20 @@
   - `scripts/package-dmg release`
   - `scripts/test-dmg-install dist/Noonmark.dmg`
 
+## Agent skills
+
+### Issue tracker
+
+Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作为 triage 入口。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+采用五个默认 triage labels：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human` 和 `wontfix`。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+采用 single-context 布局：根目录 `CONTEXT.md` 记录领域语言，`docs/adr/` 记录架构决策。详见 `docs/agents/domain.md`。
+
 ## 强制工作流
 
 任何任务都必须按以下顺序推进：

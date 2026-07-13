@@ -49,6 +49,7 @@ final class OpenAICompatibleProviderTests: XCTestCase {
         )
 
         XCTAssertEqual(response.text, "事实：今天有 2 个未完成。建议：减少承诺。")
+        XCTAssertEqual(response.rawContent, "事实：今天有 2 个未完成。建议：减少承诺。")
         XCTAssertEqual(capturedRequest?.url?.absoluteString, "https://provider.example/v1/chat/completions")
         XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer secret-token")
         XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "X-Suntrace-Test"), "1")
@@ -62,6 +63,7 @@ final class OpenAICompatibleProviderTests: XCTestCase {
     }
 
     func testCompleteParsesStructuredSuggestionOperations() async throws {
+        let structured = #"{"summary":"建议先创建任务池任务。","confidence":0.66,"proposedOperations":[{"type":"createPoolTask","title":"整理远程结构化输出","descriptionText":"解析安全操作","note":"确认后落库"}]}"#
         URLProtocolStub.handler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -69,7 +71,6 @@ final class OpenAICompatibleProviderTests: XCTestCase {
                 httpVersion: nil,
                 headerFields: ["Content-Type": "application/json"]
             )!
-            let structured = #"{"summary":"建议先创建任务池任务。","confidence":0.66,"proposedOperations":[{"type":"createPoolTask","title":"整理远程结构化输出","descriptionText":"解析安全操作","note":"确认后落库"}]}"#
             let body = #"{"choices":[{"message":{"role":"assistant","content":"\#(structured.replacingOccurrences(of: "\"", with: "\\\""))"}}]}"#
             return (response, Data(body.utf8))
         }
@@ -90,6 +91,7 @@ final class OpenAICompatibleProviderTests: XCTestCase {
         )
 
         XCTAssertEqual(response.text, "建议先创建任务池任务。")
+        XCTAssertEqual(response.rawContent, structured)
         XCTAssertEqual(response.confidence, 0.66)
         XCTAssertEqual(
             response.proposedOperations,

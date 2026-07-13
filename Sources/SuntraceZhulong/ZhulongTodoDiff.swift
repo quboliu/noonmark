@@ -466,6 +466,12 @@ public struct ZhulongTodoDiffApplier: Sendable {
     }
 }
 
+public enum ZhulongApplicationSnapshotDigest {
+    public static func value(_ snapshot: SuntraceSnapshot) throws -> String {
+        try ZhulongTodoDigest.snapshot(snapshot)
+    }
+}
+
 public extension ZhulongSession {
     var currentTodoDiff: ZhulongTodoDiffDraft? {
         guard let artifact = effectivePlanArtifact else { return nil }
@@ -613,7 +619,11 @@ enum ZhulongTodoDigest {
     static func value(_ value: some Encodable) throws -> String {
         do {
             let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .secondsSince1970
+            encoder.dateEncodingStrategy = .custom { date, encoder in
+                var container = encoder.singleValueContainer()
+                let milliseconds = (date.timeIntervalSince1970 * 1000).rounded()
+                try container.encode(milliseconds / 1000)
+            }
             encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
             let data = try encoder.encode(value)
             return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()

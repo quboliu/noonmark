@@ -52,7 +52,13 @@ public struct OpenAICompatibleProvider: AIProvider {
             throw AIProviderHTTPError.emptyResponse
         }
 
-        return try responseParser.parse(content)
+        let parsed = try responseParser.parse(content)
+        return AIProviderResponse(
+            text: parsed.text,
+            proposedOperations: parsed.proposedOperations,
+            confidence: parsed.confidence,
+            rawContent: content
+        )
     }
 
     public func healthCheck() async -> AIProviderHealth {

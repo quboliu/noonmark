@@ -81,6 +81,7 @@ public struct ZhulongProviderRequest: Equatable, Sendable {
     public let providerIdentity: ZhulongProviderConfigurationIdentity
     public let payload: ZhulongProviderPayload
     public let purpose: ZhulongProviderRunPurpose
+    public let expectedPlanArtifactVersion: Int?
     public let startedAt: Date
 }
 

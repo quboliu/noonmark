@@ -34,7 +34,6 @@
 - 初始化向导和设置页可以复用同一套偏好字段。
 - 后续 `SQLiteSyncCoordinator` 或在线服务 coordinator 必须先读取 `dataMode`，只启动对应主链路。
 - 备份 adapter 可以独立支持 iCloud Drive、S3 或其他对象存储，但不得调用双向 merge。
-- 从旧数据包或旧数据库载入时，缺省为 `localFirst`，备份策略为关闭。
 
 **Alternatives Considered**
 

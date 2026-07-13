@@ -4,6 +4,7 @@ import SuntraceCore
 public enum SyncRecordMaterializerError: Error, Equatable, Sendable {
     case missingEntity(SyncEntityType, String)
     case unsupportedDelete(SyncEntityType, String)
+    case invalidImmutablePayload(SyncEntityType, String)
 }
 
 public struct SyncRecordMaterializer: Sendable {
@@ -18,6 +19,12 @@ public struct SyncRecordMaterializer: Sendable {
     }
 
     public func record(for entry: SyncJournalEntry, in snapshot: SuntraceSnapshot) throws -> SyncRecord {
+        guard entry.hasValidRecordPayloadInvariant else {
+            throw SyncRecordMaterializerError.invalidImmutablePayload(
+                entry.entityType,
+                entry.entityID
+            )
+        }
         guard entry.operation == .upsert else {
             throw SyncRecordMaterializerError.unsupportedDelete(entry.entityType, entry.entityID)
         }
@@ -35,6 +42,10 @@ public struct SyncRecordMaterializer: Sendable {
             return try subtaskRecord(for: entry, in: snapshot)
         case .appPreferences:
             return try preferencesRecord(for: entry, in: snapshot)
+        case .classificationCommit:
+            return try classificationCommitRecord(for: entry)
+        case .traceClassificationEvent:
+            return try traceClassificationEventRecord(for: entry)
         }
     }
 
@@ -81,5 +92,56 @@ public struct SyncRecordMaterializer: Sendable {
             for: AppPreferencesEnvelope(preferences: snapshot.preferences, updatedAt: entry.changedAt),
             modifiedBy: entry.deviceID
         )
+    }
+
+    private func classificationCommitRecord(
+        for entry: SyncJournalEntry
+    ) throws -> SyncRecord {
+        guard let payload = entry.recordPayload else {
+            throw SyncRecordMaterializerError.missingEntity(entry.entityType, entry.entityID)
+        }
+        let envelope: ClassificationCommitEnvelope
+        do {
+            envelope = try ClassificationCommitEnvelope.decode(payload)
+        } catch {
+            throw SyncRecordMaterializerError.invalidImmutablePayload(
+                entry.entityType,
+                entry.entityID
+            )
+        }
+        guard envelope.changeRecord.id.uuidString == entry.entityID else {
+            throw SyncRecordMaterializerError.invalidImmutablePayload(
+                entry.entityType,
+                entry.entityID
+            )
+        }
+        return try mapper.record(for: envelope, modifiedBy: entry.deviceID)
+    }
+
+    private func traceClassificationEventRecord(
+        for entry: SyncJournalEntry
+    ) throws -> SyncRecord {
+        guard let payload = entry.recordPayload else {
+            throw SyncRecordMaterializerError.missingEntity(
+                entry.entityType,
+                entry.entityID
+            )
+        }
+        let envelope: TraceClassificationEventEnvelope
+        do {
+            envelope = try TraceClassificationEventEnvelope.decode(payload)
+        } catch {
+            throw SyncRecordMaterializerError.invalidImmutablePayload(
+                entry.entityType,
+                entry.entityID
+            )
+        }
+        guard envelope.event.id.uuidString == entry.entityID else {
+            throw SyncRecordMaterializerError.invalidImmutablePayload(
+                entry.entityType,
+                entry.entityID
+            )
+        }
+        return try mapper.record(for: envelope, modifiedBy: entry.deviceID)
     }
 }

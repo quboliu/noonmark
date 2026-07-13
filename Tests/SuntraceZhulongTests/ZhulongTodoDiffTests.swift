@@ -3,6 +3,29 @@
 import XCTest
 
 final class ZhulongTodoDiffTests: XCTestCase {
+    func testApplicationDigestNormalizesDatesToSQLiteMillisecondPrecision() throws {
+        for (preciseInterval, persistedInterval) in [
+            (1_783_865_569.073_456, 1_783_865_569.073),
+            (1_783_865_569.073_789, 1_783_865_569.074),
+            (1_783_865_569.999_9, 1_783_865_570.000)
+        ] {
+            let precise = Date(timeIntervalSince1970: preciseInterval)
+            let persisted = Date(timeIntervalSince1970: persistedInterval)
+            let preciseEngine = SuntraceEngine()
+            _ = try preciseEngine.createPoolTask(title: "毫秒精度", now: precise)
+            let preciseSnapshot = preciseEngine.snapshot()
+            var persistedSnapshot = preciseSnapshot
+            persistedSnapshot.chains[0].createdAt = persisted
+            persistedSnapshot.chains[0].updatedAt = persisted
+            persistedSnapshot.definitions[0].createdAt = persisted
+
+            XCTAssertEqual(
+                try ZhulongApplicationSnapshotDigest.value(preciseSnapshot),
+                try ZhulongApplicationSnapshotDigest.value(persistedSnapshot)
+            )
+        }
+    }
+
     private let today = LocalDate("2026-07-12")
     private let tomorrow = LocalDate("2026-07-13")
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -278,6 +301,89 @@ final class ZhulongTodoDiffTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? ZhulongTodoDiffError, .emptyDiff)
         }
+    }
+
+    func testUserRevisionCanEditRemoveAndSplitBeforeAtomicApply() throws {
+        var engine = SuntraceEngine()
+        let editedID = ZhulongTodoDiffItemID()
+        let removedID = ZhulongTodoDiffItemID()
+        let splitID = ZhulongTodoDiffItemID()
+        let original = try makeDraft(
+            snapshot: engine.snapshot(),
+            items: [
+                ZhulongTodoDiffItem(
+                    id: editedID,
+                    operation: .createTask(
+                        title: "原始交付物",
+                        descriptionText: nil,
+                        note: nil,
+                        plannedSubtasks: [],
+                        targetDate: nil
+                    )
+                ),
+                ZhulongTodoDiffItem(
+                    id: removedID,
+                    operation: .createTask(
+                        title: "不再需要的交付物",
+                        descriptionText: nil,
+                        note: nil,
+                        plannedSubtasks: [],
+                        targetDate: nil
+                    )
+                )
+            ]
+        )
+        let revision = try ZhulongTodoDiffDraft(
+            revising: original,
+            createdAt: now.addingTimeInterval(1),
+            items: [
+                ZhulongTodoDiffItem(
+                    id: editedID,
+                    operation: .createTask(
+                        title: "编辑后的第一部分",
+                        descriptionText: nil,
+                        note: nil,
+                        plannedSubtasks: [],
+                        targetDate: nil
+                    )
+                ),
+                ZhulongTodoDiffItem(
+                    id: splitID,
+                    operation: .createTask(
+                        title: "拆分出的第二部分",
+                        descriptionText: nil,
+                        note: nil,
+                        plannedSubtasks: [],
+                        targetDate: nil
+                    )
+                )
+            ]
+        )
+
+        guard case let .userRevision(parentID, modifiedIDs) = revision.source else {
+            return XCTFail("Expected user revision")
+        }
+        XCTAssertEqual(parentID, original.id)
+        XCTAssertEqual(Set(modifiedIDs), [editedID, removedID, splitID])
+
+        var authorization = try ZhulongTodoDiffApplier().authorize(
+            revision,
+            against: engine,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        _ = try ZhulongTodoDiffApplier().apply(
+            revision,
+            authorization: &authorization,
+            to: &engine,
+            today: today,
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(
+            Set(engine.definitions.values.map(\.title)),
+            ["编辑后的第一部分", "拆分出的第二部分"]
+        )
     }
 
     func testAuthorizationRequiresCausalTimesAndIgnoresPreferenceOnlyChanges() throws {

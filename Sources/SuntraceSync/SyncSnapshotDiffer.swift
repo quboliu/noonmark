@@ -1,6 +1,12 @@
 import Foundation
 import SuntraceCore
 
+public enum SyncSnapshotDifferError: Error, Equatable, Sendable {
+    case classificationHistoryDiverged
+    case classificationCommitsMustBePersistedIndividually(count: Int)
+    case unsupportedClassificationTransition(changeRecordID: UUID?, reason: String)
+}
+
 public struct SyncSnapshotDiffer: Sendable {
     public init() {}
 
@@ -9,8 +15,15 @@ public struct SyncSnapshotDiffer: Sendable {
         to newSnapshot: SuntraceSnapshot,
         changedAt: Date,
         deviceID: SyncDeviceID
-    ) -> [SyncJournalEntry] {
-        changedEntities(from: oldSnapshot, to: newSnapshot).map { entity in
+    ) throws -> [SyncJournalEntry] {
+        let classificationDelta = try classificationDelta(
+            from: oldSnapshot.classifications,
+            to: newSnapshot.classifications
+        )
+        var entries = changedEntities(
+            from: oldSnapshot,
+            to: newSnapshot
+        ).map { entity in
             SyncJournalEntry(
                 entityType: entity.type,
                 entityID: entity.id,
@@ -19,14 +32,229 @@ public struct SyncSnapshotDiffer: Sendable {
                 deviceID: deviceID
             )
         }
+        if let classificationEntry = try classificationCommitEntry(
+            delta: classificationDelta,
+            deviceID: deviceID
+        ) {
+            entries.append(classificationEntry)
+        }
+        entries.append(contentsOf: try traceClassificationEventEntries(
+            delta: classificationDelta,
+            deviceID: deviceID
+        ))
+        return entries.sorted {
+            if $0.entityType.dependencyOrder != $1.entityType.dependencyOrder {
+                return $0.entityType.dependencyOrder < $1.entityType.dependencyOrder
+            }
+            return $0.entityID < $1.entityID
+        }
     }
 
-    private func changedEntities(from oldSnapshot: SuntraceSnapshot, to newSnapshot: SuntraceSnapshot) -> [ChangedEntity] {
+    private func traceClassificationEventEntries(
+        delta: ClassificationDelta,
+        deviceID: SyncDeviceID
+    ) throws -> [SyncJournalEntry] {
+        try delta.appendedEventsByTraceID.values
+            .flatMap { $0 }
+            .map { event in
+                let envelope = try TraceClassificationEventEnvelope(
+                    event: event,
+                    predecessorEventID: delta.predecessorByEventID[event.id] ?? nil
+                )
+                return SyncJournalEntry(
+                    entityType: .traceClassificationEvent,
+                    entityID: event.id.uuidString,
+                    changedAt: event.capturedAt,
+                    deviceID: deviceID,
+                    recordPayload: try envelope.canonicalData()
+                )
+            }
+    }
+
+    private func classificationCommitEntry(
+        delta: ClassificationDelta,
+        deviceID: SyncDeviceID
+    ) throws -> SyncJournalEntry? {
+        guard let record = delta.changeRecord else { return nil }
+        do {
+            let envelope = try ClassificationCommitEnvelope(
+                before: delta.stateBeforeCommit,
+                after: delta.resultState,
+                changeRecord: record
+            )
+            return SyncJournalEntry(
+                entityType: .classificationCommit,
+                entityID: record.id.uuidString,
+                changedAt: record.committedAt,
+                deviceID: deviceID,
+                recordPayload: try envelope.canonicalData()
+            )
+        } catch {
+            throw SyncSnapshotDifferError.unsupportedClassificationTransition(
+                changeRecordID: record.id,
+                reason: String(describing: error)
+            )
+        }
+    }
+
+    private func classificationDelta(
+        from oldState: TaskClassificationState,
+        to newState: TaskClassificationState
+    ) throws -> ClassificationDelta {
+        let changeRecord = try appendedChangeRecord(from: oldState, to: newState)
+        let eventDelta = try appendedTraceEvents(from: oldState, to: newState)
+        try validateClassificationResult(
+            stateBeforeCommit: eventDelta.stateBeforeCommit,
+            resultState: newState,
+            changeRecord: changeRecord
+        )
+
+        return ClassificationDelta(
+            stateBeforeCommit: eventDelta.stateBeforeCommit,
+            resultState: newState,
+            appendedEventsByTraceID: eventDelta.appendedEventsByTraceID,
+            predecessorByEventID: eventDelta.predecessorByEventID,
+            changeRecord: changeRecord
+        )
+    }
+
+    private func appendedChangeRecord(
+        from oldState: TaskClassificationState,
+        to newState: TaskClassificationState
+    ) throws -> ClassificationChangeRecord? {
+        do {
+            try oldState.validateIntegrity()
+            try newState.validateIntegrity()
+        } catch {
+            throw SyncSnapshotDifferError.classificationHistoryDiverged
+        }
+        let oldRecordsByID = Dictionary(
+            uniqueKeysWithValues: oldState.changeRecords.map { ($0.id, $0) }
+        )
+        let newRecordsByID = Dictionary(
+            uniqueKeysWithValues: newState.changeRecords.map { ($0.id, $0) }
+        )
+        guard oldRecordsByID.allSatisfy({ newRecordsByID[$0.key] == $0.value }) else {
+            throw SyncSnapshotDifferError.classificationHistoryDiverged
+        }
+        let appended = newState.changeRecords.filter { oldRecordsByID[$0.id] == nil }
+        guard appended.count <= 1 else {
+            throw SyncSnapshotDifferError.classificationCommitsMustBePersistedIndividually(
+                count: appended.count
+            )
+        }
+        return appended.first
+    }
+
+    private func appendedTraceEvents(
+        from oldState: TaskClassificationState,
+        to newState: TaskClassificationState
+    ) throws -> ClassificationTraceEventDelta {
+        var stateBeforeCommit = oldState
+        var appendedByTraceID: [DayTraceID: [TraceClassificationSnapshot]] = [:]
+        var predecessorByEventID: [UUID: UUID?] = [:]
+        for (traceID, newEvents) in newState.snapshotEventsByTraceID {
+            let oldEvents = oldState.snapshotEventsByTraceID[traceID] ?? []
+            guard newEvents.starts(with: oldEvents) else {
+                throw SyncSnapshotDifferError.classificationHistoryDiverged
+            }
+            let appended = Array(newEvents.dropFirst(oldEvents.count))
+            guard appended.isEmpty == false else { continue }
+            appendedByTraceID[traceID] = appended
+            recordEventPredecessors(
+                appended,
+                after: oldEvents,
+                into: &predecessorByEventID
+            )
+            stateBeforeCommit.snapshotEventsByTraceID[traceID] = newEvents
+            stateBeforeCommit.snapshotsByTraceID[traceID] = newEvents.last
+        }
+        guard oldState.snapshotEventsByTraceID.keys.allSatisfy({
+            newState.snapshotEventsByTraceID[$0] != nil
+        }) else {
+            throw SyncSnapshotDifferError.classificationHistoryDiverged
+        }
+        let appendedCount = appendedByTraceID.values.reduce(0) { $0 + $1.count }
+        guard let eventCount = UInt64(exactly: appendedCount),
+              oldState.revision <= UInt64.max - eventCount
+        else {
+            throw SyncSnapshotDifferError.classificationHistoryDiverged
+        }
+        stateBeforeCommit.revision = oldState.revision + eventCount
+        return ClassificationTraceEventDelta(
+            stateBeforeCommit: stateBeforeCommit,
+            appendedEventsByTraceID: appendedByTraceID,
+            predecessorByEventID: predecessorByEventID
+        )
+    }
+
+    private func recordEventPredecessors(
+        _ appended: [TraceClassificationSnapshot],
+        after existing: [TraceClassificationSnapshot],
+        into predecessors: inout [UUID: UUID?]
+    ) {
+        var predecessorID = existing.last?.id
+        for event in appended {
+            predecessors[event.id] = predecessorID
+            predecessorID = event.id
+        }
+    }
+
+    private func validateClassificationResult(
+        stateBeforeCommit: TaskClassificationState,
+        resultState: TaskClassificationState,
+        changeRecord: ClassificationChangeRecord?
+    ) throws {
+        guard let changeRecord else {
+            guard stateBeforeCommit == resultState else {
+                throw SyncSnapshotDifferError.unsupportedClassificationTransition(
+                    changeRecordID: nil,
+                    reason: "分类状态变化既不是追加轨迹快照，也没有对应 commit record"
+                )
+            }
+            return
+        }
+        let expectedRevision = try classificationResultRevision(
+            after: stateBeforeCommit.revision,
+            for: changeRecord
+        )
+        guard changeRecord.revision == expectedRevision,
+              resultState.revision == expectedRevision
+        else {
+            throw SyncSnapshotDifferError.unsupportedClassificationTransition(
+                changeRecordID: changeRecord.id,
+                reason: "分类 commit 与轨迹快照的 revision 顺序不连续"
+            )
+        }
+    }
+
+    private func classificationResultRevision(
+        after baseRevision: UInt64,
+        for changeRecord: ClassificationChangeRecord
+    ) throws -> UInt64 {
+        guard changeRecord.advancesStateRevision else { return baseRevision }
+        let (next, overflow) = baseRevision.addingReportingOverflow(1)
+        guard overflow == false else {
+            throw SyncSnapshotDifferError.unsupportedClassificationTransition(
+                changeRecordID: changeRecord.id,
+                reason: "分类 commit revision 溢出"
+            )
+        }
+        return next
+    }
+
+    private func changedEntities(
+        from oldSnapshot: SuntraceSnapshot,
+        to newSnapshot: SuntraceSnapshot
+    ) -> [ChangedEntity] {
         var entities: [ChangedEntity] = []
         entities += changedDays(from: oldSnapshot.days, to: newSnapshot.days)
         entities += changedChains(from: oldSnapshot.chains, to: newSnapshot.chains)
         entities += changedDefinitions(from: oldSnapshot.definitions, to: newSnapshot.definitions)
-        entities += changedTraces(from: oldSnapshot.traces, to: newSnapshot.traces)
+        entities += changedTraces(
+            from: oldSnapshot.traces,
+            to: newSnapshot.traces
+        )
         entities += changedSubtasks(from: oldSnapshot.subtasks, to: newSnapshot.subtasks)
 
         if oldSnapshot.preferences != newSnapshot.preferences {
@@ -60,10 +288,15 @@ public struct SyncSnapshotDiffer: Sendable {
         }
     }
 
-    private func changedTraces(from oldTraces: [DayTrace], to newTraces: [DayTrace]) -> [ChangedEntity] {
+    private func changedTraces(
+        from oldTraces: [DayTrace],
+        to newTraces: [DayTrace]
+    ) -> [ChangedEntity] {
         let oldByID = Dictionary(uniqueKeysWithValues: oldTraces.map { ($0.id, $0) })
         return newTraces.compactMap { trace in
-            oldByID[trace.id] == trace ? nil : ChangedEntity(type: .dayTrace, id: trace.id.rawValue.uuidString)
+            oldByID[trace.id] == trace
+                ? nil
+                : ChangedEntity(type: .dayTrace, id: trace.id.rawValue.uuidString)
         }
     }
 
@@ -75,33 +308,28 @@ public struct SyncSnapshotDiffer: Sendable {
     }
 }
 
+private struct ClassificationTraceEventDelta {
+    let stateBeforeCommit: TaskClassificationState
+    let appendedEventsByTraceID: [DayTraceID: [TraceClassificationSnapshot]]
+    let predecessorByEventID: [UUID: UUID?]
+}
+
+private struct ClassificationDelta {
+    let stateBeforeCommit: TaskClassificationState
+    let resultState: TaskClassificationState
+    let appendedEventsByTraceID: [DayTraceID: [TraceClassificationSnapshot]]
+    let predecessorByEventID: [UUID: UUID?]
+    let changeRecord: ClassificationChangeRecord?
+}
+
 private struct ChangedEntity: Comparable {
     var type: SyncEntityType
     var id: String
 
     static func < (lhs: ChangedEntity, rhs: ChangedEntity) -> Bool {
-        if lhs.type.syncOrder != rhs.type.syncOrder {
-            return lhs.type.syncOrder < rhs.type.syncOrder
+        if lhs.type.dependencyOrder != rhs.type.dependencyOrder {
+            return lhs.type.dependencyOrder < rhs.type.dependencyOrder
         }
         return lhs.id < rhs.id
-    }
-}
-
-private extension SyncEntityType {
-    var syncOrder: Int {
-        switch self {
-        case .taskChain:
-            return 0
-        case .taskDefinition:
-            return 1
-        case .day:
-            return 2
-        case .dayTrace:
-            return 3
-        case .subtask:
-            return 4
-        case .appPreferences:
-            return 5
-        }
     }
 }

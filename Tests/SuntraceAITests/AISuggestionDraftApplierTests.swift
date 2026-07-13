@@ -13,7 +13,14 @@ final class AISuggestionDraftApplierTests: XCTestCase {
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: today, today: today, now: now)
 
         let operation = AIProposedOperation.addSubtask(traceID: traceID, title: "补截图验收", difficulty: .medium)
-        let result = try AISuggestionDraftApplier().applyConfirmed(operation, to: engine, today: today, now: now)
+        let draft = makeDraft(operation)
+        let result = try AISuggestionDraftApplier().applyConfirmed(
+            operation,
+            from: draft,
+            to: engine,
+            today: today,
+            now: now
+        )
 
         XCTAssertEqual(result.operation, operation)
         XCTAssertEqual(result.message, "已添加子任务")
@@ -27,8 +34,10 @@ final class AISuggestionDraftApplierTests: XCTestCase {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "打包 DMG", now: now)
 
+        let operation = AIProposedOperation.scheduleFromPool(chainID: chainID, targetDate: tomorrow)
         _ = try AISuggestionDraftApplier().applyConfirmed(
-            .scheduleFromPool(chainID: chainID, targetDate: tomorrow),
+            operation,
+            from: makeDraft(operation),
             to: engine,
             today: today,
             now: now
@@ -40,35 +49,108 @@ final class AISuggestionDraftApplierTests: XCTestCase {
         XCTAssertEqual(scheduled?.trace.status, .pending)
     }
 
-    func testAssignLabelAppliesExistingActiveTagToPrimarySlot() throws {
+    func testAssignLabelPreparesPlanWithoutWritingUntilUserBoundaryConfirms() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "分类任务", now: now)
-        let tagID = try engine.createTaskTag(name: "工程", now: now)
+        let operation = AIProposedOperation.assignLabel(chainID: chainID, label: "工程")
+        let draft = makeDraft(operation)
+        let decisionID = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000001")!
 
-        let result = try AISuggestionDraftApplier().applyConfirmed(
-            .assignLabel(chainID: chainID, label: "工程"),
-            to: engine,
-            today: today,
+        let plan = try AISuggestionDraftApplier().prepareClassification(
+            operation,
+            from: draft,
+            interactionID: decisionID,
+            on: engine,
+            now: now
+        )
+        XCTAssertTrue(engine.snapshot().classifications.labels.isEmpty)
+
+        let receipt = try engine.commitClassification(
+            plan,
+            confirmation: .user(confirming: plan, decisionID: decisionID),
             now: now
         )
 
-        XCTAssertEqual(result.message, "已更新任务 Tag")
-        XCTAssertEqual(engine.chains[chainID]?.tagAssignments, [TaskTagAssignment(tagID: tagID, slot: .tagI, now: now)])
+        XCTAssertEqual(receipt.decisionID, decisionID)
+        let state = engine.snapshot().classifications
+        let labelID = try XCTUnwrap(state.labels.values.first(where: { $0.name == "工程" })?.id)
+        XCTAssertEqual(state.currentByChainID[chainID]?.labelIDs, [labelID])
+        let record = try XCTUnwrap(state.changeRecords.last)
+        XCTAssertEqual(record.decisionID, decisionID)
+        XCTAssertEqual(
+            record.source,
+            .zhulongSuggestion(
+                sessionID: draft.sessionID,
+                draftID: draft.id.rawValue,
+                draftVersion: draft.version,
+                evidenceID: draft.evidenceID
+            )
+        )
     }
 
-    func testAssignLabelFailsClosedWhenTagDoesNotExist() throws {
+    func testApplyFailsClosedWhenOperationIsNotPartOfConfirmedDraft() throws {
         let engine = SuntraceEngine()
         let chainID = try engine.createPoolTask(title: "分类任务", now: now)
+        let confirmedOperation = AIProposedOperation.assignLabel(chainID: chainID, label: "工程")
+        let unrelatedOperation = AIProposedOperation.assignLabel(chainID: chainID, label: "私人")
 
         XCTAssertThrowsError(
             try AISuggestionDraftApplier().applyConfirmed(
-                .assignLabel(chainID: chainID, label: "工程"),
+                unrelatedOperation,
+                from: makeDraft(confirmedOperation),
                 to: engine,
                 today: today,
                 now: now
             )
         ) { error in
-            XCTAssertEqual(error as? AISuggestionApplyError, .unsupportedOperation("tag 尚未创建或已停用"))
+            XCTAssertEqual(
+                error as? AISuggestionApplyError,
+                .unsupportedOperation(
+                    "operation does not belong to the confirmed suggestion draft"
+                )
+            )
         }
+    }
+
+    func testAssignLabelCannotCommitInsideAIModule() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "分类任务", now: now)
+        let operation = AIProposedOperation.assignLabel(chainID: chainID, label: "工程")
+
+        XCTAssertThrowsError(
+            try AISuggestionDraftApplier().applyConfirmed(
+                operation,
+                from: makeDraft(operation),
+                to: engine,
+                today: today,
+                now: now
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AISuggestionApplyError,
+                .unsupportedOperation(
+                    "classification operations require confirmation at the user decision boundary"
+                )
+            )
+        }
+        XCTAssertTrue(engine.snapshot().classifications.labels.isEmpty)
+    }
+
+    private func makeDraft(_ operation: AIProposedOperation) -> AISuggestionDraft {
+        AISuggestionDraft(
+            id: AISuggestionDraftID(
+                UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
+            ),
+            sessionID: UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000002")!,
+            version: 1,
+            evidenceID: UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000003")!,
+            kind: .labelClassification,
+            createdAt: now,
+            sourceScope: AIScopeSnapshot(ranges: []),
+            localReport: LocalInsightReport(evidence: [], facts: []),
+            summary: "测试建议",
+            proposedOperations: [operation],
+            confidence: 1
+        )
     }
 }

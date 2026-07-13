@@ -70,6 +70,36 @@ final class SuntraceEngineTests: XCTestCase {
         )
     }
 
+    func testTaskTitleRenameVersionsCurrentContinuationWithoutRewritingHistory() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "历史标题", now: now)
+        let historicalTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        engine.settleDays(upTo: day2, now: now)
+        let currentTraceID = try engine.continueTrace(
+            traceID: historicalTraceID,
+            targetDate: day2,
+            today: day2,
+            now: now
+        )
+
+        try engine.renameTaskTitle(
+            chainID: chainID,
+            title: "当前\n标题",
+            today: day2,
+            now: now.addingTimeInterval(1)
+        )
+
+        let historicalTrace = try XCTUnwrap(engine.traces[historicalTraceID])
+        let currentTrace = try XCTUnwrap(engine.traces[currentTraceID])
+        XCTAssertEqual(engine.definitions[historicalTrace.definitionID]?.title, "历史标题")
+        XCTAssertEqual(engine.definitions[currentTrace.definitionID]?.title, "当前\n标题")
+    }
+
     func testTaskPoolRemovalDeletesUnscheduledAndPreservesReturnedHistory() throws {
         let engine = SuntraceEngine()
         let unscheduledChainID = try engine.createPoolTask(title: "未排期删除", now: now)
@@ -86,26 +116,6 @@ final class SuntraceEngineTests: XCTestCase {
         XCTAssertEqual(engine.traces[returnedTraceID]?.status, .returnedToPool)
         XCTAssertEqual(engine.chains[returnedChainID]?.state, .abandoned)
         XCTAssertFalse(engine.taskPool().contains { $0.chain.id == returnedChainID })
-    }
-
-    func testTaskTagsUseThreeSlotsAndActiveTagRules() throws {
-        let engine = SuntraceEngine()
-        let chainID = try engine.createPoolTask(title: "Tag 任务", now: now)
-        let work = try engine.createTaskTag(name: "工作", colorHex: "#0E9488", now: now)
-        let reading = try engine.createTaskTag(name: "阅读", colorHex: "#7C5CFF", now: now)
-
-        try engine.setTaskTagAssignment(chainID: chainID, slot: .tagI, tagID: work, now: now)
-        try engine.setTaskTagAssignment(chainID: chainID, slot: .tagII, tagID: reading, now: now)
-
-        XCTAssertEqual(engine.chains[chainID]?.primaryTagID, work)
-        XCTAssertEqual(engine.chains[chainID]?.tagAssignments.map(\.slot), [.tagI, .tagII])
-        XCTAssertThrowsError(try engine.setTaskTagAssignment(chainID: chainID, slot: .tagIII, tagID: work, now: now))
-
-        try engine.updateTaskTag(tagID: reading, name: "阅读", status: .inactive, colorHex: "#7C5CFF", now: now)
-        XCTAssertThrowsError(try engine.setTaskTagAssignment(chainID: chainID, slot: .tagIII, tagID: reading, now: now))
-
-        try engine.setTaskTagAssignment(chainID: chainID, slot: .tagII, tagID: nil, now: now)
-        XCTAssertEqual(engine.chains[chainID]?.tagAssignments.map(\.slot), [.tagI])
     }
 
     func testCurrentCompletionCanBeUndoneButHistoryCannot() throws {
@@ -616,5 +626,36 @@ final class SuntraceEngineTests: XCTestCase {
         let restored = try SuntraceEngine(snapshot: decoder.decode(SuntraceSnapshot.self, from: data))
 
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
+    }
+
+    func testTaskTitlesPreserveSoftAndMarkdownHardLineBreaks() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(
+            title: "  第一行\n第二行  \r\n第三行  ",
+            now: now
+        )
+
+        XCTAssertEqual(engine.taskPool().first?.definition.title, "第一行\n第二行  \n第三行")
+
+        try engine.renameTaskTitle(
+            chainID: chainID,
+            title: "更新\n\n后的标题",
+            today: day1,
+            now: now
+        )
+        XCTAssertEqual(engine.taskPool().first?.definition.title, "更新\n\n后的标题")
+    }
+
+    func testParentCompletionReportsTypedErrorWhileSubtasksRemainOpen() throws {
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "父任务", now: now)
+        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
+        _ = try engine.addSubtask(traceID: traceID, title: "未完成子任务", now: now)
+
+        XCTAssertThrowsError(try engine.markCompleted(traceID: traceID, today: day1, now: now)) { error in
+            XCTAssertEqual(error as? SuntraceError, .openSubtasksPreventCompletion)
+            XCTAssertEqual(error.localizedDescription, "还有未完成子任务，完成全部子任务后才能完成父任务")
+        }
+        XCTAssertEqual(engine.traces[traceID]?.status, .pending)
     }
 }

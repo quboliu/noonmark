@@ -60,6 +60,20 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         XCTAssertEqual(failed.retryCount, 1)
         XCTAssertTrue(failed.lastError?.contains("missingEntity") == true)
         XCTAssertEqual(try syncRepository.auditLog(limit: 1).first?.action, "materializationFailed")
+
+        let retryResult = try await coordinator.uploadPending()
+        XCTAssertEqual(
+            retryResult,
+            SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 0, failedCount: 1)
+        )
+        let failedAgain = try XCTUnwrap(syncRepository.journalEntries(state: .failed).first)
+        XCTAssertEqual(failedAgain.id, missingDay.id)
+        XCTAssertEqual(failedAgain.retryCount, 2)
+        XCTAssertTrue(try syncRepository.journalEntries(state: .uploaded).isEmpty)
+        XCTAssertEqual(
+            try syncRepository.auditLog().filter { $0.action == "materializationFailed" }.count,
+            2
+        )
     }
 
     func testTransportFailureMarksUploadableEntriesFailedAndThrows() async throws {
@@ -87,6 +101,131 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         }
     }
 
+    func testTransientTransportFailureRetriesFailedJournalAndAuditsRecovery() async throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let transport = RecoveringSyncTransport()
+        let deviceID = SyncDeviceID("mac-a")
+        let engine = SuntraceEngine()
+
+        try engineRepository.save(engine.snapshot())
+        engine.updateDailyReview(
+            date: today,
+            summary: "恢复后上传",
+            unfinishedReason: nil,
+            tomorrowNote: nil,
+            now: now
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+
+        let coordinator = SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        do {
+            _ = try await coordinator.uploadPending()
+            XCTFail("首次瞬时失败必须抛错")
+        } catch {
+            XCTAssertEqual(error as? TestSyncTransportError, .unavailable)
+        }
+
+        let failed = try XCTUnwrap(syncRepository.journalEntries(state: .failed).first)
+        XCTAssertEqual(failed.retryCount, 1)
+        XCTAssertTrue(failed.lastError?.contains("unavailable") == true)
+
+        let recovered = try await coordinator.uploadPending()
+
+        XCTAssertEqual(
+            recovered,
+            SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 1, failedCount: 0)
+        )
+        XCTAssertTrue(try syncRepository.journalEntries(state: .failed).isEmpty)
+        let uploaded = try XCTUnwrap(syncRepository.journalEntries(state: .uploaded).first)
+        XCTAssertEqual(uploaded.id, failed.id)
+        XCTAssertEqual(uploaded.retryCount, 1)
+        XCTAssertNil(uploaded.lastError)
+        let pushAttemptCount = await transport.pushAttemptCount()
+        XCTAssertEqual(pushAttemptCount, 2)
+        XCTAssertEqual(
+            Set(try syncRepository.auditLog().map(\.action)),
+            ["uploadFailed", "uploaded"]
+        )
+    }
+
+    func testFailedClassificationParentKeepsGlobalPriorityAheadOfOlderPendingChild() async throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let transport = InMemorySyncTransport()
+        let deviceID = SyncDeviceID("mac-a")
+        let engine = SuntraceEngine()
+        let chainID = try engine.createPoolTask(title: "父提交优先重试", now: now)
+        let beforeClassification = engine.snapshot()
+        let plan = try engine.prepareClassification(
+            .createCategory(name: "依赖父项", colorHex: "#2A6FDB"),
+            source: .userDirect,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(20)
+        )
+        _ = try engine.commitClassification(
+            plan,
+            confirmation: .user(decisionID: UUID()),
+            now: now.addingTimeInterval(20)
+        )
+        let afterClassification = engine.snapshot()
+        let parentEntry = try XCTUnwrap(
+            try SyncSnapshotDiffer().journalEntries(
+                from: beforeClassification,
+                to: afterClassification,
+                changedAt: now.addingTimeInterval(20),
+                deviceID: deviceID
+            ).first { $0.entityType == .classificationCommit }
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
+        let childEntry = SyncJournalEntry(
+            entityType: .dayTrace,
+            entityID: traceID.rawValue.uuidString,
+            changedAt: now,
+            deviceID: deviceID
+        )
+
+        try engineRepository.save(engine.snapshot())
+        try syncRepository.appendJournalEntry(parentEntry)
+        try syncRepository.markJournalEntryFailed(parentEntry.id, error: "transient")
+        try syncRepository.appendJournalEntry(childEntry)
+
+        let coordinator = SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        let result = try await coordinator.uploadPending(limit: 1)
+
+        XCTAssertEqual(
+            result,
+            SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 1, failedCount: 0)
+        )
+        let uploadedTypes = try await transport.fetchAll().map(\.entityType)
+        XCTAssertEqual(uploadedTypes, [.classificationCommit])
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .pendingUpload).map(\.id),
+            [childEntry.id]
+        )
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .uploaded).map(\.id),
+            [parentEntry.id]
+        )
+    }
+
     private func makeDatabaseURL() -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("suntrace-sync-upload-\(UUID().uuidString)")
@@ -100,6 +239,29 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
 
 private enum TestSyncTransportError: Error {
     case unavailable
+}
+
+private actor RecoveringSyncTransport: SyncRecordTransport {
+    private var attempts = 0
+    private var records: [SyncRecordID: SyncRecord] = [:]
+
+    func push(_ records: [SyncRecord]) async throws {
+        attempts += 1
+        guard attempts > 1 else {
+            throw TestSyncTransportError.unavailable
+        }
+        for record in records {
+            self.records[record.id] = record
+        }
+    }
+
+    func fetchAll() async throws -> [SyncRecord] {
+        Array(records.values)
+    }
+
+    func pushAttemptCount() -> Int {
+        attempts
+    }
 }
 
 private actor FailingSyncTransport: SyncRecordTransport {

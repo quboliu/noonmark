@@ -92,15 +92,18 @@ public struct AIProviderResponse: Equatable, Sendable {
     public let text: String
     public let proposedOperations: [AIProposedOperation]
     public let confidence: Double?
+    public let rawContent: String?
 
     public init(
         text: String,
         proposedOperations: [AIProposedOperation] = [],
-        confidence: Double? = nil
+        confidence: Double? = nil,
+        rawContent: String? = nil
     ) {
         self.text = text
         self.proposedOperations = proposedOperations
         self.confidence = confidence
+        self.rawContent = rawContent
     }
 }
 

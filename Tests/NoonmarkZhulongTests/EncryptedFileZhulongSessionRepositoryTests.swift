@@ -40,6 +40,36 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertEqual(permissions & 0o777, 0o600)
     }
 
+    func testEncryptedRepositoryRoundTripsTypedWorkflowPurpose() throws {
+        let repository = makeRepository(key: key)
+        let session = try ZhulongSession(
+            primaryIntent: "Organize task groups and label classifications",
+            purpose: .classificationAssistance,
+            proposedScopes: [.currentDayTodo, .taskClassifications],
+            now: now
+        )
+
+        try repository.save(session)
+
+        XCTAssertEqual(try repository.load(session.id).purpose, .classificationAssistance)
+    }
+
+    func testCurrentSchemaRejectsMissingWorkflowPurpose() throws {
+        let repository = makeRepository(key: key)
+        let session = try ZhulongSession(
+            primaryIntent: "Close today and arrange tomorrow",
+            purpose: .dailyClose,
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+
+        try repository.saveCurrentSessionWithoutPurposeForTesting(session)
+
+        XCTAssertThrowsError(try repository.load(session.id)) { error in
+            XCTAssertEqual(error as? ZhulongSidecarRepositoryError, .invalidCiphertext)
+        }
+    }
+
     func testRepositoryRoundTripsTodoLedgerAndRejectsMissingAuthorization() throws {
         let repository = makeRepository(key: key)
         var session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
@@ -151,16 +181,9 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         }
     }
 
-    func testRepositoryMigratesVersionSixTodoLedgerToEmptyDailyCloseLedger() throws {
+    func testCurrentSchemaRejectsMissingRequiredDailyCloseLedger() throws {
         let repository = makeRepository(key: key)
         let session = try makeDraftReviewSession()
-
-        try repository.saveVersionSixSessionForTesting(session)
-        let restored = try repository.load(session.id)
-
-        XCTAssertEqual(restored, session)
-        XCTAssertTrue(restored.dailyCloseSnapshots.isEmpty)
-        XCTAssertTrue(restored.dailyReviewReceipts.isEmpty)
 
         try repository.saveCurrentSessionWithoutDailyLedgerForTesting(session)
         XCTAssertThrowsError(try repository.load(session.id)) { error in
@@ -183,18 +206,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertThrowsError(try repository.load(session.id))
     }
 
-    func testCurrentSchemaRejectsLegacySessionOnlyAuthentication() throws {
-        let repository = makeRepository(key: key)
-        let session = try makeDraftReviewSession()
-
-        try repository.saveCurrentSessionWithLegacyAuthenticationForTesting(session)
-
-        XCTAssertThrowsError(try repository.load(session.id)) { error in
-            XCTAssertEqual(error as? ZhulongSidecarRepositoryError, .invalidCiphertext)
-        }
-    }
-
-    func testEnvelopeVersionTamperingFailsClosedForCurrentAndLegacyFiles() throws {
+    func testCurrentEnvelopeVersionTamperingFailsClosed() throws {
         let repository = makeRepository(key: key)
         let session = try makeDraftReviewSession()
 
@@ -202,49 +214,8 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [1, 2, 3, 4, 5, 6, 7, 9]
+            replacementVersions: [0, 2, 8, 255]
         )
-
-        try repository.saveVersionThreeSessionForTesting(session)
-        try assertVersionTamperingFails(
-            repository: repository,
-            sessionID: session.id,
-            replacementVersions: [1, 2, 4, 5, 6, 7, 8, 9]
-        )
-
-        try repository.saveVersionTwoSessionForTesting(session)
-        try assertVersionTamperingFails(
-            repository: repository,
-            sessionID: session.id,
-            replacementVersions: [1, 3, 4, 5, 6, 7, 8, 9]
-        )
-
-        try repository.saveLegacySessionForTesting(session)
-        try assertVersionTamperingFails(
-            repository: repository,
-            sessionID: session.id,
-            replacementVersions: [2, 3, 4, 5, 6, 7, 8, 9]
-        )
-    }
-
-    func testRepositoryMigratesVersionFourPlanningOutputToEmptyTodoLedger() throws {
-        let repository = makeRepository(key: key)
-        let session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
-
-        try repository.saveVersionFourSessionForTesting(session)
-        try assertVersionTamperingFails(
-            repository: repository,
-            sessionID: session.id,
-            replacementVersions: [1, 2, 3, 5, 6, 7, 8, 9]
-        )
-        try repository.saveVersionFourSessionForTesting(session)
-        let restored = try repository.load(session.id)
-
-        XCTAssertEqual(restored, session)
-        XCTAssertTrue(restored.todoDiffDrafts.isEmpty)
-        try repository.save(restored)
-        let bytes = try Data(contentsOf: repository.fileURL(for: session.id))
-        XCTAssertEqual(bytes[Data("NOONMARK-ZHULONG-SIDECAR".utf8).count], 8)
     }
 
     func testUnavailableKeyFailsBeforeWritingAnything() throws {
@@ -379,115 +350,6 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.load(session.id), session)
     }
 
-    func testRepositoryMigratesVersionOneEncryptedSessionWithoutLosingProviderHistory() throws {
-        let repository = makeRepository(key: key)
-        let legacySession = try makeDraftReviewSession()
-        try repository.saveLegacySessionForTesting(legacySession)
-
-        let migrated = try repository.load(legacySession.id)
-
-        XCTAssertEqual(migrated.id, legacySession.id)
-        XCTAssertEqual(migrated.primaryIntent, legacySession.primaryIntent)
-        XCTAssertEqual(migrated.phase, legacySession.phase)
-        XCTAssertEqual(migrated.authorizations, legacySession.authorizations)
-        XCTAssertEqual(migrated.providerSends, legacySession.providerSends)
-        XCTAssertEqual(migrated.workspaceStatus, .active)
-        XCTAssertEqual(migrated.entries.map(\.content), [legacySession.primaryIntent])
-        XCTAssertEqual(try repository.load(legacySession.id), migrated)
-    }
-
-    func testRepositoryMigratesVersionTwoWorkspaceSessionWithoutLosingEntries() throws {
-        let repository = makeRepository(key: key)
-        var versionTwoSession = try ZhulongSession(
-            primaryIntent: "规划发布新版",
-            proposedScopes: [.currentDayTodo],
-            now: now
-        )
-        _ = try versionTwoSession.appendEntry(
-            author: .user,
-            kind: .decision,
-            content: "先交付离线版本。",
-            now: now.addingTimeInterval(1)
-        )
-        try repository.saveVersionTwoSessionForTesting(versionTwoSession)
-
-        let migrated = try repository.load(versionTwoSession.id)
-
-        XCTAssertEqual(migrated, versionTwoSession)
-        XCTAssertTrue(migrated.planningBriefs.isEmpty)
-        XCTAssertEqual(try repository.load(versionTwoSession.id), migrated)
-    }
-
-    func testRepositoryMigratesVersionThreePlanningBriefSession() throws {
-        let repository = makeRepository(key: key)
-        var session = try makePlanningSession()
-        let brief = try session.publishPlanningBrief(
-            makePlanningBriefDraft(for: session),
-            now: now.addingTimeInterval(2)
-        )
-        try session.reviewPlanningBrief(brief.id, now: now.addingTimeInterval(3))
-        _ = try session.delegatePlanning(for: brief.id, now: now.addingTimeInterval(4))
-        try repository.saveVersionThreeSessionForTesting(session)
-
-        let migrated = try repository.load(session.id)
-
-        XCTAssertEqual(migrated, session)
-        XCTAssertTrue(migrated.decisionGates.isEmpty)
-        XCTAssertTrue(migrated.planArtifacts.isEmpty)
-    }
-
-    func testVersionThreeRawPlanArtifactMigratesToReadOnlyLegacyPurpose() throws {
-        let repository = makeRepository(key: key)
-        let session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
-        var record = ZhulongSessionRecordV3(session)
-        let send = try XCTUnwrap(record.providerSends.last)
-        let completedAt = try XCTUnwrap(send.completedAt)
-        record.providerSends[record.providerSends.count - 1] = ZhulongProviderSendRecord(
-            runID: send.runID,
-            providerIdentity: send.providerIdentity,
-            payload: send.payload,
-            purpose: send.purpose,
-            startedAt: send.startedAt,
-            result: .succeeded(
-                completedAt: completedAt,
-                response: ZhulongProviderResponse(content: "旧版规划草稿", draftVersion: 1)
-            )
-        )
-        let finalSequence = try XCTUnwrap(record.events.last?.sequence)
-        record.events[record.events.count - 1] = ZhulongSessionEventRecord(
-            sequence: finalSequence,
-            kind: .draftReady,
-            occurredAt: completedAt,
-            summary: "Provider 已返回可审查草稿",
-            reference: .providerRun(send.runID)
-        )
-        try repository.saveVersionThreeRecordForTesting(record)
-
-        let migrated = try repository.load(session.id)
-
-        guard case .migratedLegacyPlanning = migrated.providerSends.last?.purpose else {
-            return XCTFail("Expected explicit legacy planning purpose")
-        }
-        XCTAssertEqual(migrated.effectiveDraftVersion, 1)
-        XCTAssertNil(migrated.effectivePlanArtifact)
-        XCTAssertTrue(migrated.planArtifacts.isEmpty)
-        try repository.save(migrated)
-        let migratedBytes = try Data(contentsOf: repository.fileURL(for: session.id))
-        XCTAssertEqual(migratedBytes[Data("NOONMARK-ZHULONG-SIDECAR".utf8).count], 9)
-        try assertVersionTamperingFails(
-            repository: repository,
-            sessionID: session.id,
-            replacementVersions: [1, 2, 3, 4, 5, 6, 7, 8]
-        )
-        try repository.save(migrated)
-        XCTAssertEqual(try repository.load(session.id), migrated)
-        try assertVersionTamperingFails(
-            repository: repository,
-            sessionID: session.id,
-            replacementVersions: [1, 2, 3, 4, 5, 6, 7, 8]
-        )
-    }
-
     func testRepositoryRoundTripsStructuredPlanArtifactAndRejectsMissingArtifact() throws {
         let repository = makeRepository(key: key)
         let session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
@@ -500,27 +362,6 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try repository.saveRecordForTesting(forged)
         XCTAssertThrowsError(try repository.load(session.id)) { error in
             XCTAssertEqual(error as? ZhulongSessionRestorationError, .invalidDraftVersion)
-        }
-    }
-
-    func testCurrentEnvelopeRejectsDelegatedPlanningRelabeledAsMigratedLegacy() throws {
-        let repository = makeRepository(key: key)
-        let session = try makeStructuredPlanningSession(output: structuredPlanArtifactJSON())
-        var record = ZhulongSessionRecord(session)
-        let send = try XCTUnwrap(record.providerSends.last)
-        let contract = try XCTUnwrap(send.planningContract)
-        record.providerSends[record.providerSends.count - 1] = ZhulongProviderSendRecord(
-            runID: send.runID,
-            providerIdentity: send.providerIdentity,
-            payload: send.payload,
-            purpose: .migratedLegacyPlanning(contract),
-            startedAt: send.startedAt,
-            result: send.result
-        )
-        try repository.saveRecordForTesting(record)
-
-        XCTAssertThrowsError(try repository.load(session.id)) { error in
-            XCTAssertEqual(error as? ZhulongSessionRestorationError, .invalidEventsForPhase)
         }
     }
 
@@ -538,7 +379,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
             startedAt: send.startedAt,
             result: .succeeded(
                 completedAt: completedAt,
-                response: ZhulongProviderResponse(content: "未结构化旧草稿", draftVersion: 1)
+                response: ZhulongProviderResponse(content: "未结构化草稿", draftVersion: 1)
             )
         )
         record.planArtifacts.removeAll()
@@ -1044,7 +885,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
             tampered[versionIndex] = replacementVersion
             try tampered.write(to: fileURL, options: .atomic)
             XCTAssertThrowsError(try repository.load(sessionID)) { error in
-                XCTAssertEqual(error as? ZhulongSidecarRepositoryError, .invalidCiphertext)
+                XCTAssertEqual(error as? ZhulongSidecarRepositoryError, .unsupportedEnvelope)
             }
         }
         try original.write(to: fileURL, options: .atomic)

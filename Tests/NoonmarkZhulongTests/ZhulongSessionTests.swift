@@ -16,6 +16,18 @@ final class ZhulongSessionTests: XCTestCase {
         }
     }
 
+    func testSessionRetainsTypedWorkflowPurposeIndependentOfDisplayIntent() throws {
+        let session = try ZhulongSession(
+            primaryIntent: "Close today and form the next credible commitment",
+            purpose: .dailyClose,
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+
+        XCTAssertEqual(session.purpose, .dailyClose)
+        XCTAssertEqual(session.primaryIntent, "Close today and form the next credible commitment")
+    }
+
     func testProviderRunFailsClosedBeforeExactScopeAuthorization() throws {
         var session = try makeSession()
         let identity = try makeProviderIdentity()

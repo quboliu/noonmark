@@ -8,7 +8,10 @@
 - 不复用 Provider API Key 或同步凭证作为数据密钥。
 - Keychain 密钥丢失时不回退明文；sidecar 可以不可恢复，但核心任务事实必须继续可用。
 - 普通 Todo 数据包和同步仍不包含 sidecar；未来导出使用独立用户密码加密包，不复制本机密钥。
-- 存储、搜索、迁移、备份和恢复设计必须验证加密边界及 fail-closed 行为。
+- 晷迹尚未发布且没有用户数据，烛龙会话 sidecar 只定义一种 canonical current envelope，并从 format version 1 开始；只接受最新完整 schema，不保留旧 record、decoder、converter、旧 AAD fallback 或迁移分支。
+- 非当前 envelope、缺失必填字段或存在未知顶层字段时一律 fail-closed，由开发者显式清理可重新生成的测试 sidecar；App 不推断、补齐或自动升级格式。
+- 测试数据只由当前领域行为生成，只验证当前格式 round-trip、当前 schema 完整性及拒绝损坏或非当前 envelope。
+- 存储、搜索、备份和恢复设计必须验证加密边界及 fail-closed 行为。
 
 ## 风险评估
 

@@ -1221,20 +1221,28 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
             try expect(ZhulongHomeIntentResolver.task(for: "整理标签分类") == .labelClassification, "classification intent was routed incorrectly")
             try expect(ZhulongHomeIntentResolver.task(for: "梳理一个模糊任务") == .taskDecomposition, "fallback intent was routed incorrectly")
 
-            let fixedWorkflowCases: [(intent: String, task: ZhulongTask, scopes: Set<ZhulongDataScope>)] = [
-                ("规划一个还很模糊的大任务", .taskDecomposition, [.currentDayTodo]),
-                ("给任务池和未完成任务重新排期", .scheduling, [.currentDayTodo, .taskPool, .unfinishedPool]),
+            let fixedWorkflowCases: [(
+                intent: String,
+                task: ZhulongTask,
+                purpose: ZhulongSessionPurpose,
+                scopes: Set<ZhulongDataScope>
+            )] = [
+                ("Plan a large task that is still fuzzy", .taskDecomposition, .taskShaping, [.currentDayTodo]),
+                ("Close today and arrange tomorrow", .dailyReview, .dailyClose, [.currentDayTodo]),
                 (
-                    "整理任务的分组与标签分类",
+                    "Reschedule tasks from the pool and unfinished work",
+                    .scheduling,
+                    .schedulingAssistance,
+                    [.currentDayTodo, .taskPool, .unfinishedPool]
+                ),
+                (
+                    "Organize task groups and label classifications",
                     .labelClassification,
+                    .classificationAssistance,
                     [.currentDayTodo, .taskPool, .unfinishedPool, .completedPool, .taskClassifications]
                 )
             ]
             for workflow in fixedWorkflowCases {
-                try expect(
-                    ZhulongHomeIntentResolver.task(for: workflow.intent) == workflow.task,
-                    "fixed workflow intent was routed incorrectly: \(workflow.intent)"
-                )
                 let priorCount = store.zhulongWorkspace.sessions.count
                 store.startZhulongWorkspaceSession(intent: workflow.intent, task: workflow.task)
                 try expect(
@@ -1245,12 +1253,23 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
                     store.zhulongWorkspace.selectedSession?.proposedScopes == workflow.scopes,
                     "fixed workflow proposed incorrect scopes: \(workflow.intent)"
                 )
+                try expect(
+                    store.zhulongWorkspace.selectedSession?.purpose == workflow.purpose,
+                    "fixed workflow did not retain its typed purpose: \(workflow.intent)"
+                )
+                if let selectedSession = store.zhulongWorkspace.selectedSession {
+                    try expect(
+                        store.zhulongTask(for: selectedSession) == workflow.task,
+                        "fixed workflow changed task after session creation: \(workflow.intent)"
+                    )
+                }
                 store.zhulongWorkspace.showHome()
             }
             let sessionCount = store.zhulongWorkspace.sessions.count
             store.startZhulongWorkspaceSession(intent: "结束今天并安排明天")
             try expect(store.zhulongWorkspace.sessions.count == sessionCount + 1, "workspace session was not created")
             try expect(store.zhulongWorkspace.selectedSession?.phase == .scopeReview, "new session bypassed scope review")
+            try expect(store.zhulongWorkspace.selectedSession?.purpose == .dailyClose, "freeform daily close lost its purpose")
             store.authorizeCurrentZhulongWorkspaceSession()
             try expect(store.zhulongWorkspace.selectedSession?.phase == .readyForProvider, "scope authorization was not persisted")
 
@@ -2224,6 +2243,20 @@ enum TaskClassificationDisplay: Equatable {
 
 @MainActor
 final class NoonmarkStore: ObservableObject {
+    private struct ZhulongWorkflowRoute {
+        let task: ZhulongTask
+        let purpose: ZhulongSessionPurpose
+    }
+
+    private static let zhulongWorkflowRoutes = [
+        ZhulongWorkflowRoute(task: .dailyReview, purpose: .dailyClose),
+        ZhulongWorkflowRoute(task: .taskDecomposition, purpose: .taskShaping),
+        ZhulongWorkflowRoute(task: .scheduling, purpose: .schedulingAssistance),
+        ZhulongWorkflowRoute(task: .labelClassification, purpose: .classificationAssistance),
+        ZhulongWorkflowRoute(task: .habitInsight, purpose: .habitInsight),
+        ZhulongWorkflowRoute(task: .theoryAnalysis, purpose: .theoryAnalysis)
+    ]
+
     enum TraceContextAction: String, Equatable {
         case markComplete
         case undoComplete
@@ -3705,7 +3738,23 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func startZhulongWorkspaceSession(intent: String, task: ZhulongTask) {
-        zhulongWorkspace.createSession(intent: intent, scopes: zhulongDataScopes(for: task))
+        zhulongWorkspace.createSession(
+            intent: intent,
+            purpose: zhulongSessionPurpose(for: task),
+            scopes: zhulongDataScopes(for: task)
+        )
+    }
+
+    func zhulongTask(for session: ZhulongSession) -> ZhulongTask {
+        if session.purpose == .freeform {
+            return ZhulongHomeIntentResolver.task(for: session.primaryIntent)
+        }
+        guard let route = Self.zhulongWorkflowRoutes.first(where: {
+            $0.purpose == session.purpose
+        }) else {
+            preconditionFailure("Missing Zhulong workflow route for purpose \(session.purpose.rawValue)")
+        }
+        return route.task
     }
 
     func recentZhulongSession(matching scopes: Set<ZhulongDataScope>) -> ZhulongSession? {
@@ -4024,8 +4073,15 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
+    private func zhulongSessionPurpose(for task: ZhulongTask) -> ZhulongSessionPurpose {
+        guard let route = Self.zhulongWorkflowRoutes.first(where: { $0.task == task }) else {
+            preconditionFailure("Missing Zhulong workflow route for task \(task.rawValue)")
+        }
+        return route.purpose
+    }
+
     private func zhulongProviderPayload(for session: ZhulongSession) throws -> ZhulongProviderPayload {
-        let task = ZhulongHomeIntentResolver.task(for: session.primaryIntent)
+        let task = zhulongTask(for: session)
         var scopeContent: [ZhulongDataScope: String] = [:]
         var systemPrompt: String?
         for scope in session.proposedScopes.sorted(by: { $0.rawValue < $1.rawValue }) {

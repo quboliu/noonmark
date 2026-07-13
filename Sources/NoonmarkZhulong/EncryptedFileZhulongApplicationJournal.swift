@@ -179,10 +179,7 @@ private struct ZhulongPendingApplicationRecord: Codable {
     }
 
     func restore() throws -> ZhulongPendingApplication {
-        let session = try afterSession.restore(
-            expectedID: sessionID,
-            allowsMigratedLegacyPlanning: false
-        )
+        let session = try afterSession.restore(expectedID: sessionID)
         return try ZhulongPendingApplication(
             id: id,
             kind: kind,

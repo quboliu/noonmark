@@ -467,7 +467,7 @@ struct ZhulongSessionStreamPage: View {
     }
 
     private func isDailyReviewSession(_ session: ZhulongSession) -> Bool {
-        ZhulongHomeIntentResolver.task(for: session.primaryIntent) == .dailyReview
+        store.zhulongTask(for: session) == .dailyReview
     }
 
     private var readyDailyReviewSession: ZhulongSession? {

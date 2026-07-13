@@ -176,9 +176,20 @@ public enum ZhulongSessionError: Error, Equatable, Sendable {
     case invalidTransition(from: ZhulongSessionPhase, to: ZhulongSessionPhase)
 }
 
+public enum ZhulongSessionPurpose: String, Codable, Equatable, Sendable {
+    case freeform
+    case taskShaping
+    case dailyClose
+    case schedulingAssistance
+    case classificationAssistance
+    case habitInsight
+    case theoryAnalysis
+}
+
 public struct ZhulongSession: Equatable, Sendable {
     public let id: ZhulongSessionID
     public let initialPrimaryIntent: String
+    public let purpose: ZhulongSessionPurpose
     public let proposedScopes: Set<ZhulongDataScope>
     public private(set) var phase: ZhulongSessionPhase
     public private(set) var authorizations: [ZhulongScopeAuthorization]
@@ -206,7 +217,6 @@ public struct ZhulongSession: Equatable, Sendable {
     public internal(set) var dailyReviewDrafts: [ZhulongDailyReviewDraft]
     public internal(set) var dailyReviewAuthorizations: [ZhulongDailyReviewAuthorization]
     public internal(set) var dailyReviewReceipts: [ZhulongDailyReviewReceipt]
-    var hasAuthenticatedLegacyPlanningProvenance: Bool
 
     public var authorization: ZhulongScopeAuthorization? { authorizations.last }
     public var primaryIntent: String {
@@ -224,6 +234,7 @@ public struct ZhulongSession: Equatable, Sendable {
     public init(
         id: ZhulongSessionID = ZhulongSessionID(),
         primaryIntent: String,
+        purpose: ZhulongSessionPurpose = .freeform,
         proposedScopes: Set<ZhulongDataScope>,
         now: Date = Date()
     ) throws {
@@ -237,6 +248,7 @@ public struct ZhulongSession: Equatable, Sendable {
 
         self.id = id
         initialPrimaryIntent = normalizedIntent
+        self.purpose = purpose
         self.proposedScopes = proposedScopes
         phase = .scopeReview
         authorizations = []
@@ -272,7 +284,6 @@ public struct ZhulongSession: Equatable, Sendable {
         dailyReviewDrafts = []
         dailyReviewAuthorizations = []
         dailyReviewReceipts = []
-        hasAuthenticatedLegacyPlanningProvenance = false
         events = [
             ZhulongSessionEvent(
                 sequence: 1,
@@ -287,6 +298,7 @@ public struct ZhulongSession: Equatable, Sendable {
     init(
         restoredID: ZhulongSessionID,
         primaryIntent: String,
+        purpose: ZhulongSessionPurpose,
         proposedScopes: Set<ZhulongDataScope>,
         phase: ZhulongSessionPhase,
         authorizations: [ZhulongScopeAuthorization],
@@ -313,11 +325,11 @@ public struct ZhulongSession: Equatable, Sendable {
         unfinishedCauseResolutions: [ZhulongUnfinishedCauseResolution] = [],
         dailyReviewDrafts: [ZhulongDailyReviewDraft] = [],
         dailyReviewAuthorizations: [ZhulongDailyReviewAuthorization] = [],
-        dailyReviewReceipts: [ZhulongDailyReviewReceipt] = [],
-        hasAuthenticatedLegacyPlanningProvenance: Bool = false
+        dailyReviewReceipts: [ZhulongDailyReviewReceipt] = []
     ) {
         id = restoredID
         initialPrimaryIntent = primaryIntent
+        self.purpose = purpose
         self.proposedScopes = proposedScopes
         self.phase = phase
         self.authorizations = authorizations
@@ -345,7 +357,6 @@ public struct ZhulongSession: Equatable, Sendable {
         self.dailyReviewDrafts = dailyReviewDrafts
         self.dailyReviewAuthorizations = dailyReviewAuthorizations
         self.dailyReviewReceipts = dailyReviewReceipts
-        self.hasAuthenticatedLegacyPlanningProvenance = hasAuthenticatedLegacyPlanningProvenance
     }
 
     public mutating func authorizeScope(
@@ -524,7 +535,7 @@ public struct ZhulongSession: Equatable, Sendable {
         )
         let expectedPlanArtifactVersion: Int? = switch purpose {
         case .conversation: nil
-        case .delegatedPlanning, .migratedLegacyPlanning:
+        case .delegatedPlanning:
             (planArtifacts.last?.version ?? 0) + 1
         }
         return ZhulongProviderRequest(

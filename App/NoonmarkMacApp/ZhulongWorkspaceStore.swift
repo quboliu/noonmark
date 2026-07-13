@@ -135,12 +135,14 @@ final class ZhulongWorkspaceStore: ObservableObject {
 
     func createSession(
         intent: String,
+        purpose: ZhulongSessionPurpose = .freeform,
         scopes: Set<ZhulongDataScope>,
         now: Date = Date()
     ) {
         do {
             let session = try ZhulongSession(
                 primaryIntent: intent,
+                purpose: purpose,
                 proposedScopes: scopes,
                 now: now
             )
@@ -739,7 +741,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
             switch send.purpose {
             case .conversation:
                 return response.content
-            case .delegatedPlanning, .migratedLegacyPlanning:
+            case .delegatedPlanning:
                 return "Provider 已返回结构化规划产物；原始响应保留在加密会话账本中。"
             }
         case let .failed(_, failure): return failure.message

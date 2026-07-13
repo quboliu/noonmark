@@ -34,7 +34,7 @@ public struct ZhulongAIProviderAdapter: ZhulongProvider {
             switch request.purpose {
             case .conversation:
                 return .success(ZhulongProviderResponse(content: response.text, draftVersion: 1))
-            case .delegatedPlanning, .migratedLegacyPlanning:
+            case .delegatedPlanning:
                 guard let rawContent = response.rawContent else {
                     return .failure(ZhulongProviderFailure(
                         code: "missing_structured_planning_output",
@@ -63,7 +63,7 @@ public struct ZhulongAIProviderAdapter: ZhulongProvider {
         switch purpose {
         case .conversation:
             "noonmark.zhulong.conversation-draft.v1"
-        case .delegatedPlanning, .migratedLegacyPlanning:
+        case .delegatedPlanning:
             "noonmark.zhulong.planning-output.v1"
         }
     }

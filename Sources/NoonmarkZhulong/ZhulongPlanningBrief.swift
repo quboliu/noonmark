@@ -246,7 +246,6 @@ public extension ZhulongSession {
               send.status == .succeeded
         else { return nil }
         guard let contract = send.planningContract else { return draftVersion }
-        if case .migratedLegacyPlanning = send.purpose { return draftVersion }
         guard currentPlanningBrief?.id == contract.briefID,
               currentPlanningBrief?.version == contract.briefVersion,
               planningRunInvalidations.contains(where: { $0.runID == send.runID }) == false

@@ -36,216 +36,6 @@ struct ZhulongScopeAuthorizationRecord: Codable, Equatable {
     var expiresAt: Date
 }
 
-struct ZhulongProviderSendRecordV2: Codable, Equatable {
-    var runID: ZhulongProviderRunID
-    var providerIdentity: ZhulongProviderConfigurationIdentity
-    var payload: ZhulongProviderPayload
-    var startedAt: Date
-    var result: ZhulongProviderSendResult
-
-    init(_ send: ZhulongProviderSendRecord) {
-        runID = send.runID
-        providerIdentity = send.providerIdentity
-        payload = send.payload
-        startedAt = send.startedAt
-        result = send.result
-    }
-
-    var migrated: ZhulongProviderSendRecord {
-        ZhulongProviderSendRecord(
-            runID: runID,
-            providerIdentity: providerIdentity,
-            payload: payload,
-            purpose: .conversation,
-            startedAt: startedAt,
-            result: result
-        )
-    }
-}
-
-struct ZhulongSessionEventRecordV1: Codable, Equatable {
-    var sequence: UInt64
-    var kind: ZhulongSessionEventKind
-    var occurredAt: Date
-    var summary: String
-    var providerRunID: ZhulongProviderRunID?
-}
-
-struct ZhulongSessionRecordV1: Codable, Equatable {
-    var id: ZhulongSessionID
-    var primaryIntent: String
-    var proposedScopes: Set<ZhulongDataScope>
-    var phase: ZhulongSessionPhase
-    var authorizations: [ZhulongScopeAuthorizationRecord]
-    var draftVersion: Int?
-    var providerSends: [ZhulongProviderSendRecordV2]
-    var events: [ZhulongSessionEventRecordV1]
-
-    init(_ session: ZhulongSession) {
-        id = session.id
-        primaryIntent = session.initialPrimaryIntent
-        proposedScopes = session.proposedScopes
-        phase = session.phase
-        authorizations = session.authorizations.map {
-            ZhulongScopeAuthorizationRecord(
-                scopes: $0.scopes,
-                providerIdentity: $0.providerIdentity,
-                grantedAt: $0.grantedAt,
-                expiresAt: $0.expiresAt
-            )
-        }
-        draftVersion = session.draftVersion
-        providerSends = session.providerSends.map(ZhulongProviderSendRecordV2.init)
-        events = session.events.map {
-            ZhulongSessionEventRecordV1(
-                sequence: $0.sequence,
-                kind: $0.kind,
-                occurredAt: $0.occurredAt,
-                summary: $0.summary,
-                providerRunID: $0.providerRunID
-            )
-        }
-    }
-}
-
-struct ZhulongSessionRecordV2: Codable, Equatable {
-    var id: ZhulongSessionID
-    var primaryIntent: String
-    var proposedScopes: Set<ZhulongDataScope>
-    var phase: ZhulongSessionPhase
-    var authorizations: [ZhulongScopeAuthorizationRecord]
-    var draftVersion: Int?
-    var providerSends: [ZhulongProviderSendRecordV2]
-    var events: [ZhulongSessionEventRecord]
-    var workspaceStatus: ZhulongWorkspaceStatus
-    var entries: [ZhulongSessionEntry]
-
-    init(_ session: ZhulongSession) {
-        id = session.id
-        primaryIntent = session.initialPrimaryIntent
-        proposedScopes = session.proposedScopes
-        phase = session.phase
-        authorizations = session.authorizations.map {
-            ZhulongScopeAuthorizationRecord(
-                scopes: $0.scopes,
-                providerIdentity: $0.providerIdentity,
-                grantedAt: $0.grantedAt,
-                expiresAt: $0.expiresAt
-            )
-        }
-        draftVersion = session.draftVersion
-        providerSends = session.providerSends.map(ZhulongProviderSendRecordV2.init)
-        events = session.events.map {
-            ZhulongSessionEventRecord(
-                sequence: $0.sequence,
-                kind: $0.kind,
-                occurredAt: $0.occurredAt,
-                summary: $0.summary,
-                reference: $0.reference
-            )
-        }
-        workspaceStatus = session.workspaceStatus
-        entries = session.entries
-    }
-}
-
-struct ZhulongSessionRecordV3: Codable, Equatable {
-    var id: ZhulongSessionID
-    var primaryIntent: String
-    var proposedScopes: Set<ZhulongDataScope>
-    var phase: ZhulongSessionPhase
-    var authorizations: [ZhulongScopeAuthorizationRecord]
-    var draftVersion: Int?
-    var providerSends: [ZhulongProviderSendRecord]
-    var events: [ZhulongSessionEventRecord]
-    var workspaceStatus: ZhulongWorkspaceStatus
-    var entries: [ZhulongSessionEntry]
-    var planningBriefs: [ZhulongPlanningBrief]
-    var planningBriefReviews: [ZhulongPlanningBriefReview]
-    var planningBriefInvalidations: [ZhulongPlanningBriefInvalidation]
-    var planningDelegations: [ZhulongPlanningDelegation]
-    var planningDelegationConsumptions: [ZhulongPlanningDelegationConsumption]
-    var planningDelegationInvalidations: [ZhulongPlanningDelegationInvalidation]
-    var planningRunInvalidations: [ZhulongPlanningRunInvalidation]
-
-    init(_ session: ZhulongSession) {
-        let record = ZhulongSessionRecord(session)
-        id = record.id
-        primaryIntent = record.primaryIntent
-        proposedScopes = record.proposedScopes
-        phase = record.phase
-        authorizations = record.authorizations
-        draftVersion = record.draftVersion
-        providerSends = record.providerSends
-        events = record.events
-        workspaceStatus = record.workspaceStatus
-        entries = record.entries
-        planningBriefs = record.planningBriefs
-        planningBriefReviews = record.planningBriefReviews
-        planningBriefInvalidations = record.planningBriefInvalidations
-        planningDelegations = record.planningDelegations
-        planningDelegationConsumptions = record.planningDelegationConsumptions
-        planningDelegationInvalidations = record.planningDelegationInvalidations
-        planningRunInvalidations = record.planningRunInvalidations
-    }
-}
-
-struct ZhulongSessionRecordV4: Codable, Equatable {
-    var id: ZhulongSessionID
-    var primaryIntent: String
-    var proposedScopes: Set<ZhulongDataScope>
-    var phase: ZhulongSessionPhase
-    var authorizations: [ZhulongScopeAuthorizationRecord]
-    var draftVersion: Int?
-    var providerSends: [ZhulongProviderSendRecord]
-    var events: [ZhulongSessionEventRecord]
-    var workspaceStatus: ZhulongWorkspaceStatus
-    var entries: [ZhulongSessionEntry]
-    var planningBriefs: [ZhulongPlanningBrief]
-    var planningBriefReviews: [ZhulongPlanningBriefReview]
-    var planningBriefInvalidations: [ZhulongPlanningBriefInvalidation]
-    var planningDelegations: [ZhulongPlanningDelegation]
-    var planningDelegationConsumptions: [ZhulongPlanningDelegationConsumption]
-    var planningDelegationInvalidations: [ZhulongPlanningDelegationInvalidation]
-    var planningRunInvalidations: [ZhulongPlanningRunInvalidation]
-    var decisionGates: [ZhulongDecisionGate]
-    var decisionGateResolutions: [ZhulongDecisionGateResolution]
-    var planArtifacts: [ZhulongPlanArtifact]
-
-    init(_ session: ZhulongSession) {
-        let record = ZhulongSessionRecord(session)
-        id = record.id
-        primaryIntent = record.primaryIntent
-        proposedScopes = record.proposedScopes
-        phase = record.phase
-        authorizations = record.authorizations
-        draftVersion = record.draftVersion
-        providerSends = record.providerSends
-        events = record.events.filter {
-            switch $0.kind {
-            case .todoDiffPublished, .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied,
-                 .dailyCloseCaptured, .unfinishedCauseProposed, .unfinishedCauseResolved,
-                 .dailyReviewDraftPublished, .dailyReviewAuthorized, .dailyReviewApplied:
-                false
-            default:
-                true
-            }
-        }
-        workspaceStatus = record.workspaceStatus
-        entries = record.entries
-        planningBriefs = record.planningBriefs
-        planningBriefReviews = record.planningBriefReviews
-        planningBriefInvalidations = record.planningBriefInvalidations
-        planningDelegations = record.planningDelegations
-        planningDelegationConsumptions = record.planningDelegationConsumptions
-        planningDelegationInvalidations = record.planningDelegationInvalidations
-        planningRunInvalidations = record.planningRunInvalidations
-        decisionGates = record.decisionGates
-        decisionGateResolutions = record.decisionGateResolutions
-        planArtifacts = record.planArtifacts
-    }
-}
-
 private struct ZhulongEventReplayState {
     var phase = ZhulongSessionPhase.scopeReview
     var authorizationIndex = 0
@@ -282,7 +72,7 @@ private struct ZhulongEventReplayState {
 
 struct ZhulongSessionRecord: Codable, Equatable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case id, primaryIntent, proposedScopes, phase, authorizations, draftVersion
+        case id, primaryIntent, purpose, proposedScopes, phase, authorizations, draftVersion
         case providerSends, events, workspaceStatus, entries
         case planningBriefs, planningBriefReviews, planningBriefInvalidations
         case planningDelegations, planningDelegationConsumptions
@@ -293,8 +83,16 @@ struct ZhulongSessionRecord: Codable, Equatable {
         case dailyReviewDrafts, dailyReviewAuthorizations, dailyReviewReceipts
     }
 
+    static let requiredPersistenceKeys = Set(
+        CodingKeys.allCases
+            .filter { $0 != .draftVersion }
+            .map(\.rawValue)
+    )
+    static let allowedPersistenceKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
     var id: ZhulongSessionID
     var primaryIntent: String
+    var purpose: ZhulongSessionPurpose
     var proposedScopes: Set<ZhulongDataScope>
     var phase: ZhulongSessionPhase
     var authorizations: [ZhulongScopeAuthorizationRecord]
@@ -326,6 +124,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
     init(_ session: ZhulongSession) {
         id = session.id
         primaryIntent = session.initialPrimaryIntent
+        purpose = session.purpose
         proposedScopes = session.proposedScopes
         phase = session.phase
         authorizations = session.authorizations.map {
@@ -374,6 +173,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(ZhulongSessionID.self, forKey: .id)
         primaryIntent = try container.decode(String.self, forKey: .primaryIntent)
+        purpose = try container.decode(ZhulongSessionPurpose.self, forKey: .purpose)
         proposedScopes = try container.decode(Set<ZhulongDataScope>.self, forKey: .proposedScopes)
         phase = try container.decode(ZhulongSessionPhase.self, forKey: .phase)
         authorizations = try container.decode([ZhulongScopeAuthorizationRecord].self, forKey: .authorizations)
@@ -413,189 +213,33 @@ struct ZhulongSessionRecord: Codable, Equatable {
             forKey: .todoWriteAuthorizations
         )
         todoApplyReceipts = try container.decode([ZhulongTodoApplyReceipt].self, forKey: .todoApplyReceipts)
-        dailyCloseSnapshots = try container.decodeIfPresent(
+        dailyCloseSnapshots = try container.decode(
             [ZhulongDailyCloseSnapshot].self,
             forKey: .dailyCloseSnapshots
-        ) ?? []
-        unfinishedCauseHypotheses = try container.decodeIfPresent(
+        )
+        unfinishedCauseHypotheses = try container.decode(
             [ZhulongUnfinishedCauseHypothesis].self,
             forKey: .unfinishedCauseHypotheses
-        ) ?? []
-        unfinishedCauseResolutions = try container.decodeIfPresent(
+        )
+        unfinishedCauseResolutions = try container.decode(
             [ZhulongUnfinishedCauseResolution].self,
             forKey: .unfinishedCauseResolutions
-        ) ?? []
-        dailyReviewDrafts = try container.decodeIfPresent(
+        )
+        dailyReviewDrafts = try container.decode(
             [ZhulongDailyReviewDraft].self,
             forKey: .dailyReviewDrafts
-        ) ?? []
-        dailyReviewAuthorizations = try container.decodeIfPresent(
+        )
+        dailyReviewAuthorizations = try container.decode(
             [ZhulongDailyReviewAuthorization].self,
             forKey: .dailyReviewAuthorizations
-        ) ?? []
-        dailyReviewReceipts = try container.decodeIfPresent(
+        )
+        dailyReviewReceipts = try container.decode(
             [ZhulongDailyReviewReceipt].self,
             forKey: .dailyReviewReceipts
-        ) ?? []
+        )
     }
 
-    init(migrating record: ZhulongSessionRecordV1) {
-        id = record.id
-        primaryIntent = record.primaryIntent
-        proposedScopes = record.proposedScopes
-        phase = record.phase
-        authorizations = record.authorizations
-        draftVersion = record.draftVersion
-        providerSends = record.providerSends.map(\.migrated)
-        events = record.events.map {
-            ZhulongSessionEventRecord(
-                sequence: $0.sequence,
-                kind: $0.kind,
-                occurredAt: $0.occurredAt,
-                summary: $0.summary,
-                reference: $0.providerRunID.map(ZhulongSessionEventReference.providerRun)
-            )
-        }
-        workspaceStatus = .active
-        let createdAt = record.events.first?.occurredAt ?? .distantPast
-        entries = [
-            ZhulongSessionEntry(
-                id: ZhulongSessionEntryID(record.id.rawValue),
-                author: .user,
-                kind: .statement,
-                content: record.primaryIntent,
-                createdAt: createdAt,
-                correctsEntryID: nil
-            )
-        ]
-        planningBriefs = []
-        planningBriefReviews = []
-        planningBriefInvalidations = []
-        planningDelegations = []
-        planningDelegationConsumptions = []
-        planningDelegationInvalidations = []
-        planningRunInvalidations = []
-        decisionGates = []
-        decisionGateResolutions = []
-        planArtifacts = []
-        todoDiffDrafts = []
-        todoWriteAuthorizations = []
-        todoApplyReceipts = []
-        dailyCloseSnapshots = []
-        unfinishedCauseHypotheses = []
-        unfinishedCauseResolutions = []
-        dailyReviewDrafts = []
-        dailyReviewAuthorizations = []
-        dailyReviewReceipts = []
-    }
-
-    init(migrating record: ZhulongSessionRecordV2) {
-        id = record.id
-        primaryIntent = record.primaryIntent
-        proposedScopes = record.proposedScopes
-        phase = record.phase
-        authorizations = record.authorizations
-        draftVersion = record.draftVersion
-        providerSends = record.providerSends.map(\.migrated)
-        events = record.events
-        workspaceStatus = record.workspaceStatus
-        entries = record.entries
-        planningBriefs = []
-        planningBriefReviews = []
-        planningBriefInvalidations = []
-        planningDelegations = []
-        planningDelegationConsumptions = []
-        planningDelegationInvalidations = []
-        planningRunInvalidations = []
-        decisionGates = []
-        decisionGateResolutions = []
-        planArtifacts = []
-        todoDiffDrafts = []
-        todoWriteAuthorizations = []
-        todoApplyReceipts = []
-        dailyCloseSnapshots = []
-        unfinishedCauseHypotheses = []
-        unfinishedCauseResolutions = []
-        dailyReviewDrafts = []
-        dailyReviewAuthorizations = []
-        dailyReviewReceipts = []
-    }
-
-    init(migrating record: ZhulongSessionRecordV3) {
-        id = record.id
-        primaryIntent = record.primaryIntent
-        proposedScopes = record.proposedScopes
-        phase = record.phase
-        authorizations = record.authorizations
-        draftVersion = record.draftVersion
-        providerSends = record.providerSends.map(\.migratedFromVersionThree)
-        events = record.events
-        workspaceStatus = record.workspaceStatus
-        entries = record.entries
-        planningBriefs = record.planningBriefs
-        planningBriefReviews = record.planningBriefReviews
-        planningBriefInvalidations = record.planningBriefInvalidations
-        planningDelegations = record.planningDelegations
-        planningDelegationConsumptions = record.planningDelegationConsumptions
-        planningDelegationInvalidations = record.planningDelegationInvalidations
-        planningRunInvalidations = record.planningRunInvalidations
-        decisionGates = []
-        decisionGateResolutions = []
-        planArtifacts = []
-        todoDiffDrafts = []
-        todoWriteAuthorizations = []
-        todoApplyReceipts = []
-        dailyCloseSnapshots = []
-        unfinishedCauseHypotheses = []
-        unfinishedCauseResolutions = []
-        dailyReviewDrafts = []
-        dailyReviewAuthorizations = []
-        dailyReviewReceipts = []
-    }
-
-    init(migrating record: ZhulongSessionRecordV4) {
-        id = record.id
-        primaryIntent = record.primaryIntent
-        proposedScopes = record.proposedScopes
-        phase = record.phase
-        authorizations = record.authorizations
-        draftVersion = record.draftVersion
-        providerSends = record.providerSends
-        events = record.events
-        workspaceStatus = record.workspaceStatus
-        entries = record.entries
-        planningBriefs = record.planningBriefs
-        planningBriefReviews = record.planningBriefReviews
-        planningBriefInvalidations = record.planningBriefInvalidations
-        planningDelegations = record.planningDelegations
-        planningDelegationConsumptions = record.planningDelegationConsumptions
-        planningDelegationInvalidations = record.planningDelegationInvalidations
-        planningRunInvalidations = record.planningRunInvalidations
-        decisionGates = record.decisionGates
-        decisionGateResolutions = record.decisionGateResolutions
-        planArtifacts = record.planArtifacts
-        todoDiffDrafts = []
-        todoWriteAuthorizations = []
-        todoApplyReceipts = []
-        dailyCloseSnapshots = []
-        unfinishedCauseHypotheses = []
-        unfinishedCauseResolutions = []
-        dailyReviewDrafts = []
-        dailyReviewAuthorizations = []
-        dailyReviewReceipts = []
-    }
-
-    func restore(
-        expectedID: ZhulongSessionID,
-        allowsMigratedLegacyPlanning: Bool
-    ) throws -> ZhulongSession {
-        let containsMigratedLegacyPlanning = providerSends.contains { send in
-            if case .migratedLegacyPlanning = send.purpose { return true }
-            return false
-        }
-        guard allowsMigratedLegacyPlanning || containsMigratedLegacyPlanning == false else {
-            throw ZhulongSessionRestorationError.invalidEventsForPhase
-        }
+    func restore(expectedID: ZhulongSessionID) throws -> ZhulongSession {
         try validateBase(expectedID: expectedID)
         try validateEntries()
         let restoredAuthorizations = try restoreAuthorizations()
@@ -609,6 +253,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         return ZhulongSession(
             restoredID: id,
             primaryIntent: primaryIntent,
+            purpose: purpose,
             proposedScopes: proposedScopes,
             phase: phase,
             authorizations: restoredAuthorizations,
@@ -643,9 +288,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
             unfinishedCauseResolutions: unfinishedCauseResolutions,
             dailyReviewDrafts: dailyReviewDrafts,
             dailyReviewAuthorizations: dailyReviewAuthorizations,
-            dailyReviewReceipts: dailyReviewReceipts,
-            hasAuthenticatedLegacyPlanningProvenance: allowsMigratedLegacyPlanning &&
-                containsMigratedLegacyPlanning
+            dailyReviewReceipts: dailyReviewReceipts
         )
     }
 
@@ -1524,7 +1167,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
                 }
                 try consumePlanArtifactResult(event, send: send, state: &state)
             }
-        case .conversation, .migratedLegacyPlanning:
+        case .conversation:
             guard event == resultEvent(send, sequence: event.sequence) else {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
@@ -1579,7 +1222,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         case .conversation:
             return state.pendingPlanningRunDelegationID == nil &&
                 state.activeDelegationID == nil
-        case let .delegatedPlanning(contract), let .migratedLegacyPlanning(contract):
+        case let .delegatedPlanning(contract):
             guard state.pendingPlanningRunDelegationID == contract.delegationID,
                   let delegation = planningDelegations.first(where: {
                       $0.id == contract.delegationID
@@ -1596,7 +1239,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
     ) -> Bool {
         switch send.purpose {
         case .conversation: phase == .readyForProvider
-        case .delegatedPlanning, .migratedLegacyPlanning:
+        case .delegatedPlanning:
             phase == .readyForProvider || phase == .draftReview
         }
     }
@@ -2341,7 +1984,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
               let response = send.response
         else { return false }
         switch send.purpose {
-        case .conversation, .migratedLegacyPlanning:
+        case .conversation:
             return true
         case .delegatedPlanning:
             guard let parsed = try? ZhulongPlanningOutputParser().parse(response.content),

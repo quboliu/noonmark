@@ -26,7 +26,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.taskActions.contains(.editDailyReview))
         XCTAssertTrue(contract.taskActions.contains(.undo))
 
-        XCTAssertEqual(contract.modals.count, 12)
+        XCTAssertEqual(contract.modals.count, 13)
+        XCTAssertTrue(contract.modals.contains(.centeredClassificationManager))
         XCTAssertTrue(contract.modals.contains(.changeTaskDialog))
         XCTAssertTrue(contract.modals.contains(.changeDialogOldTaskStrikethroughPreview))
         XCTAssertTrue(contract.modals.contains(.changeDialogNewTaskTitleInput))
@@ -164,8 +165,8 @@ final class MacUIDesignContractTests: XCTestCase {
     func testClassificationManagementUsesCompactVerifiedMetrics() {
         XCTAssertLessThanOrEqual(MacUIClassificationLayout.settingsSummaryHeight, 120)
         XCTAssertEqual(MacUIClassificationLayout.settingsSummaryHeight, 112)
-        XCTAssertEqual(MacUIClassificationLayout.managerWidth, 480)
-        XCTAssertEqual(MacUIClassificationLayout.managerHeight, 420)
+        XCTAssertEqual(MacUIClassificationLayout.managerWidth, 560)
+        XCTAssertEqual(MacUIClassificationLayout.managerHeight, 460)
         XCTAssertEqual(MacUIClassificationLayout.managerRowHeight, 42)
         XCTAssertEqual(MacUIClassificationAccessibility.renameActionPrefix, "classification.manager.lifecycle.rename")
         XCTAssertEqual(MacUIClassificationAccessibility.archiveActionPrefix, "classification.manager.lifecycle.archive")

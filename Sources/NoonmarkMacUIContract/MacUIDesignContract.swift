@@ -321,6 +321,7 @@ public enum MacUITaskAction: String, CaseIterable, Sendable {
 }
 
 public enum MacUIModal: String, CaseIterable, Sendable {
+    case centeredClassificationManager
     case continueDatePicker
     case scheduleDatePicker
     case moveFutureDatePicker
@@ -371,8 +372,8 @@ public enum MacUISettingsElement: String, CaseIterable, Sendable {
 
 public enum MacUIClassificationLayout {
     public static let settingsSummaryHeight = 112.0
-    public static let managerWidth = 480.0
-    public static let managerHeight = 420.0
+    public static let managerWidth = 560.0
+    public static let managerHeight = 460.0
     public static let managerRowHeight = 42.0
 }
 

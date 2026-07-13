@@ -128,6 +128,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
     }
 
     @objc private func undoAction(_ sender: Any?) {
+        guard store.showingClassificationManager == false else { return }
         store.undo()
     }
 
@@ -2352,6 +2353,7 @@ final class NoonmarkStore: ObservableObject {
     @Published var showingPicker: DatePickerPurpose?
     @Published var showingFromPoolPicker = false
     @Published var showingChangeDialog = false
+    @Published var showingClassificationManager = CommandLine.arguments.contains("--e2e-open-classification-manager")
     @Published var changeText = ""
     @Published var detailSubtaskText = ""
     @Published var detailNoteText = ""
@@ -4597,6 +4599,8 @@ struct NoonmarkRootView: View {
                 WindowBoundaryStroke(cornerRadius: 12)
             )
             .ignoresSafeArea()
+            .disabled(store.showingClassificationManager)
+            .accessibilityHidden(store.showingClassificationManager)
 
             if let toast = store.toast {
                 VStack {
@@ -4612,7 +4616,31 @@ struct NoonmarkRootView: View {
                         .padding(.bottom, 30)
                 }
             }
+
+            if store.showingClassificationManager {
+                ZStack {
+                    Color.black.opacity(0.16)
+                        .contentShape(Rectangle())
+                        .onTapGesture {}
+                        .accessibilityHidden(true)
+
+                    ClassificationManagementDialog {
+                        store.showingClassificationManager = false
+                    }
+                    .environmentObject(store)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Theme.line.opacity(0.8))
+                    )
+                    .shadow(color: .black.opacity(0.18), radius: 28, y: 12)
+                    .transition(.scale(scale: 0.98).combined(with: .opacity))
+                }
+                .ignoresSafeArea()
+                .zIndex(1)
+            }
         }
+        .animation(.easeOut(duration: 0.16), value: store.showingClassificationManager)
         .sheet(item: Binding(
             get: { store.showingPicker.map(PickerSheetState.init(purpose:)) },
             set: { if $0 == nil { store.showingPicker = nil } }
@@ -4629,9 +4657,21 @@ struct NoonmarkRootView: View {
                 .environmentObject(store)
         }
         .onMoveCommand { direction in
-            store.moveSelectedDate(direction)
+            if store.showingClassificationManager == false {
+                store.moveSelectedDate(direction)
+            }
         }
-        .onAppear(perform: syncNativeWindowTitle)
+        .onAppear {
+            syncNativeWindowTitle()
+            if store.showingClassificationManager {
+                resignBackgroundFocus()
+            }
+        }
+        .onChange(of: store.showingClassificationManager) { _, isPresented in
+            if isPresented {
+                resignBackgroundFocus()
+            }
+        }
         .onChange(of: store.windowTitle) { _, _ in
             syncNativeWindowTitle()
         }
@@ -4642,6 +4682,12 @@ struct NoonmarkRootView: View {
 
     private func syncNativeWindowTitle() {
         NSApp.windows.first { $0 is NoonmarkWindow }?.title = store.windowTitle
+    }
+
+    private func resignBackgroundFocus() {
+        DispatchQueue.main.async {
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
     }
 }
 

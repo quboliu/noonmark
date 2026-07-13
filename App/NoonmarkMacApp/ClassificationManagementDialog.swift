@@ -3,7 +3,7 @@ import NoonmarkMacUIContract
 import SwiftUI
 
 struct ClassificationManagerButton: View {
-    @State private var isPresented = CommandLine.arguments.contains("--e2e-open-classification-manager")
+    @EnvironmentObject private var store: NoonmarkStore
     @State private var isHovered = false
 
     let title: String
@@ -16,7 +16,7 @@ struct ClassificationManagerButton: View {
 
     var body: some View {
         Button {
-            isPresented.toggle()
+            store.showingClassificationManager = true
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "slider.horizontal.3")
@@ -50,16 +50,14 @@ struct ClassificationManagerButton: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .accessibilityIdentifier("classification.manager.open")
-        .popover(isPresented: $isPresented, arrowEdge: .top) {
-            ClassificationManagementPopover()
-        }
     }
 }
 
-private struct ClassificationManagementPopover: View {
+struct ClassificationManagementDialog: View {
     private static let palette = ["#D87831", "#2A6FDB", "#0E9488", "#B44D5E", "#7C5CFF", "#D1477A"]
 
     @EnvironmentObject private var store: NoonmarkStore
+    let close: () -> Void
     @State private var kind: ClassificationItemKind = CommandLine.arguments.contains(
         "--e2e-classification-manager-labels"
     ) ? .label : .category
@@ -73,6 +71,7 @@ private struct ClassificationManagementPopover: View {
     @State private var isCreateButtonHovered = false
     @State private var isArchivedHeaderHovered = false
     @State private var message: String?
+    @FocusState private var isSearchFocused: Bool
 
     private var catalog: ClassificationCatalogProjection? {
         store.classificationCatalog()
@@ -123,7 +122,11 @@ private struct ClassificationManagementPopover: View {
             height: CGFloat(MacUIClassificationLayout.managerHeight)
         )
         .background(Theme.panel)
-        .accessibilityIdentifier("classification.manager.popover")
+        .defaultFocus($isSearchFocused, true)
+        .accessibilityIdentifier("classification.manager.dialog")
+        .onAppear {
+            isSearchFocused = true
+        }
         .onChange(of: kind) { _, _ in
             editingID = nil
             message = nil
@@ -149,6 +152,20 @@ private struct ClassificationManagementPopover: View {
             .pickerStyle(.segmented)
             .frame(width: 178)
             .accessibilityIdentifier("classification.manager.kind")
+            Button {
+                close()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Theme.text3)
+                    .frame(width: 26, height: 26)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.controlFill))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityIdentifier("classification.manager.close")
+            .accessibilityLabel("关闭分类管理")
         }
         .padding(.horizontal, 14)
         .frame(height: 52)
@@ -163,6 +180,7 @@ private struct ClassificationManagementPopover: View {
                 TextField(kind == .category ? "搜索分组" : "搜索标签", text: $search)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11.5))
+                    .focused($isSearchFocused)
                 if search.isEmpty == false {
                     Button {
                         search = ""

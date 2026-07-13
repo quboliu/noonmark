@@ -297,7 +297,7 @@ capture_app_screenshot() {
 
   mkdir -p "$out_dir"
   screenshot="${out_dir}/${screenshot_name}.png"
-  if [[ "$screenshot_name" == "pool-classification-overflow" || "$screenshot_name" == "pool-classification-manager" || "$screenshot_name" == "pool-classification-manager-labels" ]]; then
+  if [[ "$screenshot_name" == "pool-classification-overflow" ]]; then
     auxiliary_window_id=""
     for _ in {1..20}; do
       if auxiliary_window_id="$(find_auxiliary_window_id "$window_id" 2>/dev/null)"; then

@@ -29,6 +29,7 @@ scenarios=(
   "pool-classification-manager|pool|--select first --e2e-open-classification-manager"
   "pool-classification-manager-labels|pool|--select first --e2e-open-classification-manager --e2e-classification-manager-labels"
   "pool-detail|pool|--select first"
+  "pool-detail-classification-edit|pool|--select first --e2e-open-classification-label-editor"
   "future|future|"
   "future-detail|future|--select first"
   "unfinished|unfinished|"

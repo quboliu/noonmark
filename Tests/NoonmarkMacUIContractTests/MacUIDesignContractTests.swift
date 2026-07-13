@@ -189,6 +189,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.detailElements.contains(.detailPanelTitle))
         XCTAssertTrue(contract.detailElements.contains(.iconOnlyOverflowMenu))
         XCTAssertTrue(contract.detailElements.contains(.progressSection))
+        XCTAssertTrue(contract.detailElements.contains(.compactClassificationEditor))
+        XCTAssertTrue(contract.detailElements.contains(.onDemandClassificationLabelInput))
         XCTAssertTrue(contract.detailElements.contains(.descriptionSection))
         XCTAssertTrue(contract.detailElements.contains(.descriptionImmediatelyUnderTitle))
         XCTAssertTrue(contract.detailElements.contains(.descriptionWithoutSectionTitle))

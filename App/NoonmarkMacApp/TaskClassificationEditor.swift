@@ -6,6 +6,7 @@ struct TaskClassificationEditor: View {
     private static let animationDuration = 0.18
     private static let newLabelColorHex = "#0E9488"
     private static let newGroupColorHex = "#D87831"
+    private static let fieldLabelWidth: CGFloat = 36
 
     @EnvironmentObject private var store: NoonmarkStore
 
@@ -17,107 +18,70 @@ struct TaskClassificationEditor: View {
     @State private var selectedCategoryID: String?
     @State private var selectedLabels: [EditorLabel] = []
     @State private var labelInput = ""
+    @State private var isAddingLabel = CommandLine.arguments.contains("--e2e-open-classification-label-editor")
     @State private var isCreatingGroup = false
     @State private var newGroupName = ""
     @State private var categoryError: String?
     @State private var labelError: String?
     @State private var showsSavedStatus = false
     @State private var saveStatusGeneration = UUID()
+    @FocusState private var isLabelInputFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("当前任务")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.7)
-                Spacer()
-                ClassificationManagerButton()
-            }
+        VStack(alignment: .leading, spacing: 9) {
             categorySection
+            Rectangle()
+                .fill(Theme.line.opacity(0.72))
+                .frame(height: 1)
             labelSection
-
-            HStack {
-                Spacer(minLength: 0)
-                savedStatus
-            }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Theme.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .stroke(Theme.line.opacity(0.8), lineWidth: 1)
-        )
+        .padding(.vertical, 2)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("classification.editor.\(chainID.description)")
         .accessibilityLabel("任务「\(taskTitle)」的分类编辑器")
         .onAppear(perform: loadDraft)
         .onChange(of: chainID) { _, _ in
+            resetTransientEditorState()
             loadDraft()
         }
     }
 
     private var categorySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("分组")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.5)
-                Spacer()
-                Menu {
-                    Button("不加入分组") { selectCategory(nil) }
-                    if activeCategories.isEmpty == false { Divider() }
-                    ForEach(activeCategories) { category in
-                        Button(category.name) { selectCategory(category.id) }
-                    }
-                    Divider()
-                    Button("新建分组…", systemImage: "plus") {
-                        isCreatingGroup = true
-                    }
-                } label: {
-                    Text(selectedCategoryID == nil ? "加入分组" : "更换")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .accessibilityIdentifier("classification.editor.category.\(chainID.description)")
-                .accessibilityLabel("任务「\(taskTitle)」的分组")
-            }
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                editorFieldLabel("分组")
 
-            if let selectedCategory {
-                HStack(spacing: 6) {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(classificationUIColor(selectedCategory.colorHex))
-                    Text(selectedCategory.name)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                    Spacer()
-                    Text("每项任务只能属于一个分组")
-                        .font(.system(size: 10.5))
+                if let selectedCategory {
+                    categoryChip(selectedCategory)
+                } else {
+                    Text("无分组")
+                        .font(.system(size: 11))
                         .foregroundStyle(Theme.text3)
                 }
-            } else if isCreatingGroup == false {
-                Text("尚未加入分组")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.text3)
+
+                Spacer(minLength: 6)
+                if showsSavedStatus {
+                    savedStatus
+                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                }
+                categoryMenu
+                ClassificationManagerButton()
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             if isCreatingGroup {
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
+                    Color.clear.frame(width: Self.fieldLabelWidth, height: 1)
                     Circle()
                         .fill(classificationUIColor(Self.newGroupColorHex))
                         .frame(width: 8, height: 8)
                     TextField("分组名称", text: $newGroupName)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(.system(size: 11.5, weight: .medium))
+                        .padding(.horizontal, 8)
+                        .frame(height: 28)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.controlFill))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line.opacity(0.8)))
                         .onSubmit(createAndSelectGroup)
                     Button("取消") {
                         newGroupName = ""
@@ -127,12 +91,8 @@ struct TaskClassificationEditor: View {
                     .foregroundStyle(Theme.text3)
                     Button("创建并加入", action: createAndSelectGroup)
                         .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(Theme.accent)
-                }
-                .padding(.vertical, 7)
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(Theme.line).frame(height: 1)
                 }
             }
 
@@ -146,44 +106,121 @@ struct TaskClassificationEditor: View {
         activeCategories.first { $0.id == selectedCategoryID }
     }
 
+    private var categoryMenu: some View {
+        Menu {
+            Button("不加入分组") { selectCategory(nil) }
+            if activeCategories.isEmpty == false { Divider() }
+            ForEach(activeCategories) { category in
+                Button(category.name) { selectCategory(category.id) }
+            }
+            Divider()
+            Button("新建分组…", systemImage: "plus") {
+                isCreatingGroup = true
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(selectedCategoryID == nil ? "选择" : "更换")
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .bold))
+            }
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 7)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accentSoft.opacity(0.52)))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityIdentifier("classification.editor.category.\(chainID.description)")
+        .accessibilityLabel("任务「\(taskTitle)」的分组")
+    }
+
+    private func categoryChip(_ category: ClassificationCatalogItemProjection) -> some View {
+        let color = classificationUIColor(category.colorHex)
+        return HStack(spacing: 5) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(color)
+            Text(category.name)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text1)
+                .lineLimit(1)
+                .help(category.name)
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 24)
+        .frame(maxWidth: 92)
+        .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.09)))
+        .layoutPriority(1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("当前分组：\(category.name)")
+    }
+
     private var labelSection: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("标签")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.text3)
-                .tracking(0.5)
-
-            if selectedLabels.isEmpty {
-                Text("尚未添加标签")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.text3)
-                    .padding(.vertical, 2)
-            } else {
+            HStack(alignment: .top, spacing: 8) {
+                editorFieldLabel("标签")
                 ClassificationEditorFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
                     ForEach(selectedLabels) { label in
                         labelChip(label)
+                    }
+
+                    if isAddingLabel == false {
+                        Button {
+                            isAddingLabel = true
+                            Task { @MainActor in isLabelInputFocused = true }
+                        } label: {
+                            Label("添加", systemImage: "plus")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(Theme.accent)
+                                .padding(.horizontal, 7)
+                                .frame(height: 24)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Theme.accentSoft.opacity(0.46))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("classification.editor.add-label.\(chainID.description)")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            TextField("输入标签名称，回车保存", text: $labelInput)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text1)
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Theme.controlFill)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(labelError == nil ? Theme.line.opacity(0.8) : Theme.warn, lineWidth: 1)
-                )
-                .onSubmit(addLabelFromInput)
-                .accessibilityIdentifier("classification.editor.label-input.\(chainID.description)")
-                .accessibilityLabel("为任务「\(taskTitle)」添加标签")
+            if isAddingLabel {
+                HStack(spacing: 7) {
+                    Color.clear.frame(width: Self.fieldLabelWidth, height: 1)
+                    TextField("输入标签名称", text: $labelInput)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.text1)
+                        .padding(.horizontal, 8)
+                        .frame(height: 28)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.controlFill))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(labelError == nil ? Theme.line.opacity(0.8) : Theme.warn, lineWidth: 1)
+                        )
+                        .focused($isLabelInputFocused)
+                        .onSubmit(addLabelFromInput)
+                        .accessibilityIdentifier("classification.editor.label-input.\(chainID.description)")
+                        .accessibilityLabel("为任务「\(taskTitle)」添加标签")
+                    Button("取消") {
+                        labelInput = ""
+                        labelError = nil
+                        isAddingLabel = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.text3)
+                    Button("添加", action: addLabelFromInput)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
 
             if let labelError {
                 editorError(labelError)
@@ -192,13 +229,29 @@ struct TaskClassificationEditor: View {
     }
 
     private var savedStatus: some View {
-        Label("已保存", systemImage: "checkmark.circle.fill")
-            .font(.system(size: 10.5, weight: .semibold))
+        Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(Theme.ok)
-            .opacity(showsSavedStatus ? 1 : 0)
-            .accessibilityHidden(showsSavedStatus == false)
+            .frame(width: 14, height: 24)
             .accessibilityIdentifier("classification.editor.save-status.\(chainID.description)")
             .accessibilityLabel("任务「\(taskTitle)」的分类已保存")
+    }
+
+    private func editorFieldLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(Theme.text3)
+            .frame(width: Self.fieldLabelWidth, height: 24, alignment: .leading)
+    }
+
+    private func resetTransientEditorState() {
+        labelInput = ""
+        isAddingLabel = false
+        newGroupName = ""
+        isCreatingGroup = false
+        categoryError = nil
+        labelError = nil
+        showsSavedStatus = false
     }
 
     private func selectCategory(_ id: String?) {
@@ -258,10 +311,10 @@ struct TaskClassificationEditor: View {
         .padding(.leading, 8)
         .padding(.trailing, 4)
         .frame(height: 24)
-        .background(RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.10)))
+        .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.10)))
         .overlay {
-            RoundedRectangle(cornerRadius: 3)
-                .stroke(color.opacity(0.48), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(color.opacity(0.22), lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("classification.editor.label-chip.\(chainID.description).\(label.id)")
@@ -284,8 +337,8 @@ struct TaskClassificationEditor: View {
             return
         }
 
-        activeCategories = catalog.categories.filter { $0.lifecycle == .active }
-        activeLabels = catalog.labels.filter { $0.lifecycle == .active }
+        activeCategories = catalog.activeManageableItems(for: .category)
+        activeLabels = catalog.activeManageableItems(for: .label)
         selectedCategoryID = projection.category?.id
         selectedLabels = projection.labels.map(EditorLabel.existing)
         categoryError = nil
@@ -316,6 +369,9 @@ struct TaskClassificationEditor: View {
         selectedLabels.append(candidate)
         labelError = nil
         saveDraft(errorPlacement: .label, clearsLabelInputOnSuccess: true)
+        if labelError == nil {
+            isAddingLabel = false
+        }
     }
 
     private func removeLabel(_ label: EditorLabel) {

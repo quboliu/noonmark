@@ -242,6 +242,8 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case traceMetadataCard
     case historyReadonlyNotice
     case progressSection
+    case compactClassificationEditor
+    case onDemandClassificationLabelInput
     case descriptionSection
     case descriptionImmediatelyUnderTitle
     case descriptionWithoutSectionTitle

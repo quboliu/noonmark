@@ -12,7 +12,8 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: .noonmarkSystemFont(ofSize: 14, weight: .semibold)
         case .body, .detailBody: .noonmarkSystemFont(ofSize: 12)
-        case .compact: .noonmarkSystemFont(ofSize: 11.5, weight: .medium)
+        case .compact:
+            .systemFont(ofSize: NoonmarkVisualMetrics.compactEditorPointSize, weight: .medium)
         }
     }
 
@@ -20,7 +21,11 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: .noonmarkSystem(size: 14, weight: .semibold)
         case .body, .detailBody: .noonmarkSystem(size: 12)
-        case .compact: .noonmarkSystem(size: 11.5, weight: .medium)
+        case .compact:
+            .noonmarkRenderedSystem(
+                size: NoonmarkVisualMetrics.compactEditorPointSize,
+                weight: .medium
+            )
         }
     }
 

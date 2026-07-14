@@ -17,6 +17,8 @@ for tool in "${required_tools[@]}"; do
   fi
 done
 
+scripts/reset-dev-data
+
 cleanup() {
   pkill -x NoonmarkMacApp >/dev/null 2>&1 || true
   hdiutil detach "$mountpoint" -quiet >/dev/null 2>&1 || true

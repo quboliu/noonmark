@@ -66,6 +66,19 @@ enum QuickAddUIE2EDriver {
                 }
                 return
             }
+            let expectedPointSize = NoonmarkVisualMetrics.compactEditorPointSize
+            guard let pointSize = textView.font?.pointSize,
+                  abs(pointSize - expectedPointSize) <= 0.01
+            else {
+                finish(
+                    failure(
+                        phase: "typography",
+                        message: "quick-add 字号不符合 token expected=\(expectedPointSize) actual=\(textView.font?.pointSize.description ?? "nil")",
+                        geometry: geometrySnapshot(for: textView)
+                    )
+                )
+                return
+            }
             guard textView.string.isEmpty, inputReadback().isEmpty else {
                 retryOrFail(
                     attemptsRemaining: attemptsRemaining,
@@ -353,58 +366,54 @@ enum QuickAddUIE2EDriver {
         }
 
         private func sendReturnThroughWindow(textView: NSTextView) -> Bool {
-            guard let window = textView.window,
-                  window.firstResponder === textView,
-                  let returnEvent = NSEvent.keyEvent(
-                      with: .keyDown,
-                      location: .zero,
-                      modifierFlags: [],
-                      timestamp: ProcessInfo.processInfo.systemUptime,
-                      windowNumber: window.windowNumber,
-                      context: nil,
-                      characters: "\r",
-                      charactersIgnoringModifiers: "\r",
-                      isARepeat: false,
-                      keyCode: 36
-                  )
-            else {
-                return false
-            }
-            window.sendEvent(returnEvent)
-            return true
+            sendKeyDownThroughWindow(
+                textView: textView,
+                stroke: Keystroke(
+                    characters: "\r",
+                    charactersIgnoringModifiers: "\r",
+                    keyCode: 36,
+                    modifiers: []
+                )
+            )
         }
 
         private func sendSelectAllAndDeleteThroughWindow(textView: NSTextView) -> Bool {
+            let selectAll = Keystroke(
+                characters: "a",
+                charactersIgnoringModifiers: "a",
+                keyCode: 0,
+                modifiers: .control
+            )
+            let delete = Keystroke(
+                characters: "\u{7f}",
+                charactersIgnoringModifiers: "\u{7f}",
+                keyCode: 51,
+                modifiers: []
+            )
+            return sendKeyDownThroughWindow(
+                textView: textView,
+                stroke: selectAll
+            ) && sendKeyDownThroughWindow(
+                textView: textView,
+                stroke: delete
+            )
+        }
+
+        private func sendKeyDownThroughWindow(
+            textView: NSTextView,
+            stroke: Keystroke
+        ) -> Bool {
             guard let window = textView.window,
                   window.firstResponder === textView,
-                  let selectAll = NSEvent.keyEvent(
-                      with: .keyDown,
-                      location: .zero,
-                      modifierFlags: .control,
-                      timestamp: ProcessInfo.processInfo.systemUptime,
-                      windowNumber: window.windowNumber,
-                      context: nil,
-                      characters: "a",
-                      charactersIgnoringModifiers: "a",
-                      isARepeat: false,
-                      keyCode: 0
-                  ), let delete = NSEvent.keyEvent(
-                      with: .keyDown,
-                      location: .zero,
-                      modifierFlags: [],
-                      timestamp: ProcessInfo.processInfo.systemUptime,
-                      windowNumber: window.windowNumber,
-                      context: nil,
-                      characters: "\u{7f}",
-                      charactersIgnoringModifiers: "\u{7f}",
-                      isARepeat: false,
-                      keyCode: 51
+                  let event = keyEvent(
+                      type: .keyDown,
+                      stroke: stroke,
+                      window: window
                   )
             else {
                 return false
             }
-            window.sendEvent(selectAll)
-            window.sendEvent(delete)
+            window.sendEvent(event)
             return true
         }
 

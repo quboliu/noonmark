@@ -2,8 +2,8 @@
 set -euo pipefail
 
 configuration="${1:-debug}"
-bundle_name="${NOONMARK_APP_BUNDLE_NAME:-Noonmark}"
-executable_name="${NOONMARK_APP_EXECUTABLE_NAME:-NoonmarkMacApp}"
+bundle_name="Noonmark"
+executable_name="NoonmarkMacApp"
 app_path="dist/${bundle_name}.app"
 
 scripts/build-mac-app "$configuration" >/dev/null

@@ -37,6 +37,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUITypographyMetrics.compactPointSize(10.5), 9.5)
         XCTAssertEqual(MacUITypographyMetrics.compactPointSize(10), 10)
         XCTAssertEqual(MacUITypographyMetrics.compactPointSize(9), 9)
+        XCTAssertEqual(MacUITypographyMetrics.compactEditorBasePointSize, 12.5)
+        XCTAssertEqual(MacUITypographyMetrics.compactEditorPointSize, 11.5)
     }
 
     func testCurrentContractCoversAllTopLevelPages() {

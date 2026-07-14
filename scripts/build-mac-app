@@ -2,14 +2,31 @@
 set -euo pipefail
 
 configuration="${1:-debug}"
+profile="${2:-app}"
 product="NoonmarkMacApp"
-executable_name="${NOONMARK_APP_EXECUTABLE_NAME:-$product}"
-bundle_identifier="${NOONMARK_BUNDLE_IDENTIFIER:-app.noonmark.mac}"
-bundle_display_name="${NOONMARK_APP_DISPLAY_NAME:-晷迹}"
-bundle_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
-bundle_name="${NOONMARK_APP_BUNDLE_NAME:-$bundle_short_name}"
-icon_source="${NOONMARK_APP_ICON_SOURCE:-App/NoonmarkMacApp/Resources/AppIcon.icns}"
-icon_name="${NOONMARK_APP_ICON_NAME:-AppIcon}"
+icon_source="App/NoonmarkMacApp/Resources/AppIcon.icns"
+icon_name="AppIcon"
+
+case "$profile" in
+  app)
+    executable_name="NoonmarkMacApp"
+    bundle_identifier="app.noonmark.mac"
+    bundle_display_name="晷迹"
+    bundle_short_name="Noonmark"
+    bundle_name="Noonmark"
+    ;;
+  e2e)
+    executable_name="NoonmarkMacAppE2E"
+    bundle_identifier="app.noonmark.mac.e2e"
+    bundle_display_name="晷迹 E2E"
+    bundle_short_name="Noonmark E2E"
+    bundle_name="NoonmarkMacAppE2E"
+    ;;
+  *)
+    echo "unknown fixed app profile: $profile" >&2
+    exit 1
+    ;;
+esac
 bundle_dir="dist/${bundle_name}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"

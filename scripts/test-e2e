@@ -7,11 +7,9 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   exit 1
 fi
 
-app_bundle_name="${NOONMARK_E2E_APP_BUNDLE_NAME:-NoonmarkMacAppE2E}"
-app_executable_name="${NOONMARK_E2E_APP_EXECUTABLE_NAME:-$app_bundle_name}"
-app_bundle_identifier="${NOONMARK_E2E_BUNDLE_IDENTIFIER:-app.noonmark.mac.e2e}"
-app_display_name="${NOONMARK_E2E_APP_DISPLAY_NAME:-晷迹 E2E}"
-app_short_name="${NOONMARK_E2E_APP_SHORT_NAME:-Noonmark E2E}"
+app_bundle_name="NoonmarkMacAppE2E"
+app_executable_name="NoonmarkMacAppE2E"
+app_display_name="晷迹 E2E"
 app_path="dist/${app_bundle_name}.app"
 app_executable_path="${app_path}/Contents/MacOS/${app_executable_name}"
 export NOONMARK_E2E_APP_EXECUTABLE_NAME="$app_executable_name"
@@ -66,12 +64,7 @@ if [[ -n "$requested_scenarios" ]]; then
   scenarios=("${filtered_scenarios[@]}")
 fi
 
-NOONMARK_APP_BUNDLE_NAME="$app_bundle_name" \
-  NOONMARK_APP_EXECUTABLE_NAME="$app_executable_name" \
-  NOONMARK_BUNDLE_IDENTIFIER="$app_bundle_identifier" \
-  NOONMARK_APP_DISPLAY_NAME="$app_display_name" \
-  NOONMARK_APP_SHORT_NAME="$app_short_name" \
-  scripts/build-mac-app "$configuration"
+scripts/build-mac-app "$configuration" e2e
 
 mkdir -p artifacts/e2e
 

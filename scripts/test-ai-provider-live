@@ -139,5 +139,6 @@ struct LiveAIProviderSmoke {
 }
 SWIFT
 
+scripts/reset-dev-data
 swiftc -parse-as-library "$swift_file" -o "$binary"
 "$binary"

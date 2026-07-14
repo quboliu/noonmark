@@ -62,6 +62,8 @@ public enum MacUIIconMetrics {
 public enum MacUITypographyMetrics {
     public static let scale = 0.92
     public static let compactThreshold = 10.5
+    public static let compactEditorBasePointSize = 12.5
+    public static let compactEditorPointSize = compactPointSize(compactEditorBasePointSize)
 
     public static func compactPointSize(_ baseSize: Double) -> Double {
         guard baseSize >= compactThreshold else { return baseSize }

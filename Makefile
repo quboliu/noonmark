@@ -1,9 +1,16 @@
-.PHONY: reset-dev-data build build-app run-app package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-ai-provider-live test-all lint format format-check check
+.PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-ai-provider-live test-all lint format format-check check
 
 reset-dev-data:
 	scripts/reset-dev-data
 
+generate-app-icon:
+	scripts/generate-app-icon
+
+verify-app-icon:
+	scripts/test-app-icon
+
 build:
+	scripts/test-app-icon
 	scripts/reset-dev-data
 	swift build
 

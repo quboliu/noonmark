@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source scripts/app-icon-common
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-app-icon-test.XXXXXX")"
+
+cleanup() {
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+required_files=(
+  "$app_icon_source_svg"
+  "$app_icon_master_png"
+  "$app_icon_icns_path"
+)
+for representation in "${app_icon_representations[@]}"; do
+  required_files+=("${app_icon_iconset_dir}/${representation%%:*}")
+done
+
+for file in "${required_files[@]}"; do
+  if [[ ! -f "$file" ]]; then
+    echo "missing app icon asset: $file" >&2
+    exit 1
+  fi
+done
+
+assert_png() {
+  local path="$1"
+  local expected_size="$2"
+  local width
+  local height
+  local format
+  local alpha
+
+  width="$(sips -g pixelWidth "$path" | awk '/pixelWidth/ {print $2}')"
+  height="$(sips -g pixelHeight "$path" | awk '/pixelHeight/ {print $2}')"
+  format="$(sips -g format "$path" | awk '/format/ {print $2}')"
+  alpha="$(sips -g hasAlpha "$path" | awk '/hasAlpha/ {print $2}')"
+
+  if [[ "$width" != "$expected_size" || "$height" != "$expected_size" ]]; then
+    echo "invalid app icon dimensions: $path is ${width}x${height}, expected ${expected_size}x${expected_size}" >&2
+    exit 1
+  fi
+  if [[ "$format" != "png" ]]; then
+    echo "invalid app icon format: $path is $format, expected png" >&2
+    exit 1
+  fi
+  if [[ "$alpha" != "yes" ]]; then
+    echo "app icon must preserve alpha: $path" >&2
+    exit 1
+  fi
+  if ! sips -g profile "$path" | grep -q "profile: sRGB"; then
+    echo "app icon must use an embedded sRGB profile: $path" >&2
+    exit 1
+  fi
+}
+
+assert_matches_source() {
+  local path="$1"
+  local expected_size="$2"
+  local filename
+  local rendered
+
+  filename="$(basename "$path")"
+  rendered="${work_dir}/rendered-${expected_size}-${filename}"
+  app_icon_render_png "$expected_size" "$rendered"
+
+  if ! cmp -s "$path" "$rendered"; then
+    echo "app icon asset is stale relative to AppIcon.svg: $path" >&2
+    exit 1
+  fi
+}
+
+assert_master_mac_icon_bounds() {
+  NOONMARK_APP_ICON_MASTER="$app_icon_master_png" osascript -l JavaScript \
+    -e 'ObjC.import("AppKit")' \
+    -e 'ObjC.import("CoreImage")' \
+    -e 'const environment = $.NSProcessInfo.processInfo.environment' \
+    -e 'const path = environment.objectForKey("NOONMARK_APP_ICON_MASTER")' \
+    -e 'const image = $.CIImage.imageWithContentsOfURL($.NSURL.fileURLWithPath(path))' \
+    -e 'const context = $.CIContext.contextWithOptions($({}))' \
+    -e 'function maxAlpha(x, y, width, height) { const filter = $.CIFilter.filterWithName("CIAreaMaximumAlpha"); filter.setValueForKey(image, "inputImage"); filter.setValueForKey($.CIVector.vectorWithCGRect($.CGRectMake(x, y, width, height)), "inputExtent"); const output = filter.valueForKey("outputImage"); const cgImage = context.createCGImageFromRect(output, $.CGRectMake(0, 0, 1, 1)); const rep = $.NSBitmapImageRep.alloc.initWithCGImage(cgImage); return Number(rep.colorAtXY(0, 0).alphaComponent); }' \
+    -e 'const outside = [[0, 0, 100, 1024], [924, 0, 100, 1024], [100, 0, 824, 112], [100, 936, 824, 88]]' \
+    -e 'const boundaries = [[100, 112, 1, 824], [923, 112, 1, 824], [100, 112, 824, 1], [100, 935, 824, 1]]' \
+    -e 'if (outside.some(region => maxAlpha(...region) > 0) || boundaries.some(region => maxAlpha(...region) <= 0)) throw new Error("AppIcon-master.png must have an 824x824 alpha bounding box at x=100, y=88")'
+}
+
+assert_png "$app_icon_master_png" 1024
+assert_matches_source "$app_icon_master_png" 1024
+assert_master_mac_icon_bounds
+for representation in "${app_icon_representations[@]}"; do
+  filename="${representation%%:*}"
+  size="${representation##*:}"
+  path="${app_icon_iconset_dir}/${filename}"
+  assert_png "$path" "$size"
+  assert_matches_source "$path" "$size"
+done
+
+extracted_iconset="${work_dir}/AppIcon.iconset"
+mkdir -p "$extracted_iconset"
+iconutil -c iconset -o "$extracted_iconset" "$app_icon_icns_path"
+for representation in "${app_icon_representations[@]}"; do
+  filename="${representation%%:*}"
+  size="${representation##*:}"
+  assert_png "${extracted_iconset}/${filename}" "$size"
+done
+
+regenerated_icns="${work_dir}/AppIcon.icns"
+iconutil -c icns -o "$regenerated_icns" "$app_icon_iconset_dir"
+if ! cmp -s "$app_icon_icns_path" "$regenerated_icns"; then
+  echo "AppIcon.icns is stale or differs from the canonical iconset" >&2
+  exit 1
+fi
+
+if ! cmp -s "$app_icon_master_png" "${app_icon_iconset_dir}/icon_512x512@2x.png"; then
+  echo "1024 app icon representation differs from the release master" >&2
+  exit 1
+fi
+
+echo "Verified AppIcon.svg, 1024 master, iconset, and icns"

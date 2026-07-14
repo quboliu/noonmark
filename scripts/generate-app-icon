@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source scripts/app-icon-common
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-app-icon.XXXXXX")"
+
+cleanup() {
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+if [[ ! -f "$app_icon_source_svg" ]]; then
+  echo "missing canonical app icon source: $app_icon_source_svg" >&2
+  exit 1
+fi
+
+generated_iconset="${work_dir}/AppIcon.iconset"
+mkdir -p "$generated_iconset"
+
+app_icon_render_png 1024 "${work_dir}/AppIcon-master.png"
+for representation in "${app_icon_representations[@]}"; do
+  filename="${representation%%:*}"
+  size="${representation##*:}"
+  app_icon_render_png "$size" "${generated_iconset}/${filename}"
+done
+
+iconutil \
+  -c icns \
+  -o "${work_dir}/AppIcon.icns" \
+  "$generated_iconset"
+
+cp "${work_dir}/AppIcon-master.png" "$app_icon_master_png"
+rm -rf "$app_icon_iconset_dir"
+cp -R "$generated_iconset" "$app_icon_iconset_dir"
+cp "${work_dir}/AppIcon.icns" "$app_icon_icns_path"
+
+scripts/test-app-icon
+echo "Generated $app_icon_icns_path from $app_icon_source_svg"

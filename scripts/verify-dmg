@@ -43,6 +43,8 @@ if [[ ! -f "$plist_path" ]]; then
   exit 1
 fi
 
+scripts/test-app-icon-bundle "$app_path"
+
 if [[ ! -L "${mountpoint}/Applications" ]]; then
   echo "DMG missing Applications shortcut" >&2
   exit 1

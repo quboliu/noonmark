@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source scripts/app-icon-common
+
+app_path="${1:-dist/Noonmark.app}"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-app-icon-bundle-test.XXXXXX")"
+
+cleanup() {
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+scripts/test-app-icon
+
+if [[ ! -d "$app_path" ]]; then
+  echo "missing app bundle for icon verification: $app_path" >&2
+  exit 1
+fi
+
+app_directory="$(cd "$(dirname "$app_path")" && pwd)"
+app_path="${app_directory}/$(basename "$app_path")"
+plist_path="${app_path}/Contents/Info.plist"
+
+if [[ ! -f "$plist_path" ]]; then
+  echo "app bundle missing Info.plist: $plist_path" >&2
+  exit 1
+fi
+
+icon_name="$(plutil -extract CFBundleIconFile raw "$plist_path")"
+bundle_icon="${app_path}/Contents/Resources/${icon_name}.icns"
+if [[ "$icon_name" != "$app_icon_bundle_icon_name" || ! -f "$bundle_icon" ]]; then
+  echo "app bundle missing the canonical ${app_icon_bundle_icon_name}.icns" >&2
+  exit 1
+fi
+
+if ! cmp -s "$app_icon_icns_path" "$bundle_icon"; then
+  echo "app bundle icon differs from the verified repository asset" >&2
+  exit 1
+fi
+
+codesign --verify --deep --strict "$app_path"
+
+launch_services="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [[ ! -x "$launch_services" ]]; then
+  echo "missing LaunchServices registration tool: $launch_services" >&2
+  exit 1
+fi
+"$launch_services" -f "$app_path" >/dev/null
+
+workspace_png="${work_dir}/workspace-icon.png"
+NOONMARK_APP_PATH="$app_path" \
+  NOONMARK_APP_ICON_OUTPUT="$workspace_png" \
+  osascript -l JavaScript \
+  -e 'ObjC.import("AppKit")' \
+  -e 'const environment = $.NSProcessInfo.processInfo.environment' \
+  -e 'const appPath = environment.objectForKey("NOONMARK_APP_PATH")' \
+  -e 'const outputPath = environment.objectForKey("NOONMARK_APP_ICON_OUTPUT")' \
+  -e 'const icon = $.NSWorkspace.sharedWorkspace.iconForFile(appPath)' \
+  -e 'const rep = $.NSBitmapImageRep.imageRepWithData(icon.TIFFRepresentation)' \
+  -e 'const data = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({}))' \
+  -e 'if (!data.writeToFileAtomically(outputPath, true)) throw new Error("failed to render the app icon through NSWorkspace")'
+
+workspace_width="$(sips -g pixelWidth "$workspace_png" | awk '/pixelWidth/ {print $2}')"
+workspace_height="$(sips -g pixelHeight "$workspace_png" | awk '/pixelHeight/ {print $2}')"
+workspace_alpha="$(sips -g hasAlpha "$workspace_png" | awk '/hasAlpha/ {print $2}')"
+if [[ "$workspace_width" != "1024" || "$workspace_height" != "1024" || "$workspace_alpha" != "yes" ]]; then
+  echo "NSWorkspace returned an invalid app icon representation" >&2
+  exit 1
+fi
+
+sips -s format bmp "$app_icon_master_png" --out "${work_dir}/master.bmp" >/dev/null
+sips -s format bmp "$workspace_png" --out "${work_dir}/workspace.bmp" >/dev/null
+if ! cmp -s "${work_dir}/master.bmp" "${work_dir}/workspace.bmp"; then
+  echo "NSWorkspace resolved an icon that differs from AppIcon-master.png" >&2
+  exit 1
+fi
+
+echo "Verified macOS resolved the canonical icon for $app_path"

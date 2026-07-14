@@ -2206,7 +2206,8 @@ private struct DateStripE2EAutomation: LaunchAutomationRunnable {
         do {
             store.page = .day
             store.selectedDate = store.today
-            guard store.dateStripDates().count == 14,
+            let initialDates = store.dateStripDates()
+            guard initialDates == (-6...7).map({ NoonmarkStore.offset(store.today, by: $0) }),
                   store.selectedDateStripIndex == 6
             else {
                 throw DateStripE2EAutomationError.failed("today index did not match 14-day strip")
@@ -2223,8 +2224,17 @@ private struct DateStripE2EAutomation: LaunchAutomationRunnable {
             }
 
             store.selectedDate = NoonmarkStore.offset(store.today, by: 8)
-            guard store.selectedDateStripIndex == nil else {
-                throw DateStripE2EAutomationError.failed("out-of-strip date unexpectedly had a selection index")
+            guard store.dateStripDates() == (8...21).map({ NoonmarkStore.offset(store.today, by: $0) }),
+                  store.selectedDateStripIndex == 0
+            else {
+                throw DateStripE2EAutomationError.failed("forward boundary did not advance to the next 14-day strip")
+            }
+
+            store.selectedDate = NoonmarkStore.offset(store.today, by: -7)
+            guard store.dateStripDates() == (-20 ... -7).map({ NoonmarkStore.offset(store.today, by: $0) }),
+                  store.selectedDateStripIndex == 13
+            else {
+                throw DateStripE2EAutomationError.failed("backward boundary did not move to the previous 14-day strip")
             }
 
             try writeResult("ok")
@@ -2343,9 +2353,9 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
         do {
             store.zhulongProviderDraft.enabled = false
             store.ensureVisiblePage()
-            try expect(store.visibleNavigationPages.contains(.zhulong), "local-mode zhulong entry was hidden")
+            try expect(store.visibleNavigationPages.contains(.zhulong) == false, "disabled zhulong entry remained visible")
             store.selectPage(.zhulong)
-            try expect(store.page == .zhulong, "local-mode zhulong selection did not open the page")
+            try expect(store.page == .day, "disabled zhulong selection bypassed the visible-page guard")
 
             store.zhulongProviderDraft.enabled = true
             try expect(store.visibleNavigationPages.contains(.zhulong), "enabled zhulong was not visible")
@@ -2369,12 +2379,17 @@ private struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
 
             store.zhulongProviderDraft.enabled = false
             store.ensureVisiblePage()
-            try expect(store.visibleNavigationPages.contains(.zhulong), "local-mode zhulong entry was hidden")
-            try expect(store.page == .zhulong, "local mode unexpectedly left the zhulong workspace")
+            try expect(store.visibleNavigationPages.contains(.zhulong) == false, "disabled zhulong entry remained visible")
+            try expect(store.page == .day, "disabling zhulong did not leave the hidden workspace")
 
-            try writeResult("ok")
+            if let resultURL {
+                ZhulongNavigationUIE2EDriver.start(store: store, resultURL: resultURL)
+            }
         } catch {
             try? writeResult("failed: \(error.localizedDescription)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                NSApp.terminate(nil)
+            }
         }
     }
 
@@ -2635,13 +2650,13 @@ private struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
         do {
             store.page = .pool
             store.clearSelection()
-            store.zhulongProviderDraft.enabled = false
+            store.zhulongProviderDraft.enabled = true
             store.isDetailRailExpanded = false
             guard store.usesZhulongContextRail,
                   store.hasDetailRailContent,
                   store.shouldShowDetailRail == false
             else {
-                throw SummarySidebarE2EAutomationError.failed("local-mode context rail was unavailable")
+                throw SummarySidebarE2EAutomationError.failed("enabled zhulong context rail was unavailable")
             }
             store.toggleDetailRail()
 
@@ -4642,7 +4657,7 @@ final class NoonmarkStore: ObservableObject {
     }
 
     var isZhulongEnabled: Bool {
-        true
+        zhulongProviderDraft.enabled
     }
 
     var hasActiveDetailSelection: Bool {
@@ -4830,7 +4845,19 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func dateStripDates() -> [LocalDate] {
-        (-6...7).map { Self.offset(today, by: $0) }
+        let blockSize = 14
+        let initialStart = Self.offset(today, by: -6)
+        let selectedOffset = Calendar(identifier: .gregorian).dateComponents(
+            [.day],
+            from: Self.gregorianDate(initialStart),
+            to: Self.gregorianDate(selectedDate)
+        ).day ?? 0
+        let truncatedBlock = selectedOffset / blockSize
+        let block = selectedOffset % blockSize < 0
+            ? truncatedBlock - 1
+            : truncatedBlock
+        let start = Self.offset(initialStart, by: block * blockSize)
+        return (0..<blockSize).map { Self.offset(start, by: $0) }
     }
 
     var selectedDateStripIndex: Int? {
@@ -8353,6 +8380,12 @@ struct NavItem: View {
         .buttonStyle(.plain)
         .padding(.horizontal, 9)
         .padding(.vertical, 1.5)
+        .background {
+            AppE2EViewAnchor(
+                identifier: "sidebar.nav.\(page.rawValue)",
+                verificationText: label
+            )
+        }
     }
 }
 
@@ -10416,6 +10449,12 @@ struct SettingsPaneToolbar: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "settings.pane.\(pane.rawValue)",
+                            verificationText: pane.title(copy: store.copy)
+                        )
+                    }
                 }
             }
         }
@@ -10781,6 +10820,12 @@ struct SettingsProviderOverviewCard: View {
                     Toggle("启用烛龙", isOn: $store.zhulongProviderDraft.enabled)
                         .toggleStyle(.checkbox)
                         .font(.noonmarkSystem(size: 12.5, weight: .medium))
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "settings.zhulong.enabled",
+                                verificationText: store.zhulongProviderDraft.enabled ? "enabled" : "disabled"
+                            )
+                        }
                     StatusPill(text: status.text, color: status.color)
                     Spacer()
                 }

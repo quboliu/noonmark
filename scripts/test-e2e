@@ -885,6 +885,7 @@ run_ui_entry_probes() {
     "$zhulong_log" \
     --ephemeral \
     --page zhulong \
+    --e2e-enable-zhulong \
     --e2e-zhulong-sidecar-key \
     --e2e-zhulong-workflows-via-ui \
     --e2e-zhulong-workflows-ui-result-url "$PWD/$zhulong_result"
@@ -958,6 +959,7 @@ run_pool_list_layout_probe() {
     "$minimum_log" \
     --ephemeral \
     --page pool \
+    --e2e-enable-zhulong \
     --e2e-pool-list-layout-probe \
     --e2e-pool-list-layout-minimum-window \
     --e2e-pool-list-layout-result-url "$PWD/$minimum_result"
@@ -1697,6 +1699,7 @@ mkdir -p "$zhulong_dir"
 open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_db" \
   --page zhulong \
+  --e2e-enable-zhulong \
   --e2e-zhulong-sidecar-key \
   --e2e-start-zhulong-workflow dailyReview \
   --e2e-rich-zhulong-session \
@@ -1723,6 +1726,7 @@ zhulong_persistence_result="${zhulong_dir}/persistence-result.txt"
 open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_db" \
   --page zhulong \
+  --e2e-enable-zhulong \
   --e2e-zhulong-sidecar-key \
   --e2e-verify-zhulong-persistence-result-url "$PWD/$zhulong_persistence_result" \
   --e2e-quit-after-automation
@@ -1737,6 +1741,7 @@ zhulong_corruption_result="${zhulong_dir}/corruption-result.txt"
 open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_db" \
   --page zhulong \
+  --e2e-enable-zhulong \
   --e2e-zhulong-sidecar-key \
   --e2e-verify-zhulong-persistence-result-url "$PWD/$zhulong_corruption_result" \
   --e2e-quit-after-automation
@@ -1757,6 +1762,7 @@ mkdir -p "$zhulong_recovery_dir"
 open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_recovery_db" \
   --page zhulong \
+  --e2e-enable-zhulong \
   --e2e-zhulong-sidecar-key \
   --e2e-start-zhulong-workflow dailyReview \
   --e2e-rich-zhulong-session \
@@ -1772,6 +1778,7 @@ fi
 open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_recovery_db" \
   --page zhulong \
+  --e2e-enable-zhulong \
   --e2e-zhulong-sidecar-key \
   --e2e-expect-zhulong-recovery \
   --e2e-verify-zhulong-persistence-result-url "$PWD/$zhulong_recovery_result" \
@@ -1802,6 +1809,7 @@ mkdir -p "$zhulong_todo_diff_dir"
 open -W -n "$app_path" --args \
   --data-url "$PWD/$zhulong_todo_diff_db" \
   --page zhulong \
+  --e2e-enable-zhulong \
   --e2e-zhulong-sidecar-key \
   --e2e-prepare-zhulong-todo-diff \
   --e2e-zhulong-todo-diff-result-url "$PWD/$zhulong_todo_diff_result"
@@ -2001,8 +2009,7 @@ open -W -n "$app_path" --args \
   --page zhulong \
   --e2e-zhulong-sidecar-key \
   --e2e-zhulong-navigation \
-  --e2e-zhulong-navigation-result-url "$PWD/$zhulong_navigation_result" \
-  --e2e-quit-after-automation
+  --e2e-zhulong-navigation-result-url "$PWD/$zhulong_navigation_result"
 
 if [[ ! -f "$zhulong_navigation_result" ]]; then
   echo "zhulong navigation result was not created: $zhulong_navigation_result" >&2
@@ -2028,6 +2035,7 @@ mkdir -p "$provider_dir"
 open -W -n "$app_path" --args \
   --ephemeral \
   --page zhulong \
+  --e2e-enable-zhulong \
   --e2e-configure-provider \
   --e2e-provider-name "$provider_name" \
   --e2e-provider-base-url "$provider_base_url" \
@@ -2038,6 +2046,7 @@ open -W -n "$app_path" --args \
 open -W -n "$app_path" --args \
   --ephemeral \
   --page zhulong \
+  --e2e-enable-zhulong \
   --e2e-verify-provider \
   --e2e-provider-name "$provider_name" \
   --e2e-provider-base-url "$provider_base_url" \

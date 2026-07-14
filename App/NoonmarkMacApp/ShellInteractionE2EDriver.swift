@@ -43,7 +43,7 @@ enum DateNavigationUIE2EDriver {
     private final class Session {
         private let store: NoonmarkStore
         private let resultURL: URL
-        private let steps = [
+        private let basicSteps = [
             Step(key: .right, expectedDayOffset: 1),
             Step(key: .left, expectedDayOffset: 0),
             Step(key: .down, expectedDayOffset: 7),
@@ -76,6 +76,21 @@ enum DateNavigationUIE2EDriver {
 
         private func waitForDateCell(attemptsRemaining: Int = 80) {
             let identifier = "\(surface.cellIdentifierPrefix).\(store.today.description)"
+            guard let window = NSApp.windows.first(where: { $0 is NoonmarkWindow })
+            else {
+                retry(attemptsRemaining, action: waitForDateCell) {
+                    "failed: \(self.surface.name) 没有可交互的真实窗口"
+                }
+                return
+            }
+            if window.isKeyWindow == false {
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                retry(attemptsRemaining, action: waitForDateCell) {
+                    "failed: \(self.surface.name) 真实窗口无法获得焦点"
+                }
+                return
+            }
             guard let dateCell = AppViewTreeE2E.view(identifier: identifier) else {
                 retry(attemptsRemaining, action: waitForDateCell) { [self] in
                     "failed: \(surface.name) 日期单元没有出现在真实 view tree"
@@ -136,6 +151,15 @@ enum DateNavigationUIE2EDriver {
                 }
                 return
             }
+            let advancedDayStripIsMissing = surface == .day
+                && stepIndex == steps.count - 1
+                && hasExpectedAdvancedDayStrip() == false
+            if advancedDayStripIsMissing {
+                retry(attemptsRemaining, action: waitForCurrentStep) {
+                    "failed: Day Todo 右移到 7 月 13 日后，日期带没有切换为后续 14 天"
+                }
+                return
+            }
 
             stepIndex += 1
             if stepIndex < steps.count {
@@ -145,6 +169,21 @@ enum DateNavigationUIE2EDriver {
             } else {
                 finish("ok")
             }
+        }
+
+        private var steps: [Step] {
+            guard surface == .day else { return basicSteps }
+            return basicSteps + (1...8).map {
+                Step(key: .right, expectedDayOffset: $0)
+            }
+        }
+
+        private func hasExpectedAdvancedDayStrip() -> Bool {
+            let prefix = "day.date-strip.cell."
+            let expected = Set((8...21).map {
+                "\(prefix)\(NoonmarkStore.offset(store.today, by: $0).description)"
+            })
+            return AppViewTreeE2E.identifiers(withPrefix: prefix) == expected
         }
 
         private var selectedDate: LocalDate {
@@ -163,6 +202,213 @@ enum DateNavigationUIE2EDriver {
             case .down: "下"
             case .up: "上"
             }
+        }
+
+        private func retry(
+            _ attemptsRemaining: Int,
+            action: @escaping (Int) -> Void,
+            failure: () -> String
+        ) {
+            guard attemptsRemaining > 1 else {
+                finish(failure())
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                action(attemptsRemaining - 1)
+            }
+        }
+
+        private func finish(_ result: String) {
+            ShellInteractionE2EResult.finish(result, at: resultURL)
+        }
+    }
+}
+
+@MainActor
+enum ZhulongNavigationUIE2EDriver {
+    static func start(store: NoonmarkStore, resultURL: URL) {
+        Session(store: store, resultURL: resultURL).start()
+    }
+
+    @MainActor
+    private final class Session {
+        private let store: NoonmarkStore
+        private let resultURL: URL
+
+        init(store: NoonmarkStore, resultURL: URL) {
+            self.store = store
+            self.resultURL = resultURL
+        }
+
+        func start(attemptsRemaining: Int = 80) {
+            guard store.isZhulongEnabled == false,
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "sidebar.nav.zhulong"),
+                  clickControl(identifier: "sidebar.nav.settings")
+            else {
+                retry(attemptsRemaining, action: start) {
+                    "failed: 关闭烛龙后，真实侧栏仍显示烛龙入口"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                enableFromSettings()
+            }
+        }
+
+        private func enableFromSettings(attemptsRemaining: Int = 60) {
+            guard store.page == .settings,
+                  clickControl(identifier: "settings.pane.zhulong")
+            else {
+                retry(attemptsRemaining, action: enableFromSettings) {
+                    "failed: 设置页无法打开烛龙配置区"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                waitForDisabledSetting()
+            }
+        }
+
+        private func waitForDisabledSetting(attemptsRemaining: Int = 60) {
+            guard store.page == .settings,
+                  let toggle = AppViewTreeE2E.view(
+                      identifier: "settings.zhulong.enabled"
+                  ),
+                  AppViewTreeE2E.verificationText(for: toggle) == "disabled",
+                  clickControl(identifier: "settings.zhulong.enabled")
+            else {
+                retry(attemptsRemaining, action: waitForDisabledSetting) {
+                    "failed: 无法通过设置中的启用烛龙开关开启功能"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                openEnabledZhulong()
+            }
+        }
+
+        private func openEnabledZhulong(attemptsRemaining: Int = 60) {
+            guard store.isZhulongEnabled,
+                  clickControl(identifier: "sidebar.nav.zhulong")
+            else {
+                retry(attemptsRemaining, action: openEnabledZhulong) {
+                    "failed: 设置启用后，真实侧栏没有显示烛龙入口"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                disableFromSettings()
+            }
+        }
+
+        private func disableFromSettings(attemptsRemaining: Int = 60) {
+            guard store.page == .zhulong,
+                  clickControl(identifier: "sidebar.nav.settings")
+            else {
+                retry(attemptsRemaining, action: disableFromSettings) {
+                    "failed: 真实侧栏中的烛龙入口无法打开工作区"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                openZhulongSettingsForDisable()
+            }
+        }
+
+        private func openZhulongSettingsForDisable(attemptsRemaining: Int = 60) {
+            guard store.page == .settings,
+                  clickControl(identifier: "settings.pane.zhulong")
+            else {
+                retry(attemptsRemaining, action: openZhulongSettingsForDisable) {
+                    "failed: 返回设置页后无法打开烛龙配置区"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                waitForEnabledSetting()
+            }
+        }
+
+        private func waitForEnabledSetting(attemptsRemaining: Int = 60) {
+            guard store.page == .settings,
+                  let toggle = AppViewTreeE2E.view(identifier: "settings.zhulong.enabled"),
+                  AppViewTreeE2E.verificationText(for: toggle) == "enabled",
+                  clickControl(identifier: "settings.zhulong.enabled")
+            else {
+                retry(attemptsRemaining, action: waitForEnabledSetting) {
+                    "failed: 无法通过设置中的启用烛龙开关关闭功能"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                waitForHiddenZhulong()
+            }
+        }
+
+        private func waitForHiddenZhulong(attemptsRemaining: Int = 60) {
+            guard store.isZhulongEnabled == false,
+                  store.page == .settings,
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "sidebar.nav.zhulong")
+            else {
+                retry(attemptsRemaining, action: waitForHiddenZhulong) {
+                    "failed: 设置关闭后，真实侧栏没有隐藏烛龙入口"
+                }
+                return
+            }
+
+            store.zhulongProviderDraft.enabled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                reopenZhulongForFallbackCheck()
+            }
+        }
+
+        private func reopenZhulongForFallbackCheck(attemptsRemaining: Int = 60) {
+            guard store.isZhulongEnabled,
+                  clickControl(identifier: "sidebar.nav.zhulong")
+            else {
+                retry(attemptsRemaining, action: reopenZhulongForFallbackCheck) {
+                    "failed: 重新启用后，烛龙入口没有恢复"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                disableOpenZhulong()
+            }
+        }
+
+        private func disableOpenZhulong(attemptsRemaining: Int = 60) {
+            guard store.page == .zhulong else {
+                retry(attemptsRemaining, action: disableOpenZhulong) {
+                    "failed: 重新启用的烛龙入口无法打开工作区"
+                }
+                return
+            }
+            store.zhulongProviderDraft.enabled = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                waitForVisiblePageFallback()
+            }
+        }
+
+        private func waitForVisiblePageFallback(attemptsRemaining: Int = 60) {
+            guard store.page == .day,
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "sidebar.nav.zhulong")
+            else {
+                retry(attemptsRemaining, action: waitForVisiblePageFallback) {
+                    "failed: 关闭烛龙后，已打开的烛龙页没有切回 Day Todo"
+                }
+                return
+            }
+            finish("ok")
+        }
+
+        private func clickControl(identifier: String) -> Bool {
+            guard let anchor = AppViewTreeE2E.view(identifier: identifier) else {
+                return false
+            }
+            if let button = AppViewTreeE2E.button(overlapping: anchor) {
+                return AppViewTreeE2E.click(button)
+            }
+            return AppViewTreeE2E.click(anchor)
         }
 
         private func retry(

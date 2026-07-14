@@ -26,11 +26,13 @@ enum PoolListLayoutUIE2EDriver {
     static func start(
         expectations: [PoolListLayoutUIE2EExpectation],
         expectedWindowSize: NSSize,
+        expectsExpandedDetailRail: Bool,
         resultURL: URL
     ) {
         Session(
             expectations: expectations,
             expectedWindowSize: expectedWindowSize,
+            expectsExpandedDetailRail: expectsExpandedDetailRail,
             resultURL: resultURL
         ).start()
     }
@@ -39,15 +41,18 @@ enum PoolListLayoutUIE2EDriver {
     private final class Session {
         private let expectations: [PoolListLayoutUIE2EExpectation]
         private let expectedWindowSize: NSSize
+        private let expectsExpandedDetailRail: Bool
         private let resultURL: URL
 
         init(
             expectations: [PoolListLayoutUIE2EExpectation],
             expectedWindowSize: NSSize,
+            expectsExpandedDetailRail: Bool,
             resultURL: URL
         ) {
             self.expectations = expectations
             self.expectedWindowSize = expectedWindowSize
+            self.expectsExpandedDetailRail = expectsExpandedDetailRail
             self.resultURL = resultURL
         }
 
@@ -57,7 +62,9 @@ enum PoolListLayoutUIE2EDriver {
                     identifier: "pool.task.\($0.taskIdentifier).title"
                 )
             }
-            guard titleViews.count == expectations.count else {
+            guard titleViews.count == expectations.count,
+                  hasSettledShellLayout()
+            else {
                 guard attemptsRemaining > 1 else {
                     finish(with: "failed: 任务池列表标题几何锚点未完整出现")
                     return
@@ -69,6 +76,30 @@ enum PoolListLayoutUIE2EDriver {
             }
 
             finish(with: evaluate())
+        }
+
+        private func hasSettledShellLayout() -> Bool {
+            guard let middle = AppViewTreeE2E.view(identifier: "shell.middle-pane") else {
+                return false
+            }
+            let expectedMiddleWidth = expectedWindowSize.width
+                - NoonmarkVisualMetrics.sidebarWidth
+                - (expectsExpandedDetailRail ? NoonmarkVisualMetrics.detailRailWidth : 0)
+            guard abs(
+                AppViewTreeE2E.frameInWindow(for: middle).width - expectedMiddleWidth
+            ) <= 1 else {
+                return false
+            }
+            if expectsExpandedDetailRail {
+                guard let rail = AppViewTreeE2E.view(identifier: "shell.detail-rail") else {
+                    return false
+                }
+                return abs(
+                    AppViewTreeE2E.frameInWindow(for: rail).width
+                        - NoonmarkVisualMetrics.detailRailWidth
+                ) <= 1
+            }
+            return AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail")
         }
 
         private func evaluate() -> String {
@@ -250,12 +281,17 @@ enum ClassificationManagerUIE2EDriver {
 
         func start() {
             waitFor("分组与标签管理入口") {
-                guard let anchor = AppViewTreeE2E.view(
+                AppViewTreeE2E.view(
                     identifier: "classification.manager.open"
-                ) else {
-                    return false
-                }
-                return AppViewTreeE2E.click(anchor)
+                ) != nil
+            } onSuccess: { [self] in
+                openManager()
+            }
+        }
+
+        private func openManager() {
+            waitFor("分组与标签管理入口点击") {
+                AppViewTreeE2E.click(identifier: "classification.manager.open")
             } onSuccess: { [self] in
                 waitFor("分组与标签管理浮窗") {
                     AppViewTreeE2E.view(

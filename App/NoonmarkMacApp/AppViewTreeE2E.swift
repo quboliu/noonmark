@@ -84,6 +84,13 @@ enum AppViewTreeE2E {
             NSPoint(x: view.bounds.midX, y: view.bounds.midY),
             to: nil
         )
+        if view is NSControl {
+            guard let hitView = window.contentView?.hitTest(point),
+                  hitView === view || hitView.isDescendant(of: view)
+            else {
+                return false
+            }
+        }
         let timestamp = ProcessInfo.processInfo.systemUptime
         guard let mouseDown = NSEvent.mouseEvent(
             with: .leftMouseDown,
@@ -119,6 +126,45 @@ enum AppViewTreeE2E {
     static func click(identifier: String) -> Bool {
         guard let view = view(identifier: identifier) else { return false }
         return click(view)
+    }
+
+    static func sendKey(_ navigationKey: DateNavigationKey) -> Bool {
+        guard let window = NSApp.keyWindow
+            ?? NSApp.mainWindow
+            ?? NSApp.windows.first(where: { $0 is NoonmarkWindow })
+        else {
+            return false
+        }
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        guard let keyDown = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: timestamp,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: navigationKey.characters,
+            charactersIgnoringModifiers: navigationKey.characters,
+            isARepeat: false,
+            keyCode: navigationKey.rawValue
+        ), let keyUp = NSEvent.keyEvent(
+            with: .keyUp,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: timestamp + 0.01,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: navigationKey.characters,
+            charactersIgnoringModifiers: navigationKey.characters,
+            isARepeat: false,
+            keyCode: navigationKey.rawValue
+        ) else {
+            return false
+        }
+
+        window.sendEvent(keyDown)
+        window.sendEvent(keyUp)
+        return true
     }
 
     static func rightClick(_ view: NSView) -> Bool {

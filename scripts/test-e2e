@@ -10,7 +10,7 @@ fi
 app_bundle_name="NoonmarkMacAppE2E"
 app_executable_name="NoonmarkMacAppE2E"
 app_display_name="晷迹 E2E"
-expected_window_width="1080"
+expected_window_width="1200"
 expected_window_height="768"
 app_path="dist/${app_bundle_name}.app"
 app_executable_path="${app_path}/Contents/MacOS/${app_executable_name}"
@@ -1930,8 +1930,7 @@ open -W -n "$app_path" --args \
   --ephemeral \
   --page day \
   --e2e-keyboard-date-navigation \
-  --e2e-keyboard-date-result-url "$PWD/$keyboard_date_result" \
-  --e2e-quit-after-automation
+  --e2e-keyboard-date-result-url "$PWD/$keyboard_date_result"
 
 if [[ ! -f "$keyboard_date_result" ]]; then
   echo "keyboard date navigation result was not created: $keyboard_date_result" >&2
@@ -1944,6 +1943,29 @@ if [[ "$(cat "$keyboard_date_result")" != "ok" ]]; then
 fi
 
 echo "E2E keyboard date navigation: $keyboard_date_result"
+
+detail_rail_dir="artifacts/e2e-detail-rail"
+detail_rail_result="${detail_rail_dir}/detail-rail-result.txt"
+rm -rf "$detail_rail_dir"
+mkdir -p "$detail_rail_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page day \
+  --e2e-detail-rail-layout \
+  --e2e-detail-rail-result-url "$PWD/$detail_rail_result"
+
+if [[ ! -f "$detail_rail_result" ]]; then
+  echo "detail rail layout result was not created: $detail_rail_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$detail_rail_result")" != "ok" ]]; then
+  echo "detail rail layout failed: $(cat "$detail_rail_result")" >&2
+  exit 1
+fi
+
+echo "E2E collapsible detail rail layout: $detail_rail_result"
 
 subtask_mutation_dir="artifacts/e2e-subtask-mutation"
 subtask_mutation_result="${subtask_mutation_dir}/subtask-mutation-result.txt"

@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import NoonmarkAI
 @_spi(ClassificationUserDecision) import NoonmarkCore
+import NoonmarkMacUIContract
 import NoonmarkStorage
 import NoonmarkSync
 import NoonmarkZhulong
@@ -264,6 +265,7 @@ private struct LaunchAutomation {
         append(CopyUndoPersistenceE2EAutomation.fromCommandLine(), to: &actions)
         append(DateStripE2EAutomation.fromCommandLine(), to: &actions)
         append(KeyboardDateNavigationE2EAutomation.fromCommandLine(), to: &actions)
+        append(DetailRailLayoutE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongNavigationE2EAutomation.fromCommandLine(), to: &actions)
         append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)
         append(SummarySidebarE2EAutomation.fromCommandLine(), to: &actions)
@@ -425,6 +427,7 @@ private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
     @MainActor
     func run(on store: NoonmarkStore) {
         store.page = .pool
+        store.isDetailRailExpanded = usesMinimumWindowSize
         let adaptiveVisibleLabelCounts: [String: Int]
         do {
             adaptiveVisibleLabelCounts = try installAdaptiveProbeTasks(on: store)
@@ -477,6 +480,7 @@ private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
             PoolListLayoutUIE2EDriver.start(
                 expectations: expectations,
                 expectedWindowSize: expectedWindowSize,
+                expectsExpandedDetailRail: usesMinimumWindowSize,
                 resultURL: resultURL
             )
         }
@@ -522,8 +526,8 @@ private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
                 "超长响应式标签丙丙丙丙丙丙丙"
             ]
         )
-        let overflowOnlyTask = try createTask(
-            title: "零级回退布局验证",
+        let extremeLabelTask = try createTask(
+            title: "极长标签布局验证",
             labels: [
                 "极长响应式标签甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲",
                 "极长响应式标签乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙",
@@ -532,7 +536,7 @@ private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
         )
         return [
             oneLabelTask: usesMinimumWindowSize ? 1 : 2,
-            overflowOnlyTask: 0
+            extremeLabelTask: usesMinimumWindowSize ? 0 : 1
         ]
     }
 
@@ -2264,44 +2268,16 @@ private struct KeyboardDateNavigationE2EAutomation: LaunchAutomationRunnable {
     @MainActor
     func run(on store: NoonmarkStore) {
         do {
-            try verifyDayTodoNavigation(on: store)
-            try verifyCalendarNavigation(on: store)
-            try writeResult("ok")
+            guard let resultURL else {
+                throw KeyboardDateNavigationE2EAutomationError.failed("missing result URL")
+            }
+            DateNavigationUIE2EDriver.start(store: store, resultURL: resultURL)
         } catch {
             try? writeResult("failed: \(error)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                NSApp.terminate(nil)
+            }
         }
-    }
-
-    @MainActor
-    private func verifyDayTodoNavigation(on store: NoonmarkStore) throws {
-        store.page = .day
-        store.selectedDate = store.today
-        store.moveSelectedDate(.right)
-        try expect(store.selectedDate == NoonmarkStore.offset(store.today, by: 1), "day right arrow did not move by one day")
-        store.moveSelectedDate(.left)
-        try expect(store.selectedDate == store.today, "day left arrow did not return to today")
-        store.moveSelectedDate(.down)
-        try expect(store.selectedDate == NoonmarkStore.offset(store.today, by: 7), "day down arrow did not move by one week")
-        store.moveSelectedDate(.up)
-        try expect(store.selectedDate == store.today, "day up arrow did not return to today")
-    }
-
-    @MainActor
-    private func verifyCalendarNavigation(on store: NoonmarkStore) throws {
-        store.page = .calendar
-        store.selectedCalendarDate = store.today
-        store.moveSelectedDate(.right)
-        try expect(store.selectedCalendarDate == NoonmarkStore.offset(store.today, by: 1), "calendar right arrow did not move by one day")
-        store.moveSelectedDate(.left)
-        try expect(store.selectedCalendarDate == store.today, "calendar left arrow did not return to today")
-        store.moveSelectedDate(.down)
-        try expect(store.selectedCalendarDate == NoonmarkStore.offset(store.today, by: 7), "calendar down arrow did not move by one week")
-        store.moveSelectedDate(.up)
-        try expect(store.selectedCalendarDate == store.today, "calendar up arrow did not return to today")
-    }
-
-    private func expect(_ condition: Bool, _ message: String) throws {
-        guard condition else { throw KeyboardDateNavigationE2EAutomationError.failed(message) }
     }
 
     private func writeResult(_ result: String) throws {
@@ -2322,6 +2298,32 @@ private enum KeyboardDateNavigationE2EAutomationError: LocalizedError {
         case let .failed(message):
             return message
         }
+    }
+}
+
+private struct DetailRailLayoutE2EAutomation: LaunchAutomationRunnable {
+    let resultURL: URL
+
+    @MainActor
+    static func fromCommandLine() -> DetailRailLayoutE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-detail-rail-layout"),
+              let path = NoonmarkStore.commandLineValue(
+                  after: "--e2e-detail-rail-result-url"
+              )
+        else {
+            return nil
+        }
+        return DetailRailLayoutE2EAutomation(
+            resultURL: URL(fileURLWithPath: path)
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        store.page = .day
+        store.clearSelection()
+        store.isDetailRailExpanded = false
+        DetailRailLayoutUIE2EDriver.start(store: store, resultURL: resultURL)
     }
 }
 
@@ -2634,14 +2636,22 @@ private struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
             store.page = .pool
             store.clearSelection()
             store.zhulongProviderDraft.enabled = false
-            guard store.usesZhulongContextRail, store.shouldShowDetailRail else {
+            store.isDetailRailExpanded = false
+            guard store.usesZhulongContextRail,
+                  store.hasDetailRailContent,
+                  store.shouldShowDetailRail == false
+            else {
                 throw SummarySidebarE2EAutomationError.failed("local-mode context rail was unavailable")
             }
+            store.toggleDetailRail()
 
             for page in [NoonmarkStore.Page.pool, .future, .unfinished, .completed] {
                 store.page = page
                 store.clearSelection()
-                guard store.usesZhulongContextRail, store.shouldShowDetailRail else {
+                guard store.usesZhulongContextRail,
+                      store.hasDetailRailContent,
+                      store.shouldShowDetailRail
+                else {
                     throw SummarySidebarE2EAutomationError.failed("\(page.rawValue) zhulong context rail was unavailable")
                 }
             }
@@ -4535,6 +4545,7 @@ final class NoonmarkStore: ObservableObject {
     @Published var showingFromPoolPicker = false
     @Published var showingChangeDialog = false
     @Published var showingClassificationManager = false
+    @Published var isDetailRailExpanded = !MacUIShellLayout.detailRailCollapsedByDefault
     @Published var changeText = ""
     @Published var detailSubtaskText = ""
     @Published var detailNoteText = ""
@@ -4647,7 +4658,7 @@ final class NoonmarkStore: ObservableObject {
             && [.pool, .future, .unfinished, .completed].contains(page)
     }
 
-    var shouldShowDetailRail: Bool {
+    var hasDetailRailContent: Bool {
         guard page != .calendar && page != .settings else { return false }
         if page == .zhulong {
             return zhulongWorkspace.selectedSession != nil
@@ -4659,6 +4670,15 @@ final class NoonmarkStore: ObservableObject {
             return true
         }
         return usesZhulongContextRail
+    }
+
+    var shouldShowDetailRail: Bool {
+        isDetailRailExpanded && hasDetailRailContent
+    }
+
+    func toggleDetailRail() {
+        guard hasDetailRailContent else { return }
+        isDetailRailExpanded.toggle()
     }
 
     var visibleNavigationPages: [Page] {
@@ -4887,7 +4907,14 @@ final class NoonmarkStore: ObservableObject {
         selectedUnfinishedChainID = nil
         selectedCompletedTraceID = nil
         selectedCompletedSubtaskID = nil
+        prepareDetailRailForSelection()
+    }
+
+    private func prepareDetailRailForSelection(expand: Bool = true) {
         detailSubtaskText = ""
+        if expand {
+            isDetailRailExpanded = true
+        }
     }
 
     func changedTarget(for trace: DayTrace) -> (trace: DayTrace, definition: TaskDefinition)? {
@@ -4914,7 +4941,7 @@ final class NoonmarkStore: ObservableObject {
         selectedUnfinishedChainID = nil
         selectedCompletedTraceID = nil
         selectedCompletedSubtaskID = nil
-        detailSubtaskText = ""
+        prepareDetailRailForSelection()
     }
 
     func isUnclassified(_ chainID: TaskChainID) -> Bool {
@@ -4999,7 +5026,7 @@ final class NoonmarkStore: ObservableObject {
         selectedPoolChainID = nil
         selectedCompletedTraceID = nil
         selectedCompletedSubtaskID = nil
-        detailSubtaskText = ""
+        prepareDetailRailForSelection()
     }
 
     func selectCompleted(_ traceID: DayTraceID) {
@@ -5008,14 +5035,15 @@ final class NoonmarkStore: ObservableObject {
         selectedTraceID = traceID
         selectedPoolChainID = nil
         selectedUnfinishedChainID = nil
-        detailSubtaskText = ""
+        prepareDetailRailForSelection()
     }
 
     func selectCompletedSubtask(_ subtaskID: SubtaskID) {
         selectedCompletedSubtaskID = subtaskID
         selectedCompletedTraceID = nil
-        detailSubtaskText = ""
-        if let record = selectedCompletedSubtaskRecord {
+        let record = selectedCompletedSubtaskRecord
+        prepareDetailRailForSelection(expand: record != nil)
+        if let record {
             selectedTraceID = record.parentTrace.id
         }
     }
@@ -7591,6 +7619,8 @@ struct AppCopy {
     var navCalendar: String { language == .chinese ? "日历" : "Calendar" }
     var navZhulong: String { language == .chinese ? "烛龙" : "Zhulong" }
     var navSettings: String { language == .chinese ? "设置" : "Settings" }
+    var expandDetailRail: String { language == .chinese ? "展开右侧栏" : "Show detail sidebar" }
+    var collapseDetailRail: String { language == .chinese ? "收起右侧栏" : "Hide detail sidebar" }
     var today: String { language == .chinese ? "今天" : "Today" }
     var chooseDate: String { language == .chinese ? "选日期" : "Choose date" }
     var openDay: String { language == .chinese ? "查看当天 →" : "Open day →" }
@@ -8160,6 +8190,10 @@ struct Sidebar: View {
                 Text(store.copy.appName)
                     .font(.noonmarkSystem(size: 17, weight: .bold))
                     .tracking(0.2)
+                Spacer(minLength: 8)
+                if store.hasDetailRailContent {
+                    DetailRailToggleButton()
+                }
             }
             .padding(.horizontal, 18)
             .padding(.bottom, 16)
@@ -8184,6 +8218,45 @@ struct Sidebar: View {
         .background(Theme.sidebar)
         .overlay(alignment: .trailing) {
             Rectangle().fill(Theme.line.opacity(0.55)).frame(width: 1)
+        }
+    }
+}
+
+struct DetailRailToggleButton: View {
+    @EnvironmentObject private var store: NoonmarkStore
+
+    private var label: String {
+        store.isDetailRailExpanded
+            ? store.copy.collapseDetailRail
+            : store.copy.expandDetailRail
+    }
+
+    var body: some View {
+        Button(action: store.toggleDetailRail) {
+            Image(systemName: "sidebar.right")
+                .font(.noonmarkRenderedSystem(size: 13, weight: .medium))
+                .frame(width: 26, height: 26)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(store.isDetailRailExpanded ? Theme.accent : Theme.text3)
+        .hoverSurface(
+            active: store.isDetailRailExpanded,
+            cornerRadius: 6,
+            idleFill: .clear,
+            hoverFill: Theme.panel.opacity(0.78),
+            activeFill: Theme.accentSoft.opacity(0.72),
+            idleStroke: .clear,
+            hoverStroke: Theme.line.opacity(0.55),
+            activeStroke: Theme.accent.opacity(0.20)
+        )
+        .accessibilityLabel(label)
+        .help(label)
+        .background {
+            AppE2EViewAnchor(
+                identifier: "shell.detail-rail.toggle",
+                verificationText: label
+            )
         }
     }
 }
@@ -8309,16 +8382,24 @@ struct MainSurface: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                AppE2EViewAnchor(identifier: "shell.middle-pane")
+            }
 
             if store.shouldShowDetailRail {
                 DetailRail()
                     .frame(width: NoonmarkVisualMetrics.detailRailWidth)
+                    .background {
+                        AppE2EViewAnchor(identifier: "shell.detail-rail")
+                    }
                     .overlay(alignment: .leading) {
                         Rectangle().fill(Theme.line.opacity(0.58)).frame(width: 1)
                     }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .background(Theme.panel)
+        .animation(.easeInOut(duration: 0.18), value: store.shouldShowDetailRail)
     }
 }
 
@@ -8540,6 +8621,8 @@ struct NewTaskInlineField: View {
 
 struct DateStrip: View {
     @EnvironmentObject private var store: NoonmarkStore
+    @State private var focusRequest = 0
+    @State private var hasKeyboardFocus = false
 
     var dates: [LocalDate] { store.dateStripDates() }
 
@@ -8555,6 +8638,7 @@ struct DateStrip: View {
                     let today = date == store.today
                     let count = store.engine.getDayTodo(date: date).traces.count
                     Button {
+                        focusRequest &+= 1
                         withAnimation(.spring(response: 0.24, dampingFraction: 0.74)) {
                             store.selectedDate = date
                         }
@@ -8574,15 +8658,30 @@ struct DateStrip: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 2)
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "day.date-strip.cell.\(date.description)",
+                                verificationText: selected ? "selected" : ""
+                            )
+                        }
                     }
                     .buttonStyle(.plain)
                 }
             }
         }
+        .background {
+            DateNavigationKeyboardFocusBridge(
+                focusRequest: focusRequest,
+                onMoveCommand: { store.moveSelectedDate($0) },
+                onFocusChange: { hasKeyboardFocus = $0 }
+            )
+        }
         .padding(.top, 14)
         .padding(.bottom, 10)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.line.opacity(0.62)).frame(height: 1)
+            Rectangle()
+                .fill(hasKeyboardFocus ? Theme.accent.opacity(0.72) : Theme.line.opacity(0.62))
+                .frame(height: hasKeyboardFocus ? 1.5 : 1)
         }
     }
 }
@@ -9749,6 +9848,7 @@ struct CompletedTrajectoryNodes: View {
 
 struct CalendarPage: View {
     @EnvironmentObject private var store: NoonmarkStore
+    @State private var focusRequest = 0
 
     var calendarCells: [CalendarCellModel] {
         let year = store.selectedCalendarDate.year
@@ -9809,7 +9909,14 @@ struct CalendarPage: View {
                                 Color.clear
                                     .frame(height: rowHeight)
                             case let .date(date):
-                                CalendarCell(date: date, height: rowHeight)
+                                CalendarCell(
+                                    date: date,
+                                    height: rowHeight,
+                                    onSelect: {
+                                        focusRequest &+= 1
+                                        store.selectedCalendarDate = date
+                                    }
+                                )
                             }
                         }
                     }
@@ -9825,6 +9932,13 @@ struct CalendarPage: View {
                 .overlay(alignment: .leading) {
                     Rectangle().fill(Theme.line.opacity(0.58)).frame(width: 1)
                 }
+        }
+        .background {
+            DateNavigationKeyboardFocusBridge(
+                focusRequest: focusRequest,
+                onMoveCommand: { store.moveSelectedDate($0) },
+                onFocusChange: { _ in }
+            )
         }
     }
 }
@@ -9851,6 +9965,7 @@ struct CalendarCell: View {
     @EnvironmentObject private var store: NoonmarkStore
     let date: LocalDate
     let height: CGFloat
+    let onSelect: () -> Void
 
     var summary: CalendarDaySummary { store.engine.calendarSummary(for: date) }
     var traces: [DayTrace] {
@@ -9923,7 +10038,13 @@ struct CalendarCell: View {
             activeStroke: Theme.accent
         )
         .contentShape(RoundedRectangle(cornerRadius: 9))
-        .onTapGesture { store.selectedCalendarDate = date }
+        .onTapGesture(perform: onSelect)
+        .background {
+            AppE2EViewAnchor(
+                identifier: "calendar.date-cell.\(date.description)",
+                verificationText: selected ? "selected" : ""
+            )
+        }
     }
 
     var heatColor: Color {

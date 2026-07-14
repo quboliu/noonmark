@@ -3,13 +3,13 @@ import XCTest
 
 final class MacUIDesignContractTests: XCTestCase {
     func testCurrentWindowLayoutMatchesCompactReference() {
-        XCTAssertEqual(MacUIWindowLayout.defaultWidth, 1080)
+        XCTAssertEqual(MacUIWindowLayout.defaultWidth, 1200)
         XCTAssertEqual(MacUIWindowLayout.defaultHeight, 768)
         XCTAssertEqual(MacUIWindowLayout.minimumWidth, 960)
         XCTAssertEqual(MacUIWindowLayout.minimumHeight, 720)
         XCTAssertEqual(
             Set(MacUIDesignContract.current.windowMetrics),
-            [.defaultLaunch1080x768, .minimum960x720]
+            [.defaultLaunch1200x768, .minimum960x720]
         )
     }
 
@@ -20,6 +20,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUIShellLayout.pageHorizontalPadding, 20)
         XCTAssertEqual(MacUIShellLayout.taskRowVerticalPadding, 8)
         XCTAssertEqual(MacUIShellLayout.detailPadding, 14)
+        XCTAssertTrue(MacUIShellLayout.detailRailCollapsedByDefault)
         XCTAssertEqual(MacUIIconMetrics.trafficLightDiameter, 12)
         XCTAssertEqual(MacUIIconMetrics.trafficLightHitTarget, 20)
         XCTAssertEqual(MacUIIconMetrics.clockLogoSize, 22)
@@ -112,8 +113,12 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.quietSidebarSurface))
         XCTAssertTrue(contract.globalElements.contains(.lowContrastControlSurfaces))
         XCTAssertTrue(contract.globalElements.contains(.borderlessListRows))
-        XCTAssertTrue(contract.windowMetrics.contains(.defaultLaunch1080x768))
+        XCTAssertTrue(contract.windowMetrics.contains(.defaultLaunch1200x768))
         XCTAssertTrue(contract.windowMetrics.contains(.minimum960x720))
+        XCTAssertTrue(contract.globalElements.contains(.collapsibleDetailRail))
+        XCTAssertTrue(contract.globalElements.contains(.detailRailCollapsedByDefault))
+        XCTAssertTrue(contract.globalElements.contains(.stableWindowFrameDuringDetailRailToggle))
+        XCTAssertTrue(contract.globalElements.contains(.adaptiveMainSurfaceWidth))
         XCTAssertTrue(contract.colorTokens.contains(.accent))
         XCTAssertTrue(contract.colorTokens.contains(.ok))
         XCTAssertTrue(contract.colorTokens.contains(.warn))

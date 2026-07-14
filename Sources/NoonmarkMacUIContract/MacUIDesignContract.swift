@@ -28,15 +28,19 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case quietSidebarSurface
     case lowContrastControlSurfaces
     case borderlessListRows
+    case collapsibleDetailRail
+    case detailRailCollapsedByDefault
+    case stableWindowFrameDuringDetailRailToggle
+    case adaptiveMainSurfaceWidth
 }
 
 public enum MacUIWindowMetric: String, CaseIterable, Sendable {
-    case defaultLaunch1080x768
+    case defaultLaunch1200x768
     case minimum960x720
 }
 
 public enum MacUIWindowLayout {
-    public static let defaultWidth = 1080.0
+    public static let defaultWidth = 1200.0
     public static let defaultHeight = 768.0
     public static let minimumWidth = 960.0
     public static let minimumHeight = 720.0
@@ -50,6 +54,7 @@ public enum MacUIShellLayout {
     public static let taskRowVerticalPadding = 8.0
     public static let detailPadding = 14.0
     public static let navigationRowHeight = 34.0
+    public static let detailRailCollapsedByDefault = true
 }
 
 public enum MacUIIconMetrics {

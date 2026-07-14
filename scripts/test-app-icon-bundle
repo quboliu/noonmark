@@ -63,17 +63,103 @@ NOONMARK_APP_PATH="$app_path" \
 
 workspace_width="$(sips -g pixelWidth "$workspace_png" | awk '/pixelWidth/ {print $2}')"
 workspace_height="$(sips -g pixelHeight "$workspace_png" | awk '/pixelHeight/ {print $2}')"
-workspace_alpha="$(sips -g hasAlpha "$workspace_png" | awk '/hasAlpha/ {print $2}')"
-if [[ "$workspace_width" != "1024" || "$workspace_height" != "1024" || "$workspace_alpha" != "yes" ]]; then
+if [[ "$workspace_width" != "1024" || "$workspace_height" != "1024" ]]; then
   echo "NSWorkspace returned an invalid app icon representation" >&2
   exit 1
 fi
 
-sips -s format bmp "$app_icon_master_png" --out "${work_dir}/master.bmp" >/dev/null
-sips -s format bmp "$workspace_png" --out "${work_dir}/workspace.bmp" >/dev/null
-if ! cmp -s "${work_dir}/master.bmp" "${work_dir}/workspace.bmp"; then
-  echo "NSWorkspace resolved an icon that differs from AppIcon-master.png" >&2
-  exit 1
-fi
+NOONMARK_MASTER_ICON="$app_icon_master_png" \
+  NOONMARK_WORKSPACE_ICON="$workspace_png" \
+  swift - <<'SWIFT'
+import AppKit
+import CoreGraphics
+import Foundation
+
+enum IconCompareError: Error, CustomStringConvertible {
+  case missingEnvironment(String)
+  case unreadableImage(String)
+  case missingCGImage(String)
+  case missingContext
+  case differentPixels(count: Int, maxChannelDelta: UInt8)
+
+  var description: String {
+    switch self {
+    case .missingEnvironment(let name):
+      return "missing environment variable: \(name)"
+    case .unreadableImage(let path):
+      return "unreadable image: \(path)"
+    case .missingCGImage(let path):
+      return "image has no CGImage representation: \(path)"
+    case .missingContext:
+      return "failed to create bitmap context"
+    case .differentPixels(let count, let maxChannelDelta):
+      return "images differ after RGBA normalization: \(count) pixels, max channel delta \(maxChannelDelta)"
+    }
+  }
+}
+
+func pathFromEnvironment(_ name: String) throws -> String {
+  guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
+    throw IconCompareError.missingEnvironment(name)
+  }
+  return value
+}
+
+func normalizedRGBA(path: String, width: Int = 1024, height: Int = 1024) throws -> [UInt8] {
+  guard let image = NSImage(contentsOfFile: path) else {
+    throw IconCompareError.unreadableImage(path)
+  }
+  var proposedRect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
+  guard let cgImage = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
+    throw IconCompareError.missingCGImage(path)
+  }
+  let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+  var data = [UInt8](repeating: 0, count: width * height * 4)
+  guard let context = CGContext(
+    data: &data,
+    width: width,
+    height: height,
+    bitsPerComponent: 8,
+    bytesPerRow: width * 4,
+    space: colorSpace,
+    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+  ) else {
+    throw IconCompareError.missingContext
+  }
+  context.interpolationQuality = .none
+  context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+  return data
+}
+
+do {
+  let master = try normalizedRGBA(path: pathFromEnvironment("NOONMARK_MASTER_ICON"))
+  let workspace = try normalizedRGBA(path: pathFromEnvironment("NOONMARK_WORKSPACE_ICON"))
+  var differingPixels = 0
+  var maxChannelDelta: UInt8 = 0
+
+  for offset in stride(from: 0, to: master.count, by: 4) {
+    var pixelDiffers = false
+    for channel in 0..<4 {
+      let lhs = master[offset + channel]
+      let rhs = workspace[offset + channel]
+      if lhs != rhs {
+        pixelDiffers = true
+        let delta = lhs > rhs ? lhs - rhs : rhs - lhs
+        maxChannelDelta = max(maxChannelDelta, delta)
+      }
+    }
+    if pixelDiffers {
+      differingPixels += 1
+    }
+  }
+
+  if differingPixels != 0 {
+    throw IconCompareError.differentPixels(count: differingPixels, maxChannelDelta: maxChannelDelta)
+  }
+} catch {
+  FileHandle.standardError.write("\(error)\n".data(using: .utf8)!)
+  exit(1)
+}
+SWIFT
 
 echo "Verified macOS resolved the canonical icon for $app_path"

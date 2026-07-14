@@ -10,10 +10,14 @@ fi
 app_bundle_name="NoonmarkMacAppE2E"
 app_executable_name="NoonmarkMacAppE2E"
 app_display_name="晷迹 E2E"
+expected_window_width="1080"
+expected_window_height="768"
 app_path="dist/${app_bundle_name}.app"
 app_executable_path="${app_path}/Contents/MacOS/${app_executable_name}"
 export NOONMARK_E2E_APP_EXECUTABLE_NAME="$app_executable_name"
 export NOONMARK_E2E_APP_DISPLAY_NAME="$app_display_name"
+export NOONMARK_E2E_EXPECTED_WINDOW_WIDTH="$expected_window_width"
+export NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT="$expected_window_height"
 
 scenarios=(
   "day|day|"
@@ -136,6 +140,8 @@ import Foundation
 let expectedOwner = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_EXECUTABLE_NAME"] ?? "NoonmarkMacAppE2E"
 let expectedDisplayName = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
 let expectedTitle = ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_TITLE"] ?? "晷迹 · Day Todo — 7月5日"
+let expectedWidth = Double(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_WIDTH"] ?? "") ?? 0
+let expectedHeight = Double(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT"] ?? "") ?? 0
 
 if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
     for window in list {
@@ -150,7 +156,7 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
             let bounds = window[kCGWindowBounds as String] as? [String: Any]
             let width = bounds?["Width"] as? Double ?? 0
             let height = bounds?["Height"] as? Double ?? 0
-            if layer == 0, width == 1000, height == 768,
+            if layer == 0, width == expectedWidth, height == expectedHeight,
                let number = window[kCGWindowNumber as String]
             {
                 print(number)
@@ -467,7 +473,14 @@ else {
     print("missing deterministic pool-detail title or description")
     exit(2)
 }
-let backingScale = CGFloat(cgImage.width) / 1000
+let expectedWindowWidth = CGFloat(
+    Double(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_WIDTH"] ?? "") ?? 0
+)
+guard expectedWindowWidth > 0 else {
+    print("missing expected window width")
+    exit(5)
+}
+let backingScale = CGFloat(cgImage.width) / expectedWindowWidth
 let visibleGap = (title.boundingBox.minY - description.boundingBox.maxY)
     * CGFloat(cgImage.height) / backingScale
 let roundedGap = visibleGap.rounded()

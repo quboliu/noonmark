@@ -124,7 +124,7 @@ enum PoolListLayoutUIE2EDriver {
             }
             let expectedVisibleLabelCount = expectation.expectedVisibleLabelCount
             guard visibleLabelCount == expectedVisibleLabelCount else {
-                return "failed: 默认窄窗未展示预期标签：\(expectation.title) actual=\(visibleLabelCount) expected=\(expectedVisibleLabelCount)"
+                return "failed: 当前窗口未展示预期标签：\(expectation.title) actual=\(visibleLabelCount) expected=\(expectedVisibleLabelCount)"
             }
 
             let overflowCount = expectation.labelNamesByIdentifier.count - expectedVisibleLabelCount

@@ -3,13 +3,13 @@ import XCTest
 
 final class MacUIDesignContractTests: XCTestCase {
     func testCurrentWindowLayoutMatchesCompactReference() {
-        XCTAssertEqual(MacUIWindowLayout.defaultWidth, 1000)
+        XCTAssertEqual(MacUIWindowLayout.defaultWidth, 1080)
         XCTAssertEqual(MacUIWindowLayout.defaultHeight, 768)
         XCTAssertEqual(MacUIWindowLayout.minimumWidth, 960)
         XCTAssertEqual(MacUIWindowLayout.minimumHeight, 720)
         XCTAssertEqual(
             Set(MacUIDesignContract.current.windowMetrics),
-            [.defaultLaunch1000x768, .minimum960x720]
+            [.defaultLaunch1080x768, .minimum960x720]
         )
     }
 
@@ -112,7 +112,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.quietSidebarSurface))
         XCTAssertTrue(contract.globalElements.contains(.lowContrastControlSurfaces))
         XCTAssertTrue(contract.globalElements.contains(.borderlessListRows))
-        XCTAssertTrue(contract.windowMetrics.contains(.defaultLaunch1000x768))
+        XCTAssertTrue(contract.windowMetrics.contains(.defaultLaunch1080x768))
         XCTAssertTrue(contract.windowMetrics.contains(.minimum960x720))
         XCTAssertTrue(contract.colorTokens.contains(.accent))
         XCTAssertTrue(contract.colorTokens.contains(.ok))

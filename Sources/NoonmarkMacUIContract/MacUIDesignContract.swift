@@ -31,12 +31,12 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
 }
 
 public enum MacUIWindowMetric: String, CaseIterable, Sendable {
-    case defaultLaunch1000x768
+    case defaultLaunch1080x768
     case minimum960x720
 }
 
 public enum MacUIWindowLayout {
-    public static let defaultWidth = 1000.0
+    public static let defaultWidth = 1080.0
     public static let defaultHeight = 768.0
     public static let minimumWidth = 960.0
     public static let minimumHeight = 720.0

@@ -446,6 +446,7 @@ private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
                 ),
                 display: true
             )
+            window.contentView?.layoutSubtreeIfNeeded()
         }
         let expectations = store.engine.taskPool().map { task in
             let classification = store.currentClassification(for: task.chain.id)
@@ -472,11 +473,13 @@ private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
                 ]
             )
         }
-        PoolListLayoutUIE2EDriver.start(
-            expectations: expectations,
-            expectedWindowSize: expectedWindowSize,
-            resultURL: resultURL
-        )
+        DispatchQueue.main.async {
+            PoolListLayoutUIE2EDriver.start(
+                expectations: expectations,
+                expectedWindowSize: expectedWindowSize,
+                resultURL: resultURL
+            )
+        }
     }
 
     @MainActor
@@ -528,7 +531,7 @@ private struct PoolListLayoutE2EAutomation: LaunchAutomationRunnable {
             ]
         )
         return [
-            oneLabelTask: 1,
+            oneLabelTask: usesMinimumWindowSize ? 1 : 2,
             overflowOnlyTask: 0
         ]
     }

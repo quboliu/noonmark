@@ -83,7 +83,11 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
         )
         XCTAssertEqual(current.category?.decisionID, decisionID)
         XCTAssertTrue(current.labels.allSatisfy { $0.source == .userDirect })
-        XCTAssertNotNil(try SQLiteSyncRepository(databaseURL: phoneURL).metadata(for: "localFirst.sync.lastResult"))
+        XCTAssertNotNil(
+            try SQLiteSyncRepository(databaseURL: phoneURL).metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            )
+        )
     }
 
     private func commitClassification(

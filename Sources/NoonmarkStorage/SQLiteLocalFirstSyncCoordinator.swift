@@ -13,7 +13,26 @@ public struct SQLiteLocalFirstSyncResult: Codable, Equatable, Sendable {
     }
 }
 
+public enum SQLiteLocalFirstSyncStatus: Codable, Equatable, Sendable {
+    case idle(since: Date)
+    case succeeded(SQLiteLocalFirstSyncResult)
+    case failed(message: String, failedAt: Date)
+
+    public var updatedAt: Date {
+        switch self {
+        case let .idle(since):
+            since
+        case let .succeeded(result):
+            result.syncedAt
+        case let .failed(_, failedAt):
+            failedAt
+        }
+    }
+}
+
 public final class SQLiteLocalFirstSyncCoordinator {
+    public static let lastStatusMetadataKey = "localFirst.sync.lastStatus"
+
     private let uploadCoordinator: SQLiteSyncUploadCoordinator
     private let downloadCoordinator: SQLiteSyncDownloadCoordinator
     private let syncRepository: SQLiteSyncRepository
@@ -25,21 +44,28 @@ public final class SQLiteLocalFirstSyncCoordinator {
     }
 
     public func sync(limit: Int = 100, now: Date = Date()) async throws -> SQLiteLocalFirstSyncResult {
-        let upload = try await uploadCoordinator.uploadPending(limit: limit)
-        let download = try await downloadCoordinator.downloadAndMerge(detectedAt: now)
-        let result = SQLiteLocalFirstSyncResult(upload: upload, download: download, syncedAt: now)
-        try saveMetadata(result)
-        return result
+        do {
+            let upload = try await uploadCoordinator.uploadPending(limit: limit)
+            let download = try await downloadCoordinator.downloadAndMerge(detectedAt: now)
+            let result = SQLiteLocalFirstSyncResult(upload: upload, download: download, syncedAt: now)
+            try saveMetadata(.succeeded(result))
+            return result
+        } catch {
+            try? saveMetadata(
+                .failed(message: error.localizedDescription, failedAt: now)
+            )
+            throw error
+        }
     }
 
-    private func saveMetadata(_ result: SQLiteLocalFirstSyncResult) throws {
+    private func saveMetadata(_ status: SQLiteLocalFirstSyncStatus) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try syncRepository.saveMetadata(
             SyncMetadataEntry(
-                key: "localFirst.sync.lastResult",
-                value: try encoder.encode(result),
-                updatedAt: result.syncedAt
+                key: Self.lastStatusMetadataKey,
+                value: try encoder.encode(status),
+                updatedAt: status.updatedAt
             )
         )
     }

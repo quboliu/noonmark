@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import NoonmarkCore
 import NoonmarkSync
@@ -399,6 +400,25 @@ public final class SQLiteEngineRepository {
         }
     }
 
+    public func replaceForDataImport(
+        _ snapshot: NoonmarkSnapshot,
+        preserving deviceIdentity: SyncDeviceIdentity?
+    ) throws {
+        try validateClassificationStateIntegrity(snapshot.classifications)
+        let stagedURL = databaseURL.deletingLastPathComponent()
+            .appendingPathComponent(".noonmark-import-\(UUID().uuidString).sqlite")
+        defer { removeDatabaseFiles(at: stagedURL) }
+
+        let stagedRepository = SQLiteEngineRepository(databaseURL: stagedURL)
+        try stagedRepository.save(snapshot)
+        if let deviceIdentity {
+            try SQLiteSyncRepository(databaseURL: stagedURL).saveDeviceIdentity(deviceIdentity)
+        }
+        _ = try stagedRepository.load()
+
+        try replaceDatabaseContents(from: stagedRepository)
+    }
+
     public func save(
         _ snapshot: NoonmarkSnapshot,
         recordingChangesFor deviceID: SyncDeviceID,
@@ -479,6 +499,7 @@ public enum SQLiteRepositoryError: Error, Equatable {
     case executeFailed(String)
     case stepFailed(String)
     case invalidStoredValue(String)
+    case backupFailed(String)
 }
 
 extension SQLiteRepositoryError: LocalizedError {
@@ -494,6 +515,8 @@ extension SQLiteRepositoryError: LocalizedError {
             return "SQLite step failed: \(message)"
         case let .invalidStoredValue(message):
             return "SQLite stored value is invalid: \(message)"
+        case let .backupFailed(message):
+            return "SQLite backup failed: \(message)"
         }
     }
 }
@@ -589,6 +612,33 @@ private extension SQLiteEngineRepository {
             throw SQLiteRepositoryError.openFailed(message)
         }
         return database
+    }
+
+    func replaceDatabaseContents(from sourceRepository: SQLiteEngineRepository) throws {
+        let source = try sourceRepository.openDatabase()
+        defer { sqlite3_close(source) }
+        let destination = try openDatabase()
+        defer { sqlite3_close(destination) }
+        sqlite3_busy_timeout(destination, 5000)
+
+        guard let backup = sqlite3_backup_init(destination, "main", source, "main") else {
+            throw SQLiteRepositoryError.backupFailed(lastError(destination))
+        }
+        let stepResult = sqlite3_backup_step(backup, -1)
+        let finishResult = sqlite3_backup_finish(backup)
+        guard stepResult == SQLITE_DONE, finishResult == SQLITE_OK else {
+            throw SQLiteRepositoryError.backupFailed(
+                "step=\(stepResult) finish=\(finishResult): \(lastError(destination))"
+            )
+        }
+    }
+
+    func removeDatabaseFiles(at url: URL) {
+        for path in [url.path, url.path + "-wal", url.path + "-shm"] {
+            path.withCString { pointer in
+                _ = unlink(pointer)
+            }
+        }
     }
 
     func applySchema(on database: Database?) throws {

@@ -221,11 +221,19 @@ public enum SyncRecordPayload: Equatable, Sendable {
 }
 
 public struct AppPreferencesEnvelope: Codable, Equatable, Sendable {
-    public var preferences: AppPreferences
+    public var theme: AppTheme
+    public var language: AppLanguage
     public var updatedAt: Date
 
     public init(preferences: AppPreferences, updatedAt: Date) {
-        self.preferences = preferences
+        theme = preferences.theme
+        language = preferences.language
+        self.updatedAt = updatedAt
+    }
+
+    public init(theme: AppTheme, language: AppLanguage, updatedAt: Date) {
+        self.theme = theme
+        self.language = language
         self.updatedAt = updatedAt
     }
 }

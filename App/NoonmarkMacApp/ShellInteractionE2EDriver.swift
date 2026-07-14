@@ -83,29 +83,33 @@ enum DateNavigationUIE2EDriver {
                 }
                 return
             }
-            if window.isKeyWindow == false {
-                window.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-                retry(attemptsRemaining, action: waitForDateCell) {
-                    "failed: \(self.surface.name) 真实窗口无法获得焦点"
-                }
-                return
-            }
-            guard let dateCell = AppViewTreeE2E.view(identifier: identifier) else {
+            window.makeKeyAndOrderFront(nil)
+            window.makeMain()
+            NSApp.activate(ignoringOtherApps: true)
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+            guard AppViewTreeE2E.view(identifier: identifier) != nil else {
                 retry(attemptsRemaining, action: waitForDateCell) { [self] in
                     "failed: \(surface.name) 日期单元没有出现在真实 view tree"
                 }
                 return
             }
-            guard AppViewTreeE2E.click(dateCell) else {
-                retry(attemptsRemaining, action: waitForDateCell) { [self] in
-                    "failed: 无法用真实鼠标事件点击 \(surface.name) 日期"
-                }
-                return
-            }
-
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
-                waitForDateFocus()
+                guard let dateCell = AppViewTreeE2E.view(identifier: identifier) else {
+                    retry(attemptsRemaining, action: waitForDateCell) {
+                        "failed: \(self.surface.name) 日期单元在点击前离开真实 view tree"
+                    }
+                    return
+                }
+                let clickTarget = AppViewTreeE2E.button(overlapping: dateCell) ?? dateCell
+                guard AppViewTreeE2E.click(clickTarget) else {
+                    retry(attemptsRemaining, action: waitForDateCell) {
+                        "failed: 无法用真实鼠标事件点击 \(self.surface.name) 日期"
+                    }
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                    waitForDateFocus()
+                }
             }
         }
 

@@ -46,6 +46,7 @@ scenarios=(
   "zhulong-todo-diff-editor|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-todo-diff --e2e-open-zhulong-todo-diff-editor"
   "settings|settings|"
   "settings-groups|settings|--e2e-settings-groups"
+  "settings-sync|settings|--e2e-settings-sync"
 )
 
 requested_scenarios="${NOONMARK_E2E_SCENARIOS:-}"
@@ -185,7 +186,8 @@ guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindow
       let mainX = mainBounds["X"] as? Double,
       let mainY = mainBounds["Y"] as? Double,
       let mainWidth = mainBounds["Width"] as? Double,
-      let mainHeight = mainBounds["Height"] as? Double
+      let mainHeight = mainBounds["Height"] as? Double,
+      let mainProcessID = main[kCGWindowOwnerPID as String] as? Int
 else {
     exit(1)
 }
@@ -194,16 +196,16 @@ var best: (id: Int, area: Double)?
 for window in list {
     guard let number = window[kCGWindowNumber as String] as? Int,
           number != expectedID,
+          (window[kCGWindowOwnerPID as String] as? Int) == mainProcessID,
           let owner = window[kCGWindowOwnerName as String] as? String,
           owner == expectedOwner || owner == expectedDisplayName,
-          (window[kCGWindowLayer as String] as? Int ?? -1) == 0,
           let bounds = window[kCGWindowBounds as String] as? [String: Any],
           let x = bounds["X"] as? Double,
           let y = bounds["Y"] as? Double,
           let width = bounds["Width"] as? Double,
           let height = bounds["Height"] as? Double,
-          width >= 100,
-          height >= 80,
+          width >= 40,
+          height >= 40,
           width < mainWidth,
           height < mainHeight,
           x < mainX + mainWidth,
@@ -357,7 +359,11 @@ capture_app_screenshot() {
       dump_visible_windows >&2
       exit 1
     fi
-    screencapture -x -l "$auxiliary_window_id" "$screenshot"
+    warmup_screenshot="${screenshot}.warmup.png"
+    screencapture -x -l "$window_id" "$warmup_screenshot"
+    sleep 0.25
+    screencapture -x -l "$window_id" "$screenshot"
+    rm -f "$warmup_screenshot"
   else
     warmup_screenshot="${screenshot}.warmup.png"
     screencapture -x -l "$window_id" "$warmup_screenshot"
@@ -2156,7 +2162,7 @@ if [[ ! -s "$data_package_json" ]]; then
   exit 1
 fi
 
-read -r data_package_task data_package_review < <(
+read -r data_package_task data_package_review replaced_task sync_enabled < <(
   sqlite3 -separator " " "$data_package_db" "
     SELECT
       (SELECT count(*)
@@ -2168,15 +2174,66 @@ read -r data_package_task data_package_review < <(
       (SELECT count(*)
        FROM days
        WHERE date = '2026-07-05'
-         AND review_summary = 'E2E 数据包导出前复盘。'
-         AND review_unfinished_reason = '验证 App 导入导出。'
-         AND review_tomorrow_note = '导入后继续检查。');
+          AND review_summary = 'E2E 数据包导出前复盘。'
+          AND review_unfinished_reason = '验证 App 导入导出。'
+          AND review_tomorrow_note = '导入后继续检查。'),
+      (SELECT count(*)
+       FROM task_definitions
+       WHERE title = 'E2E 导入前替换任务'),
+      (SELECT value
+       FROM sync_settings
+       WHERE key = 'app.local_first_sync.enabled');
   "
 )
 
-if [[ "$data_package_task" -ne 1 || "$data_package_review" -ne 1 ]]; then
-  echo "data package e2e persistence failed: task=$data_package_task review=$data_package_review" >&2
+if [[ "$data_package_task" -ne 1 || "$data_package_review" -ne 1 || "$replaced_task" -ne 0 || "$sync_enabled" != "false" ]]; then
+  echo "data package e2e persistence failed: task=$data_package_task review=$data_package_review replaced=$replaced_task sync_enabled=$sync_enabled" >&2
   exit 1
 fi
 
-echo "E2E data package round-trip: $data_package_json -> $data_package_db (task=$data_package_task review=$data_package_review)"
+echo "E2E data package round-trip: $data_package_json -> $data_package_db (task=$data_package_task review=$data_package_review replaced=$replaced_task sync_enabled=$sync_enabled)"
+
+data_package_failure_dir="artifacts/e2e-data-package-import-failure"
+data_package_failure_db="${data_package_failure_dir}/Noonmark.sqlite"
+data_package_failure_json="${data_package_failure_dir}/rejected-import.json"
+data_package_failure_result="${data_package_failure_dir}/result.txt"
+rm -rf "$data_package_failure_dir"
+mkdir -p "$data_package_failure_dir"
+
+open -W -n "$app_path" --args \
+  --data-url "$PWD/$data_package_failure_db" \
+  --page settings \
+  --e2e-persistence-failure-automation \
+  --e2e-data-package-import-failure \
+  --e2e-data-package-url "$PWD/$data_package_failure_json" \
+  --e2e-data-package-result-url "$PWD/$data_package_failure_result" \
+  --e2e-quit-after-automation
+
+if [[ ! -f "$data_package_failure_result" ]]; then
+  echo "data package import-failure result was not created: $data_package_failure_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$data_package_failure_result")" != "ok" ]]; then
+  echo "data package import-failure e2e failed: $(cat "$data_package_failure_result")" >&2
+  exit 1
+fi
+
+read -r retained_task rejected_task < <(
+  sqlite3 -separator " " "$data_package_failure_db" "
+    SELECT
+      (SELECT count(*)
+       FROM task_definitions
+       WHERE title = 'E2E 导入失败保留任务'),
+      (SELECT count(*)
+       FROM task_definitions
+       WHERE title = 'E2E 不应落盘的导入任务');
+  "
+)
+
+if [[ "$retained_task" -ne 1 || "$rejected_task" -ne 0 ]]; then
+  echo "data package import-failure rollback failed: retained=$retained_task rejected=$rejected_task" >&2
+  exit 1
+fi
+
+echo "E2E data package import rollback: $data_package_failure_db (retained=$retained_task rejected=$rejected_task)"

@@ -66,6 +66,35 @@ final class SyncSnapshotDifferTests: XCTestCase {
         XCTAssertEqual(entries.map(\.entityID).last, "default")
     }
 
+    func testDeviceLocalConfigurationDoesNotCreatePreferenceSyncRecords() throws {
+        let engine = NoonmarkEngine()
+        let oldSnapshot = engine.snapshot()
+        engine.updateDataMode(.onlineFirst)
+        engine.updateBackupPolicy(
+            ScheduledBackupPolicy(frequency: .weekly, destination: .s3)
+        )
+        engine.updateLocalFirstSyncPolicy(
+            LocalFirstCloudSyncPolicy(
+                enabled: true,
+                endpoint: .localFolder,
+                mode: .automatic,
+                intervalSeconds: 90
+            )
+        )
+        engine.updateSettingsPoemDisplayPolicy(
+            SettingsPoemDisplayPolicy(enabled: false, text: "仅保留在本机")
+        )
+
+        let entries = try SyncSnapshotDiffer().journalEntries(
+            from: oldSnapshot,
+            to: engine.snapshot(),
+            changedAt: later,
+            deviceID: SyncDeviceID("mac-local-config")
+        )
+
+        XCTAssertTrue(entries.isEmpty)
+    }
+
     func testPoolNoteEditAndDeleteBecomeCurrentTaskChainSyncRecord() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(

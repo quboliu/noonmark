@@ -7,20 +7,20 @@
 - Mac 首发，SwiftUI 是不可变技术约束。
 - 本地优先，无账号、无网络也能完整使用核心功能。
 - 允许用户选择 **本地优先** 或 **在线优先** 作为主 **数据模式**；两者互斥，不能并行写入同一份任务事实。
-- 在线优先模式可以配置 **定时备份**，把当前数据导出成可恢复数据包到 iCloud Drive、S3 或其他对象存储；备份不是双向同步，也不是第二事实源。
+- 在线优先的 **定时备份** 是后续旁路能力；当前只能手动导出可恢复数据包。
 - 每个自然日都有可回看的 Day Todo。
 - 当前日任务可以执行、完成、变更、回池、废弃或延续。
 - 历史日轨迹不可删除、不可无痕改期、不可覆盖式编辑。
 - 未来计划可以调整，因为它尚未形成当日承诺。
 - 第一阶段只支持有限撤销，不能用撤销抹掉历史事实。
-- 一期只做手动数据包导出 / 导入和同步端点入口占位。
+- 当前提供经过写后校验的手动数据包导出 / 事务性导入，以及默认关闭的 iCloud Drive 记录同步；CloudKit、S3 与 WebDAV 仍未接入。
 - 烛龙是可选 sidecar；没有 AI provider 时普通清单功能必须完整可用。
 
 ## 数据模式与备份边界
 
 晷迹的数据模式分为两类：
 
-- **本地优先**：本机 SQLite 事实表是主要运行路径；同步底座只作为未来跨设备交换和诊断能力，不要求在线服务可用。
+- **本地优先**：本机 SQLite 事实表是主要运行路径；可选同步端点交换逐条记录，端点不可用时不影响本机核心功能。
 - **在线优先**：在线服务是主要运行路径；本机可以缓存和导出恢复包，但不再作为主同步事实源。
 
 约束：
@@ -29,7 +29,7 @@
 - 模式切换必须是显式操作，并且必须关闭另一套主同步链路。
 - 不允许本地优先同步和在线优先同步同时运行、同时写入、同时解决冲突。
 - 定时备份是旁路能力：它只把当前事实导出成可恢复数据包，不接收远端变更，不参与冲突合并。
-- 在线优先允许开启定时备份到 iCloud Drive、S3 或用户配置的对象存储；这不违反主数据模式互斥。
+- 在线优先的定时备份仍是规划项；接入后也只能旁路导出，不能参与双向 merge。
 
 ## 第一屏信息架构
 
@@ -470,7 +470,8 @@ func listSyncEndpointOptions() -> [SyncEndpointOption]
 
 - 第一期外观主题为冷灰和微暖纸感。
 - 第一期界面语言为中文和 English。
-- 自定义同步端点和 iCloud 云同步是规划中入口，不能表现为已可用同步。
+- iCloud Drive 记录仓库与本地文件夹是显式启用的开发期端点；无 Apple Account 时 iCloud 必须显示不可用。
+- 自定义服务、S3、WebDAV 与最终 CloudKit adapter 是规划中入口，不能表现为已可用。
 
 ### SubtaskUseCase
 
@@ -546,15 +547,21 @@ func confirmDailyReview(sessionId: ZhulongSessionID) throws -> ZhulongDailyRevie
 
 ```swift
 func exportDataPackage(destination: URL) throws
-func importDataPackage(source: URL, mode: ImportMode) throws
+func importDataPackage(source: URL) throws
 func configureSyncEndpointPlaceholder(kind: SyncEndpointKind, location: String?) throws
+func setLocalFirstSyncEnabled(_ enabled: Bool) throws
+func syncLocalFirstNow() async throws
 ```
 
 约束：
 
-- 第一期只做手动导出 / 导入。
-- 第一期不做自动双向同步。
-- 第一期不直接同步裸 SQLite 文件。
+- 数据包只做手动导出 / 导入，不作为自动同步载体。
+- 数据包可以保留端点与触发偏好，但导入时必须把同步启用状态重置为关闭，由目标 Mac 的用户重新显式启用。
+- 导入不得与同步并发；必须先在当前 schema 的隔离 SQLite staging 中完成保存与回读，再以 SQLite 原子整库替换恢复目标。旧任务事实与旧同步运行态不得残留，目标 Mac 的设备身份必须保留；staging 或替换失败时，原数据库与内存状态都不得改变。
+- 本地优先记录同步默认关闭，只有用户显式启用后才允许手动或按持久化间隔触发。
+- 跨设备偏好记录只包含主题与语言；数据模式、同步开关、端点、间隔、备份策略和设置页诗文都是设备本地配置。
+- 当前 iCloud Drive 与本地文件夹端点交换逐条 canonical 记录；S3、WebDAV 与 CloudKit adapter 尚未接入。
+- 任何端点都不得直接同步裸 SQLite 文件。
 
 ### UndoUseCase
 
@@ -639,7 +646,7 @@ func canUndoLastLocalAction() -> Bool
 13. 未完成子任务随父任务延续复制到目标日期，并保留同一条子任务轨迹线。
 14. 已完成池的任务轨迹可展开查看每条子任务的开始日期、延续日期和完成日期。
 15. 每日复盘可补写，但不能改变统计事实。
-16. 数据包可导出并在空库导入后恢复核心数据。
+16. 数据包导出必须写后回读；在非空库导入后必须精确恢复核心数据、移除导入前旧事实并关闭同步，任何 staging 或替换失败都必须保留原数据库与内存状态。
 17. `Cmd+Z` 只能撤销当前日或计划草稿误操作，不能抹掉历史轨迹事实。
 18. 未配置 AI provider 时，Day Todo、任务池、未来计划、未完成池、已完成池和每日复盘仍完整可用。
 19. 烛龙可以在当前会话中形成复盘、规划与 Todo 变更 diff，但不能未经当前版本确认能力写入任务事实。

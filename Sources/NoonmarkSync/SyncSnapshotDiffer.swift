@@ -329,7 +329,9 @@ public struct SyncSnapshotDiffer: Sendable {
         )
         entities += changedSubtasks(from: oldSnapshot.subtasks, to: newSnapshot.subtasks)
 
-        if oldSnapshot.preferences != newSnapshot.preferences {
+        let themeChanged = oldSnapshot.preferences.theme != newSnapshot.preferences.theme
+        let languageChanged = oldSnapshot.preferences.language != newSnapshot.preferences.language
+        if themeChanged || languageChanged {
             entities.append(ChangedEntity(type: .appPreferences, id: "default"))
         }
 

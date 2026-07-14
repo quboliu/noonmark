@@ -252,6 +252,46 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         XCTAssertEqual(restored, [replacement])
     }
 
+    func testFetchAllConvergesAnICloudConflictCopyForCurrentRecords() async throws {
+        let folderURL = makeFolderURL()
+        let first = ordinaryRecord(variant: "first")
+        let replacement = ordinaryRecord(variant: "replacement")
+        let transport = LocalFolderSyncTransport(rootURL: folderURL)
+        try await transport.push([first])
+        try writeConflictCopy(replacement, to: folderURL)
+
+        let restored = try await transport.fetchAll()
+
+        XCTAssertEqual(restored, [replacement])
+    }
+
+    func testFetchAllRejectsADivergentImmutableICloudConflictCopy() async throws {
+        let folderURL = makeFolderURL()
+        let first = immutableRecord(
+            entityType: .classificationCommit,
+            id: "icloud-immutable-conflict",
+            variant: "first"
+        )
+        let collision = immutableRecord(
+            entityType: .classificationCommit,
+            id: "icloud-immutable-conflict",
+            variant: "second"
+        )
+        let transport = LocalFolderSyncTransport(rootURL: folderURL)
+        try await transport.push([first])
+        try writeConflictCopy(collision, to: folderURL)
+
+        do {
+            _ = try await transport.fetchAll()
+            XCTFail("不可变 iCloud 冲突副本应 fail-closed")
+        } catch {
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .immutableRecordCollision(recordID: first.id)
+            )
+        }
+    }
+
     func testOrdinaryCurrentRecordIgnoresLateStaleWriteAcrossTransports() async throws {
         let newer = ordinaryRecord(
             modifiedAt: now.addingTimeInterval(10),
@@ -2018,6 +2058,16 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         )
         .filter { $0.pathExtension == "json" }
         return try XCTUnwrap(recordURLs.only)
+    }
+
+    private func writeConflictCopy(_ record: SyncRecord, to folderURL: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let conflictURL = folderURL
+            .appendingPathComponent("records", isDirectory: true)
+            .appendingPathComponent("icloud conflicted copy \(UUID().uuidString).json")
+        try encoder.encode(record).write(to: conflictURL, options: .atomic)
     }
 
     private func makeFolderURL() -> URL {

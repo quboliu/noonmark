@@ -1,12 +1,14 @@
 # iCloud 同步调研与实施方案
 
-最新确认日期：2026-07-07
+最新确认日期：2026-07-14
 
 本文调研晷迹在 macOS 与未来 iOS / iPadOS 平台上实装 iCloud 同步的可行方案，并给出推荐架构、坑点、限制、落地步骤和验证策略。结论基于当前仓库源码、既有 ADR、Apple 官方文档和公开应用案例。
 
 ## 结论
 
 晷迹推荐采用 **CloudKit private database + CKSyncEngine + 自有 SQLite / NoonmarkCore 合并层**。
+
+2026-07-14 的当前实现先提供默认关闭的 **iCloud Drive 逐记录仓库端点**，用于验证通用同步协议、真实 App 事务边界和 Apple 系统上传。它不复制 SQLite，也不使用整个 JSON 数据包做同步；同时它不是最终 CloudKit adapter，不得据此删除下文的 CloudKit 发布门禁。决策与风险边界见 `docs/adr/0018-opt-in-icloud-drive-record-repository-before-cloudkit.md`。
 
 不推荐：
 
@@ -33,20 +35,21 @@
 
 当前仓库已有基础：
 
-- `docs/adr/0002-local-first-manual-data-packages-before-sync.md` 明确：一期本地优先，只做手动数据包，不直接同步裸 SQLite。
+- `docs/adr/0002-local-first-manual-data-packages-before-sync.md` 记录最初“先手动数据包”的基线；后续 `0008` 建立通用同步底座，`0018` 决定在 CloudKit 前显式启用 iCloud Drive 逐记录仓库。三者都禁止同步裸 SQLite。
 - `docs/adr/0004-use-insert-only-relational-model-not-event-sourcing.md` 明确：事实表是事实来源，`change_journal` 只能作为未来同步和诊断辅助流水，不是事实来源。
 - `NoonmarkCore` 已有稳定 ID、日期值对象、任务链、任务定义、日轨迹、子任务、每日复盘和偏好。
 - `NoonmarkStorage` 已有 `SQLiteEngineRepository`、`NoonmarkDataPackage`、`sync_settings` 表和 `sync_endpoint_options_view`；TaskChain 与 DayTrace 的结构化附言分别保存在 `note_entries_json`，不是单一文本字段。TaskDefinition 不存附言。
-- 设置页已展示“自定义同步端点”和“iCloud 云同步”，当前均标记为规划中。
+- `NoonmarkSync` 已有设备身份、canonical records、journal、等待队列、terminal ledger、冲突、审计、确定性 merge、Local Folder 与 iCloud Drive transport。
+- 当前 `AppPreferencesRecord` payload 已收窄为主题与语言；数据模式和同步配置不写入 journal payload，远端合并也保留本机配置。
+- 设置页可显式启用 / 关闭 iCloud Drive 记录同步，支持手动 / 自动触发，并展示等待、失败和未解决冲突计数；S3、WebDAV 与自定义服务仍标记为规划中。
+- `scripts/test-icloud-sync-live` 已验证双 SQLite 合并、真实 `.app`、同步 metadata、仓库 ref 与 CloudDocs 上传完成信号。
 
 当前缺口：
 
 - 没有 CloudKit entitlement、container、schema、record mapping。
-- 没有设备 ID、同步游标、server change token、本地待上传队列。
-- 没有变更 journal 表。
-- 没有冲突表、冲突 UI、同步状态 UI。
-- 没有 iCloud account status / quota / throttle / retry 处理。
-- 没有真实双设备同步测试。
+- 没有 CloudKit server change token、zone lifecycle、push、quota、throttle 与 `retryAfterSeconds` 处理。
+- 已有冲突持久化与计数，但没有面向用户的冲突处理列表。
+- 没有两台物理设备的到达、离线并发与恢复测试。
 
 ## 外部方案调研
 
@@ -446,16 +449,16 @@ CREATE TABLE sync_audit_log (
 - 有冲突时右侧详情或设置页能打开冲突列表。
 - 关闭同步不删除本地 SQLite 数据。
 
-### Live CloudKit 手动测试
+### Live iCloud 手动测试
 
 新增类似 `scripts/test-ai-provider-live` 的显式入口：
 
 - `scripts/test-icloud-sync-live`
-- 必须显式设置环境变量，例如 `NOONMARK_ICLOUD_LIVE=1`。
+- 当前入口内部显式设置 `NOONMARK_LIVE_ICLOUD_SYNC=1`，默认不运行。
 - 默认不进入 `make check`。
-- 使用专门测试 container 或 development environment。
-- 必须能清理测试 zone / records。
-- 缺少 entitlement、iCloud account、container 或真实设备时 fail-closed，不得假装通过。
+- 当前 iCloud Drive 阶段使用隔离测试目录，并由 clean-cut 清理固定 App 仓库。
+- 必须验证 coordinator merge、真实 `.app`、SQLite metadata、仓库 ref 和系统上传完成；任何一层缺失都失败。
+- CloudKit adapter 接入后仍需专门 development container、zone 清理和物理设备测试；缺少 entitlement、account、container 或真实设备时不得假装通过。
 
 ## 实施里程碑
 
@@ -463,7 +466,7 @@ CREATE TABLE sync_audit_log (
 
 - 落地本文。
 - 新增 ADR：采用 CloudKit private database + CKSyncEngine，不同步裸 SQLite。
-- 更新功能规格，把 iCloud 从“规划中”改成“下一阶段实施中”的边界。
+- 更新功能规格，区分已可显式启用的 iCloud Drive 记录仓库与仍属下一阶段的 CloudKit adapter。
 
 ### M1：本地同步骨架
 

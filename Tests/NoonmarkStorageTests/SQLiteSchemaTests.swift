@@ -1,5 +1,6 @@
 import NoonmarkCore
 @testable import NoonmarkStorage
+import NoonmarkSync
 import XCTest
 
 final class SQLiteSchemaTests: XCTestCase {
@@ -224,6 +225,70 @@ final class SQLiteSchemaTests: XCTestCase {
             restored.traces[continuedTraceID]?.noteEntries.first(where: { $0.id == deletedNoteID })?.body,
             ""
         )
+    }
+
+    func testDataImportReplacementRemovesOldRowsAndResetsSyncState() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noonmark-import-replace-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let identity = SyncDeviceIdentity(
+            displayName: "Import Test Mac",
+            createdAt: now
+        )
+        let oldEngine = NoonmarkEngine()
+        _ = try oldEngine.createPoolTask(title: "导入前旧任务", now: now)
+        try syncRepository.saveDeviceIdentity(identity)
+        try repository.save(
+            oldEngine.snapshot(),
+            recordingChangesFor: identity.deviceID
+        )
+        try syncRepository.saveMetadata(
+            SyncMetadataEntry(key: "old.sync.status", value: Data("old".utf8))
+        )
+        XCTAssertFalse(try syncRepository.journalEntries().isEmpty)
+
+        let importedEngine = NoonmarkEngine()
+        _ = try importedEngine.createPoolTask(title: "数据包任务", now: now)
+        try repository.replaceForDataImport(
+            importedEngine.snapshot(),
+            preserving: identity
+        )
+
+        XCTAssertEqual(try repository.load().snapshot(), importedEngine.snapshot())
+        XCTAssertEqual(try syncRepository.loadDeviceIdentity(), identity)
+        XCTAssertTrue(try syncRepository.journalEntries().isEmpty)
+        XCTAssertNil(try syncRepository.metadata(for: "old.sync.status"))
+    }
+
+    func testDataImportStagingFailureLeavesExistingDatabaseUnchanged() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noonmark-import-rollback-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let existingEngine = NoonmarkEngine()
+        _ = try existingEngine.createPoolTask(title: "必须保留的任务", now: now)
+        try repository.save(existingEngine)
+
+        let invalidEngine = NoonmarkEngine()
+        _ = try invalidEngine.createPoolTask(title: "无效导入任务", now: now)
+        var invalidSnapshot = invalidEngine.snapshot()
+        invalidSnapshot.chains.removeAll()
+
+        XCTAssertThrowsError(
+            try repository.replaceForDataImport(
+                invalidSnapshot,
+                preserving: nil
+            )
+        )
+        XCTAssertEqual(try repository.load().snapshot(), existingEngine.snapshot())
     }
 }
 

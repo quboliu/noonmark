@@ -5,3 +5,45 @@ scripts/reset-dev-data
 export NOONMARK_LIVE_ICLOUD_SYNC=1
 
 swift test --filter ICloudDriveLocalFirstSyncLiveTests/testTwoSQLiteStoresSyncThroughRealICloudDriveEndpoint
+
+scripts/build-mac-app debug e2e >/dev/null
+
+artifact_dir="artifacts/e2e-icloud-sync-live"
+database_path="$artifact_dir/Noonmark.sqlite"
+result_path="$artifact_dir/result.txt"
+upload_log="$(mktemp -t noonmark-icloud-upload.XXXXXX)"
+rm -rf "$artifact_dir"
+mkdir -p "$artifact_dir"
+trap 'rm -f "$upload_log"' EXIT
+
+open -W -n "$PWD/dist/NoonmarkMacAppE2E.app" --args \
+  --data-url "$PWD/$database_path" \
+  --page settings \
+  --e2e-icloud-sync-live \
+  --e2e-icloud-sync-result-url "$PWD/$result_path"
+
+if [[ ! -f "$result_path" || "$(cat "$result_path")" != "ok" ]]; then
+  echo "real App iCloud sync failed: $(cat "$result_path" 2>/dev/null || echo missing-result)" >&2
+  exit 1
+fi
+
+sync_metadata_count="$(sqlite3 -noheader "$database_path" \
+  "SELECT count(*) FROM sync_metadata WHERE key = 'localFirst.sync.lastStatus';")"
+if [[ "$sync_metadata_count" -ne 1 ]]; then
+  echo "real App iCloud sync metadata was not persisted" >&2
+  exit 1
+fi
+
+icloud_repository="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Noonmark/SyncRepository"
+if [[ ! -s "$icloud_repository/refs/latest" ]]; then
+  echo "real App iCloud repository latest ref is missing" >&2
+  exit 1
+fi
+
+brctl monitor -t 60 -w com.apple.CloudDocs >"$upload_log"
+if ! grep -q "all items are now uploaded" "$upload_log"; then
+  echo "iCloud Drive did not confirm upload completion within 60 seconds" >&2
+  exit 1
+fi
+
+echo "Live iCloud sync: coordinator merge, real App path, persisted status, and CloudDocs upload confirmed"

@@ -31,6 +31,56 @@ final class SyncRecordMergerTests: XCTestCase {
         XCTAssertEqual(restored.getDayTodo(date: today).traces.first?.id, traceID)
     }
 
+    func testPreferenceRecordPreservesDeviceLocalConfiguration() throws {
+        let local = NoonmarkEngine()
+        local.updateDataMode(.onlineFirst)
+        local.updateBackupPolicy(
+            ScheduledBackupPolicy(frequency: .weekly, destination: .s3)
+        )
+        local.updateLocalFirstSyncPolicy(
+            LocalFirstCloudSyncPolicy(
+                enabled: true,
+                endpoint: .localFolder,
+                mode: .automatic,
+                intervalSeconds: 90
+            )
+        )
+        local.updateSettingsPoemDisplayPolicy(
+            SettingsPoemDisplayPolicy(enabled: false, text: "本机诗文")
+        )
+        let localPreferences = local.preferences
+        let remotePreferences = AppPreferences(
+            theme: .warmPaper,
+            language: .english,
+            dataMode: .localFirst,
+            localFirstSyncPolicy: LocalFirstCloudSyncPolicy(
+                enabled: false,
+                endpoint: .iCloud,
+                mode: .manual
+            )
+        )
+        let mapper = SyncRecordMapper()
+        let record = try mapper.record(
+            for: AppPreferencesEnvelope(
+                preferences: remotePreferences,
+                updatedAt: now
+            ),
+            modifiedBy: SyncDeviceID("remote-preferences")
+        )
+
+        let result = SyncRecordMerger(mapper: mapper).merge(
+            records: [record],
+            into: local.snapshot(),
+            detectedAt: now
+        )
+        var expectedPreferences = localPreferences
+        expectedPreferences.theme = .warmPaper
+        expectedPreferences.language = .english
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertEqual(result.snapshot.preferences, expectedPreferences)
+    }
+
     func testTaskChainNotesMergeByStableIdentityAndTombstone() throws {
         let base = NoonmarkEngine()
         let chainID = try base.createPoolTask(

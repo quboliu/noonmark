@@ -3,6 +3,11 @@ import Darwin
 import Foundation
 
 public actor LocalFolderSyncTransport: SyncRecordTransport {
+    private struct StoredRecordFile {
+        var data: Data
+        var record: SyncRecord
+    }
+
     private let rootURL: URL
     private let fileManager: FileManager
     private let encoder: JSONEncoder
@@ -25,14 +30,13 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         guard records.isEmpty == false else { return }
 
         try withExclusiveRepositoryLock {
-            let existingRecords = try storedRecords()
+            let storedFiles = try storedRecordFiles()
+            let existingRecords = try canonicalRecords(from: storedFiles)
             try ImmutableSyncRecordCASPreflight.validate(
-                existing: try existingRecords.map {
+                existing: storedFiles.map {
                     ImmutableSyncRecordCASCandidate(
-                        record: $0,
-                        exactData: try Data(
-                            contentsOf: recordURL(for: $0.id)
-                        )
+                        record: $0.record,
+                        exactData: $0.data
                     )
                 },
                 incoming: try records.map {
@@ -73,6 +77,10 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     }
 
     private func storedRecords() throws -> [SyncRecord] {
+        try canonicalRecords(from: storedRecordFiles())
+    }
+
+    private func storedRecordFiles() throws -> [StoredRecordFile] {
         let recordDirectory = recordsURL
         guard fileManager.fileExists(atPath: recordDirectory.path) else { return [] }
         return try fileManager.contentsOfDirectory(
@@ -80,8 +88,65 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
             includingPropertiesForKeys: nil
         )
         .filter { $0.pathExtension == "json" }
-        .map { try decoder.decode(SyncRecord.self, from: Data(contentsOf: $0)) }
-        .sorted {
+        .map {
+            let data = try Data(contentsOf: $0)
+            return StoredRecordFile(
+                data: data,
+                record: try decoder.decode(SyncRecord.self, from: data)
+            )
+        }
+    }
+
+    private func canonicalRecords(
+        from storedFiles: [StoredRecordFile]
+    ) throws -> [SyncRecord] {
+        let grouped = Dictionary(grouping: storedFiles, by: { $0.record.id })
+        for (recordID, candidates) in grouped where candidates.count > 1 {
+            guard let first = candidates.first else { continue }
+            let requiresImmutableCAS = candidates.contains {
+                $0.record.entityType.requiresImmutableRecordPayload
+            }
+            if requiresImmutableCAS {
+                guard candidates.dropFirst().allSatisfy({ candidate in
+                    candidate.record.exactlyMatches(first.record)
+                        && candidate.data == first.data
+                }) else {
+                    throw SyncRecordTransportError.immutableRecordCollision(
+                        recordID: recordID
+                    )
+                }
+            }
+        }
+
+        let batch = try currentRecordMerger.prepareTransportBatch(
+            existingRecords: [],
+            incomingRecords: storedFiles.map(\.record)
+        )
+        var canonicalByID: [SyncRecordID: SyncRecord] = [:]
+        for record in batch.records {
+            guard let existing = canonicalByID[record.id] else {
+                canonicalByID[record.id] = record
+                continue
+            }
+            let requiresImmutableCAS = existing.entityType.requiresImmutableRecordPayload
+                || record.entityType.requiresImmutableRecordPayload
+            if requiresImmutableCAS {
+                continue
+            }
+            do {
+                canonicalByID[record.id] = try currentRecordMerger.merge(
+                    existing: existing,
+                    incoming: record,
+                    context: batch.mergeContext
+                )
+            } catch {
+                throw SyncRecordTransportError.invalidCurrentRecordMerge(
+                    recordID: record.id
+                )
+            }
+        }
+
+        return canonicalByID.values.sorted {
             if $0.entityType.rawValue != $1.entityType.rawValue {
                 return $0.entityType.rawValue < $1.entityType.rawValue
             }

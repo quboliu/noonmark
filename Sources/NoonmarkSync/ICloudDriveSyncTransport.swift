@@ -2,6 +2,21 @@ import Foundation
 
 public enum ICloudDriveSyncTransportError: Error, Equatable, Sendable {
     case unavailable
+    case accountUnavailable
+    case driveUnavailable
+}
+
+extension ICloudDriveSyncTransportError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            "当前同步端点不可用。"
+        case .accountUnavailable:
+            "iCloud Drive 不可用：请先登录 Apple Account 并开启 iCloud Drive。"
+        case .driveUnavailable:
+            "找不到 iCloud Drive 本机目录，请在系统设置中确认 iCloud Drive 已启用。"
+        }
+    }
 }
 
 public actor ICloudDriveSyncTransport: SyncRecordTransport {
@@ -27,16 +42,34 @@ public actor ICloudDriveSyncTransport: SyncRecordTransport {
         repositoryName: String = ICloudDriveSyncTransport.defaultRepositoryName,
         fileManager: FileManager = .default
     ) throws -> URL {
-        if let ubiquitousURL = fileManager.url(forUbiquityContainerIdentifier: nil) {
-            return ubiquitousURL
+        let cloudDocsURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
+        return try resolvedRootURL(
+            repositoryName: repositoryName,
+            ubiquitousContainerURL: fileManager.url(forUbiquityContainerIdentifier: nil),
+            cloudDocsURL: cloudDocsURL,
+            hasICloudAccount: fileManager.ubiquityIdentityToken != nil,
+            cloudDocsExists: fileManager.fileExists(atPath: cloudDocsURL.path)
+        )
+    }
+
+    nonisolated static func resolvedRootURL(
+        repositoryName: String,
+        ubiquitousContainerURL: URL?,
+        cloudDocsURL: URL,
+        hasICloudAccount: Bool,
+        cloudDocsExists: Bool
+    ) throws -> URL {
+        guard hasICloudAccount else {
+            throw ICloudDriveSyncTransportError.accountUnavailable
+        }
+        if let ubiquitousContainerURL {
+            return ubiquitousContainerURL
                 .appendingPathComponent("Documents", isDirectory: true)
                 .appendingPathComponent(repositoryName, isDirectory: true)
         }
-
-        let cloudDocsURL = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
-        guard fileManager.fileExists(atPath: cloudDocsURL.path) else {
-            throw ICloudDriveSyncTransportError.unavailable
+        guard cloudDocsExists else {
+            throw ICloudDriveSyncTransportError.driveUnavailable
         }
         return cloudDocsURL.appendingPathComponent(repositoryName, isDirectory: true)
     }

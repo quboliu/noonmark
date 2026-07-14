@@ -27,6 +27,38 @@ final class SyncRecordMapperTests: XCTestCase {
         XCTAssertEqual(decodedTrace, try XCTUnwrap(engine.snapshot().traces.first))
     }
 
+    func testPreferenceRecordContainsOnlyCrossDeviceAppearanceFields() throws {
+        var preferences = AppPreferences(
+            theme: .warmPaper,
+            language: .english,
+            dataMode: .onlineFirst
+        )
+        preferences.localFirstSyncPolicy = LocalFirstCloudSyncPolicy(
+            enabled: true,
+            endpoint: .localFolder,
+            mode: .automatic
+        )
+        let mapper = SyncRecordMapper()
+        let record = try mapper.record(
+            for: AppPreferencesEnvelope(
+                preferences: preferences,
+                updatedAt: now
+            ),
+            modifiedBy: SyncDeviceID("mac-private-config")
+        )
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: record.payload) as? [String: Any]
+        )
+        let payload = try XCTUnwrap(object["payload"] as? [String: Any])
+        let decoded = try mapper.decodeAppPreferences(record)
+
+        XCTAssertEqual(Set(payload.keys), ["theme", "language", "updatedAt"])
+        XCTAssertEqual(decoded.theme, .warmPaper)
+        XCTAssertEqual(decoded.language, .english)
+        XCTAssertEqual(decoded.updatedAt, now)
+    }
+
     func testNoteMutationTimeDrivesTaskChainAndTraceRecordFreshness() throws {
         let noteUpdatedAt = now.addingTimeInterval(90)
         let chainEngine = NoonmarkEngine()

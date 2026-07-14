@@ -1,3 +1,4 @@
+import CryptoKit
 @testable import NoonmarkCore
 @testable import NoonmarkStorage
 import XCTest
@@ -20,6 +21,25 @@ final class DataPackageTests: XCTestCase {
         let restored = try NoonmarkEngine(snapshot: NoonmarkDataPackage.decode(data))
 
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
+    }
+
+    func testWriteVerifiesThePersistedPackageAndReturnsItsDigest() throws {
+        let snapshot = try makeEngine().snapshot()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noonmark-data-package-\(UUID().uuidString).json")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+
+        let receipt = try NoonmarkDataPackage.write(snapshot, to: url)
+        let persisted = try Data(contentsOf: url)
+        let expectedDigest = SHA256.hash(data: persisted)
+            .map { String(format: "%02x", $0) }
+            .joined()
+
+        XCTAssertEqual(receipt.byteCount, persisted.count)
+        XCTAssertEqual(receipt.sha256, expectedDigest)
+        XCTAssertEqual(try NoonmarkDataPackage.read(from: url), snapshot)
     }
 
     func testJSONDataPackageRequiresChainNoteEntries() throws {

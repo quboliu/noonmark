@@ -252,6 +252,7 @@ private struct LaunchAutomation {
         append(LifecycleRestartE2EAutomation.fromCommandLine(), to: &actions)
         append(ReactivationAtomicityE2EAutomation.fromCommandLine(), to: &actions)
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
+        append(ICloudSyncE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteMutationAtomicityE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteMutationAtomicityUIE2EAutomation.fromCommandLine(), to: &actions)
@@ -2714,12 +2715,25 @@ private enum SummarySidebarE2EAutomationError: LocalizedError {
 }
 
 private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode {
+        case roundTrip
+        case importPersistenceFailure
+    }
+
+    private let mode: Mode
     var exportURL: URL
     var resultURL: URL?
 
     @MainActor
     static func fromCommandLine() -> DataPackageE2EAutomation? {
-        guard CommandLine.arguments.contains("--e2e-data-package-workflow"),
+        let mode: Mode? = if CommandLine.arguments.contains("--e2e-data-package-workflow") {
+            .roundTrip
+        } else if CommandLine.arguments.contains("--e2e-data-package-import-failure") {
+            .importPersistenceFailure
+        } else {
+            nil
+        }
+        guard let mode,
               let exportPath = NoonmarkStore.commandLineValue(after: "--e2e-data-package-url")
         else {
             return nil
@@ -2727,6 +2741,7 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
         let resultURL = NoonmarkStore.commandLineValue(after: "--e2e-data-package-result-url")
             .map { URL(fileURLWithPath: $0) }
         return DataPackageE2EAutomation(
+            mode: mode,
             exportURL: URL(fileURLWithPath: exportPath),
             resultURL: resultURL
         )
@@ -2735,23 +2750,93 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
     @MainActor
     func run(on store: NoonmarkStore) {
         do {
-            let title = "E2E 数据包任务"
-            let chainID = try store.engine.createPoolTask(title: title, descriptionText: "E2E 数据包导出导入路径。")
-            _ = try store.engine.scheduleFromPool(chainID: chainID, date: store.today, today: store.today)
-            store.updateReview(
-                summary: "E2E 数据包导出前复盘。",
-                reason: "验证 App 导入导出。",
-                tomorrow: "导入后继续检查。"
-            )
-
-            try store.exportDataPackage(to: exportURL)
-
-            store.engine = NoonmarkEngine()
-            try store.importDataPackage(from: exportURL)
-
+            switch mode {
+            case .roundTrip:
+                try runRoundTrip(on: store)
+            case .importPersistenceFailure:
+                try runImportPersistenceFailure(on: store)
+            }
             try writeResult("ok")
         } catch {
+            store.disarmPersistenceFailureForE2E()
             try? writeResult("failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func runRoundTrip(on store: NoonmarkStore) throws {
+        let title = "E2E 数据包任务"
+        let chainID = try store.engine.createPoolTask(
+            title: title,
+            descriptionText: "E2E 数据包导出导入路径。"
+        )
+        _ = try store.engine.scheduleFromPool(
+            chainID: chainID,
+            date: store.today,
+            today: store.today
+        )
+        store.updateReview(
+            summary: "E2E 数据包导出前复盘。",
+            reason: "验证 App 导入导出。",
+            tomorrow: "导入后继续检查。"
+        )
+        var exportPolicy = store.engine.preferences.localFirstSyncPolicy
+        exportPolicy.enabled = true
+        exportPolicy.mode = .automatic
+        store.engine.updateLocalFirstSyncPolicy(exportPolicy)
+        var expected = store.engine.snapshot()
+        expected.preferences.localFirstSyncPolicy.enabled = false
+
+        try store.exportDataPackage(to: exportURL)
+
+        let replacedTitle = "E2E 导入前替换任务"
+        store.engine = NoonmarkEngine()
+        store.poolText = replacedTitle
+        store.addPoolTask()
+        guard store.engine.definitions.values.contains(where: { $0.title == replacedTitle }) else {
+            throw DataPackageE2EAutomationError.failed(
+                "未能建立导入前的持久化替换状态"
+            )
+        }
+        try store.importDataPackage(from: exportURL)
+        guard store.engine.snapshot() == expected else {
+            throw DataPackageE2EAutomationError.failed(
+                "导入后的完整 snapshot 与安全归一化后的导出 snapshot 不一致"
+            )
+        }
+    }
+
+    @MainActor
+    private func runImportPersistenceFailure(on store: NoonmarkStore) throws {
+        let baselineTitle = "E2E 导入失败保留任务"
+        _ = try store.engine.createPoolTask(
+            title: baselineTitle,
+            descriptionText: "导入写库失败后必须保留。"
+        )
+        store.persist()
+        let baseline = store.engine.snapshot()
+
+        let imported = NoonmarkEngine()
+        _ = try imported.createPoolTask(
+            title: "E2E 不应落盘的导入任务",
+            descriptionText: "这个 snapshot 必须被整体拒绝。"
+        )
+        try NoonmarkDataPackage.write(imported.snapshot(), to: exportURL)
+
+        try store.armPersistenceFailureForE2E()
+        do {
+            try store.importDataPackage(from: exportURL)
+            throw DataPackageE2EAutomationError.failed(
+                "导入写库失败却返回成功"
+            )
+        } catch is PersistenceFailureE2EError {
+            store.disarmPersistenceFailureForE2E()
+        }
+
+        guard store.engine.snapshot() == baseline else {
+            throw DataPackageE2EAutomationError.failed(
+                "导入写库失败后内存 snapshot 被替换"
+            )
         }
     }
 
@@ -2762,6 +2847,104 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
             withIntermediateDirectories: true
         )
         try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum DataPackageE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            message
+        }
+    }
+}
+
+private struct ICloudSyncE2EAutomation: LaunchAutomationRunnable {
+    let resultURL: URL
+
+    @MainActor
+    static func fromCommandLine() -> ICloudSyncE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-icloud-sync-live"),
+              let resultPath = NoonmarkStore.commandLineValue(
+                  after: "--e2e-icloud-sync-result-url"
+              )
+        else { return nil }
+        return ICloudSyncE2EAutomation(
+            resultURL: URL(fileURLWithPath: resultPath)
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        do {
+            guard store.isICloudDriveAvailable else {
+                throw ICloudSyncE2EAutomationError.failed(
+                    "iCloud Drive runtime endpoint is unavailable"
+                )
+            }
+            _ = try store.engine.createPoolTask(
+                title: "E2E 真实 iCloud App 同步",
+                descriptionText: "由真实 App 写入并等待系统上传。"
+            )
+            store.persist()
+            store.setLocalFirstSyncEndpoint(.iCloud)
+            store.setLocalFirstSyncMode(.manual)
+            store.setLocalFirstSyncEnabled(true)
+            guard store.engine.preferences.localFirstSyncPolicy.enabled else {
+                throw ICloudSyncE2EAutomationError.failed(
+                    "iCloud sync did not become enabled"
+                )
+            }
+            store.syncLocalFolderNow()
+            waitForCompletion(on: store)
+        } catch {
+            finish("failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func waitForCompletion(on store: NoonmarkStore) {
+        Task { @MainActor in
+            for _ in 0 ..< 300 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                let syncCompleted = store.isLocalFirstSyncing == false
+                    && store.localFirstSyncMessage?.hasPrefix("同步完成") == true
+                if syncCompleted {
+                    finish("ok")
+                    return
+                }
+            }
+            finish(
+                "failed: \(store.localFirstSyncMessage ?? "iCloud sync timed out without a status")"
+            )
+        }
+    }
+
+    @MainActor
+    private func finish(_ result: String) {
+        do {
+            try FileManager.default.createDirectory(
+                at: resultURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try result.write(to: resultURL, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("Noonmark iCloud E2E result write failed: %@", String(describing: error))
+        }
+        NSApp.terminate(nil)
+    }
+}
+
+private enum ICloudSyncE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            message
+        }
     }
 }
 
@@ -4287,6 +4470,17 @@ private enum PersistenceFailureE2EError: LocalizedError {
     }
 }
 
+private enum DataPackageImportError: LocalizedError {
+    case syncInProgress
+
+    var errorDescription: String? {
+        switch self {
+        case .syncInProgress:
+            "同步正在进行，完成后才能导入数据包。"
+        }
+    }
+}
+
 private struct EnginePersistenceCommitError: LocalizedError {
     let underlying: Error
 
@@ -4573,7 +4767,7 @@ final class NoonmarkStore: ObservableObject {
     let today = LocalDate("2026-07-05")
     private let repository: SQLiteEngineRepository?
     private let databaseURL: URL?
-    private let syncDeviceID: SyncDeviceID?
+    private let syncDeviceIdentity: SyncDeviceIdentity?
     private let permitsPersistenceFailureE2E: Bool
     lazy var zhulongWorkspace = ZhulongWorkspaceStore(
         directoryURL: zhulongSidecarDirectoryURL,
@@ -4593,17 +4787,20 @@ final class NoonmarkStore: ObservableObject {
         if CommandLine.arguments.contains("--ephemeral") {
             repository = nil
             databaseURL = nil
-            syncDeviceID = nil
+            syncDeviceIdentity = nil
             seed()
         } else {
             let configuredDatabaseURL = Self.configuredDatabaseURL()
             databaseURL = configuredDatabaseURL
             repository = SQLiteEngineRepository(databaseURL: configuredDatabaseURL)
-            syncDeviceID = Self.loadOrCreateSyncDeviceID(databaseURL: configuredDatabaseURL)
+            syncDeviceIdentity = Self.loadOrCreateSyncDeviceIdentity(
+                databaseURL: configuredDatabaseURL
+            )
             loadOrSeed()
         }
         recoverPendingZhulongApplication()
         Theme.apply(engine.preferences.theme)
+        restoreLocalFirstSyncStatus()
         restartLocalFirstSyncAutomation()
     }
 
@@ -5845,50 +6042,75 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func setDataMode(_ dataMode: AppDataMode) {
-        objectWillChange.send()
-        engine.updateDataMode(dataMode)
-        persist()
-        restartLocalFirstSyncAutomation()
-        showToast(copy.dataModeChangedToast(for: dataMode))
-    }
-
-    func setBackupFrequency(_ frequency: ScheduledBackupFrequency) {
-        objectWillChange.send()
-        var policy = engine.preferences.backupPolicy
-        policy.frequency = frequency
-        engine.updateBackupPolicy(policy)
-        persist()
-        showToast(copy.backupPolicyChangedToast)
-    }
-
-    func setBackupDestination(_ destination: BackupDestinationKind) {
-        objectWillChange.send()
-        var policy = engine.preferences.backupPolicy
-        policy.destination = destination
-        engine.updateBackupPolicy(policy)
-        persist()
-        showToast(copy.backupPolicyChangedToast)
+        guard engine.preferences.dataMode != dataMode else { return }
+        do {
+            try commitEngineMutation { candidate in
+                candidate.updateDataMode(dataMode)
+            }
+            restartLocalFirstSyncAutomation()
+            showToast(copy.dataModeChangedToast(for: dataMode))
+        } catch {
+            showToast(error.localizedDescription)
+        }
     }
 
     func setLocalFirstSyncEndpoint(_ endpoint: CloudSyncEndpointKind) {
-        objectWillChange.send()
+        guard engine.preferences.localFirstSyncPolicy.endpoint != endpoint else { return }
         var policy = engine.preferences.localFirstSyncPolicy
         policy.endpoint = endpoint
-        policy.enabled = endpoint == .iCloud || endpoint == .localFolder
-        engine.updateLocalFirstSyncPolicy(policy)
-        persist()
-        restartLocalFirstSyncAutomation()
-        showToast(copy.localFirstSyncChangedToast)
+        let endpointIsUnavailable = supportsRunnableLocalFirstSync(endpoint) == false
+            || (endpoint == .iCloud && isICloudDriveAvailable == false)
+        if endpointIsUnavailable {
+            policy.enabled = false
+        }
+        commitLocalFirstSyncPolicy(policy)
     }
 
     func setLocalFirstSyncMode(_ mode: CloudSyncMode) {
-        objectWillChange.send()
+        guard engine.preferences.localFirstSyncPolicy.mode != mode else { return }
         var policy = engine.preferences.localFirstSyncPolicy
         policy.mode = mode
-        engine.updateLocalFirstSyncPolicy(policy)
-        persist()
-        restartLocalFirstSyncAutomation()
-        showToast(copy.localFirstSyncChangedToast)
+        commitLocalFirstSyncPolicy(policy)
+    }
+
+    func setLocalFirstSyncEnabled(_ enabled: Bool) {
+        guard engine.preferences.localFirstSyncPolicy.enabled != enabled else { return }
+        var policy = engine.preferences.localFirstSyncPolicy
+        if enabled {
+            guard supportsRunnableLocalFirstSync(policy.endpoint) else {
+                showToast(copy.localFirstSyncUnavailableToast)
+                return
+            }
+            if policy.endpoint == .iCloud {
+                do {
+                    _ = try ICloudDriveSyncTransport.defaultRootURL()
+                } catch {
+                    localFirstSyncMessage = error.localizedDescription
+                    showToast(error.localizedDescription)
+                    return
+                }
+            }
+        }
+        policy.enabled = enabled
+        commitLocalFirstSyncPolicy(policy)
+    }
+
+    var isICloudDriveAvailable: Bool {
+        (try? ICloudDriveSyncTransport.defaultRootURL()) != nil
+    }
+
+    private func commitLocalFirstSyncPolicy(_ policy: LocalFirstCloudSyncPolicy) {
+        do {
+            try commitEngineMutation { candidate in
+                candidate.updateLocalFirstSyncPolicy(policy)
+            }
+            localFirstSyncMessage = nil
+            resetPersistedLocalFirstSyncStatus()
+            restartLocalFirstSyncAutomation()
+            showToast(copy.localFirstSyncChangedToast)
+        } catch {
+            showToast(error.localizedDescription)
+        }
     }
 
     func syncLocalFolderNow() {
@@ -5897,6 +6119,7 @@ final class NoonmarkStore: ObservableObject {
 
     private func runLocalFolderSync(showToastOnSuccess: Bool) {
         guard engine.preferences.dataMode == .localFirst,
+              engine.preferences.localFirstSyncPolicy.enabled,
               supportsRunnableLocalFirstSync(engine.preferences.localFirstSyncPolicy.endpoint)
         else {
             showToast(copy.localFirstSyncUnavailableToast)
@@ -5908,7 +6131,13 @@ final class NoonmarkStore: ObservableObject {
             return
         }
 
-        persist()
+        do {
+            try save(engine)
+        } catch {
+            localFirstSyncMessage = "同步前保存失败：\(error.localizedDescription)"
+            showToast(localFirstSyncMessage ?? error.localizedDescription)
+            return
+        }
         isLocalFirstSyncing = true
         localFirstSyncMessage = "同步中…"
         let endpoint = engine.preferences.localFirstSyncPolicy.endpoint
@@ -5920,14 +6149,27 @@ final class NoonmarkStore: ObservableObject {
                 )
                 let result = try await coordinator.sync()
                 let loaded = try SQLiteEngineRepository(databaseURL: databaseURL).load()
+                let unresolvedConflictCount = try SQLiteSyncRepository(
+                    databaseURL: databaseURL
+                ).unresolvedConflicts().count
                 await MainActor.run {
+                    let automationConfigurationChanged =
+                        engine.preferences.dataMode != loaded.preferences.dataMode
+                        || engine.preferences.localFirstSyncPolicy
+                            != loaded.preferences.localFirstSyncPolicy
                     engine = loaded
                     Theme.apply(engine.preferences.theme)
                     normalizeSelection()
                     isLocalFirstSyncing = false
-                    localFirstSyncMessage = copy.localFirstSyncResult(result)
+                    localFirstSyncMessage = copy.localFirstSyncResult(
+                        result,
+                        unresolvedConflictCount: unresolvedConflictCount
+                    )
                     if showToastOnSuccess {
-                        showToast(copy.localFirstSyncResult(result))
+                        showToast(localFirstSyncMessage ?? copy.localFirstSyncChangedToast)
+                    }
+                    if automationConfigurationChanged {
+                        restartLocalFirstSyncAutomation()
                     }
                 }
             } catch {
@@ -5969,16 +6211,61 @@ final class NoonmarkStore: ObservableObject {
         let intervalNanoseconds = UInt64(policy.intervalSeconds) * 1_000_000_000
         localFirstSyncAutomationTask = Task { [weak self] in
             while Task.isCancelled == false {
+                await MainActor.run {
+                    self?.runLocalFolderSync(showToastOnSuccess: false)
+                }
                 do {
                     try await Task.sleep(nanoseconds: intervalNanoseconds)
                 } catch {
                     return
                 }
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    self?.runLocalFolderSync(showToastOnSuccess: false)
-                }
             }
+        }
+    }
+
+    private func restoreLocalFirstSyncStatus() {
+        guard let databaseURL else { return }
+        let policy = engine.preferences.localFirstSyncPolicy
+        guard engine.preferences.dataMode == .localFirst,
+              policy.enabled,
+              supportsRunnableLocalFirstSync(policy.endpoint)
+        else {
+            localFirstSyncMessage = nil
+            return
+        }
+        if policy.endpoint == .iCloud {
+            do {
+                _ = try ICloudDriveSyncTransport.defaultRootURL()
+            } catch {
+                localFirstSyncMessage = error.localizedDescription
+                return
+            }
+        }
+        do {
+            let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+            guard let metadata = try syncRepository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            ) else { return }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let status = try decoder.decode(
+                SQLiteLocalFirstSyncStatus.self,
+                from: metadata.value
+            )
+            switch status {
+            case .idle:
+                localFirstSyncMessage = nil
+            case let .succeeded(result):
+                localFirstSyncMessage = copy.localFirstSyncResult(
+                    result,
+                    unresolvedConflictCount: try syncRepository.unresolvedConflicts().count
+                )
+            case let .failed(message, _):
+                localFirstSyncMessage = "同步失败：\(message)"
+            }
+        } catch {
+            NSLog("Noonmark sync status load failed: %@", String(describing: error))
+            localFirstSyncMessage = "无法读取上次同步状态：\(error.localizedDescription)"
         }
     }
 
@@ -5993,7 +6280,7 @@ final class NoonmarkStore: ObservableObject {
 
         do {
             try exportDataPackage(to: url)
-            showToast("已导出 \(url.lastPathComponent)")
+            showToast("已导出并校验 \(url.lastPathComponent)")
         } catch {
             showToast("导出失败：\(error.localizedDescription)")
         }
@@ -6016,20 +6303,72 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
-    func exportDataPackage(to url: URL) throws {
-        try NoonmarkDataPackage.write(engine.snapshot(), to: url)
+    @discardableResult
+    func exportDataPackage(to url: URL) throws -> DataPackageWriteReceipt {
+        try withSecurityScopedAccess(to: url) {
+            try NoonmarkDataPackage.write(engine.snapshot(), to: url)
+        }
     }
 
     func importDataPackage(from url: URL) throws {
-        let snapshot = try NoonmarkDataPackage.read(from: url)
-
-        pushUndoSnapshot()
-        engine = try NoonmarkEngine(snapshot: snapshot)
+        guard isLocalFirstSyncing == false else {
+            throw DataPackageImportError.syncInProgress
+        }
+        var snapshot = try withSecurityScopedAccess(to: url) {
+            try NoonmarkDataPackage.read(from: url)
+        }
+        snapshot.preferences.localFirstSyncPolicy.enabled = false
+        let importedEngine = try NoonmarkEngine(snapshot: snapshot)
+        localFirstSyncAutomationTask?.cancel()
+        localFirstSyncAutomationTask = nil
+        do {
+            try replacePersistedData(with: importedEngine)
+        } catch {
+            restartLocalFirstSyncAutomation()
+            throw error
+        }
+        undoStack.removeAll()
+        engine = importedEngine
         Theme.apply(engine.preferences.theme)
         selectedDate = today
         selectedCalendarDate = today
         clearSelection()
-        persist()
+        localFirstSyncMessage = nil
+        resetPersistedLocalFirstSyncStatus()
+        restartLocalFirstSyncAutomation()
+    }
+
+    private func resetPersistedLocalFirstSyncStatus(now: Date = Date()) {
+        guard let databaseURL else { return }
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try SQLiteSyncRepository(databaseURL: databaseURL).saveMetadata(
+                SyncMetadataEntry(
+                    key: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
+                    value: try encoder.encode(
+                        SQLiteLocalFirstSyncStatus.idle(since: now)
+                    ),
+                    updatedAt: now
+                )
+            )
+        } catch {
+            NSLog("Noonmark sync status reset failed: %@", String(describing: error))
+            localFirstSyncMessage = "无法重置同步状态：\(error.localizedDescription)"
+        }
+    }
+
+    private func withSecurityScopedAccess<Result>(
+        to url: URL,
+        _ operation: () throws -> Result
+    ) throws -> Result {
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try operation()
     }
 
     func saveZhulongProvider() {
@@ -6772,21 +7111,24 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
-    static func loadOrCreateSyncDeviceID(databaseURL: URL) -> SyncDeviceID {
+    static func loadOrCreateSyncDeviceIdentity(databaseURL: URL) -> SyncDeviceIdentity {
         let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
         do {
             if let identity = try syncRepository.loadDeviceIdentity() {
-                return identity.deviceID
+                return identity
             }
             let identity = SyncDeviceIdentity(
                 displayName: Host.current().localizedName,
                 createdAt: Date()
             )
             try syncRepository.saveDeviceIdentity(identity)
-            return identity.deviceID
+            return identity
         } catch {
             NSLog("Noonmark sync identity load failed: %@", String(describing: error))
-            return SyncDeviceID()
+            return SyncDeviceIdentity(
+                displayName: Host.current().localizedName,
+                createdAt: Date()
+            )
         }
     }
 
@@ -6931,14 +7273,26 @@ final class NoonmarkStore: ObservableObject {
             persistenceFailuresRemainingForE2E -= 1
             throw PersistenceFailureE2EError.injectedSaveFailure
         }
-        if let syncDeviceID {
+        if let syncDeviceIdentity {
             try repository.save(
                 candidate.snapshot(),
-                recordingChangesFor: syncDeviceID
+                recordingChangesFor: syncDeviceIdentity.deviceID
             )
         } else {
             try repository.save(candidate)
         }
+    }
+
+    private func replacePersistedData(with candidate: NoonmarkEngine) throws {
+        guard let repository else { return }
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
+        try repository.replaceForDataImport(
+            candidate.snapshot(),
+            preserving: syncDeviceIdentity
+        )
     }
 
     @discardableResult
@@ -7765,7 +8119,9 @@ struct AppCopy {
 
     var dataSectionTitle: String { language == .chinese ? "数据" : "Data" }
     var dataSectionSubtitle: String {
-        language == .chinese ? "导出和导入本机数据包。" : "Export and import local data packages."
+        language == .chinese
+            ? "导出经过校验的恢复包，或事务性导入。"
+            : "Export verified recovery packages or import transactionally."
     }
 
     var exportJSON: String { language == .chinese ? "导出数据 (JSON)" : "Export JSON" }
@@ -7777,12 +8133,13 @@ struct AppCopy {
     var syncTitle: String { language == .chinese ? "同步" : "Sync" }
     var syncSubtitle: String {
         language == .chinese
-            ? "本地优先使用云端点同步仓库；在线优先才允许旁路定时备份。"
-            : "Local-first uses a cloud sync endpoint; only online-first allows scheduled backup."
+            ? "本地优先可显式启用记录同步；在线优先的定时备份仍在规划中。"
+            : "Local-first can enable record sync; online-first scheduled backup is still planned."
     }
 
     var planned: String { language == .chinese ? "规划中" : "Planned" }
     var available: String { language == .chinese ? "可用" : "Available" }
+    var unavailable: String { language == .chinese ? "不可用" : "Unavailable" }
     var dataModeTitle: String { language == .chinese ? "数据模式" : "Data mode" }
     var localFirstMode: String { language == .chinese ? "本地优先" : "Local-first" }
     var onlineFirstMode: String { language == .chinese ? "在线优先" : "Online-first" }
@@ -7797,8 +8154,23 @@ struct AppCopy {
     var syncModeTitle: String { language == .chinese ? "同步触发" : "Sync trigger" }
     var syncManualMode: String { language == .chinese ? "手动" : "Manual" }
     var syncAutomaticMode: String { language == .chinese ? "自动" : "Automatic" }
-    var syncSnapshotPolicyTitle: String { language == .chinese ? "快照保留" : "Snapshot retention" }
-    var syncConflictCopyTitle: String { language == .chinese ? "冲突副本" : "Conflict copy" }
+    var localFirstSyncEnabled: String { language == .chinese ? "启用同步" : "Enable sync" }
+    var localFirstSyncDisabled: String { language == .chinese ? "同步已关闭" : "Sync is off" }
+    var syncAutomaticIntervalTitle: String { language == .chinese ? "自动间隔" : "Automatic interval" }
+    func syncAutomaticInterval(_ seconds: Int) -> String {
+        if seconds < 60 {
+            return language == .chinese ? "每 \(seconds) 秒" : "Every \(seconds) sec"
+        }
+        let minutes = seconds / 60
+        let remainingSeconds = seconds % 60
+        guard remainingSeconds > 0 else {
+            return language == .chinese ? "每 \(minutes) 分钟" : "Every \(minutes) min"
+        }
+        return language == .chinese
+            ? "每 \(minutes) 分 \(remainingSeconds) 秒"
+            : "Every \(minutes) min \(remainingSeconds) sec"
+    }
+
     var syncNow: String { language == .chinese ? "立即同步" : "Sync now" }
     var syncing: String { language == .chinese ? "同步中" : "Syncing" }
     var syncFolderPathTitle: String { language == .chinese ? "同步文件夹" : "Sync folder" }
@@ -7816,8 +8188,8 @@ struct AppCopy {
 
     var iCloudSyncReady: String {
         language == .chinese
-            ? "iCloud Drive 端点已接入：远端逻辑位置如下，本机路径是系统同步镜像。"
-            : "The iCloud Drive endpoint is active: the logical cloud location is below; the local path is the system-synced mirror."
+            ? "同步仓库已写入 iCloud Drive 本机镜像；云端上传由系统完成，可能存在短暂延迟。"
+            : "The repository is written to the local iCloud Drive mirror; system upload may be briefly delayed."
     }
 
     var remoteEndpointPlanned: String {
@@ -7843,21 +8215,15 @@ struct AppCopy {
 
     var localFirstSyncBoundary: String {
         language == .chinese
-            ? "参考思源：本机仍是事实源；同步前生成快照索引，远端只保存同步仓库对象。iCloud 和本地文件夹端点已可用，S3/WebDAV 继续按同一仓库协议接入。"
-            : "Following SiYuan: local data remains primary; sync creates snapshot indexes before exchanging repository objects. iCloud and local folder endpoints are available; S3/WebDAV will use the same repository protocol."
+            ? "本机 SQLite 仍是事实源；同步只交换经过校验的记录，并保留等待、失败与冲突状态。S3/WebDAV 尚未接入。"
+            : "Local SQLite remains authoritative. Sync exchanges validated records and retains waiting, failure, and conflict state. S3/WebDAV are not connected yet."
     }
 
     var scheduledBackupTitle: String { language == .chinese ? "定时备份" : "Scheduled backup" }
-    var backupDestinationTitle: String { language == .chinese ? "备份目标" : "Backup destination" }
-    var backupOff: String { language == .chinese ? "关闭" : "Off" }
-    var backupDaily: String { language == .chinese ? "每日" : "Daily" }
-    var backupWeekly: String { language == .chinese ? "每周" : "Weekly" }
-    var backupICloudDrive: String { language == .chinese ? "iCloud" : "iCloud" }
-    var backupS3: String { language == .chinese ? "S3" : "S3" }
     var backupBoundary: String {
         language == .chinese
-            ? "在线优先可定时导出本地可恢复数据包到 iCloud 或 S3；这不是双向同步。"
-            : "Online-first can export restorable local packages to iCloud or S3 on a schedule; this is not bidirectional sync."
+            ? "定时自动导出尚未接入。当前请在“数据”页手动导出经过校验的 JSON 恢复包。"
+            : "Scheduled export is not connected yet. Use Data to manually export a verified JSON recovery package."
     }
 
     var providerTitle: String { language == .chinese ? "烛龙配置" : "Zhulong Configuration" }
@@ -7889,15 +8255,21 @@ struct AppCopy {
     var save: String { language == .chinese ? "保存" : "Save" }
     var testConnection: String { language == .chinese ? "测试连接" : "Test" }
     var clear: String { language == .chinese ? "清空" : "Clear" }
-    var backupPolicyChangedToast: String { language == .chinese ? "备份策略已更新" : "Backup policy updated" }
     var localFirstSyncChangedToast: String { language == .chinese ? "本地优先同步设置已更新" : "Local-first sync settings updated" }
 
-    func localFirstSyncResult(_ result: SQLiteLocalFirstSyncResult) -> String {
-        switch language {
+    func localFirstSyncResult(
+        _ result: SQLiteLocalFirstSyncResult,
+        unresolvedConflictCount: Int? = nil
+    ) -> String {
+        let conflictCount = unresolvedConflictCount ?? result.download.conflictCount
+        let requiresAttention = result.upload.failedCount > 0
+            || result.download.waitingCount > 0
+            || conflictCount > 0
+        return switch language {
         case .chinese:
-            "同步完成：上传 \(result.upload.uploadedCount) 条，下载合并 \(result.download.appliedCount) 条，冲突 \(result.download.conflictCount) 条"
+            "\(requiresAttention ? "同步需处理" : "同步完成")：上传 \(result.upload.uploadedCount) 条，下载合并 \(result.download.appliedCount) 条，等待 \(result.download.waitingCount) 条，失败 \(result.upload.failedCount) 条，未解决冲突 \(conflictCount) 条"
         case .english:
-            "Sync complete: uploaded \(result.upload.uploadedCount), merged \(result.download.appliedCount), conflicts \(result.download.conflictCount)"
+            "\(requiresAttention ? "Sync needs attention" : "Sync complete"): uploaded \(result.upload.uploadedCount), merged \(result.download.appliedCount), waiting \(result.download.waitingCount), failed \(result.upload.failedCount), unresolved conflicts \(conflictCount)"
         }
     }
 
@@ -7973,12 +8345,12 @@ struct AppCopy {
     func syncDescription(for kind: SyncEndpointKind) -> String {
         switch (language, kind) {
         case (.chinese, .customEndpoint): "连接自有服务端"
-        case (.chinese, .iCloud): "使用 iCloud 作为同步仓库端点"
+        case (.chinese, .iCloud): "使用 iCloud Drive 记录仓库"
         case (.chinese, .s3): "使用兼容 S3 的对象存储"
         case (.chinese, .webDAV): "使用兼容 WebDAV 的远端目录"
         case (.chinese, .localFolder): "使用自管目录或局域网共享"
         case (.english, .customEndpoint): "Connect your own server"
-        case (.english, .iCloud): "Use iCloud as the sync repository endpoint"
+        case (.english, .iCloud): "Use an iCloud Drive record repository"
         case (.english, .s3): "Use S3-compatible object storage"
         case (.english, .webDAV): "Use a WebDAV-compatible remote directory"
         case (.english, .localFolder): "Use a managed folder or LAN share"
@@ -7995,21 +8367,6 @@ struct AppCopy {
         case (.english, .s3): "S3"
         case (.english, .webDAV): "WebDAV"
         case (.english, .localFolder): "Local folder"
-        }
-    }
-
-    func backupFrequencyTitle(for frequency: ScheduledBackupFrequency) -> String {
-        switch frequency {
-        case .off: backupOff
-        case .daily: backupDaily
-        case .weekly: backupWeekly
-        }
-    }
-
-    func backupDestinationTitle(for destination: BackupDestinationKind) -> String {
-        switch destination {
-        case .iCloudDrive: backupICloudDrive
-        case .s3: backupS3
         }
     }
 }
@@ -10010,74 +10367,76 @@ struct CalendarCell: View {
     var isToday: Bool { date == store.today }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
-                Text(verbatim: "\(date.day)")
-                    .font(.noonmarkSystem(size: 12.5, weight: isToday || selected ? .bold : .medium))
-                    .foregroundStyle(selected ? Theme.accent : traces.isEmpty ? Theme.text3 : Theme.text1)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                if isToday {
-                    Circle()
-                        .fill(Theme.accent)
-                        .frame(width: 4, height: 4)
-                }
-                Spacer()
-                if summary.total > 0 {
-                    RoundedRectangle(cornerRadius: 2.5)
-                        .fill(heatColor)
-                        .frame(width: 10, height: 10)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 1.5) {
-                ForEach(traces.prefix(6), id: \.id) { trace in
-                    HStack(spacing: 3) {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 4) {
+                    Text(verbatim: "\(date.day)")
+                        .font(.noonmarkSystem(size: 12.5, weight: isToday || selected ? .bold : .medium))
+                        .foregroundStyle(selected ? Theme.accent : traces.isEmpty ? Theme.text3 : Theme.text1)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                    if isToday {
                         Circle()
-                            .fill(dotColor(for: trace.status))
+                            .fill(Theme.accent)
                             .frame(width: 4, height: 4)
-                            .fixedSize()
-                        MarkdownInlineText(store.definition(for: trace)?.title ?? "")
-                            .font(.noonmarkSystem(size: 9.5))
-                            .foregroundStyle(titleColor(for: trace.status))
-                            .strikethrough(trace.status == .completed || trace.status == .abandoned)
-                            .lineLimit(1)
                     }
-                    .frame(height: 12, alignment: .leading)
+                    Spacer()
+                    if summary.total > 0 {
+                        RoundedRectangle(cornerRadius: 2.5)
+                            .fill(heatColor)
+                            .frame(width: 10, height: 10)
+                    }
                 }
-                if traces.count > 6 {
-                    Text("+\(traces.count - 6)")
-                        .font(.noonmarkSystem(size: 9))
-                        .foregroundStyle(Theme.text3)
-                        .padding(.leading, 7)
-                }
-            }
-            .padding(.top, 3)
 
-            Spacer()
-        }
-        .padding(.top, 5)
-        .padding(.horizontal, 6)
-        .padding(.bottom, 4)
-        .frame(height: height, alignment: .top)
-        .hoverSurface(
-            active: selected,
-            cornerRadius: 9,
-            idleFill: Theme.panel,
-            hoverFill: Theme.panel2,
-            activeFill: Theme.accentSoft,
-            idleStroke: isToday ? Theme.accent : Theme.line,
-            hoverStroke: isToday ? Theme.accent : Theme.line2,
-            activeStroke: Theme.accent
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 9))
-        .onTapGesture(perform: onSelect)
-        .background {
-            AppE2EViewAnchor(
-                identifier: "calendar.date-cell.\(date.description)",
-                verificationText: selected ? "selected" : ""
+                VStack(alignment: .leading, spacing: 1.5) {
+                    ForEach(traces.prefix(6), id: \.id) { trace in
+                        HStack(spacing: 3) {
+                            Circle()
+                                .fill(dotColor(for: trace.status))
+                                .frame(width: 4, height: 4)
+                                .fixedSize()
+                            MarkdownInlineText(store.definition(for: trace)?.title ?? "")
+                                .font(.noonmarkSystem(size: 9.5))
+                                .foregroundStyle(titleColor(for: trace.status))
+                                .strikethrough(trace.status == .completed || trace.status == .abandoned)
+                                .lineLimit(1)
+                        }
+                        .frame(height: 12, alignment: .leading)
+                    }
+                    if traces.count > 6 {
+                        Text("+\(traces.count - 6)")
+                            .font(.noonmarkSystem(size: 9))
+                            .foregroundStyle(Theme.text3)
+                            .padding(.leading, 7)
+                    }
+                }
+                .padding(.top, 3)
+
+                Spacer()
+            }
+            .padding(.top, 5)
+            .padding(.horizontal, 6)
+            .padding(.bottom, 4)
+            .frame(height: height, alignment: .top)
+            .hoverSurface(
+                active: selected,
+                cornerRadius: 9,
+                idleFill: Theme.panel,
+                hoverFill: Theme.panel2,
+                activeFill: Theme.accentSoft,
+                idleStroke: isToday ? Theme.accent : Theme.line,
+                hoverStroke: isToday ? Theme.accent : Theme.line2,
+                activeStroke: Theme.accent
             )
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "calendar.date-cell.\(date.description)",
+                    verificationText: selected ? "selected" : ""
+                )
+            }
         }
+        .buttonStyle(.plain)
     }
 
     var heatColor: Color {
@@ -10354,9 +10713,13 @@ struct SettingsPage: View {
     @State private var selectedPane: SettingsPane
 
     init() {
-        let initialPane: SettingsPane = CommandLine.arguments.contains("--e2e-settings-groups")
-            ? .groups
-            : .general
+        let initialPane: SettingsPane = if CommandLine.arguments.contains("--e2e-settings-groups") {
+            .groups
+        } else if CommandLine.arguments.contains("--e2e-settings-sync") {
+            .sync
+        } else {
+            .general
+        }
         _selectedPane = State(initialValue: initialPane)
     }
 
@@ -10635,9 +10998,33 @@ struct LocalFirstCloudSyncCard: View {
         store.engine.preferences.localFirstSyncPolicy
     }
 
+    private var syncEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { policy.enabled },
+            set: { enabled in store.setLocalFirstSyncEnabled(enabled) }
+        )
+    }
+
+    private var runtimeStatus: (text: String, color: Color) {
+        if policy.endpoint == .iCloud, store.isICloudDriveAvailable == false {
+            return (store.copy.unavailable, Theme.warn)
+        }
+        if policy.enabled {
+            return (store.copy.available, Theme.ok)
+        }
+        return (store.copy.localFirstSyncDisabled, Theme.text3)
+    }
+
     var body: some View {
         SettingSection(title: store.copy.localFirstSyncTitle) {
             VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Toggle(store.copy.localFirstSyncEnabled, isOn: syncEnabledBinding)
+                        .toggleStyle(.checkbox)
+                        .font(.noonmarkSystem(size: 12.5, weight: .medium))
+                    StatusPill(text: runtimeStatus.text, color: runtimeStatus.color)
+                    Spacer()
+                }
                 SettingSection(title: store.copy.syncEndpointTitle) {
                     SegmentedOptionRow(
                         options: CloudSyncEndpointKind.allCases,
@@ -10655,20 +11042,13 @@ struct LocalFirstCloudSyncCard: View {
                         rightAction: { store.setLocalFirstSyncMode(.automatic) }
                     )
                 }
-                VStack(alignment: .leading, spacing: 6) {
+                if policy.mode == .automatic {
                     SettingsInfoRow(
-                        label: store.copy.syncSnapshotPolicyTitle,
-                        value: "\(policy.snapshotRetention.indexRetentionDays) 天 / 每日 \(policy.snapshotRetention.retentionIndexesDaily) 个"
-                    )
-                    SettingsInfoRow(
-                        label: store.copy.syncConflictCopyTitle,
-                        value: policy.generateConflictCopy ? "开启" : "关闭",
+                        label: store.copy.syncAutomaticIntervalTitle,
+                        value: store.copy.syncAutomaticInterval(policy.intervalSeconds),
                         last: true
                     )
                 }
-                .padding(.horizontal, 10)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
                 if policy.endpoint == .iCloud || policy.endpoint == .localFolder {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
@@ -10678,8 +11058,16 @@ struct LocalFirstCloudSyncCard: View {
                             ) {
                                 store.syncLocalFolderNow()
                             }
-                            .disabled(store.isLocalFirstSyncing)
-                            Text(policy.endpoint == .iCloud ? store.copy.iCloudSyncReady : store.copy.localFolderSyncReady)
+                            .disabled(
+                                store.isLocalFirstSyncing
+                                    || policy.enabled == false
+                                    || (policy.endpoint == .iCloud && store.isICloudDriveAvailable == false)
+                            )
+                            Text(
+                                policy.enabled
+                                    ? (policy.endpoint == .iCloud ? store.copy.iCloudSyncReady : store.copy.localFolderSyncReady)
+                                    : store.copy.localFirstSyncDisabled
+                            )
                                 .font(.noonmarkSystem(size: 11.5))
                                 .foregroundStyle(Theme.text3)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -10736,21 +11124,7 @@ struct ScheduledBackupCard: View {
     var body: some View {
         SettingSection(title: store.copy.scheduledBackupTitle) {
             VStack(alignment: .leading, spacing: 10) {
-                SegmentedOptionRow(
-                    options: ScheduledBackupFrequency.allCases,
-                    selected: store.engine.preferences.backupPolicy.frequency,
-                    title: store.copy.backupFrequencyTitle(for:),
-                    action: store.setBackupFrequency
-                )
-                SettingSection(title: store.copy.backupDestinationTitle) {
-                    SegmentedPair(
-                        left: store.copy.backupDestinationTitle(for: .iCloudDrive),
-                        right: store.copy.backupDestinationTitle(for: .s3),
-                        leftSelected: store.engine.preferences.backupPolicy.destination == .iCloudDrive,
-                        leftAction: { store.setBackupDestination(.iCloudDrive) },
-                        rightAction: { store.setBackupDestination(.s3) }
-                    )
-                }
+                Notice(text: store.copy.planned, tone: .locked)
                 Text(store.copy.backupBoundary)
                     .font(.noonmarkSystem(size: 11.5))
                     .foregroundStyle(Theme.text3)
@@ -10766,6 +11140,8 @@ struct SyncOptionsCard: View {
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(store.engine.syncEndpointOptions().enumerated()), id: \.element.kind) { index, option in
+                let iCloudUnavailable = option.kind == .iCloud
+                    && store.isICloudDriveAvailable == false
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(store.copy.syncTitle(for: option.kind))
@@ -10777,8 +11153,12 @@ struct SyncOptionsCard: View {
                     }
                     Spacer()
                     StatusPill(
-                        text: store.copy.syncAvailabilityTitle(for: option.availability),
-                        color: option.availability == .available ? Theme.ok : Theme.text3
+                        text: iCloudUnavailable
+                            ? store.copy.unavailable
+                            : store.copy.syncAvailabilityTitle(for: option.availability),
+                        color: iCloudUnavailable
+                            ? Theme.warn
+                            : (option.availability == .available ? Theme.ok : Theme.text3)
                     )
                 }
                 .padding(.horizontal, 14)

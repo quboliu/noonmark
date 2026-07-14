@@ -1,5 +1,16 @@
+import CryptoKit
 import Foundation
 import NoonmarkCore
+
+public struct DataPackageWriteReceipt: Equatable, Sendable {
+    public let byteCount: Int
+    public let sha256: String
+
+    public init(byteCount: Int, sha256: String) {
+        self.byteCount = byteCount
+        self.sha256 = sha256
+    }
+}
 
 public enum NoonmarkDataPackage {
     private static let currentFormatVersion = 1
@@ -41,8 +52,25 @@ public enum NoonmarkDataPackage {
         return snapshot
     }
 
-    public static func write(_ snapshot: NoonmarkSnapshot, to url: URL) throws {
-        try encode(snapshot).write(to: url, options: .atomic)
+    @discardableResult
+    public static func write(
+        _ snapshot: NoonmarkSnapshot,
+        to url: URL
+    ) throws -> DataPackageWriteReceipt {
+        let encoded = try encode(snapshot)
+        try encoded.write(to: url, options: .atomic)
+        let persisted = try Data(contentsOf: url)
+        guard persisted == encoded else {
+            throw DataPackageError.writeVerificationFailed
+        }
+        _ = try decode(persisted)
+        let digest = SHA256.hash(data: persisted)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return DataPackageWriteReceipt(
+            byteCount: persisted.count,
+            sha256: digest
+        )
     }
 
     public static func read(from url: URL) throws -> NoonmarkSnapshot {
@@ -121,6 +149,7 @@ public enum DataPackageError: LocalizedError, Equatable {
     case malformedFormatVersion
     case missingReference(String)
     case unsupportedFormatVersion(Int)
+    case writeVerificationFailed
 
     public var errorDescription: String? {
         switch self {
@@ -134,6 +163,8 @@ public enum DataPackageError: LocalizedError, Equatable {
             return "导入数据引用不完整：\(reference)"
         case let .unsupportedFormatVersion(version):
             return "无法导入数据包：不支持格式版本 \(version)。"
+        case .writeVerificationFailed:
+            return "数据包写入后校验失败，未确认导出成功。"
         }
     }
 }

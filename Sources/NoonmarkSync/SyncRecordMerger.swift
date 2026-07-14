@@ -1212,7 +1212,8 @@ public struct SyncRecordMerger: Sendable {
 
     private func apply(_ envelope: AppPreferencesEnvelope, record: SyncRecord, context: inout MergeContext) {
         if envelope.updatedAt >= context.working.preferencesUpdatedAt {
-            context.working.preferences = envelope.preferences
+            context.working.preferences.theme = envelope.theme
+            context.working.preferences.language = envelope.language
             context.working.preferencesUpdatedAt = envelope.updatedAt
             context.applied.append(record.id)
         }

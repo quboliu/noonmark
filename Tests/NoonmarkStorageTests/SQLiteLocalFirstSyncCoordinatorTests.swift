@@ -98,7 +98,57 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(macDownload.download.appliedCount, 1)
         XCTAssertEqual(macDownload.download.waitingCount, 0)
         XCTAssertEqual(restoredMac.days[today]?.reviewSummary, "手机端补写复盘")
-        XCTAssertNotNil(try SQLiteSyncRepository(databaseURL: macURL).metadata(for: "localFirst.sync.lastResult"))
+        let statusMetadata = try XCTUnwrap(
+            SQLiteSyncRepository(databaseURL: macURL).metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(
+            try decoder.decode(
+                SQLiteLocalFirstSyncStatus.self,
+                from: statusMetadata.value
+            ),
+            .succeeded(macDownload)
+        )
+    }
+
+    func testFatalTransportFailurePersistsTheLatestSyncStatus() async throws {
+        let databaseURL = makeDatabaseURL("failure-status")
+        try SQLiteEngineRepository(databaseURL: databaseURL).save(
+            NoonmarkEngine().snapshot()
+        )
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: FailingFetchSyncTransport()
+        )
+
+        do {
+            _ = try await coordinator.sync(now: now)
+            XCTFail("致命传输失败必须向调用方抛出")
+        } catch {
+            XCTAssertEqual(
+                error as? FailingFetchSyncTransportError,
+                .unavailable
+            )
+        }
+
+        let metadata = try XCTUnwrap(
+            SQLiteSyncRepository(databaseURL: databaseURL).metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(
+            try decoder.decode(SQLiteLocalFirstSyncStatus.self, from: metadata.value),
+            .failed(
+                message: FailingFetchSyncTransportError.unavailable.localizedDescription,
+                failedAt: now
+            )
+        )
+        XCTAssertEqual(metadata.updatedAt, now)
     }
 
     func testTwoSQLiteStoresConvergeConcurrentTaskNoteForksThroughSharedTransport() async throws {
@@ -569,5 +619,21 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         case add
         case edit
         case delete
+    }
+}
+
+private enum FailingFetchSyncTransportError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? {
+        "E2E transport unavailable"
+    }
+}
+
+private actor FailingFetchSyncTransport: SyncRecordTransport {
+    func push(_: [SyncRecord]) async throws {}
+
+    func fetchAll() async throws -> [SyncRecord] {
+        throw FailingFetchSyncTransportError.unavailable
     }
 }

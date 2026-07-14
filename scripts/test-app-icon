@@ -11,7 +11,7 @@ cleanup() {
 trap cleanup EXIT
 
 required_files=(
-  "$app_icon_source_svg"
+  "$app_icon_source_png"
   "$app_icon_master_png"
   "$app_icon_icns_path"
 )
@@ -32,10 +32,12 @@ assert_png() {
   local width
   local height
   local format
+  local alpha
 
   width="$(sips -g pixelWidth "$path" | awk '/pixelWidth/ {print $2}')"
   height="$(sips -g pixelHeight "$path" | awk '/pixelHeight/ {print $2}')"
   format="$(sips -g format "$path" | awk '/format/ {print $2}')"
+  alpha="$(sips -g hasAlpha "$path" | awk '/hasAlpha/ {print $2}')"
 
   if [[ "$width" != "$expected_size" || "$height" != "$expected_size" ]]; then
     echo "invalid app icon dimensions: $path is ${width}x${height}, expected ${expected_size}x${expected_size}" >&2
@@ -43,6 +45,10 @@ assert_png() {
   fi
   if [[ "$format" != "png" ]]; then
     echo "invalid app icon format: $path is $format, expected png" >&2
+    exit 1
+  fi
+  if [[ "$alpha" != "yes" ]]; then
+    echo "app icon must preserve alpha: $path" >&2
     exit 1
   fi
   if ! sips -g profile "$path" | grep -q "profile: sRGB"; then
@@ -62,21 +68,121 @@ assert_matches_source() {
   app_icon_render_png "$expected_size" "$rendered"
 
   if ! cmp -s "$path" "$rendered"; then
-    echo "app icon asset is stale relative to AppIcon.svg: $path" >&2
+    echo "app icon asset is stale relative to AppIcon-source.png: $path" >&2
     exit 1
   fi
 }
 
-source_width="$(sips -g pixelWidth "$app_icon_source_svg" | awk '/pixelWidth/ {print $2}')"
-source_height="$(sips -g pixelHeight "$app_icon_source_svg" | awk '/pixelHeight/ {print $2}')"
-source_format="$(sips -g format "$app_icon_source_svg" | awk '/format/ {print $2}')"
-if [[ "$source_width" != "$source_height" || "$source_format" != "svg" ]]; then
-  echo "canonical app icon source must be a square svg: $app_icon_source_svg" >&2
+assert_master_mac_icon_bounds() {
+  NOONMARK_APP_ICON_MASTER="$app_icon_master_png" swift - <<'SWIFT'
+import AppKit
+import CoreGraphics
+import Foundation
+
+enum BoundsError: Error, CustomStringConvertible {
+  case missingEnvironment
+  case unreadableImage(String)
+  case missingCGImage(String)
+  case missingContext
+  case noVisiblePixels
+  case invalidBounds(minX: Int, minY: Int, maxX: Int, maxY: Int)
+  case opaqueCorner(x: Int, y: Int)
+
+  var description: String {
+    switch self {
+    case .missingEnvironment:
+      return "missing NOONMARK_APP_ICON_MASTER"
+    case .unreadableImage(let path):
+      return "unreadable app icon master: \(path)"
+    case .missingCGImage(let path):
+      return "app icon master has no CGImage representation: \(path)"
+    case .missingContext:
+      return "failed to create app icon bounds context"
+    case .noVisiblePixels:
+      return "app icon master has no visible pixels"
+    case .invalidBounds(let minX, let minY, let maxX, let maxY):
+      return "app icon master alpha bounds are \(minX),\(minY)-\(maxX),\(maxY), expected an approximately 824 px macOS icon body"
+    case .opaqueCorner(let x, let y):
+      return "app icon master corner must remain transparent at \(x),\(y)"
+    }
+  }
+}
+
+func alpha(atX x: Int, y: Int, data: [UInt8], width: Int) -> UInt8 {
+  data[(y * width + x) * 4 + 3]
+}
+
+do {
+  guard let path = ProcessInfo.processInfo.environment["NOONMARK_APP_ICON_MASTER"], !path.isEmpty else {
+    throw BoundsError.missingEnvironment
+  }
+  guard let image = NSImage(contentsOfFile: path) else {
+    throw BoundsError.unreadableImage(path)
+  }
+  let width = 1024
+  let height = 1024
+  var proposedRect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
+  guard let cgImage = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
+    throw BoundsError.missingCGImage(path)
+  }
+  let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+  var data = [UInt8](repeating: 0, count: width * height * 4)
+  guard let context = CGContext(
+    data: &data,
+    width: width,
+    height: height,
+    bitsPerComponent: 8,
+    bytesPerRow: width * 4,
+    space: colorSpace,
+    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+  ) else {
+    throw BoundsError.missingContext
+  }
+  context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+  var minX = width
+  var minY = height
+  var maxX = -1
+  var maxY = -1
+  for y in 0..<height {
+    for x in 0..<width where alpha(atX: x, y: y, data: data, width: width) > 0 {
+      minX = min(minX, x)
+      minY = min(minY, y)
+      maxX = max(maxX, x)
+      maxY = max(maxY, y)
+    }
+  }
+  if maxX < 0 || maxY < 0 {
+    throw BoundsError.noVisiblePixels
+  }
+  if !(95...105).contains(minX) || !(95...105).contains(minY)
+    || !(918...928).contains(maxX) || !(918...928).contains(maxY)
+  {
+    throw BoundsError.invalidBounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY)
+  }
+  for (x, y) in [(0, 0), (0, height - 1), (width - 1, 0), (width - 1, height - 1)] {
+    if alpha(atX: x, y: y, data: data, width: width) != 0 {
+      throw BoundsError.opaqueCorner(x: x, y: y)
+    }
+  }
+} catch {
+  FileHandle.standardError.write("\(error)\n".data(using: .utf8)!)
+  exit(1)
+}
+SWIFT
+}
+
+source_width="$(sips -g pixelWidth "$app_icon_source_png" | awk '/pixelWidth/ {print $2}')"
+source_height="$(sips -g pixelHeight "$app_icon_source_png" | awk '/pixelHeight/ {print $2}')"
+source_format="$(sips -g format "$app_icon_source_png" | awk '/format/ {print $2}')"
+if [[ "$source_width" != "$source_height" || "$source_format" != "png" ]]; then
+  echo "canonical app icon source must be a square png: $app_icon_source_png" >&2
   exit 1
 fi
 
 assert_png "$app_icon_master_png" 1024
 assert_matches_source "$app_icon_master_png" 1024
+assert_master_mac_icon_bounds
 for representation in "${app_icon_representations[@]}"; do
   filename="${representation%%:*}"
   size="${representation##*:}"
@@ -106,4 +212,4 @@ if ! cmp -s "$app_icon_master_png" "${app_icon_iconset_dir}/icon_512x512@2x.png"
   exit 1
 fi
 
-echo "Verified AppIcon.svg, 1024 master, iconset, and icns"
+echo "Verified AppIcon-source.png, 1024 master, iconset, and icns"

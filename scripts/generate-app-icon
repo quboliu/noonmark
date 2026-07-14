@@ -10,8 +10,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ ! -f "$app_icon_source_svg" ]]; then
-  echo "missing canonical app icon source: $app_icon_source_svg" >&2
+if [[ ! -f "$app_icon_source_png" ]]; then
+  echo "missing canonical app icon source: $app_icon_source_png" >&2
   exit 1
 fi
 
@@ -36,4 +36,4 @@ cp -R "$generated_iconset" "$app_icon_iconset_dir"
 cp "${work_dir}/AppIcon.icns" "$app_icon_icns_path"
 
 scripts/test-app-icon
-echo "Generated $app_icon_icns_path from $app_icon_source_svg"
+echo "Generated $app_icon_icns_path from $app_icon_source_png"

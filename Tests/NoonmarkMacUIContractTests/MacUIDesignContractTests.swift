@@ -314,9 +314,9 @@ final class MacUIDesignContractTests: XCTestCase {
 
         XCTAssertEqual(Set(contract.zhulongHomeElements), Set(MacUIZhulongHomeElement.allCases))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.freeformIntentComposer))
-        XCTAssertTrue(contract.zhulongHomeElements.contains(.verticallyCenteredComposerContent))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.verticallyCenteredHomeContent))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.singleVisualAxis))
-        XCTAssertTrue(contract.zhulongHomeElements.contains(.capsuleIntentComposer))
+        XCTAssertTrue(contract.zhulongHomeElements.contains(.roundedRectIntentComposer))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.flatWorkflowList))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.quietSuggestionModeLabel))
         XCTAssertTrue(contract.zhulongHomeElements.contains(.collapsedEmptyPendingSection))
@@ -329,14 +329,26 @@ final class MacUIDesignContractTests: XCTestCase {
 
     func testZhulongHomeUsesOneSparseVisualAxis() {
         XCTAssertEqual(MacUIZhulongHomeLayout.contentMaxWidth, 780)
-        XCTAssertEqual(MacUIZhulongHomeLayout.headerOuterMaxWidth, 828)
+        XCTAssertEqual(MacUIZhulongHomeLayout.headerOuterMaxWidth, 820)
+        XCTAssertEqual(
+            MacUIZhulongHomeLayout.headerOuterMaxWidth,
+            MacUIZhulongHomeLayout.contentMaxWidth + (MacUIShellLayout.pageHorizontalPadding * 2)
+        )
         XCTAssertEqual(MacUIZhulongHomeLayout.composerHeight, 54)
-        XCTAssertEqual(MacUIZhulongHomeLayout.composerCornerRadius, 27)
+        XCTAssertEqual(MacUIZhulongHomeLayout.composerCornerRadius, 14)
         XCTAssertEqual(MacUIZhulongHomeLayout.workflowRowHeight, 62)
         XCTAssertEqual(MacUIZhulongHomeLayout.workflowListCount, 1)
         XCTAssertEqual(MacUIZhulongHomeLayout.composerActionCount, 1)
         XCTAssertTrue(MacUIZhulongHomeLayout.collapsesEmptyPendingSection)
         XCTAssertTrue(MacUIZhulongHomeLayout.collapsesHomeDetailRail)
+        XCTAssertEqual(
+            MacUIZhulongHomeLayout.contentPlacement(hasPendingSessions: false),
+            .centered
+        )
+        XCTAssertEqual(
+            MacUIZhulongHomeLayout.contentPlacement(hasPendingSessions: true),
+            .topAligned
+        )
     }
 
     func testDetailAndReviewSectionsAreNotOptional() {

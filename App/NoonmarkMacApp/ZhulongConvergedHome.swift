@@ -69,29 +69,45 @@ private struct ZhulongWorkspaceHome: View {
         workspace.sessions.filter { $0.workspaceStatus != .archived }.count
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            PageHeader(
-                title: store.copy.navZhulong,
-                subtitle: "把模糊的事想清楚，把已经开始的事继续推进。"
-            )
-            .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.headerOuterMaxWidth))
-            .frame(maxWidth: .infinity)
+    private var contentAlignment: Alignment {
+        switch MacUIZhulongHomeLayout.contentPlacement(hasPendingSessions: pendingCount > 0) {
+        case .centered:
+            .center
+        case .topAligned:
+            .top
+        }
+    }
 
+    var body: some View {
+        GeometryReader { viewport in
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    intentComposer
-                    workflowSection
-                    if pendingCount > 0 {
-                        pendingSection
-                            .padding(.top, 10)
+                VStack(alignment: .leading, spacing: 0) {
+                    PageHeader(
+                        title: store.copy.navZhulong,
+                        subtitle: "把模糊的事想清楚，把已经开始的事继续推进。"
+                    )
+                    .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.headerOuterMaxWidth))
+                    .frame(maxWidth: .infinity)
+
+                    VStack(alignment: .leading, spacing: 22) {
+                        intentComposer
+                        workflowSection
+                        if pendingCount > 0 {
+                            pendingSection
+                                .padding(.top, 10)
+                        }
                     }
+                    .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.contentMaxWidth), alignment: .leading)
+                    .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+                    .padding(.top, 20)
+                    .padding(.bottom, 36)
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.contentMaxWidth), alignment: .leading)
-                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
-                .padding(.top, 20)
-                .padding(.bottom, 36)
-                .frame(maxWidth: .infinity, alignment: .top)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: viewport.size.height,
+                    alignment: contentAlignment
+                )
             }
         }
         .background(Theme.background)

@@ -142,9 +142,9 @@ public enum MacUIPage: String, CaseIterable, Sendable {
 
 public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
     case freeformIntentComposer
-    case verticallyCenteredComposerContent
+    case verticallyCenteredHomeContent
     case singleVisualAxis
-    case capsuleIntentComposer
+    case roundedRectIntentComposer
     case flatWorkflowList
     case quietSuggestionModeLabel
     case collapsedEmptyPendingSection
@@ -469,16 +469,25 @@ public enum MacUIClassificationLayout {
     public static let managerRowHeight = 42.0
 }
 
+public enum MacUIZhulongHomeContentPlacement: Equatable, Sendable {
+    case centered
+    case topAligned
+}
+
 public enum MacUIZhulongHomeLayout {
     public static let contentMaxWidth = 780.0
-    public static let headerOuterMaxWidth = 828.0
+    public static let headerOuterMaxWidth = contentMaxWidth + (MacUIShellLayout.pageHorizontalPadding * 2)
     public static let composerHeight = 54.0
-    public static let composerCornerRadius = 27.0
+    public static let composerCornerRadius = 14.0
     public static let workflowRowHeight = 62.0
     public static let workflowListCount = 1
     public static let composerActionCount = 1
     public static let collapsesEmptyPendingSection = true
     public static let collapsesHomeDetailRail = true
+
+    public static func contentPlacement(hasPendingSessions: Bool) -> MacUIZhulongHomeContentPlacement {
+        hasPendingSessions ? .topAligned : .centered
+    }
 }
 
 public enum MacUIClassificationAccessibility {

@@ -240,16 +240,6 @@ private struct LaunchAutomation {
     @MainActor
     static func fromCommandLine() -> LaunchAutomation? {
         var actions: [@MainActor (NoonmarkStore) -> Void] = []
-        let quickTaskTitle = NoonmarkStore.commandLineValue(after: "--e2e-add-quick-task")?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let quickTaskTitle, quickTaskTitle.isEmpty == false {
-            actions.append { store in
-                store.page = .day
-                store.selectedDate = store.today
-                store.quickText = quickTaskTitle
-                store.addQuickTask()
-            }
-        }
 
         append(ProviderE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongStreamE2EAutomation.fromCommandLine(), to: &actions)
@@ -265,7 +255,7 @@ private struct LaunchAutomation {
         append(TaskNoteMutationAtomicityE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteMutationAtomicityUIE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskTitleDeleteE2EAutomation.fromCommandLine(), to: &actions)
-        append(QuickTaskReturnE2EAutomation.fromCommandLine(), to: &actions)
+        append(QuickAddUIE2EAutomation.fromCommandLine(), to: &actions)
         append(ReportedBugsE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewE2EAutomation.fromCommandLine(), to: &actions)
         append(ReviewZhulongEntryE2EAutomation.fromCommandLine(), to: &actions)
@@ -3483,37 +3473,67 @@ private enum TaskTitleDeleteE2EAutomationError: LocalizedError {
     }
 }
 
-private struct QuickTaskReturnE2EAutomation: LaunchAutomationRunnable {
+private struct QuickAddUIE2EAutomation: LaunchAutomationRunnable {
+    enum Surface: String {
+        case day
+        case pool
+    }
+
+    let surface: Surface
     let resultURL: URL
     let title: String
 
     @MainActor
     static func fromCommandLine() -> Self? {
-        guard CommandLine.arguments.contains("--e2e-add-quick-task-with-return"),
-              let resultPath = NoonmarkStore.commandLineValue(
-                  after: "--e2e-add-quick-task-with-return-result-url"
-              )
+        guard let rawSurface = NoonmarkStore.commandLineValue(
+            after: "--e2e-quick-add-via-ui"
+        ), let surface = Surface(rawValue: rawSurface),
+            let title = NoonmarkStore.commandLineValue(
+                after: "--e2e-quick-add-ui-title"
+            ), let resultPath = NoonmarkStore.commandLineValue(
+                after: "--e2e-quick-add-ui-result-url"
+            )
         else { return nil }
-        let title = NoonmarkStore.commandLineValue(after: "--e2e-add-quick-task-with-return")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return Self(resultURL: URL(fileURLWithPath: resultPath), title: title)
+        return Self(
+            surface: surface,
+            resultURL: URL(fileURLWithPath: resultPath),
+            title: title
+        )
     }
 
     @MainActor
     func run(on store: NoonmarkStore) {
-        store.page = .day
-        store.selectedDate = store.today
-        store.quickText = title
-        let eventSucceeded = MarkdownEditorKeyboardProbe.submitWithReturn {
-            store.addQuickTask()
+        switch surface {
+        case .day:
+            store.page = .day
+            store.selectedDate = store.today
+        case .pool:
+            store.page = .pool
         }
-        let taskExists = store.engine.getDayTodo(date: store.today).traces.contains { trace in
-            store.definition(for: trace)?.title == title
-        }
-        let result = eventSucceeded && taskExists && store.quickText.isEmpty
-            ? "ok"
-            : "failed: event=\(eventSucceeded) task=\(taskExists) cleared=\(store.quickText.isEmpty)"
-        try? result.write(to: resultURL, atomically: true, encoding: .utf8)
+
+        QuickAddUIE2EDriver.start(
+            resultURL: resultURL,
+            title: title,
+            editorIdentifier: "quick-add.\(surface.rawValue)",
+            inputReadback: {
+                switch surface {
+                case .day: store.quickText
+                case .pool: store.poolText
+                }
+            },
+            taskExists: { candidateTitle in
+                switch surface {
+                case .day:
+                    store.engine.getDayTodo(date: store.today).traces.contains { trace in
+                        store.definition(for: trace)?.title == candidateTitle
+                    }
+                case .pool:
+                    store.engine.taskPool().contains { task in
+                        task.definition.title == candidateTitle
+                    }
+                }
+            }
+        )
     }
 }
 
@@ -8442,7 +8462,8 @@ struct DayQuickAdd: View {
         HStack(alignment: .top, spacing: 8) {
             NewTaskInlineField(
                 placeholder: store.isFuture ? "为这一天排期任务，回车确认" : "添加今日任务，回车确认",
-                text: $store.quickText
+                text: $store.quickText,
+                nativeAccessibilityIdentifier: "quick-add.day"
             ) {
                 store.addQuickTask()
             }
@@ -8455,6 +8476,7 @@ struct NewTaskInlineField: View {
     @EnvironmentObject private var store: NoonmarkStore
     let placeholder: String
     @Binding var text: String
+    let nativeAccessibilityIdentifier: String
     let onSubmit: () -> Void
 
     var suggestions: [ClassificationCatalogItemProjection] {
@@ -8468,7 +8490,8 @@ struct NewTaskInlineField: View {
                 placeholder: placeholder,
                 style: .compact,
                 commitsOnReturn: true,
-                onCommit: onSubmit
+                onCommit: onSubmit,
+                nativeAccessibilityIdentifier: nativeAccessibilityIdentifier
             )
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line.opacity(0.72)))
@@ -9031,7 +9054,8 @@ struct PoolQuickAdd: View {
     var body: some View {
         NewTaskInlineField(
             placeholder: "新建任务到任务池，回车确认",
-            text: $store.poolText
+            text: $store.poolText,
+            nativeAccessibilityIdentifier: "quick-add.pool"
         ) {
             store.addPoolTask()
         }

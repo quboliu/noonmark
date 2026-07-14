@@ -12,7 +12,15 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: .noonmarkSystemFont(ofSize: 14, weight: .semibold)
         case .body, .detailBody: .noonmarkSystemFont(ofSize: 12)
-        case .compact: .noonmarkSystemFont(ofSize: 12.5, weight: .medium)
+        case .compact: .noonmarkSystemFont(ofSize: 11.5, weight: .medium)
+        }
+    }
+
+    var swiftUIFont: Font {
+        switch self {
+        case .title: .noonmarkSystem(size: 14, weight: .semibold)
+        case .body, .detailBody: .noonmarkSystem(size: 12)
+        case .compact: .noonmarkSystem(size: 11.5, weight: .medium)
         }
     }
 
@@ -41,8 +49,10 @@ enum MarkdownEditorStyle {
                 width: NoonmarkVisualMetrics.detailTextInset,
                 height: NoonmarkVisualMetrics.detailTextInset
             )
-        case .body, .compact:
+        case .body:
             NSSize(width: 5, height: 6)
+        case .compact:
+            NSSize(width: 5, height: 10)
         }
     }
 }
@@ -83,7 +93,7 @@ struct MarkdownEditor: View {
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
                     Text(placeholder)
-                        .font(.noonmarkSystem(size: style == .title ? 14 : 12))
+                        .font(style.swiftUIFont)
                         .foregroundStyle(Theme.text3)
                         .padding(.horizontal, style.textContainerInset.width)
                         .padding(.vertical, style.textContainerInset.height)
@@ -271,6 +281,7 @@ private final class MarkdownNSTextView: NSTextView {
         modifiers: NSEvent.ModifierFlags
     ) -> Bool {
         guard event.keyCode == 36 else { return false }
+        guard hasMarkedText() == false else { return false }
         if modifiers.contains(.command) {
             commitAction?()
             return true

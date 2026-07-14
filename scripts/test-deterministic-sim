@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+scripts/reset-dev-data
 ST_SIM_RUNS="${ST_SIM_RUNS:-64}" swift test --filter NoonmarkSimulationTests

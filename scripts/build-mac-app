@@ -15,6 +15,7 @@ contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
 
+scripts/reset-dev-data
 swift build -c "$configuration" --product "$product"
 
 rm -rf "$bundle_dir"

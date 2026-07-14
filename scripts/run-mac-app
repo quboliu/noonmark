@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+configuration="${1:-debug}"
+bundle_name="${NOONMARK_APP_BUNDLE_NAME:-Noonmark}"
+executable_name="${NOONMARK_APP_EXECUTABLE_NAME:-NoonmarkMacApp}"
+app_path="dist/${bundle_name}.app"
+
+scripts/build-mac-app "$configuration" >/dev/null
+
+if [[ ! -x "$app_path/Contents/MacOS/$executable_name" ]]; then
+  echo "missing built app executable: $app_path/Contents/MacOS/$executable_name" >&2
+  exit 1
+fi
+
+open -n "$app_path"
+for _ in {1..50}; do
+  if pgrep -x "$executable_name" >/dev/null 2>&1; then
+    echo "$app_path"
+    exit 0
+  fi
+  sleep 0.1
+done
+
+echo "failed to launch $app_path" >&2
+exit 1

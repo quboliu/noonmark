@@ -38,8 +38,9 @@
 - 本机已确认 `xcodebuild -version` 输出 Xcode 26.2，`swift --version` 输出 Apple Swift 6.2.3；项目声明仍以 `Package.swift` 的 Swift tools 6.0 为准。
 - 本机已确认 `xcrun --find xctest` 和 `xcrun --find simctl` 可用。
 - 基础命令：
-  - `swift build`
-  - `swift test`
+  - `make build`
+  - `make test`
+  - 若必须直接运行 `swift build` 或 `swift test`，必须先执行 `scripts/reset-dev-data`。
 - 当前环境取证：
   - `swift build` 通过。
   - `make check` 通过，覆盖 `swift build`、UT、IT、ST、确定性仿真测试、SwiftLint 和 SwiftFormat lint。
@@ -48,6 +49,8 @@
   - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`。
 - 项目级工具入口：
   - `make build`
+  - `make build-app`
+  - `make run-app`
   - `make test`
   - `make lint`
   - `make format-check`
@@ -57,6 +60,15 @@
   - `scripts/test-ai-provider-live`：手动 live AI provider smoke；必须显式设置 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`，不进入默认 `make check`。
   - `scripts/package-dmg release`
   - `scripts/test-dmg-install dist/Noonmark.dmg`
+
+## 开发数据 clean cut（强制）
+
+- 晷迹尚未发布，最新提交和最新编译产物就是唯一版本；开发调试不迁移、不备份、不复用任何旧版本数据。
+- 每次产生新 commit 后，以及每次开始新编译前，都必须执行 `scripts/reset-dev-data`。仓库受控的 `make build`、`make test`、各层测试脚本、`scripts/build-mac-app`、`scripts/run-mac-app` 和 `scripts/check` 已强制执行；绕过这些入口直接运行 SwiftPM 命令时，由执行者先手动清理。
+- `scripts/reset-dev-data` 必须先终止 Noonmark 的开发 / E2E / Audit 进程，再整体删除固定的 `~/Library/Application Support/noonmark`，并清除对应 bundle 的 UserDefaults、cache 与窗口 saved state。范围包括 SQLite、WAL / SHM、`ZhulongSidecar`、本地同步仓库和任何旧备份目录；同时清除固定的 iCloud `Noonmark/SyncRepository` 与仅用于 sidecar 加密的生成 key，防止旧同步记录或旧密钥重新进入当前版本。
+- 清理必须 fail-closed：进程无法终止或目标路径不符合固定护栏时，不得继续删除或启动。不得增加保留旧库、自动迁移、复制备份或兼容旧 schema 的分支。
+- E2E 可以在单次套件内保留该套件自己创建的隔离数据库，以验证重启与持久化；下一次构建 / 套件必须重新生成当前版本 fixture，不得回读上一轮测试数据。
+- Keychain 中的 Provider API 凭证属于开发者凭证，不是测试历史，clean cut 不得删除；不得扫描整个 Keychain、iCloud Drive 或 `$HOME`，也不得删除用户通过 NSSavePanel 自选路径导出的数据包。
 
 ## Agent skills
 

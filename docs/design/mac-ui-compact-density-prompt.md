@@ -33,6 +33,13 @@
 - Songti SC 诗文、Markdown 编辑态与 Markdown 展示态必须经过同一映射，不能在进入编辑时突然变大。
 - 禁止使用根视图 `scaleEffect`、渲染后缩放或模糊变换；布局尺寸、字体和图标必须由 token 驱动。
 
+## 快速新增输入
+
+- Day Todo 与任务池的快速新增继续共用同一个 `32pt` 单行编辑器，不新增标题、提示块、按钮、焦点描边或第二层容器等视觉单位。
+- compact 字体保持 `11.5pt`。文字、placeholder 与原生 AppKit 插入点必须共享同一垂直基线；真实 `NSTextView` 聚焦后，插入点中心与输入框中心误差不得超过 `0.5pt`，上下留白差不得超过 `1pt`。
+- 无修饰键 Return 必须经真实窗口 responder path 提交当前内容；存在 IME marked text 时，首个 Return 只交还 AppKit 确认组合态，不得提前创建任务，下一次无组合态 Return 才提交。成功后实际 `NSTextView`、SwiftUI binding 与输入 placeholder 状态必须同步清空。Day Todo 生成当天 pending trace，任务池生成未排期 active chain。
+- Day Todo 与任务池必须使用全局唯一的真实 App UI 锚点。验收必须鼠标聚焦屏幕上的输入框，再由其所属 `NSWindow` 发送普通文本和 Return；脱离窗口新建 `NSTextView`、直接写 Store 或直接调用新增方法都不算交互验收。
+
 ## 关键页面密度
 
 - Day Todo 页面标题约 `19.5pt`；14 日 Date Strip 在 `500pt` 主内容宽度内完整展示，不得横向滚动或丢失日期。

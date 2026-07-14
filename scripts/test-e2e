@@ -235,7 +235,11 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         let name = window[kCGWindowName as String] as? String ?? ""
         if owner.contains("Noonmark") || owner.contains("晷迹") || name.contains("晷迹") {
-            print("window owner=\(owner) title=\(name)")
+            let number = window[kCGWindowNumber as String] as? Int ?? -1
+            let processID = window[kCGWindowOwnerPID as String] as? Int ?? -1
+            let layer = window[kCGWindowLayer as String] as? Int ?? -1
+            let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
+            print("window id=\(number) pid=\(processID) owner=\(owner) title=\(name) layer=\(layer) bounds=\(bounds)")
         }
     }
 }
@@ -284,11 +288,13 @@ capture_app_screenshot() {
   esac
 
   window_id=""
+  : >"$launch_log"
   for launch_attempt in {1..3}; do
     terminate_e2e_app
     mkdir -p "$out_dir"
-    "$app_executable_path" "$@" --page "$page" >"$launch_log" 2>&1 &
-    disown "$!" 2>/dev/null || true
+    echo "launch attempt=$launch_attempt page=$page expected_title=$expected_window_title" >>"$launch_log"
+    "$app_executable_path" "$@" --page "$page" >>"$launch_log" 2>&1 &
+    app_pid=$!
     sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
 
     for _ in {1..20}; do
@@ -299,15 +305,24 @@ capture_app_screenshot() {
     done
 
     if [[ -n "$window_id" ]]; then
+      disown "$app_pid" 2>/dev/null || true
       break
     fi
+    if kill -0 "$app_pid" >/dev/null 2>&1; then
+      echo "launch attempt=$launch_attempt pid=$app_pid state=running window_match=missing" >>"$launch_log"
+    else
+      app_exit_code=0
+      wait "$app_pid" || app_exit_code=$?
+      echo "launch attempt=$launch_attempt pid=$app_pid state=exited exit_code=$app_exit_code window_match=missing" >>"$launch_log"
+    fi
+    dump_visible_windows >>"$launch_log"
     terminate_e2e_app
     sleep 0.5
   done
 
   if [[ -z "$window_id" ]]; then
     echo "Noonmark app window not found for ${page}" >&2
-    dump_visible_windows >&2
+    cat "$launch_log" >&2
     exit 1
   fi
 
@@ -978,6 +993,73 @@ run_pool_context_menu_action_probe() {
   echo "E2E pool context-menu schedule and persistence: $action_db"
 }
 
+run_quick_add_ui_probe() {
+  local quick_add_dir="artifacts/e2e-quick-add-ui"
+  local day_db="$quick_add_dir/day.sqlite"
+  local pool_db="$quick_add_dir/pool.sqlite"
+  local day_result="$quick_add_dir/day-result.txt"
+  local pool_result="$quick_add_dir/pool-result.txt"
+  local day_log="$quick_add_dir/day.log"
+  local pool_log="$quick_add_dir/pool.log"
+  local day_title="dayreturntask"
+  local pool_title="poolreturntask"
+  local day_persisted
+  local pool_persisted
+
+  rm -rf "$quick_add_dir"
+  mkdir -p "$quick_add_dir"
+
+  run_terminating_ui_probe \
+    "Day Todo quick-add real Return" \
+    "$day_result" \
+    "$day_log" \
+    --data-url "$PWD/$day_db" \
+    --page day \
+    --e2e-quick-add-via-ui day \
+    --e2e-quick-add-ui-title "$day_title" \
+    --e2e-quick-add-ui-result-url "$PWD/$day_result"
+
+  day_persisted="$(sqlite3 -noheader "$day_db" "
+    SELECT count(*)
+    FROM day_traces
+    JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+    WHERE task_definitions.title = '$day_title'
+      AND day_traces.date = '2026-07-05'
+      AND day_traces.status = 'pending';
+  ")"
+  if [[ "$day_persisted" != "1" ]]; then
+    echo "Day Todo quick-add persistence failed: ${day_persisted:-missing}" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "task-pool quick-add real Return" \
+    "$pool_result" \
+    "$pool_log" \
+    --data-url "$PWD/$pool_db" \
+    --page pool \
+    --e2e-quick-add-via-ui pool \
+    --e2e-quick-add-ui-title "$pool_title" \
+    --e2e-quick-add-ui-result-url "$PWD/$pool_result"
+
+  pool_persisted="$(sqlite3 -noheader "$pool_db" "
+    SELECT count(*)
+    FROM task_chains
+    JOIN task_definitions ON task_definitions.chain_id = task_chains.id
+    WHERE task_definitions.title = '$pool_title'
+      AND task_chains.state = 'active'
+      AND NOT EXISTS (
+        SELECT 1 FROM day_traces WHERE day_traces.chain_id = task_chains.id
+      );
+  ")"
+  if [[ "$pool_persisted" != "1" ]]; then
+    echo "task-pool quick-add persistence failed: ${pool_persisted:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E real quick-add Return, geometry, and persistence: $day_db $pool_db"
+}
+
 run_markdown_editor_ui_probe() {
   local markdown_dir="artifacts/e2e-markdown-editor"
   local markdown_db="$markdown_dir/Noonmark.sqlite"
@@ -1178,7 +1260,7 @@ run_terminating_ui_probe() {
   fi
   pid=$!
 
-  for _ in {1..120}; do
+  for _ in {1..400}; do
     if [[ -f "$result" ]] || ! kill -0 "$pid" 2>/dev/null; then
       break
     fi
@@ -1267,6 +1349,11 @@ if [[ "${NOONMARK_E2E_MARKDOWN_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_QUICK_ADD_UI_ONLY:-0}" == "1" ]]; then
+  run_quick_add_ui_probe
+  exit 0
+fi
+
 for scenario in "${scenarios[@]}"; do
   IFS="|" read -r screenshot_name page extra_args <<< "$scenario"
   if [[ -n "$extra_args" ]]; then
@@ -1297,6 +1384,8 @@ run_reactivation_atomicity_probe
 run_copy_undo_persistence_probe
 
 run_ui_entry_probes
+
+run_quick_add_ui_probe
 
 run_seed_clock_probe
 
@@ -1593,80 +1682,6 @@ if [[ "$classification_category_count" -ne 1 \
 fi
 
 echo "E2E classification edit and restart: $classification_db (category=$classification_category_count labels=$classification_label_count revision=$classification_revision records=$classification_record_count crosscheck=$classification_crosscheck_count)"
-
-interaction_dir="artifacts/e2e-interaction"
-interaction_db="${interaction_dir}/Noonmark.sqlite"
-interaction_title="E2E 快速新增任务"
-rm -rf "$interaction_dir"
-mkdir -p "$interaction_dir"
-
-open -W -n "$app_path" --args \
-  --data-url "$PWD/$interaction_db" \
-  --page day \
-  --e2e-add-quick-task "$interaction_title" \
-  --e2e-quit-after-automation
-
-if [[ ! -f "$interaction_db" ]]; then
-  echo "interaction database was not created: $interaction_db" >&2
-  exit 1
-fi
-
-read -r interaction_definitions interaction_traces < <(
-  sqlite3 -separator " " "$interaction_db" "
-    SELECT
-      (SELECT count(*)
-       FROM task_definitions
-       WHERE title = '$interaction_title'),
-      (SELECT count(*)
-       FROM day_traces
-       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
-       WHERE task_definitions.title = '$interaction_title'
-         AND day_traces.date = '2026-07-05'
-         AND day_traces.status = 'pending');
-  "
-)
-
-if [[ "$interaction_definitions" -ne 1 || "$interaction_traces" -ne 1 ]]; then
-  echo "quick-add interaction failed: definitions=$interaction_definitions traces=$interaction_traces" >&2
-  exit 1
-fi
-
-echo "E2E quick-add app interaction: $interaction_db (title=$interaction_title definitions=$interaction_definitions traces=$interaction_traces)"
-
-return_interaction_dir="artifacts/e2e-return-interaction"
-return_interaction_db="${return_interaction_dir}/Noonmark.sqlite"
-return_interaction_result="${return_interaction_dir}/result.txt"
-return_interaction_title="E2E 回车新增任务"
-rm -rf "$return_interaction_dir"
-mkdir -p "$return_interaction_dir"
-
-open -W -n "$app_path" --args \
-  --data-url "$PWD/$return_interaction_db" \
-  --page day \
-  --e2e-add-quick-task-with-return "$return_interaction_title" \
-  --e2e-add-quick-task-with-return-result-url "$PWD/$return_interaction_result" \
-  --e2e-quit-after-automation
-
-if [[ ! -f "$return_interaction_result" || "$(cat "$return_interaction_result")" != "ok" ]]; then
-  echo "Return quick-add interaction failed: $(cat "$return_interaction_result" 2>/dev/null || echo missing-result)" >&2
-  exit 1
-fi
-
-return_interaction_count="$(sqlite3 "$return_interaction_db" "
-  SELECT count(*)
-  FROM day_traces
-  JOIN task_definitions ON task_definitions.id = day_traces.definition_id
-  WHERE task_definitions.title = '$return_interaction_title'
-    AND day_traces.date = '2026-07-05'
-    AND day_traces.status = 'pending';
-")"
-
-if [[ "$return_interaction_count" -ne 1 ]]; then
-  echo "Return quick-add persistence probe failed: tasks=$return_interaction_count" >&2
-  exit 1
-fi
-
-echo "E2E Return quick-add interaction: $return_interaction_db (title=$return_interaction_title tasks=$return_interaction_count)"
 
 zhulong_dir="artifacts/e2e-zhulong"
 zhulong_db="${zhulong_dir}/Noonmark.sqlite"

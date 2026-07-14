@@ -15,6 +15,7 @@ xcodebuild -version
 xcrun --find xctest >/dev/null
 
 echo "==> Swift build"
+scripts/reset-dev-data
 swift build
 
 echo "==> Unit tests"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+scripts/reset-dev-data
 swift test --filter NoonmarkCoreTests
 swift test --filter NoonmarkAITests
 swift test --filter NoonmarkMacUIContractTests

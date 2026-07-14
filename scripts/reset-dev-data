@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -z "${HOME:-}" || "$HOME" == "/" ]]; then
+  echo "refusing to reset Noonmark development data with an invalid HOME" >&2
+  exit 1
+fi
+
+data_root="$HOME/Library/Application Support/noonmark"
+expected_data_root="${HOME%/}/Library/Application Support/noonmark"
+icloud_sync_root="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Noonmark/SyncRepository"
+expected_icloud_sync_root="${HOME%/}/Library/Mobile Documents/com~apple~CloudDocs/Noonmark/SyncRepository"
+
+if [[ "$data_root" != "$expected_data_root" || "$data_root" == "/" \
+  || "$icloud_sync_root" != "$expected_icloud_sync_root" || "$icloud_sync_root" == "/" ]]; then
+  echo "refusing to reset unexpected Noonmark development paths" >&2
+  exit 1
+fi
+
+if [[ -L "$data_root" || -L "$icloud_sync_root" ]]; then
+  echo "refusing to reset a symlinked Noonmark development path" >&2
+  exit 1
+fi
+
+process_names=(NoonmarkMacApp NoonmarkMacAppE2E NoonmarkMacAppAudit)
+if [[ -n "${NOONMARK_APP_EXECUTABLE_NAME:-}" ]]; then
+  process_names+=("$NOONMARK_APP_EXECUTABLE_NAME")
+fi
+
+terminate_process() {
+  local process_name="$1"
+  pkill -TERM -x "$process_name" >/dev/null 2>&1 || true
+  for _ in {1..50}; do
+    if ! pgrep -x "$process_name" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  pkill -KILL -x "$process_name" >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    if ! pgrep -x "$process_name" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  echo "failed to terminate $process_name; development data was not deleted" >&2
+  return 1
+}
+
+for process_name in "${process_names[@]}"; do
+  terminate_process "$process_name"
+done
+
+rm -rf -- "$data_root" "$icloud_sync_root"
+
+keychain_status=0
+security delete-generic-password \
+  -s app.noonmark.zhulong.sidecar-key \
+  -a sidecar-encryption-key-v1 \
+  >/dev/null 2>&1 || keychain_status=$?
+if [[ "$keychain_status" -ne 0 && "$keychain_status" -ne 44 ]]; then
+  echo "failed to remove the Noonmark sidecar key" >&2
+  exit 1
+fi
+
+bundle_identifiers=(app.noonmark.mac app.noonmark.mac.e2e app.noonmark.mac.audit)
+for bundle_identifier in "${bundle_identifiers[@]}"; do
+  defaults delete "$bundle_identifier" >/dev/null 2>&1 || true
+  rm -rf -- \
+    "$HOME/Library/Caches/$bundle_identifier" \
+    "$HOME/Library/Saved Application State/$bundle_identifier.savedState"
+  if defaults read "$bundle_identifier" >/dev/null 2>&1; then
+    echo "failed to clear defaults for $bundle_identifier" >&2
+    exit 1
+  fi
+done
+
+if [[ -e "$data_root" || -e "$icloud_sync_root" ]]; then
+  echo "failed to remove Noonmark development data" >&2
+  exit 1
+fi
+
+for process_name in "${process_names[@]}"; do
+  if pgrep -x "$process_name" >/dev/null 2>&1; then
+    echo "Noonmark process survived reset: $process_name" >&2
+    exit 1
+  fi
+done
+
+echo "Noonmark development data reset: local, iCloud sync, and sidecar key"

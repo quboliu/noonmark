@@ -1,10 +1,17 @@
-.PHONY: build build-app package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-ai-provider-live test-all lint format format-check check
+.PHONY: reset-dev-data build build-app run-app package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-ai-provider-live test-all lint format format-check check
+
+reset-dev-data:
+	scripts/reset-dev-data
 
 build:
+	scripts/reset-dev-data
 	swift build
 
 build-app:
 	scripts/build-mac-app
+
+run-app:
+	scripts/run-mac-app
 
 package-dmg:
 	scripts/package-dmg
@@ -16,6 +23,7 @@ test-dmg-install:
 	scripts/test-dmg-install
 
 test:
+	scripts/reset-dev-data
 	swift test
 
 test-unit:

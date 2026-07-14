@@ -11,7 +11,7 @@ cleanup() {
 trap cleanup EXIT
 
 required_files=(
-  "$app_icon_source_png"
+  "$app_icon_source_svg"
   "$app_icon_master_png"
   "$app_icon_icns_path"
 )
@@ -62,16 +62,16 @@ assert_matches_source() {
   app_icon_render_png "$expected_size" "$rendered"
 
   if ! cmp -s "$path" "$rendered"; then
-    echo "app icon asset is stale relative to AppIcon-source.png: $path" >&2
+    echo "app icon asset is stale relative to AppIcon.svg: $path" >&2
     exit 1
   fi
 }
 
-source_width="$(sips -g pixelWidth "$app_icon_source_png" | awk '/pixelWidth/ {print $2}')"
-source_height="$(sips -g pixelHeight "$app_icon_source_png" | awk '/pixelHeight/ {print $2}')"
-source_format="$(sips -g format "$app_icon_source_png" | awk '/format/ {print $2}')"
-if [[ "$source_width" != "$source_height" || "$source_format" != "png" ]]; then
-  echo "canonical app icon source must be a square png: $app_icon_source_png" >&2
+source_width="$(sips -g pixelWidth "$app_icon_source_svg" | awk '/pixelWidth/ {print $2}')"
+source_height="$(sips -g pixelHeight "$app_icon_source_svg" | awk '/pixelHeight/ {print $2}')"
+source_format="$(sips -g format "$app_icon_source_svg" | awk '/format/ {print $2}')"
+if [[ "$source_width" != "$source_height" || "$source_format" != "svg" ]]; then
+  echo "canonical app icon source must be a square svg: $app_icon_source_svg" >&2
   exit 1
 fi
 
@@ -106,4 +106,4 @@ if ! cmp -s "$app_icon_master_png" "${app_icon_iconset_dir}/icon_512x512@2x.png"
   exit 1
 fi
 
-echo "Verified AppIcon-source.png, 1024 master, iconset, and icns"
+echo "Verified AppIcon.svg, 1024 master, iconset, and icns"

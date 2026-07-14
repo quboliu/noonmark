@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+  fill="none"
+>
+  <defs>
+    <linearGradient id="background" x1="188" y1="116" x2="820" y2="914" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#FBFAF6"/>
+    </linearGradient>
+    <linearGradient id="dial-black" x1="296" y1="274" x2="594" y2="792" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2E2E2C"/>
+      <stop offset="0.55" stop-color="#191918"/>
+      <stop offset="1" stop-color="#262624"/>
+    </linearGradient>
+    <linearGradient id="needle" x1="396" y1="674" x2="634" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1D1D1B"/>
+      <stop offset="0.46" stop-color="#383836"/>
+      <stop offset="1" stop-color="#191917"/>
+    </linearGradient>
+    <linearGradient id="needle-highlight" x1="428" y1="668" x2="570" y2="428" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3B3B38" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#5B5B57" stop-opacity="0.32"/>
+    </linearGradient>
+    <linearGradient id="solar-orange" x1="678" y1="224" x2="744" y2="318" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F58A3E"/>
+      <stop offset="0.52" stop-color="#E4622C"/>
+      <stop offset="1" stop-color="#CF3D24"/>
+    </linearGradient>
+    <linearGradient id="tick-gold" x1="524" y1="808" x2="786" y2="396" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D79848"/>
+      <stop offset="0.62" stop-color="#C67C2E"/>
+      <stop offset="1" stop-color="#B66A27"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#background)"/>
+
+  <!-- Vector reconstruction of the final 01 logo: open sundial body. -->
+  <path
+    d="M 590 226
+       C 495 204 395 232 318 304
+       C 242 376 210 478 232 579
+       C 257 696 362 776 512 778"
+    stroke="url(#dial-black)"
+    stroke-width="30"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Right-side noon scale, kept as explicit geometry for crisp small renders. -->
+  <g stroke="url(#tick-gold)" stroke-width="10" stroke-linecap="butt" stroke-linejoin="round">
+    <path d="M 512 810 C 626 810 716 756 759 662 C 799 574 797 469 751 396"/>
+    <path d="M 512 744 L 512 810"/>
+    <path d="M 566 739 L 579 801"/>
+    <path d="M 615 721 L 641 781"/>
+    <path d="M 658 691 L 699 743"/>
+    <path d="M 692 651 L 746 690"/>
+    <path d="M 716 602 L 779 626"/>
+    <path d="M 724 535 L 790 535"/>
+    <path d="M 716 470 L 779 447"/>
+    <path d="M 731 414 L 759 476"/>
+  </g>
+
+  <!-- Solar marker. -->
+  <circle cx="713" cy="270" r="49" fill="url(#solar-orange)"/>
+
+  <!-- Gnomon needle and grounded base. -->
+  <path
+    d="M 396 664
+       C 428 622 504 530 626 362
+       C 631 355 640 360 635 369
+       L 518 654
+       C 488 666 444 671 396 664 Z"
+    fill="url(#needle)"
+  />
+  <path
+    d="M 422 660
+       C 456 619 518 536 604 404
+       L 500 650
+       C 474 660 448 664 422 660 Z"
+    fill="url(#needle-highlight)"
+  />
+  <ellipse cx="421" cy="665" rx="64" ry="17" fill="#1D1D1B"/>
+</svg>

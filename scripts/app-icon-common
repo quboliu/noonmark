@@ -1,7 +1,7 @@
 # Shared manifest and renderer for the canonical Noonmark app icon assets.
 
 app_icon_resources_dir="App/NoonmarkMacApp/Resources"
-app_icon_source_png="${app_icon_resources_dir}/AppIcon-source.png"
+app_icon_source_svg="${app_icon_resources_dir}/AppIcon.svg"
 app_icon_master_png="${app_icon_resources_dir}/AppIcon-master.png"
 app_icon_iconset_dir="${app_icon_resources_dir}/AppIcon.iconset"
 app_icon_icns_path="${app_icon_resources_dir}/AppIcon.icns"
@@ -21,7 +21,7 @@ app_icon_representations=(
 )
 
 readonly app_icon_resources_dir
-readonly app_icon_source_png
+readonly app_icon_source_svg
 readonly app_icon_master_png
 readonly app_icon_iconset_dir
 readonly app_icon_icns_path
@@ -37,6 +37,6 @@ app_icon_render_png() {
     -s format png \
     --matchTo "$app_icon_srgb_profile" \
     -z "$size" "$size" \
-    "$app_icon_source_png" \
+    "$app_icon_source_svg" \
     --out "$destination" >/dev/null
 }

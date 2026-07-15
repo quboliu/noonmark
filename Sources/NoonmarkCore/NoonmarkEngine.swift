@@ -270,6 +270,9 @@ public final class NoonmarkEngine {
         guard chainTraces.allSatisfy({ $0.status != .pending || $0.date >= today }) else {
             throw NoonmarkError.immutableHistory
         }
+        for trace in chainTraces where trace.status == .pending {
+            try ensureUnlockedDay(trace.date)
+        }
 
         var currentDefinition = try currentDefinition(for: chainID)
         guard currentDefinition.title != normalizedTitle else { return }
@@ -401,6 +404,7 @@ public final class NoonmarkEngine {
         guard date >= today else {
             throw NoonmarkError.invalidTransition("task-pool tasks cannot be scheduled into the past")
         }
+        try ensureUnlockedDay(date)
 
         let definition = try currentDefinition(for: chainID)
         let chain = try chain(chainID)
@@ -621,6 +625,7 @@ public final class NoonmarkEngine {
 
     public func markCompleted(traceID: DayTraceID, today: LocalDate, now: Date = Date()) throws {
         var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.date == today else {
             if trace.date > today {
                 throw NoonmarkError.futurePlanCannotComplete
@@ -643,6 +648,7 @@ public final class NoonmarkEngine {
 
     public func undoCompleted(traceID: DayTraceID, today: LocalDate, now: Date = Date()) throws {
         var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.date == today else {
             throw NoonmarkError.historicalCompletionCannotBeUndone
         }
@@ -659,6 +665,7 @@ public final class NoonmarkEngine {
 
     public func returnToPool(traceID: DayTraceID, today: LocalDate, now: Date = Date()) throws {
         var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
 
         if trace.date > today {
             guard trace.continuedFromTraceID == nil else {
@@ -692,6 +699,8 @@ public final class NoonmarkEngine {
 
     public func rescheduleFuturePlan(traceID: DayTraceID, targetDate: LocalDate, today: LocalDate, now: Date = Date()) throws {
         var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
+        try ensureUnlockedDay(targetDate)
         guard trace.date > today, targetDate > today else {
             throw NoonmarkError.invalidTransition("only future plans can be rescheduled to future dates")
         }
@@ -715,6 +724,7 @@ public final class NoonmarkEngine {
     ) throws -> DayTraceID {
         var source = try trace(traceID)
         try ensureActiveChain(source.chainID)
+        try ensureUnlockedDay(targetDate)
         guard targetDate >= today else {
             throw NoonmarkError.invalidTransition("continuation target cannot be in the past")
         }
@@ -768,6 +778,7 @@ public final class NoonmarkEngine {
             .map { [try TaskNoteEntry(body: $0, now: now)] } ?? []
         var oldTrace = try trace(traceID)
         try ensureActiveChain(oldTrace.chainID)
+        try ensureUnlockedDay(oldTrace.date)
         guard oldTrace.date == today, oldTrace.status == .pending else {
             throw NoonmarkError.invalidTransition("only pending current-day traces can change definition")
         }
@@ -785,7 +796,7 @@ public final class NoonmarkEngine {
             chainID: newChain.id,
             definitionID: newDefinition.id,
             date: today,
-            priority: oldTrace.priority + 1,
+            priority: nextPriority(on: today),
             descriptionText: newDefinition.descriptionText,
             noteEntries: newChain.activeNoteEntries,
             now: now
@@ -844,7 +855,10 @@ public final class NoonmarkEngine {
 
         try source.markContentModified(at: now)
         try chain.markContentModified(at: now)
-        if source.date >= today {
+        if days[source.date]?.lockedAt != nil {
+            source.status = .unfinished
+            source.settledAt = source.settledAt ?? now
+        } else if source.date >= today {
             source.status = .pending
             source.settledAt = nil
         } else {
@@ -898,6 +912,7 @@ public final class NoonmarkEngine {
     ) throws -> SubtaskID {
         let normalizedTitle = try normalizeTitle(title)
         let trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.status == .pending else {
             throw NoonmarkError.invalidTransition("subtasks can only be added to pending traces")
         }
@@ -919,6 +934,7 @@ public final class NoonmarkEngine {
             throw NoonmarkError.notFound("subtask")
         }
         let trace = try trace(subtask.traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.date == today, trace.status == .pending else {
             throw NoonmarkError.immutableHistory
         }
@@ -935,6 +951,7 @@ public final class NoonmarkEngine {
             throw NoonmarkError.notFound("subtask")
         }
         let trace = try trace(subtask.traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.date == today, trace.status == .pending else {
             throw NoonmarkError.immutableHistory
         }
@@ -952,6 +969,7 @@ public final class NoonmarkEngine {
             throw NoonmarkError.notFound("subtask")
         }
         let trace = try trace(subtask.traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.date == today, trace.status == .pending else {
             throw NoonmarkError.immutableHistory
         }
@@ -968,6 +986,7 @@ public final class NoonmarkEngine {
             throw NoonmarkError.notFound("subtask")
         }
         let trace = try trace(subtask.traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.date == today, trace.status == .pending else {
             throw NoonmarkError.immutableHistory
         }
@@ -983,6 +1002,7 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws {
         var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.status == .pending else {
             throw NoonmarkError.invalidTransition("only pending traces can update descriptive text")
         }
@@ -1005,6 +1025,7 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws {
         var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.status == .pending else {
             throw NoonmarkError.invalidTransition("only pending traces can edit notes")
         }
@@ -1023,6 +1044,7 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws -> TaskNoteEntryID {
         var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.status == .pending else {
             throw NoonmarkError.invalidTransition("only pending traces can append notes")
         }
@@ -1043,6 +1065,7 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws {
         var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.status == .pending else {
             throw NoonmarkError.invalidTransition("only pending traces can delete notes")
         }
@@ -1060,6 +1083,7 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws {
         var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.date == today, trace.status == .pending else {
             throw NoonmarkError.immutableHistory
         }
@@ -1126,14 +1150,95 @@ public final class NoonmarkEngine {
         today: LocalDate,
         now: Date = Date()
     ) throws {
-        var trace = try trace(traceID)
+        let trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
         guard trace.date >= today else {
             throw NoonmarkError.immutableHistory
         }
-        guard trace.priority != newPriority else { return }
-        try trace.markContentModified(at: now)
-        trace.priority = newPriority
-        traces[trace.id] = trace
+        guard trace.status == .pending else {
+            throw NoonmarkError.invalidTransition(
+                "only pending day traces can change priority"
+            )
+        }
+        let pendingSlots = pendingPrioritySlots(on: trace.date)
+        guard let currentIndex = pendingSlots.firstIndex(where: { $0.id == traceID }) else {
+            throw NoonmarkError.notFound("day trace priority")
+        }
+        let targetIndices = pendingSlots.indices.filter {
+            pendingSlots[$0].priority == newPriority
+        }
+        guard targetIndices.count == 1, let targetIndex = targetIndices.first else {
+            throw NoonmarkError.invalidInput(
+                "priority must reference an existing pending day-trace slot"
+            )
+        }
+        guard currentIndex != targetIndex else { return }
+
+        let targetTraceID: DayTraceID?
+        if targetIndex < currentIndex {
+            targetTraceID = pendingSlots[targetIndex].id
+        } else {
+            let followingIndex = targetIndex + 1
+            targetTraceID = pendingSlots.indices.contains(followingIndex)
+                ? pendingSlots[followingIndex].id
+                : nil
+        }
+        try reorderDayTrace(
+            traceID,
+            before: targetTraceID,
+            today: today,
+            now: now
+        )
+    }
+
+    public func reorderDayTrace(
+        _ traceID: DayTraceID,
+        before targetTraceID: DayTraceID?,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        let movingTrace = try trace(traceID)
+        try ensureUnlockedDay(movingTrace.date)
+        guard movingTrace.date >= today else {
+            throw NoonmarkError.immutableHistory
+        }
+        guard movingTrace.status == .pending else {
+            throw NoonmarkError.invalidTransition(
+                "only pending day traces can change priority"
+            )
+        }
+        try validatePriorityTarget(
+            targetTraceID,
+            movingTrace: movingTrace
+        )
+        guard targetTraceID != traceID else { return }
+
+        let pendingSlots = pendingPrioritySlots(on: movingTrace.date)
+        let prioritySlots = pendingSlots.map(\.priority)
+        var orderedIDs = pendingSlots.map(\.id)
+        guard let movingIndex = orderedIDs.firstIndex(of: traceID) else {
+            throw NoonmarkError.notFound("day trace priority")
+        }
+        orderedIDs.remove(at: movingIndex)
+        if let targetTraceID, let targetIndex = orderedIDs.firstIndex(of: targetTraceID) {
+            orderedIDs.insert(traceID, at: targetIndex)
+        } else {
+            orderedIDs.append(traceID)
+        }
+
+        var reordered: [DayTrace] = []
+        reordered.reserveCapacity(orderedIDs.count)
+        for (id, priority) in zip(orderedIDs, prioritySlots) {
+            var candidate = try trace(id)
+            if candidate.priority != priority {
+                try candidate.markContentModified(at: now)
+                candidate.priority = priority
+            }
+            reordered.append(candidate)
+        }
+        for candidate in reordered {
+            traces[candidate.id] = candidate
+        }
     }
 
     public func settleDays(upTo today: LocalDate, now: Date = Date()) throws {
@@ -1307,19 +1412,60 @@ private extension NoonmarkEngine {
         return trimmed?.isEmpty == true ? nil : trimmed
     }
 
+    func pendingPrioritySlots(on date: LocalDate) -> [DayTrace] {
+        getDayTodo(date: date).traces.filter { $0.status == .pending }
+    }
+
+    func validatePriorityTarget(
+        _ targetTraceID: DayTraceID?,
+        movingTrace: DayTrace
+    ) throws {
+        guard let targetTraceID else { return }
+        let targetTrace = try trace(targetTraceID)
+        guard targetTrace.date == movingTrace.date else {
+            throw NoonmarkError.invalidInput(
+                "day traces can only be reordered within the same date"
+            )
+        }
+        guard targetTrace.status == .pending else {
+            throw NoonmarkError.invalidTransition(
+                "priority targets must be pending day traces"
+            )
+        }
+    }
+
     func sorted(_ traces: [DayTrace], by sort: ViewSort) -> [DayTrace] {
         switch sort {
         case .priority:
-            return traces.sorted { $0.priority < $1.priority }
+            return traces.sorted(by: tracePriorityOrder)
         case .createdAt:
-            return traces.sorted { $0.createdAt < $1.createdAt }
+            return traces.sorted {
+                if $0.createdAt != $1.createdAt {
+                    return $0.createdAt < $1.createdAt
+                }
+                return $0.id.description < $1.id.description
+            }
         case .title:
             return traces.sorted {
                 let lhs = definitions[$0.definitionID]?.title ?? ""
                 let rhs = definitions[$1.definitionID]?.title ?? ""
-                return lhs.localizedStandardCompare(rhs) == .orderedAscending
+                let comparison = lhs.localizedStandardCompare(rhs)
+                if comparison != .orderedSame {
+                    return comparison == .orderedAscending
+                }
+                return $0.id.description < $1.id.description
             }
         }
+    }
+
+    func tracePriorityOrder(_ lhs: DayTrace, _ rhs: DayTrace) -> Bool {
+        if lhs.priority != rhs.priority {
+            return lhs.priority < rhs.priority
+        }
+        if lhs.createdAt != rhs.createdAt {
+            return lhs.createdAt < rhs.createdAt
+        }
+        return lhs.id.description < rhs.id.description
     }
 
     func nextPriority(on date: LocalDate) -> Int {
@@ -1329,6 +1475,12 @@ private extension NoonmarkEngine {
     func ensureDay(_ date: LocalDate, now: Date) {
         if days[date] == nil {
             days[date] = Day(date: date, now: now)
+        }
+    }
+
+    func ensureUnlockedDay(_ date: LocalDate) throws {
+        guard days[date]?.lockedAt == nil else {
+            throw NoonmarkError.immutableHistory
         }
     }
 
@@ -1531,7 +1683,10 @@ private extension NoonmarkEngine {
         if lhs.priority != rhs.priority {
             return lhs.priority < rhs.priority
         }
-        return lhs.createdAt < rhs.createdAt
+        if lhs.createdAt != rhs.createdAt {
+            return lhs.createdAt < rhs.createdAt
+        }
+        return lhs.id.description < rhs.id.description
     }
 
     func subtaskRecordChronology(_ lhs: SubtaskTrajectoryRecord, _ rhs: SubtaskTrajectoryRecord) -> Bool {

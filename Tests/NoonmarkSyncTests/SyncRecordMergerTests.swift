@@ -2295,15 +2295,15 @@ final class SyncRecordMergerTests: XCTestCase {
         try local.settleDays(upTo: tomorrow, now: now.addingTimeInterval(60))
         let localSnapshot = local.snapshot()
 
-        let remote = try NoonmarkEngine(snapshot: localSnapshot)
-        try remote.undoCompleted(
-            traceID: traceID,
-            today: today,
-            now: now.addingTimeInterval(120)
+        // Current engines reject this mutation before it can be published. Forge
+        // the stale wire fact explicitly so the merge boundary remains covered.
+        var remoteTrace = try XCTUnwrap(
+            localSnapshot.traces.first(where: { $0.id == traceID })
         )
-        let remoteTrace = try XCTUnwrap(
-            remote.snapshot().traces.first(where: { $0.id == traceID })
-        )
+        remoteTrace.status = .pending
+        remoteTrace.completedAt = nil
+        remoteTrace.settledAt = nil
+        try remoteTrace.markContentModified(at: now.addingTimeInterval(120))
         let mapper = SyncRecordMapper()
         let remoteRecord = try mapper.record(
             for: remoteTrace,

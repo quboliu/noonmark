@@ -288,6 +288,49 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.definitions[newDefinitionID]?.sequence, 1)
     }
 
+    func testChangingNonfinalTraceAppendsWithoutCollidingWithExistingPriorityFacts() throws {
+        let engine = NoonmarkEngine()
+        let changedChainID = try engine.createPoolTask(title: "需要变更", now: now)
+        let middleChainID = try engine.createPoolTask(title: "中间任务", now: now)
+        let lastChainID = try engine.createPoolTask(title: "最后任务", now: now)
+        let changedTraceID = try engine.scheduleFromPool(
+            chainID: changedChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let middleTraceID = try engine.scheduleFromPool(
+            chainID: middleChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let lastTraceID = try engine.scheduleFromPool(
+            chainID: lastChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let middleFact = try XCTUnwrap(engine.traces[middleTraceID])
+        let lastFact = try XCTUnwrap(engine.traces[lastTraceID])
+
+        let replacementTraceID = try engine.changeTrace(
+            traceID: changedTraceID,
+            newTitle: "变更后的任务",
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(engine.traces[changedTraceID]?.priority, 1)
+        XCTAssertEqual(engine.traces[middleTraceID], middleFact)
+        XCTAssertEqual(engine.traces[lastTraceID], lastFact)
+        XCTAssertEqual(engine.traces[replacementTraceID]?.priority, 4)
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.priority),
+            [1, 2, 3, 4]
+        )
+    }
+
     func testCurrentReturnToPoolLeavesTraceAndMakesChainSchedulableAgain() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "回池测试", now: now)
@@ -1143,5 +1186,376 @@ final class NoonmarkEngineTests: XCTestCase {
             XCTAssertEqual(error.localizedDescription, "还有未完成子任务，完成全部子任务后才能完成父任务")
         }
         XCTAssertEqual(engine.traces[traceID]?.status, .pending)
+    }
+
+    func testLockedDayCannotBeReopenedWhenTheObservedNaturalDayMovesBackward() throws {
+        let engine = NoonmarkEngine()
+        let completedChainID = try engine.createPoolTask(title: "已完成", now: now)
+        let completedTraceID = try engine.scheduleFromPool(
+            chainID: completedChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.markCompleted(
+            traceID: completedTraceID,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.settleDays(upTo: day2, now: now.addingTimeInterval(2))
+
+        XCTAssertThrowsError(
+            try engine.undoCompleted(
+                traceID: completedTraceID,
+                today: day1,
+                now: now.addingTimeInterval(3)
+            )
+        )
+        XCTAssertThrowsError(
+            try engine.updatePriority(
+                traceID: completedTraceID,
+                newPriority: 9,
+                today: day1,
+                now: now.addingTimeInterval(3)
+            )
+        )
+
+        let poolChainID = try engine.createPoolTask(
+            title: "不能塞回已锁日",
+            now: now.addingTimeInterval(3)
+        )
+        XCTAssertThrowsError(
+            try engine.scheduleFromPool(
+                chainID: poolChainID,
+                date: day1,
+                today: day1,
+                now: now.addingTimeInterval(4)
+            )
+        ) { error in
+            XCTAssertEqual(error as? NoonmarkError, .immutableHistory)
+        }
+        XCTAssertEqual(engine.traces[completedTraceID]?.status, .completed)
+        XCTAssertEqual(engine.traces[completedTraceID]?.priority, 1)
+        XCTAssertTrue(engine.taskPool().contains { $0.chain.id == poolChainID })
+    }
+
+    func testDayTraceReorderProducesContiguousStablePriorities() throws {
+        let engine = NoonmarkEngine()
+        let firstChain = try engine.createPoolTask(title: "第一项", now: now)
+        let secondChain = try engine.createPoolTask(title: "第二项", now: now)
+        let thirdChain = try engine.createPoolTask(title: "第三项", now: now)
+        let first = try engine.scheduleFromPool(
+            chainID: firstChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let second = try engine.scheduleFromPool(
+            chainID: secondChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let third = try engine.scheduleFromPool(
+            chainID: thirdChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+
+        try engine.reorderDayTrace(
+            third,
+            before: first,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.id),
+            [third, first, second]
+        )
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.priority),
+            [1, 2, 3]
+        )
+    }
+
+    func testPendingDayTraceReorderPreservesTerminalPriorityFact() throws {
+        let engine = NoonmarkEngine()
+        let firstChain = try engine.createPoolTask(title: "第一项", now: now)
+        let completedChain = try engine.createPoolTask(title: "完成项", now: now)
+        let thirdChain = try engine.createPoolTask(title: "第三项", now: now)
+        let first = try engine.scheduleFromPool(
+            chainID: firstChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let completed = try engine.scheduleFromPool(
+            chainID: completedChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let third = try engine.scheduleFromPool(
+            chainID: thirdChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.markCompleted(
+            traceID: completed,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let completedFact = try XCTUnwrap(engine.traces[completed])
+
+        try engine.reorderDayTrace(
+            third,
+            before: first,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.id),
+            [third, completed, first]
+        )
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.priority),
+            [1, 2, 3]
+        )
+        XCTAssertEqual(engine.traces[completed], completedFact)
+
+        try engine.updatePriority(
+            traceID: first,
+            newPriority: 1,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.id),
+            [first, completed, third]
+        )
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.priority),
+            [1, 2, 3]
+        )
+        XCTAssertEqual(engine.traces[completed], completedFact)
+    }
+
+    func testDayTracePriorityMutationRejectsTerminalSourceAndTargetAtomically() throws {
+        let engine = NoonmarkEngine()
+        let completedChain = try engine.createPoolTask(title: "完成项", now: now)
+        let pendingChain = try engine.createPoolTask(title: "待完成项", now: now)
+        let completed = try engine.scheduleFromPool(
+            chainID: completedChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let pending = try engine.scheduleFromPool(
+            chainID: pendingChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.markCompleted(
+            traceID: completed,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let snapshot = engine.snapshot()
+
+        XCTAssertThrowsError(
+            try engine.updatePriority(
+                traceID: completed,
+                newPriority: 9,
+                today: day1,
+                now: now.addingTimeInterval(2)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidTransition("only pending day traces can change priority")
+            )
+        }
+        XCTAssertEqual(engine.snapshot(), snapshot)
+
+        XCTAssertThrowsError(
+            try engine.reorderDayTrace(
+                completed,
+                before: pending,
+                today: day1,
+                now: now.addingTimeInterval(2)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidTransition("only pending day traces can change priority")
+            )
+        }
+        XCTAssertEqual(engine.snapshot(), snapshot)
+
+        XCTAssertThrowsError(
+            try engine.reorderDayTrace(
+                pending,
+                before: completed,
+                today: day1,
+                now: now.addingTimeInterval(2)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidTransition("priority targets must be pending day traces")
+            )
+        }
+        XCTAssertEqual(engine.snapshot(), snapshot)
+    }
+
+    func testDayTracePriorityUpdateMovesWithinExistingPendingSlots() throws {
+        let engine = NoonmarkEngine()
+        let firstChain = try engine.createPoolTask(title: "第一项", now: now)
+        let secondChain = try engine.createPoolTask(title: "第二项", now: now)
+        let thirdChain = try engine.createPoolTask(title: "第三项", now: now)
+        let first = try engine.scheduleFromPool(
+            chainID: firstChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let second = try engine.scheduleFromPool(
+            chainID: secondChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let third = try engine.scheduleFromPool(
+            chainID: thirdChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+
+        try engine.updatePriority(
+            traceID: first,
+            newPriority: 3,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.id),
+            [second, third, first]
+        )
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.priority),
+            [1, 2, 3]
+        )
+
+        let snapshot = engine.snapshot()
+        XCTAssertThrowsError(
+            try engine.updatePriority(
+                traceID: first,
+                newPriority: 9,
+                today: day1,
+                now: now.addingTimeInterval(2)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidInput("priority must reference an existing pending day-trace slot")
+            )
+        }
+        XCTAssertEqual(engine.snapshot(), snapshot)
+    }
+
+    func testDayTraceReorderRejectsCrossDateAndLockedHistoryAtomically() throws {
+        let engine = NoonmarkEngine()
+        let firstChain = try engine.createPoolTask(title: "第一天", now: now)
+        let secondChain = try engine.createPoolTask(title: "第二天", now: now)
+        let first = try engine.scheduleFromPool(
+            chainID: firstChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let second = try engine.scheduleFromPool(
+            chainID: secondChain,
+            date: day2,
+            today: day1,
+            now: now
+        )
+        let snapshot = engine.snapshot()
+
+        XCTAssertThrowsError(
+            try engine.reorderDayTrace(
+                first,
+                before: second,
+                today: day1,
+                now: now.addingTimeInterval(1)
+            )
+        )
+        XCTAssertEqual(engine.snapshot(), snapshot)
+
+        try engine.settleDays(upTo: day2, now: now.addingTimeInterval(2))
+        let settledSnapshot = engine.snapshot()
+        XCTAssertThrowsError(
+            try engine.reorderDayTrace(
+                first,
+                before: nil,
+                today: day1,
+                now: now.addingTimeInterval(3)
+            )
+        )
+        XCTAssertEqual(engine.snapshot(), settledSnapshot)
+    }
+
+    func testLockedAbandonedTraceCannotBecomePendingWhenNaturalDayMovesBackward() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "已废弃", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.abandonChain(from: traceID, now: now.addingTimeInterval(1))
+        try engine.settleDays(upTo: day2, now: now.addingTimeInterval(2))
+
+        _ = try engine.reactivateAbandonedChain(
+            from: traceID,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(engine.traces[traceID]?.status, .unfinished)
+        XCTAssertNotNil(engine.traces[traceID]?.settledAt)
+        XCTAssertEqual(engine.chains[chainID]?.state, .active)
+        XCTAssertNotNil(engine.days[day1]?.lockedAt)
+    }
+
+    func testLockedUnfinishedTraceCanStillContinueToAnUnlockedTarget() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "仍可延续", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.settleDays(upTo: day2, now: now.addingTimeInterval(1))
+
+        let continuedID = try engine.continueTrace(
+            traceID: traceID,
+            targetDate: day2,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(engine.traces[traceID]?.status, .continued)
+        XCTAssertEqual(engine.traces[continuedID]?.date, day2)
+        XCTAssertEqual(engine.traces[continuedID]?.status, .pending)
     }
 }

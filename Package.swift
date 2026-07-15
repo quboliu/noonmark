@@ -10,6 +10,8 @@ let package = Package(
     products: [
         .executable(name: "NoonmarkMacApp", targets: ["NoonmarkMacApp"]),
         .library(name: "NoonmarkCore", targets: ["NoonmarkCore"]),
+        .library(name: "NoonmarkDayContext", targets: ["NoonmarkDayContext"]),
+        .library(name: "NoonmarkMacRuntime", targets: ["NoonmarkMacRuntime"]),
         .library(name: "NoonmarkAI", targets: ["NoonmarkAI"]),
         .library(name: "NoonmarkZhulong", targets: ["NoonmarkZhulong"]),
         .library(name: "NoonmarkZhulongAI", targets: ["NoonmarkZhulongAI"]),
@@ -21,13 +23,21 @@ let package = Package(
         .executableTarget(
             name: "NoonmarkMacApp",
             dependencies: [
-                "NoonmarkCore", "NoonmarkAI", "NoonmarkZhulong", "NoonmarkZhulongAI", "NoonmarkMacUIContract",
+                "NoonmarkCore", "NoonmarkDayContext", "NoonmarkMacRuntime", "NoonmarkAI", "NoonmarkZhulong", "NoonmarkZhulongAI", "NoonmarkMacUIContract",
                 "NoonmarkStorage", "NoonmarkSync"
             ],
             path: "App/NoonmarkMacApp",
             exclude: ["Resources"]
         ),
         .target(name: "NoonmarkCore"),
+        .target(
+            name: "NoonmarkDayContext",
+            dependencies: ["NoonmarkCore"]
+        ),
+        .target(
+            name: "NoonmarkMacRuntime",
+            dependencies: ["NoonmarkCore", "NoonmarkDayContext"]
+        ),
         .target(
             name: "NoonmarkAI",
             dependencies: ["NoonmarkCore"]
@@ -62,6 +72,14 @@ let package = Package(
         .testTarget(
             name: "NoonmarkCoreTests",
             dependencies: ["NoonmarkCore"]
+        ),
+        .testTarget(
+            name: "NoonmarkDayContextTests",
+            dependencies: ["NoonmarkDayContext", "NoonmarkCore"]
+        ),
+        .testTarget(
+            name: "NoonmarkMacRuntimeTests",
+            dependencies: ["NoonmarkMacRuntime", "NoonmarkCore", "NoonmarkDayContext"]
         ),
         .testTarget(
             name: "NoonmarkAITests",

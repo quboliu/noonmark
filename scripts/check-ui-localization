@@ -1,0 +1,198 @@
+#!/bin/bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+baseline="$repo_root/scripts/ui-localization-literals-baseline.txt"
+raw_matches="$(mktemp)"
+inventory="$(mktemp)"
+scanner="$(mktemp)"
+scratch="$(mktemp -d)"
+trap 'rm -f "$raw_matches" "$inventory" "$scanner"; rm -rf "$scratch"' EXIT
+
+# This scanner deliberately understands enough declaration scope to cover copy
+# returned by View helpers, not only literals passed directly to Text/Button.
+# Presentation boundaries and test/fixture scopes remain valid owners of Han
+# literals and are excluded by file or declaration name.
+cat > "$scanner" <<'PERL'
+use strict;
+use warnings;
+use utf8;
+
+binmode STDOUT, ':encoding(UTF-8)';
+my $path = shift @ARGV;
+my ($name) = $path =~ m{/([^/]+)$};
+exit 0 if ($name // '') =~ /^(?:AppCopy|AppPresentation)(?:\+.*)?\.swift$/;
+exit 0 if ($name // '') =~ /(?:E2E|Automation|Driver|Fixture)/;
+
+open my $source, '<:encoding(UTF-8)', $path or die "cannot read $path: $!";
+my @lines = <$source>;
+close $source;
+
+my $depth = 0;
+my $in_multiline_string = 0;
+my @excluded_scopes;
+my @ui_helper_scopes;
+my $pending_excluded = 0;
+my $pending_ui_helper = 0;
+
+sub structural_line {
+    my ($line) = @_;
+    my $outside = '';
+    while (length $line) {
+        if ($in_multiline_string) {
+            my $end = index($line, '"""');
+            return $outside if $end < 0;
+            $line = substr($line, $end + 3);
+            $in_multiline_string = 0;
+            next;
+        }
+        my $start = index($line, '"""');
+        if ($start < 0) {
+            $outside .= $line;
+            last;
+        }
+        $outside .= substr($line, 0, $start);
+        $line = substr($line, $start + 3);
+        $in_multiline_string = 1;
+    }
+    $outside =~ s/"(?:\\.|[^"\\])*"//g;
+    $outside =~ s{//.*$}{};
+    return $outside;
+}
+
+for my $index (0 .. $#lines) {
+    my $line = $lines[$index];
+    my $structural = structural_line($line);
+    my $opens = () = $structural =~ /\{/g;
+    my $closes = () = $structural =~ /\}/g;
+
+    my $excluded_declaration = $line =~ /\b(?:struct|class|enum|actor|extension|func)\b[^\n]*(?:E2E|Automation|Driver|Fixture)/
+        || $line =~ /\bfunc\s+seed\s*\(/;
+    my $ui_helper_declaration = $line =~ /\bvar\s+body\s*:\s*some\s+View\b/
+        || $line =~ /\bfunc\b[^\n]*->\s*some\s+View\b/
+        || $line =~ /\b(?:var|func)\s+[A-Za-z0-9_]*(?:Label|Title|Subtitle|Text|Placeholder|Status|Badge|Hint|Header|Footer|Toast|Notice|MetaText)[A-Za-z0-9_]*\b/i;
+
+    $pending_excluded = 1 if $excluded_declaration;
+    $pending_ui_helper = 1 if $ui_helper_declaration;
+    if ($opens > 0) {
+        if ($pending_excluded) {
+            push @excluded_scopes, $depth;
+            $pending_excluded = 0;
+        }
+        if ($pending_ui_helper) {
+            push @ui_helper_scopes, $depth;
+            $pending_ui_helper = 0;
+        }
+    }
+
+    my $is_excluded = @excluded_scopes > 0;
+    my $has_han_literal = $line =~ /"(?:\\.|[^"\\])*\p{Han}(?:\\.|[^"\\])*"/;
+    my $direct_surface = $line =~ /\b(?:Text|Button|Label|TextField|SecureField|Toggle|Picker|Menu|Section|GroupBox|Link|HeaderButton|SmallActionButton|DetailSection|MarkdownText|MarkdownInlineText|ClassificationManagerButton)\s*\([^\n]*"[^"\n]*\p{Han}/
+        || $line =~ /\.(?:accessibilityLabel|help|navigationTitle)\s*\([^\n]*"[^"\n]*\p{Han}/
+        || $line =~ /\b(?:showToast|reportUIError)\s*\([^\n]*"[^"\n]*\p{Han}/
+        || $line =~ /\b(?:descriptionText|initialNoteBody|intent):\s*"[^"\n]*\p{Han}/
+        || $line =~ /\b(?:validationMessage|statusMessage|message|toast)\s*=\s*"[^"\n]*\p{Han}/
+        || $line =~ /\b[A-Za-z0-9_]+\.(?:title|messageText|informativeText|placeholderString|toolTip)\s*=(?!=)[^\n]*"[^"\n]*\p{Han}/
+        || $line =~ /\baddButton\s*\(\s*withTitle:[^\n]*"[^"\n]*\p{Han}/;
+    my $helper_surface = @ui_helper_scopes > 0 && $has_han_literal;
+
+    if (!$is_excluded && ($direct_surface || $helper_surface)) {
+        chomp $line;
+        print "$path:" . ($index + 1) . ":$line\n";
+    }
+
+    $depth += $opens - $closes;
+    pop @excluded_scopes while @excluded_scopes && $depth <= $excluded_scopes[-1];
+    pop @ui_helper_scopes while @ui_helper_scopes && $depth <= $ui_helper_scopes[-1];
+}
+PERL
+
+while IFS= read -r source; do
+    perl "$scanner" "$source" >> "$raw_matches"
+done < <(
+    rg --files "$repo_root/App/NoonmarkMacApp" \
+        -g '*.swift' \
+        -g '!AppCopy*.swift' \
+        -g '!AppPresentation*.swift' \
+        -g '!*E2E*.swift' \
+        -g '!*Automation*.swift' \
+        -g '!*Driver.swift' \
+        -g '!*Fixture*.swift'
+)
+
+if [[ "${1:-}" == "--self-test" ]]; then
+    cat > "$scratch/ProductionView.swift" <<'SWIFT'
+struct ProductionView: View {
+    var body: some View {
+        Text("直接中文")
+    }
+
+    var statusLabel: String {
+        "帮助中文"
+    }
+
+    func saveDefaults() {
+        createTask(descriptionText: "持久化中文")
+        startSession(intent: "模型中文意图")
+    }
+}
+
+private struct FixtureE2EAutomation: View {
+    var body: some View { Text("测试中文") }
+}
+
+func intentKeywords() -> [String] {
+    ["分组", "标签"]
+}
+SWIFT
+    cat > "$scratch/AppCopy.swift" <<'SWIFT'
+struct AppCopy {
+    var title: String { "合法中文" }
+}
+SWIFT
+    self_test_matches="$scratch/self-test-matches.txt"
+    perl "$scanner" "$scratch/ProductionView.swift" > "$self_test_matches"
+    perl "$scanner" "$scratch/AppCopy.swift" >> "$self_test_matches"
+    if [[ "$(wc -l < "$self_test_matches" | tr -d ' ')" != "4" ]] ||
+        ! grep -Fq '直接中文' "$self_test_matches" ||
+        ! grep -Fq '帮助中文' "$self_test_matches" ||
+        ! grep -Fq '持久化中文' "$self_test_matches" ||
+        ! grep -Fq '模型中文意图' "$self_test_matches"; then
+        echo "UI localization scanner self-test failed:" >&2
+        cat "$self_test_matches" >&2
+        exit 1
+    fi
+    echo "UI localization scanner self-test: ok"
+    exit 0
+fi
+
+cat "$raw_matches" \
+    | sed -E "s#^${repo_root}/##; s/^([^:]+):[0-9]+:/\1|/" \
+    | sed -E 's/[[:space:]]+/ /g; s/\| /\|/' \
+    | sort -u > "$inventory"
+
+if [[ "${1:-}" == "--inventory" ]]; then
+    cat "$inventory"
+    exit 0
+fi
+
+if [[ "${1:-}" == "--report" ]]; then
+    printf 'Recognized direct production UI literals: %s\n' "$(wc -l < "$inventory" | tr -d ' ')"
+    awk -F '|' '{ count[$1] += 1 } END { for (file in count) print count[file], file }' "$inventory" \
+        | sort -nr
+    exit 0
+fi
+
+if [[ ! -f "$baseline" ]]; then
+    echo "UI localization baseline is missing: $baseline" >&2
+    exit 1
+fi
+
+if ! diff -u "$baseline" "$inventory"; then
+    echo >&2
+    echo "Direct production UI copy changed outside AppPresentation/AppCopy." >&2
+    echo "Move the copy behind a typed presentation boundary, then deliberately update the reviewed baseline." >&2
+    exit 1
+fi
+
+echo "UI localization literal guard: ok ($(wc -l < "$inventory" | tr -d ' ') known literals)"

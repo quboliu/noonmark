@@ -33,6 +33,9 @@ scripts/test-system
 echo "==> Deterministic simulation tests"
 scripts/test-deterministic-sim
 
+echo "==> UI localization literal guard"
+scripts/check-ui-localization
+
 echo "==> SwiftLint"
 swiftlint lint --quiet
 

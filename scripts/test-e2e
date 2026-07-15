@@ -6,6 +6,22 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   echo "missing required tool: sqlite3" >&2
   exit 1
 fi
+if ! command -v caffeinate >/dev/null 2>&1; then
+  echo "missing required tool: caffeinate" >&2
+  exit 1
+fi
+console_session_state="$(/usr/sbin/ioreg -n Root -d1 2>/dev/null || true)"
+if [[ "$console_session_state" == *'"CGSSessionScreenIsLocked"=Yes'* ]]; then
+  echo "real App E2E requires an unlocked macOS console session" >&2
+  exit 1
+fi
+
+# The suite exercises real AppKit focus, keyboard events, menus, and screenshots.
+# Wake the interactive display once, then keep it awake until this process exits.
+# Without this assertion, a long suite can cross macOS display sleep and produce
+# false focus or framebuffer failures halfway through otherwise valid scenarios.
+caffeinate -d -i -u -w "$$" >/dev/null 2>&1 &
+display_assertion_pid=$!
 
 app_bundle_name="NoonmarkMacAppE2E"
 app_executable_name="NoonmarkMacAppE2E"
@@ -29,7 +45,7 @@ scenarios=(
   "day-review-saved|day|--e2e-update-review --e2e-review-summary E2E自动保存反馈"
   "pool|pool|"
   "pool-context-menu|pool|--e2e-open-pool-context-menu"
-  "pool-classification-overflow|pool|--e2e-classification-overflow-via-ui --e2e-classification-overflow-ui-result-url $PWD/artifacts/e2e/pool-classification-overflow-ui.txt --e2e-ui-entry-keep-open"
+  "pool-classification-overflow|pool|--e2e-classification-overflow-via-ui --e2e-classification-overflow-ui-result-url $PWD/artifacts/e2e/pool-classification-overflow-ui.txt --e2e-ui-entry-keep-open --e2e-classification-overflow-invalidate-first-ready"
   "pool-classification-manager|pool|--select first --e2e-classification-manager-via-ui --e2e-classification-manager-ui-result-url $PWD/artifacts/e2e/pool-classification-manager-ui.txt --e2e-ui-entry-keep-open"
   "pool-classification-manager-labels|pool|--select first --e2e-classification-manager-labels-via-ui --e2e-classification-manager-ui-result-url $PWD/artifacts/e2e/pool-classification-manager-labels-ui.txt --e2e-ui-entry-keep-open"
   "pool-detail|pool|--select first"
@@ -49,6 +65,16 @@ scenarios=(
   "settings|settings|"
   "settings-groups|settings|--e2e-settings-groups"
   "settings-sync|settings|--e2e-settings-sync"
+  "day-minimum-window|day|--e2e-window-size 960x720"
+  "day-wide-window|day|--e2e-window-size 1440x900"
+  "english-day|day||english"
+  "english-pool|pool||english"
+  "english-future|future||english"
+  "english-unfinished|unfinished||english"
+  "english-completed|completed||english"
+  "english-calendar|calendar||english"
+  "english-settings|settings||english"
+  "english-zhulong|zhulong|--e2e-enable-zhulong|english"
 )
 
 requested_scenarios="${NOONMARK_E2E_SCENARIOS:-}"
@@ -106,6 +132,14 @@ terminate_e2e_app() {
   return 1
 }
 
+finish_e2e_session() {
+  terminate_e2e_app >/dev/null 2>&1 || true
+  if kill -0 "$display_assertion_pid" >/dev/null 2>&1; then
+    kill "$display_assertion_pid" >/dev/null 2>&1 || true
+    wait "$display_assertion_pid" 2>/dev/null || true
+  fi
+}
+
 visible_e2e_windows() {
   swift -e '
 import CoreGraphics
@@ -131,11 +165,15 @@ has_e2e_windows() {
 }
 
 terminate_e2e_app
-trap 'terminate_e2e_app >/dev/null 2>&1 || true' EXIT
+trap finish_e2e_session EXIT
 
 find_window_id() {
   local expected_title="$1"
-  NOONMARK_E2E_EXPECTED_WINDOW_TITLE="$expected_title" swift -e '
+  local expected_width="${2:-$expected_window_width}"
+  local expected_height="${3:-$expected_window_height}"
+  NOONMARK_E2E_EXPECTED_WINDOW_TITLE="$expected_title" \
+    NOONMARK_E2E_EXPECTED_WINDOW_WIDTH="$expected_width" \
+    NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT="$expected_height" swift -e '
 import CoreGraphics
 import Darwin
 import Foundation
@@ -159,7 +197,9 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
             let bounds = window[kCGWindowBounds as String] as? [String: Any]
             let width = bounds?["Width"] as? Double ?? 0
             let height = bounds?["Height"] as? Double ?? 0
-            if layer == 0, width == expectedWidth, height == expectedHeight,
+            let sizeMatches = expectedWidth <= 0 || expectedHeight <= 0
+                || (width == expectedWidth && height == expectedHeight)
+            if layer == 0, sizeMatches,
                let number = window[kCGWindowNumber as String]
             {
                 print(number)
@@ -249,46 +289,164 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
 '
 }
 
+capture_classification_overflow_handshake() {
+  local main_window_id="$1"
+  local process_id="$2"
+  local result_path="$3"
+  local screenshot="$4"
+  local expected_recovery_count="$5"
+  local acknowledgement_path="${result_path}.ack"
+  local warmup_screenshot="${screenshot}.warmup.png"
+  local result_value=""
+  local status=""
+  local generation=""
+  local ready_process_id=""
+  local ready_main_window_id=""
+  local ready_presentation_window_id=""
+  local ready_recovery_count=""
+  local extra_field=""
+  local observed_presentation_window_id=""
+
+  for _ in {1..200}; do
+    if [[ -f "$result_path" ]]; then
+      result_value="$(<"$result_path")"
+      if [[ "$result_value" == failed:* ]]; then
+        echo "classification overflow capture handshake failed: $result_value" >&2
+        return 1
+      fi
+      IFS="|" read -r status generation ready_process_id ready_main_window_id \
+        ready_presentation_window_id ready_recovery_count extra_field <<<"$result_value"
+      if [[ "$status" == "ready" && -n "$generation" && -z "$extra_field" &&
+        "$ready_process_id" == "$process_id" &&
+        "$ready_main_window_id" == "$main_window_id" &&
+        "$ready_presentation_window_id" =~ ^[0-9]+$ &&
+        "$ready_recovery_count" =~ ^[0-9]+$ ]] &&
+        ((ready_recovery_count >= expected_recovery_count)); then
+        observed_presentation_window_id=""
+        observed_presentation_window_id="$(
+          find_auxiliary_window_id "$main_window_id" 2>/dev/null || true
+        )"
+        if [[ "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
+          screencapture -x -o -l"$main_window_id" "$warmup_screenshot"
+          sleep 0.25
+          observed_presentation_window_id="$(
+            find_auxiliary_window_id "$main_window_id" 2>/dev/null || true
+          )"
+          if [[ -f "$result_path" && "$(<"$result_path")" == "$result_value" &&
+            "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
+            screencapture -x -o -l"$main_window_id" "$screenshot"
+            observed_presentation_window_id="$(
+              find_auxiliary_window_id "$main_window_id" 2>/dev/null || true
+            )"
+            if [[ -f "$result_path" && "$(<"$result_path")" == "$result_value" &&
+              "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
+              printf '%s\n' "$generation" >"$acknowledgement_path"
+              for _ in {1..80}; do
+                if [[ -f "$result_path" &&
+                  "$(<"$result_path")" == "ok|$generation|$ready_recovery_count" ]]; then
+                  rm -f "$warmup_screenshot"
+                  echo "E2E classification overflow capture handshake: generation=$generation recovery=$ready_recovery_count"
+                  return 0
+                fi
+                if [[ -f "$result_path" && "$(<"$result_path")" == failed:* ]]; then
+                  echo "classification overflow capture acknowledgement failed: $(<"$result_path")" >&2
+                  return 1
+                fi
+                if [[ -f "$result_path" && "$(<"$result_path")" != "$result_value" ]]; then
+                  break
+                fi
+                sleep 0.05
+              done
+            fi
+          fi
+          rm -f "$warmup_screenshot" "$screenshot"
+        fi
+      fi
+    fi
+    sleep 0.05
+  done
+
+  echo "classification overflow capture-ready handshake timed out" >&2
+  if [[ -f "$result_path" ]]; then
+    echo "last handshake state: $(<"$result_path")" >&2
+  fi
+  return 1
+}
+
 capture_app_screenshot() {
   local out_dir="$1"
   local screenshot_name="$2"
   local page="$3"
   local launch_log
   local expected_window_title
+  local expected_frame_width="$expected_window_width"
+  local expected_frame_height="$expected_window_height"
+  local expected_language="${NOONMARK_E2E_EXPECTED_LANGUAGE:-chinese}"
   local ui_entry_result=""
+  local expected_overflow_recovery_count=0
   shift 3
 
   local arguments=("$@")
   for ((index = 0; index < ${#arguments[@]}; index++)); do
+    if [[ "${arguments[$index]}" == "--e2e-window-size" ]]; then
+      requested_window_size="${arguments[$((index + 1))]:-}"
+      if [[ "$requested_window_size" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+        expected_frame_width="${BASH_REMATCH[1]}"
+        expected_frame_height="${BASH_REMATCH[2]}"
+      else
+        echo "invalid E2E window size: ${requested_window_size:-missing}" >&2
+        exit 1
+      fi
+    fi
     if [[ "${arguments[$index]}" == "--e2e-classification-manager-ui-result-url" ||
       "${arguments[$index]}" == "--e2e-classification-overflow-ui-result-url" ]]; then
       ui_entry_result="${arguments[$((index + 1))]:-}"
-      break
+    fi
+    if [[ "${arguments[$index]}" == "--e2e-classification-overflow-invalidate-first-ready" ]]; then
+      expected_overflow_recovery_count=1
     fi
   done
   if [[ -n "$ui_entry_result" ]]; then
-    rm -f "$ui_entry_result"
+    rm -f "$ui_entry_result" "${ui_entry_result}.ack"
+  fi
+  if [[ "$page" == "settings" ]]; then
+    expected_frame_width=0
+    expected_frame_height=0
   fi
 
   launch_log="${out_dir}/${screenshot_name}.log"
 
-  case "$page" in
-    day)
-      if [[ "$screenshot_name" == "day-changed-target" ]]; then
-        expected_window_title="晷迹 · Day Todo — 7月4日"
-      else
-        expected_window_title="晷迹 · Day Todo — 7月5日"
-      fi
-      ;;
-    pool) expected_window_title="晷迹 · 任务池" ;;
-    future) expected_window_title="晷迹 · 未来计划" ;;
-    unfinished) expected_window_title="晷迹 · 未完成" ;;
-    completed) expected_window_title="晷迹 · 已完成" ;;
-    calendar) expected_window_title="晷迹 · 日历 — 7月5日" ;;
-    zhulong) expected_window_title="晷迹 · 烛龙" ;;
-    settings) expected_window_title="晷迹 · 设置" ;;
-    *) expected_window_title="晷迹 · Noonmark" ;;
-  esac
+  if [[ "$expected_language" == "english" ]]; then
+    case "$page" in
+      day) expected_window_title="Noonmark · Day Todo — 5 Jul" ;;
+      pool) expected_window_title="Noonmark · Task Pool" ;;
+      future) expected_window_title="Noonmark · Upcoming" ;;
+      unfinished) expected_window_title="Noonmark · Unfinished" ;;
+      completed) expected_window_title="Noonmark · Completed" ;;
+      calendar) expected_window_title="Noonmark · Calendar — 5 Jul" ;;
+      zhulong) expected_window_title="Noonmark · Zhulong" ;;
+      settings) expected_window_title="Settings" ;;
+      *) expected_window_title="Noonmark" ;;
+    esac
+  else
+    case "$page" in
+      day)
+        if [[ "$screenshot_name" == "day-changed-target" ]]; then
+          expected_window_title="晷迹 · Day Todo — 7月4日"
+        else
+          expected_window_title="晷迹 · Day Todo — 7月5日"
+        fi
+        ;;
+      pool) expected_window_title="晷迹 · 任务池" ;;
+      future) expected_window_title="晷迹 · 未来计划" ;;
+      unfinished) expected_window_title="晷迹 · 未完成" ;;
+      completed) expected_window_title="晷迹 · 已完成" ;;
+      calendar) expected_window_title="晷迹 · 日历 — 7月5日" ;;
+      zhulong) expected_window_title="晷迹 · 烛龙" ;;
+      settings) expected_window_title="设置" ;;
+      *) expected_window_title="晷迹 · Noonmark" ;;
+    esac
+  fi
 
   window_id=""
   : >"$launch_log"
@@ -298,10 +456,17 @@ capture_app_screenshot() {
     echo "launch attempt=$launch_attempt page=$page expected_title=$expected_window_title" >>"$launch_log"
     "$app_executable_path" "$@" --page "$page" >>"$launch_log" 2>&1 &
     app_pid=$!
-    sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
+    if [[ -z "$ui_entry_result" ]]; then
+      sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
+    fi
 
     for _ in {1..20}; do
-      if window_id="$(find_window_id "$expected_window_title" 2>/dev/null)"; then
+      if window_id="$(
+        find_window_id \
+          "$expected_window_title" \
+          "$expected_frame_width" \
+          "$expected_frame_height" 2>/dev/null
+      )"; then
         break
       fi
       sleep 0.25
@@ -329,7 +494,7 @@ capture_app_screenshot() {
     exit 1
   fi
 
-  if [[ -n "$ui_entry_result" ]]; then
+  if [[ -n "$ui_entry_result" && "$screenshot_name" != "pool-classification-overflow" ]]; then
     for _ in {1..80}; do
       if [[ -f "$ui_entry_result" ]]; then
         break
@@ -349,51 +514,300 @@ capture_app_screenshot() {
   mkdir -p "$out_dir"
   screenshot="${out_dir}/${screenshot_name}.png"
   if [[ "$screenshot_name" == "pool-classification-overflow" ]]; then
-    auxiliary_window_id=""
-    for _ in {1..20}; do
-      if auxiliary_window_id="$(find_auxiliary_window_id "$window_id" 2>/dev/null)"; then
-        break
-      fi
-      sleep 0.1
-    done
-    if [[ -z "$auxiliary_window_id" ]]; then
-      echo "classification overflow popover window not found" >&2
+    if [[ -z "$ui_entry_result" ]] || ! capture_classification_overflow_handshake \
+      "$window_id" \
+      "$app_pid" \
+      "$ui_entry_result" \
+      "$screenshot" \
+      "$expected_overflow_recovery_count"; then
+      echo "classification overflow popover was not capture-ready" >&2
       dump_visible_windows >&2
       exit 1
     fi
-    warmup_screenshot="${screenshot}.warmup.png"
-    screencapture -x -l "$window_id" "$warmup_screenshot"
-    sleep 0.25
-    screencapture -x -l "$window_id" "$screenshot"
-    rm -f "$warmup_screenshot"
   else
     warmup_screenshot="${screenshot}.warmup.png"
-    screencapture -x -l "$window_id" "$warmup_screenshot"
+    screencapture -x -o -l"$window_id" "$warmup_screenshot"
     sleep 0.25
-    screencapture -x -l "$window_id" "$screenshot"
+    screencapture -x -o -l"$window_id" "$screenshot"
     rm -f "$warmup_screenshot"
   fi
   width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
   height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
 
-  if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 || "${width:-0}" -gt 3000 || "${height:-0}" -gt 2000 ]]; then
+  if [[ "$page" == "settings" ]]; then
+    if [[ "${width:-0}" -lt 680 || "${height:-0}" -lt 500 || "${width:-0}" -gt 2000 || "${height:-0}" -gt 1600 ]]; then
+      echo "invalid native Settings screenshot size for ${screenshot_name}: ${width:-unknown}x${height:-unknown}" >&2
+      exit 1
+    fi
+  elif [[ "${width:-0}" -lt "$expected_frame_width" || "${height:-0}" -lt "$expected_frame_height" ||
+    "${width:-0}" -gt 4800 || "${height:-0}" -gt 3200 ]]; then
     echo "invalid e2e screenshot size for ${screenshot_name}: ${width:-unknown}x${height:-unknown}" >&2
     exit 1
   fi
 
+  assert_clean_app_log "${screenshot_name} screenshot" "$launch_log"
   echo "E2E ${screenshot_name} screenshot: ${screenshot} (${width}x${height})"
 }
 
 assert_clean_app_log() {
   local label="$1"
   local log_path="$2"
-  local failure_pattern='Noonmark persistence (load|save) failed|Fatal error|Assertion failed|Precondition failed'
+  local failure_pattern='Noonmark persistence (load|save) failed|Fatal error|Assertion failed|Precondition failed|Publishing changes from within view updates|Publishing changes from background threads|Modifying state during view update|AttributeGraph: cycle detected|SwiftUI.*(runtime warning|encountered an issue)|ForEach<.*ID .*occurs multiple times|the ID .*occurs multiple times within the collection|Unable to simultaneously satisfy constraints|NSLayoutConstraint.*(conflict|unsatisfiable)|Accessibility.*(action.*)?(failed|failure|rejected|could not|unable)|AX(UIElement)?.*(failed|failure)|kAXError'
 
-  if grep -E -n "$failure_pattern" "$log_path" >/dev/null 2>&1; then
-    echo "${label} app log contains a persistence or runtime failure:" >&2
-    grep -E -n "$failure_pattern" "$log_path" >&2
+  if grep -E -i -n "$failure_pattern" "$log_path" >/dev/null 2>&1; then
+    echo "${label} app log contains a persistence, UI runtime, layout, or accessibility failure:" >&2
+    grep -E -i -n "$failure_pattern" "$log_path" >&2
     exit 1
   fi
+}
+
+prepare_english_screenshot_database() {
+  local database_path="$1"
+  local bootstrap_log="$2"
+  local bootstrap_pid
+  local ready=0
+
+  rm -f "$database_path" "${database_path}-wal" "${database_path}-shm"
+  : > "$bootstrap_log"
+  "$app_executable_path" \
+    --data-url "$database_path" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale en_SG \
+    > "$bootstrap_log" 2>&1 &
+  bootstrap_pid=$!
+
+  for _ in {1..120}; do
+    if [[ -f "$database_path" ]] &&
+      [[ "$(sqlite3 -noheader "$database_path" "SELECT count(*) FROM app_preferences WHERE id = 1;" 2>/dev/null || true)" == "1" ]]; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$bootstrap_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  terminate_e2e_app
+  wait "$bootstrap_pid" 2>/dev/null || true
+  if [[ "$ready" != "1" ]]; then
+    echo "English screenshot database was not initialized by the real app" >&2
+    cat "$bootstrap_log" >&2
+    exit 1
+  fi
+  assert_clean_app_log "English database bootstrap" "$bootstrap_log"
+
+  sqlite3 "$database_path" "UPDATE app_preferences SET language = 'english' WHERE id = 1;"
+  if [[ "$(sqlite3 -noheader "$database_path" "SELECT language FROM app_preferences WHERE id = 1;")" != "english" ]]; then
+    echo "English screenshot database did not retain the English preference" >&2
+    exit 1
+  fi
+}
+
+assert_english_screenshot() {
+  local screenshot="$1"
+  local page="$2"
+  local expected_text
+  local ocr="${screenshot%.png}-ocr.txt"
+  local ocr_log="${screenshot%.png}-ocr.log"
+
+  case "$page" in
+    day) expected_text="Day Todo" ;;
+    pool) expected_text="Task Pool" ;;
+    future) expected_text="Upcoming" ;;
+    unfinished) expected_text="Unfinished" ;;
+    completed) expected_text="Completed" ;;
+    calendar) expected_text="Calendar" ;;
+    settings) expected_text="Settings" ;;
+    zhulong) expected_text="Zhulong" ;;
+    *) expected_text="Noonmark" ;;
+  esac
+
+  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" \
+    NOONMARK_E2E_OCR_EXPECTED="$expected_text" swift -e '
+import AppKit
+import Foundation
+import Vision
+
+let environment = ProcessInfo.processInfo.environment
+guard let path = environment["NOONMARK_E2E_OCR_IMAGE"],
+      let expected = environment["NOONMARK_E2E_OCR_EXPECTED"],
+      let image = NSImage(contentsOfFile: path),
+      let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+else {
+    fputs("unable to load English screenshot for OCR\n", stderr)
+    exit(1)
+}
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.recognitionLanguages = ["en-US", "zh-Hans"]
+request.usesLanguageCorrection = false
+try VNImageRequestHandler(cgImage: cgImage).perform([request])
+let text = (request.results ?? [])
+    .compactMap { $0.topCandidates(1).first?.string }
+    .joined(separator: "\n")
+print(text)
+guard text.localizedCaseInsensitiveContains(expected) else {
+    fputs("expected English page marker was not recognized: \(expected)\n", stderr)
+    exit(2)
+}
+guard text.range(of: "\\p{Han}", options: .regularExpression) == nil else {
+    fputs("English screenshot contains recognized Han text\n", stderr)
+    exit(3)
+}
+' > "$ocr" 2> "$ocr_log"; then
+    echo "English ${page} screenshot localization assertion failed:" >&2
+    cat "$ocr" >&2
+    cat "$ocr_log" >&2
+    exit 1
+  fi
+  echo "E2E English ${page} screenshot has no recognized Han text: $screenshot"
+}
+
+assert_settings_sidebar_screenshot() {
+  local screenshot="$1"
+  local language="$2"
+  local ocr="${screenshot%.png}-ocr.txt"
+  local ocr_log="${screenshot%.png}-ocr.log"
+
+  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" \
+    NOONMARK_E2E_OCR_LANGUAGE="$language" swift -e '
+import AppKit
+import Foundation
+import Vision
+
+let environment = ProcessInfo.processInfo.environment
+guard let path = environment["NOONMARK_E2E_OCR_IMAGE"],
+      let language = environment["NOONMARK_E2E_OCR_LANGUAGE"],
+      let image = NSImage(contentsOfFile: path),
+      let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+else {
+    fputs("unable to load Settings screenshot for OCR\n", stderr)
+    exit(1)
+}
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.recognitionLanguages = ["zh-Hans", "en-US"]
+request.usesLanguageCorrection = false
+try VNImageRequestHandler(cgImage: cgImage).perform([request])
+let text = (request.results ?? [])
+    .compactMap { $0.topCandidates(1).first?.string }
+    .joined(separator: "\n")
+print(text)
+
+func normalized(_ value: String) -> String {
+    value.precomposedStringWithCompatibilityMapping
+        .components(separatedBy: .whitespacesAndNewlines)
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+}
+
+let expectedTitles = language == "english"
+    ? ["Settings", "Zhulong Configuration", "Write & Privacy Boundaries"]
+    : ["设置", "烛龙配置", "写入与隐私边界"]
+let recognizedText = normalized(text)
+for expectedTitle in expectedTitles {
+    let normalizedTitle = normalized(expectedTitle)
+    let found = language == "english"
+        ? recognizedText.localizedCaseInsensitiveContains(normalizedTitle)
+        : recognizedText.contains(normalizedTitle)
+    guard found else {
+        fputs("Settings sidebar is missing the complete title: \(expectedTitle)\n", stderr)
+        exit(2)
+    }
+}
+' > "$ocr" 2> "$ocr_log"; then
+    echo "Settings sidebar OCR assertion failed:" >&2
+    cat "$ocr" >&2
+    cat "$ocr_log" >&2
+    exit 1
+  fi
+  echo "E2E Settings sidebar titles are complete in ${language}: $screenshot"
+}
+
+run_english_menu_probe() {
+  local database_path="$1"
+  local menu_dir="artifacts/e2e-english/menu"
+  local state_file="$menu_dir/state.json"
+  local exercise_result="$menu_dir/exercise-result.txt"
+  local exercise_log="$menu_dir/exercise.log"
+  local verify_result="$menu_dir/verify-result.txt"
+  local verify_log="$menu_dir/verify.log"
+  local pool_result="$menu_dir/pool-result.txt"
+  local pool_log="$menu_dir/pool.log"
+  local pool_title="englishpoolreturntask"
+
+  rm -rf "$menu_dir"
+  mkdir -p "$menu_dir"
+  terminate_e2e_app
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "English native menu exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$database_path" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale en_SG \
+    --e2e-reset-selection \
+    --e2e-native-command-surface-exercise \
+    --e2e-native-command-state-url "$PWD/$state_file" \
+    --e2e-native-command-result-url "$PWD/$exercise_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "English native menu restart" \
+    "$verify_result" \
+    "$verify_log" \
+    --data-url "$database_path" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale en_SG \
+    --e2e-reset-selection \
+    --e2e-native-command-surface-verify \
+    --e2e-native-command-state-url "$PWD/$state_file" \
+    --e2e-native-command-result-url "$PWD/$verify_result"
+
+  run_terminating_ui_probe \
+    "English task-pool quick-add" \
+    "$pool_result" \
+    "$pool_log" \
+    --data-url "$database_path" \
+    --page pool \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale en_SG \
+    --e2e-quick-add-via-ui pool \
+    --e2e-quick-add-ui-title "$pool_title" \
+    --e2e-quick-add-ui-result-url "$PWD/$pool_result"
+
+  if [[ "$(sqlite3 -noheader "$database_path" "SELECT language FROM app_preferences WHERE id = 1;")" != "english" ]]; then
+    echo "English native menu probe changed the persisted language" >&2
+    exit 1
+  fi
+  if [[ "$(sqlite3 -noheader "$database_path" "
+    SELECT description_text
+    FROM task_definitions
+    WHERE title = 'commandrecoverytask';
+  ")" != "Quickly captured from Day Todo." ]]; then
+    echo "English Quick Entry persisted a non-localized default description" >&2
+    exit 1
+  fi
+  if [[ "$(sqlite3 -noheader -separator '|' "$database_path" "
+    SELECT
+      definition.description_text,
+      instr(chain.note_entries_json, 'Schedule it for today, tomorrow, or a specific date.') > 0
+    FROM task_definitions AS definition
+    JOIN task_chains AS chain ON chain.id = definition.chain_id
+    WHERE definition.title = '$pool_title';
+  ")" != "An unscheduled task in the Task Pool.|1" ]]; then
+    echo "English Task Pool quick-add persisted non-localized defaults" >&2
+    exit 1
+  fi
+  echo "E2E native menus and persisted Quick Entry/Task Pool defaults validated in English"
 }
 
 assert_pool_context_menu_screenshot() {
@@ -442,6 +856,52 @@ print((request.results ?? [])
   echo "E2E pool task real context menu: $screenshot"
 }
 
+assert_pool_classification_overflow_screenshot() {
+  local screenshot="artifacts/e2e/pool-classification-overflow.png"
+  local ocr="artifacts/e2e/pool-classification-overflow-ocr.txt"
+  local ocr_log="artifacts/e2e/pool-classification-overflow-ocr.log"
+
+  if [[ -n "$requested_scenarios" && " $requested_scenarios " != *" pool-classification-overflow "* ]]; then
+    return 0
+  fi
+  if [[ ! -f "$screenshot" ]]; then
+    echo "classification overflow screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" swift -e '
+import AppKit
+import Foundation
+import Vision
+
+guard let path = ProcessInfo.processInfo.environment["NOONMARK_E2E_OCR_IMAGE"],
+      let image = NSImage(contentsOfFile: path),
+      let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+else {
+    exit(1)
+}
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.recognitionLanguages = ["zh-Hans", "en-US"]
+request.usesLanguageCorrection = false
+try VNImageRequestHandler(cgImage: cgImage).perform([request])
+print((request.results ?? [])
+    .compactMap { $0.topCandidates(1).first?.string }
+    .joined(separator: "\n"))
+' >"$ocr" 2>"$ocr_log"; then
+    echo "classification overflow screenshot OCR failed:" >&2
+    cat "$ocr_log" >&2
+    exit 1
+  fi
+  for expected in 全部标签 第三章; do
+    if ! grep -Fq "$expected" "$ocr"; then
+      echo "classification overflow popover is missing $expected; OCR output:" >&2
+      cat "$ocr" >&2
+      exit 1
+    fi
+  done
+  echo "E2E classification overflow popover: $screenshot"
+}
+
 assert_pool_detail_density_screenshot() {
   local screenshot="artifacts/e2e/pool-detail.png"
   local result="artifacts/e2e/pool-detail-density.txt"
@@ -465,6 +925,7 @@ guard let path = ProcessInfo.processInfo.environment["NOONMARK_E2E_OCR_IMAGE"],
 else {
     exit(1)
 }
+
 let request = VNRecognizeTextRequest()
 request.recognitionLevel = .accurate
 request.recognitionLanguages = ["zh-Hans", "en-US"]
@@ -510,6 +971,114 @@ print(String(format: "title-description visible gap: %.2fpt", visibleGap))
     exit 1
   fi
   echo "E2E pool detail density: $(cat "$result")"
+}
+
+assert_sidebar_semantic_icon_colors_screenshot() {
+  local screenshot="artifacts/e2e/day.png"
+  local zhulong_screenshot="artifacts/e2e/zhulong.png"
+  local result="artifacts/e2e/sidebar-semantic-icon-colors.txt"
+  local result_log="artifacts/e2e/sidebar-semantic-icon-colors.log"
+  local verify_day=1
+  local verify_zhulong=1
+
+  if [[ -n "$requested_scenarios" ]]; then
+    verify_day=0
+    verify_zhulong=0
+    if [[ " $requested_scenarios " == *" day "* ]]; then
+      verify_day=1
+    fi
+    if [[ " $requested_scenarios " == *" zhulong "* ]]; then
+      verify_zhulong=1
+    fi
+  fi
+  if [[ "$verify_day" == "0" && "$verify_zhulong" == "0" ]]; then
+    return 0
+  fi
+  if [[ "$verify_day" == "1" && ! -f "$screenshot" ]]; then
+    echo "sidebar semantic icon color screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+  if [[ "$verify_zhulong" == "1" && ! -f "$zhulong_screenshot" ]]; then
+    echo "Zhulong sidebar semantic icon color screenshot is missing: $zhulong_screenshot" >&2
+    exit 1
+  fi
+  if ! NOONMARK_E2E_DAY_IMAGE="$PWD/$screenshot" \
+    NOONMARK_E2E_ZHULONG_IMAGE="$PWD/$zhulong_screenshot" \
+    NOONMARK_E2E_VERIFY_DAY="$verify_day" \
+    NOONMARK_E2E_VERIFY_ZHULONG="$verify_zhulong" swift -e '
+import AppKit
+import Foundation
+
+let environment = ProcessInfo.processInfo.environment
+func loadImage(_ key: String) -> NSBitmapImageRep? {
+    guard let path = environment[key],
+          let data = try? Data(contentsOf: URL(fileURLWithPath: path))
+    else {
+        return nil
+    }
+    return NSBitmapImageRep(data: data)
+}
+
+let verifyDay = environment["NOONMARK_E2E_VERIFY_DAY"] == "1"
+let verifyZhulong = environment["NOONMARK_E2E_VERIFY_ZHULONG"] == "1"
+let dayImage = verifyDay ? loadImage("NOONMARK_E2E_DAY_IMAGE") : nil
+let zhulongImage = verifyZhulong ? loadImage("NOONMARK_E2E_ZHULONG_IMAGE") : nil
+guard (!verifyDay || dayImage != nil), (!verifyZhulong || zhulongImage != nil) else {
+    exit(1)
+}
+
+let dayIcons: [(name: String, centerY: Double, rgb: Int)] = verifyDay ? [
+    ("day", 83, 0x2A6FDB),
+    ("pool", 125.5, 0x0E9488),
+    ("future", 156.5, 0x7C5CFF),
+    ("unfinished", 225, 0xE0851B),
+    ("completed", 261.5, 0x1F8A5B),
+    ("calendar", 299.5, 0xD1477A),
+] : []
+let zhulongIcons: [(name: String, centerY: Double, rgb: Int)] = verifyZhulong ? [
+    ("zhulong", 336.5, 0x7C5CFF),
+] : []
+var results: [String] = []
+for (image, icons) in [(dayImage, dayIcons), (zhulongImage, zhulongIcons)] {
+    guard let image else { continue }
+    let scale = Double(image.pixelsWide) / 1_200
+    for icon in icons {
+        let expected = NSColor(
+            srgbRed: CGFloat((icon.rgb >> 16) & 0xFF) / 255,
+            green: CGFloat((icon.rgb >> 8) & 0xFF) / 255,
+            blue: CGFloat(icon.rgb & 0xFF) / 255,
+            alpha: 1
+        )
+        var matchingPixels = 0
+        for y in Int((icon.centerY - 11) * scale)..<Int((icon.centerY + 11) * scale) {
+            for x in Int(18 * scale)..<Int(44 * scale) {
+                guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+                    continue
+                }
+                let high = max(color.redComponent, color.greenComponent, color.blueComponent)
+                let low = min(color.redComponent, color.greenComponent, color.blueComponent)
+                let saturation = high == 0 ? 0 : (high - low) / high
+                let rawHueDistance = abs(color.hueComponent - expected.hueComponent)
+                let hueDistance = min(rawHueDistance, 1 - rawHueDistance)
+                if saturation > 0.32, hueDistance < 0.08 {
+                    matchingPixels += 1
+                }
+            }
+        }
+        guard matchingPixels >= 80 else {
+            fputs("\(icon.name) semantic icon color missing (pixels=\(matchingPixels))\n", stderr)
+            exit(1)
+        }
+        results.append("\(icon.name)=\(matchingPixels)")
+    }
+}
+print(results.joined(separator: " "))
+' >"$result" 2>"$result_log"; then
+    echo "sidebar semantic icon color screenshot probe failed:" >&2
+    cat "$result_log" >&2
+    exit 1
+  fi
+  echo "E2E sidebar semantic icon colors: $screenshot ($(cat "$result"))"
 }
 
 run_task_note_persistence_probe() {
@@ -776,7 +1345,7 @@ run_task_note_mutation_atomicity_probe() {
        WHERE instr(json_extract(value, '$.body'), 'UNSAVED') > 0),
       (SELECT count(*) FROM change_journal);
   ")"
-  if [[ "$sql_probe" != "2 1 4 2 0 0 6" ]]; then
+  if [[ "$sql_probe" != "2 1 4 2 0 0 7" ]]; then
     echo "task-note mutation atomicity SQLite/restart probe failed: ${sql_probe:-missing}" >&2
     exit 1
   fi
@@ -859,9 +1428,11 @@ run_ui_entry_probes() {
   local entry_dir="artifacts/e2e-ui-entry"
   local classification_result="${entry_dir}/classification-manager-result.txt"
   local classification_labels_result="${entry_dir}/classification-manager-labels-result.txt"
+  local classification_overflow_result="${entry_dir}/classification-overflow-result.txt"
   local zhulong_result="${entry_dir}/zhulong-workflows-result.txt"
   local classification_log="${entry_dir}/classification-manager.log"
   local classification_labels_log="${entry_dir}/classification-manager-labels.log"
+  local classification_overflow_log="${entry_dir}/classification-overflow.log"
   local zhulong_log="${entry_dir}/zhulong-workflows.log"
 
   rm -rf "$entry_dir"
@@ -888,6 +1459,15 @@ run_ui_entry_probes() {
     --e2e-classification-manager-ui-result-url "$PWD/$classification_labels_result"
 
   run_terminating_ui_probe \
+    "classification overflow UI entry" \
+    "$classification_overflow_result" \
+    "$classification_overflow_log" \
+    --ephemeral \
+    --page pool \
+    --e2e-classification-overflow-via-ui \
+    --e2e-classification-overflow-ui-result-url "$PWD/$classification_overflow_result"
+
+  run_terminating_ui_probe \
     "zhulong workflow UI entry" \
     "$zhulong_result" \
     "$zhulong_log" \
@@ -898,7 +1478,7 @@ run_ui_entry_probes() {
     --e2e-zhulong-workflows-via-ui \
     --e2e-zhulong-workflows-ui-result-url "$PWD/$zhulong_result"
 
-  echo "E2E real UI entries: $classification_result $classification_labels_result $zhulong_result"
+  echo "E2E real UI entries: $classification_result $classification_labels_result $classification_overflow_result $zhulong_result"
 }
 
 run_seed_clock_probe() {
@@ -940,6 +1520,304 @@ run_window_resize_probe() {
     --e2e-quit-after-automation
 
   echo "E2E compact window resize: $resize_result"
+}
+
+run_workspace_restoration_probe() {
+  local state_dir="artifacts/e2e-workspace-restoration"
+  local state_file="$state_dir/state.json"
+  local exercise_result="$state_dir/exercise-result.txt"
+  local exercise_log="$state_dir/exercise.log"
+  local verify_result="$state_dir/verify-result.txt"
+  local verify_log="$state_dir/verify.log"
+
+  rm -rf "$state_dir"
+  mkdir -p "$state_dir"
+
+  run_terminating_ui_probe \
+    "workspace restoration exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --ephemeral \
+    --page day \
+    --e2e-workspace-restoration \
+    --e2e-reset-workspace-state \
+    --e2e-workspace-restoration-exercise \
+    --e2e-workspace-restoration-state-url "$PWD/$state_file" \
+    --e2e-workspace-restoration-result-url "$PWD/$exercise_result"
+
+  run_terminating_ui_probe \
+    "workspace restoration restart" \
+    "$verify_result" \
+    "$verify_log" \
+    --ephemeral \
+    --page day \
+    --e2e-workspace-restoration \
+    --e2e-workspace-restoration-verify \
+    --e2e-workspace-restoration-state-url "$PWD/$state_file" \
+    --e2e-workspace-restoration-result-url "$PWD/$verify_result"
+
+  echo "E2E window frame, divider, and collapse restoration: $state_file"
+}
+
+run_window_close_behavior_probe() {
+  local close_dir="artifacts/e2e-window-close"
+  local close_result="$close_dir/result.txt"
+  local close_log="$close_dir/launch.log"
+
+  rm -rf "$close_dir"
+  mkdir -p "$close_dir"
+
+  run_terminating_ui_probe \
+    "window close and dock reopen" \
+    "$close_result" \
+    "$close_log" \
+    --ephemeral \
+    --page day \
+    --e2e-window-close-behavior-probe \
+    --e2e-window-close-behavior-result-url "$PWD/$close_result"
+
+  echo "E2E close-last-window and dock reopen: $close_result"
+}
+
+run_native_command_surface_probe() {
+  local command_dir="artifacts/e2e-native-command-surface"
+  local command_db="$command_dir/Noonmark.sqlite"
+  local state_file="$command_dir/state.json"
+  local exercise_result="$command_dir/exercise-result.txt"
+  local exercise_log="$command_dir/exercise.log"
+  local verify_result="$command_dir/verify-result.txt"
+  local verify_log="$command_dir/verify.log"
+  local sqlite_probe
+
+  rm -rf "$command_dir"
+  mkdir -p "$command_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "native command surface exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$command_db" \
+    --page day \
+    --e2e-reset-selection \
+    --e2e-native-command-surface-exercise \
+    --e2e-native-command-state-url "$PWD/$state_file" \
+    --e2e-native-command-result-url "$PWD/$exercise_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "native command surface restart" \
+    "$verify_result" \
+    "$verify_log" \
+    --data-url "$PWD/$command_db" \
+    --page day \
+    --e2e-reset-selection \
+    --e2e-native-command-surface-verify \
+    --e2e-native-command-state-url "$PWD/$state_file" \
+    --e2e-native-command-result-url "$PWD/$verify_result"
+
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$command_db" "
+    SELECT
+      count(*),
+      count(DISTINCT trace.id),
+      count(DISTINCT definition.chain_id)
+    FROM day_traces AS trace
+    JOIN task_definitions AS definition ON definition.id = trace.definition_id
+    JOIN task_chains AS chain ON chain.id = trace.chain_id
+    WHERE definition.title = 'commandrecoverytask'
+      AND definition.superseded_at IS NULL
+      AND trace.date = '2026-07-05'
+      AND trace.status = 'pending'
+      AND chain.state = 'active';
+  ")"
+  if [[ "$sqlite_probe" != "1 1 1" ]]; then
+    echo "native command surface SQLite restart probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E native menus, Settings, Quick Entry, Search, Undo/Redo restart: $command_db (probe=$sqlite_probe)"
+}
+
+run_workspace_productivity_probe() {
+  local productivity_dir="artifacts/e2e-workspace-productivity"
+  local productivity_db="$productivity_dir/Noonmark.sqlite"
+  local state_file="$productivity_dir/state.json"
+  local exercise_result="$productivity_dir/exercise-result.txt"
+  local exercise_log="$productivity_dir/exercise.log"
+  local verify_result="$productivity_dir/verify-result.txt"
+  local verify_log="$productivity_dir/verify.log"
+  local persisted_order
+  local sqlite_probe
+
+  rm -rf "$productivity_dir"
+  mkdir -p "$productivity_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "workspace productivity exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$productivity_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-reset-selection \
+    --e2e-persistence-failure-automation \
+    --e2e-workspace-productivity-exercise \
+    --e2e-workspace-productivity-state-url "$PWD/$state_file" \
+    --e2e-workspace-productivity-result-url "$PWD/$exercise_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "workspace productivity restart" \
+    "$verify_result" \
+    "$verify_log" \
+    --data-url "$PWD/$productivity_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-reset-selection \
+    --e2e-workspace-productivity-verify \
+    --e2e-workspace-productivity-state-url "$PWD/$state_file" \
+    --e2e-workspace-productivity-result-url "$PWD/$verify_result"
+
+  persisted_order="$(sqlite3 -noheader "$productivity_db" "
+    SELECT group_concat(title, '|')
+    FROM (
+      SELECT definition.title AS title
+      FROM day_traces AS trace
+      JOIN task_definitions AS definition ON definition.id = trace.definition_id
+      WHERE trace.date = '2026-07-05'
+        AND definition.title LIKE 'E2E workspace drag %'
+      ORDER BY trace.priority
+    );
+  ")"
+  if [[ "$persisted_order" != "E2E workspace drag D|E2E workspace drag A|E2E workspace drag B|E2E workspace drag C" ]]; then
+    echo "workspace drag SQLite order probe failed: ${persisted_order:-missing}" >&2
+    exit 1
+  fi
+
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$productivity_db" "
+    SELECT
+      (SELECT count(*)
+       FROM day_traces AS trace
+       JOIN task_definitions AS definition ON definition.id = trace.definition_id
+       WHERE trace.date = '2026-07-05'
+         AND trace.status = 'completed'
+         AND definition.title LIKE 'E2E workspace drag %'),
+      (SELECT count(*)
+       FROM day_traces AS trace
+       JOIN task_definitions AS definition ON definition.id = trace.definition_id
+       WHERE trace.date = '2026-07-05'
+         AND trace.status = 'pending'
+         AND definition.title LIKE 'E2E workspace pool %'),
+      (SELECT count(*)
+       FROM day_traces AS trace
+       JOIN task_definitions AS definition ON definition.id = trace.definition_id
+       WHERE trace.status = 'returnedToPool'
+         AND definition.title LIKE 'E2E workspace future %'),
+      (SELECT count(DISTINCT trace.priority)
+       FROM day_traces AS trace
+       JOIN task_definitions AS definition ON definition.id = trace.definition_id
+       WHERE trace.date = '2026-07-05'
+         AND definition.title LIKE 'E2E workspace drag %'
+         AND trace.priority BETWEEN 1 AND 4);
+  ")"
+  if [[ "$sqlite_probe" != "4 3 3 4" ]]; then
+    echo "workspace bulk-action SQLite probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E workspace selection, bulk actions, drag order, atomic save failure, and restart: $productivity_db (probe=$sqlite_probe)"
+}
+
+run_data_import_ui_probe() {
+  local import_dir="artifacts/e2e-data-import-ui"
+  local import_db="${import_dir}/Noonmark.sqlite"
+  local fixture_dir="/tmp/noonmark-e2e-import-ui"
+  local fixture_json="${fixture_dir}/fixture.json"
+  local state_file="${import_dir}/state.json"
+  local setup_result="${import_dir}/setup-result.txt"
+  local exercise_result="${import_dir}/exercise-result.txt"
+  local restart_result="${import_dir}/restart-result.txt"
+  local setup_log="${import_dir}/setup.log"
+  local exercise_log="${import_dir}/exercise.log"
+  local restart_log="${import_dir}/restart.log"
+  local sqlite_probe
+
+  rm -rf "$import_dir"
+  rm -rf "$fixture_dir"
+  mkdir -p "$fixture_dir"
+  mkdir -p "$import_dir"
+
+  run_terminating_ui_probe \
+    "data-import UI fixture setup" \
+    "$setup_result" \
+    "$setup_log" \
+    --data-url "$PWD/$import_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-data-import-ui-setup \
+    --e2e-data-import-ui-fixture-url "$fixture_json" \
+    --e2e-data-import-ui-state-url "$PWD/$state_file" \
+    --e2e-data-import-ui-result-url "$PWD/$setup_result"
+
+  if [[ "$(sqlite3 -noheader "$import_db" "
+    SELECT count(*)
+    FROM task_definitions
+    WHERE title = 'E2E UI import baseline 7319';
+  ")" != "1" ]]; then
+    echo "data-import UI setup did not persist its baseline" >&2
+    exit 1
+  fi
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "data-import real File menu and NSOpenPanel" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$import_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-data-import-ui-exercise \
+    --e2e-data-import-ui-fixture-url "$fixture_json" \
+    --e2e-data-import-ui-state-url "$PWD/$state_file" \
+    --e2e-data-import-ui-result-url "$PWD/$exercise_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "data-import UI restart" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$import_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-data-import-ui-verify \
+    --e2e-data-import-ui-fixture-url "$fixture_json" \
+    --e2e-data-import-ui-state-url "$PWD/$state_file" \
+    --e2e-data-import-ui-result-url "$PWD/$restart_result"
+
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$import_db" "
+    SELECT
+      (SELECT count(*) FROM task_definitions
+       WHERE title = 'E2E UI import baseline 7319'),
+      (SELECT count(*) FROM task_definitions
+       WHERE title = 'E2E UI import scheduled 7319'),
+      (SELECT count(*) FROM task_definitions
+       WHERE title = 'E2E UI import pool 7319'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E UI import scheduled 7319'
+         AND day_traces.date = '2026-07-05'),
+      (SELECT count(*) FROM task_definitions),
+      (SELECT count(*) FROM day_traces);
+  ")"
+  if [[ "$sqlite_probe" != "0 1 1 1 2 1" ]]; then
+    echo "data-import UI SQLite/restart probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+  rm -rf "$fixture_dir"
+  echo "E2E File > Import, real NSOpenPanel, cancel, destructive confirm, SQLite/restart: $import_db (probe=$sqlite_probe)"
 }
 
 run_pool_list_layout_probe() {
@@ -1261,6 +2139,90 @@ run_lifecycle_persistence_probe() {
   echo "E2E lifecycle SQLite restart: $lifecycle_db (probe=$lifecycle_probe)"
 }
 
+run_natural_day_rollover_probe() {
+  local rollover_dir="artifacts/e2e-natural-day"
+  local rollover_db="${rollover_dir}/Noonmark.sqlite"
+  local rollover_state="${rollover_dir}/state.json"
+  local exercise_result="${rollover_dir}/exercise-result.txt"
+  local restart_result="${rollover_dir}/restart-result.txt"
+  local exercise_log="${rollover_dir}/exercise.log"
+  local restart_log="${rollover_dir}/restart.log"
+  local sqlite_probe
+  local wake_block_count
+  local manual_block_count
+  local retry_count
+  local backward_count
+  local forward_count
+
+  rm -rf "$rollover_dir"
+  mkdir -p "$rollover_dir"
+
+  run_terminating_ui_probe \
+    "natural-day live rollover" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$rollover_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-persistence-failure-automation \
+    --e2e-natural-day-rollover-exercise \
+    --e2e-natural-day-rollover-state-url "$PWD/$rollover_state" \
+    --e2e-natural-day-rollover-result-url "$PWD/$exercise_result" \
+    --e2e-quit-after-automation
+
+  wake_block_count="$(grep -cF 'natural day blocked signal=wake applied=2026-07-05 candidate=2026-07-06' "$exercise_log" || true)"
+  manual_block_count="$(grep -cF 'natural day blocked signal=manual applied=2026-07-05 candidate=2026-07-06' "$exercise_log" || true)"
+  retry_count="$(grep -cF 'natural day reconciled signal=applicationBecameActive previous=2026-07-05 current=2026-07-06' "$exercise_log" || true)"
+  backward_count="$(grep -cF 'natural day reconciled signal=timeZoneChanged previous=2026-07-06 current=2026-07-05' "$exercise_log" || true)"
+  forward_count="$(grep -cF 'natural day reconciled signal=timeZoneChanged previous=2026-07-05 current=2026-07-06' "$exercise_log" || true)"
+  if [[ "$wake_block_count" -ne 1 || "$manual_block_count" -ne 1 ||
+    "$retry_count" -ne 1 || "$backward_count" -ne 1 || "$forward_count" -ne 1 ]]; then
+    echo "natural-day lifecycle log markers are incomplete or duplicated" >&2
+    cat "$exercise_log" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "natural-day restart" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$rollover_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-06T04:30:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-natural-day-rollover-restart-verify \
+    --e2e-natural-day-rollover-state-url "$PWD/$rollover_state" \
+    --e2e-natural-day-rollover-result-url "$PWD/$restart_result" \
+    --e2e-quit-after-automation
+
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$rollover_db" "
+    WITH target AS (
+      SELECT trace.status, trace.settled_at, day.locked_at
+      FROM day_traces AS trace
+      JOIN task_definitions AS definition ON definition.id = trace.definition_id
+      JOIN days AS day ON day.date = trace.date
+      WHERE definition.title = 'E2E natural day atomic rollover'
+        AND trace.date = '2026-07-05'
+    )
+    SELECT
+      (SELECT count(*) FROM target WHERE status = 'unfinished'),
+      (SELECT count(*) FROM target WHERE status = 'pending'),
+      (SELECT count(*) FROM target
+       WHERE settled_at IS NOT NULL
+         AND locked_at IS NOT NULL
+         AND settled_at = locked_at);
+  ")"
+  if [[ "$sqlite_probe" != "1 0 1" ]]; then
+    echo "natural-day SQLite rollover probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E natural-day wake/retry/time-zone/restart: $rollover_db (probe=$sqlite_probe)"
+}
+
 run_terminating_ui_probe() {
   local label="$1"
   local result="$2"
@@ -1350,6 +2312,38 @@ if [[ "${NOONMARK_E2E_LIFECYCLE_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_NATURAL_DAY_ONLY:-0}" == "1" ]]; then
+  run_natural_day_rollover_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_WINDOW_RESIZE_ONLY:-0}" == "1" ]]; then
+  run_window_resize_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_WINDOW_STATE_ONLY:-0}" == "1" ]]; then
+  run_workspace_restoration_probe
+  run_window_close_behavior_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_NATIVE_COMMANDS_ONLY:-0}" == "1" ]]; then
+  run_native_command_surface_probe
+  run_window_close_behavior_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_WORKSPACE_PRODUCTIVITY_ONLY:-0}" == "1" ]]; then
+  run_workspace_productivity_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_DATA_IMPORT_UI_ONLY:-0}" == "1" ]]; then
+  run_data_import_ui_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_POOL_LIST_LAYOUT_ONLY:-0}" == "1" ]]; then
   run_pool_list_layout_probe
   exit 0
@@ -1370,18 +2364,76 @@ if [[ "${NOONMARK_E2E_QUICK_ADD_UI_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+english_screenshot_dir="artifacts/e2e-english"
+english_screenshot_db="$english_screenshot_dir/Noonmark.sqlite"
+english_scenarios_enabled=0
 for scenario in "${scenarios[@]}"; do
-  IFS="|" read -r screenshot_name page extra_args <<< "$scenario"
-  if [[ -n "$extra_args" ]]; then
+  IFS="|" read -r _ _ _ scenario_language <<< "$scenario"
+  if [[ "$scenario_language" == "english" ]]; then
+    english_scenarios_enabled=1
+    break
+  fi
+done
+if [[ "$english_scenarios_enabled" == "1" ]]; then
+  rm -rf "$english_screenshot_dir"
+  mkdir -p "$english_screenshot_dir"
+  prepare_english_screenshot_database \
+    "$PWD/$english_screenshot_db" \
+    "$english_screenshot_dir/bootstrap.log"
+fi
+
+for scenario in "${scenarios[@]}"; do
+  IFS="|" read -r screenshot_name page extra_args scenario_language <<< "$scenario"
+  if [[ "$scenario_language" == "english" ]]; then
+    if [[ -n "$extra_args" ]]; then
+      # shellcheck disable=SC2086
+      NOONMARK_E2E_EXPECTED_LANGUAGE=english capture_app_screenshot \
+        artifacts/e2e \
+        "$screenshot_name" \
+        "$page" \
+        --data-url "$PWD/$english_screenshot_db" \
+        --e2e-fixed-instant 2026-07-05T16:00:00Z \
+        --e2e-fixed-time-zone America/New_York \
+        --e2e-fixed-locale en_SG \
+        --e2e-reset-selection \
+        $extra_args
+    else
+      NOONMARK_E2E_EXPECTED_LANGUAGE=english capture_app_screenshot \
+        artifacts/e2e \
+        "$screenshot_name" \
+        "$page" \
+        --data-url "$PWD/$english_screenshot_db" \
+        --e2e-fixed-instant 2026-07-05T16:00:00Z \
+        --e2e-fixed-time-zone America/New_York \
+        --e2e-fixed-locale en_SG \
+        --e2e-reset-selection
+    fi
+    assert_english_screenshot "artifacts/e2e/${screenshot_name}.png" "$page"
+  elif [[ -n "$extra_args" ]]; then
     # shellcheck disable=SC2086
     capture_app_screenshot artifacts/e2e "$screenshot_name" "$page" --ephemeral --e2e-reset-selection $extra_args
   else
     capture_app_screenshot artifacts/e2e "$screenshot_name" "$page" --ephemeral --e2e-reset-selection
   fi
+  if [[ "$screenshot_name" == "settings" ]]; then
+    assert_settings_sidebar_screenshot \
+      "artifacts/e2e/${screenshot_name}.png" \
+      chinese
+  elif [[ "$screenshot_name" == "english-settings" ]]; then
+    assert_settings_sidebar_screenshot \
+      "artifacts/e2e/${screenshot_name}.png" \
+      english
+  fi
 done
 
 assert_pool_context_menu_screenshot
+assert_pool_classification_overflow_screenshot
 assert_pool_detail_density_screenshot
+assert_sidebar_semantic_icon_colors_screenshot
+
+if [[ "$english_scenarios_enabled" == "1" && "${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}" != "1" ]]; then
+  run_english_menu_probe "$PWD/$english_screenshot_db"
+fi
 
 if [[ "${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
   terminate_e2e_app
@@ -1412,6 +2464,16 @@ run_pool_context_menu_action_probe
 run_markdown_editor_ui_probe
 
 run_window_resize_probe
+
+run_workspace_restoration_probe
+
+run_window_close_behavior_probe
+
+run_native_command_surface_probe
+
+run_workspace_productivity_probe
+
+run_data_import_ui_probe
 
 summary_sidebar_dir="artifacts/e2e-summary-sidebar"
 summary_sidebar_result="${summary_sidebar_dir}/summary-sidebar-result.txt"
@@ -2133,6 +3195,7 @@ fi
 echo "E2E domain workflow: $workflow_db (continued=$workflow_continued pending=$workflow_pending review=$workflow_review)"
 
 run_lifecycle_persistence_probe
+run_natural_day_rollover_probe
 
 data_package_dir="artifacts/e2e-data-package"
 data_package_db="${data_package_dir}/Noonmark.sqlite"

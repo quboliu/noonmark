@@ -3,28 +3,350 @@ set -euo pipefail
 
 dmg_path="${1:-dist/Noonmark.dmg}"
 app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
-work_dir="artifacts/dmg-install"
+work_dir="$PWD/artifacts/dmg-install"
 install_dir="${work_dir}/Applications"
-database_path="${work_dir}/Noonmark.sqlite"
+database_path=""
+redirected_database_path="${work_dir}/forbidden-redirect.sqlite"
 screenshot_path="${work_dir}/installed-day.png"
+window_metadata_path="${work_dir}/installed-day-window.txt"
+initial_launch_log="${work_dir}/initial-launch.log"
+initial_console_log="${work_dir}/initial-console.log"
+forbidden_automation_result="${work_dir}/forbidden-automation-result.txt"
+forbidden_automation_state="${work_dir}/forbidden-automation-state.json"
 mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-install.XXXXXX")"
+executable_name="NoonmarkMacApp"
+active_console_pid=""
 
-required_tools=(hdiutil ditto sqlite3 swift open screencapture sips)
+required_tools=(
+  awk
+  ditto
+  grep
+  hdiutil
+  log
+  open
+  pgrep
+  pkill
+  ps
+  screencapture
+  sips
+  sqlite3
+  swift
+)
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "missing required tool: $tool" >&2
     exit 1
   fi
 done
+if [[ ! -x /usr/libexec/PlistBuddy ]]; then
+  echo "missing required tool: /usr/libexec/PlistBuddy" >&2
+  exit 1
+fi
 
-scripts/reset-dev-data
+terminate_installed_app() {
+  local running_pids
+
+  running_pids="$(pgrep -x "$executable_name" 2>/dev/null || true)"
+  if [[ -z "$running_pids" ]]; then
+    return 0
+  fi
+
+  pkill -TERM -x "$executable_name" >/dev/null 2>&1 || true
+  for _ in {1..40}; do
+    if ! pgrep -x "$executable_name" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  pkill -KILL -x "$executable_name" >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    if ! pgrep -x "$executable_name" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  echo "failed to terminate installed app process: $executable_name" >&2
+  pgrep -alf "$executable_name" >&2 || true
+  return 1
+}
+
+stop_console_capture() {
+  local pid="$active_console_pid"
+
+  active_console_pid=""
+  if [[ -z "$pid" ]]; then
+    return 0
+  fi
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    kill -INT "$pid" >/dev/null 2>&1 || true
+    for _ in {1..20}; do
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.05
+    done
+  fi
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
 
 cleanup() {
-  pkill -x NoonmarkMacApp >/dev/null 2>&1 || true
+  local cleanup_status=0
+
+  stop_console_capture || cleanup_status=1
+  terminate_installed_app || cleanup_status=1
   hdiutil detach "$mountpoint" -quiet >/dev/null 2>&1 || true
   rmdir "$mountpoint" >/dev/null 2>&1 || true
+  return "$cleanup_status"
 }
 trap cleanup EXIT
+
+start_console_capture() {
+  local output_path="$1"
+
+  stop_console_capture
+  : >"$output_path"
+  /usr/bin/log stream \
+    --style compact \
+    --level info \
+    --predicate "process == \"$executable_name\"" \
+    >"$output_path" 2>&1 &
+  active_console_pid=$!
+  sleep 0.2
+  if ! kill -0 "$active_console_pid" >/dev/null 2>&1; then
+    wait "$active_console_pid" 2>/dev/null || true
+    active_console_pid=""
+    echo "failed to start installed app console capture: $output_path" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+}
+
+assert_clean_app_logs() {
+  local label="$1"
+  shift
+  local log_path
+  local failure_pattern
+
+  failure_pattern='Noonmark startup failed|Noonmark persistence (load|save) failed|Noonmark sync identity load failed|Noonmark natural-day timer (could not|produced)|Fatal error|Assertion failed|Precondition failed|EXC_BAD_ACCESS|Segmentation fault|Abort trap|Publishing changes from within view updates|Publishing changes from background threads|Modifying state during view update|AttributeGraph: cycle detected|SwiftUI.*(runtime warning|encountered an issue)|ForEach<.*ID .*occurs multiple times|the ID .*occurs multiple times within the collection|Unable to simultaneously satisfy constraints|NSLayoutConstraint.*(conflict|unsatisfiable)|Accessibility.*(action.*)?(failed|failure|rejected|could not|unable)|AX(UIElement)?.*(failed|failure)|kAXError'
+
+  for log_path in "$@"; do
+    if [[ ! -f "$log_path" ]]; then
+      echo "$label log was not created: $log_path" >&2
+      exit 1
+    fi
+    if grep -E -i -n "$failure_pattern" "$log_path" >/dev/null 2>&1; then
+      echo "$label contains a startup, persistence, runtime, layout, or accessibility failure: $log_path" >&2
+      grep -E -i -n "$failure_pattern" "$log_path" >&2
+      exit 1
+    fi
+    if grep -E -i -n '^log: (could not|failed|invalid)' "$log_path" >/dev/null 2>&1; then
+      echo "$label console capture itself failed: $log_path" >&2
+      cat "$log_path" >&2
+      exit 1
+    fi
+  done
+}
+
+current_day_metadata() {
+  swift -e '
+import Foundation
+import Darwin
+
+var calendar = Calendar(identifier: .gregorian)
+calendar.locale = Locale(identifier: "en_US_POSIX")
+calendar.timeZone = .autoupdatingCurrent
+let now = Date()
+let components = calendar.dateComponents([.year, .month, .day], from: now)
+guard let year = components.year,
+      let month = components.month,
+      let day = components.day
+else {
+    fputs("unable to resolve the production natural day\n", stderr)
+    exit(1)
+}
+let formatter = DateFormatter()
+formatter.calendar = Calendar(identifier: .gregorian)
+formatter.locale = Locale(identifier: "zh_Hans_SG")
+formatter.timeZone = .autoupdatingCurrent
+formatter.dateFormat = "M月d日"
+let localDay = String(format: "%04d-%02d-%02d", year, month, day)
+let title = "晷迹 · Day Todo — \(formatter.string(from: now))"
+print("\(localDay)|\(title)")
+'
+}
+
+single_installed_pid() {
+  local pids
+
+  pids="$(pgrep -x "$executable_name" 2>/dev/null || true)"
+  if [[ -z "$pids" || "$pids" == *$'\n'* ]]; then
+    return 1
+  fi
+  printf '%s\n' "$pids"
+}
+
+wait_for_installed_pid() {
+  local pid=""
+
+  for _ in {1..80}; do
+    if pid="$(single_installed_pid)"; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "installed app did not expose exactly one $executable_name process" >&2
+  pgrep -alf "$executable_name" >&2 || true
+  return 1
+}
+
+verify_installed_process_path() {
+  local pid="$1"
+  local installed_executable="$2"
+  local command_line
+
+  command_line="$(ps -p "$pid" -o command=)"
+  if [[ "$command_line" != *"$installed_executable"* ]]; then
+    echo "unexpected installed app executable for pid $pid: $command_line" >&2
+    echo "expected executable path: $installed_executable" >&2
+    exit 1
+  fi
+}
+
+find_main_window_metadata() {
+  local pid="$1"
+
+  NOONMARK_DMG_APP_PID="$pid" swift -e '
+import CoreGraphics
+import Darwin
+import Foundation
+
+let environment = ProcessInfo.processInfo.environment
+guard let expectedPID = Int(environment["NOONMARK_DMG_APP_PID"] ?? ""),
+      let windows = CGWindowListCopyWindowInfo(
+          [.optionOnScreenOnly],
+          kCGNullWindowID
+      ) as? [[String: Any]]
+else {
+    exit(1)
+}
+
+var calendar = Calendar(identifier: .gregorian)
+calendar.locale = Locale(identifier: "en_US_POSIX")
+calendar.timeZone = .autoupdatingCurrent
+let now = Date()
+let components = calendar.dateComponents([.year, .month, .day], from: now)
+guard let year = components.year,
+      let month = components.month,
+      let day = components.day
+else {
+    exit(1)
+}
+let formatter = DateFormatter()
+formatter.calendar = Calendar(identifier: .gregorian)
+formatter.locale = Locale(identifier: "zh_Hans_SG")
+formatter.timeZone = .autoupdatingCurrent
+formatter.dateFormat = "M月d日"
+let localDay = String(format: "%04d-%02d-%02d", year, month, day)
+let expectedTitle = "晷迹 · Day Todo — \(formatter.string(from: now))"
+
+for window in windows {
+    let pid = window[kCGWindowOwnerPID as String] as? Int ?? -1
+    let title = window[kCGWindowName as String] as? String ?? ""
+    let layer = window[kCGWindowLayer as String] as? Int ?? -1
+    let bounds = window[kCGWindowBounds as String] as? [String: Any]
+    let width = bounds?["Width"] as? Double ?? 0
+    let height = bounds?["Height"] as? Double ?? 0
+    guard pid == expectedPID,
+          title == expectedTitle,
+          layer == 0,
+          width >= 960,
+          height >= 720,
+          let number = window[kCGWindowNumber as String]
+    else { continue }
+    print("\(number)|\(localDay)|\(expectedTitle)")
+    exit(0)
+}
+exit(1)
+'
+}
+
+dump_process_windows() {
+  local pid="$1"
+
+  NOONMARK_DMG_APP_PID="$pid" swift -e '
+import CoreGraphics
+import Foundation
+
+let environment = ProcessInfo.processInfo.environment
+guard let expectedPID = Int(environment["NOONMARK_DMG_APP_PID"] ?? ""),
+      let windows = CGWindowListCopyWindowInfo(
+          [.optionOnScreenOnly],
+          kCGNullWindowID
+      ) as? [[String: Any]]
+else {
+    exit(1)
+}
+
+for window in windows where
+    (window[kCGWindowOwnerPID as String] as? Int) == expectedPID
+{
+    let number = window[kCGWindowNumber as String] as? Int ?? -1
+    let title = window[kCGWindowName as String] as? String ?? ""
+    let layer = window[kCGWindowLayer as String] as? Int ?? -1
+    let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
+    print("window id=\(number) title=\(title) layer=\(layer) bounds=\(bounds)")
+}
+'
+}
+
+wait_for_main_window_metadata() {
+  local pid="$1"
+  local window_metadata=""
+
+  for _ in {1..80}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      echo "installed app exited before presenting its main window" >&2
+      return 1
+    fi
+    if window_metadata="$(find_main_window_metadata "$pid" 2>/dev/null)"; then
+      printf '%s\n' "$window_metadata"
+      return 0
+    fi
+    sleep 0.1
+  done
+  IFS='|' read -r _ current_expected_title < <(current_day_metadata)
+  echo "installed app main window not found for dynamic title: $current_expected_title" >&2
+  dump_process_windows "$pid" >&2 || true
+  return 1
+}
+
+scripts/reset-dev-data
+terminate_installed_app
+
+database_path="$(swift -e '
+import Foundation
+
+guard let base = FileManager.default.urls(
+    for: .applicationSupportDirectory,
+    in: .userDomainMask
+).first else {
+    exit(1)
+}
+print(base
+    .appendingPathComponent("noonmark", isDirectory: true)
+    .appendingPathComponent("Noonmark.sqlite")
+    .path)
+')"
+if [[ "$database_path" != */Library/Application\ Support/noonmark/Noonmark.sqlite ]]; then
+  echo "refusing to inspect an unexpected production database path: $database_path" >&2
+  exit 1
+fi
 
 if [[ ! -f "$dmg_path" ]]; then
   echo "missing DMG: $dmg_path" >&2
@@ -44,59 +366,86 @@ if [[ ! -d "$source_app" ]]; then
 fi
 
 ditto "$source_app" "$installed_app"
-if [[ ! -x "${installed_app}/Contents/MacOS/NoonmarkMacApp" ]]; then
-  echo "installed app binary is not executable" >&2
+info_plist="${installed_app}/Contents/Info.plist"
+if [[ ! -f "$info_plist" ]]; then
+  echo "installed app is missing Info.plist: $info_plist" >&2
   exit 1
 fi
 
-find_window_id() {
-  swift -e '
-import CoreGraphics
-import Darwin
-
-if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
-    for window in list {
-        let owner = window[kCGWindowOwnerName as String] as? String ?? ""
-        let name = window[kCGWindowName as String] as? String ?? ""
-        if (owner == "晷迹" || owner == "Noonmark" || owner == "NoonmarkMacApp") && name == "晷迹 · Day Todo — 7月5日" {
-            if let number = window[kCGWindowNumber as String] {
-                print(number)
-                exit(0)
-            }
-        }
-    }
-}
-exit(1)
-'
-}
-
-pkill -x NoonmarkMacApp >/dev/null 2>&1 || true
-open -n "$installed_app" --args --data-url "$PWD/$database_path" --page day
-sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
-
-window_id=""
-for _ in {1..20}; do
-  if window_id="$(find_window_id 2>/dev/null)"; then
-    break
-  fi
-  sleep 0.25
-done
-
-if [[ -z "$window_id" ]]; then
-  echo "installed Noonmark app window not found" >&2
+executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")"
+bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")"
+if [[ "$bundle_identifier" != "app.noonmark.mac" ]]; then
+  echo "installed app has an unexpected production bundle identifier: $bundle_identifier" >&2
+  exit 1
+fi
+installed_executable="${installed_app}/Contents/MacOS/${executable_name}"
+if [[ ! -x "$installed_executable" ]]; then
+  echo "installed app binary is not executable: $installed_executable" >&2
   exit 1
 fi
 
-screencapture -x -l "$window_id" "$screenshot_path"
+rm -f \
+  "$redirected_database_path" \
+  "${redirected_database_path}-wal" \
+  "${redirected_database_path}-shm" \
+  "$forbidden_automation_result" \
+  "$forbidden_automation_state"
+: >"$initial_launch_log"
+start_console_capture "$initial_console_log"
+/usr/bin/open -n "$installed_app" --args \
+  --data-url "$redirected_database_path" \
+  --page settings \
+  --e2e-native-command-surface-exercise \
+  --e2e-native-command-state-url "$forbidden_automation_state" \
+  --e2e-native-command-result-url "$forbidden_automation_result" \
+  >"$initial_launch_log" 2>&1
+
+installed_pid="$(wait_for_installed_pid)"
+verify_installed_process_path "$installed_pid" "$installed_executable"
+window_metadata="$(wait_for_main_window_metadata "$installed_pid")"
+IFS='|' read -r window_id initial_day expected_window_title <<<"$window_metadata"
+if [[ -z "$window_id" || -z "$initial_day" || -z "$expected_window_title" ]]; then
+  echo "installed app window metadata was incomplete: $window_metadata" >&2
+  exit 1
+fi
+if [[ -e "$redirected_database_path" || -e "$forbidden_automation_result" ||
+  -e "$forbidden_automation_state" ]]; then
+  echo "production DMG accepted an internal launch argument" >&2
+  ls -l \
+    "$redirected_database_path" \
+    "$forbidden_automation_result" \
+    "$forbidden_automation_state" \
+    2>/dev/null >&2 || true
+  exit 1
+fi
+
+screencapture -x -o -l"$window_id" "$screenshot_path"
+if [[ ! -s "$screenshot_path" ]]; then
+  echo "installed app screenshot was not created: $screenshot_path" >&2
+  exit 1
+fi
 width="$(sips -g pixelWidth "$screenshot_path" | awk '/pixelWidth/ {print $2}')"
 height="$(sips -g pixelHeight "$screenshot_path" | awk '/pixelHeight/ {print $2}')"
 
-if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 || "${width:-0}" -gt 3000 || "${height:-0}" -gt 2000 ]]; then
+if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 ||
+  "${width:-0}" -gt 4800 || "${height:-0}" -gt 3200 ]]; then
   echo "invalid installed app screenshot size: ${width:-unknown}x${height:-unknown}" >&2
   exit 1
 fi
 
-pkill -x NoonmarkMacApp >/dev/null 2>&1 || true
+printf 'pid=%s\nwindow_id=%s\nnatural_day=%s\ntitle=%s\n' \
+  "$installed_pid" \
+  "$window_id" \
+  "$initial_day" \
+  "$expected_window_title" \
+  >"$window_metadata_path"
+
+terminate_installed_app
+stop_console_capture
+assert_clean_app_logs \
+  "installed blank-app launch" \
+  "$initial_launch_log" \
+  "$initial_console_log"
 
 if [[ ! -f "$database_path" ]]; then
   echo "installed app did not create persistence database: $database_path" >&2
@@ -115,11 +464,15 @@ read -r days chains definitions traces subtasks preferences < <(
   "
 )
 
-if [[ "$days" -ne 0 || "$chains" -ne 0 || "$definitions" -ne 0 || "$traces" -ne 0 || "$subtasks" -ne 0 || "$preferences" -ne 1 ]]; then
-  echo "invalid installed app persistence counts: days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences" >&2
+if [[ "$days" -ne 0 || "$chains" -ne 0 || "$definitions" -ne 0 ||
+  "$traces" -ne 0 || "$subtasks" -ne 0 || "$preferences" -ne 1 ]]; then
+  echo "invalid installed app empty persistence counts: days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences" >&2
   exit 1
 fi
 
 echo "DMG install smoke: $installed_app"
+echo "Installed dynamic main window: $expected_window_title (natural_day=$initial_day)"
 echo "Installed app screenshot: $screenshot_path (${width}x${height})"
 echo "Installed blank app persistence: $database_path (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"
+echo "Installed release ignored internal data, page, and E2E launch arguments"
+echo "Installed app logs are clean: $initial_console_log"

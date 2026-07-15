@@ -1,5 +1,6 @@
 import Foundation
 import NoonmarkAI
+import NoonmarkMacRuntime
 import Security
 
 struct ZhulongProviderDraft: Equatable {
@@ -10,7 +11,11 @@ struct ZhulongProviderDraft: Equatable {
     var apiKeyInput = ""
     var enabled = false
     var hasStoredAPIKey = false
-    var statusMessage = "未配置 Provider"
+    var status: ZhulongProviderStatus = .notConfigured
+
+    var statusMessage: String {
+        AppPresentation(language: .chinese).zhulong.providerStatus(status)
+    }
 
     var isConfigured: Bool {
         enabled
@@ -29,7 +34,9 @@ struct ZhulongProviderDraft: Equatable {
 
     var normalizedDisplayName: String {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "自定义 Provider" : trimmed
+        return trimmed.isEmpty
+            ? AppPresentation(language: .chinese).zhulong.customProviderName
+            : trimmed
     }
 
     var normalizedModel: String {
@@ -59,7 +66,7 @@ enum ZhulongProviderSettingsStore {
         }
         draft.hasStoredAPIKey = ZhulongProviderKeychain.hasAPIKey()
         if draft.enabled {
-            draft.statusMessage = draft.hasStoredAPIKey ? "Provider 已保存，API Key 在 Keychain 中" : "Provider 已保存，未保存 API Key"
+            draft.status = draft.hasStoredAPIKey ? .savedWithCredential : .savedWithoutCredential
         }
         return draft
     }
@@ -98,9 +105,9 @@ enum ZhulongProviderSettingsStore {
         }
         next.hasStoredAPIKey = ZhulongProviderKeychain.hasAPIKey()
         if next.enabled {
-            next.statusMessage = next.hasStoredAPIKey ? "Provider 已保存，API Key 在 Keychain 中" : "Provider 已保存，未保存 API Key"
+            next.status = next.hasStoredAPIKey ? .savedWithCredential : .savedWithoutCredential
         } else {
-            next.statusMessage = "烛龙已关闭，普通清单不受影响"
+            next.status = .disabled
         }
         return next
     }
@@ -130,19 +137,19 @@ enum ZhulongProviderSettingsStore {
     }
 }
 
-enum ZhulongProviderSettingsError: LocalizedError, Equatable {
+enum ZhulongProviderSettingsError: Error, Equatable {
     case invalidBaseURL
     case emptyModel
     case keychainFailure(OSStatus)
 
-    var errorDescription: String? {
+    var presentationFailure: ZhulongProviderSettingsFailure {
         switch self {
         case .invalidBaseURL:
-            return "Base URL 必须是 http 或 https URL"
+            .invalidBaseURL
         case .emptyModel:
-            return "模型名称不能为空"
-        case let .keychainFailure(status):
-            return "Keychain 操作失败：\(status)"
+            .emptyModel
+        case .keychainFailure:
+            .keychainUnavailable
         }
     }
 }

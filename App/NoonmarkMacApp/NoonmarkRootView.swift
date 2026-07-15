@@ -1,0 +1,258 @@
+import AppKit
+import Combine
+import CryptoKit
+import Darwin
+import NoonmarkAI
+@_spi(ClassificationUserDecision) import NoonmarkCore
+import NoonmarkDayContext
+import NoonmarkMacRuntime
+import NoonmarkMacUIContract
+import NoonmarkStorage
+import NoonmarkSync
+import NoonmarkZhulong
+import NoonmarkZhulongAI
+import SwiftUI
+import UniformTypeIdentifiers
+
+final class NoonmarkWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+
+    override var canBecomeMain: Bool { true }
+}
+
+enum TaskClassificationDisplay: Equatable {
+    case current(TaskClassificationProjection)
+    case historical(TraceClassificationProjection)
+
+    var category: ClassificationItemProjection? {
+        switch self {
+        case let .current(projection):
+            projection.category
+        case let .historical(projection):
+            projection.category
+        }
+    }
+
+    var labels: [ClassificationItemProjection] {
+        switch self {
+        case let .current(projection):
+            projection.labels
+        case let .historical(projection):
+            projection.labels
+        }
+    }
+
+    var isHistorical: Bool {
+        if case .historical = self { return true }
+        return false
+    }
+
+    var isEmpty: Bool {
+        category == nil && labels.isEmpty
+    }
+}
+
+struct NoonmarkRootView: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let workspaceStateRepository: WorkspaceStateRepository
+
+    var body: some View {
+        ZStack {
+            NativeWorkspaceSplitView(
+                store: store,
+                stateRepository: workspaceStateRepository
+            )
+            .background(Theme.background)
+            .disabled(
+                store.showingClassificationManager
+                    || store.dayBoundaryState.isReady == false
+            )
+            .accessibilityHidden(store.showingClassificationManager)
+
+            if let message = store.dayBoundaryState.failureMessage {
+                VStack(spacing: 0) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Theme.warn)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(store.copy.naturalDayBlockedTitle)
+                                .font(.noonmarkSystem(size: 12, weight: .semibold))
+                            Text(message)
+                                .font(.noonmarkSystem(size: 11))
+                                .foregroundStyle(Theme.text2)
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 12)
+                        Button(store.copy.retry) {
+                            store.retryNaturalDay()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Theme.warnSoft)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(Theme.warn.opacity(0.28)).frame(height: 1)
+                    }
+                    Spacer()
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(store.copy.naturalDayBlockedTitle)
+                .zIndex(2)
+            }
+
+            if let operationFailure = store.operationFailureNotice {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Theme.warn)
+                            .accessibilityHidden(true)
+                        Text(operationFailure.message)
+                            .font(.noonmarkSystem(size: 12, weight: .medium))
+                            .foregroundStyle(Theme.text1)
+                            .lineLimit(2)
+                        Spacer(minLength: 8)
+                        Button(store.copy.dismiss) {
+                            store.dismissOperationFailure()
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: 620)
+                    .background {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Theme.panel)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Theme.warn.opacity(0.5))
+                    }
+                    .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 76)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("app.operation-failure")
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "app.operation-failure",
+                            verificationText: operationFailure.message
+                        )
+                    }
+                }
+                .zIndex(3)
+            }
+
+            if let toast = store.toast {
+                VStack {
+                    Spacer()
+                    Text(toast)
+                        .font(.noonmarkSystem(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.background)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Theme.text1))
+                        .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(.bottom, 30)
+                        .accessibilityIdentifier("app.toast")
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "app.toast",
+                                verificationText: toast
+                            )
+                        }
+                }
+            }
+        }
+        .font(.noonmarkSystem(size: 13))
+        .sheet(isPresented: $store.showingClassificationManager) {
+            ClassificationManagementDialog {
+                store.showingClassificationManager = false
+            }
+            .environmentObject(store)
+        }
+        .sheet(item: Binding(
+            get: { store.showingPicker.map(PickerSheetState.init(purpose:)) },
+            set: { if $0 == nil { store.showingPicker = nil } }
+        )) { state in
+            DatePickerSheet(state: state)
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $store.showingFromPoolPicker) {
+            FromPoolSheet()
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $store.showingChangeDialog) {
+            ChangeTaskSheet()
+                .environmentObject(store)
+        }
+        .sheet(item: Binding(
+            get: { store.preparedDataImport },
+            set: { if $0 == nil { store.cancelPreparedDataImport() } }
+        )) { preview in
+            DataImportConfirmationSheet(preview: preview)
+                .environmentObject(store)
+        }
+        .onMoveCommand { direction in
+            if store.showingClassificationManager == false, store.selectedWorkspaceItemCount == 0 {
+                store.moveSelectedDate(direction)
+            }
+        }
+        .onAppear {
+            syncNativeWindowTitle()
+            if store.showingClassificationManager {
+                resignBackgroundFocus()
+            }
+        }
+        .onChange(of: store.showingClassificationManager) { _, isPresented in
+            if isPresented {
+                resignBackgroundFocus()
+            }
+        }
+        .onChange(of: store.windowTitle) { _, _ in
+            syncNativeWindowTitle()
+        }
+        .onChange(of: store.isZhulongEnabled) { _, _ in
+            store.ensureVisiblePage()
+        }
+        .onChange(of: store.toast) { _, message in
+            guard let message else { return }
+            announce(message)
+        }
+        .onChange(of: store.operationFailureNotice) { _, notice in
+            guard let notice else { return }
+            announce(notice.message)
+        }
+    }
+
+    private func announce(_ message: String) {
+        NSAccessibility.post(
+            element: NSApplication.shared,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.medium.rawValue
+            ]
+        )
+    }
+
+    private func syncNativeWindowTitle() {
+        NSApp.windows.first { $0 is NoonmarkWindow }?.title = store.windowTitle
+    }
+
+    private func resignBackgroundFocus() {
+        DispatchQueue.main.async {
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
+    }
+}
+
+struct PickerSheetState: Identifiable {
+    let id = UUID()
+    let purpose: NoonmarkStore.DatePickerPurpose
+}

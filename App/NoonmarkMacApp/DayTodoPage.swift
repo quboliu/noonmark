@@ -1,0 +1,736 @@
+import AppKit
+import Combine
+import CryptoKit
+import Darwin
+import NoonmarkAI
+@_spi(ClassificationUserDecision) import NoonmarkCore
+import NoonmarkDayContext
+import NoonmarkMacRuntime
+import NoonmarkMacUIContract
+import NoonmarkStorage
+import NoonmarkSync
+import NoonmarkZhulong
+import NoonmarkZhulongAI
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct DayTodoPage: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    @State private var quickAddFocusRequest = 0
+
+    var traces: [DayTrace] {
+        store.engine.getDayTodo(date: store.selectedDate).traces
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DayTodoHeader(dayBadge: dayBadge, badgeColor: badgeColor)
+
+            DateStrip()
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+                .padding(.bottom, 10)
+
+            if store.isHistory {
+                Notice(text: store.copy.lockedDayNotice, tone: .locked)
+                    .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+            } else if store.isFuture {
+                Notice(text: store.copy.futureDayNotice, tone: .future)
+                    .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+            }
+
+            WorkspaceBulkActionBar()
+
+            TaskSelectionClearingScrollView {
+                VStack(spacing: 0) {
+                    if store.isHistory == false {
+                        DayQuickAdd(focusRequest: quickAddFocusRequest)
+                            .padding(.bottom, 12)
+                    }
+
+                    LazyVStack(spacing: 0) {
+                        ForEach(traces, id: \.id) { trace in
+                            TaskRow(trace: trace)
+                        }
+
+                        if traces.isEmpty {
+                            if store.isHistory {
+                                EmptyState(kind: .dayTodo, text: store.copy.emptyDay)
+                                    .padding(.top, 40)
+                            } else {
+                                EmptyState(
+                                    kind: .dayTodo,
+                                    text: store.copy.emptyDay,
+                                    actionTitle: store.copy.addTask
+                                ) {
+                                    quickAddFocusRequest &+= 1
+                                }
+                                .padding(.top, 40)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+                .padding(.top, store.isHistory ? 12 : 14)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+
+    private var dayBadge: String {
+        if store.selectedDate == store.today { return store.copy.dayBadgeToday }
+        if store.isHistory { return store.copy.dayBadgeLocked }
+        return store.copy.dayBadgeFuture
+    }
+
+    private var badgeColor: Color {
+        if store.selectedDate == store.today { return Theme.accent }
+        if store.isHistory { return Theme.text2 }
+        return Theme.accent
+    }
+}
+
+struct DayTodoHeader: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let dayBadge: String
+    let badgeColor: Color
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text(store.displayFullDate(store.selectedDate))
+                .font(.noonmarkSystem(size: 21, weight: .bold))
+                .foregroundStyle(Theme.text1)
+                .monospacedDigit()
+                .lineLimit(1)
+            Text(store.weekday(store.selectedDate))
+                .font(.noonmarkSystem(size: 12))
+                .foregroundStyle(Theme.text3)
+                .lineLimit(1)
+            DayStateBadge(text: dayBadge, color: badgeColor, filled: store.selectedDate == store.today)
+            Spacer(minLength: 8)
+            HStack(spacing: 6) {
+                HeaderButton("‹", accessibilityLabel: store.copy.previousDay) {
+                    store.selectedDate = NoonmarkStore.offset(store.selectedDate, by: -1)
+                }
+                HeaderButton(store.copy.today) { store.selectedDate = store.today }
+                HeaderButton("›", accessibilityLabel: store.copy.nextDay) {
+                    store.selectedDate = NoonmarkStore.offset(store.selectedDate, by: 1)
+                }
+                HeaderButton(store.copy.chooseDate) { store.showingPicker = .gotoDay }
+            }
+        }
+        .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+        .padding(.top, 16)
+    }
+}
+
+struct DayStateBadge: View {
+    let text: String
+    let color: Color
+    let filled: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.noonmarkSystem(size: 11, weight: .semibold))
+            .foregroundStyle(filled ? .white : color)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(filled ? color : color.opacity(0.12)))
+    }
+}
+
+struct DayQuickAdd: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let focusRequest: Int
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            NewTaskInlineField(
+                placeholder: store.isFuture
+                    ? store.copy.dayQuickAddFuturePlaceholder
+                    : store.copy.dayQuickAddTodayPlaceholder,
+                text: $store.quickText,
+                nativeAccessibilityIdentifier: "quick-add.day",
+                focusRequest: focusRequest
+            ) {
+                store.addQuickTask()
+            }
+            HeaderButton(store.copy.scheduleFromPool) { store.showingFromPoolPicker = true }
+        }
+    }
+}
+
+struct NewTaskInlineField: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let placeholder: String
+    @Binding var text: String
+    let nativeAccessibilityIdentifier: String
+    let focusRequest: Int
+    let onSubmit: () -> Void
+
+    var suggestions: [ClassificationCatalogItemProjection] {
+        store.newTaskLabelSuggestions(for: text)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            MarkdownEditor(
+                text: $text,
+                placeholder: placeholder,
+                style: .compact,
+                commitsOnReturn: true,
+                onCommit: onSubmit,
+                nativeAccessibilityIdentifier: nativeAccessibilityIdentifier,
+                focusRequest: focusRequest
+            )
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line.opacity(0.72)))
+
+            if store.shouldShowNewTaskLabelSuggestions(for: text) {
+                VStack(spacing: 0) {
+                    ForEach(suggestions.prefix(6)) { label in
+                        Button {
+                            text = store.completeLastHashToken(in: text, with: label.name)
+                        } label: {
+                            HStack(spacing: 7) {
+                                Text("#")
+                                    .font(.noonmarkSystem(size: 10, weight: .black, design: .rounded))
+                                    .foregroundStyle(label.color)
+                                    .frame(width: 18, height: 18)
+                                    .background(RoundedRectangle(cornerRadius: 3).fill(label.color.opacity(0.10)))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .stroke(label.color.opacity(0.48), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                                    }
+                                Text("#\(label.name)")
+                                    .font(.noonmarkSystem(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(Theme.text1)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 9)
+                            .frame(height: 28)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line.opacity(0.72)))
+                .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+            }
+        }
+        .layoutPriority(1)
+    }
+}
+
+struct DateStrip: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    @State private var focusRequest = 0
+    @State private var hasKeyboardFocus = false
+
+    var dates: [LocalDate] { store.dateStripDates() }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            DateStripSelectionPill(selectedIndex: store.selectedDateStripIndex, cellCount: dates.count)
+                .frame(height: 52)
+                .clipped()
+
+            HStack(spacing: 0) {
+                ForEach(dates, id: \.self) { date in
+                    let selected = date == store.selectedDate
+                    let today = date == store.today
+                    let count = store.engine.getDayTodo(date: date).traces.count
+                    Button {
+                        focusRequest &+= 1
+                        withAnimation(
+                            Theme.shouldReduceMotion
+                                ? nil
+                                : .spring(response: 0.24, dampingFraction: 0.74)
+                        ) {
+                            store.selectedDate = date
+                        }
+                    } label: {
+                        VStack(spacing: 4) {
+                            Text(store.weekdayNarrow(date))
+                                .font(.noonmarkSystem(size: 9.5, weight: .medium))
+                                .foregroundStyle(Theme.text3)
+                            Text("\(date.day)")
+                                .font(.noonmarkSystem(size: 12, weight: .semibold))
+                                .foregroundStyle(selected ? .white : today ? Theme.accent : Theme.text1)
+                                .frame(width: 24, height: 24)
+                                .overlay(Circle().stroke(today && !selected ? Theme.accent : .clear, lineWidth: 1.5))
+                            Group {
+                                if count > 0, Theme.shouldDifferentiateWithoutColor {
+                                    Text("\(min(count, 99))")
+                                        .font(.noonmarkSystem(size: 8.5, weight: .bold))
+                                        .foregroundStyle(selected ? .white : Theme.text2)
+                                        .monospacedDigit()
+                                } else {
+                                    Circle()
+                                        .fill(count > 0 ? (selected ? .white.opacity(0.9) : Theme.accent) : .clear)
+                                        .frame(width: 4, height: 4)
+                                }
+                            }
+                            .frame(height: 9)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 2)
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "day.date-strip.cell.\(date.description)",
+                                verificationText: selected ? "selected" : ""
+                            )
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        store.copy.dateCellAccessibilityLabel(
+                            date: store.displayDate(date),
+                            weekday: store.weekday(date),
+                            taskCount: count,
+                            isToday: today,
+                            isSelected: selected
+                        )
+                    )
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+        }
+        .background {
+            DateNavigationKeyboardFocusBridge(
+                focusRequest: focusRequest,
+                onMoveCommand: { store.moveSelectedDate($0) },
+                onFocusChange: { hasKeyboardFocus = $0 }
+            )
+        }
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(hasKeyboardFocus ? Theme.accent.opacity(0.72) : Theme.line.opacity(0.62))
+                .frame(height: hasKeyboardFocus ? 1.5 : 1)
+        }
+    }
+}
+
+struct DateStripSelectionPill: View {
+    let selectedIndex: Int?
+    let cellCount: Int
+
+    var body: some View {
+        GeometryReader { proxy in
+            if let selectedIndex, cellCount > 0 {
+                let cellWidth = proxy.size.width / CGFloat(cellCount)
+                Circle()
+                    .fill(Theme.accent)
+                    .frame(width: 24, height: 24)
+                    .shadow(color: Theme.accent.opacity(0.34), radius: 6, x: 0, y: 2)
+                    .offset(
+                        x: cellWidth * CGFloat(selectedIndex) + (cellWidth - 24) / 2,
+                        y: 17
+                    )
+                    .animation(
+                        Theme.shouldReduceMotion
+                            ? nil
+                            : .spring(response: 0.24, dampingFraction: 0.74),
+                        value: selectedIndex
+                    )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+struct TaskRow: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let trace: DayTrace
+
+    var definition: TaskDefinition? { store.definition(for: trace) }
+    var progress: TraceProgress { store.engine.traceProgress(for: trace.id) }
+    var subtasks: [Subtask] { store.subtasks(for: trace.id) }
+    var selected: Bool {
+        store.isWorkspaceItemSelected(.dayTrace(trace.id))
+    }
+
+    var expanded: Bool { store.expandedTraceIDs.contains(trace.id) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 10) {
+                Button {
+                    store.toggleComplete(trace.id)
+                } label: {
+                    StatusGlyph(status: trace.status)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(trace.status != .pending && trace.status != .completed)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(
+                    trace.status == .completed
+                        ? store.copy.undoComplete
+                        : store.copy.markComplete
+                )
+                .help(
+                    trace.status == .completed
+                        ? store.copy.undoComplete
+                        : store.copy.markComplete
+                )
+
+                VStack(alignment: .leading, spacing: 0) {
+                    MarkdownInlineText(definition?.title ?? store.copy.untitledTask)
+                        .font(.noonmarkSystem(size: 13, weight: .medium))
+                        .foregroundStyle(trace.status.uiStyle.titleColor)
+                        .strikethrough(trace.status.uiStyle.strikethrough)
+
+                    if let classification = store.displayableClassification(for: trace) {
+                        TaskClassificationBadges(
+                            display: classification,
+                            taskTitle: definition?.title ?? store.copy.untitledTask,
+                            accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                                surface: "day-row",
+                                instanceID: trace.id.description
+                            )
+                        )
+                        .padding(.top, 4)
+                    }
+
+                    if showsProgress {
+                        HStack(spacing: 6) {
+                            GeometryReader { proxy in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(Theme.chip)
+                                    Capsule()
+                                        .fill(progress.percent == 100 ? Theme.ok : Theme.accent)
+                                        .frame(width: proxy.size.width * CGFloat(progress.percent) / 100)
+                                }
+                            }
+                            .frame(width: 150, height: 4)
+                            Text("\(progress.percent)%")
+                                .font(.noonmarkSystem(size: 10, weight: .semibold))
+                                .foregroundStyle(progress.percent == 100 ? Theme.ok : Theme.accent)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .padding(.top, 5)
+                    }
+
+                    if metaText.isEmpty == false {
+                        Text(metaText)
+                            .font(.noonmarkSystem(size: 11))
+                            .foregroundStyle(Theme.text3)
+                            .padding(.top, 2)
+                    }
+
+                    if let changedTarget = store.changedTarget(for: trace) {
+                        ChangedTargetButton(
+                            title: changedTarget.definition.title,
+                            compact: true
+                        ) {
+                            store.openChangedTarget(from: trace)
+                        }
+                        .padding(.top, 3)
+                    }
+                }
+                .layoutPriority(1)
+
+                Spacer()
+
+                if subtasks.isEmpty == false {
+                    Button {
+                        if expanded {
+                            store.expandedTraceIDs.remove(trace.id)
+                        } else {
+                            store.expandedTraceIDs.insert(trace.id)
+                        }
+                    } label: {
+                        SubtaskDisclosureLabel(count: subtasks.count, expanded: expanded)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if canReorder, selected {
+                    PriorityStepper(
+                        canMoveUp: canMoveUp,
+                        canMoveDown: canMoveDown,
+                        moveUp: { store.movePriority(trace.id, delta: -1) },
+                        moveDown: { store.movePriority(trace.id, delta: 1) }
+                    )
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
+
+            if expanded {
+                VStack(spacing: 6) {
+                    ForEach(subtasks, id: \.id) { subtask in
+                        SubtaskRow(subtask: subtask)
+                    }
+                }
+                .padding(.top, 1)
+                .padding(.leading, 40)
+                .padding(.trailing, 12)
+                .padding(.bottom, 10)
+            }
+        }
+        .listRowSurface(selected: selected, tint: Theme.accent, separatorLeadingInset: 44)
+        .contentShape(Rectangle())
+        .workspaceSelectable(.dayTrace(trace.id))
+        .modifier(
+            DayTracePriorityReorderingModifier(
+                trace: trace,
+                isEnabled: canReorder
+            )
+        )
+        .onTapGesture { store.userSelectTrace(trace.id) }
+        .contextMenu {
+            TaskContextMenu(trace: trace)
+        }
+    }
+
+    var metaText: String {
+        var parts: [String] = []
+        if trace.continuationSeq > 0 {
+            parts.append(
+                store.copy.continuationDuration(
+                    sequence: trace.continuationSeq,
+                    days: store.continuationDurationDays(for: trace)
+                )
+            )
+        }
+        if trace.status == .returnedToPool { parts.append(store.copy.returnedToPoolOnDay) }
+        return parts.joined(separator: " · ")
+    }
+
+    var showsProgress: Bool {
+        guard progress.percent > 0, progress.percent < 100 else { return false }
+        switch trace.status {
+        case .pending, .continued, .unfinished:
+            return true
+        case .completed, .changed, .returnedToPool, .abandoned:
+            return false
+        }
+    }
+
+    var canReorder: Bool {
+        trace.status == .pending && (store.selectedDate == store.today || store.selectedDate > store.today)
+    }
+
+    var canMoveUp: Bool {
+        canReorder && store.canMovePriority(trace.id, delta: -1)
+    }
+
+    var canMoveDown: Bool {
+        canReorder && store.canMovePriority(trace.id, delta: 1)
+    }
+}
+
+private struct DayTracePriorityReorderingModifier: ViewModifier {
+    @EnvironmentObject private var store: NoonmarkStore
+
+    let trace: DayTrace
+    let isEnabled: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content
+                .draggable(TaskPriorityDragItem(traceID: trace.id, date: trace.date))
+                .dropDestination(
+                    for: TaskPriorityDragItem.self,
+                    action: { items, _ in
+                        guard let moving = items.first, moving.date == trace.date else {
+                            WorkspaceDragE2EDiagnostics.recordDrop(
+                                targetTraceID: trace.id,
+                                items: items,
+                                accepted: false
+                            )
+                            return false
+                        }
+                        let accepted = store.reorderTrace(moving.traceID, before: trace.id)
+                        WorkspaceDragE2EDiagnostics.recordDrop(
+                            targetTraceID: trace.id,
+                            items: items,
+                            accepted: accepted
+                        )
+                        return accepted
+                    },
+                    isTargeted: { isTargeted in
+                        WorkspaceDragE2EDiagnostics.recordTarget(
+                            traceID: trace.id,
+                            isTargeted: isTargeted
+                        )
+                    }
+                )
+        } else {
+            content
+        }
+    }
+}
+
+struct SubtaskDisclosureLabel: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let count: Int
+    let expanded: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "chevron.right")
+                .font(.noonmarkSystem(size: 9, weight: .bold))
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+            Text(store.copy.subtaskCount(count))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
+                .monospacedDigit()
+        }
+        .foregroundStyle(Theme.accent)
+        .padding(.horizontal, 7)
+        .frame(height: 22)
+        .background(Capsule().fill(Theme.accentSoft))
+        .contentShape(Capsule())
+    }
+}
+
+struct ChangedTargetButton: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let title: String
+    var compact = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(store.copy.changedToPrefix)
+                    .foregroundStyle(Theme.text3)
+                MarkdownInlineText(title)
+                    .lineLimit(1)
+                Image(systemName: "arrow.right")
+                    .font(.noonmarkSystem(size: compact ? 8.5 : 9.5, weight: .bold))
+            }
+            .font(.noonmarkSystem(size: compact ? 10.5 : 11, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, compact ? 0 : 7)
+            .frame(height: compact ? nil : 22)
+            .background {
+                if !compact {
+                    Capsule().fill(Theme.accentSoft)
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SubtaskRow: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let subtask: Subtask
+
+    var canMutate: Bool {
+        store.canMutateSubtask(subtask)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                store.toggleSubtask(subtask.id)
+            } label: {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(subtask.status == .completed ? Theme.ok : Theme.panel)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(subtask.status == .completed ? Theme.ok : Theme.line2, lineWidth: 1.5))
+                    .overlay(Text(subtask.status == .completed ? "✓" : "").font(.noonmarkSystem(size: 9)).foregroundStyle(.white))
+                    .frame(width: 15, height: 15)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(canMutate == false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(
+                subtask.status == .completed
+                    ? store.copy.undoComplete
+                    : store.copy.markComplete
+            )
+
+            MarkdownInlineText(subtask.title)
+                .font(.noonmarkSystem(size: 12))
+                .foregroundStyle(subtask.status == .completed ? Theme.text3 : Theme.text1)
+                .strikethrough(subtask.status == .completed)
+
+            Spacer()
+
+            if subtask.completedAt != nil && canMutate == false {
+                Image(systemName: "lock.fill")
+                    .font(.noonmarkSystem(size: 9))
+                    .foregroundStyle(Theme.text3)
+            }
+
+            Menu {
+                ForEach(SubtaskDifficulty.allCases, id: \.self) { difficulty in
+                    Button {
+                        store.setSubtaskDifficulty(subtask.id, difficulty: difficulty)
+                    } label: {
+                        Label(
+                            difficultyMenuTitle(difficulty),
+                            systemImage: difficulty == subtask.difficulty ? "checkmark.circle.fill" : "circle"
+                        )
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.noonmarkSystem(size: 9, weight: .semibold))
+                    Text(store.copy.subtaskDifficulty(subtask.difficulty, compact: true))
+                    Image(systemName: "chevron.down")
+                        .font(.noonmarkSystem(size: 8, weight: .bold))
+                }
+                .font(.noonmarkSystem(size: 9, weight: .bold))
+                .foregroundStyle(subtask.difficulty == .hard ? Theme.warn : Theme.text2)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(subtask.difficulty == .hard ? Theme.warnSoft : Theme.chip))
+                .overlay(Capsule().stroke(Theme.line2))
+            }
+            .buttonStyle(.plain)
+            .help(store.copy.subtaskDifficultyHelp(canMutate: canMutate))
+        }
+    }
+
+    private func difficultyMenuTitle(_ difficulty: SubtaskDifficulty) -> String {
+        store.copy.subtaskDifficulty(difficulty)
+    }
+}
+
+struct TaskContextMenu: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let trace: DayTrace
+    var actions: [NoonmarkStore.TraceContextAction] { store.contextMenuActions(for: trace) }
+
+    var body: some View {
+        ForEach(actions, id: \.self) { action in
+            switch action {
+            case .markComplete:
+                Button(store.copy.markComplete) { store.toggleComplete(trace.id) }
+            case .undoComplete:
+                Button(store.copy.undoComplete) { store.toggleComplete(trace.id) }
+            case .continueTo:
+                Button(store.copy.continueTo) { store.showingPicker = .continueTrace(trace.id) }
+            case .changeToNewTask:
+                Button(store.copy.changeToNewTask) {
+                    store.selectTrace(trace.id)
+                    store.changeText = store.definition(for: trace)?.title ?? ""
+                    store.showingChangeDialog = true
+                }
+            case .returnToPool:
+                Button(store.copy.returnToPoolWithTrace) { store.returnToPool(trace.id) }
+            case .reschedule:
+                Button(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
+            case .copyAsNewTask:
+                Button(store.copy.copyAsNewTask) { store.copyAsNewTask(trace.id) }
+            case .abandonChain:
+                Button(store.copy.abandonChain, role: .destructive) { store.abandon(trace.id) }
+            }
+        }
+    }
+}

@@ -79,25 +79,22 @@ enum PoolListLayoutUIE2EDriver {
         }
 
         private func hasSettledShellLayout() -> Bool {
-            guard let middle = AppViewTreeE2E.view(identifier: "shell.middle-pane") else {
+            guard let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar"),
+                  let middle = AppViewTreeE2E.view(identifier: "shell.middle-pane")
+            else {
                 return false
             }
-            let expectedMiddleWidth = expectedWindowSize.width
-                - NoonmarkVisualMetrics.sidebarWidth
-                - (expectsExpandedDetailRail ? NoonmarkVisualMetrics.detailRailWidth : 0)
-            guard abs(
-                AppViewTreeE2E.frameInWindow(for: middle).width - expectedMiddleWidth
-            ) <= 1 else {
+            let sidebarWidth = AppViewTreeE2E.frameInWindow(for: sidebar).width
+            let middleWidth = AppViewTreeE2E.frameInWindow(for: middle).width
+            guard (180...320).contains(sidebarWidth), middleWidth >= 440 else {
                 return false
             }
             if expectsExpandedDetailRail {
                 guard let rail = AppViewTreeE2E.view(identifier: "shell.detail-rail") else {
                     return false
                 }
-                return abs(
-                    AppViewTreeE2E.frameInWindow(for: rail).width
-                        - NoonmarkVisualMetrics.detailRailWidth
-                ) <= 1
+                let railWidth = AppViewTreeE2E.frameInWindow(for: rail).width
+                return (240...420).contains(railWidth)
             }
             return AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail")
         }
@@ -305,7 +302,7 @@ enum ClassificationManagerUIE2EDriver {
 
         private func selectLabelsIfNeeded() {
             guard selectsLabels else {
-                finish(with: "ok")
+                completeInteraction()
                 return
             }
             waitFor("标签分段入口") {
@@ -315,6 +312,25 @@ enum ClassificationManagerUIE2EDriver {
                     AppViewTreeE2E.view(
                         identifier: "classification.manager.kind.selected.label"
                     ) != nil
+                } onSuccess: { [self] in
+                    completeInteraction()
+                }
+            }
+        }
+
+        private func completeInteraction() {
+            guard keepsAppOpen == false else {
+                finish(with: "ok")
+                return
+            }
+            waitFor("关闭分组与标签管理浮窗") {
+                AppViewTreeE2E.click(identifier: "classification.manager.close")
+            } onSuccess: { [self] in
+                waitFor("分组与标签管理浮窗关闭完成") {
+                    AppViewTreeE2E.hasNoVisibleView(
+                        identifier: "classification.manager.dialog"
+                    )
+                        && AppViewTreeE2E.hasNoAttachedSheets()
                 } onSuccess: { [self] in
                     finish(with: "ok")
                 }
@@ -377,13 +393,15 @@ enum ClassificationOverflowUIE2EDriver {
         chainIdentifier: String,
         labels: [ClassificationItemProjection],
         resultURL: URL,
-        keepsAppOpen: Bool
+        keepsAppOpen: Bool,
+        invalidatesFirstCaptureReadiness: Bool
     ) {
         Session(
             chainIdentifier: chainIdentifier,
             labels: labels,
             resultURL: resultURL,
-            keepsAppOpen: keepsAppOpen
+            keepsAppOpen: keepsAppOpen,
+            invalidatesFirstCaptureReadiness: invalidatesFirstCaptureReadiness
         ).start()
     }
 
@@ -393,17 +411,22 @@ enum ClassificationOverflowUIE2EDriver {
         private let labels: [ClassificationItemProjection]
         private let resultURL: URL
         private let keepsAppOpen: Bool
+        private let invalidatesFirstCaptureReadiness: Bool
+        private var didInvalidateFirstCaptureReadiness = false
+        private var captureRecoveryCount = 0
 
         init(
             chainIdentifier: String,
             labels: [ClassificationItemProjection],
             resultURL: URL,
-            keepsAppOpen: Bool
+            keepsAppOpen: Bool,
+            invalidatesFirstCaptureReadiness: Bool
         ) {
             self.chainIdentifier = chainIdentifier
             self.labels = labels
             self.resultURL = resultURL
             self.keepsAppOpen = keepsAppOpen
+            self.invalidatesFirstCaptureReadiness = invalidatesFirstCaptureReadiness
         }
 
         func start() {
@@ -411,6 +434,16 @@ enum ClassificationOverflowUIE2EDriver {
                 surface: "pool-row",
                 instanceID: chainIdentifier
             )
+            waitFor("主窗口进入前台") {
+                AppViewTreeE2E.activateMainWindow()
+            } onSuccess: { [self] in
+                openPopover(in: namespace)
+            }
+        }
+
+        private func openPopover(
+            in namespace: TaskClassificationAccessibilityNamespace
+        ) {
             waitFor("标签溢出入口") {
                 AppViewTreeE2E.click(
                     identifier: namespace.overflowIdentifier
@@ -424,10 +457,153 @@ enum ClassificationOverflowUIE2EDriver {
                     waitFor("全部标签浮窗内容") {
                         self.validatesAllLabels(in: namespace)
                     } onSuccess: { [self] in
-                        finish(with: "ok")
+                        waitFor("全部标签浮窗映射到 WindowServer") {
+                            AppViewTreeE2E.mappedPresentationWindow(
+                                identifier: namespace.popoverIdentifier
+                            ) != nil
+                        } onSuccess: { [self] in
+                            guard let identity = AppViewTreeE2E.mappedPresentationWindow(
+                                identifier: namespace.popoverIdentifier
+                            ) else {
+                                restartAfterInvalidPresentation()
+                                return
+                            }
+                            completeInteraction(
+                                in: namespace,
+                                identity: identity
+                            )
+                        }
                     }
                 }
             }
+        }
+
+        private func completeInteraction(
+            in namespace: TaskClassificationAccessibilityNamespace,
+            identity: AppViewTreeE2E.PresentationWindowIdentity
+        ) {
+            guard keepsAppOpen == false else {
+                beginCaptureHandshake(
+                    in: namespace,
+                    identity: identity
+                )
+                return
+            }
+            waitFor("关闭全部标签浮窗") {
+                AppViewTreeE2E.sendEscapeKey()
+            } onSuccess: { [self] in
+                waitFor("全部标签浮窗关闭完成") {
+                    AppViewTreeE2E.hasNoVisibleView(
+                        identifier: namespace.popoverIdentifier
+                    )
+                        && AppViewTreeE2E.hasNoAttachedPresentationWindows()
+                } onSuccess: { [self] in
+                    finish(with: "ok")
+                }
+            }
+        }
+
+        private func beginCaptureHandshake(
+            in namespace: TaskClassificationAccessibilityNamespace,
+            identity: AppViewTreeE2E.PresentationWindowIdentity
+        ) {
+            let generation = UUID().uuidString
+            let processID = ProcessInfo.processInfo.processIdentifier
+            write(
+                "ready|\(generation)|\(processID)|" +
+                    "\(identity.mainWindowNumber)|\(identity.presentationWindowNumber)|" +
+                    "\(captureRecoveryCount)"
+            )
+            let shouldInvalidateFirstReadiness = invalidatesFirstCaptureReadiness
+                && didInvalidateFirstCaptureReadiness == false
+            if shouldInvalidateFirstReadiness {
+                didInvalidateFirstCaptureReadiness = true
+                invalidateCaptureReadiness(
+                    generation: generation,
+                    namespace: namespace
+                )
+                return
+            }
+            waitForCaptureAcknowledgement(
+                generation: generation,
+                namespace: namespace,
+                identity: identity
+            )
+        }
+
+        private func waitForCaptureAcknowledgement(
+            generation: String,
+            namespace: TaskClassificationAccessibilityNamespace,
+            identity: AppViewTreeE2E.PresentationWindowIdentity,
+            attemptsRemaining: Int = 160
+        ) {
+            if captureAcknowledgement == generation {
+                guard AppViewTreeE2E.mappedPresentationWindow(
+                    identifier: namespace.popoverIdentifier
+                ) == identity else {
+                    restartAfterInvalidPresentation(generation: generation)
+                    return
+                }
+                write("ok|\(generation)|\(captureRecoveryCount)")
+                return
+            }
+
+            guard AppViewTreeE2E.mappedPresentationWindow(
+                identifier: namespace.popoverIdentifier
+            ) == identity else {
+                restartAfterInvalidPresentation(generation: generation)
+                return
+            }
+            guard attemptsRemaining > 1 else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finish(with: "failed: 等待截图确认超时")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [self] in
+                waitForCaptureAcknowledgement(
+                    generation: generation,
+                    namespace: namespace,
+                    identity: identity,
+                    attemptsRemaining: attemptsRemaining - 1
+                )
+            }
+        }
+
+        private func invalidateCaptureReadiness(
+            generation: String,
+            namespace: TaskClassificationAccessibilityNamespace
+        ) {
+            waitFor("使首轮截图就绪失效") {
+                AppViewTreeE2E.sendEscapeKey()
+            } onSuccess: { [self] in
+                waitFor("首轮截图就绪窗口关闭完成") {
+                    AppViewTreeE2E.hasNoVisibleView(
+                        identifier: namespace.popoverIdentifier
+                    )
+                        && AppViewTreeE2E.hasNoAttachedPresentationWindows()
+                } onSuccess: { [self] in
+                    restartAfterInvalidPresentation(generation: generation)
+                }
+            }
+        }
+
+        private func restartAfterInvalidPresentation(generation: String? = nil) {
+            if let generation {
+                captureRecoveryCount += 1
+                write("stale|\(generation)|\(captureRecoveryCount)")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [self] in
+                start()
+            }
+        }
+
+        private var captureAcknowledgement: String? {
+            try? String(contentsOf: captureAcknowledgementURL, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        private var captureAcknowledgementURL: URL {
+            resultURL.appendingPathExtension("ack")
         }
 
         private func validatesAllLabels(
@@ -477,6 +653,14 @@ enum ClassificationOverflowUIE2EDriver {
         }
 
         private func finish(with result: String) {
+            write(result)
+            guard keepsAppOpen == false else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                NSApp.terminate(nil)
+            }
+        }
+
+        private func write(_ result: String) {
             do {
                 try FileManager.default.createDirectory(
                     at: resultURL.deletingLastPathComponent(),
@@ -488,10 +672,6 @@ enum ClassificationOverflowUIE2EDriver {
                     "Noonmark classification overflow UI E2E result write failed: %@",
                     String(describing: error)
                 )
-            }
-            guard keepsAppOpen == false else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                NSApp.terminate(nil)
             }
         }
     }

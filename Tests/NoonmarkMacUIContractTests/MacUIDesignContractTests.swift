@@ -26,21 +26,43 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(MacUIShellLayout.detailRailCollapsedByDefault)
         XCTAssertEqual(MacUIIconMetrics.toolbarSize, 13)
         XCTAssertEqual(MacUIIconMetrics.navigationSize, 14)
+        XCTAssertEqual(MacUIAccessibilityLayout.minimumInteractiveTargetSize, 28)
         XCTAssertEqual(MacUIShellLayout.navigationRowHeight, 34)
     }
 
     func testTypographyCompactsReadableTextWithoutShrinkingMicrocopy() {
-        XCTAssertEqual(MacUITypographyMetrics.scale, 0.92)
-        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(21), 19.5)
-        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(17), 15.5)
-        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(14.5), 13.5)
-        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(13), 12)
-        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(12), 11)
-        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(10.5), 9.5)
+        XCTAssertEqual(MacUITypographyMetrics.scale, 1.0)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(21), 21)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(17), 17)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(14.5), 14.5)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(13), 13)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(12), 12)
+        XCTAssertEqual(MacUITypographyMetrics.compactPointSize(10.5), 10.5)
         XCTAssertEqual(MacUITypographyMetrics.compactPointSize(10), 10)
         XCTAssertEqual(MacUITypographyMetrics.compactPointSize(9), 9)
         XCTAssertEqual(MacUITypographyMetrics.compactEditorBasePointSize, 12.5)
-        XCTAssertEqual(MacUITypographyMetrics.compactEditorPointSize, 11.5)
+        XCTAssertEqual(MacUITypographyMetrics.compactEditorPointSize, 12.5)
+        XCTAssertEqual(MacUITypographyMetrics.compactEditorVerticalInset, 8.5)
+    }
+
+    func testSmallTextAndSemanticSuccessColorsMeetContrastContract() {
+        let white = MacUISRGBColor(red: 1, green: 1, blue: 1)
+        XCTAssertGreaterThanOrEqual(
+            MacUIAccessibleColorMetrics.success.contrastRatio(against: white),
+            MacUIAccessibleColorMetrics.minimumSmallTextContrast
+        )
+        XCTAssertGreaterThanOrEqual(
+            MacUIAccessibleColorMetrics.coolGrayTertiaryText.contrastRatio(
+                against: MacUIAccessibleColorMetrics.coolGrayBackground
+            ),
+            MacUIAccessibleColorMetrics.minimumSmallTextContrast
+        )
+        XCTAssertGreaterThanOrEqual(
+            MacUIAccessibleColorMetrics.warmPaperTertiaryText.contrastRatio(
+                against: MacUIAccessibleColorMetrics.warmPaperBackground
+            ),
+            MacUIAccessibleColorMetrics.minimumSmallTextContrast
+        )
     }
 
     func testCurrentContractCoversAllTopLevelPages() {
@@ -48,14 +70,14 @@ final class MacUIDesignContractTests: XCTestCase {
 
         XCTAssertEqual(
             contract.pages,
-            [.dayTodo, .taskPool, .futurePlans, .unfinishedPool, .completedPool, .calendar, .zhulong, .settings]
+            [.dayTodo, .taskPool, .futurePlans, .unfinishedPool, .completedPool, .calendar, .zhulong]
         )
     }
 
     func testContractKeepsActionsAndModalsExplicit() {
         let contract = MacUIDesignContract.current
 
-        XCTAssertEqual(contract.taskActions.count, 28)
+        XCTAssertEqual(contract.taskActions.count, 33)
         XCTAssertTrue(contract.taskActions.contains(.continueToDate))
         XCTAssertTrue(contract.taskActions.contains(.changeIntoNewTask))
         XCTAssertTrue(contract.taskActions.contains(.returnToPool))
@@ -111,7 +133,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.dateStripSelectionAnimation))
         XCTAssertTrue(contract.globalElements.contains(.semanticStatusStyles))
         XCTAssertTrue(contract.globalElements.contains(.protectedActionButtonLabels))
-        XCTAssertTrue(contract.globalElements.contains(.todoistInspiredUnifiedShell))
+        XCTAssertTrue(contract.globalElements.contains(.nativeProductivityWorkspace))
         XCTAssertTrue(contract.globalElements.contains(.quietSidebarSurface))
         XCTAssertTrue(contract.globalElements.contains(.lowContrastControlSurfaces))
         XCTAssertTrue(contract.globalElements.contains(.borderlessListRows))
@@ -128,6 +150,19 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.spatiallySeparatedRailControls))
         XCTAssertTrue(contract.globalElements.contains(.viewMenuRailCommands))
         XCTAssertTrue(contract.globalElements.contains(.adaptiveMainSurfaceWidth))
+        XCTAssertTrue(contract.globalElements.contains(.nativeMainMenu))
+        XCTAssertTrue(contract.globalElements.contains(.nativeSettingsWindow))
+        XCTAssertTrue(contract.globalElements.contains(.restorableWindow))
+        XCTAssertTrue(contract.globalElements.contains(.adjustableSplitView))
+        XCTAssertTrue(contract.globalElements.contains(.workspaceKeyboardSelection))
+        XCTAssertTrue(contract.globalElements.contains(.workspaceMultipleSelection))
+        XCTAssertTrue(contract.globalElements.contains(.globalSearchCommand))
+        XCTAssertTrue(contract.globalElements.contains(.quickEntryCommand))
+        XCTAssertTrue(contract.globalElements.contains(.semanticErrorPresentation))
+        XCTAssertTrue(contract.globalElements.contains(.increaseContrast))
+        XCTAssertTrue(contract.globalElements.contains(.differentiateWithoutColor))
+        XCTAssertTrue(contract.globalElements.contains(.reduceMotion))
+        XCTAssertTrue(contract.globalElements.contains(.reduceTransparency))
         XCTAssertTrue(contract.colorTokens.contains(.accent))
         XCTAssertTrue(contract.colorTokens.contains(.ok))
         XCTAssertTrue(contract.colorTokens.contains(.warn))
@@ -137,35 +172,24 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.colorTokens.contains(.t1))
         XCTAssertTrue(contract.colorTokens.contains(.t2))
         XCTAssertTrue(contract.colorTokens.contains(.t3))
-        XCTAssertTrue(contract.navigationElements.contains(.semanticIconColors))
+        XCTAssertTrue(contract.navigationElements.contains(.unifiedNavigationIcons))
+        XCTAssertTrue(contract.navigationElements.contains(.semanticNavigationIconColors))
         XCTAssertTrue(contract.navigationElements.contains(.quietSelectedPill))
         XCTAssertTrue(contract.navigationElements.contains(.countBadges))
         XCTAssertTrue(contract.navigationElements.contains(.zhulongEntryVisibilityFollowsSettings))
-        XCTAssertEqual(
-            Set(contract.navigationIconColorTokens),
-            Set(MacUINavigationIconColorToken.allCases)
-        )
-        XCTAssertEqual(MacUINavigationIconColorToken.dayTodo.hexValue, "#2A6FDB")
-        XCTAssertEqual(MacUINavigationIconColorToken.taskPool.hexValue, "#0E9488")
-        XCTAssertEqual(MacUINavigationIconColorToken.futurePlans.hexValue, "#7C5CFF")
-        XCTAssertEqual(MacUINavigationIconColorToken.unfinishedPool.hexValue, "#E0851B")
-        XCTAssertEqual(MacUINavigationIconColorToken.completedPool.hexValue, "#1F8A5B")
-        XCTAssertEqual(MacUINavigationIconColorToken.calendar.hexValue, "#D1477A")
-        XCTAssertEqual(MacUINavigationIconColorToken.zhulong.hexValue, "#7C5CFF")
-        XCTAssertEqual(MacUINavigationIconColorToken.settings.hexValue, "#64748B")
-
         XCTAssertTrue(contract.dayTodoElements.contains(.fourteenDayStrip))
         XCTAssertTrue(contract.dayTodoElements.contains(.dateStripSelectedPill))
         XCTAssertTrue(contract.dayTodoElements.contains(.dateStripTodayOutline))
-        XCTAssertTrue(contract.dayTodoElements.contains(.dateStripSelectedDot))
+        XCTAssertTrue(contract.dayTodoElements.contains(.accessibleDateCellState))
         XCTAssertTrue(contract.dayTodoElements.contains(.dateStripTaskPresenceDot))
         XCTAssertTrue(contract.dayTodoElements.contains(.keyboardDateNavigation))
         XCTAssertTrue(contract.dayTodoElements.contains(.taskRowSelectedState))
-        XCTAssertTrue(contract.dayTodoElements.contains(.taskRowStatusDot))
         XCTAssertTrue(contract.dayTodoElements.contains(.taskRowTitle))
         XCTAssertTrue(contract.dayTodoElements.contains(.taskRowTrajectoryMetadata))
         XCTAssertTrue(contract.dayTodoElements.contains(.changedTraceTargetJump))
-        XCTAssertTrue(contract.dayTodoElements.contains(.taskRowMoveButtons))
+        XCTAssertTrue(contract.dayTodoElements.contains(.singleStatusGlyph))
+        XCTAssertTrue(contract.dayTodoElements.contains(.dragReordering))
+        XCTAssertTrue(contract.dayTodoElements.contains(.selectedReorderControls))
         XCTAssertTrue(contract.taskPoolElements.contains(.rowContextMenu))
         XCTAssertTrue(contract.taskPoolElements.contains(.scheduleTomorrowContextMenuAction))
         XCTAssertTrue(contract.taskPoolElements.contains(.sharedRowAndDetailActions))
@@ -173,7 +197,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.futurePlanElements.contains(.selectTaskAction))
         XCTAssertTrue(contract.futurePlanElements.contains(.contextMenuAction))
         XCTAssertTrue(contract.futurePlanElements.contains(.openDetailAction))
-        XCTAssertTrue(contract.futurePlanElements.contains(.taskRowMoveButtons))
+        XCTAssertTrue(contract.futurePlanElements.contains(.dragReordering))
+        XCTAssertTrue(contract.futurePlanElements.contains(.selectedReorderControls))
         XCTAssertTrue(contract.unfinishedPoolElements.contains(.detailsExpansion))
         XCTAssertTrue(contract.unfinishedPoolElements.contains(.reenableAbandonedContextMenuAction))
         XCTAssertTrue(contract.completedPoolElements.contains(.subtaskCompletionRecord))
@@ -191,7 +216,10 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.settingsElements.contains(.customSyncEndpoint))
         XCTAssertTrue(contract.settingsElements.contains(.zhulongEnabledToggle))
         XCTAssertTrue(contract.settingsElements.contains(.zhulongProviderConfiguration))
-        XCTAssertTrue(contract.settingsElements.contains(.balancedSettingsLayout))
+        XCTAssertTrue(contract.settingsElements.contains(.nativeSettingsWindow))
+        XCTAssertTrue(contract.settingsElements.contains(.nativeSidebarSelection))
+        XCTAssertTrue(contract.settingsElements.contains(.flatFormSections))
+        XCTAssertTrue(contract.settingsElements.contains(.poemInAboutPanel))
         XCTAssertTrue(contract.settingsElements.contains(.compactClassificationSummary))
         XCTAssertTrue(contract.settingsElements.contains(.classificationManagerTypeSwitcher))
         XCTAssertTrue(contract.settingsElements.contains(.classificationManagerSearch))
@@ -201,19 +229,23 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.settingsElements.contains(.classificationManagerReferenceCounts))
         XCTAssertTrue(contract.settingsElements.contains(.classificationManagerHistoryNotice))
         XCTAssertTrue(contract.settingsElements.contains(.iCloudSync))
-        XCTAssertTrue(contract.emptyStateElements.contains(.illustration))
+        XCTAssertTrue(contract.emptyStateElements.contains(.semanticSymbol))
         XCTAssertTrue(contract.emptyStateElements.contains(.copy))
-        XCTAssertTrue(contract.pageEmptyStateElements.contains(.dayTodoIllustration))
+        XCTAssertTrue(contract.emptyStateElements.contains(.contextualPrimaryAction))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.dayTodoSymbol))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.dayTodoCopy))
-        XCTAssertTrue(contract.pageEmptyStateElements.contains(.taskPoolIllustration))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.dayTodoPrimaryAction))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.taskPoolSymbol))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.taskPoolCopy))
-        XCTAssertTrue(contract.pageEmptyStateElements.contains(.futurePlansIllustration))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.taskPoolPrimaryAction))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.futurePlansSymbol))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.futurePlansCopy))
-        XCTAssertTrue(contract.pageEmptyStateElements.contains(.unfinishedPoolIllustration))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.futurePlansPrimaryAction))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.unfinishedPoolSymbol))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.unfinishedPoolCopy))
-        XCTAssertTrue(contract.pageEmptyStateElements.contains(.completedPoolIllustration))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.completedPoolSymbol))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.completedPoolCopy))
-        XCTAssertTrue(contract.pageEmptyStateElements.contains(.calendarIllustration))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.calendarSymbol))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.calendarCopy))
     }
 

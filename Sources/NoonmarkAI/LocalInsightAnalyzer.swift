@@ -57,7 +57,7 @@ public struct LocalInsightAnalyzer: Sendable {
             if terminalTraces.isEmpty == false {
                 let completedCount = terminalTraces.filter { $0.trace.status == .completed }.count
                 let completionRate = Double(completedCount) / Double(terminalTraces.count)
-                let fact = "范围内已结算轨迹 \(terminalTraces.count) 条，其中完成 \(completedCount) 条，完成率为 \(Int((completionRate * 100).rounded()))%。"
+                let fact = "范围内已产生结果的日轨迹 \(terminalTraces.count) 条，其中完成 \(completedCount) 条，完成率为 \(Int((completionRate * 100).rounded()))%。"
                 evidence.append(
                     AIEvidence(
                         metric: "completion_rate",

@@ -57,7 +57,10 @@ enum MarkdownEditorStyle {
         case .body:
             NSSize(width: 5, height: 6)
         case .compact:
-            NSSize(width: 5, height: 10)
+            // A 15 pt insertion caret inside the fixed 32 pt compact field
+            // leaves 17 pt of vertical whitespace. Split that evenly so the
+            // text system does not scroll a 35 pt document inside the viewport.
+            NSSize(width: 5, height: NoonmarkVisualMetrics.compactEditorVerticalInset)
         }
     }
 }
@@ -73,6 +76,7 @@ struct MarkdownEditor: View {
     var onCommit: (() -> Void)?
     var onEndEditing: (() -> Void)?
     var nativeAccessibilityIdentifier: String?
+    var focusRequest = 0
 
     var body: some View {
         let editor = MarkdownTextViewRepresentable(
@@ -82,7 +86,8 @@ struct MarkdownEditor: View {
             onCommit: onCommit,
             onEndEditing: onEndEditing,
             accessibilityLabel: placeholder,
-            nativeAccessibilityIdentifier: nativeAccessibilityIdentifier
+            nativeAccessibilityIdentifier: nativeAccessibilityIdentifier,
+            focusRequest: focusRequest
         )
         Group {
             if let height {
@@ -117,9 +122,14 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     let onEndEditing: (() -> Void)?
     let accessibilityLabel: String
     let nativeAccessibilityIdentifier: String?
+    let focusRequest: Int
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onEndEditing: onEndEditing)
+        Coordinator(
+            text: $text,
+            onEndEditing: onEndEditing,
+            focusRequest: focusRequest
+        )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -187,6 +197,13 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         }
         context.coordinator.text = $text
         context.coordinator.onEndEditing = onEndEditing
+        if context.coordinator.focusRequest != focusRequest {
+            context.coordinator.focusRequest = focusRequest
+            DispatchQueue.main.async { [weak scrollView, weak textView] in
+                guard let scrollView, let textView else { return }
+                scrollView.window?.makeFirstResponder(textView)
+            }
+        }
     }
 
     func sizeThatFits(
@@ -224,10 +241,16 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
         var onEndEditing: (() -> Void)?
+        var focusRequest: Int
 
-        init(text: Binding<String>, onEndEditing: (() -> Void)?) {
+        init(
+            text: Binding<String>,
+            onEndEditing: (() -> Void)?,
+            focusRequest: Int
+        ) {
             self.text = text
             self.onEndEditing = onEndEditing
+            self.focusRequest = focusRequest
         }
 
         func textDidChange(_ notification: Notification) {
@@ -249,36 +272,20 @@ private final class MarkdownNSTextView: NSTextView {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
 
-        if modifiers.contains(.control), key == "a" {
-            selectAll(nil)
-            return
-        }
-        if handleReturn(event, modifiers: modifiers) {
-            return
-        }
-        if modifiers.contains(.command), let key {
-            switch key {
-            case "b":
-                wrapSelection(prefix: "**", suffix: "**")
-                return
-            case "i":
-                wrapSelection(prefix: "*", suffix: "*")
-                return
-            case "e":
-                wrapSelection(prefix: "`", suffix: "`")
-                return
-            case "k":
-                wrapSelection(prefix: "[", suffix: "](https://)")
-                return
-            default:
-                break
-            }
-        }
-        if event.keyCode == 48, modifiers.contains(.command) == false {
-            insertText("    ", replacementRange: selectedRange())
-            return
-        }
+        if handleSelectAll(key: key, modifiers: modifiers) { return }
+        if handleReturn(event, modifiers: modifiers) { return }
+        if handleFormattingShortcut(key: key, modifiers: modifiers) { return }
+        if handleTab(event, modifiers: modifiers) { return }
         super.keyDown(with: event)
+    }
+
+    private func handleSelectAll(
+        key: String?,
+        modifiers: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard modifiers.contains(.control), key == "a" else { return false }
+        selectAll(nil)
+        return true
     }
 
     private func handleReturn(
@@ -301,6 +308,41 @@ private final class MarkdownNSTextView: NSTextView {
             return true
         }
         return false
+    }
+
+    private func handleFormattingShortcut(
+        key: String?,
+        modifiers: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard modifiers.contains(.command), let key else { return false }
+        switch key {
+        case "b":
+            wrapSelection(prefix: "**", suffix: "**")
+        case "i":
+            wrapSelection(prefix: "*", suffix: "*")
+        case "e":
+            wrapSelection(prefix: "`", suffix: "`")
+        case "k":
+            wrapSelection(prefix: "[", suffix: "](https://)")
+        default:
+            return false
+        }
+        return true
+    }
+
+    private func handleTab(
+        _ event: NSEvent,
+        modifiers: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard event.keyCode == 48, modifiers.contains(.command) == false else { return false }
+        if modifiers.contains(.option) {
+            insertText("    ", replacementRange: selectedRange())
+        } else if modifiers.contains(.shift) {
+            window?.selectPreviousKeyView(self)
+        } else {
+            window?.selectNextKeyView(self)
+        }
+        return true
     }
 
     private func wrapSelection(prefix: String, suffix: String) {

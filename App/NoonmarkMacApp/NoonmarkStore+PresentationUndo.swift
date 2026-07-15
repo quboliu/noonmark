@@ -1,0 +1,935 @@
+import AppKit
+import Foundation
+@_spi(ClassificationUserDecision) import NoonmarkCore
+import NoonmarkDayContext
+import NoonmarkMacRuntime
+import SwiftUI
+
+extension NoonmarkStore {
+    var isHistory: Bool {
+        selectedDate < today || engine.days[selectedDate]?.lockedAt != nil
+    }
+
+    var isFuture: Bool {
+        selectedDate > today && engine.days[selectedDate]?.lockedAt == nil
+    }
+
+    var selectedTrace: DayTrace? {
+        guard let selectedTraceID else { return nil }
+        return engine.traces[selectedTraceID]
+    }
+
+    var selectedDefinition: TaskDefinition? {
+        guard let selectedTrace else { return nil }
+        return engine.definitions[selectedTrace.definitionID]
+    }
+
+    var selectedPoolTask: PoolTask? {
+        guard let selectedPoolChainID else { return nil }
+        return engine.taskPool().first { $0.chain.id == selectedPoolChainID }
+    }
+
+    func currentDefinition(for chainID: TaskChainID) -> TaskDefinition? {
+        engine.definitions.values.first {
+            $0.chainID == chainID && $0.supersededAt == nil
+        }
+    }
+
+    var selectedCompletedItem: CompletedPoolItem? {
+        guard let selectedCompletedTraceID else { return nil }
+        return engine.completedPool().first { $0.trace.id == selectedCompletedTraceID }
+    }
+
+    var selectedCompletedSubtaskRecord: CompletedSubtaskRecord? {
+        guard let selectedCompletedSubtaskID else { return nil }
+        return engine.completedSubtaskRecords().first { $0.subtask.id == selectedCompletedSubtaskID }
+    }
+
+    var selectedUnfinishedItem: UnfinishedPoolItem? {
+        guard let selectedUnfinishedChainID else { return nil }
+        return engine.unfinishedPool().first { $0.chain.id == selectedUnfinishedChainID }
+    }
+
+    var isZhulongEnabled: Bool {
+        zhulongProviderDraft.enabled
+    }
+
+    var hasActiveDetailSelection: Bool {
+        if selectedPoolTask != nil || selectedUnfinishedItem != nil || selectedCompletedItem != nil || selectedCompletedSubtaskRecord != nil {
+            return true
+        }
+        return selectedTrace != nil && selectedDefinition != nil
+    }
+
+    var usesZhulongContextRail: Bool {
+        isZhulongEnabled
+            && hasActiveDetailSelection == false
+            && [.pool, .future, .unfinished, .completed].contains(page)
+    }
+
+    var hasDetailRailContent: Bool {
+        guard page != .settings else { return false }
+        if page == .calendar {
+            return true
+        }
+        if page == .zhulong {
+            return zhulongWorkspace.selectedSession != nil
+        }
+        if hasActiveDetailSelection {
+            return true
+        }
+        if page == .day {
+            return true
+        }
+        return usesZhulongContextRail
+    }
+
+    var shouldShowDetailRail: Bool {
+        isDetailRailExpanded && hasDetailRailContent
+    }
+
+    var canPerformEngineMutation: Bool {
+        dayBoundaryState.isReady && exclusiveEngineOperation == nil
+    }
+
+    var canBeginDataImport: Bool {
+        canPerformEngineMutation && isLocalFirstSyncing == false
+    }
+
+    var canUndoDomainAction: Bool {
+        canPerformEngineMutation
+            && showingClassificationManager == false
+            && undoStack.isEmpty == false
+    }
+
+    var canRedoDomainAction: Bool {
+        canPerformEngineMutation
+            && showingClassificationManager == false
+            && redoStack.isEmpty == false
+    }
+
+    var domainUndoMenuTitle: String {
+        guard let entry = undoStack.last else { return copy.undo }
+        return copy.undoNamed(entry.actionName(copy: copy))
+    }
+
+    var domainRedoMenuTitle: String {
+        guard let entry = redoStack.last else { return copy.redo }
+        return copy.redoNamed(entry.actionName(copy: copy))
+    }
+
+    func toggleDetailRail() {
+        guard hasDetailRailContent else { return }
+        isDetailRailExpanded.toggle()
+    }
+
+    func toggleSidebar() {
+        isSidebarExpanded.toggle()
+    }
+
+    var visibleNavigationPages: [Page] {
+        var pages: [Page] = [.day, .pool, .future, .unfinished, .completed, .calendar]
+        if isZhulongEnabled {
+            pages.append(.zhulong)
+        }
+        return pages
+    }
+
+    var copy: AppCopy {
+        AppCopy(language: engine.preferences.language)
+    }
+
+    var windowTitle: String {
+        switch page {
+        case .day:
+            return "\(copy.appName) · \(copy.navDay) — \(displayDate(selectedDate))"
+        case .calendar:
+            return "\(copy.appName) · \(copy.navCalendar) — \(displayDate(selectedCalendarDate))"
+        default:
+            return "\(copy.appName) · \(windowPageTitle)"
+        }
+    }
+
+    private var windowPageTitle: String {
+        switch page {
+        case .day:
+            return copy.navDay
+        case .pool:
+            return copy.navPool
+        case .future:
+            return copy.navFuture
+        case .unfinished:
+            return copy.navUnfinished
+        case .completed:
+            return copy.navCompleted
+        case .calendar:
+            return copy.navCalendar
+        case .zhulong:
+            return copy.navZhulong
+        case .settings:
+            return copy.navSettings
+        }
+    }
+
+    func navigationLabel(for page: Page) -> String {
+        switch page {
+        case .day:
+            return copy.navDay
+        case .pool:
+            return copy.navPool
+        case .future:
+            return copy.navFuture
+        case .unfinished:
+            return copy.navUnfinished
+        case .completed:
+            return copy.navCompleted
+        case .calendar:
+            return copy.navCalendar
+        case .zhulong:
+            return copy.navZhulong
+        case .settings:
+            return copy.navSettings
+        }
+    }
+
+    func navigationCount(for page: Page) -> Int {
+        switch page {
+        case .day:
+            return engine.getDayTodo(date: today).traces.filter { $0.status == .pending }.count
+        case .pool:
+            return engine.taskPool().count
+        case .future:
+            return engine.futurePlans(today: today).count
+        case .unfinished:
+            return engine.unfinishedPool().count
+        case .completed:
+            return engine.completedPool().count + engine.completedSubtaskRecords().count
+        case .calendar, .zhulong, .settings:
+            return 0
+        }
+    }
+
+    func definition(for trace: DayTrace) -> TaskDefinition? {
+        engine.definitions[trace.definitionID]
+    }
+
+    func subtasks(for traceID: DayTraceID) -> [Subtask] {
+        engine.subtasks.values
+            .filter { $0.traceID == traceID }
+            .sorted { $0.position < $1.position }
+    }
+
+    func contextMenuActions(for trace: DayTrace) -> [TraceContextAction] {
+        let isLocked = engine.days[trace.date]?.lockedAt != nil
+        if isLocked == false, trace.date == today, trace.status == .pending {
+            var actions: [TraceContextAction] = []
+            if chainHasSubtasks(trace.chainID) == false {
+                actions.append(.markComplete)
+            }
+            actions.append(contentsOf: [.continueTo, .changeToNewTask, .returnToPool, .abandonChain])
+            return actions
+        }
+
+        if isLocked == false, trace.date == today, trace.status == .completed {
+            return chainHasSubtasks(trace.chainID) ? [] : [.undoComplete]
+        }
+
+        let canContinueHistoricalUnfinished = (trace.date < today || isLocked)
+            && trace.status == .unfinished
+            && chainIsActive(trace.chainID)
+            && activeTrace(for: trace.chainID) == nil
+        if canContinueHistoricalUnfinished {
+            return [.continueTo, .abandonChain]
+        }
+
+        if trace.date < today || isLocked, trace.status == .completed {
+            return [.copyAsNewTask]
+        }
+
+        if trace.date > today, trace.status == .pending {
+            return [.reschedule, .returnToPool]
+        }
+
+        return []
+    }
+
+    private func chainHasSubtasks(_ chainID: TaskChainID) -> Bool {
+        let traceIDs = Set(engine.traces.values.filter { $0.chainID == chainID }.map(\.id))
+        return engine.subtasks.values.contains { traceIDs.contains($0.traceID) }
+    }
+
+    private func chainIsActive(_ chainID: TaskChainID) -> Bool {
+        engine.chains[chainID]?.state == .active
+    }
+
+    private func activeTrace(for chainID: TaskChainID) -> DayTrace? {
+        engine.traces.values.first { $0.chainID == chainID && $0.status == .pending }
+    }
+
+    func dateStripDates() -> [LocalDate] {
+        let blockSize = 14
+        let initialStart = Self.offset(today, by: -6)
+        let selectedOffset = Self.dayDistance(
+            from: initialStart,
+            to: selectedDate
+        )
+        let truncatedBlock = selectedOffset / blockSize
+        let block = selectedOffset % blockSize < 0
+            ? truncatedBlock - 1
+            : truncatedBlock
+        let start = Self.offset(initialStart, by: block * blockSize)
+        return (0..<blockSize).map { Self.offset(start, by: $0) }
+    }
+
+    var selectedDateStripIndex: Int? {
+        dateStripDates().firstIndex(of: selectedDate)
+    }
+
+    func moveSelectedDate(_ direction: MoveCommandDirection) {
+        guard showingPicker == nil,
+              showingFromPoolPicker == false,
+              showingChangeDialog == false
+        else {
+            return
+        }
+
+        let days: Int
+        switch direction {
+        case .left:
+            days = -1
+        case .right:
+            days = 1
+        case .up:
+            days = -7
+        case .down:
+            days = 7
+        @unknown default:
+            return
+        }
+
+        switch page {
+        case .day:
+            selectedDate = Self.offset(selectedDate, by: days)
+        case .calendar:
+            selectedCalendarDate = Self.offset(selectedCalendarDate, by: days)
+        case .pool, .future, .unfinished, .completed, .zhulong, .settings:
+            return
+        }
+    }
+
+    func continuationDurationDays(for trace: DayTrace) -> Int {
+        let chainDates = engine.traces.values
+            .filter { $0.chainID == trace.chainID }
+            .map(\.date)
+        guard let startDate = chainDates.min() else { return 1 }
+        let days = Self.dayDistance(from: startDate, to: trace.date)
+        return max(1, days + 1)
+    }
+
+    func performDateChoice(_ date: LocalDate) {
+        guard let showingPicker else { return }
+        switch showingPicker {
+        case .gotoDay:
+            selectedDate = date
+            selectedCalendarDate = date
+            page = .day
+        case let .schedulePool(chainID):
+            schedulePoolTask(chainID, date: date)
+        case .scheduleSelectedPool:
+            if let selectedPoolChainID {
+                schedulePoolTask(selectedPoolChainID, date: date)
+            }
+        case let .continueTrace(traceID):
+            continueTrace(traceID, to: date)
+        case let .reschedule(traceID):
+            reschedule(traceID, to: date)
+        }
+        self.showingPicker = nil
+    }
+
+    func undo() {
+        guard let moment = prepareNaturalDayForUserMutation() else { return }
+        guard let entry = undoStack.last else {
+            showToast(copy.nothingToUndo)
+            return
+        }
+        let currentSnapshot = engine.snapshot()
+        let candidate: NoonmarkEngine
+        var noteIdentityRemap: NoteIdentityRemap?
+        let redoEntry: RedoEntry
+        do {
+            switch entry {
+            case let .snapshot(snapshot, _):
+                candidate = try NoonmarkEngine(snapshot: snapshot)
+                try candidate.prepareSnapshotUndo(
+                    replacing: currentSnapshot,
+                    now: moment.instant
+                )
+            case let .copiedTask(_, copiedChainID):
+                candidate = try NoonmarkEngine(snapshot: currentSnapshot)
+                _ = try candidate.removeTaskFromPool(
+                    chainID: copiedChainID,
+                    now: try copiedTaskUndoDate(
+                        chainID: copiedChainID,
+                        in: candidate
+                    )
+                )
+            case .traceNoteAppend, .traceNoteEdit, .traceNoteDelete,
+                 .poolNoteAppend, .poolNoteEdit, .poolNoteDelete:
+                candidate = try NoonmarkEngine(snapshot: currentSnapshot)
+                noteIdentityRemap = try applyNoteUndo(entry, to: candidate)
+            }
+            redoEntry = try makeRedoEntry(
+                for: entry,
+                snapshotBeforeUndo: currentSnapshot,
+                noteIdentityRemap: noteIdentityRemap
+            )
+            try save(candidate)
+        } catch {
+            NSLog("Noonmark undo failed: %@", String(describing: error))
+            showOperationFailure(.undo, error: error)
+            return
+        }
+        undoStack.removeLast()
+        pushRedoEntry(redoEntry)
+        if let noteIdentityRemap {
+            undoStack = undoStack.map {
+                $0.remappingNoteIdentity(noteIdentityRemap)
+            }
+        }
+        engine = candidate
+        Theme.apply(engine.preferences.theme)
+        normalizeSelection()
+        showToast(copy.undoCompleted)
+    }
+
+    func redo() {
+        guard let moment = prepareNaturalDayForUserMutation() else { return }
+        guard let entry = redoStack.last else {
+            showToast(copy.nothingToRedo)
+            return
+        }
+        let currentSnapshot = engine.snapshot()
+        let replay: RedoReplay
+        do {
+            replay = try replayRedoEntry(
+                entry,
+                snapshotBeforeRedo: currentSnapshot,
+                now: moment.instant
+            )
+            try save(replay.engine)
+        } catch {
+            NSLog("Noonmark redo failed: %@", String(describing: error))
+            showOperationFailure(.redo, error: error)
+            return
+        }
+        redoStack.removeLast()
+        undoStack.append(replay.undoEntry)
+        if undoStack.count > Self.undoHistoryLimit {
+            undoStack.removeFirst(undoStack.count - Self.undoHistoryLimit)
+        }
+        engine = replay.engine
+        Theme.apply(engine.preferences.theme)
+        normalizeSelection()
+        showToast(copy.redoCompleted)
+    }
+
+    private func replayRedoEntry(
+        _ entry: RedoEntry,
+        snapshotBeforeRedo: NoonmarkSnapshot,
+        now: Date
+    ) throws -> RedoReplay {
+        let candidate: NoonmarkEngine
+        let undoEntry: UndoEntry
+        switch entry {
+        case let .snapshot(snapshot, previousUndoEntry):
+            candidate = try NoonmarkEngine(snapshot: snapshot)
+            try candidate.prepareSnapshotUndo(
+                replacing: snapshotBeforeRedo,
+                now: now
+            )
+            undoEntry = previousUndoEntry
+        case let .traceNoteAppend(traceID, body):
+            candidate = try NoonmarkEngine(snapshot: snapshotBeforeRedo)
+            let trace = try noteUndoTrace(traceID, in: candidate)
+            let noteID = try candidate.appendTraceNote(
+                traceID: traceID,
+                body: body,
+                today: today,
+                now: try forwardNoteUndoDate(
+                    after: [trace.createdAt] + trace.noteEntries.map(\.updatedAt)
+                )
+            )
+            undoEntry = .traceNoteAppend(
+                traceID: traceID,
+                noteID: noteID
+            )
+        case let .traceNoteEdit(traceID, noteID, body):
+            candidate = try NoonmarkEngine(snapshot: snapshotBeforeRedo)
+            let trace = try noteUndoTrace(traceID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            try candidate.editTraceNote(
+                traceID: traceID,
+                noteID: noteID,
+                body: body,
+                today: today,
+                now: try forwardNoteUndoDate(after: [note.updatedAt])
+            )
+            undoEntry = .traceNoteEdit(
+                traceID: traceID,
+                noteID: noteID,
+                previousBody: note.body
+            )
+        case let .traceNoteDelete(traceID, noteID):
+            candidate = try NoonmarkEngine(snapshot: snapshotBeforeRedo)
+            let trace = try noteUndoTrace(traceID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            try candidate.deleteTraceNote(
+                traceID: traceID,
+                noteID: noteID,
+                today: today,
+                now: try forwardNoteUndoDate(after: [note.updatedAt])
+            )
+            undoEntry = .traceNoteDelete(
+                traceID: traceID,
+                noteID: noteID,
+                deletedBody: note.body
+            )
+        case let .poolNoteAppend(chainID, body):
+            candidate = try NoonmarkEngine(snapshot: snapshotBeforeRedo)
+            let chain = try noteUndoChain(chainID, in: candidate)
+            let noteID = try candidate.appendPoolNote(
+                chainID: chainID,
+                body: body,
+                now: try forwardNoteUndoDate(
+                    after: [chain.createdAt] + chain.noteEntries.map(\.updatedAt)
+                )
+            )
+            undoEntry = .poolNoteAppend(
+                chainID: chainID,
+                noteID: noteID
+            )
+        case let .poolNoteEdit(chainID, noteID, body):
+            candidate = try NoonmarkEngine(snapshot: snapshotBeforeRedo)
+            let chain = try noteUndoChain(chainID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            try candidate.editPoolNote(
+                chainID: chainID,
+                noteID: noteID,
+                body: body,
+                now: try forwardNoteUndoDate(
+                    after: [note.updatedAt, chain.updatedAt]
+                )
+            )
+            undoEntry = .poolNoteEdit(
+                chainID: chainID,
+                noteID: noteID,
+                previousBody: note.body
+            )
+        case let .poolNoteDelete(chainID, noteID):
+            candidate = try NoonmarkEngine(snapshot: snapshotBeforeRedo)
+            let chain = try noteUndoChain(chainID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            try candidate.deletePoolNote(
+                chainID: chainID,
+                noteID: noteID,
+                now: try forwardNoteUndoDate(
+                    after: [note.updatedAt, chain.updatedAt]
+                )
+            )
+            undoEntry = .poolNoteDelete(
+                chainID: chainID,
+                noteID: noteID,
+                deletedBody: note.body
+            )
+        }
+        return RedoReplay(engine: candidate, undoEntry: undoEntry)
+    }
+
+    private func copiedTaskUndoDate(
+        chainID: TaskChainID,
+        in candidate: NoonmarkEngine
+    ) throws -> Date {
+        guard let chain = candidate.chains[chainID] else {
+            throw NoonmarkError.notFound("copied task chain")
+        }
+        let chainFrontier = chain.updatedAt.timeIntervalSinceReferenceDate
+        guard chainFrontier.isFinite, chainFrontier.nextUp.isFinite else {
+            throw NoonmarkError.invalidInput("copied task undo time is invalid")
+        }
+        let afterChain = Date(
+            timeIntervalSinceReferenceDate: chainFrontier.nextUp
+        )
+        return max(
+            afterChain,
+            candidate.nextClassificationMutationDate()
+        )
+    }
+
+    private func applyNoteUndo(
+        _ entry: UndoEntry,
+        to candidate: NoonmarkEngine
+    ) throws -> NoteIdentityRemap? {
+        switch entry {
+        case .snapshot, .copiedTask:
+            throw NoonmarkError.invalidTransition("snapshot is not a note undo action")
+        case let .traceNoteAppend(traceID, noteID):
+            let trace = try noteUndoTrace(traceID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            try candidate.deleteTraceNote(
+                traceID: traceID,
+                noteID: noteID,
+                today: today,
+                now: try forwardNoteUndoDate(after: [note.updatedAt])
+            )
+            return nil
+        case let .traceNoteEdit(traceID, noteID, previousBody):
+            let trace = try noteUndoTrace(traceID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            try candidate.editTraceNote(
+                traceID: traceID,
+                noteID: noteID,
+                body: previousBody,
+                today: today,
+                now: try forwardNoteUndoDate(after: [note.updatedAt])
+            )
+            return nil
+        case let .traceNoteDelete(traceID, noteID, deletedBody):
+            let trace = try noteUndoTrace(traceID, in: candidate)
+            let newID = try candidate.appendTraceNote(
+                traceID: traceID,
+                body: deletedBody,
+                today: today,
+                now: try forwardNoteUndoDate(
+                    after: [trace.createdAt] + trace.noteEntries.map(\.updatedAt)
+                )
+            )
+            return NoteIdentityRemap(
+                owner: .trace(traceID),
+                oldID: noteID,
+                newID: newID
+            )
+        case let .poolNoteAppend(chainID, noteID):
+            let chain = try noteUndoChain(chainID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            try candidate.deletePoolNote(
+                chainID: chainID,
+                noteID: noteID,
+                now: try forwardNoteUndoDate(
+                    after: [note.updatedAt, chain.updatedAt]
+                )
+            )
+            return nil
+        case let .poolNoteEdit(chainID, noteID, previousBody):
+            let chain = try noteUndoChain(chainID, in: candidate)
+            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            try candidate.editPoolNote(
+                chainID: chainID,
+                noteID: noteID,
+                body: previousBody,
+                now: try forwardNoteUndoDate(
+                    after: [note.updatedAt, chain.updatedAt]
+                )
+            )
+            return nil
+        case let .poolNoteDelete(chainID, noteID, deletedBody):
+            let chain = try noteUndoChain(chainID, in: candidate)
+            let newID = try candidate.appendPoolNote(
+                chainID: chainID,
+                body: deletedBody,
+                now: try forwardNoteUndoDate(
+                    after: [chain.createdAt] + chain.noteEntries.map(\.updatedAt)
+                )
+            )
+            return NoteIdentityRemap(
+                owner: .pool(chainID),
+                oldID: noteID,
+                newID: newID
+            )
+        }
+    }
+
+    private func makeRedoEntry(
+        for undoEntry: UndoEntry,
+        snapshotBeforeUndo: NoonmarkSnapshot,
+        noteIdentityRemap: NoteIdentityRemap?
+    ) throws -> RedoEntry {
+        switch undoEntry {
+        case .snapshot, .copiedTask:
+            return .snapshot(snapshotBeforeUndo, undoEntry: undoEntry)
+        case let .traceNoteAppend(traceID, noteID):
+            let trace = try snapshotTrace(traceID, in: snapshotBeforeUndo)
+            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            return .traceNoteAppend(traceID: traceID, body: note.body)
+        case let .traceNoteEdit(traceID, noteID, _):
+            let trace = try snapshotTrace(traceID, in: snapshotBeforeUndo)
+            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            return .traceNoteEdit(
+                traceID: traceID,
+                noteID: noteID,
+                body: note.body
+            )
+        case let .traceNoteDelete(traceID, _, _):
+            guard let noteIdentityRemap,
+                  noteIdentityRemap.owner == .trace(traceID)
+            else {
+                throw NoonmarkError.invalidTransition(
+                    "trace note delete undo did not create a redo identity"
+                )
+            }
+            return .traceNoteDelete(
+                traceID: traceID,
+                noteID: noteIdentityRemap.newID
+            )
+        case let .poolNoteAppend(chainID, noteID):
+            let chain = try snapshotChain(chainID, in: snapshotBeforeUndo)
+            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            return .poolNoteAppend(chainID: chainID, body: note.body)
+        case let .poolNoteEdit(chainID, noteID, _):
+            let chain = try snapshotChain(chainID, in: snapshotBeforeUndo)
+            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            return .poolNoteEdit(
+                chainID: chainID,
+                noteID: noteID,
+                body: note.body
+            )
+        case let .poolNoteDelete(chainID, _, _):
+            guard let noteIdentityRemap,
+                  noteIdentityRemap.owner == .pool(chainID)
+            else {
+                throw NoonmarkError.invalidTransition(
+                    "pool note delete undo did not create a redo identity"
+                )
+            }
+            return .poolNoteDelete(
+                chainID: chainID,
+                noteID: noteIdentityRemap.newID
+            )
+        }
+    }
+
+    private func snapshotTrace(
+        _ traceID: DayTraceID,
+        in snapshot: NoonmarkSnapshot
+    ) throws -> DayTrace {
+        guard let trace = snapshot.traces.first(where: { $0.id == traceID }) else {
+            throw NoonmarkError.notFound("day trace")
+        }
+        return trace
+    }
+
+    private func snapshotChain(
+        _ chainID: TaskChainID,
+        in snapshot: NoonmarkSnapshot
+    ) throws -> TaskChain {
+        guard let chain = snapshot.chains.first(where: { $0.id == chainID }) else {
+            throw NoonmarkError.notFound("task chain")
+        }
+        return chain
+    }
+
+    private func noteUndoTrace(
+        _ traceID: DayTraceID,
+        in candidate: NoonmarkEngine
+    ) throws -> DayTrace {
+        guard let trace = candidate.traces[traceID] else {
+            throw NoonmarkError.notFound("day trace")
+        }
+        return trace
+    }
+
+    private func noteUndoChain(
+        _ chainID: TaskChainID,
+        in candidate: NoonmarkEngine
+    ) throws -> TaskChain {
+        guard let chain = candidate.chains[chainID] else {
+            throw NoonmarkError.notFound("task chain")
+        }
+        return chain
+    }
+
+    private func noteUndoEntry(
+        _ noteID: TaskNoteEntryID,
+        in entries: [TaskNoteEntry]
+    ) throws -> TaskNoteEntry {
+        guard let note = entries.first(where: {
+            $0.id == noteID && !$0.isDeleted
+        }) else {
+            throw NoonmarkError.notFound("task note")
+        }
+        return note
+    }
+
+    private func forwardNoteUndoDate(after frontiers: [Date]) throws -> Date {
+        let frontier = frontiers.map(\.timeIntervalSinceReferenceDate).max()
+            ?? Date().timeIntervalSinceReferenceDate
+        let current = Date().timeIntervalSinceReferenceDate
+        guard frontier.isFinite, current.isFinite, frontier.nextUp.isFinite else {
+            throw NoonmarkError.invalidInput("task note undo time is invalid")
+        }
+        return Date(
+            timeIntervalSinceReferenceDate: max(frontier.nextUp, current)
+        )
+    }
+
+    func clearUndoHistory() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+    }
+
+    func showToast(_ message: String) {
+        toast = message
+        toastScheduler.replace(after: .milliseconds(2200)) { [weak self] in
+            self?.toast = nil
+        }
+    }
+
+    func showOperationFailure(
+        _ context: AppOperationFailureContext,
+        error: Error
+    ) {
+        NSLog(
+            "Noonmark operation failed context=%@ error=%@",
+            String(describing: context),
+            String(reflecting: error)
+        )
+        let message = AppPresentation(language: engine.preferences.language)
+            .failureMessage(for: context)
+        showPersistentFailureMessage(message, context: context)
+    }
+
+    func showPersistentFailureMessage(
+        _ message: String,
+        context: AppOperationFailureContext
+    ) {
+        toastScheduler.cancel()
+        toast = nil
+        operationFailureNotice = AppOperationFailureNotice(
+            context: context,
+            message: message
+        )
+    }
+
+    func resolveOperationFailure(_ context: AppOperationFailureContext) {
+        guard operationFailureNotice?.context == context else { return }
+        operationFailureNotice = nil
+    }
+
+    func dismissOperationFailure() {
+        operationFailureNotice = nil
+    }
+
+    static func offset(_ date: LocalDate, by days: Int) -> LocalDate {
+        requireCivilDate {
+            try GregorianCivilCalendar.offset(date, byDays: days)
+        }
+    }
+
+    private var dateTimeFormatter: AppDateTimeFormatter {
+        AppDateTimeFormatter(
+            language: engine.preferences.language,
+            timeZone: TimeZone(identifier: naturalDayState.timeZoneIdentifier)
+                ?? .autoupdatingCurrent
+        )
+    }
+
+    func displayDate(_ date: LocalDate) -> String {
+        (try? dateTimeFormatter.string(from: date, style: .monthDay))
+            ?? date.description
+    }
+
+    func displayFullDate(_ date: LocalDate) -> String {
+        (try? dateTimeFormatter.string(from: date, style: .fullDate))
+            ?? date.description
+    }
+
+    func displayMonthYear(_ date: LocalDate) -> String {
+        (try? dateTimeFormatter.string(from: date, style: .monthYear))
+            ?? date.description
+    }
+
+    func displayAccessibilityDate(_ date: LocalDate) -> String {
+        (try? dateTimeFormatter.string(from: date, style: .accessibilityFull))
+            ?? date.description
+    }
+
+    func displayTime(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        return dateTimeFormatter.string(from: date, style: .shortTime)
+    }
+
+    func displayDateTime(_ date: Date) -> String {
+        dateTimeFormatter.string(from: date, style: .dateAndTime)
+    }
+
+    func weekday(_ date: LocalDate) -> String {
+        (try? dateTimeFormatter.string(from: date, style: .weekday))
+            ?? date.description
+    }
+
+    func weekdayNarrow(_ date: LocalDate) -> String {
+        (try? dateTimeFormatter.string(from: date, style: .weekdayNarrow))
+            ?? date.description
+    }
+
+    func calendarWeekdayLabels() -> [String] {
+        dateTimeFormatter.narrowWeekdaySymbolsStartingMonday()
+    }
+
+    static func gregorianDate(_ date: LocalDate) -> Date {
+        requireCivilDate {
+            try GregorianCivilCalendar.foundationDate(from: date)
+        }
+    }
+
+    static func dayDistance(from start: LocalDate, to end: LocalDate) -> Int {
+        requireCivilDate {
+            try GregorianCivilCalendar.dayDistance(from: start, to: end)
+        }
+    }
+
+    static func daysInMonth(year: Int, month: Int) -> Int {
+        requireCivilDate {
+            try GregorianCivilCalendar.daysInMonth(year: year, month: month)
+        }
+    }
+
+    static func mondayLeadBlankCount(year: Int, month: Int) -> Int {
+        requireCivilDate {
+            try GregorianCivilCalendar.mondayLeadBlankCount(
+                year: year,
+                month: month
+            )
+        }
+    }
+
+    static func shiftedMonth(from date: LocalDate, by delta: Int) -> LocalDate {
+        requireCivilDate {
+            try GregorianCivilCalendar.shiftedMonth(from: date, by: delta)
+        }
+    }
+
+    private static func requireCivilDate<Value>(
+        _ operation: () throws -> Value
+    ) -> Value {
+        do {
+            return try operation()
+        } catch {
+            preconditionFailure("Invalid civil-date operation: \(error)")
+        }
+    }
+
+    func pushUndoEntry(with entry: UndoEntry) {
+        undoStack.append(entry)
+        if undoStack.count > Self.undoHistoryLimit {
+            undoStack.removeFirst(undoStack.count - Self.undoHistoryLimit)
+        }
+    }
+
+    private func pushRedoEntry(_ entry: RedoEntry) {
+        redoStack.append(entry)
+        if redoStack.count > Self.undoHistoryLimit {
+            redoStack.removeFirst(redoStack.count - Self.undoHistoryLimit)
+        }
+    }
+}

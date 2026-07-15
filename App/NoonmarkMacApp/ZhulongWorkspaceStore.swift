@@ -1,5 +1,6 @@
 import Foundation
 import NoonmarkCore
+import NoonmarkMacRuntime
 import NoonmarkZhulong
 
 enum ZhulongStreamActor: Equatable {
@@ -8,16 +9,47 @@ enum ZhulongStreamActor: Equatable {
     case system
 }
 
-enum ZhulongStreamSection: String, CaseIterable, Identifiable {
-    case intent = "意图与范围"
-    case brief = "活简报"
-    case planning = "规划运行"
-    case decision = "决定与授权"
-    case todo = "Todo 应用"
-    case dailyClose = "每日收尾"
-    case lifecycle = "会话状态"
+extension ZhulongDataScope {
+    var presentationCopyKey: ZhulongScopeCopyKey {
+        switch self {
+        case .currentDayTodo: .currentDayTodo
+        case .taskPool: .taskPool
+        case .unfinishedPool: .unfinishedPool
+        case .completedPool: .completedPool
+        case .taskClassifications: .taskClassifications
+        }
+    }
+}
 
-    var id: String { rawValue }
+private extension ZhulongSessionEventKind {
+    var presentationCopyKey: ZhulongEventCopyKey {
+        guard let key = ZhulongEventCopyKey(rawValue: rawValue) else {
+            preconditionFailure("Missing Zhulong event presentation key: \(rawValue)")
+        }
+        return key
+    }
+}
+
+enum ZhulongStreamSection: CaseIterable, Identifiable {
+    case intent
+    case brief
+    case planning
+    case decision
+    case todo
+    case dailyClose
+    case lifecycle
+
+    var id: String {
+        switch self {
+        case .intent: "intent"
+        case .brief: "brief"
+        case .planning: "planning"
+        case .decision: "decision"
+        case .todo: "todo"
+        case .dailyClose: "daily-close"
+        case .lifecycle: "lifecycle"
+        }
+    }
 }
 
 struct ZhulongStreamRecord: Identifiable, Equatable {
@@ -37,7 +69,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
     @Published private(set) var sessions: [ZhulongSession] = []
     @Published private(set) var selectedSessionID: ZhulongSessionID?
     @Published private(set) var memoryLedger = ZhulongMemoryLedger()
-    @Published private(set) var statusMessage: String?
+    @Published private(set) var status: ZhulongWorkspaceNotice?
+    @Published private(set) var presentationLanguage: AppLanguage = .chinese
     private let directoryURL: URL
     private let sessionRepository: EncryptedFileZhulongSessionRepository
     private let memoryRepository: EncryptedFileZhulongMemoryRepository
@@ -68,26 +101,43 @@ final class ZhulongWorkspaceStore: ObservableObject {
         return sessions.first { $0.id == selectedSessionID }
     }
 
-    var records: [ZhulongStreamRecord] {
+    var statusMessage: String? {
+        status.map { presentationCopy.notice($0) }
+    }
+
+    func records(using copy: ZhulongCopy) -> [ZhulongStreamRecord] {
         guard let session = selectedSession else { return [] }
-        var projected = session.entries.map(record(for:))
-        projected.append(contentsOf: session.events.map(record(for:)))
+        var projected = session.entries.map { record(for: $0, copy: copy) }
+        projected.append(contentsOf: session.events.map { record(for: $0, copy: copy) })
         return projected.sorted { lhs, rhs in
             if lhs.occurredAt != rhs.occurredAt { return lhs.occurredAt < rhs.occurredAt }
             return lhs.id < rhs.id
         }
     }
 
-    var selectedSessionStatus: String {
-        guard let session = selectedSession else { return "未选择会话" }
-        if session.workspaceStatus == .paused { return "已暂停" }
-        if session.workspaceStatus == .archived { return "已归档" }
-        switch session.phase {
-        case .scopeReview: return "等待范围确认"
-        case .readyForProvider: return "范围已确认"
-        case .providerRunning: return "Provider 正在运行"
-        case .decisionGate: return "等待用户决定"
-        case .draftReview: return "草稿待审"
+    func selectedSessionStatus(using copy: ZhulongCopy) -> String {
+        copy.sessionStatus(sessionState, style: .compact)
+    }
+
+    func setPresentationLanguage(_ language: AppLanguage) {
+        guard presentationLanguage != language else { return }
+        presentationLanguage = language
+    }
+
+    private var presentationCopy: ZhulongCopy {
+        AppPresentation(language: presentationLanguage).zhulong
+    }
+
+    private var sessionState: ZhulongSessionStateCopyKey {
+        guard let session = selectedSession else { return .noSelection }
+        if session.workspaceStatus == .paused { return .paused }
+        if session.workspaceStatus == .archived { return .archived }
+        return switch session.phase {
+        case .scopeReview: .scopeReview
+        case .readyForProvider: .readyForProvider
+        case .providerRunning: .providerRunning
+        case .decisionGate: .decisionGate
+        case .draftReview: .draftReview
         }
     }
 
@@ -107,9 +157,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
             try sessionRepository.save(session)
             sessions.insert(session, at: 0)
             selectedSessionID = session.id
-            statusMessage = nil
+            status = nil
         } catch {
-            statusMessage = "无法建立会话：\(error.localizedDescription)"
+            status = .sessionCreationFailed
         }
     }
 
@@ -246,7 +296,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
                         ZhulongTodoDiffItem(operation: .createTask(
                             title: deliverable,
                             descriptionText: stage.objective,
-                            initialNoteBody: "来自规划阶段：\(stage.title)",
+                            initialNoteBody: presentationCopy.planningStageNote(stageTitle: stage.title),
                             plannedSubtasks: [],
                             targetDate: nil
                         ))
@@ -368,10 +418,10 @@ final class ZhulongWorkspaceStore: ObservableObject {
             try sessionRepository.save(afterSession)
             try applicationJournal.clear()
             replaceLoadedSession(afterSession)
-            statusMessage = nil
+            status = nil
             return afterEngine
         } catch {
-            statusMessage = "Todo 批次应用失败：\(error.localizedDescription)"
+            status = .todoBatchApplyFailed
             return nil
         }
     }
@@ -409,16 +459,16 @@ final class ZhulongWorkspaceStore: ObservableObject {
                 throw error
             }
             if interruptAfterEnginePersisted {
-                statusMessage = "E2E：已在 SQLite 提交后中断，等待重启恢复。"
+                status = .e2eInterruption
                 return afterEngine
             }
             try sessionRepository.save(afterSession)
             try applicationJournal.clear()
             replaceLoadedSession(afterSession)
-            statusMessage = nil
+            status = nil
             return afterEngine
         } catch {
-            statusMessage = "每日复盘保存失败：\(error.localizedDescription)"
+            status = .dailyReviewSaveFailed
             return nil
         }
     }
@@ -440,16 +490,16 @@ final class ZhulongWorkspaceStore: ObservableObject {
             } else if currentDigest == afterDigest {
                 recoveredEngine = currentEngine
             } else {
-                statusMessage = "检测到未完成的烛龙写入，但当前 Todo 已发生其他变化；已停止自动恢复。"
+                status = .applicationRecoveryConflict
                 return currentEngine
             }
             try sessionRepository.save(pending.afterSession)
             try applicationJournal.clear()
             replaceLoadedSession(pending.afterSession)
-            statusMessage = "已恢复上次中断的烛龙原子写入。"
+            status = .applicationRecovered
             return recoveredEngine
         } catch {
-            statusMessage = "无法恢复烛龙原子写入：\(error.localizedDescription)"
+            status = .applicationRecoveryFailed
             return currentEngine
         }
     }
@@ -469,7 +519,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
         provider: any ZhulongProvider
     ) async {
         guard let selectedSessionID else { return }
-        statusMessage = "Provider 正在处理已授权内容。"
+        status = .providerRunning
         do {
             let session = try await providerOrchestrator.run(
                 sessionID: selectedSessionID,
@@ -477,10 +527,10 @@ final class ZhulongWorkspaceStore: ObservableObject {
                 provider: provider
             )
             replaceLoadedSession(session)
-            statusMessage = nil
+            status = nil
         } catch {
             reload()
-            statusMessage = "Provider 运行失败：\(error.localizedDescription)"
+            status = .providerRunFailed
         }
     }
 
@@ -491,7 +541,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
         guard let selectedSessionID,
               let delegationID = selectedSession?.activePlanningDelegation?.id
         else { return }
-        statusMessage = "Provider 正在执行本次单次规划委托。"
+        status = .planningProviderRunning
         do {
             let session = try await providerOrchestrator.runPlanning(
                 sessionID: selectedSessionID,
@@ -500,10 +550,10 @@ final class ZhulongWorkspaceStore: ObservableObject {
                 provider: provider
             )
             replaceLoadedSession(session)
-            statusMessage = nil
+            status = nil
         } catch {
             reload()
-            statusMessage = "规划运行失败：\(error.localizedDescription)"
+            status = .planningRunFailed
         }
     }
 
@@ -513,22 +563,26 @@ final class ZhulongWorkspaceStore: ObservableObject {
             ledger.setEnabled(enabled)
             try memoryRepository.save(ledger)
             memoryLedger = ledger
-            statusMessage = nil
+            status = nil
         } catch {
-            statusMessage = "无法保存记忆设置：\(error.localizedDescription)"
+            status = .memorySaveFailed
         }
     }
 
+    func reportUIError(_ notice: ZhulongWorkspaceNotice) {
+        status = notice
+    }
+
     func reportUIError(_ message: String) {
-        statusMessage = message
+        status = .diagnostic(message)
     }
 
     func reload() {
         let sessionLoad = loadSessions()
         sessions = sessionLoad.sessions
-        statusMessage = sessionLoad.failureCount == 0
+        status = sessionLoad.failureCount == 0
             ? nil
-            : "有 \(sessionLoad.failureCount) 个加密会话无法验证，内容未载入。"
+            : .unverifiableSessions(sessionLoad.failureCount)
         if let selectedSessionID {
             let selectionStillExists = sessions.contains { $0.id == selectedSessionID }
             if selectionStillExists == false {
@@ -540,7 +594,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
         } catch ZhulongSidecarRepositoryError.missingMemoryLedger {
             memoryLedger = ZhulongMemoryLedger()
         } catch {
-            statusMessage = "记忆 sidecar 无法读取：\(error.localizedDescription)"
+            status = .memoryReadFailed
         }
     }
 
@@ -557,10 +611,10 @@ final class ZhulongWorkspaceStore: ObservableObject {
             try sessionRepository.save(session)
             sessions[index] = session
             sessions.sort { $0.events.last?.occurredAt ?? .distantPast > $1.events.last?.occurredAt ?? .distantPast }
-            statusMessage = nil
+            status = nil
             return true
         } catch {
-            statusMessage = "会话操作失败：\(error.localizedDescription)"
+            status = .sessionOperationFailed
             return false
         }
     }
@@ -598,37 +652,46 @@ final class ZhulongWorkspaceStore: ObservableObject {
         return (sessions, failureCount)
     }
 
-    private func record(for entry: ZhulongSessionEntry) -> ZhulongStreamRecord {
+    private func record(
+        for entry: ZhulongSessionEntry,
+        copy: ZhulongCopy
+    ) -> ZhulongStreamRecord {
         let actor: ZhulongStreamActor = entry.author == .user ? .user : .zhulong
-        let title: String = switch entry.kind {
-        case .statement: entry.author == .user ? "用户说明" : "烛龙说明"
-        case .question: "需要澄清"
-        case .answer: "用户回答"
-        case .decision: "用户决定"
-        case .correction: "追加更正"
+        let titleKey: ZhulongEntryKindCopyKey = switch entry.kind {
+        case .statement: entry.author == .user ? .userStatement : .zhulongStatement
+        case .question: .question
+        case .answer: .answer
+        case .decision: .decision
+        case .correction: .correction
         }
         return ZhulongStreamRecord(
             id: "entry-\(entry.id.rawValue.uuidString)",
             occurredAt: entry.createdAt,
             actor: actor,
             section: entry.kind == .decision || entry.kind == .correction ? .decision : .intent,
-            eyebrow: entry.author == .user ? "你" : "烛龙",
-            title: title,
+            eyebrow: entry.author == .user ? copy.userEyebrow : copy.zhulongEyebrow,
+            title: copy.entryTitle(titleKey),
             body: entry.content,
             isBoundary: entry.kind == .decision || entry.kind == .correction,
             isInvalidation: false
         )
     }
 
-    private func record(for event: ZhulongSessionEvent) -> ZhulongStreamRecord {
+    private func record(
+        for event: ZhulongSessionEvent,
+        copy: ZhulongCopy
+    ) -> ZhulongStreamRecord {
         ZhulongStreamRecord(
             id: "event-\(event.sequence)",
             occurredAt: event.occurredAt,
             actor: actor(for: event.kind),
             section: section(for: event.kind),
-            eyebrow: eyebrow(for: event.kind),
-            title: event.summary,
-            body: detail(for: event),
+            eyebrow: eyebrow(for: event.kind, copy: copy),
+            title: copy.eventTitle(
+                event.kind.presentationCopyKey,
+                chineseAuditTitle: event.summary
+            ),
+            body: detail(for: event, copy: copy),
             isBoundary: isBoundary(event.kind),
             isInvalidation: isInvalidation(event.kind)
         )
@@ -667,32 +730,41 @@ final class ZhulongWorkspaceStore: ObservableObject {
         }
     }
 
-    private func eyebrow(for kind: ZhulongSessionEventKind) -> String {
+    private func eyebrow(
+        for kind: ZhulongSessionEventKind,
+        copy: ZhulongCopy
+    ) -> String {
         switch actor(for: kind) {
-        case .user: "用户决定"
-        case .zhulong: "烛龙产物"
-        case .system: isInvalidation(kind) ? "历史边界" : "系统边界"
+        case .user: copy.userDecisionEyebrow
+        case .zhulong: copy.zhulongOutputEyebrow
+        case .system: isInvalidation(kind) ? copy.historyBoundaryEyebrow : copy.systemBoundaryEyebrow
         }
     }
 
-    private func detail(for kind: ZhulongSessionEventKind) -> String? {
+    private func detail(
+        for kind: ZhulongSessionEventKind,
+        copy: ZhulongCopy
+    ) -> String? {
         switch kind {
-        case .scopeAuthorized: "范围绑定当前 Provider 配置身份，有效期一小时；Todo 写入仍需另行确认。"
-        case .planningDelegationGranted: "这是一次性规划委托，不包含 Todo 写入或未来托管。"
-        case .todoWriteAuthorized, .dailyReviewAuthorized: "这项授权只可消费一次，并绑定当前草稿摘要。"
-        case .todoBatchApplied, .dailyReviewApplied: "结果已形成不可重排的应用回执。"
+        case .scopeAuthorized: copy.scopeAuthorizationDetail
+        case .planningDelegationGranted: copy.planningDelegationDetail
+        case .todoWriteAuthorized, .dailyReviewAuthorized: copy.singleUseAuthorizationDetail
+        case .todoBatchApplied, .dailyReviewApplied: copy.applicationReceiptDetail
         case .planningBriefInvalidated, .planningDelegationInvalidated, .planningRunInvalidated:
-            "原内容继续可审计，但不能恢复旧执行能力。"
+            copy.invalidationDetail
         default: nil
         }
     }
 
-    private func detail(for event: ZhulongSessionEvent) -> String? {
+    private func detail(
+        for event: ZhulongSessionEvent,
+        copy: ZhulongCopy
+    ) -> String? {
         guard case let .providerRun(runID) = event.reference else {
-            return detail(for: event.kind)
+            return detail(for: event.kind, copy: copy)
         }
         guard let send = selectedSession?.providerSends.last(where: { $0.runID == runID }) else {
-            return detail(for: event.kind)
+            return detail(for: event.kind, copy: copy)
         }
         switch send.result {
         case let .succeeded(_, response):
@@ -700,10 +772,10 @@ final class ZhulongWorkspaceStore: ObservableObject {
             case .conversation:
                 return response.content
             case .delegatedPlanning:
-                return "Provider 已返回结构化规划产物；原始响应保留在加密会话账本中。"
+                return copy.delegatedPlanningSuccessDetail
             }
-        case let .failed(_, failure): return failure.message
-        case .running: return detail(for: event.kind)
+        case .failed: return copy.providerFailureDetail
+        case .running: return detail(for: event.kind, copy: copy)
         }
     }
 

@@ -1,14 +1,20 @@
 import NoonmarkCore
+import NoonmarkMacRuntime
 import NoonmarkZhulong
 import SwiftUI
 
 struct ZhulongTodoDiffEditor: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: NoonmarkStore
     @State private var items: [EditableTodoDiffItem]
     @State private var validationMessage: String?
 
     let version: Int
     let onSave: ([ZhulongTodoDiffItem]) -> Bool
+
+    private var copy: ZhulongCopy {
+        AppPresentation(language: store.engine.preferences.language).zhulong
+    }
 
     init(
         diff: ZhulongTodoDiffDraft,
@@ -22,10 +28,10 @@ struct ZhulongTodoDiffEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("审查 Todo 变更")
+                Text(copy.todoEditorTitle)
                     .font(.noonmarkSystem(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.text1)
-                Text("基于 v\(version) 建立新修订；原版本继续保留在会话日志中。")
+                Text(copy.todoRevisionSubtitle(version: version))
                     .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
@@ -51,13 +57,13 @@ struct ZhulongTodoDiffEditor: View {
             Divider()
 
             HStack(spacing: 8) {
-                Text("保存修订不会写入 Todo；整批应用仍需再次确认。")
+                Text(copy.todoRevisionBoundary)
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
                 Spacer()
-                Button("取消") { dismiss() }
+                Button(copy.cancelAction) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("保存为新版本") { save() }
+                Button(copy.saveNewVersionAction) { save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(items.isEmpty)
                     .accessibilityIdentifier("zhulong-save-todo-diff-revision")
@@ -75,12 +81,12 @@ struct ZhulongTodoDiffEditor: View {
             HStack(spacing: 8) {
                 Image(systemName: value.symbolName)
                     .foregroundStyle(Theme.accent)
-                Text(value.kindLabel)
+                Text(value.kindLabel(copy: copy))
                     .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                     .foregroundStyle(Theme.text2)
                 Spacer()
                 if value.canSplit {
-                    Button("拆分") { split(value.id) }
+                    Button(copy.splitAction) { split(value.id) }
                         .buttonStyle(.borderless)
                         .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                         .accessibilityIdentifier(
@@ -95,27 +101,27 @@ struct ZhulongTodoDiffEditor: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(Theme.warn)
                 .disabled(items.count == 1)
-                .accessibilityLabel("移除这项 Todo 变更")
+                .accessibilityLabel(copy.removeTodoChangeAccessibilityLabel)
             }
 
             if value.hasEditableTitle {
-                MarkdownEditor(text: item.title, placeholder: "任务标题", style: .title)
+                MarkdownEditor(text: item.title, placeholder: copy.taskTitlePlaceholder, style: .title)
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
                     .accessibilityIdentifier(
                         "zhulong-todo-diff-title-\(value.identifierSuffix)"
                     )
             } else {
-                Text(value.fixedDescription)
+                Text(value.fixedDescription(copy: copy))
                     .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text2)
             }
 
             if value.hasEditableDate {
                 HStack(spacing: 8) {
-                    Text(value.requiresDate ? "目标日期" : "目标日期（可留空）")
+                    Text(copy.targetDateTitle(required: value.requiresDate))
                         .font(.noonmarkSystem(size: 10.5))
                         .foregroundStyle(Theme.text3)
-                    TextField("YYYY-MM-DD", text: item.targetDateText)
+                    TextField(copy.isoDatePlaceholder, text: item.targetDateText)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 142)
                         .accessibilityIdentifier(
@@ -138,9 +144,9 @@ struct ZhulongTodoDiffEditor: View {
 
     private func split(_ id: ZhulongTodoDiffItemID) {
         guard let index = items.firstIndex(where: { $0.id == id }),
-              let second = items[index].splitCopy()
+              let second = items[index].splitCopy(copy: copy)
         else { return }
-        items[index].title += "（部分 1）"
+        items[index].title += copy.todoTitlePart(1)
         items.insert(second, at: index + 1)
         validationMessage = nil
     }
@@ -152,9 +158,9 @@ struct ZhulongTodoDiffEditor: View {
                 dismiss()
             }
         } catch let error as EditableTodoDiffItem.ValidationError {
-            validationMessage = error.message
+            validationMessage = copy.todoValidationMessage(error.presentationFailure)
         } catch {
-            validationMessage = "无法建立修订：\(error.localizedDescription)"
+            validationMessage = copy.todoValidationMessage(.revisionFailed)
         }
     }
 }
@@ -176,10 +182,10 @@ private struct EditableTodoDiffItem: Identifiable {
         case missingTitle
         case invalidDate
 
-        var message: String {
+        var presentationFailure: ZhulongTodoValidationFailure {
             switch self {
-            case .missingTitle: "任务标题不能为空。"
-            case .invalidDate: "目标日期必须是有效的 YYYY-MM-DD。"
+            case .missingTitle: .missingTitle
+            case .invalidDate: .invalidDate
             }
         }
     }
@@ -259,14 +265,18 @@ private struct EditableTodoDiffItem: Identifiable {
         }
     }
 
-    var kindLabel: String {
+    private var copyKey: ZhulongTodoEditorKindCopyKey {
         switch kind {
-        case .createTask: "创建任务"
-        case .addSubtask: "添加子任务"
-        case .scheduleFromPool: "任务池排期"
-        case .continueTrace: "延续任务"
-        case .abandonChain: "废弃任务链"
+        case .createTask: .createTask
+        case .addSubtask: .addSubtask
+        case .scheduleFromPool: .scheduleFromPool
+        case .continueTrace: .continueTrace
+        case .abandonChain: .abandonChain
         }
+    }
+
+    func kindLabel(copy: ZhulongCopy) -> String {
+        copy.todoEditorKindTitle(copyKey)
     }
 
     var symbolName: String {
@@ -278,16 +288,11 @@ private struct EditableTodoDiffItem: Identifiable {
         }
     }
 
-    var fixedDescription: String {
-        switch kind {
-        case .scheduleFromPool: "将已有任务从任务池排期"
-        case .continueTrace: "把未完成任务延续到新日期"
-        case .abandonChain: "废弃当前任务链"
-        case .createTask, .addSubtask: ""
-        }
+    func fixedDescription(copy: ZhulongCopy) -> String {
+        copy.todoEditorFixedDescription(copyKey)
     }
 
-    func splitCopy() -> Self? {
+    func splitCopy(copy: ZhulongCopy) -> Self? {
         guard case let .createTask(descriptionText, initialNoteBody, _) = kind else { return nil }
         return Self(
             id: ZhulongTodoDiffItemID(),
@@ -296,7 +301,7 @@ private struct EditableTodoDiffItem: Identifiable {
                 initialNoteBody: initialNoteBody,
                 plannedSubtasks: []
             ),
-            title: title + "（部分 2）",
+            title: title + copy.todoTitlePart(2),
             targetDateText: targetDateText
         )
     }

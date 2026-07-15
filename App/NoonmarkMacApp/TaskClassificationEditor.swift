@@ -1,5 +1,7 @@
 import Foundation
 import NoonmarkCore
+import NoonmarkMacRuntime
+import NoonmarkMacUIContract
 import SwiftUI
 
 struct TaskClassificationEditor: View {
@@ -18,7 +20,7 @@ struct TaskClassificationEditor: View {
     @State private var selectedCategoryID: String?
     @State private var selectedLabels: [EditorLabel] = []
     @State private var labelInput = ""
-    @State private var isAddingLabel = CommandLine.arguments.contains("--e2e-open-classification-label-editor")
+    @State private var isAddingLabel = AppLaunchArguments.contains("--e2e-open-classification-label-editor")
     @State private var isCreatingGroup = false
     @State private var newGroupName = ""
     @State private var categoryError: String?
@@ -26,6 +28,14 @@ struct TaskClassificationEditor: View {
     @State private var showsSavedStatus = false
     @State private var saveStatusGeneration = UUID()
     @FocusState private var isLabelInputFocused: Bool
+
+    private var presentation: AppPresentation {
+        AppPresentation(language: store.engine.preferences.language)
+    }
+
+    private var copy: TaskClassificationEditorCopy {
+        presentation.taskClassificationEditor
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -38,7 +48,7 @@ struct TaskClassificationEditor: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("classification.editor.\(chainID.description)")
-        .accessibilityLabel("任务「\(taskTitle)」的分组与标签编辑器")
+        .accessibilityLabel(copy.editorAccessibilityLabel(taskTitle: taskTitle))
         .onAppear(perform: loadDraft)
         .onChange(of: chainID) { _, _ in
             resetTransientEditorState()
@@ -49,7 +59,7 @@ struct TaskClassificationEditor: View {
     private var categorySection: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
-                editorFieldLabel("分组")
+                editorFieldLabel(copy.categoryTitle)
                 categoryMenu
 
                 Spacer(minLength: 6)
@@ -67,7 +77,7 @@ struct TaskClassificationEditor: View {
                     Circle()
                         .fill(classificationUIColor(Self.newGroupColorHex))
                         .frame(width: 8, height: 8)
-                    TextField("分组名称", text: $newGroupName)
+                    TextField(copy.groupNamePlaceholder, text: $newGroupName)
                         .textFieldStyle(.plain)
                         .font(.noonmarkSystem(size: 11.5, weight: .medium))
                         .padding(.horizontal, 8)
@@ -75,13 +85,13 @@ struct TaskClassificationEditor: View {
                         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.controlFill))
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line.opacity(0.8)))
                         .onSubmit(createAndSelectGroup)
-                    Button("取消") {
+                    Button(copy.cancelAction) {
                         newGroupName = ""
                         isCreatingGroup = false
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.text3)
-                    Button("创建并加入", action: createAndSelectGroup)
+                    Button(copy.createAndAddAction, action: createAndSelectGroup)
                         .buttonStyle(.plain)
                         .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                         .foregroundStyle(Theme.accent)
@@ -100,13 +110,13 @@ struct TaskClassificationEditor: View {
 
     private var categoryMenu: some View {
         Menu {
-            Button("不加入分组") { selectCategory(nil) }
+            Button(copy.noGroupAction) { selectCategory(nil) }
             if activeCategories.isEmpty == false { Divider() }
             ForEach(activeCategories) { category in
                 Button(category.name) { selectCategory(category.id) }
             }
             Divider()
-            Button("新建分组…", systemImage: "plus") {
+            Button(copy.newGroupAction, systemImage: "plus") {
                 isCreatingGroup = true
             }
         } label: {
@@ -114,25 +124,27 @@ struct TaskClassificationEditor: View {
                 categoryChip(selectedCategory)
             } else {
                 HStack(spacing: 5) {
-                    Text("无分组")
+                    Text(copy.noGroup)
                         .font(.noonmarkSystem(size: 11))
                     Image(systemName: "chevron.down")
                         .font(.noonmarkSystem(size: 7, weight: .bold))
                 }
                 .foregroundStyle(Theme.text3)
                 .padding(.horizontal, 7)
-                .frame(height: 24)
+                .frame(
+                    minHeight: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
+                )
                 .contentShape(Rectangle())
             }
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .accessibilityLabel("任务「\(taskTitle)」的分组")
+        .accessibilityLabel(copy.taskGroupAccessibilityLabel(taskTitle: taskTitle))
         .background {
             AppE2EViewAnchor(
                 identifier: "classification.editor.category.\(chainID.description)",
-                verificationText: selectedCategory?.name ?? "无分组"
+                verificationText: selectedCategory?.name ?? copy.noGroup
             )
         }
     }
@@ -153,18 +165,20 @@ struct TaskClassificationEditor: View {
                 .foregroundStyle(Theme.text3)
         }
         .padding(.horizontal, 7)
-        .frame(height: 24)
+        .frame(
+            minHeight: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
+        )
         .frame(maxWidth: 92)
         .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.09)))
         .layoutPriority(1)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("当前分组：\(category.name)")
+        .accessibilityLabel(copy.currentGroupAccessibilityLabel(category.name))
     }
 
     private var labelSection: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .top, spacing: 8) {
-                editorFieldLabel("标签")
+                editorFieldLabel(copy.labelTitle)
                 ClassificationEditorFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
                     ForEach(selectedLabels) { label in
                         labelChip(label)
@@ -175,11 +189,15 @@ struct TaskClassificationEditor: View {
                             isAddingLabel = true
                             Task { @MainActor in isLabelInputFocused = true }
                         } label: {
-                            Label("添加", systemImage: "plus")
+                            Label(copy.addAction, systemImage: "plus")
                                 .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                                 .foregroundStyle(Theme.accent)
                                 .padding(.horizontal, 7)
-                                .frame(height: 24)
+                                .frame(
+                                    minHeight: CGFloat(
+                                        MacUIAccessibilityLayout.minimumInteractiveTargetSize
+                                    )
+                                )
                                 .background(
                                     RoundedRectangle(cornerRadius: 6)
                                         .fill(Theme.accentSoft.opacity(0.46))
@@ -195,7 +213,7 @@ struct TaskClassificationEditor: View {
             if isAddingLabel {
                 HStack(spacing: 7) {
                     Color.clear.frame(width: Self.fieldLabelWidth, height: 1)
-                    TextField("输入标签名称", text: $labelInput)
+                    TextField(copy.tagNamePlaceholder, text: $labelInput)
                         .textFieldStyle(.plain)
                         .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text1)
@@ -209,8 +227,8 @@ struct TaskClassificationEditor: View {
                         .focused($isLabelInputFocused)
                         .onSubmit(addLabelFromInput)
                         .accessibilityIdentifier("classification.editor.label-input.\(chainID.description)")
-                        .accessibilityLabel("为任务「\(taskTitle)」添加标签")
-                    Button("取消") {
+                        .accessibilityLabel(copy.addTagAccessibilityLabel(taskTitle: taskTitle))
+                    Button(copy.cancelAction) {
                         labelInput = ""
                         labelError = nil
                         isAddingLabel = false
@@ -218,10 +236,15 @@ struct TaskClassificationEditor: View {
                     .buttonStyle(.plain)
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
-                    Button("添加", action: addLabelFromInput)
+                    Button(copy.addAction, action: addLabelFromInput)
                         .buttonStyle(.plain)
                         .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                         .foregroundStyle(Theme.accent)
+                        .frame(
+                            minHeight: CGFloat(
+                                MacUIAccessibilityLayout.minimumInteractiveTargetSize
+                            )
+                        )
                 }
             }
 
@@ -237,7 +260,7 @@ struct TaskClassificationEditor: View {
             .foregroundStyle(Theme.ok)
             .frame(width: 14, height: 24)
             .accessibilityIdentifier("classification.editor.save-status.\(chainID.description)")
-            .accessibilityLabel("任务「\(taskTitle)」的分组与标签已保存")
+            .accessibilityLabel(copy.savedAccessibilityLabel(taskTitle: taskTitle))
     }
 
     private func editorFieldLabel(_ text: String) -> some View {
@@ -267,7 +290,7 @@ struct TaskClassificationEditor: View {
     private func createAndSelectGroup() {
         let name = ClassificationNameCanonicalizer.displayName(newGroupName)
         guard name.isEmpty == false else {
-            categoryError = "请输入分组名称。"
+            categoryError = copy.emptyGroupNameError
             return
         }
         do {
@@ -305,23 +328,38 @@ struct TaskClassificationEditor: View {
                     .font(.noonmarkSystem(size: 8, weight: .bold))
                     .foregroundStyle(Theme.text3)
                     .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
             }
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
             .buttonStyle(.plain)
             .accessibilityIdentifier("classification.editor.remove-label.\(chainID.description).\(label.id)")
-            .accessibilityLabel("从任务「\(taskTitle)」移除标签「\(label.name)」")
+            .accessibilityLabel(
+                copy.removeTagAccessibilityLabel(
+                    taskTitle: taskTitle,
+                    tagName: label.name
+                )
+            )
         }
         .padding(.leading, 8)
-        .padding(.trailing, 4)
-        .frame(height: 24)
-        .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.10)))
+        .frame(height: 28)
+        .background {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(color.opacity(0.10))
+                .frame(height: 24)
+        }
         .overlay {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(color.opacity(0.22), lineWidth: 1)
+                .frame(height: 24)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("classification.editor.label-chip.\(chainID.description).\(label.id)")
-        .accessibilityLabel("任务「\(taskTitle)」的标签「\(label.name)」")
+        .accessibilityLabel(
+            copy.taskTagAccessibilityLabel(
+                taskTitle: taskTitle,
+                tagName: label.name
+            )
+        )
     }
 
     private func editorError(_ message: String) -> some View {
@@ -329,14 +367,16 @@ struct TaskClassificationEditor: View {
             .font(.noonmarkSystem(size: 10.5, weight: .medium))
             .foregroundStyle(Theme.warn)
             .fixedSize(horizontal: false, vertical: true)
-            .accessibilityLabel("保存失败：\(message)")
+            .accessibilityLabel(copy.saveFailedAccessibilityLabel(message))
     }
 
     private func loadDraft() {
         guard let projection = store.currentClassification(for: chainID),
               let catalog = store.classificationCatalog()
         else {
-            categoryError = "无法读取当前分组与标签，请稍后重试。"
+            categoryError = presentation.message(
+                for: .classificationCatalogUnavailable
+            )
             return
         }
 
@@ -351,7 +391,7 @@ struct TaskClassificationEditor: View {
     private func addLabelFromInput() {
         let name = normalizedLabelName(labelInput)
         guard name.isEmpty == false else {
-            labelError = "请输入标签名称。"
+            labelError = copy.emptyTagNameError
             return
         }
 
@@ -365,7 +405,7 @@ struct TaskClassificationEditor: View {
         }
 
         guard selectedLabels.contains(where: { $0.matches(candidate) }) == false else {
-            labelError = "标签「\(name)」已经添加。"
+            labelError = copy.duplicateTagError(name)
             return
         }
 
@@ -424,14 +464,14 @@ struct TaskClassificationEditor: View {
     private func showSavedStatus() {
         let generation = UUID()
         saveStatusGeneration = generation
-        withAnimation(.easeInOut(duration: Self.animationDuration)) {
+        withAnimation(Theme.shouldReduceMotion ? nil : .easeInOut(duration: Self.animationDuration)) {
             showsSavedStatus = true
         }
 
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(900))
             guard saveStatusGeneration == generation else { return }
-            withAnimation(.easeInOut(duration: Self.animationDuration)) {
+            withAnimation(Theme.shouldReduceMotion ? nil : .easeInOut(duration: Self.animationDuration)) {
                 showsSavedStatus = false
             }
         }
@@ -442,26 +482,12 @@ struct TaskClassificationEditor: View {
     }
 
     private func editorErrorMessage(_ error: Error) -> String {
-        switch error as? NoonmarkError {
-        case let .invalidInput(message), let .invalidTransition(message), let .notFound(message):
-            message
-        case .invalidTitle:
-            "分组或标签名称无效。"
-        case .chainAbandoned:
-            "已放弃的任务不能修改分组与标签。"
-        case .immutableHistory:
-            "历史分组与标签不能直接改写。"
-        case .lockedDay:
-            "历史日期已经锁定。"
-        case .activeTraceAlreadyExists,
-             .noActiveTrace,
-             .futurePlanCannotComplete,
-             .historicalCompletionCannotBeUndone,
-             .openSubtasksPreventCompletion:
-            "当前任务状态不允许修改分组与标签。"
-        case nil:
-            error.localizedDescription
+        let failure: AppPresentationError = if error is ClassificationEditorError {
+            .classificationResourceUnavailable
+        } else {
+            AppPresentation.classify(error, for: .classificationMutation)
         }
+        return presentation.message(for: failure)
     }
 }
 
@@ -471,12 +497,8 @@ private extension TaskClassificationEditor {
         case label
     }
 
-    enum ClassificationEditorError: LocalizedError {
+    enum ClassificationEditorError: Error {
         case invalidIdentifier
-
-        var errorDescription: String? {
-            "分组与标签资料无效，请重新打开任务后再试。"
-        }
     }
 
     enum EditorLabelReference: Equatable {

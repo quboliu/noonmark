@@ -1,4 +1,5 @@
 import NoonmarkCore
+import NoonmarkMacRuntime
 import NoonmarkMacUIContract
 import SwiftUI
 
@@ -6,12 +7,18 @@ struct ClassificationManagerButton: View {
     @EnvironmentObject private var store: NoonmarkStore
     @State private var isHovered = false
 
-    let title: String
+    let title: String?
     let prominent: Bool
 
-    init(title: String = "管理", prominent: Bool = false) {
+    init(title: String? = nil, prominent: Bool = false) {
         self.title = title
         self.prominent = prominent
+    }
+
+    private var resolvedTitle: String {
+        title ?? AppPresentation(
+            language: store.engine.preferences.language
+        ).groupManagement.manageShortAction
     }
 
     var body: some View {
@@ -21,7 +28,7 @@ struct ClassificationManagerButton: View {
             HStack(spacing: 6) {
                 Image(systemName: "slider.horizontal.3")
                     .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                Text(title)
+                Text(resolvedTitle)
                     .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 if prominent {
                     Image(systemName: "chevron.right")
@@ -53,7 +60,7 @@ struct ClassificationManagerButton: View {
         .background {
             AppE2EViewAnchor(
                 identifier: "classification.manager.open",
-                verificationText: title
+                verificationText: resolvedTitle
             )
         }
     }
@@ -79,6 +86,18 @@ struct ClassificationManagementDialog: View {
 
     private var catalog: ClassificationCatalogProjection? {
         store.classificationCatalog()
+    }
+
+    private var presentation: AppPresentation {
+        AppPresentation(language: store.engine.preferences.language)
+    }
+
+    private var copy: ClassificationManagerCopy {
+        presentation.classificationManager
+    }
+
+    private var selectedMetric: GroupManagementMetric {
+        metric(for: kind)
     }
 
     private var categoryCount: Int {
@@ -131,7 +150,7 @@ struct ClassificationManagementDialog: View {
         .background {
             AppE2EViewAnchor(
                 identifier: "classification.manager.dialog",
-                verificationText: "分组与标签管理"
+                verificationText: copy.title
             )
         }
         .onAppear {
@@ -146,17 +165,19 @@ struct ClassificationManagementDialog: View {
     private var header: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("分组与标签管理")
+                Text(copy.title)
                     .font(.noonmarkSystem(size: 15, weight: .bold))
                     .foregroundStyle(Theme.text1)
-                Text("维护当前分组与标签，不改写任务的历史快照")
+                Text(copy.subtitle)
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
             }
             Spacer()
-            Picker("类型", selection: $kind) {
-                Text("分组  \(categoryCount)").tag(ClassificationItemKind.category)
-                Text("标签  \(labelCount)").tag(ClassificationItemKind.label)
+            Picker(copy.kindPickerTitle, selection: $kind) {
+                Text(copy.kindTitle(.category, count: categoryCount))
+                    .tag(ClassificationItemKind.category)
+                Text(copy.kindTitle(.label, count: labelCount))
+                    .tag(ClassificationItemKind.label)
             }
             .labelsHidden()
             .pickerStyle(.segmented)
@@ -185,14 +206,23 @@ struct ClassificationManagementDialog: View {
                 Image(systemName: "xmark")
                     .font(.noonmarkSystem(size: 9, weight: .bold))
                     .foregroundStyle(Theme.text3)
-                    .frame(width: 26, height: 26)
+                    .frame(
+                        width: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize),
+                        height: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
+                    )
                     .background(RoundedRectangle(cornerRadius: 7).fill(Theme.controlFill))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.cancelAction)
             .accessibilityIdentifier("classification.manager.close")
-            .accessibilityLabel("关闭分组与标签管理")
+            .accessibilityLabel(copy.closeAccessibilityLabel)
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "classification.manager.close",
+                    verificationText: copy.closeAccessibilityLabel
+                )
+            }
         }
         .padding(.horizontal, 14)
         .frame(height: 52)
@@ -206,16 +236,24 @@ struct ClassificationManagementDialog: View {
         ZStack {
             AppE2EViewAnchor(
                 identifier: "classification.manager.kind.\(anchorKind.rawValue)",
-                verificationText: anchorKind == .category ? "分组" : "标签"
+                verificationText: copy.metricTitle(metric(for: anchorKind))
             )
             if kind == anchorKind {
                 AppE2EViewAnchor(
                     identifier: "classification.manager.kind.selected.\(anchorKind.rawValue)",
-                    verificationText: anchorKind == .category ? "已选择分组" : "已选择标签"
+                    verificationText: copy.selectedMetricVerification(
+                        metric(for: anchorKind)
+                    )
                 )
             }
         }
         .frame(width: width, height: height)
+    }
+
+    private func metric(
+        for kind: ClassificationItemKind
+    ) -> GroupManagementMetric {
+        kind == .category ? .category : .label
     }
 
     private var toolbar: some View {
@@ -224,7 +262,7 @@ struct ClassificationManagementDialog: View {
                 Image(systemName: "magnifyingglass")
                     .font(.noonmarkSystem(size: 11, weight: .medium))
                     .foregroundStyle(Theme.text3)
-                TextField(kind == .category ? "搜索分组" : "搜索标签", text: $search)
+                TextField(copy.searchPlaceholder(selectedMetric), text: $search)
                     .textFieldStyle(.plain)
                     .font(.noonmarkSystem(size: 11.5))
                     .focused($isSearchFocused)
@@ -237,7 +275,7 @@ struct ClassificationManagementDialog: View {
                             .foregroundStyle(Theme.text3)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("清除搜索")
+                    .accessibilityLabel(copy.clearSearchAccessibilityLabel)
                 }
             }
             .padding(.horizontal, 9)
@@ -247,12 +285,15 @@ struct ClassificationManagementDialog: View {
             .accessibilityIdentifier("classification.manager.search")
 
             Button {
-                withAnimation(.easeInOut(duration: 0.16)) {
+                withAnimation(Theme.shouldReduceMotion ? nil : .easeInOut(duration: 0.16)) {
                     isCreating.toggle()
                     message = nil
                 }
             } label: {
-                Label(kind == .category ? "新建分组" : "新建标签", systemImage: isCreating ? "xmark" : "plus")
+                Label(
+                    copy.newItemAction(selectedMetric),
+                    systemImage: isCreating ? "xmark" : "plus"
+                )
                     .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                     .foregroundStyle(isCreating ? Theme.text2 : Theme.accent)
                     .padding(.horizontal, 10)
@@ -281,7 +322,7 @@ struct ClassificationManagementDialog: View {
     private var creationEditor: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                TextField(kind == .category ? "分组名称" : "标签名称", text: $newName)
+                TextField(copy.namePlaceholder(selectedMetric), text: $newName)
                     .textFieldStyle(.plain)
                     .font(.noonmarkSystem(size: 11.5, weight: .medium))
                     .padding(.horizontal, 9)
@@ -290,7 +331,7 @@ struct ClassificationManagementDialog: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.35)))
                     .onSubmit(createItem)
 
-                Button("创建", action: createItem)
+                Button(copy.createAction, action: createItem)
                     .buttonStyle(.plain)
                     .font(.noonmarkSystem(size: 10.5, weight: .bold))
                     .foregroundStyle(Theme.accent)
@@ -298,28 +339,32 @@ struct ClassificationManagementDialog: View {
             }
 
             HStack(spacing: 9) {
-                Text("颜色")
+                Text(copy.colorTitle)
                     .font(.noonmarkSystem(size: 9.5, weight: .semibold))
                     .foregroundStyle(Theme.text3)
-                ForEach(Self.palette, id: \.self) { color in
-                    Button {
-                        selectedColor = color
-                    } label: {
-                        Circle()
-                            .fill(classificationUIColor(color))
-                            .frame(width: 15, height: 15)
-                            .overlay {
-                                if selectedColor == color {
-                                    Circle().stroke(.white, lineWidth: 2)
-                                    Circle().stroke(classificationUIColor(color), lineWidth: 1).padding(-2)
+                HStack(spacing: 2) {
+                    ForEach(Self.palette, id: \.self) { color in
+                        Button {
+                            selectedColor = color
+                        } label: {
+                            Circle()
+                                .fill(classificationUIColor(color))
+                                .frame(width: 15, height: 15)
+                                .overlay {
+                                    if selectedColor == color {
+                                        Circle().stroke(.white, lineWidth: 2)
+                                        Circle().stroke(classificationUIColor(color), lineWidth: 1).padding(-2)
+                                    }
                                 }
-                            }
+                        }
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(copy.chooseColorAccessibilityLabel(color))
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("选择颜色 \(color)")
                 }
                 Spacer()
-                Text(kind == .category ? "任务至多使用一个分组" : "任务可使用多个标签")
+                Text(copy.usageRule(selectedMetric))
                     .font(.noonmarkSystem(size: 9.5))
                     .foregroundStyle(Theme.text3)
             }
@@ -333,9 +378,14 @@ struct ClassificationManagementDialog: View {
     private var itemList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                sectionHeader(title: "使用中", count: activeItems.count)
+                sectionHeader(title: copy.activeSectionTitle, count: activeItems.count)
                 if activeItems.isEmpty {
-                    emptyRow(search.isEmpty ? "还没有使用中的项目" : "没有匹配的使用中项目")
+                    emptyRow(
+                        copy.emptyActiveMessage(
+                            selectedMetric,
+                            isSearching: search.isEmpty == false
+                        )
+                    )
                 } else {
                     ForEach(activeItems) { item in
                         itemRow(item)
@@ -376,7 +426,7 @@ struct ClassificationManagementDialog: View {
 
     private var archivedHeader: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.16)) {
+            withAnimation(Theme.shouldReduceMotion ? nil : .easeInOut(duration: 0.16)) {
                 showsArchived.toggle()
             }
         } label: {
@@ -384,7 +434,7 @@ struct ClassificationManagementDialog: View {
                 Image(systemName: "chevron.right")
                     .font(.noonmarkSystem(size: 8, weight: .bold))
                     .rotationEffect(.degrees(showsArchived ? 90 : 0))
-                Text("已归档")
+                Text(copy.archivedSectionTitle)
                     .font(.noonmarkSystem(size: 9.5, weight: .bold))
                     .tracking(0.7)
                 Text("\(archivedItems.count)")
@@ -393,7 +443,7 @@ struct ClassificationManagementDialog: View {
                     .frame(height: 16)
                     .background(Capsule().fill(Theme.chip))
                 Spacer()
-                Text(showsArchived ? "收起" : "展开")
+                Text(showsArchived ? copy.collapseAction : copy.expandAction)
                     .font(.noonmarkSystem(size: 9.5))
             }
             .foregroundStyle(Theme.text3)
@@ -423,15 +473,15 @@ struct ClassificationManagementDialog: View {
         return HStack(spacing: 9) {
             itemSymbol(item)
             if editingID == item.id {
-                TextField("名称", text: $editingName)
+                TextField(copy.nameEditorPlaceholder, text: $editingName)
                     .textFieldStyle(.plain)
                     .font(.noonmarkSystem(size: 11.5, weight: .medium))
                     .onSubmit { rename(item) }
-                Button("保存") { rename(item) }
+                Button(copy.saveAction) { rename(item) }
                     .buttonStyle(.plain)
                     .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                     .foregroundStyle(Theme.accent)
-                Button("取消") { editingID = nil }
+                Button(copy.cancelAction) { editingID = nil }
                     .buttonStyle(.plain)
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
@@ -442,16 +492,16 @@ struct ClassificationManagementDialog: View {
                     .lineLimit(1)
                 Spacer()
                 HStack(spacing: 5) {
-                    Text("当前 \(item.currentUsageCount)")
+                    Text(copy.currentReferenceCount(item.currentUsageCount))
                     Text("·")
-                    Text("历史 \(item.historicalUsageCount)")
+                    Text(copy.historicalReferenceCount(item.historicalUsageCount))
                 }
                 .font(.noonmarkSystem(size: 9.5))
                 .foregroundStyle(Theme.text3)
                 .accessibilityIdentifier("classification.manager.references.\(item.id)")
 
                 Menu {
-                    Button("重命名", systemImage: "pencil") {
+                    Button(copy.renameAction, systemImage: "pencil") {
                         editingID = item.id
                         editingName = item.name
                     }
@@ -459,22 +509,26 @@ struct ClassificationManagementDialog: View {
                         "\(MacUIClassificationAccessibility.renameActionPrefix).\(item.id)"
                     )
                     if item.lifecycle == .active {
-                        Button("归档", systemImage: "archivebox") { archive(item) }
+                        Button(copy.archiveAction, systemImage: "archivebox") {
+                            archive(item)
+                        }
                             .accessibilityIdentifier(
                                 "\(MacUIClassificationAccessibility.archiveActionPrefix).\(item.id)"
                             )
                     } else {
-                        Button("恢复使用", systemImage: "arrow.uturn.backward") { restore(item) }
+                        Button(copy.restoreAction, systemImage: "arrow.uturn.backward") {
+                            restore(item)
+                        }
                             .accessibilityIdentifier(
                                 "\(MacUIClassificationAccessibility.restoreActionPrefix).\(item.id)"
                             )
                     }
                     Divider()
                     if canDiscard == false {
-                        Text("仍有任务或历史引用，只能归档")
+                        Text(copy.referencedItemsArchiveOnlyNotice)
                     }
                     Button(role: .destructive) { discard(item) } label: {
-                        Label("废弃", systemImage: "trash")
+                        Label(copy.discardAction, systemImage: "trash")
                     }
                     .disabled(canDiscard == false)
                     .accessibilityIdentifier(
@@ -484,7 +538,10 @@ struct ClassificationManagementDialog: View {
                     Image(systemName: "ellipsis")
                         .font(.noonmarkSystem(size: 11, weight: .bold))
                         .foregroundStyle(Theme.text3)
-                        .frame(width: 26, height: 26)
+                        .frame(
+                            width: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize),
+                            height: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
+                        )
                         .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
@@ -525,7 +582,7 @@ struct ClassificationManagementDialog: View {
         HStack(spacing: 7) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-            Text("名称与生命周期可调整；历史引用始终保留。")
+            Text(copy.historyNotice)
                 .font(.noonmarkSystem(size: 10))
                 .lineLimit(1)
             Spacer()
@@ -594,7 +651,8 @@ struct ClassificationManagementDialog: View {
             _ = try store.applyClassificationIntent(intent)
             message = nil
         } catch {
-            message = error.localizedDescription
+            let failure = AppPresentation.classify(error, for: .classificationMutation)
+            message = presentation.message(for: failure)
         }
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import NoonmarkCore
+import NoonmarkMacRuntime
 import SwiftUI
 
 struct TaskClassificationAccessibilityNamespace: Hashable {
@@ -37,10 +38,18 @@ struct TaskClassificationBadges: View {
     let accessibilityNamespace: TaskClassificationAccessibilityNamespace
     var showsCategory = true
 
+    @EnvironmentObject private var store: NoonmarkStore
+
     @State private var isShowingAllLabels = false
 
     private var hasClassification: Bool {
         (showsCategory && display.category != nil) || display.labels.isEmpty == false
+    }
+
+    private var copy: TaskClassificationBadgesCopy {
+        AppPresentation(
+            language: store.engine.preferences.language
+        ).taskClassificationBadges
     }
 
     var body: some View {
@@ -57,10 +66,15 @@ struct TaskClassificationBadges: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(accessibilityNamespace.containerIdentifier(isHistorical: display.isHistorical))
             .accessibilityLabel(
-                "任务「\(taskTitle)」的\(display.isHistorical ? "当时分组与标签" : "当前分组与标签")"
+                copy.containerAccessibilityLabel(
+                    taskTitle: taskTitle,
+                    isHistorical: display.isHistorical
+                )
             )
             .animation(
-                .easeInOut(duration: Self.animationDuration),
+                Theme.shouldReduceMotion
+                    ? nil
+                    : .easeInOut(duration: Self.animationDuration),
                 value: isShowingAllLabels
             )
         }
@@ -74,8 +88,11 @@ struct TaskClassificationBadges: View {
             if showsCategory, let category = display.category {
                 TaskGroupMarker(
                     category: category,
-                    taskTitle: taskTitle,
-                    accessibilityIdentifier: accessibilityNamespace.categoryIdentifier
+                    accessibilityIdentifier: accessibilityNamespace.categoryIdentifier,
+                    accessibilityLabel: copy.taskGroupAccessibilityLabel(
+                        taskTitle: taskTitle,
+                        groupName: category.name
+                    )
                 )
             }
 
@@ -83,18 +100,28 @@ struct TaskClassificationBadges: View {
                 TaskLabelPatch(
                     label: label,
                     accessibilityIdentifier: accessibilityNamespace.labelIdentifier(label.id),
-                    accessibilityLabel: "任务「\(taskTitle)」的标签「\(label.name)」"
+                    accessibilityLabel: copy.taskTagAccessibilityLabel(
+                        taskTitle: taskTitle,
+                        tagName: label.name
+                    )
                 )
             }
 
             if overflowCount > 0 {
                 ClassificationOverflowButton(
                     hiddenCount: overflowCount,
-                    totalCount: display.labels.count,
-                    taskTitle: taskTitle,
-                    accessibilityIdentifier: accessibilityNamespace.overflowIdentifier
+                    accessibilityIdentifier: accessibilityNamespace.overflowIdentifier,
+                    accessibilityLabel: copy.overflowAccessibilityLabel(
+                        taskTitle: taskTitle,
+                        totalCount: display.labels.count,
+                        hiddenCount: overflowCount
+                    )
                 ) {
-                    withAnimation(.easeInOut(duration: Self.animationDuration)) {
+                    withAnimation(
+                        Theme.shouldReduceMotion
+                            ? nil
+                            : .easeInOut(duration: Self.animationDuration)
+                    ) {
                         isShowingAllLabels = true
                     }
                 }
@@ -113,8 +140,8 @@ struct TaskClassificationBadges: View {
 
 struct TaskGroupMarker: View {
     let category: ClassificationItemProjection
-    let taskTitle: String
     let accessibilityIdentifier: String
+    let accessibilityLabel: String
 
     private var color: Color {
         classificationUIColor(category.colorHex)
@@ -141,7 +168,7 @@ struct TaskGroupMarker: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityIdentifier(accessibilityIdentifier)
-        .accessibilityLabel("任务「\(taskTitle)」的分组「\(category.name)」")
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -187,9 +214,8 @@ struct TaskLabelPatch: View {
 
 private struct ClassificationOverflowButton: View {
     let hiddenCount: Int
-    let totalCount: Int
-    let taskTitle: String
     let accessibilityIdentifier: String
+    let accessibilityLabel: String
     let action: () -> Void
 
     var body: some View {
@@ -208,9 +234,7 @@ private struct ClassificationOverflowButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(accessibilityIdentifier)
-        .accessibilityLabel(
-            "展开任务「\(taskTitle)」的全部 \(totalCount) 个标签；当前还有 \(hiddenCount) 个未显示"
-        )
+        .accessibilityLabel(accessibilityLabel)
         .background {
             AppE2EViewAnchor(
                 identifier: accessibilityIdentifier,
@@ -221,14 +245,22 @@ private struct ClassificationOverflowButton: View {
 }
 
 private struct ClassificationLabelsPopover: View {
+    @EnvironmentObject private var store: NoonmarkStore
+
     let labels: [ClassificationItemProjection]
     let taskTitle: String
     let accessibilityNamespace: TaskClassificationAccessibilityNamespace
 
+    private var copy: TaskClassificationBadgesCopy {
+        AppPresentation(
+            language: store.engine.preferences.language
+        ).taskClassificationBadges
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 6) {
-                Text("全部标签")
+                Text(copy.allTagsTitle)
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.6)
@@ -238,7 +270,10 @@ private struct ClassificationLabelsPopover: View {
                     TaskLabelPatch(
                         label: label,
                         accessibilityIdentifier: accessibilityNamespace.popoverLabelIdentifier(label.id),
-                        accessibilityLabel: "任务「\(taskTitle)」的标签「\(label.name)」",
+                        accessibilityLabel: copy.taskTagAccessibilityLabel(
+                            taskTitle: taskTitle,
+                            tagName: label.name
+                        ),
                         isFocusable: true
                     )
                 }
@@ -250,7 +285,7 @@ private struct ClassificationLabelsPopover: View {
         .background(Theme.panel)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(accessibilityNamespace.popoverIdentifier)
-        .accessibilityLabel("任务「\(taskTitle)」的全部标签")
+        .accessibilityLabel(copy.allTagsAccessibilityLabel(taskTitle: taskTitle))
         .background {
             AppE2EViewAnchor(
                 identifier: accessibilityNamespace.popoverIdentifier,

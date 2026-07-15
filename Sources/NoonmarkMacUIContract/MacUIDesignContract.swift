@@ -1,3 +1,5 @@
+import Foundation
+
 public enum MacUINavigationGroup: String, CaseIterable, Sendable {
     case plan = "计划"
     case trace = "轨迹"
@@ -25,7 +27,7 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case dateStripSelectionAnimation
     case semanticStatusStyles
     case protectedActionButtonLabels
-    case todoistInspiredUnifiedShell
+    case nativeProductivityWorkspace
     case quietSidebarSurface
     case lowContrastControlSurfaces
     case borderlessListRows
@@ -40,6 +42,19 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case spatiallySeparatedRailControls
     case viewMenuRailCommands
     case adaptiveMainSurfaceWidth
+    case nativeMainMenu
+    case nativeSettingsWindow
+    case restorableWindow
+    case adjustableSplitView
+    case workspaceKeyboardSelection
+    case workspaceMultipleSelection
+    case globalSearchCommand
+    case quickEntryCommand
+    case semanticErrorPresentation
+    case increaseContrast
+    case differentiateWithoutColor
+    case reduceMotion
+    case reduceTransparency
 }
 
 public enum MacUIWindowMetric: String, CaseIterable, Sendable {
@@ -73,11 +88,52 @@ public enum MacUIIconMetrics {
     public static let navigationSize = 14.0
 }
 
+public enum MacUIAccessibilityLayout {
+    public static let minimumInteractiveTargetSize = 28.0
+}
+
+public struct MacUISRGBColor: Equatable, Sendable {
+    public let red: Double
+    public let green: Double
+    public let blue: Double
+
+    public init(red: Double, green: Double, blue: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    public func contrastRatio(against other: MacUISRGBColor) -> Double {
+        let brighter = max(relativeLuminance, other.relativeLuminance)
+        let darker = min(relativeLuminance, other.relativeLuminance)
+        return (brighter + 0.05) / (darker + 0.05)
+    }
+
+    private var relativeLuminance: Double {
+        let linear = [red, green, blue].map { component in
+            component <= 0.04045
+                ? component / 12.92
+                : pow((component + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+}
+
+public enum MacUIAccessibleColorMetrics {
+    public static let minimumSmallTextContrast = 4.5
+    public static let success = MacUISRGBColor(red: 0.04, green: 0.45, blue: 0.30)
+    public static let coolGrayTertiaryText = MacUISRGBColor(red: 0.455, green: 0.455, blue: 0.495)
+    public static let coolGrayBackground = MacUISRGBColor(red: 0.994, green: 0.993, blue: 0.991)
+    public static let warmPaperTertiaryText = MacUISRGBColor(red: 0.47, green: 0.405, blue: 0.335)
+    public static let warmPaperBackground = MacUISRGBColor(red: 0.997, green: 0.992, blue: 0.982)
+}
+
 public enum MacUITypographyMetrics {
-    public static let scale = 0.92
+    public static let scale = 1.0
     public static let compactThreshold = 10.5
     public static let compactEditorBasePointSize = 12.5
     public static let compactEditorPointSize = compactPointSize(compactEditorBasePointSize)
+    public static let compactEditorVerticalInset = 8.5
 
     public static func compactPointSize(_ baseSize: Double) -> Double {
         guard baseSize >= compactThreshold else { return baseSize }
@@ -101,45 +157,11 @@ public enum MacUINavigationElement: String, CaseIterable, Sendable {
     case planGroupHeader
     case traceGroupHeader
     case pageIcons
-    case semanticIconColors
-    case selectedBackground
-    case selectedLeadingBar
+    case unifiedNavigationIcons
+    case semanticNavigationIconColors
     case quietSelectedPill
     case countBadges
     case zhulongEntryVisibilityFollowsSettings
-    case settingsFooterItem
-}
-
-public enum MacUINavigationIconColorToken: CaseIterable, Sendable {
-    case dayTodo
-    case taskPool
-    case futurePlans
-    case unfinishedPool
-    case completedPool
-    case calendar
-    case zhulong
-    case settings
-
-    public var hexValue: String {
-        switch self {
-        case .dayTodo:
-            return "#2A6FDB"
-        case .taskPool:
-            return "#0E9488"
-        case .futurePlans:
-            return "#7C5CFF"
-        case .unfinishedPool:
-            return "#E0851B"
-        case .completedPool:
-            return "#1F8A5B"
-        case .calendar:
-            return "#D1477A"
-        case .zhulong:
-            return "#7C5CFF"
-        case .settings:
-            return "#64748B"
-        }
-    }
 }
 
 public enum MacUIPage: String, CaseIterable, Sendable {
@@ -150,7 +172,6 @@ public enum MacUIPage: String, CaseIterable, Sendable {
     case completedPool
     case calendar
     case zhulong
-    case settings
 }
 
 public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
@@ -179,7 +200,7 @@ public enum MacUIDayTodoElement: String, CaseIterable, Sendable {
     case fourteenDayStrip
     case dateStripSelectedPill
     case dateStripTodayOutline
-    case dateStripSelectedDot
+    case accessibleDateCellState
     case dateStripTaskPresenceDot
     case keyboardDateNavigation
     case historyLockNotice
@@ -188,15 +209,14 @@ public enum MacUIDayTodoElement: String, CaseIterable, Sendable {
     case fromPoolButton
     case taskRows
     case taskRowSelectedState
-    case taskRowStatusDot
     case taskRowTitle
     case taskRowProgress
     case taskRowTrajectoryMetadata
     case changedTraceTargetJump
     case taskRowSubtaskExpansion
-    case statusChips
-    case priorityStepper
-    case taskRowMoveButtons
+    case singleStatusGlyph
+    case dragReordering
+    case selectedReorderControls
     case emptyState
 }
 
@@ -226,10 +246,8 @@ public enum MacUIFuturePlanElement: String, CaseIterable, Sendable {
     case openDetailAction
     case rescheduleAction
     case returnToPoolAction
-    /// Domain priority adjustment; taskRowMoveButtons is the row-level visual entry for the same ordering operation.
-    case priorityStepper
-    /// Row-level visual entry for priorityStepper ordering in future plans.
-    case taskRowMoveButtons
+    case dragReordering
+    case selectedReorderControls
     case emptyState
 }
 
@@ -375,22 +393,26 @@ public enum MacUIReviewElement: String, CaseIterable, Sendable {
 }
 
 public enum MacUIEmptyStateElement: String, CaseIterable, Sendable {
-    case illustration
+    case semanticSymbol
     case copy
+    case contextualPrimaryAction
 }
 
 public enum MacUIPageEmptyStateElement: String, CaseIterable, Sendable {
-    case dayTodoIllustration
+    case dayTodoSymbol
     case dayTodoCopy
-    case taskPoolIllustration
+    case dayTodoPrimaryAction
+    case taskPoolSymbol
     case taskPoolCopy
-    case futurePlansIllustration
+    case taskPoolPrimaryAction
+    case futurePlansSymbol
     case futurePlansCopy
-    case unfinishedPoolIllustration
+    case futurePlansPrimaryAction
+    case unfinishedPoolSymbol
     case unfinishedPoolCopy
-    case completedPoolIllustration
+    case completedPoolSymbol
     case completedPoolCopy
-    case calendarIllustration
+    case calendarSymbol
     case calendarCopy
 }
 
@@ -423,6 +445,11 @@ public enum MacUITaskAction: String, CaseIterable, Sendable {
     case exportData
     case importData
     case undo
+    case redo
+    case bulkComplete
+    case bulkScheduleToday
+    case bulkReturnToPool
+    case reorderTask
 }
 
 public enum MacUIModal: String, CaseIterable, Sendable {
@@ -464,7 +491,10 @@ public enum MacUISettingsElement: String, CaseIterable, Sendable {
     case localFolderSync
     case zhulongEnabledToggle
     case zhulongProviderConfiguration
-    case balancedSettingsLayout
+    case nativeSettingsWindow
+    case nativeSidebarSelection
+    case flatFormSections
+    case poemInAboutPanel
     case compactClassificationSummary
     case classificationManagerTypeSwitcher
     case classificationManagerSearch
@@ -521,7 +551,8 @@ public enum MacUIBackendCapability: String, CaseIterable, Sendable {
     case calendarDaySummary
     case returnedToPoolTaskPoolView
     case changePointer
-    case limitedUndo
+    case undoRedo
+    case atomicMutationHistory
     case themeSetting
     case languageSetting
     case dataModeSelection
@@ -539,7 +570,6 @@ public struct MacUIDesignContract: Sendable {
     public let windowMetrics: [MacUIWindowMetric]
     public let colorTokens: [MacUIColorToken]
     public let navigationElements: [MacUINavigationElement]
-    public let navigationIconColorTokens: [MacUINavigationIconColorToken]
     public let pages: [MacUIPage]
     public let zhulongHomeElements: [MacUIZhulongHomeElement]
     public let dayTodoElements: [MacUIDayTodoElement]
@@ -563,7 +593,6 @@ public struct MacUIDesignContract: Sendable {
         windowMetrics: [MacUIWindowMetric] = MacUIWindowMetric.allCases,
         colorTokens: [MacUIColorToken] = MacUIColorToken.allCases,
         navigationElements: [MacUINavigationElement] = MacUINavigationElement.allCases,
-        navigationIconColorTokens: [MacUINavigationIconColorToken] = MacUINavigationIconColorToken.allCases,
         pages: [MacUIPage] = MacUIPage.allCases,
         zhulongHomeElements: [MacUIZhulongHomeElement] = MacUIZhulongHomeElement.allCases,
         dayTodoElements: [MacUIDayTodoElement] = MacUIDayTodoElement.allCases,
@@ -586,7 +615,6 @@ public struct MacUIDesignContract: Sendable {
         self.windowMetrics = windowMetrics
         self.colorTokens = colorTokens
         self.navigationElements = navigationElements
-        self.navigationIconColorTokens = navigationIconColorTokens
         self.pages = pages
         self.zhulongHomeElements = zhulongHomeElements
         self.dayTodoElements = dayTodoElements

@@ -238,6 +238,8 @@ enum ZhulongNavigationUIE2EDriver {
     private final class Session {
         private let store: NoonmarkStore
         private let resultURL: URL
+        private weak var mainWindow: NSWindow?
+        private var pageBeforeSettings: NoonmarkStore.Page?
 
         init(store: NoonmarkStore, resultURL: URL) {
             self.store = store
@@ -247,10 +249,10 @@ enum ZhulongNavigationUIE2EDriver {
         func start(attemptsRemaining: Int = 80) {
             guard store.isZhulongEnabled == false,
                   AppViewTreeE2E.hasNoVisibleView(identifier: "sidebar.nav.zhulong"),
-                  clickControl(identifier: "sidebar.nav.settings")
+                  openNativeSettingsFromMainWindow()
             else {
                 retry(attemptsRemaining, action: start) {
-                    "failed: 关闭烛龙后，真实侧栏仍显示烛龙入口"
+                    "failed: 关闭烛龙后侧栏仍显示入口，或标准 Settings action 无法打开原生窗口"
                 }
                 return
             }
@@ -260,11 +262,18 @@ enum ZhulongNavigationUIE2EDriver {
         }
 
         private func enableFromSettings(attemptsRemaining: Int = 60) {
-            guard store.page == .settings,
-                  clickControl(identifier: "settings.pane.zhulong")
+            guard let mainWindow,
+                  let pageBeforeSettings,
+                  store.page == pageBeforeSettings,
+                  NativeSettingsWindowE2E.isReady(
+                      excluding: mainWindow,
+                      paneIdentifier: "settings.sidebar.zhulong",
+                      title: store.copy.navSettings
+                  ),
+                  clickControl(identifier: "settings.sidebar.zhulong")
             else {
                 retry(attemptsRemaining, action: enableFromSettings) {
-                    "failed: 设置页无法打开烛龙配置区"
+                    "failed: 原生 Settings window 或烛龙 sidebar pane anchor 不可用"
                 }
                 return
             }
@@ -274,7 +283,8 @@ enum ZhulongNavigationUIE2EDriver {
         }
 
         private func waitForDisabledSetting(attemptsRemaining: Int = 60) {
-            guard store.page == .settings,
+            guard let pageBeforeSettings,
+                  store.page == pageBeforeSettings,
                   let toggle = AppViewTreeE2E.view(
                       identifier: "settings.zhulong.enabled"
                   ),
@@ -287,15 +297,44 @@ enum ZhulongNavigationUIE2EDriver {
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                closeSettingsAfterEnable()
+            }
+        }
+
+        private func closeSettingsAfterEnable(attemptsRemaining: Int = 60) {
+            guard let pageBeforeSettings,
+                  store.isZhulongEnabled,
+                  store.page == pageBeforeSettings,
+                  let settingsWindow = NativeSettingsWindowE2E.visibleWindow(),
+                  NativeSettingsWindowE2E.close(settingsWindow)
+            else {
+                retry(attemptsRemaining, action: closeSettingsAfterEnable) {
+                    "failed: 启用烛龙后无法关闭原生 Settings window"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
                 openEnabledZhulong()
             }
         }
 
         private func openEnabledZhulong(attemptsRemaining: Int = 60) {
-            store.zhulongWorkspace.showHome()
-            guard store.isZhulongEnabled,
-                  clickControl(identifier: "sidebar.nav.zhulong")
+            guard let mainWindow,
+                  let pageBeforeSettings,
+                  NativeSettingsWindowE2E.visibleWindow() == nil,
+                  NSApp.keyWindow === mainWindow,
+                  mainWindow.isVisible,
+                  store.page == pageBeforeSettings,
+                  store.isZhulongEnabled
             else {
+                retry(attemptsRemaining, action: openEnabledZhulong) {
+                    "failed: 关闭 Settings 后没有回到原主窗口与原页面"
+                }
+                return
+            }
+
+            store.zhulongWorkspace.showHome()
+            guard clickControl(identifier: "sidebar.nav.zhulong") else {
                 retry(attemptsRemaining, action: openEnabledZhulong) {
                     "failed: 设置启用后，真实侧栏没有显示烛龙入口"
                 }
@@ -353,10 +392,10 @@ enum ZhulongNavigationUIE2EDriver {
 
         private func disableFromSettings(attemptsRemaining: Int = 60) {
             guard store.page == .zhulong,
-                  clickControl(identifier: "sidebar.nav.settings")
+                  openNativeSettingsFromMainWindow()
             else {
                 retry(attemptsRemaining, action: disableFromSettings) {
-                    "failed: 真实侧栏中的烛龙入口无法打开工作区"
+                    "failed: 无法从烛龙工作区通过标准 action 打开原生 Settings window"
                 }
                 return
             }
@@ -366,11 +405,18 @@ enum ZhulongNavigationUIE2EDriver {
         }
 
         private func openZhulongSettingsForDisable(attemptsRemaining: Int = 60) {
-            guard store.page == .settings,
-                  clickControl(identifier: "settings.pane.zhulong")
+            guard let mainWindow,
+                  let pageBeforeSettings,
+                  store.page == pageBeforeSettings,
+                  NativeSettingsWindowE2E.isReady(
+                      excluding: mainWindow,
+                      paneIdentifier: "settings.sidebar.zhulong",
+                      title: store.copy.navSettings
+                  ),
+                  clickControl(identifier: "settings.sidebar.zhulong")
             else {
                 retry(attemptsRemaining, action: openZhulongSettingsForDisable) {
-                    "failed: 返回设置页后无法打开烛龙配置区"
+                    "failed: 原生 Settings window 无法打开烛龙 sidebar pane"
                 }
                 return
             }
@@ -380,7 +426,8 @@ enum ZhulongNavigationUIE2EDriver {
         }
 
         private func waitForEnabledSetting(attemptsRemaining: Int = 60) {
-            guard store.page == .settings,
+            guard let pageBeforeSettings,
+                  store.page == pageBeforeSettings,
                   let toggle = AppViewTreeE2E.view(identifier: "settings.zhulong.enabled"),
                   AppViewTreeE2E.verificationText(for: toggle) == "enabled",
                   clickControl(identifier: "settings.zhulong.enabled")
@@ -391,17 +438,37 @@ enum ZhulongNavigationUIE2EDriver {
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                closeSettingsAfterDisable()
+            }
+        }
+
+        private func closeSettingsAfterDisable(attemptsRemaining: Int = 60) {
+            guard store.isZhulongEnabled == false,
+                  store.page == .day,
+                  let settingsWindow = NativeSettingsWindowE2E.visibleWindow(),
+                  NativeSettingsWindowE2E.close(settingsWindow)
+            else {
+                retry(attemptsRemaining, action: closeSettingsAfterDisable) {
+                    "failed: Settings 关闭烛龙后没有回退 Day Todo，或窗口无法关闭"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
                 waitForHiddenZhulong()
             }
         }
 
         private func waitForHiddenZhulong(attemptsRemaining: Int = 60) {
-            guard store.isZhulongEnabled == false,
-                  store.page == .settings,
+            guard let mainWindow,
+                  NativeSettingsWindowE2E.visibleWindow() == nil,
+                  NSApp.keyWindow === mainWindow,
+                  mainWindow.isVisible,
+                  store.isZhulongEnabled == false,
+                  store.page == .day,
                   AppViewTreeE2E.hasNoVisibleView(identifier: "sidebar.nav.zhulong")
             else {
                 retry(attemptsRemaining, action: waitForHiddenZhulong) {
-                    "failed: 设置关闭后，真实侧栏没有隐藏烛龙入口"
+                    "failed: 关闭 Settings 后未回到原主窗口，或侧栏仍显示烛龙入口"
                 }
                 return
             }
@@ -459,6 +526,17 @@ enum ZhulongNavigationUIE2EDriver {
                 return AppViewTreeE2E.click(button)
             }
             return AppViewTreeE2E.click(anchor)
+        }
+
+        private func openNativeSettingsFromMainWindow() -> Bool {
+            guard let window = mainWindow ?? NSApp.windows.first(where: {
+                $0 is NoonmarkWindow && $0.isVisible && $0.isMiniaturized == false
+            }) else {
+                return false
+            }
+            mainWindow = window
+            pageBeforeSettings = store.page
+            return NativeSettingsWindowE2E.open(from: window)
         }
 
         private func retry(
@@ -752,43 +830,92 @@ enum DetailRailLayoutUIE2EDriver {
         }
 
         private func waitForExpandedSidebarNavigation(attemptsRemaining: Int = 60) {
-            guard store.page == .calendar,
+            guard let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
+                  store.page == .calendar,
                   store.isSidebarExpanded,
                   store.shouldShowDetailRail == false,
                   AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail"),
-                  AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil,
-                  let settingsNavigation = AppViewTreeE2E.view(identifier: "sidebar.nav.settings")
+                  AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil
             else {
                 retry(attemptsRemaining, action: waitForExpandedSidebarNavigation) {
                     "failed: 左栏恢复后的导航没有进入默认收起右栏的日历"
                 }
                 return
             }
-            guard AppViewTreeE2E.click(settingsNavigation) else {
-                finish("failed: 无法通过真实鼠标进入设置页验证无效右栏入口")
+            guard NativeSettingsWindowE2E.open(from: window) else {
+                finish("failed: 无法通过标准 Settings action 打开原生窗口")
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [self] in
-                waitForSettingsToolbar()
+                waitForNativeSettingsWindow()
             }
         }
 
-        private func waitForSettingsToolbar(attemptsRemaining: Int = 60) {
-            guard let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }) else {
-                retry(attemptsRemaining, action: waitForSettingsToolbar) {
-                    "failed: 设置页缺少真实窗口"
+        private func waitForNativeSettingsWindow(attemptsRemaining: Int = 60) {
+            guard let initialWindowFrame,
+                  let mainWindow = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
+                  let settingsWindow = NativeSettingsWindowE2E.visibleWindow()
+            else {
+                retry(attemptsRemaining, action: waitForNativeSettingsWindow) {
+                    "failed: 原生 Settings window 没有出现"
                 }
                 return
             }
-            guard store.page == .settings,
-                  store.hasDetailRailContent == false,
+            guard store.page == .calendar,
+                  mainWindow.frame == initialWindowFrame,
+                  NativeSettingsWindowE2E.isReady(
+                      excluding: mainWindow,
+                      paneIdentifier: "settings.sidebar.general",
+                      title: store.copy.navSettings
+                  ),
+                  settingsWindow.toolbar == nil,
                   AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail.toggle"),
-                  window.toolbar?.items.contains(where: {
+                  mainWindow.toolbar?.items.contains(where: {
                       $0.itemIdentifier == NoonmarkToolbarIdentifier.detailRail
-                  }) == false
+                  }) == true,
+                  NativeSettingsWindowE2E.close(settingsWindow)
             else {
-                retry(attemptsRemaining, action: waitForSettingsToolbar) {
-                    "failed: 无详情内容的设置页仍显示右栏工具栏入口"
+                retry(attemptsRemaining, action: waitForNativeSettingsWindow) {
+                    "failed: Settings window anchor、sidebar pane 或独立布局不正确"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [self] in
+                waitForMainWindowAfterSettings()
+            }
+        }
+
+        private func waitForMainWindowAfterSettings(attemptsRemaining: Int = 60) {
+            guard let initialWindowFrame,
+                  let initialMiddleWidth,
+                  let initialSidebarWidth,
+                  let mainWindow = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
+                  let middle = AppViewTreeE2E.view(identifier: "shell.middle-pane"),
+                  let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar")
+            else {
+                retry(attemptsRemaining, action: waitForMainWindowAfterSettings) {
+                    "failed: 关闭 Settings 后原主窗口几何锚点没有恢复"
+                }
+                return
+            }
+            let middleWidth = AppViewTreeE2E.frameInWindow(for: middle).width
+            let sidebarWidth = AppViewTreeE2E.frameInWindow(for: sidebar).width
+            guard NativeSettingsWindowE2E.visibleWindow() == nil,
+                  NSApp.keyWindow === mainWindow,
+                  store.page == .calendar,
+                  store.isSidebarExpanded,
+                  store.shouldShowDetailRail == false,
+                  mainWindow.frame == initialWindowFrame,
+                  abs(middleWidth - initialMiddleWidth) <= 1,
+                  abs(sidebarWidth - initialSidebarWidth) <= 1,
+                  AppViewTreeE2E.view(identifier: "sidebar.nav.calendar") != nil,
+                  AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil,
+                  mainWindow.toolbar?.items.contains(where: {
+                      $0.itemIdentifier == NoonmarkToolbarIdentifier.detailRail
+                  }) == true
+            else {
+                retry(attemptsRemaining, action: waitForMainWindowAfterSettings) {
+                    "failed: 关闭 Settings 后没有回到原日历窗口与原始布局"
                 }
                 return
             }
@@ -812,6 +939,104 @@ enum DetailRailLayoutUIE2EDriver {
         private func finish(_ result: String) {
             ShellInteractionE2EResult.finish(result, at: resultURL)
         }
+    }
+}
+
+@MainActor
+private enum NativeSettingsWindowE2E {
+    static func open(from mainWindow: NSWindow) -> Bool {
+        guard mainWindow.isVisible, mainWindow.isMiniaturized == false else {
+            return false
+        }
+        mainWindow.makeKeyAndOrderFront(nil)
+        mainWindow.makeMain()
+        NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        return NSApp.sendAction(
+            NoonmarkMenuAction.showSettings,
+            to: nil,
+            from: nil
+        )
+    }
+
+    static func visibleWindow() -> NSWindow? {
+        let matches = NSApp.windows.filter {
+            $0.identifier == NoonmarkSettingsWindowController.windowIdentifier
+                && $0.isVisible
+                && $0.isMiniaturized == false
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
+    static func isReady(
+        excluding mainWindow: NSWindow,
+        paneIdentifier: String,
+        title: String
+    ) -> Bool {
+        guard let settingsWindow = visibleWindow(),
+              settingsWindow !== mainWindow,
+              settingsWindow is NSPanel == false,
+              settingsWindow.parent == nil,
+              settingsWindow.isKeyWindow,
+              settingsWindow.title == title,
+              let windowAnchor = uniqueVisibleView(
+                  identifier: "settings.window",
+                  in: settingsWindow
+              ),
+              let sidebarAnchor = uniqueVisibleView(
+                  identifier: "settings.sidebar",
+                  in: settingsWindow
+              ),
+              let paneAnchor = uniqueVisibleView(
+                  identifier: paneIdentifier,
+                  in: settingsWindow
+              ),
+              AppViewTreeE2E.verificationText(for: windowAnchor) == title,
+              sidebarAnchor.window === settingsWindow,
+              paneAnchor.window === settingsWindow
+        else {
+            return false
+        }
+        return true
+    }
+
+    static func close(_ settingsWindow: NSWindow) -> Bool {
+        guard settingsWindow.identifier
+            == NoonmarkSettingsWindowController.windowIdentifier
+        else {
+            return false
+        }
+        return NSApp.sendAction(
+            #selector(NSWindow.performClose(_:)),
+            to: settingsWindow,
+            from: nil
+        )
+    }
+
+    private static func uniqueVisibleView(
+        identifier: String,
+        in window: NSWindow
+    ) -> NSView? {
+        guard let root = window.contentView?.superview ?? window.contentView else {
+            return nil
+        }
+        var pending = [root]
+        var matches: [NSView] = []
+        var visited: Set<ObjectIdentifier> = []
+        while let view = pending.popLast(), visited.count < 5000 {
+            guard visited.insert(ObjectIdentifier(view)).inserted else {
+                continue
+            }
+            let matchesTarget = view.identifier?.rawValue == identifier && view.window === window
+            let isVisible = view.isHiddenOrHasHiddenAncestor == false && view.alphaValue > 0 && view.bounds.width > 0 && view.bounds.height > 0 && view.visibleRect.width > 0 && view.visibleRect.height > 0
+            if matchesTarget, isVisible {
+                matches.append(view)
+            }
+            pending.append(contentsOf: view.subviews)
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 }
 

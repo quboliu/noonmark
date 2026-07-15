@@ -60,6 +60,9 @@ enum TaskNoteE2EUIInteractionDriver {
                 textView.selectAll(nil)
                 textView.insertText(editedBody, replacementRange: textView.selectedRange())
                 return textView.string == editedBody
+                    && AppViewTreeE2E.hasNoVisibleView(
+                        identifier: deletedActionsIdentifier
+                    )
             } onSuccess: { [self] in
                 saveEdit()
             }
@@ -93,7 +96,10 @@ enum TaskNoteE2EUIInteractionDriver {
                 return click(item)
             } onSuccess: { [self] in
                 waitFor("删除后的附言行消失") { [self] in
-                    AppViewTreeE2E.hasNoVisibleView(identifier: deletedEntryStateIdentifier)
+                    AppViewTreeE2E.hasNoVisibleView(
+                        identifier: deletedEntryStateIdentifier
+                    )
+                        && AppViewTreeE2E.hasNoAttachedPresentationWindows()
                 } onSuccess: { [self] in
                     finish(with: "ok")
                 }
@@ -195,12 +201,16 @@ enum TaskNoteE2EUIInteractionDriver {
 enum TaskNotePersistenceFailureUIE2EDriver {
     static func start(
         noteID: TaskNoteEntryID,
+        otherNoteID: TaskNoteEntryID,
         editedBody: String,
+        expectedFailureMessage: String,
         resultURL: URL
     ) {
         Session(
             noteID: noteID,
+            otherNoteID: otherNoteID,
             editedBody: editedBody,
+            expectedFailureMessage: expectedFailureMessage,
             resultURL: resultURL
         ).start()
     }
@@ -208,12 +218,22 @@ enum TaskNotePersistenceFailureUIE2EDriver {
     @MainActor
     private final class Session {
         private let noteID: TaskNoteEntryID
+        private let otherNoteID: TaskNoteEntryID
         private let editedBody: String
+        private let expectedFailureMessage: String
         private let resultURL: URL
 
-        init(noteID: TaskNoteEntryID, editedBody: String, resultURL: URL) {
+        init(
+            noteID: TaskNoteEntryID,
+            otherNoteID: TaskNoteEntryID,
+            editedBody: String,
+            expectedFailureMessage: String,
+            resultURL: URL
+        ) {
             self.noteID = noteID
+            self.otherNoteID = otherNoteID
             self.editedBody = editedBody
+            self.expectedFailureMessage = expectedFailureMessage
             self.resultURL = resultURL
         }
 
@@ -253,6 +273,9 @@ enum TaskNotePersistenceFailureUIE2EDriver {
                     replacementRange: textView.selectedRange()
                 )
                 return textView.string == editedBody
+                    && AppViewTreeE2E.hasNoVisibleView(
+                        identifier: otherActionsIdentifier
+                    )
             } onSuccess: { [self] in
                 saveDraft()
             }
@@ -271,10 +294,38 @@ enum TaskNotePersistenceFailureUIE2EDriver {
                               identifier: editorIdentifier
                           ) as? NSTextView,
                           textView.string == editedBody,
-                          let toast = AppViewTreeE2E.view(identifier: "app.toast"),
-                          AppViewTreeE2E.verificationText(for: toast)?.hasPrefix(
-                              "保存失败："
-                          ) == true
+                          let failure = AppViewTreeE2E.view(
+                              identifier: "app.operation-failure"
+                          ),
+                          AppViewTreeE2E.verificationText(for: failure)
+                              == expectedFailureMessage
+                    else {
+                        return false
+                    }
+                    return true
+                } onSuccess: { [self] in
+                    retrySave()
+                }
+            }
+        }
+
+        private func retrySave() {
+            waitFor("保存失败后的重试按钮") { [self] in
+                guard let button = AppViewTreeE2E.view(identifier: saveIdentifier) else {
+                    return false
+                }
+                return AppViewTreeE2E.click(button)
+            } onSuccess: { [self] in
+                waitFor("重试成功后编辑器与对应失败反馈消失") { [self] in
+                    guard AppViewTreeE2E.hasNoVisibleView(
+                        identifier: editorStateIdentifier
+                    ),
+                    AppViewTreeE2E.hasNoVisibleView(
+                        identifier: "app.operation-failure"
+                    ),
+                    let entry = AppViewTreeE2E.view(identifier: entryStateIdentifier),
+                    AppViewTreeE2E.verificationText(for: entry) == editedBody,
+                    AppViewTreeE2E.hasNoAttachedPresentationWindows()
                     else {
                         return false
                     }
@@ -332,6 +383,10 @@ enum TaskNotePersistenceFailureUIE2EDriver {
             "detail.note.actions.\(noteID.description)"
         }
 
+        private var otherActionsIdentifier: String {
+            "detail.note.actions.\(otherNoteID.description)"
+        }
+
         private var editMenuIdentifier: String {
             "detail.note.edit.\(noteID.description)"
         }
@@ -342,6 +397,10 @@ enum TaskNotePersistenceFailureUIE2EDriver {
 
         private var editorStateIdentifier: String {
             "detail.note.editor.state.\(noteID.description)"
+        }
+
+        private var entryStateIdentifier: String {
+            "detail.note.entry.state.\(noteID.description)"
         }
 
         private var saveIdentifier: String {

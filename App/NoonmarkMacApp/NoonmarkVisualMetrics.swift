@@ -41,6 +41,9 @@ enum NoonmarkVisualMetrics {
     static let toolbarIconSize = CGFloat(MacUIIconMetrics.toolbarSize)
     static let navigationIconSize = CGFloat(MacUIIconMetrics.navigationSize)
     static let compactEditorPointSize = CGFloat(MacUITypographyMetrics.compactEditorPointSize)
+    static let compactEditorVerticalInset = CGFloat(
+        MacUITypographyMetrics.compactEditorVerticalInset
+    )
 
     static func compactPointSize(_ baseSize: CGFloat) -> CGFloat {
         CGFloat(MacUITypographyMetrics.compactPointSize(Double(baseSize)))

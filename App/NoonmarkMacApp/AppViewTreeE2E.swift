@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 
 /// In-process query and pointer surface for real-App E2E runs.
@@ -8,6 +9,11 @@ import Foundation
 /// control action or reaches into application state.
 @MainActor
 enum AppViewTreeE2E {
+    struct PresentationWindowIdentity: Equatable {
+        let mainWindowNumber: Int
+        let presentationWindowNumber: Int
+    }
+
     static func view(identifier: String) -> NSView? {
         let matches = visibleViews(identifier: identifier)
         guard matches.count == 1 else { return nil }
@@ -17,6 +23,60 @@ enum AppViewTreeE2E {
     static func hasNoVisibleView(identifier: String) -> Bool {
         guard currentWindowTree().isEmpty == false else { return false }
         return visibleViews(identifier: identifier).isEmpty
+    }
+
+    static func hasNoAttachedSheets() -> Bool {
+        guard let mainWindow = currentMainWindow() else { return false }
+        return mainWindow.attachedSheet == nil
+            && mainWindow.sheets.isEmpty
+            && NSApp.modalWindow == nil
+            && NSApp.windows.allSatisfy { $0.sheetParent !== mainWindow }
+    }
+
+    static func hasNoAttachedPresentationWindows() -> Bool {
+        guard let mainWindow = currentMainWindow() else { return false }
+        return mainWindow.attachedSheet == nil
+            && mainWindow.sheets.isEmpty
+            && (mainWindow.childWindows ?? []).isEmpty
+            && NSApp.modalWindow == nil
+            && NSApp.windows.allSatisfy {
+                $0.parent !== mainWindow && $0.sheetParent !== mainWindow
+            }
+    }
+
+    static func activateMainWindow() -> Bool {
+        guard let mainWindow = currentMainWindow() else { return false }
+        mainWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        return NSApp.isActive && mainWindow.isKeyWindow
+    }
+
+    static func mappedPresentationWindow(
+        identifier: String
+    ) -> PresentationWindowIdentity? {
+        guard NSApp.isActive,
+              let mainWindow = currentMainWindow(),
+              let presentationView = view(identifier: identifier),
+              let presentationWindow = presentationView.window,
+              presentationWindow !== mainWindow,
+              presentationWindow.isVisible,
+              presentationWindow.isMiniaturized == false,
+              presentationWindow.alphaValue > 0,
+              presentationWindow.parent === mainWindow
+                  || presentationWindow.sheetParent === mainWindow
+                  || (mainWindow.childWindows ?? []).contains(where: {
+                      $0 === presentationWindow
+                  }),
+              NSApp.keyWindow === mainWindow || NSApp.keyWindow === presentationWindow,
+              isWindowServerMapped(presentationWindow)
+        else {
+            return nil
+        }
+        return PresentationWindowIdentity(
+            mainWindowNumber: mainWindow.windowNumber,
+            presentationWindowNumber: presentationWindow.windowNumber
+        )
     }
 
     static func identifiers(withPrefix prefix: String) -> Set<String>? {
@@ -86,7 +146,8 @@ enum AppViewTreeE2E {
         )
         if view is NSControl {
             let windowRoot = window.contentView?.superview ?? window.contentView
-            guard let hitView = windowRoot?.hitTest(point),
+            let hitView = windowRoot?.hitTest(point)
+            guard let hitView,
                   hitView === view || hitView.isDescendant(of: view)
             else {
                 return false
@@ -159,6 +220,45 @@ enum AppViewTreeE2E {
             charactersIgnoringModifiers: navigationKey.characters,
             isARepeat: false,
             keyCode: navigationKey.rawValue
+        ) else {
+            return false
+        }
+
+        window.sendEvent(keyDown)
+        window.sendEvent(keyUp)
+        return true
+    }
+
+    static func sendEscapeKey() -> Bool {
+        guard let window = NSApp.keyWindow
+            ?? NSApp.mainWindow
+            ?? NSApp.windows.first(where: { $0 is NoonmarkWindow })
+        else {
+            return false
+        }
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        guard let keyDown = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: timestamp,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\u{1B}",
+            charactersIgnoringModifiers: "\u{1B}",
+            isARepeat: false,
+            keyCode: 53
+        ), let keyUp = NSEvent.keyEvent(
+            with: .keyUp,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: timestamp + 0.01,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\u{1B}",
+            charactersIgnoringModifiers: "\u{1B}",
+            isARepeat: false,
+            keyCode: 53
         ) else {
             return false
         }
@@ -253,6 +353,27 @@ enum AppViewTreeE2E {
 
     static func writeDump(beside resultURL: URL) {
         var lines: [String] = []
+        if let mainWindow = currentMainWindow() {
+            let attachedSheet = mainWindow.attachedSheet?.windowNumber.description ?? "nil"
+            let modalWindow = NSApp.modalWindow?.windowNumber.description ?? "nil"
+            lines.append(
+                "main-window-lifecycle window=\(mainWindow.windowNumber) " +
+                    "attachedSheet=\(attachedSheet) " +
+                    "sheets=\(mainWindow.sheets.map(\.windowNumber)) " +
+                    "children=\((mainWindow.childWindows ?? []).map(\.windowNumber)) " +
+                    "modal=\(modalWindow)"
+            )
+            for window in NSApp.windows {
+                let parent = window.parent?.windowNumber.description ?? "nil"
+                let sheetParent = window.sheetParent?.windowNumber.description ?? "nil"
+                lines.append(
+                    "app-window=\(window.windowNumber) " +
+                        "type=\(String(describing: type(of: window))) " +
+                        "visible=\(window.isVisible) alpha=\(window.alphaValue) " +
+                        "parent=\(parent) sheetParent=\(sheetParent)"
+                )
+            }
+        }
         for window in currentWindowTree() {
             lines.append(
                 "window=\(window.windowNumber) type=\(String(describing: type(of: window))) " +
@@ -301,8 +422,25 @@ enum AppViewTreeE2E {
             }
             result.append(window)
             pending.append(contentsOf: window.childWindows ?? [])
+            pending.append(contentsOf: NSApp.windows.filter { $0.sheetParent === window })
         }
         return result
+    }
+
+    private static func isWindowServerMapped(_ window: NSWindow) -> Bool {
+        guard window.windowNumber > 0,
+              let windows = CGWindowListCopyWindowInfo(
+                  [.optionOnScreenOnly],
+                  kCGNullWindowID
+              ) as? [[String: Any]]
+        else {
+            return false
+        }
+        let processID = ProcessInfo.processInfo.processIdentifier
+        return windows.contains { description in
+            description[kCGWindowNumber as String] as? Int == window.windowNumber
+                && description[kCGWindowOwnerPID as String] as? Int32 == processID
+        }
     }
 
     private static func currentMainWindow() -> NSWindow? {

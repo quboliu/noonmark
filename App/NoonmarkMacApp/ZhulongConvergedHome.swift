@@ -1,4 +1,5 @@
 import NoonmarkAI
+import NoonmarkMacRuntime
 import NoonmarkMacUIContract
 import NoonmarkZhulong
 import SwiftUI
@@ -8,6 +9,14 @@ struct ZhulongConvergedHome: View {
 
     var body: some View {
         ZhulongWorkspaceRoot(workspace: store.zhulongWorkspace)
+            .onAppear {
+                store.zhulongWorkspace.setPresentationLanguage(
+                    store.engine.preferences.language
+                )
+            }
+            .onChange(of: store.engine.preferences.language) { _, language in
+                store.zhulongWorkspace.setPresentationLanguage(language)
+            }
     }
 }
 
@@ -30,35 +39,39 @@ private struct ZhulongWorkspaceHome: View {
     @State private var intent = ""
     @State private var hoveredWorkflowID: String?
 
+    private var copy: ZhulongCopy {
+        AppPresentation(language: store.engine.preferences.language).zhulong
+    }
+
     private var workflows: [ZhulongHomeWorkflow] {
         [
             ZhulongHomeWorkflow(
                 id: "task-shaping",
-                title: store.copy.zhulongTaskShapingTitle,
-                detail: store.copy.zhulongTaskShapingDetail,
-                intent: store.copy.zhulongTaskShapingIntent,
+                title: copy.taskShapingTitle,
+                detail: copy.taskShapingDetail,
+                intent: copy.taskShapingIntent,
                 task: .taskDecomposition
             ),
             ZhulongHomeWorkflow(
                 id: "daily-close",
-                title: store.copy.zhulongDailyCloseTitle,
-                detail: store.copy.zhulongDailyCloseDetail,
-                intent: store.copy.zhulongDailyCloseIntent,
+                title: copy.dailyCloseTitle,
+                detail: copy.dailyCloseDetail,
+                intent: copy.dailyCloseIntent,
                 task: .dailyReview
             ),
             ZhulongHomeWorkflow(
                 id: "scheduling",
-                title: store.copy.zhulongSchedulingTitle,
-                detail: store.copy.zhulongSchedulingDetail,
-                intent: store.copy.zhulongSchedulingIntent,
+                title: copy.schedulingTitle,
+                detail: copy.schedulingDetail,
+                intent: copy.schedulingIntent,
                 task: .scheduling,
                 isSuggestion: true
             ),
             ZhulongHomeWorkflow(
                 id: "classification",
-                title: store.copy.zhulongClassificationTitle,
-                detail: store.copy.zhulongClassificationDetail,
-                intent: store.copy.zhulongClassificationIntent,
+                title: copy.classificationTitle,
+                detail: copy.classificationDetail,
+                intent: copy.classificationIntent,
                 task: .classification,
                 isSuggestion: true
             )
@@ -84,7 +97,7 @@ private struct ZhulongWorkspaceHome: View {
                 VStack(alignment: .leading, spacing: 0) {
                     PageHeader(
                         title: store.copy.navZhulong,
-                        subtitle: "把模糊的事想清楚，把已经开始的事继续推进。"
+                        subtitle: copy.homeSubtitle
                     )
                     .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.headerOuterMaxWidth))
                     .frame(maxWidth: .infinity)
@@ -124,7 +137,7 @@ private struct ZhulongWorkspaceHome: View {
         HStack(alignment: .center, spacing: 10) {
             MarkdownEditor(
                 text: $intent,
-                placeholder: "说说你现在想推进什么……",
+                placeholder: copy.intentPlaceholder,
                 style: .compact,
                 showsSurface: false,
                 onCommit: startIntent
@@ -144,7 +157,7 @@ private struct ZhulongWorkspaceHome: View {
             }
             .buttonStyle(.plain)
             .disabled(canSubmitIntent == false)
-            .accessibilityLabel("开始梳理")
+            .accessibilityLabel(copy.beginIntentAccessibilityLabel)
             .accessibilityIdentifier("zhulong-home-submit")
         }
         .padding(.leading, 16)
@@ -195,7 +208,7 @@ private struct ZhulongWorkspaceHome: View {
                             .font(.noonmarkSystem(size: 13, weight: .semibold))
                             .foregroundStyle(Theme.text1)
                         if workflow.isSuggestion {
-                            Text(store.copy.zhulongSuggestionMode)
+                            Text(copy.suggestionMode)
                                 .font(.noonmarkSystem(size: 9.5, weight: .medium))
                                 .foregroundStyle(Theme.text3)
                         }
@@ -225,7 +238,7 @@ private struct ZhulongWorkspaceHome: View {
             hoveredWorkflowID = isHovered ? workflow.id : nil
         }
         .accessibilityLabel(
-            store.copy.zhulongWorkflowAccessibilityLabel(
+            copy.workflowAccessibilityLabel(
                 title: workflow.title,
                 detail: workflow.detail
             )
@@ -234,7 +247,7 @@ private struct ZhulongWorkspaceHome: View {
         .background {
             AppE2EViewAnchor(
                 identifier: "zhulong-home-workflow-\(workflow.id)",
-                verificationText: store.copy.zhulongWorkflowAccessibilityLabel(
+                verificationText: copy.workflowAccessibilityLabel(
                     title: workflow.title,
                     detail: workflow.detail
                 )
@@ -244,10 +257,10 @@ private struct ZhulongWorkspaceHome: View {
 
     private var pendingSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionHeader("待你决定", count: pendingCount)
+            sectionHeader(copy.pendingDecisionsTitle, count: pendingCount)
 
             ForEach(workspace.sessions.filter { $0.workspaceStatus != .archived }, id: \.id) { session in
-                ZhulongWorkspaceSessionRow(session: session) {
+                ZhulongWorkspaceSessionRow(session: session, copy: copy) {
                     workspace.selectSession(session.id)
                 }
                 Divider().overlay(Theme.line)
@@ -261,7 +274,7 @@ private struct ZhulongWorkspaceHome: View {
                 .font(.noonmarkSystem(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.text1)
             Spacer()
-            Text("\(count) 项")
+            Text(copy.itemCount(count))
                 .font(.noonmarkSystem(size: 10.5))
                 .foregroundStyle(Theme.text3)
                 .monospacedDigit()
@@ -292,6 +305,7 @@ private struct ZhulongWorkspaceHome: View {
 
 private struct ZhulongWorkspaceSessionRow: View {
     let session: ZhulongSession
+    let copy: ZhulongCopy
     let action: () -> Void
 
     var body: some View {
@@ -305,13 +319,13 @@ private struct ZhulongWorkspaceSessionRow: View {
                     Text(sessionStatus)
                         .font(.noonmarkSystem(size: 10.8))
                         .foregroundStyle(Theme.text2)
-                    Text("下一步：继续同一条追加式会话流")
+                    Text(copy.sessionNextStep)
                         .font(.noonmarkSystem(size: 10.5))
                         .foregroundStyle(Theme.text3)
                 }
 
                 Spacer(minLength: 10)
-                Text("继续")
+                Text(copy.continueAction)
                     .font(.noonmarkSystem(size: 10.8, weight: .semibold))
                     .foregroundStyle(Theme.accent)
             }
@@ -325,15 +339,20 @@ private struct ZhulongWorkspaceSessionRow: View {
     }
 
     private var sessionStatus: String {
-        if session.workspaceStatus == .paused { return "会话已暂停" }
-        if session.workspaceStatus == .archived { return "会话已归档" }
-        return switch session.phase {
-        case .scopeReview: "等待你确认本次范围"
-        case .readyForProvider: "范围已确认，可以继续推进"
-        case .providerRunning: "Provider 正在运行"
-        case .decisionGate: "等待你作出关键决定"
-        case .draftReview: "草稿已形成，等待审查"
+        let state: ZhulongSessionStateCopyKey = if session.workspaceStatus == .paused {
+            .paused
+        } else if session.workspaceStatus == .archived {
+            .archived
+        } else {
+            switch session.phase {
+            case .scopeReview: .scopeReview
+            case .readyForProvider: .readyForProvider
+            case .providerRunning: .providerRunning
+            case .decisionGate: .decisionGate
+            case .draftReview: .draftReview
+            }
         }
+        return copy.sessionStatus(state, style: .expanded)
     }
 }
 
@@ -362,69 +381,25 @@ private struct ZhulongHomeWorkflow: Identifiable {
     }
 }
 
-private extension AppCopy {
-    var zhulongSuggestionMode: String { language == .chinese ? "建议模式" : "Suggestion mode" }
-    func zhulongWorkflowAccessibilityLabel(title: String, detail: String) -> String {
-        language == .chinese
-            ? "开始\(title)：\(detail)"
-            : "Start \(title): \(detail)"
-    }
-
-    var zhulongTaskShapingTitle: String { language == .chinese ? "把模糊任务变成计划" : "Turn a fuzzy task into a plan" }
-    var zhulongTaskShapingDetail: String {
-        language == .chinese
-            ? "澄清目标与约束，形成可审查的规划和 Todo diff"
-            : "Clarify goals and constraints, then review the plan and Todo diff"
-    }
-
-    var zhulongTaskShapingIntent: String {
-        language == .chinese ? "规划一个还很模糊的大任务" : "Plan a large task that is still fuzzy"
-    }
-
-    var zhulongDailyCloseTitle: String { language == .chinese ? "结束今天并安排明天" : "Close today and arrange tomorrow" }
-    var zhulongDailyCloseDetail: String {
-        language == .chinese
-            ? "复盘今日事实，处置未完成任务并形成下一次承诺"
-            : "Review today, resolve unfinished work, and form the next commitment"
-    }
-
-    var zhulongDailyCloseIntent: String {
-        language == .chinese ? "结束今天并形成下一次可信承诺" : "Close today and form the next credible commitment"
-    }
-
-    var zhulongSchedulingTitle: String { language == .chinese ? "重新安排任务" : "Reschedule tasks" }
-    var zhulongSchedulingDetail: String {
-        language == .chinese
-            ? "基于任务池与未完成任务提出可确认的排期建议"
-            : "Suggest a reviewable schedule for pooled and unfinished tasks"
-    }
-
-    var zhulongSchedulingIntent: String {
-        language == .chinese ? "给任务池和未完成任务重新排期" : "Reschedule tasks from the pool and unfinished work"
-    }
-
-    var zhulongClassificationTitle: String { language == .chinese ? "整理分组与标签" : "Organize groups and labels" }
-    var zhulongClassificationDetail: String {
-        language == .chinese
-            ? "审查现有分组与标签，并提出可确认的整理建议"
-            : "Review current classifications and suggest confirmable changes"
-    }
-
-    var zhulongClassificationIntent: String {
-        language == .chinese ? "整理任务的分组与标签" : "Organize task groups and labels"
-    }
-}
-
 enum ZhulongHomeIntentResolver {
     static func task(for intent: String) -> ZhulongTask {
         let normalized = intent.lowercased()
-        if containsAny(["收尾", "复盘", "回顾今天", "结束今天"], in: normalized) {
+        if containsAny(
+            ["收尾", "复盘", "回顾今天", "结束今天", "daily close", "review today", "close today"],
+            in: normalized
+        ) {
             return .dailyReview
         }
-        if containsAny(["排期", "安排明天", "安排任务", "计划明天"], in: normalized) {
+        if containsAny(
+            ["排期", "安排明天", "安排任务", "计划明天", "schedule", "reschedule", "plan tomorrow"],
+            in: normalized
+        ) {
             return .scheduling
         }
-        if containsAny(["分组", "标签", "分类", "归类"], in: normalized) {
+        if containsAny(
+            ["分组", "标签", "分类", "归类", "group", "tag", "classify", "classification"],
+            in: normalized
+        ) {
             return .classification
         }
         return .taskDecomposition

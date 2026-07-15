@@ -104,6 +104,7 @@ enum TaskNoteCopyE2EUIInteractionDriver {
         private func verifyDeleteToast() {
             waitFor("English 删除附言反馈") { [self] in
                 elementHasText(identifier: "app.toast", expected: "Note deleted")
+                    && AppViewTreeE2E.hasNoAttachedPresentationWindows()
             } onSuccess: { [self] in
                 finish(with: "ok")
             }

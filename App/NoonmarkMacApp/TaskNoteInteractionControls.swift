@@ -25,7 +25,6 @@ struct TaskNoteOverflowControl: NSViewRepresentable {
         button.isBordered = false
         button.imageScaling = .scaleNone
         button.contentTintColor = .tertiaryLabelColor
-        button.focusRingType = .none
         configureAccessibility(for: button)
         return button
     }
@@ -73,19 +72,28 @@ struct TaskNoteOverflowControl: NSViewRepresentable {
 
             let popover = NSPopover()
             let controller = NSViewController()
-            controller.view = TaskNoteActionMenuView(
+            let menuView = TaskNoteActionMenuView(
                 entryID: entryID,
                 copy: copy,
                 target: self,
                 editAction: #selector(editNote(_:)),
                 deleteAction: #selector(deleteNote(_:))
             )
+            controller.view = menuView
             popover.contentViewController = controller
             popover.contentSize = NSSize(width: 148, height: 68)
             popover.behavior = .transient
             popover.animates = false
             self.popover = popover
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minX)
+            DispatchQueue.main.async {
+                popover.contentViewController?.view.window?
+                    .makeFirstResponder(menuView.initialFocusView)
+                NSAccessibility.post(
+                    element: menuView.initialFocusView,
+                    notification: .focusedUIElementChanged
+                )
+            }
         }
 
         @objc private func editNote(_ sender: Any?) {
@@ -101,6 +109,8 @@ struct TaskNoteOverflowControl: NSViewRepresentable {
 }
 
 private final class TaskNoteActionMenuView: NSView {
+    let initialFocusView: NSButton
+
     init(
         entryID: TaskNoteEntryID,
         copy: AppCopy,
@@ -108,20 +118,21 @@ private final class TaskNoteActionMenuView: NSView {
         editAction: Selector,
         deleteAction: Selector
     ) {
-        super.init(frame: NSRect(x: 0, y: 0, width: 148, height: 68))
-
-        let editButton = makeButton(
+        let editButton = Self.makeButton(
             title: copy.editNoteAction,
             symbol: "pencil",
             color: .labelColor,
             identifier: "detail.note.edit.\(entryID.description)"
         )
+        initialFocusView = editButton
+        super.init(frame: NSRect(x: 0, y: 0, width: 148, height: 68))
+
         editButton.target = target
         editButton.action = editAction
         editButton.frame = NSRect(x: 6, y: 35, width: 136, height: 27)
         addSubview(editButton)
 
-        let deleteButton = makeButton(
+        let deleteButton = Self.makeButton(
             title: copy.deleteNoteAction,
             symbol: "trash",
             color: .systemRed,
@@ -131,6 +142,8 @@ private final class TaskNoteActionMenuView: NSView {
         deleteButton.action = deleteAction
         deleteButton.frame = NSRect(x: 6, y: 6, width: 136, height: 27)
         addSubview(deleteButton)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(copy.noteActionsAccessibilityLabel)
     }
 
     @available(*, unavailable)
@@ -138,7 +151,7 @@ private final class TaskNoteActionMenuView: NSView {
         nil
     }
 
-    private func makeButton(
+    private static func makeButton(
         title: String,
         symbol: String,
         color: NSColor,
@@ -158,7 +171,6 @@ private final class TaskNoteActionMenuView: NSView {
             )
         button.imagePosition = .imageLeading
         button.imageHugsTitle = true
-        button.focusRingType = .none
         button.identifier = NSUserInterfaceItemIdentifier(identifier)
         button.setAccessibilityIdentifier(identifier)
         return button
@@ -188,7 +200,6 @@ struct TaskNoteTextActionControl: NSViewRepresentable {
             action: #selector(Coordinator.performAction(_:))
         )
         button.isBordered = false
-        button.focusRingType = .none
         configure(button)
         return button
     }

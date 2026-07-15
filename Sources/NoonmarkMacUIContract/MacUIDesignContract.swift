@@ -6,7 +6,9 @@ public enum MacUINavigationGroup: String, CaseIterable, Sendable {
 
 public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case macWindowChrome
+    case nativeUnifiedCompactToolbar
     case trafficLights
+    case systemTrafficLights
     case operableTrafficLights
     case resizableWindow
     case closeWindowKeepsAppRunning
@@ -57,7 +59,7 @@ public enum MacUIShellLayout {
     public static let collapsedSidebarWidth = 0.0
     public static let detailRailWidth = 280.0
     public static let calendarRailWidth = 248.0
-    public static let windowToolbarHeight = 42.0
+    public static let toolbarButtonSize = 28.0
     public static let pageHorizontalPadding = 20.0
     public static let taskRowVerticalPadding = 8.0
     public static let detailPadding = 14.0
@@ -67,8 +69,7 @@ public enum MacUIShellLayout {
 }
 
 public enum MacUIIconMetrics {
-    public static let trafficLightDiameter = 12.0
-    public static let trafficLightHitTarget = 20.0
+    public static let toolbarSize = 13.0
     public static let navigationSize = 14.0
 }
 
@@ -91,7 +92,6 @@ public enum MacUIColorToken: String, CaseIterable, Sendable {
     case chip
     case panel
     case line
-    case windowBoundary
     case t1
     case t2
     case t3

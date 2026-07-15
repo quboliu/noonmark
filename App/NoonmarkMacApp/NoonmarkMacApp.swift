@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CryptoKit
 import Darwin
 import NoonmarkAI
@@ -11,11 +12,19 @@ import NoonmarkZhulongAI
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum NoonmarkToolbarIdentifier {
+    static let toolbar = NSToolbar.Identifier("Noonmark.MainToolbar")
+    static let sidebar = NSToolbarItem.Identifier("shell.sidebar.toggle")
+    static let detailRail = NSToolbarItem.Identifier("shell.detail-rail.toggle")
+}
+
 @main
 @MainActor
-final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSToolbarDelegate {
     private static var retainedDelegate: NoonmarkMacApp?
     private var window: NSWindow?
+    private var toolbarObservation: AnyCancellable?
+    private var zhulongToolbarObservation: AnyCancellable?
     private let store = NoonmarkStore()
 
     static func main() {
@@ -59,6 +68,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         installMainMenu()
         store.onLanguageChange = { [weak self] in
             self?.installMainMenu()
+            self?.synchronizeToolbar()
         }
         store.ensureVisiblePage()
         registerCloudKitRemoteNotificationsIfNeeded()
@@ -119,15 +129,15 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         window.title = store.windowTitle
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.backgroundColor = .clear
-        window.isOpaque = false
-        window.hasShadow = false
-        window.isMovableByWindowBackground = true
-        window.standardWindowButton(.closeButton)?.isHidden = true
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.standardWindowButton(.zoomButton)?.isHidden = true
+        window.titlebarSeparatorStyle = .line
+        window.backgroundColor = .windowBackgroundColor
+        window.isOpaque = true
+        window.hasShadow = true
+        window.isMovableByWindowBackground = false
         window.isReleasedWhenClosed = false
         window.isRestorable = false
+        self.window = window
+        installToolbar(on: window)
         let hostingView = NSHostingView(rootView: root)
         hostingView.sizingOptions = []
         hostingView.frame = window.contentView?.bounds ?? .zero
@@ -135,13 +145,175 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         window.contentView?.addSubview(hostingView)
         window.center()
         window.minSize = NoonmarkVisualMetrics.minimumSize
-        self.window = window
 
         DispatchQueue.main.async {
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    private func installToolbar(on window: NSWindow) {
+        let toolbar = NSToolbar(identifier: NoonmarkToolbarIdentifier.toolbar)
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        toolbar.autosavesConfiguration = false
+        window.toolbarStyle = .unifiedCompact
+        window.toolbar = toolbar
+
+        toolbarObservation = store.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in
+                self?.synchronizeToolbar()
+            }
+        }
+        synchronizeToolbar()
+    }
+
+    private func synchronizeToolbar() {
+        guard let toolbar = window?.toolbar else { return }
+        synchronizeZhulongToolbarObservation()
+        let detailIndex = toolbar.items.firstIndex {
+            $0.itemIdentifier == NoonmarkToolbarIdentifier.detailRail
+        }
+        if store.hasDetailRailContent, detailIndex == nil {
+            toolbar.insertItem(
+                withItemIdentifier: NoonmarkToolbarIdentifier.detailRail,
+                at: toolbar.items.count
+            )
+        } else if store.hasDetailRailContent == false, let detailIndex {
+            toolbar.removeItem(at: detailIndex)
+        }
+
+        updateToolbarItem(
+            identifier: NoonmarkToolbarIdentifier.sidebar,
+            label: store.isSidebarExpanded ? store.copy.collapseSidebar : store.copy.expandSidebar,
+            possibleLabels: [store.copy.collapseSidebar, store.copy.expandSidebar],
+            enabled: true
+        )
+        updateToolbarItem(
+            identifier: NoonmarkToolbarIdentifier.detailRail,
+            label: store.isDetailRailExpanded
+                ? store.copy.collapseDetailRail
+                : store.copy.expandDetailRail,
+            possibleLabels: [store.copy.collapseDetailRail, store.copy.expandDetailRail],
+            enabled: store.hasDetailRailContent
+        )
+    }
+
+    private func synchronizeZhulongToolbarObservation() {
+        guard store.page == .zhulong else {
+            zhulongToolbarObservation = nil
+            return
+        }
+        guard zhulongToolbarObservation == nil else { return }
+        zhulongToolbarObservation = store.zhulongWorkspace.$selectedSessionID
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.synchronizeToolbar()
+                }
+            }
+    }
+
+    private func updateToolbarItem(
+        identifier: NSToolbarItem.Identifier,
+        label: String,
+        possibleLabels: Set<String>,
+        enabled: Bool
+    ) {
+        guard let item = window?.toolbar?.items.first(where: {
+            $0.itemIdentifier == identifier
+        }) else { return }
+        item.label = label
+        item.paletteLabel = label
+        item.possibleLabels = possibleLabels
+        item.toolTip = label
+        item.isEnabled = enabled
+        guard let button = item.view as? NSButton else { return }
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+        button.isEnabled = enabled
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [
+            NoonmarkToolbarIdentifier.sidebar,
+            .flexibleSpace,
+            NoonmarkToolbarIdentifier.detailRail
+        ]
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        var identifiers: [NSToolbarItem.Identifier] = [
+            NoonmarkToolbarIdentifier.sidebar,
+            .flexibleSpace
+        ]
+        if store.hasDetailRailContent {
+            identifiers.append(NoonmarkToolbarIdentifier.detailRail)
+        }
+        return identifiers
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        switch itemIdentifier {
+        case NoonmarkToolbarIdentifier.sidebar:
+            return makeToolbarItem(
+                identifier: itemIdentifier,
+                symbolName: "sidebar.left",
+                action: #selector(toggleSidebarAction(_:)),
+                isNavigational: true
+            )
+        case NoonmarkToolbarIdentifier.detailRail:
+            return makeToolbarItem(
+                identifier: itemIdentifier,
+                symbolName: "sidebar.right",
+                action: #selector(toggleDetailRailAction(_:)),
+                isNavigational: false
+            )
+        default:
+            return nil
+        }
+    }
+
+    private func makeToolbarItem(
+        identifier: NSToolbarItem.Identifier,
+        symbolName: String,
+        action: Selector,
+        isNavigational: Bool
+    ) -> NSToolbarItem {
+        let image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: nil
+        ) ?? NSImage()
+        image.isTemplate = true
+        let button = NSButton(image: image, target: self, action: action)
+        button.identifier = NSUserInterfaceItemIdentifier(identifier.rawValue)
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: NoonmarkVisualMetrics.toolbarIconSize,
+            weight: .medium
+        )
+        button.bezelStyle = .toolbar
+        button.showsBorderOnlyWhileMouseInside = true
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: NoonmarkVisualMetrics.toolbarButtonSize),
+            button.heightAnchor.constraint(equalToConstant: NoonmarkVisualMetrics.toolbarButtonSize)
+        ])
+
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.view = button
+        item.target = self
+        item.action = action
+        item.isNavigational = isNavigational
+        item.visibilityPriority = .high
+        return item
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -252,10 +424,12 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     @objc private func toggleSidebarAction(_ sender: Any?) {
         store.toggleSidebar()
+        synchronizeToolbar()
     }
 
     @objc private func toggleDetailRailAction(_ sender: Any?) {
         store.toggleDetailRail()
+        synchronizeToolbar()
     }
 
     @objc private func undoAction(_ sender: Any?) {
@@ -2689,8 +2863,14 @@ private struct WindowCloseBehaviorE2EAutomation: LaunchAutomationRunnable {
                 guard let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }) else {
                     throw WindowCloseBehaviorE2EAutomationError.failed("missing NoonmarkWindow")
                 }
+                guard let closeButton = window.standardWindowButton(.closeButton),
+                      AppViewTreeE2E.click(closeButton)
+                else {
+                    throw WindowCloseBehaviorE2EAutomationError.failed(
+                        "native close button did not accept a real mouse event"
+                    )
+                }
 
-                window.performClose(nil)
                 try await Task.sleep(nanoseconds: 250_000_000)
 
                 let visibleNoonmarkWindows = NSApp.windows.filter { $0 is NoonmarkWindow && $0.isVisible }
@@ -8350,24 +8530,15 @@ struct NoonmarkRootView: View {
 
     var body: some View {
         ZStack {
-            VStack(spacing: 0) {
-                WindowToolbar()
-
-                HStack(spacing: 0) {
-                    if store.isSidebarExpanded {
-                        Sidebar()
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    }
-                    MainSurface()
+            HStack(spacing: 0) {
+                if store.isSidebarExpanded {
+                    Sidebar()
+                        .transition(.move(edge: .leading).combined(with: .opacity))
                 }
+                MainSurface()
             }
             .animation(.easeInOut(duration: 0.18), value: store.isSidebarExpanded)
             .background(Theme.background)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                WindowBoundaryStroke(cornerRadius: 12)
-            )
-            .ignoresSafeArea()
             .disabled(store.showingClassificationManager)
             .accessibilityHidden(store.showingClassificationManager)
 
@@ -8891,21 +9062,6 @@ struct AppCopy {
     }
 }
 
-private struct WindowBoundaryStroke: View {
-    var cornerRadius: CGFloat
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(Theme.windowBoundary, lineWidth: 1.35)
-            RoundedRectangle(cornerRadius: cornerRadius - 0.7, style: .continuous)
-                .inset(by: 1)
-                .stroke(.white.opacity(0.78), lineWidth: 0.7)
-        }
-        .allowsHitTesting(false)
-    }
-}
-
 enum Theme {
     struct Palette {
         let desk: Color
@@ -8914,7 +9070,6 @@ enum Theme {
         let panel2: Color
         let line: Color
         let line2: Color
-        let windowBoundary: Color
         let text1: Color
         let text2: Color
         let text3: Color
@@ -8948,7 +9103,6 @@ enum Theme {
                 panel2: Color(red: 0.984, green: 0.984, blue: 0.987),
                 line: Color(red: 0.90, green: 0.902, blue: 0.914),
                 line2: Color(red: 0.80, green: 0.805, blue: 0.835),
-                windowBoundary: Color(red: 0.69, green: 0.704, blue: 0.735),
                 text1: Color(red: 0.11, green: 0.11, blue: 0.12),
                 text2: Color(red: 0.42, green: 0.42, blue: 0.46),
                 text3: Color(red: 0.63, green: 0.63, blue: 0.67),
@@ -8965,7 +9119,6 @@ enum Theme {
                 panel2: Color(red: 0.990, green: 0.982, blue: 0.964),
                 line: Color(red: 0.90, green: 0.872, blue: 0.824),
                 line2: Color(red: 0.78, green: 0.724, blue: 0.646),
-                windowBoundary: Color(red: 0.67, green: 0.61, blue: 0.52),
                 text1: Color(red: 0.13, green: 0.105, blue: 0.085),
                 text2: Color(red: 0.44, green: 0.385, blue: 0.32),
                 text3: Color(red: 0.64, green: 0.58, blue: 0.50),
@@ -8983,7 +9136,6 @@ enum Theme {
     static var panel2: Color { palette.panel2 }
     static var line: Color { palette.line }
     static var line2: Color { palette.line2 }
-    static var windowBoundary: Color { palette.windowBoundary }
     static var text1: Color { palette.text1 }
     static var text2: Color { palette.text2 }
     static var text3: Color { palette.text3 }
@@ -9006,111 +9158,6 @@ enum Theme {
     static let navCalendar = hex(0xD1477A)
     static let navZhulong = hex(0x7C5CFF)
     static let navSettings = hex(0x64748B)
-}
-
-struct TrafficLightDots: View {
-    var body: some View {
-        HStack(spacing: 0) {
-            trafficLight(
-                color: Color(red: 1, green: 0.451, blue: 0.416),
-                accessibilityLabel: "关闭窗口",
-                action: closeWindow
-            )
-            trafficLight(
-                color: Color(red: 0.996, green: 0.737, blue: 0.18),
-                accessibilityLabel: "最小化窗口",
-                action: minimizeWindow
-            )
-            trafficLight(
-                color: Color(red: 0.098, green: 0.765, blue: 0.188),
-                accessibilityLabel: "缩放窗口",
-                action: zoomWindow
-            )
-        }
-        .frame(height: NoonmarkVisualMetrics.trafficLightHitTarget)
-    }
-
-    private func trafficLight(
-        color: Color,
-        accessibilityLabel: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Circle()
-                .fill(color)
-                .overlay(Circle().stroke(.black.opacity(0.1), lineWidth: 0.5))
-                .frame(
-                    width: NoonmarkVisualMetrics.trafficLightDiameter,
-                    height: NoonmarkVisualMetrics.trafficLightDiameter
-                )
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .frame(
-            width: NoonmarkVisualMetrics.trafficLightHitTarget,
-            height: NoonmarkVisualMetrics.trafficLightHitTarget
-        )
-        .contentShape(Rectangle())
-        .accessibilityLabel(accessibilityLabel)
-    }
-
-    private func closeWindow() {
-        currentWindow?.performClose(nil)
-    }
-
-    private func minimizeWindow() {
-        currentWindow?.miniaturize(nil)
-    }
-
-    private func zoomWindow() {
-        currentWindow?.zoom(nil)
-    }
-
-    private var currentWindow: NSWindow? {
-        NSApp.keyWindow ?? NSApp.windows.first { $0 is NoonmarkWindow }
-    }
-}
-
-struct WindowToolbar: View {
-    @EnvironmentObject private var store: NoonmarkStore
-
-    var body: some View {
-        ZStack {
-            HStack(spacing: 0) {
-                if store.isSidebarExpanded {
-                    Theme.sidebar
-                        .frame(width: NoonmarkVisualMetrics.sidebarWidth)
-                }
-                Theme.panel
-                    .frame(maxWidth: .infinity)
-                if store.shouldShowDetailRail {
-                    Theme.panel2
-                        .frame(width: store.page.detailRailWidth)
-                }
-            }
-
-            HStack(spacing: 10) {
-                TrafficLightDots()
-                SidebarToggleButton()
-                Spacer(minLength: 24)
-                if store.hasDetailRailContent {
-                    DetailRailToggleButton()
-                        .transition(.opacity)
-                }
-            }
-            .padding(.horizontal, 16)
-        }
-        .frame(height: NoonmarkVisualMetrics.windowToolbarHeight)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Theme.line.opacity(0.55))
-                .frame(height: 1)
-        }
-        .background {
-            AppE2EViewAnchor(identifier: "shell.window-toolbar")
-        }
-        .animation(.easeInOut(duration: 0.18), value: store.shouldShowDetailRail)
-    }
 }
 
 struct Sidebar: View {
@@ -9162,78 +9209,6 @@ struct Sidebar: View {
         }
         .overlay(alignment: .trailing) {
             Rectangle().fill(Theme.line.opacity(0.55)).frame(width: 1)
-        }
-    }
-}
-
-struct SidebarToggleButton: View {
-    @EnvironmentObject private var store: NoonmarkStore
-
-    private var label: String {
-        store.isSidebarExpanded
-            ? store.copy.collapseSidebar
-            : store.copy.expandSidebar
-    }
-
-    var body: some View {
-        Button(action: store.toggleSidebar) {
-            Image(systemName: "sidebar.left")
-                .font(.noonmarkRenderedSystem(size: 13, weight: .medium))
-                .frame(width: 28, height: 28)
-                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Theme.text2)
-        .hoverSurface(
-            cornerRadius: 6,
-            idleFill: .clear,
-            hoverFill: Theme.listRowHover,
-            idleStroke: .clear,
-            hoverStroke: Theme.line.opacity(0.55)
-        )
-        .accessibilityLabel(label)
-        .help(label)
-        .background {
-            AppE2EViewAnchor(
-                identifier: "shell.sidebar.toggle",
-                verificationText: label
-            )
-        }
-    }
-}
-
-struct DetailRailToggleButton: View {
-    @EnvironmentObject private var store: NoonmarkStore
-
-    private var label: String {
-        store.isDetailRailExpanded
-            ? store.copy.collapseDetailRail
-            : store.copy.expandDetailRail
-    }
-
-    var body: some View {
-        Button(action: store.toggleDetailRail) {
-            Image(systemName: "sidebar.right")
-                .font(.noonmarkRenderedSystem(size: 13, weight: .medium))
-                .frame(width: 28, height: 28)
-                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Theme.text2)
-        .hoverSurface(
-            cornerRadius: 6,
-            idleFill: .clear,
-            hoverFill: Theme.listRowHover,
-            idleStroke: .clear,
-            hoverStroke: Theme.line.opacity(0.55)
-        )
-        .accessibilityLabel(label)
-        .help(label)
-        .background {
-            AppE2EViewAnchor(
-                identifier: "shell.detail-rail.toggle",
-                verificationText: label
-            )
         }
     }
 }

@@ -292,6 +292,7 @@ enum ZhulongNavigationUIE2EDriver {
         }
 
         private func openEnabledZhulong(attemptsRemaining: Int = 60) {
+            store.zhulongWorkspace.showHome()
             guard store.isZhulongEnabled,
                   clickControl(identifier: "sidebar.nav.zhulong")
             else {
@@ -301,8 +302,53 @@ enum ZhulongNavigationUIE2EDriver {
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
-                disableFromSettings()
+                waitForZhulongHomeToolbar()
             }
+        }
+
+        private func waitForZhulongHomeToolbar(attemptsRemaining: Int = 60) {
+            guard store.page == .zhulong,
+                  store.zhulongWorkspace.selectedSession == nil,
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail.toggle"),
+                  clickControl(identifier: "zhulong-home-workflow-task-shaping")
+            else {
+                retry(attemptsRemaining, action: waitForZhulongHomeToolbar) {
+                    "failed: 烛龙首页仍显示右栏入口，或无法通过真实入口建立会话"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                waitForZhulongSessionToolbar()
+            }
+        }
+
+        private func waitForZhulongSessionToolbar(attemptsRemaining: Int = 60) {
+            guard store.page == .zhulong,
+                  store.zhulongWorkspace.selectedSession != nil,
+                  AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil,
+                  clickControl(identifier: "zhulong-session-show-home")
+            else {
+                retry(attemptsRemaining, action: waitForZhulongSessionToolbar) {
+                    "failed: 烛龙会话没有同步显示原生右栏入口"
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
+                waitForReturnedZhulongHomeToolbar()
+            }
+        }
+
+        private func waitForReturnedZhulongHomeToolbar(attemptsRemaining: Int = 60) {
+            guard store.page == .zhulong,
+                  store.zhulongWorkspace.selectedSession == nil,
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail.toggle")
+            else {
+                retry(attemptsRemaining, action: waitForReturnedZhulongHomeToolbar) {
+                    "failed: 烛龙返回首页后仍残留右栏入口"
+                }
+                return
+            }
+            disableFromSettings()
         }
 
         private func disableFromSettings(attemptsRemaining: Int = 60) {
@@ -583,7 +629,10 @@ enum DetailRailLayoutUIE2EDriver {
                       $0.action == NSSelectorFromString("toggleDetailRailAction:")
                   }),
                   let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
-                  let toolbar = AppViewTreeE2E.view(identifier: "shell.window-toolbar"),
+                  let toolbar = window.toolbar,
+                  let closeButton = window.standardWindowButton(.closeButton),
+                  let miniaturizeButton = window.standardWindowButton(.miniaturizeButton),
+                  let zoomButton = window.standardWindowButton(.zoomButton),
                   let middle = AppViewTreeE2E.view(identifier: "shell.middle-pane"),
                   let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar"),
                   let sidebarToggle = AppViewTreeE2E.view(identifier: "shell.sidebar.toggle"),
@@ -595,10 +644,10 @@ enum DetailRailLayoutUIE2EDriver {
                 }
                 return
             }
-            let toolbarFrame = AppViewTreeE2E.frameInWindow(for: toolbar)
             let sidebarToggleFrame = AppViewTreeE2E.frameInWindow(for: sidebarToggle)
             let detailToggleFrame = AppViewTreeE2E.frameInWindow(for: detailToggle)
             let sidebarWidth = AppViewTreeE2E.frameInWindow(for: sidebar).width
+            let toolbarItemIdentifiers = Set(toolbar.items.map(\.itemIdentifier))
             guard store.isSidebarExpanded,
                   sidebarMenuItem.title == store.copy.collapseSidebar,
                   sidebarMenuItem.keyEquivalent == "s",
@@ -607,12 +656,18 @@ enum DetailRailLayoutUIE2EDriver {
                   detailMenuItem.keyEquivalent == "i",
                   detailMenuItem.keyEquivalentModifierMask == [.command, .option],
                   abs(sidebarWidth - NoonmarkVisualMetrics.sidebarWidth) <= 1,
-                  abs(toolbarFrame.width - window.frame.width) <= 1,
-                  abs(toolbarFrame.height - NoonmarkVisualMetrics.windowToolbarHeight) <= 1,
-                  sidebarToggleFrame.midX < toolbarFrame.width * 0.2,
-                  detailToggleFrame.midX > toolbarFrame.width * 0.8
+                  window.toolbarStyle == .unifiedCompact,
+                  toolbar.displayMode == .iconOnly,
+                  toolbarItemIdentifiers.contains(NoonmarkToolbarIdentifier.sidebar),
+                  toolbarItemIdentifiers.contains(NoonmarkToolbarIdentifier.detailRail),
+                  closeButton.isHidden == false,
+                  miniaturizeButton.isHidden == false,
+                  zoomButton.isHidden == false,
+                  sidebarToggleFrame.midX < window.frame.width * 0.2,
+                  detailToggleFrame.midX > window.frame.width * 0.8,
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.window-toolbar")
             else {
-                finish("failed: 左栏默认几何或窗口两端的栏位入口不正确")
+                finish("failed: 原生窗口工具栏、系统 traffic lights 或两端栏位入口不正确")
                 return
             }
             initialWindowFrame = window.frame
@@ -701,10 +756,39 @@ enum DetailRailLayoutUIE2EDriver {
                   store.isSidebarExpanded,
                   store.shouldShowDetailRail == false,
                   AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail"),
-                  AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil
+                  AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil,
+                  let settingsNavigation = AppViewTreeE2E.view(identifier: "sidebar.nav.settings")
             else {
                 retry(attemptsRemaining, action: waitForExpandedSidebarNavigation) {
                     "failed: 左栏恢复后的导航没有进入默认收起右栏的日历"
+                }
+                return
+            }
+            guard AppViewTreeE2E.click(settingsNavigation) else {
+                finish("failed: 无法通过真实鼠标进入设置页验证无效右栏入口")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [self] in
+                waitForSettingsToolbar()
+            }
+        }
+
+        private func waitForSettingsToolbar(attemptsRemaining: Int = 60) {
+            guard let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }) else {
+                retry(attemptsRemaining, action: waitForSettingsToolbar) {
+                    "failed: 设置页缺少真实窗口"
+                }
+                return
+            }
+            guard store.page == .settings,
+                  store.hasDetailRailContent == false,
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail.toggle"),
+                  window.toolbar?.items.contains(where: {
+                      $0.itemIdentifier == NoonmarkToolbarIdentifier.detailRail
+                  }) == false
+            else {
+                retry(attemptsRemaining, action: waitForSettingsToolbar) {
+                    "failed: 无详情内容的设置页仍显示右栏工具栏入口"
                 }
                 return
             }

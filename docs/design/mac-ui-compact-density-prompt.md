@@ -2,7 +2,7 @@
 
 ## 参照与目标
 
-以用户于 2026-07-13 提供的 TickTick / 滴答清单并排截图为视觉参照，并以同一台机器的真实窗口边界作为尺寸证据：TickTick 当前窗口为 `1000 × 768pt`，晷迹当前窗口为 `1320 × 820pt`。截图中 TickTick traffic light 的可见直径为 `12pt`，晷迹为 `14pt`。
+以用户于 2026-07-13 提供的 TickTick / 滴答清单并排截图为视觉参照，并以同一台机器的真实窗口边界作为尺寸证据：TickTick 当前窗口为 `1000 × 768pt`，晷迹早期窗口为 `1320 × 820pt`。窗口 chrome 已统一改由 AppKit 原生组件绘制，不再人工匹配 traffic light 尺寸。
 
 本文件描述当前唯一的紧凑界面，不保留早期行内动作或有框描述编辑器。结果应像同一个产品整体缩小一档，并把低频动作收进任务右键与详情三点菜单；不能只缩字体而保留重复入口、松散留白或多余容器。
 
@@ -17,12 +17,11 @@
 - 页面主要水平 padding 从 `24pt` 收紧为 `20pt`；列表行主要纵向 padding 从 `9–10pt` 收紧为 `7–8pt`。
 - 不设置虚假的最大内容尺寸；窗口继续支持系统缩放、关闭后保留进程及 Dock 重新打开。
 
-## Traffic lights 与品牌区
+## 原生窗口工具栏与导航
 
-- 三个 traffic light 可见圆点直径统一为 `12pt`。
-- 每个按钮保留 `20 × 20pt` 的透明点击区，三个按钮中心距为 `20pt`；不得因视觉缩小而降低可操作性。
-- Sidebar 顶部 padding 为 `10pt`，横向起点维持约 `16pt`，避免按钮贴边。
-- Clock Logo 从 `24pt` 缩为 `22pt`，品牌字从 `17pt` 缩为约 `15.5pt`。
+- titlebar 必须使用真正的 `NSToolbar` 与 `.unifiedCompact`；traffic lights、窗口圆角、边界和阴影均由系统绘制，不保留 SwiftUI 自绘副本或固定 toolbar 高度 token。
+- toolbar 不显示 Clock Logo、品牌字或重复标题。`sidebar.left` 位于原生 toolbar 前端，`sidebar.right` 位于尾端；两个 SF Symbol 使用 `13pt`，按钮占位为 `28 × 28pt`，并从 `NoonmarkMacUIContract` 取值；无详情内容时移除右侧 item。
+- Sidebar 顶部 padding 为 `14pt`，横向起点维持约 `16pt`，避免导航内容贴边。
 - 导航 icon 视觉字号从 `15.5pt` 缩为 `14pt`，占位宽度从 `21pt` 缩为 `19pt`。
 - 导航主文字从 `14.5pt` 缩为 `13.5pt`，导航行高从 `36pt` 缩为 `34pt`。
 

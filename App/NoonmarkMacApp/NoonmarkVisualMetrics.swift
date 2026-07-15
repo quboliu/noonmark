@@ -15,7 +15,7 @@ enum NoonmarkVisualMetrics {
     static let sidebarWidth = CGFloat(MacUIShellLayout.sidebarWidth)
     static let detailRailWidth = CGFloat(MacUIShellLayout.detailRailWidth)
     static let calendarRailWidth = CGFloat(MacUIShellLayout.calendarRailWidth)
-    static let windowToolbarHeight = CGFloat(MacUIShellLayout.windowToolbarHeight)
+    static let toolbarButtonSize = CGFloat(MacUIShellLayout.toolbarButtonSize)
     static let pageHorizontalPadding = CGFloat(MacUIShellLayout.pageHorizontalPadding)
     static let taskRowVerticalPadding = CGFloat(MacUIShellLayout.taskRowVerticalPadding)
     static let detailPadding = CGFloat(MacUIShellLayout.detailPadding)
@@ -38,8 +38,7 @@ enum NoonmarkVisualMetrics {
     )
     static let detailTextInset = CGFloat(MacUIDetailEditorLayout.textInset)
 
-    static let trafficLightDiameter = CGFloat(MacUIIconMetrics.trafficLightDiameter)
-    static let trafficLightHitTarget = CGFloat(MacUIIconMetrics.trafficLightHitTarget)
+    static let toolbarIconSize = CGFloat(MacUIIconMetrics.toolbarSize)
     static let navigationIconSize = CGFloat(MacUIIconMetrics.navigationSize)
     static let compactEditorPointSize = CGFloat(MacUITypographyMetrics.compactEditorPointSize)
 

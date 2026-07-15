@@ -85,7 +85,8 @@ enum AppViewTreeE2E {
             to: nil
         )
         if view is NSControl {
-            guard let hitView = window.contentView?.hitTest(point),
+            let windowRoot = window.contentView?.superview ?? window.contentView
+            guard let hitView = windowRoot?.hitTest(point),
                   hitView === view || hitView.isDescendant(of: view)
             else {
                 return false
@@ -257,8 +258,8 @@ enum AppViewTreeE2E {
                 "window=\(window.windowNumber) type=\(String(describing: type(of: window))) " +
                     "visible=\(window.isVisible) main=\(window.isMainWindow) key=\(window.isKeyWindow)"
             )
-            guard let contentView = window.contentView else { continue }
-            appendDump(for: contentView, depth: 1, to: &lines)
+            guard let rootView = window.contentView?.superview ?? window.contentView else { continue }
+            appendDump(for: rootView, depth: 1, to: &lines)
         }
 
         let dumpURL = resultURL
@@ -280,8 +281,8 @@ enum AppViewTreeE2E {
     private static func currentVisibleViews() -> [NSView] {
         let windows = currentWindowTree()
         return windows.flatMap { window -> [NSView] in
-            guard let contentView = window.contentView else { return [] }
-            return allViews(from: contentView).filter {
+            guard let rootView = window.contentView?.superview ?? window.contentView else { return [] }
+            return allViews(from: rootView).filter {
                 isVisible($0, in: windows)
             }
         }

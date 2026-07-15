@@ -522,6 +522,7 @@ private final class OpenPanelKeyboardSelection: NSObject {
     private let interactionLabel: String
     private var timer: Timer?
     private weak var panel: NSOpenPanel?
+    private var inputDriver: WindowServerInputDriver?
     private var stage = Stage.waitingForPanel
     private var tickCount = 0
 
@@ -608,7 +609,11 @@ private final class OpenPanelKeyboardSelection: NSObject {
     }
 
     private func waitForDirectory() throws {
-        guard let panel else { return }
+        guard let panel,
+              panel.isVisible,
+              panel.isKeyWindow,
+              NSApp.isActive
+        else { return }
         guard panel.directoryURL?.standardizedFileURL
             == fixtureURL.deletingLastPathComponent().standardizedFileURL
         else {
@@ -627,6 +632,7 @@ private final class OpenPanelKeyboardSelection: NSObject {
             stage = .finished
             return
         }
+        guard panel.isKeyWindow, NSApp.isActive else { return }
         guard panel.urls.map(\.standardizedFileURL).contains(
             fixtureURL.standardizedFileURL
         ) else {
@@ -642,7 +648,12 @@ private final class OpenPanelKeyboardSelection: NSObject {
     }
 
     private func waitForPanelClose() {
-        guard panel?.isVisible != false else {
+        guard let panel else {
+            stage = .finished
+            trace("panel-released")
+            return
+        }
+        guard panel.isVisible else {
             stage = .finished
             trace("panel-closed")
             return
@@ -650,24 +661,21 @@ private final class OpenPanelKeyboardSelection: NSObject {
     }
 
     private func postHIDKey(keyCode: CGKeyCode) throws {
-        guard CGPreflightPostEventAccess() else {
-            throw DataImportPanelInputError.windowServerEventAccessUnavailable
-        }
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let keyDown = CGEvent(
-                  keyboardEventSource: source,
-                  virtualKey: keyCode,
-                  keyDown: true
-              ), let keyUp = CGEvent(
-                  keyboardEventSource: source,
-                  virtualKey: keyCode,
-                  keyDown: false
-              )
+        guard let panel,
+              panel.isVisible,
+              panel.isKeyWindow,
+              NSApp.isActive
         else {
-            throw DataImportPanelInputError.eventConstructionFailed
+            throw DataImportPanelInputError.inputTargetUnavailable
         }
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
+        let driver: WindowServerInputDriver
+        if let inputDriver {
+            driver = inputDriver
+        } else {
+            driver = try WindowServerInputDriver()
+            inputDriver = driver
+        }
+        try driver.postKey(keyCode: keyCode)
     }
 
     private func fail(_ message: String) {
@@ -758,15 +766,12 @@ private final class OpenPanelKeyboardSelection: NSObject {
 }
 
 private enum DataImportPanelInputError: LocalizedError {
-    case eventConstructionFailed
-    case windowServerEventAccessUnavailable
+    case inputTargetUnavailable
 
     var errorDescription: String? {
         switch self {
-        case .eventConstructionFailed:
-            "could not construct a real NSOpenPanel keyboard event"
-        case .windowServerEventAccessUnavailable:
-            "WindowServer denied real keyboard events for the NSOpenPanel"
+        case .inputTargetUnavailable:
+            "NSOpenPanel was not the active key window for real keyboard input"
         }
     }
 }

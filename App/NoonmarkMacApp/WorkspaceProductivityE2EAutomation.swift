@@ -70,6 +70,13 @@ enum WorkspaceDragE2EDiagnostics {
         events.isEmpty == false
     }
 
+    static func hasTargeted(_ traceID: DayTraceID) -> Bool {
+        events.contains {
+            if case .target(traceID, true) = $0 { return true }
+            return false
+        }
+    }
+
     static func completedNativePath(
         sourceTraceID: DayTraceID,
         targetTraceID: DayTraceID
@@ -91,66 +98,92 @@ enum WorkspaceDragE2EDiagnostics {
 
 @MainActor
 private final class WorkspaceDragEventPump: NSObject {
+    private enum Phase {
+        case waitingForSource
+        case waitingForButtonDown
+        case dragging
+        case waitingForTarget
+        case dwellingAtTarget
+        case waitingForButtonUp
+        case waitingForDrop
+        case cleanupWaitingForButtonUp
+    }
+
     private let window: NSWindow
-    private let points: [NSPoint]
-    private let targetPoint: NSPoint
+    private let input: WindowServerInputDriver
+    private let points: [CGPoint]
+    private let sourcePoint: CGPoint
+    private let targetPoint: CGPoint
+    private let sourceTraceID: DayTraceID
+    private let targetTraceID: DayTraceID
+    private let expectsNativePath: Bool
     private let originalCursorPoint: CGPoint?
-    private let eventNumberBase: Int
+    private let gestureNumber: Int64
     private var index = 0
-    private var lastLocation: NSPoint
+    private var phase = Phase.waitingForSource
+    private var phaseAttempts = 0
+    private var dwellFramesRemaining = 0
+    private var lastLocation: CGPoint
     private var postedMouseDown = false
-    private var postedMouseUp = false
+    private var mouseUpWasPosted = false
     private var isFinishing = false
+    private var finalizationAttempts = 0
     private var motionTimer: Timer?
     private var finalizationTimer: Timer?
 
     private(set) var failure: String?
     private(set) var isFinalized = false
 
-    init(window: NSWindow, sourcePoint: NSPoint, targetPoint: NSPoint) {
+    init(
+        window: NSWindow,
+        input: WindowServerInputDriver,
+        sourcePoint: CGPoint,
+        targetPoint: CGPoint,
+        sourceTraceID: DayTraceID,
+        targetTraceID: DayTraceID,
+        expectsNativePath: Bool
+    ) {
         self.window = window
+        self.input = input
+        self.sourcePoint = sourcePoint
         self.targetPoint = targetPoint
+        self.sourceTraceID = sourceTraceID
+        self.targetTraceID = targetTraceID
+        self.expectsNativePath = expectsNativePath
         lastLocation = sourcePoint
-        points = (1 ... 24).map { step in
-            let progress = CGFloat(step) / 24
-            return NSPoint(
+        points = (1 ... 30).map { step in
+            let progress = CGFloat(step) / 30
+            return CGPoint(
                 x: sourcePoint.x + (targetPoint.x - sourcePoint.x) * progress,
                 y: sourcePoint.y + (targetPoint.y - sourcePoint.y) * progress
             )
-        } + Array(repeating: targetPoint, count: 6)
-        originalCursorPoint = CGEvent(source: nil)?.location
-        eventNumberBase = Int(ProcessInfo.processInfo.systemUptime * 1000)
+        }
+        originalCursorPoint = input.currentPointerLocation
+        gestureNumber = input.nextMouseGestureNumber()
         super.init()
     }
 
-    func start(with mouseDown: NSEvent) throws {
-        guard let sourceCursorPoint = mouseDown.cgEvent?.location else {
+    func start() throws {
+        guard input.isLeftButtonDown == false else {
             throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "drag start event did not expose a WindowServer cursor location"
+                "combined-session left button was already down before drag"
             )
         }
-        let error = CGWarpMouseCursorPosition(sourceCursorPoint)
-        guard error == .success else {
+        guard isExpectedWindowActive else {
             throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "could not place the WindowServer cursor at the drag source: \(error.rawValue)"
+                "main window lost focus before WindowServer drag started"
             )
         }
-        guard let targetEvent = makeEvent(
-            type: .leftMouseDragged,
-            location: targetPoint,
-            pressure: 1,
-            eventNumber: eventNumberBase
-        ), let targetCursorPoint = targetEvent.cgEvent?.location else {
-            restoreCursor()
-            throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "drag target did not expose a WindowServer cursor location"
-            )
-        }
-        WorkspaceDragE2EDiagnostics.recordPointerEvidence(
-            "cursor-source=\(sourceCursorPoint),cursor-target=\(targetCursorPoint)"
+        try input.postMouse(
+            type: .mouseMoved,
+            at: sourcePoint,
+            gestureNumber: gestureNumber,
+            pressure: 0
         )
-        window.postEvent(mouseDown, atStart: false)
-        postedMouseDown = true
+        WorkspaceDragE2EDiagnostics.recordPointerEvidence(
+            "cursor-source=\(sourcePoint),cursor-target=\(targetPoint),"
+                + "gesture=\(gestureNumber)"
+        )
 
         let timer = Timer(
             timeInterval: 1.0 / 60.0,
@@ -170,96 +203,305 @@ private final class WorkspaceDragEventPump: NSObject {
             timer.invalidate()
             return
         }
-        if index < points.count {
-            postDragEvent(timer)
-        } else {
-            postMouseUpAndFinish(timer)
+        do {
+            switch phase {
+            case .waitingForSource:
+                try waitForSourcePosition()
+            case .waitingForButtonDown:
+                try waitForButtonDown()
+            case .dragging:
+                try postDragEvent()
+            case .waitingForTarget:
+                try waitForNativeTarget()
+            case .dwellingAtTarget:
+                try dwellAtTarget()
+            case .waitingForButtonUp:
+                try waitForButtonUp()
+            case .waitingForDrop:
+                waitForNativeDrop()
+            case .cleanupWaitingForButtonUp:
+                try waitForCleanupButtonUp()
+            }
+        } catch {
+            beginFailure(error.localizedDescription)
         }
     }
 
     func cancel() {
         guard isFinalized == false else { return }
-        beginFinishing(
-            motionTimer,
-            failure: failure ?? "drag event pump was cancelled before completion"
+        beginFailure(failure ?? "drag event pump was cancelled before completion")
+    }
+
+    private func waitForSourcePosition() throws {
+        guard isExpectedWindowActive else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "main window lost focus while positioning the drag pointer"
+            )
+        }
+        let pointerReachedSource = input.currentPointerLocation.map {
+            pointsAreNear($0, sourcePoint)
+        } ?? false
+        if pointerReachedSource {
+            try input.postMouse(
+                type: .leftMouseDown,
+                at: sourcePoint,
+                gestureNumber: gestureNumber,
+                pressure: 1
+            )
+            postedMouseDown = true
+            phase = .waitingForButtonDown
+            phaseAttempts = 0
+            WorkspaceDragE2EDiagnostics.recordPointerEvidence(
+                "mouse-down-posted=true"
+            )
+            return
+        }
+        phaseAttempts += 1
+        guard phaseAttempts < 30 else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "WindowServer pointer did not settle at the drag source"
+            )
+        }
+        if phaseAttempts.isMultiple(of: 6) {
+            try input.postMouse(
+                type: .mouseMoved,
+                at: sourcePoint,
+                gestureNumber: gestureNumber,
+                pressure: 0
+            )
+        }
+    }
+
+    private func waitForButtonDown() throws {
+        guard isExpectedWindowActive else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "main window lost focus before WindowServer confirmed mouse-down"
+            )
+        }
+        if input.isLeftButtonDown {
+            phase = .dragging
+            phaseAttempts = 0
+            WorkspaceDragE2EDiagnostics.recordPointerEvidence(
+                "button-state-down=true"
+            )
+            return
+        }
+        phaseAttempts += 1
+        guard phaseAttempts < 30 else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "WindowServer did not establish the combined-session left-button state"
+            )
+        }
+    }
+
+    private func postDragEvent() throws {
+        guard isExpectedWindowActive, input.isLeftButtonDown else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "native drag lost its window or combined-session button state"
+            )
+        }
+        guard index < points.count else {
+            phase = .waitingForTarget
+            phaseAttempts = 0
+            return
+        }
+        let location = points[index]
+        try input.postMouse(
+            type: .leftMouseDragged,
+            at: location,
+            gestureNumber: gestureNumber,
+            pressure: 1
+        )
+        lastLocation = location
+        index += 1
+    }
+
+    private func waitForNativeTarget() throws {
+        guard isExpectedWindowActive, input.isLeftButtonDown else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "native drag lost focus or button state at its destination"
+            )
+        }
+        let targetIsReady = expectsNativePath == false
+            || WorkspaceDragE2EDiagnostics.hasTargeted(targetTraceID)
+        if targetIsReady {
+            phase = .dwellingAtTarget
+            dwellFramesRemaining = 6
+            return
+        }
+        phaseAttempts += 1
+        guard phaseAttempts < 60 else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "native drop destination never entered its targeted state"
+            )
+        }
+        let jitter = phaseAttempts.isMultiple(of: 2) ? 0.5 : -0.5
+        let location = CGPoint(x: targetPoint.x + jitter, y: targetPoint.y)
+        try input.postMouse(
+            type: .leftMouseDragged,
+            at: location,
+            gestureNumber: gestureNumber,
+            pressure: 1
+        )
+        lastLocation = location
+    }
+
+    private func dwellAtTarget() throws {
+        guard isExpectedWindowActive, input.isLeftButtonDown else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "native drag lost focus or button state during target dwell"
+            )
+        }
+        guard dwellFramesRemaining > 0 else {
+            try postMouseUp(at: targetPoint)
+            return
+        }
+        try input.postMouse(
+            type: .leftMouseDragged,
+            at: targetPoint,
+            gestureNumber: gestureNumber,
+            pressure: 1
+        )
+        lastLocation = targetPoint
+        dwellFramesRemaining -= 1
+    }
+
+    private func postMouseUp(at location: CGPoint) throws {
+        try input.postMouse(
+            type: .leftMouseUp,
+            at: location,
+            gestureNumber: gestureNumber,
+            pressure: 0
+        )
+        mouseUpWasPosted = true
+        lastLocation = location
+        phase = .waitingForButtonUp
+        phaseAttempts = 0
+        WorkspaceDragE2EDiagnostics.recordPointerEvidence(
+            "mouse-up-posted=true"
         )
     }
 
-    private func postDragEvent(_ timer: Timer) {
-        let location = points[index]
-        let eventNumber = eventNumberBase + index + 1
-        guard let event = makeEvent(
-            type: .leftMouseDragged,
-            location: location,
-            pressure: 1,
-            eventNumber: eventNumber
-        ), let cursorPoint = event.cgEvent?.location else {
-            beginFinishing(
-                timer,
-                failure: "drag movement \(index) could not form a WindowServer event"
+    private func waitForButtonUp() throws {
+        if input.isLeftButtonDown == false {
+            WorkspaceDragE2EDiagnostics.recordPointerEvidence(
+                "button-state-up=true"
             )
+            phaseAttempts = 0
+            if expectsNativePath {
+                phase = .waitingForDrop
+            } else {
+                scheduleFinalization()
+            }
             return
         }
-        let error = CGWarpMouseCursorPosition(cursorPoint)
-        guard error == .success else {
-            beginFinishing(
-                timer,
-                failure: "drag movement \(index) could not move the WindowServer cursor: \(error.rawValue)"
+        phaseAttempts += 1
+        if phaseAttempts.isMultiple(of: 10) {
+            try input.postMouse(
+                type: .leftMouseUp,
+                at: lastLocation,
+                gestureNumber: gestureNumber,
+                pressure: 0
             )
-            return
         }
-        lastLocation = location
-        index += 1
-        window.postEvent(event, atStart: false)
+        guard phaseAttempts < 60 else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "WindowServer did not release the combined-session left button"
+            )
+        }
     }
 
-    private func postMouseUpAndFinish(_ timer: Timer) {
-        let eventNumber = eventNumberBase + index + 1
-        guard let event = makeEvent(
-            type: .leftMouseUp,
-            location: targetPoint,
-            pressure: 0,
-            eventNumber: eventNumber
-        ), let cursorPoint = event.cgEvent?.location else {
-            beginFinishing(
-                timer,
-                failure: "drag completion could not form a WindowServer event"
+    private func waitForNativeDrop() {
+        if WorkspaceDragE2EDiagnostics.completedNativePath(
+            sourceTraceID: sourceTraceID,
+            targetTraceID: targetTraceID
+        ) {
+            scheduleFinalization()
+            return
+        }
+        phaseAttempts += 1
+        guard phaseAttempts < 60 else {
+            beginFailure(
+                "native drop did not accept the exact source item after mouse-up"
             )
             return
         }
-        let error = CGWarpMouseCursorPosition(cursorPoint)
-        guard error == .success else {
-            beginFinishing(
-                timer,
-                failure: "drag completion could not move the WindowServer cursor: \(error.rawValue)"
-            )
-            return
-        }
-        lastLocation = targetPoint
-        postedMouseUp = true
-        window.postEvent(event, atStart: false)
-        beginFinishing(timer, failure: nil)
     }
 
-    private func beginFinishing(_ timer: Timer?, failure: String?) {
+    private func beginFailure(_ message: String) {
+        guard isFinalized == false, isFinishing == false else { return }
+        if failure == nil {
+            failure = message
+            WorkspaceDragE2EDiagnostics.recordPointerEvidence(
+                "event-pump-failure=\(message)"
+            )
+        }
+        if postedMouseDown {
+            do {
+                try input.postMouse(
+                    type: .leftMouseUp,
+                    at: lastLocation,
+                    gestureNumber: gestureNumber,
+                    pressure: 0
+                )
+                mouseUpWasPosted = true
+            } catch {
+                failure = failure.map { $0 + "; cleanup: \(error.localizedDescription)" }
+                    ?? error.localizedDescription
+            }
+            phase = .cleanupWaitingForButtonUp
+            phaseAttempts = 0
+        } else {
+            scheduleFinalization()
+        }
+    }
+
+    private func waitForCleanupButtonUp() throws {
+        if mouseUpWasPosted == false {
+            try input.postMouse(
+                type: .leftMouseUp,
+                at: lastLocation,
+                gestureNumber: gestureNumber,
+                pressure: 0
+            )
+            mouseUpWasPosted = true
+            return
+        }
+        if input.isLeftButtonDown == false {
+            WorkspaceDragE2EDiagnostics.recordPointerEvidence(
+                "cleanup-button-state-up=true"
+            )
+            scheduleFinalization()
+            return
+        }
+        phaseAttempts += 1
+        if phaseAttempts.isMultiple(of: 10) {
+            try input.postMouse(
+                type: .leftMouseUp,
+                at: lastLocation,
+                gestureNumber: gestureNumber,
+                pressure: 0
+            )
+        }
+        guard phaseAttempts < 60 else {
+            failure = failure.map { $0 + "; cleanup left button remained down" }
+                ?? "cleanup left button remained down"
+            scheduleFinalization(restoreCursor: false)
+            return
+        }
+    }
+
+    private func scheduleFinalization(restoreCursor: Bool = true) {
         guard isFinishing == false else { return }
         isFinishing = true
-        timer?.invalidate()
         motionTimer?.invalidate()
         motionTimer = nil
-        if let failure {
-            self.failure = failure
-            WorkspaceDragE2EDiagnostics.recordPointerEvidence(
-                "event-pump-failure=\(failure)"
-            )
-        }
-        postBestEffortMouseUpIfNeeded()
 
         let finalizationTimer = Timer(
             timeInterval: 0,
             target: self,
             selector: #selector(finalizeAfterEventTracking(_:)),
-            userInfo: nil,
+            userInfo: restoreCursor,
             repeats: false
         )
         finalizationTimer.tolerance = 0
@@ -267,37 +509,40 @@ private final class WorkspaceDragEventPump: NSObject {
         RunLoop.main.add(finalizationTimer, forMode: .default)
     }
 
-    private func postBestEffortMouseUpIfNeeded() {
-        guard postedMouseDown, postedMouseUp == false else { return }
-        let eventNumber = eventNumberBase + index + 1
-        guard let event = makeEvent(
-            type: .leftMouseUp,
-            location: lastLocation,
-            pressure: 0,
-            eventNumber: eventNumber
-        ) else {
-            self.failure = failure
-                ?? "drag cleanup could not form a mouse-up event"
-            return
-        }
-        if let cursorPoint = event.cgEvent?.location {
-            let error = CGWarpMouseCursorPosition(cursorPoint)
-            if error != .success {
-                self.failure = failure
-                    ?? "drag cleanup could not move the WindowServer cursor: \(error.rawValue)"
-                WorkspaceDragE2EDiagnostics.recordPointerEvidence(
-                    "cursor-cleanup-failed=\(error.rawValue)"
-                )
-            }
-        }
-        postedMouseUp = true
-        window.postEvent(event, atStart: false)
-    }
-
     @objc private func finalizeAfterEventTracking(_ timer: Timer) {
         timer.invalidate()
         finalizationTimer = nil
-        if let originalCursorPoint {
+        let shouldRestoreCursor = timer.userInfo as? Bool ?? true
+        if input.isLeftButtonDown {
+            failure = failure.map { $0 + "; finalization observed left button down" }
+                ?? "finalization observed left button down"
+            finalizationAttempts += 1
+            do {
+                try input.postMouse(
+                    type: .leftMouseUp,
+                    at: lastLocation,
+                    gestureNumber: gestureNumber,
+                    pressure: 0
+                )
+                mouseUpWasPosted = true
+            } catch {
+                failure = failure.map { $0 + "; \(error.localizedDescription)" }
+                    ?? error.localizedDescription
+            }
+            if finalizationAttempts < 30 {
+                let retry = Timer(
+                    timeInterval: 1.0 / 60.0,
+                    target: self,
+                    selector: #selector(finalizeAfterEventTracking(_:)),
+                    userInfo: shouldRestoreCursor,
+                    repeats: false
+                )
+                retry.tolerance = 0
+                finalizationTimer = retry
+                RunLoop.main.add(retry, forMode: .default)
+                return
+            }
+        } else if shouldRestoreCursor, let originalCursorPoint {
             let error = CGWarpMouseCursorPosition(originalCursorPoint)
             if error != .success, failure == nil {
                 failure = "drag cleanup could not restore the original cursor: \(error.rawValue)"
@@ -307,33 +552,15 @@ private final class WorkspaceDragEventPump: NSObject {
         WorkspaceDragE2EDiagnostics.recordPointerEvidence("event-pump-finalized=true")
     }
 
-    private func makeEvent(
-        type: NSEvent.EventType,
-        location: NSPoint,
-        pressure: Float,
-        eventNumber: Int
-    ) -> NSEvent? {
-        NSEvent.mouseEvent(
-            with: type,
-            location: location,
-            modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: window.windowNumber,
-            context: nil,
-            eventNumber: eventNumber,
-            clickCount: 1,
-            pressure: pressure
-        )
+    private var isExpectedWindowActive: Bool {
+        NSApp.isActive
+            && window.isVisible
+            && window.isMiniaturized == false
+            && window.isKeyWindow
     }
 
-    private func restoreCursor() {
-        guard let originalCursorPoint else { return }
-        let error = CGWarpMouseCursorPosition(originalCursorPoint)
-        if error != .success {
-            WorkspaceDragE2EDiagnostics.recordPointerEvidence(
-                "cursor-restore-failed=\(error.rawValue)"
-            )
-        }
+    private func pointsAreNear(_ lhs: CGPoint, _ rhs: CGPoint) -> Bool {
+        abs(lhs.x - rhs.x) <= 2 && abs(lhs.y - rhs.y) <= 2
     }
 }
 
@@ -458,6 +685,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             failure: "day workspace rows did not render"
         )
 
+        try await ensureMainWindowActive(window)
         try await exercisePointerSelection(
             store: store,
             traceIDs: fixture.dayTraceIDs
@@ -477,7 +705,10 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         WorkspaceDragE2EDiagnostics.reset()
         let dragPump = try drag(
             from: dayIdentifier(fixture.dayTraceIDs[3]),
-            to: dayIdentifier(fixture.dayTraceIDs[0])
+            to: dayIdentifier(fixture.dayTraceIDs[0]),
+            sourceTraceID: fixture.dayTraceIDs[3],
+            targetTraceID: fixture.dayTraceIDs[0],
+            expectsNativePath: true
         )
         defer { dragPump.cancel() }
         try await waitUntil("drag event pump did not finalize") {
@@ -554,20 +785,20 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         store: NoonmarkStore,
         traceIDs: [DayTraceID]
     ) async throws {
-        try click(dayIdentifier(traceIDs[0]))
+        try await click(dayIdentifier(traceIDs[0]))
         try await waitForSelection(
             store,
             expected: [.dayTrace(traceIDs[0])]
         )
 
-        try click(dayIdentifier(traceIDs[2]), modifiers: .shift)
+        try await click(dayIdentifier(traceIDs[2]), modifiers: .shift)
         try await waitForSelection(
             store,
             expected: traceIDs[0 ... 2].map { .dayTrace($0) },
             visibleCount: 3
         )
 
-        try click(dayIdentifier(traceIDs[1]), modifiers: .command)
+        try await click(dayIdentifier(traceIDs[1]), modifiers: .command)
         try await waitForSelection(
             store,
             expected: [.dayTrace(traceIDs[0]), .dayTrace(traceIDs[2])],
@@ -580,7 +811,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         window: NSWindow,
         traceIDs: [DayTraceID]
     ) async throws {
-        try click(dayIdentifier(traceIDs[1]))
+        try await click(dayIdentifier(traceIDs[1]))
         try await waitForSelection(
             store,
             expected: [.dayTrace(traceIDs[1])]
@@ -644,7 +875,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         let baselineSelection = store.workspaceSelection
         try store.armPersistenceFailureForE2E()
         do {
-            try click("workspace.bulk.complete.e2e")
+            try await click("workspace.bulk.complete.e2e")
             try await waitUntil("failed bulk completion did not publish its failure") {
                 store.operationFailure != nil
             }
@@ -663,7 +894,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         }
         store.disarmPersistenceFailureForE2E()
 
-        try click("workspace.bulk.complete.e2e")
+        try await click("workspace.bulk.complete.e2e")
         try await waitUntil("bulk completion did not complete every selected task") {
             traceIDs.allSatisfy { store.engine.traces[$0]?.status == .completed }
                 && store.workspaceSelection.isEmpty
@@ -695,7 +926,10 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         WorkspaceDragE2EDiagnostics.reset()
         let dragPump = try drag(
             from: dayIdentifier(traceIDs[0]),
-            to: dayIdentifier(traceIDs[1])
+            to: dayIdentifier(traceIDs[1]),
+            sourceTraceID: traceIDs[0],
+            targetTraceID: traceIDs[1],
+            expectsNativePath: false
         )
         defer { dragPump.cancel() }
         try await waitUntil("terminal drag event pump did not finalize") {
@@ -726,7 +960,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         store: NoonmarkStore,
         chainIDs: [TaskChainID]
     ) async throws {
-        try click("sidebar.nav.pool")
+        try await click("sidebar.nav.pool")
         try await waitUntil("Task Pool navigation did not complete") {
             store.page == .pool
         }
@@ -735,14 +969,14 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             failure: "pool workspace rows did not render"
         )
 
-        try click(poolIdentifier(chainIDs[0]))
-        try click(poolIdentifier(chainIDs[2]), modifiers: .shift)
+        try await click(poolIdentifier(chainIDs[0]))
+        try await click(poolIdentifier(chainIDs[2]), modifiers: .shift)
         try await waitForSelection(
             store,
             expected: chainIDs.map { .poolTask($0) },
             visibleCount: chainIDs.count
         )
-        try click("workspace.bulk.schedule-today.e2e")
+        try await click("workspace.bulk.schedule-today.e2e")
         try await waitUntil("bulk Task Pool scheduling did not reach today") {
             store.page == .day
                 && chainIDs.allSatisfy { chainID in
@@ -761,7 +995,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         traceIDs: [DayTraceID],
         chainIDs: [TaskChainID]
     ) async throws {
-        try click("sidebar.nav.future")
+        try await click("sidebar.nav.future")
         try await waitUntil("Future navigation did not complete") {
             store.page == .future
         }
@@ -770,14 +1004,14 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             failure: "future workspace rows did not render"
         )
 
-        try click(futureIdentifier(traceIDs[0]))
-        try click(futureIdentifier(traceIDs[2]), modifiers: .shift)
+        try await click(futureIdentifier(traceIDs[0]))
+        try await click(futureIdentifier(traceIDs[2]), modifiers: .shift)
         try await waitForSelection(
             store,
             expected: traceIDs.map { .futureTrace($0) },
             visibleCount: traceIDs.count
         )
-        try click("workspace.bulk.return-pool.e2e")
+        try await click("workspace.bulk.return-pool.e2e")
         try await waitUntil("bulk future return did not reach the Task Pool") {
             store.page == .pool
                 && traceIDs.allSatisfy {
@@ -930,47 +1164,41 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
     private func click(
         _ identifier: String,
         modifiers: NSEvent.ModifierFlags = []
-    ) throws {
+    ) async throws {
         guard let view = AppViewTreeE2E.view(identifier: identifier),
-              let window = view.window
+              let window = view.window,
+              window.isVisible,
+              window.isMiniaturized == false,
+              window.isKeyWindow,
+              NSApp.isActive
         else {
             throw Failure.failed("missing visible click target \(identifier)")
         }
-        let point = view.convert(
+        let windowPoint = view.convert(
             NSPoint(x: view.bounds.midX, y: view.bounds.midY),
             to: nil
         )
-        let timestamp = ProcessInfo.processInfo.systemUptime
-        guard let down = NSEvent.mouseEvent(
-            with: .leftMouseDown,
-            location: point,
-            modifierFlags: modifiers,
-            timestamp: timestamp,
-            windowNumber: window.windowNumber,
-            context: nil,
-            eventNumber: 0,
-            clickCount: 1,
-            pressure: 1
-        ), let up = NSEvent.mouseEvent(
-            with: .leftMouseUp,
-            location: point,
-            modifierFlags: modifiers,
-            timestamp: timestamp + 0.01,
-            windowNumber: window.windowNumber,
-            context: nil,
-            eventNumber: 0,
-            clickCount: 1,
-            pressure: 0
-        ) else {
-            throw Failure.failed("could not create click events for \(identifier)")
+        do {
+            let input = try WindowServerInputDriver()
+            let coordinate = try input.pointerCoordinate(
+                windowPoint: windowPoint,
+                in: window
+            )
+            try await input.postClick(at: coordinate, modifiers: modifiers)
+        } catch {
+            throw Failure.failed(
+                "WindowServer click failed for \(identifier): "
+                    + error.localizedDescription
+            )
         }
-        NSApp.postEvent(down, atStart: false)
-        NSApp.postEvent(up, atStart: false)
     }
 
     private func drag(
         from sourceIdentifier: String,
-        to targetIdentifier: String
+        to targetIdentifier: String,
+        sourceTraceID: DayTraceID,
+        targetTraceID: DayTraceID,
+        expectsNativePath: Bool
     ) throws -> WorkspaceDragEventPump {
         guard let source = AppViewTreeE2E.view(identifier: sourceIdentifier),
               let target = AppViewTreeE2E.view(identifier: targetIdentifier),
@@ -1003,28 +1231,38 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         WorkspaceDragE2EDiagnostics.recordPointerEvidence(
             "target=\(targetPoint),hit=\(targetHit.map { String(describing: type(of: $0)) } ?? "nil")"
         )
-        let timestamp = ProcessInfo.processInfo.systemUptime
-        guard let down = NSEvent.mouseEvent(
-            with: .leftMouseDown,
-            location: sourcePoint,
-            modifierFlags: [],
-            timestamp: timestamp,
-            windowNumber: window.windowNumber,
-            context: nil,
-            eventNumber: Int(timestamp * 1000),
-            clickCount: 1,
-            pressure: 1
-        ) else {
-            throw Failure.failed("could not create drag start event")
+        do {
+            let input = try WindowServerInputDriver()
+            let sourceCoordinate = try input.pointerCoordinate(
+                windowPoint: sourcePoint,
+                in: window
+            )
+            let targetCoordinate = try input.pointerCoordinate(
+                windowPoint: targetPoint,
+                in: window
+            )
+            WorkspaceDragE2EDiagnostics.recordPointerEvidence(
+                "source-coordinate=\(sourceCoordinate.report)"
+            )
+            WorkspaceDragE2EDiagnostics.recordPointerEvidence(
+                "target-coordinate=\(targetCoordinate.report)"
+            )
+            let eventPump = WorkspaceDragEventPump(
+                window: window,
+                input: input,
+                sourcePoint: sourceCoordinate.quartzPoint,
+                targetPoint: targetCoordinate.quartzPoint,
+                sourceTraceID: sourceTraceID,
+                targetTraceID: targetTraceID,
+                expectsNativePath: expectsNativePath
+            )
+            try eventPump.start()
+            return eventPump
+        } catch {
+            throw Failure.failed(
+                "WindowServer drag failed: \(error.localizedDescription)"
+            )
         }
-
-        let eventPump = WorkspaceDragEventPump(
-            window: window,
-            sourcePoint: sourcePoint,
-            targetPoint: targetPoint
-        )
-        try eventPump.start(with: down)
-        return eventPump
     }
 
     private func sendArrow(keyCode: UInt16, window: NSWindow) throws {

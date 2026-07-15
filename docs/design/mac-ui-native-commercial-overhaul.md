@@ -261,7 +261,8 @@
 - 当前分支最新 `make check` 通过全部默认 build、UT、IT、ST 与确定性仿真；UI localization guard、SwiftLint 与 SwiftFormat lint 均通过。精确测试数以最终门禁运行报告为准，不在实施中固化中途计数。
 - 完整真实 `.app` 截图套件曾连续生成 38 张中／英文页面与 presentation 截图，并通过 OCR、菜单、窗口、task note、导入、SQLite、restart 与原子失败探针；其后新增 workspace productivity probe 揭露了拖放事件注入未进入 WindowServer destination negotiation，门禁没有把该失败吞掉。
 - 侧栏语义色以真实截图中每个 glyph crop 的 hue pixel probe 验证；`day.png` 的 Day／任务池／未来／未完成／已完成／日历有效像素数分别为 206／316／366／198／175／284，`zhulong.png` 的烛龙有效像素数为 153。默认 E2E 同时要求两张截图通过。
-- 拖放分段诊断显示四个真实 SwiftUI destination 均已挂载，但一次也未进入 `isTargeted`；数据层和 SQLite 均未发生变更。E2E 已改为 event-tracking run loop 的逐帧统一事件流，并同步对应 `NSEvent.cgEvent` 的 WindowServer 光标位置；成功门禁同时要求目标 targeted、drop 收到精确 source item 并 accepted、event pump 完成清理、连续 priority、即时 SQLite snapshot 与 restart SQLite 顺序一致。
+- 拖放分段诊断显示四个真实 SwiftUI destination 均已挂载，但旧路径一次也未进入 `isTargeted`；数据层和 SQLite 均未发生变更。运行证据确认 `CGWarpMouseCursorPosition` 只移动光标，而 `window.postEvent` 只进入 AppKit 本地队列，无法建立 WindowServer 左键状态或原生 drag session。
+- E2E 输入已收束为共享 `WindowServerInputDriver`：登录 session 使用单一 retained `.combinedSessionState` source，把 AppKit window point 显式转换为 Quartz global point 并 round-trip 对账，所有 down／drag／up 都发布到 `.cghidEventTap`。拖放状态机等待 source cursor、系统 button state、精确 destination targeted、精确 payload accepted 和 button release；异常路径只要曾投递 down 就无条件以同一 source／gesture 补发 up，确认释放后才恢复光标。选择点击和 `NSOpenPanel` 键盘路径复用同一权限与 source policy。
 - `scripts/package-dmg release` 已生成 `dist/Noonmark.dmg`；`scripts/verify-dmg` 已通过挂载内容、签名、canonical icon 和 optical variant 校验。
 
 ### 可回退实施节点
@@ -275,7 +276,7 @@
 
 ### 最终门禁状态
 
-- 当前 console session 锁定，真实 App 无法成为 main／key window，因此新拖放光标同步、完整 E2E 最终重跑与 DMG 安装后启动尚未取得有效证据；不得把锁屏下的 activation failure 归因于产品，也不得在未重跑前宣布完成。
+- 当前登录 session 报告 `CGSSessionScreenIsLocked=Yes`，真实 App 无法成为 main／key window；`scripts/test-e2e` 在启动应用前正确 fail-closed。除此之外，最后一次解锁运行的 `artifacts/e2e-data-import-ui/exercise-result.txt` 已证明当前 E2E bundle 尚未取得 WindowServer event-posting／Accessibility 授权。该 bundle 目前是 ad-hoc 签名且 designated requirement 为 cdhash，最终源码稳定后必须重新构建、由用户给该精确 bundle 授权，再连续重跑 workspace-only、完整 E2E 和 DMG 安装启动；不得用本地 `NSEvent` 注入或模拟结果替代。
 - VoiceOver、Full Keyboard Access 与系统辅助设置组合仍是发布前人工门禁；当前自动化只覆盖 label、trait、keyboard action、environment policy 与可见 presentation。
 - 当前没有用户确认的真实 App reference，视觉回归仍不设默认 baseline；当前没有 Docker／deployed endpoint，不虚构容器或线上验证。
 

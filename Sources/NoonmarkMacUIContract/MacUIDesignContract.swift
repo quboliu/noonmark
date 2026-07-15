@@ -13,7 +13,6 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case visibleWindowBoundary
     case integratedWindowControls
     case pageDerivedWindowTitle
-    case appClockLogo
     case lightDeskBackground
     case coolGrayTheme
     case warmPaperTheme
@@ -60,7 +59,6 @@ public enum MacUIShellLayout {
 public enum MacUIIconMetrics {
     public static let trafficLightDiameter = 12.0
     public static let trafficLightHitTarget = 20.0
-    public static let clockLogoSize = 22.0
     public static let navigationSize = 14.0
 }
 

@@ -9006,22 +9006,15 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TrafficLightDots()
-                .padding(.horizontal, 16)
-                .padding(.bottom, 18)
-
             HStack(spacing: 8) {
-                ClockLogo()
-                Text(store.copy.appName)
-                    .font(.noonmarkSystem(size: 17, weight: .bold))
-                    .tracking(0.2)
+                TrafficLightDots()
                 Spacer(minLength: 8)
                 if store.hasDetailRailContent {
                     DetailRailToggleButton()
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 16)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 18)
 
             NavGroupTitle(store.copy.planGroup)
             ForEach(planPages) { page in
@@ -9083,23 +9076,6 @@ struct DetailRailToggleButton: View {
                 verificationText: label
             )
         }
-    }
-}
-
-struct ClockLogo: View {
-    var body: some View {
-        ZStack {
-            Circle().stroke(Theme.accent, lineWidth: 1.5)
-            Rectangle()
-                .fill(Theme.accent)
-                .frame(width: 1.5, height: 7)
-                .offset(y: -3)
-            Circle().fill(Theme.accent).frame(width: 4, height: 4)
-        }
-        .frame(
-            width: NoonmarkVisualMetrics.clockLogoSize,
-            height: NoonmarkVisualMetrics.clockLogoSize
-        )
     }
 }
 

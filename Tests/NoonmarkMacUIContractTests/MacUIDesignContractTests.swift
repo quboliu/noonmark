@@ -23,7 +23,6 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(MacUIShellLayout.detailRailCollapsedByDefault)
         XCTAssertEqual(MacUIIconMetrics.trafficLightDiameter, 12)
         XCTAssertEqual(MacUIIconMetrics.trafficLightHitTarget, 20)
-        XCTAssertEqual(MacUIIconMetrics.clockLogoSize, 22)
         XCTAssertEqual(MacUIIconMetrics.navigationSize, 14)
         XCTAssertEqual(MacUIShellLayout.navigationRowHeight, 34)
     }
@@ -105,7 +104,6 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.visibleWindowBoundary))
         XCTAssertTrue(contract.globalElements.contains(.integratedWindowControls))
         XCTAssertTrue(contract.globalElements.contains(.pageDerivedWindowTitle))
-        XCTAssertTrue(contract.globalElements.contains(.appClockLogo))
         XCTAssertTrue(contract.globalElements.contains(.dateStripSelectionAnimation))
         XCTAssertTrue(contract.globalElements.contains(.semanticStatusStyles))
         XCTAssertTrue(contract.globalElements.contains(.protectedActionButtonLabels))

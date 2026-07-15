@@ -39,7 +39,6 @@ enum NoonmarkVisualMetrics {
 
     static let trafficLightDiameter = CGFloat(MacUIIconMetrics.trafficLightDiameter)
     static let trafficLightHitTarget = CGFloat(MacUIIconMetrics.trafficLightHitTarget)
-    static let clockLogoSize = CGFloat(MacUIIconMetrics.clockLogoSize)
     static let navigationIconSize = CGFloat(MacUIIconMetrics.navigationSize)
     static let compactEditorPointSize = CGFloat(MacUITypographyMetrics.compactEditorPointSize)
 

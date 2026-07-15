@@ -21,6 +21,7 @@ export NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT="$expected_window_height"
 
 scenarios=(
   "day|day|"
+  "day-sidebar-collapsed|day|--e2e-collapse-sidebar"
   "day-subtasks-expanded|day|--e2e-expand-first-subtask-trace"
   "day-changed-target|day|--select changed"
   "day-detail|day|--select first"
@@ -40,6 +41,7 @@ scenarios=(
   "completed|completed|"
   "completed-detail|completed|--select first"
   "calendar|calendar|"
+  "calendar-detail-expanded|calendar|--e2e-expand-detail-rail"
   "zhulong|zhulong|--e2e-enable-zhulong"
   "zhulong-stream|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session"
   "zhulong-authorized|zhulong|--e2e-zhulong-sidecar-key --e2e-start-zhulong-workflow dailyReview"
@@ -1979,7 +1981,7 @@ if [[ "$(cat "$detail_rail_result")" != "ok" ]]; then
   exit 1
 fi
 
-echo "E2E collapsible detail rail layout: $detail_rail_result"
+echo "E2E collapsible navigation and detail rails: $detail_rail_result"
 
 subtask_mutation_dir="artifacts/e2e-subtask-mutation"
 subtask_mutation_result="${subtask_mutation_dir}/subtask-mutation-result.txt"

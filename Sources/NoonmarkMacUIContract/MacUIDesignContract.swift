@@ -27,8 +27,12 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case quietSidebarSurface
     case lowContrastControlSurfaces
     case borderlessListRows
+    case collapsibleSidebar
+    case sidebarExpandedByDefault
+    case stableWindowFrameDuringSidebarToggle
     case collapsibleDetailRail
     case detailRailCollapsedByDefault
+    case calendarUsesCollapsibleDetailRail
     case stableWindowFrameDuringDetailRailToggle
     case adaptiveMainSurfaceWidth
 }
@@ -47,12 +51,14 @@ public enum MacUIWindowLayout {
 
 public enum MacUIShellLayout {
     public static let sidebarWidth = 220.0
+    public static let collapsedSidebarWidth = 76.0
     public static let detailRailWidth = 280.0
     public static let calendarRailWidth = 248.0
     public static let pageHorizontalPadding = 20.0
     public static let taskRowVerticalPadding = 8.0
     public static let detailPadding = 14.0
     public static let navigationRowHeight = 34.0
+    public static let sidebarExpandedByDefault = true
     public static let detailRailCollapsedByDefault = true
 }
 

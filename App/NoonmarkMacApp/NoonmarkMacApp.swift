@@ -36,6 +36,12 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--e2e-reset-selection") {
             delegate.store.resetLaunchSelection()
         }
+        if CommandLine.arguments.contains("--e2e-collapse-sidebar") {
+            delegate.store.isSidebarExpanded = false
+        }
+        if CommandLine.arguments.contains("--e2e-expand-detail-rail") {
+            delegate.store.isDetailRailExpanded = true
+        }
         if CommandLine.arguments.contains("--page"), let index = CommandLine.arguments.firstIndex(of: "--page") {
             let valueIndex = CommandLine.arguments.index(after: index)
             let pageName = CommandLine.arguments.indices.contains(valueIndex) ? CommandLine.arguments[valueIndex] : ""
@@ -4950,6 +4956,7 @@ final class NoonmarkStore: ObservableObject {
     @Published var showingFromPoolPicker = false
     @Published var showingChangeDialog = false
     @Published var showingClassificationManager = false
+    @Published var isSidebarExpanded = MacUIShellLayout.sidebarExpandedByDefault
     @Published var isDetailRailExpanded = !MacUIShellLayout.detailRailCollapsedByDefault
     @Published var changeText = ""
     @Published var detailSubtaskText = ""
@@ -5072,7 +5079,10 @@ final class NoonmarkStore: ObservableObject {
     }
 
     var hasDetailRailContent: Bool {
-        guard page != .calendar && page != .settings else { return false }
+        guard page != .settings else { return false }
+        if page == .calendar {
+            return true
+        }
         if page == .zhulong {
             return zhulongWorkspace.selectedSession != nil
         }
@@ -5092,6 +5102,10 @@ final class NoonmarkStore: ObservableObject {
     func toggleDetailRail() {
         guard hasDetailRailContent else { return }
         isDetailRailExpanded.toggle()
+    }
+
+    func toggleSidebar() {
+        isSidebarExpanded.toggle()
     }
 
     var visibleNavigationPages: [Page] {
@@ -5308,7 +5322,11 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func selectPage(_ next: Page) {
-        page = visiblePage(for: next)
+        let nextPage = visiblePage(for: next)
+        if nextPage == .calendar, page != .calendar {
+            isDetailRailExpanded = false
+        }
+        page = nextPage
         clearSelection()
     }
 
@@ -8286,6 +8304,7 @@ struct NoonmarkRootView: View {
                 Sidebar()
                 MainSurface()
             }
+            .animation(.easeInOut(duration: 0.18), value: store.isSidebarExpanded)
             .background(Theme.background)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
@@ -8427,6 +8446,8 @@ struct AppCopy {
     var navCalendar: String { language == .chinese ? "日历" : "Calendar" }
     var navZhulong: String { language == .chinese ? "烛龙" : "Zhulong" }
     var navSettings: String { language == .chinese ? "设置" : "Settings" }
+    var expandSidebar: String { language == .chinese ? "展开左侧栏" : "Show navigation sidebar" }
+    var collapseSidebar: String { language == .chinese ? "收起左侧栏" : "Hide navigation sidebar" }
     var expandDetailRail: String { language == .chinese ? "展开右侧栏" : "Show detail sidebar" }
     var collapseDetailRail: String { language == .chinese ? "收起右侧栏" : "Hide detail sidebar" }
     var today: String { language == .chinese ? "今天" : "Today" }
@@ -9006,36 +9027,122 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            topControls
+
+            if store.isSidebarExpanded {
+                NavGroupTitle(store.copy.planGroup)
+            }
+            ForEach(planPages) { page in
+                NavItem(
+                    page: page,
+                    label: store.navigationLabel(for: page),
+                    count: store.navigationCount(for: page),
+                    compact: store.isSidebarExpanded == false
+                )
+            }
+
+            if store.isSidebarExpanded {
+                NavGroupTitle(store.copy.traceGroup)
+                    .padding(.top, 12)
+            } else {
+                Color.clear.frame(height: 12)
+            }
+            ForEach(tracePages) { page in
+                NavItem(
+                    page: page,
+                    label: store.navigationLabel(for: page),
+                    count: store.navigationCount(for: page),
+                    compact: store.isSidebarExpanded == false
+                )
+            }
+
+            Spacer()
+            NavItem(
+                page: .settings,
+                label: store.copy.navSettings,
+                count: 0,
+                compact: store.isSidebarExpanded == false
+            )
+        }
+        .frame(
+            width: store.isSidebarExpanded
+                ? NoonmarkVisualMetrics.sidebarWidth
+                : NoonmarkVisualMetrics.collapsedSidebarWidth
+        )
+        .padding(.top, 10)
+        .padding(.bottom, 10)
+        .background(Theme.sidebar)
+        .background {
+            AppE2EViewAnchor(identifier: "shell.sidebar")
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(Theme.line.opacity(0.55)).frame(width: 1)
+        }
+    }
+
+    @ViewBuilder private var topControls: some View {
+        if store.isSidebarExpanded {
             HStack(spacing: 8) {
                 TrafficLightDots()
                 Spacer(minLength: 8)
+                SidebarToggleButton()
                 if store.hasDetailRailContent {
                     DetailRailToggleButton()
                 }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 18)
-
-            NavGroupTitle(store.copy.planGroup)
-            ForEach(planPages) { page in
-                NavItem(page: page, label: store.navigationLabel(for: page), count: store.navigationCount(for: page))
+        } else {
+            VStack(spacing: 8) {
+                TrafficLightDots()
+                HStack(spacing: 8) {
+                    SidebarToggleButton()
+                    if store.hasDetailRailContent {
+                        DetailRailToggleButton()
+                    }
+                }
             }
-
-            NavGroupTitle(store.copy.traceGroup)
-                .padding(.top, 12)
-            ForEach(tracePages) { page in
-                NavItem(page: page, label: store.navigationLabel(for: page), count: store.navigationCount(for: page))
-            }
-
-            Spacer()
-            NavItem(page: .settings, label: store.copy.navSettings, count: 0)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 12)
         }
-        .frame(width: NoonmarkVisualMetrics.sidebarWidth)
-        .padding(.top, 10)
-        .padding(.bottom, 10)
-        .background(Theme.sidebar)
-        .overlay(alignment: .trailing) {
-            Rectangle().fill(Theme.line.opacity(0.55)).frame(width: 1)
+    }
+}
+
+struct SidebarToggleButton: View {
+    @EnvironmentObject private var store: NoonmarkStore
+
+    private var label: String {
+        store.isSidebarExpanded
+            ? store.copy.collapseSidebar
+            : store.copy.expandSidebar
+    }
+
+    var body: some View {
+        Button(action: store.toggleSidebar) {
+            Image(systemName: "sidebar.left")
+                .font(.noonmarkRenderedSystem(size: 13, weight: .medium))
+                .frame(width: 26, height: 26)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(store.isSidebarExpanded ? Theme.text3 : Theme.accent)
+        .hoverSurface(
+            active: store.isSidebarExpanded == false,
+            cornerRadius: 6,
+            idleFill: .clear,
+            hoverFill: Theme.panel.opacity(0.78),
+            activeFill: Theme.accentSoft.opacity(0.72),
+            idleStroke: .clear,
+            hoverStroke: Theme.line.opacity(0.55),
+            activeStroke: Theme.accent.opacity(0.20)
+        )
+        .accessibilityLabel(label)
+        .help(label)
+        .background {
+            AppE2EViewAnchor(
+                identifier: "shell.sidebar.toggle",
+                verificationText: label
+            )
         }
     }
 }
@@ -9101,6 +9208,7 @@ struct NavItem: View {
     let page: NoonmarkStore.Page
     let label: String
     let count: Int
+    let compact: Bool
 
     var active: Bool { store.page == page }
 
@@ -9108,32 +9216,31 @@ struct NavItem: View {
         Button {
             store.selectPage(page)
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: page.navigationSystemImage)
-                    .font(
-                        .noonmarkRenderedSystem(
-                            size: NoonmarkVisualMetrics.navigationIconSize,
-                            weight: .medium
-                        )
-                    )
-                    .frame(width: 19)
-                    .foregroundStyle(page.navigationIconColor)
-                Text(label)
-                    .font(.noonmarkSystem(size: 14.5, weight: active ? .semibold : .medium))
-                    .foregroundStyle(active ? Theme.text1 : Theme.text2)
-                Spacer()
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.noonmarkSystem(size: 12, weight: active ? .semibold : .regular))
-                        .foregroundStyle(Theme.text2)
-                        .padding(.horizontal, 7)
-                        .frame(minWidth: 21, minHeight: 18)
-                        .background(Capsule().fill(active ? Theme.panel.opacity(0.8) : Theme.chip))
+            Group {
+                if compact {
+                    navigationIcon
+                        .frame(maxWidth: .infinity)
+                } else {
+                    HStack(spacing: 10) {
+                        navigationIcon
+                        Text(label)
+                            .font(.noonmarkSystem(size: 14.5, weight: active ? .semibold : .medium))
+                            .foregroundStyle(active ? Theme.text1 : Theme.text2)
+                        Spacer()
+                        if count > 0 {
+                            Text("\(count)")
+                                .font(.noonmarkSystem(size: 12, weight: active ? .semibold : .regular))
+                                .foregroundStyle(Theme.text2)
+                                .padding(.horizontal, 7)
+                                .frame(minWidth: 21, minHeight: 18)
+                                .background(Capsule().fill(active ? Theme.panel.opacity(0.8) : Theme.chip))
+                        }
+                    }
+                    .padding(.leading, 14)
+                    .padding(.trailing, 12)
                 }
             }
             .frame(height: NoonmarkVisualMetrics.navigationRowHeight)
-            .padding(.leading, 14)
-            .padding(.trailing, 12)
             .hoverSurface(
                 active: active,
                 cornerRadius: 8,
@@ -9152,8 +9259,10 @@ struct NavItem: View {
             }
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 9)
+        .padding(.horizontal, compact ? 8 : 9)
         .padding(.vertical, 1.5)
+        .accessibilityLabel(label)
+        .help(label)
         .background {
             AppE2EViewAnchor(
                 identifier: "sidebar.nav.\(page.rawValue)",
@@ -9161,10 +9270,28 @@ struct NavItem: View {
             )
         }
     }
+
+    private var navigationIcon: some View {
+        Image(systemName: page.navigationSystemImage)
+            .font(
+                .noonmarkRenderedSystem(
+                    size: NoonmarkVisualMetrics.navigationIconSize,
+                    weight: .medium
+                )
+            )
+            .frame(width: 19)
+            .foregroundStyle(page.navigationIconColor)
+    }
 }
 
 struct MainSurface: View {
     @EnvironmentObject private var store: NoonmarkStore
+
+    private var detailRailWidth: CGFloat {
+        store.page == .calendar
+            ? NoonmarkVisualMetrics.calendarRailWidth
+            : NoonmarkVisualMetrics.detailRailWidth
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -9195,7 +9322,7 @@ struct MainSurface: View {
 
             if store.shouldShowDetailRail {
                 DetailRail()
-                    .frame(width: NoonmarkVisualMetrics.detailRailWidth)
+                    .frame(width: detailRailWidth)
                     .background {
                         AppE2EViewAnchor(identifier: "shell.detail-rail")
                     }
@@ -10670,76 +10797,69 @@ struct CalendarPage: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 10) {
-                    Text(verbatim: "\(store.selectedCalendarDate.year)年 \(store.selectedCalendarDate.month) 月")
-                        .font(.noonmarkSystem(size: 21, weight: .bold))
-                        .foregroundStyle(Theme.text1)
-                        .monospacedDigit()
-                    Spacer()
-                    HeaderButton("‹") {
-                        store.selectedCalendarDate = NoonmarkStore.shiftedMonth(from: store.selectedCalendarDate, by: -1)
-                    }
-                    HeaderButton(store.copy.today) { store.selectedCalendarDate = store.today }
-                    HeaderButton("›") {
-                        store.selectedCalendarDate = NoonmarkStore.shiftedMonth(from: store.selectedCalendarDate, by: 1)
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text(verbatim: "\(store.selectedCalendarDate.year)年 \(store.selectedCalendarDate.month) 月")
+                    .font(.noonmarkSystem(size: 21, weight: .bold))
+                    .foregroundStyle(Theme.text1)
+                    .monospacedDigit()
+                Spacer()
+                HeaderButton("‹") {
+                    store.selectedCalendarDate = NoonmarkStore.shiftedMonth(from: store.selectedCalendarDate, by: -1)
                 }
-
-                Text(store.copy.calendarSubtitle)
-                    .font(.noonmarkSystem(size: 12))
-                    .foregroundStyle(Theme.text3)
-                    .padding(.top, 4)
-
-                HStack {
-                    ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) {
-                        Text($0)
-                            .font(.noonmarkSystem(size: 11, weight: .semibold))
-                            .foregroundStyle(Theme.text3)
-                            .frame(maxWidth: .infinity)
-                            .padding(.bottom, 6)
-                    }
+                HeaderButton(store.copy.today) { store.selectedCalendarDate = store.today }
+                HeaderButton("›") {
+                    store.selectedCalendarDate = NoonmarkStore.shiftedMonth(from: store.selectedCalendarDate, by: 1)
                 }
-                .padding(.top, 14)
+            }
 
-                GeometryReader { proxy in
-                    let rows = max(5, Int(ceil(Double(calendarCells.count) / 7.0)))
-                    let rowHeight = max(88, (proxy.size.height - CGFloat(rows - 1) * 6) / CGFloat(rows))
-                    LazyVGrid(
-                        columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7),
-                        spacing: 6
-                    ) {
-                        ForEach(calendarCells) { cell in
-                            switch cell.kind {
-                            case .blank:
-                                Color.clear
-                                    .frame(height: rowHeight)
-                            case let .date(date):
-                                CalendarCell(
-                                    date: date,
-                                    height: rowHeight,
-                                    onSelect: {
-                                        focusRequest &+= 1
-                                        store.selectedCalendarDate = date
-                                    }
-                                )
-                            }
+            Text(store.copy.calendarSubtitle)
+                .font(.noonmarkSystem(size: 12))
+                .foregroundStyle(Theme.text3)
+                .padding(.top, 4)
+
+            HStack {
+                ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) {
+                    Text($0)
+                        .font(.noonmarkSystem(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 6)
+                }
+            }
+            .padding(.top, 14)
+
+            GeometryReader { proxy in
+                let rows = max(5, Int(ceil(Double(calendarCells.count) / 7.0)))
+                let rowHeight = max(88, (proxy.size.height - CGFloat(rows - 1) * 6) / CGFloat(rows))
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7),
+                    spacing: 6
+                ) {
+                    ForEach(calendarCells) { cell in
+                        switch cell.kind {
+                        case .blank:
+                            Color.clear
+                                .frame(height: rowHeight)
+                        case let .date(date):
+                            CalendarCell(
+                                date: date,
+                                height: rowHeight,
+                                onSelect: {
+                                    focusRequest &+= 1
+                                    store.selectedCalendarDate = date
+                                }
+                            )
                         }
                     }
-                    .frame(maxHeight: .infinity, alignment: .top)
                 }
-                .padding(.top, 14)
+                .frame(maxHeight: .infinity, alignment: .top)
             }
-            .padding(.top, 16)
-            .padding(.horizontal, 18)
-            .padding(.bottom, 18)
-            CalendarDetailPanel()
-                .frame(width: NoonmarkVisualMetrics.calendarRailWidth)
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(Theme.line.opacity(0.58)).frame(width: 1)
-                }
+            .padding(.top, 14)
         }
+        .padding(.top, 16)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 18)
         .background {
             DateNavigationKeyboardFocusBridge(
                 focusRequest: focusRequest,
@@ -12670,36 +12790,40 @@ struct DetailRail: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if let trace = store.selectedTrace, let definition = store.selectedDefinition {
-                    if store.page == .completed, let record = store.selectedCompletedSubtaskRecord {
-                        CompletedSubtaskDetail(record: record)
-                    } else if store.page == .completed, let item = store.selectedCompletedItem {
-                        CompletedRecordDetail(item: item)
-                    } else if store.page == .future {
-                        FuturePlanDetail(trace: trace, definition: definition)
+        if store.page == .calendar {
+            CalendarDetailPanel()
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let trace = store.selectedTrace, let definition = store.selectedDefinition {
+                        if store.page == .completed, let record = store.selectedCompletedSubtaskRecord {
+                            CompletedSubtaskDetail(record: record)
+                        } else if store.page == .completed, let item = store.selectedCompletedItem {
+                            CompletedRecordDetail(item: item)
+                        } else if store.page == .future {
+                            FuturePlanDetail(trace: trace, definition: definition)
+                        } else {
+                            TaskDetail(trace: trace, definition: definition)
+                        }
+                    } else if let task = store.selectedPoolTask {
+                        PoolDetail(task: task)
+                    } else if let item = store.selectedUnfinishedItem {
+                        UnfinishedDetail(item: item)
+                    } else if store.page == .zhulong {
+                        ZhulongRail()
+                    } else if store.page == .day {
+                        ReviewRail()
+                    } else if let model = zhulongContextModel {
+                        ZhulongContextRail(model: model)
                     } else {
-                        TaskDetail(trace: trace, definition: definition)
+                        RailHint(text: hint)
+                            .padding(.top, 40)
                     }
-                } else if let task = store.selectedPoolTask {
-                    PoolDetail(task: task)
-                } else if let item = store.selectedUnfinishedItem {
-                    UnfinishedDetail(item: item)
-                } else if store.page == .zhulong {
-                    ZhulongRail()
-                } else if store.page == .day {
-                    ReviewRail()
-                } else if let model = zhulongContextModel {
-                    ZhulongContextRail(model: model)
-                } else {
-                    RailHint(text: hint)
-                        .padding(.top, 40)
                 }
+                .padding(NoonmarkVisualMetrics.detailPadding)
             }
-            .padding(NoonmarkVisualMetrics.detailPadding)
+            .background(Theme.panel)
         }
-        .background(Theme.panel)
     }
 
     var hint: String {

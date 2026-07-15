@@ -14,6 +14,8 @@ required_files=(
   "$app_icon_source_png"
   "$app_icon_master_png"
   "$app_icon_icns_path"
+  "scripts/app-icon-optical-renderer.swift"
+  "scripts/app-icon-optical-probe.swift"
 )
 for representation in "${app_icon_representations[@]}"; do
   required_files+=("${app_icon_iconset_dir}/${representation%%:*}")
@@ -69,6 +71,22 @@ assert_matches_source() {
 
   if ! cmp -s "$path" "$rendered"; then
     echo "app icon asset is stale relative to AppIcon-source.png: $path" >&2
+    exit 1
+  fi
+}
+
+assert_matches_representation_renderer() {
+  local path="$1"
+  local expected_size="$2"
+  local filename
+  local rendered
+
+  filename="$(basename "$path")"
+  rendered="${work_dir}/rendered-${expected_size}-${filename}"
+  app_icon_render_representation "$filename" "$expected_size" "$rendered"
+
+  if ! cmp -s "$path" "$rendered"; then
+    echo "app icon asset is stale relative to its canonical renderer: $path" >&2
     exit 1
   fi
 }
@@ -188,8 +206,15 @@ for representation in "${app_icon_representations[@]}"; do
   size="${representation##*:}"
   path="${app_icon_iconset_dir}/${filename}"
   assert_png "$path" "$size"
-  assert_matches_source "$path" "$size"
+  assert_matches_representation_renderer "$path" "$size"
 done
+
+source_resamples_dir="${work_dir}/source-resamples"
+mkdir -p "$source_resamples_dir"
+app_icon_render_png 16 "${source_resamples_dir}/icon_16x16.png"
+app_icon_render_png 32 "${source_resamples_dir}/icon_16x16@2x.png"
+app_icon_render_png 32 "${source_resamples_dir}/icon_32x32.png"
+app_icon_render_png 64 "${source_resamples_dir}/icon_32x32@2x.png"
 
 extracted_iconset="${work_dir}/AppIcon.iconset"
 mkdir -p "$extracted_iconset"
@@ -199,6 +224,27 @@ for representation in "${app_icon_representations[@]}"; do
   size="${representation##*:}"
   assert_png "${extracted_iconset}/${filename}" "$size"
 done
+
+probe_arguments=(
+  --small "${app_icon_iconset_dir}/icon_16x16.png" 16
+  --small "${app_icon_iconset_dir}/icon_16x16@2x.png" 32
+  --small "${app_icon_iconset_dir}/icon_32x32.png" 32
+  --small "${app_icon_iconset_dir}/icon_32x32@2x.png" 64
+  --distinct "${app_icon_iconset_dir}/icon_16x16.png" "${source_resamples_dir}/icon_16x16.png"
+  --distinct "${app_icon_iconset_dir}/icon_16x16@2x.png" "${source_resamples_dir}/icon_16x16@2x.png"
+  --distinct "${app_icon_iconset_dir}/icon_32x32.png" "${source_resamples_dir}/icon_32x32.png"
+  --distinct "${app_icon_iconset_dir}/icon_32x32@2x.png" "${source_resamples_dir}/icon_32x32@2x.png"
+  --distinct "${app_icon_iconset_dir}/icon_16x16@2x.png" "${app_icon_iconset_dir}/icon_32x32.png"
+)
+for representation in "${app_icon_representations[@]}"; do
+  filename="${representation%%:*}"
+  probe_arguments+=(
+    --round-trip
+    "${app_icon_iconset_dir}/${filename}"
+    "${extracted_iconset}/${filename}"
+  )
+done
+swift scripts/app-icon-optical-probe.swift "${probe_arguments[@]}"
 
 regenerated_icns="${work_dir}/AppIcon.icns"
 iconutil -c icns -o "$regenerated_icns" "$app_icon_iconset_dir"
@@ -212,4 +258,4 @@ if ! cmp -s "$app_icon_master_png" "${app_icon_iconset_dir}/icon_512x512@2x.png"
   exit 1
 fi
 
-echo "Verified AppIcon-source.png, 1024 master, iconset, and icns"
+echo "Verified app icon sources, optical variants, iconset, and icns"

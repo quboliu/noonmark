@@ -22,7 +22,10 @@ app_icon_render_png 1024 "${work_dir}/AppIcon-master.png"
 for representation in "${app_icon_representations[@]}"; do
   filename="${representation%%:*}"
   size="${representation##*:}"
-  app_icon_render_png "$size" "${generated_iconset}/${filename}"
+  app_icon_render_representation \
+    "$filename" \
+    "$size" \
+    "${generated_iconset}/${filename}"
 done
 
 iconutil \

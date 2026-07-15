@@ -29,6 +29,50 @@ readonly app_icon_bundle_icon_name
 readonly app_icon_srgb_profile
 readonly app_icon_representations
 
+app_icon_render_optical_png() {
+  local optical_size="$1"
+  local size="$2"
+  local destination="$3"
+  local raw_destination
+
+  raw_destination="${destination}.unprofiled.$$"
+  NOONMARK_APP_ICON_OPTICAL_SIZE="$optical_size" \
+    NOONMARK_APP_ICON_SIZE="$size" \
+    NOONMARK_APP_ICON_OUTPUT="$raw_destination" \
+    swift scripts/app-icon-optical-renderer.swift
+
+  sips \
+    -s format png \
+    --matchTo "$app_icon_srgb_profile" \
+    "$raw_destination" \
+    --out "$destination" >/dev/null
+  rm -f "$raw_destination"
+}
+
+app_icon_render_representation() {
+  local filename="$1"
+  local size="$2"
+  local destination="$3"
+
+  case "$filename" in
+    icon_16x16.png)
+      app_icon_render_optical_png 16 "$size" "$destination"
+      ;;
+    icon_16x16@2x.png)
+      app_icon_render_optical_png 16 "$size" "$destination"
+      ;;
+    icon_32x32.png)
+      app_icon_render_optical_png 32 "$size" "$destination"
+      ;;
+    icon_32x32@2x.png)
+      app_icon_render_optical_png 32 "$size" "$destination"
+      ;;
+    *)
+      app_icon_render_png "$size" "$destination"
+      ;;
+  esac
+}
+
 app_icon_render_png() {
   local size="$1"
   local destination="$2"

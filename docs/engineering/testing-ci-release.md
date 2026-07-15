@@ -37,6 +37,7 @@ Neon 的可借鉴点：
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
 - Live AI Provider Smoke：真实 OpenAI-compatible provider 连通性测试，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，必须显式提供 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`；一旦手动启用，缺少 key 或 provider 不可达必须失败。
 - Live iCloud Sync：真实 Apple Account / iCloud Drive 手动测试，入口为 `scripts/test-icloud-sync-live`，不进入默认 `make check`；覆盖双 SQLite record merge、真实 `.app` 同步、SQLite status、仓库 ref 与 `brctl` 上传完成信号。
+- Live CloudKit Sync：真实签名 App / CloudKit Development container 手动测试，入口为 `scripts/test-cloudkit-sync-live`，不进入默认 `make check`；要求 Apple signing identity、provisioning profile 与 container 授权，覆盖独立 SQLite 上传／下载、`CKSyncEngine` state 落盘和隔离 test zone 清理。缺少任一外部条件必须失败，不能以 mock 或 ad-hoc 结果代替。
 
 ## 命令
 
@@ -48,6 +49,7 @@ make test-deterministic-sim
 make test-e2e
 make test-ai-provider-live
 scripts/test-icloud-sync-live
+make test-cloudkit-sync-live
 make test-all
 make package-dmg
 make verify-dmg
@@ -69,6 +71,16 @@ NOONMARK_AI_BASE_URL=https://provider.example/v1 \
 NOONMARK_AI_MODEL=model-name \
 NOONMARK_AI_API_KEY=... \
 make test-ai-provider-live
+```
+
+真实 CloudKit Development live：
+
+```bash
+NOONMARK_CLOUDKIT_CONTAINER_ID=iCloud.example.noonmark \
+NOONMARK_CLOUDKIT_ENVIRONMENT=Development \
+NOONMARK_CODESIGN_IDENTITY="Apple Development: Developer Name (TEAMID)" \
+NOONMARK_PROVISIONING_PROFILE=/absolute/path/Noonmark.provisionprofile \
+make test-cloudkit-sync-live
 ```
 
 用户确认真实 App 界面后，可显式比较 reference 与新截图：
@@ -123,6 +135,7 @@ Release：
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 数据包 round-trip 探针，验证设置页导出路径生成 JSON，随后通过导入路径恢复任务和复盘数据到 SQLite。
 - 2026-07-14：数据包 E2E 升级为完整 snapshot 对账，先在非空库加入替换任务，再验证导入会移除旧事实、关闭同步并精确恢复导出 snapshot；另注入导入写库失败，验证内存状态与重启后的 SQLite 都保留导入前数据。导出文件写后回读并生成 SHA-256 回执，Storage 测试另覆盖 staging 失败回滚、旧同步运行态清除与目标设备身份保留。
 - 2026-07-14：`scripts/test-icloud-sync-live` 已通过，证据覆盖双 SQLite 合并、真实 E2E App 显式启用与同步、`localFirst.sync.lastStatus` 落盘、仓库 `refs/latest` 和 CloudDocs 上传完成。它仍不是两台物理设备或 CloudKit production 验收。
+- 2026-07-14：CloudKit `CKSyncEngine` adapter、SQLite durable mirror、非重入 session 持久化、account／zone／record 删除阻断、entitlement 与 account preflight、签名输入门禁及独立 test zone live 脚本已落地；CloudKit 专项测试和真实 ad-hoc App 缺 entitlement 失败路径通过。本机没有有效 code-signing identity，因此 `scripts/test-cloudkit-sync-live` 尚未运行成功，不得描述为真实 CloudKit 到达证据。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App Provider 配置 round-trip 探针，验证非密配置经 UserDefaults 回读、dummy API Key 经 Keychain 回读，并在验证后清理。
 - 2026-07-06：`make package-dmg` 通过，生成 `dist/Noonmark.dmg` 与 `dist/Noonmark.dmg.sha256`，`shasum -a 256 -c dist/Noonmark.dmg.sha256` 通过。
 - 2026-07-06：`scripts/test-dmg-install dist/Noonmark.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
@@ -134,6 +147,6 @@ Release：
 ## 后续缺口
 
 - E2E 已覆盖主要页面、关键详情栏选中态、默认汇总侧栏、日历本地分析、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、Day Todo 复盘区烛龙分析入口、右键菜单动作矩阵、有限撤销、当天子任务完成撤回和难度修改、日期 strip 选中映射、方向键日期导航、变更、回池、废弃、事务性导入 / 导出、烛龙导航 gating、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
-- iCloud 发布前仍需两台物理设备和最终 CloudKit / `CKSyncEngine` adapter 验收；当前 live 入口只证明本机 App 到 Apple CloudDocs 服务的上传与同仓库合并。
+- iCloud 发布前仍需取得 Apple 签名资产，运行 CloudKit Development／Production live，并完成两台物理设备的到达、离线并发与恢复验收；当前已通过的 live 证据只覆盖本机 App 到 Apple CloudDocs 服务的上传与同仓库合并。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
 - Release 后续需要补 Apple Developer ID 签名、notarization；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成、校验和从本机复制安装后启动。

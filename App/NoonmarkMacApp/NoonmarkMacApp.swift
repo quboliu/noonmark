@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import Darwin
 import NoonmarkAI
 @_spi(ClassificationUserDecision) import NoonmarkCore
 import NoonmarkMacUIContract
@@ -18,6 +19,15 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
     private let store = NoonmarkStore()
 
     static func main() {
+        do {
+            _ = try CloudKitSyncLaunchConfiguration.resolve(
+                arguments: CommandLine.arguments
+            )
+        } catch {
+            let message = "Invalid Noonmark CloudKit launch arguments.\n"
+            FileHandle.standardError.write(Data(message.utf8))
+            exit(EX_USAGE)
+        }
         let app = NSApplication.shared
         let delegate = NoonmarkMacApp()
         if CommandLine.arguments.contains("--e2e-enable-zhulong") {
@@ -45,8 +55,33 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
             self?.installMainMenu()
         }
         store.ensureVisiblePage()
+        registerCloudKitRemoteNotificationsIfNeeded()
         openMainWindow()
         runLaunchAutomationIfNeeded()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        store.refreshCloudKitAccountAvailability()
+    }
+
+    func application(
+        _ application: NSApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        NSLog(
+            "Noonmark CloudKit remote notifications registered (%d-byte token)",
+            deviceToken.count
+        )
+    }
+
+    func application(
+        _ application: NSApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        NSLog(
+            "Noonmark CloudKit remote notification registration failed: %@",
+            error.localizedDescription
+        )
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -232,6 +267,21 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
             automation.run(on: store)
         }
     }
+
+    private func registerCloudKitRemoteNotificationsIfNeeded() {
+        guard let configuration = store.cloudKitSyncConfiguration else { return }
+        do {
+            try CloudKitEntitlementProbe.validateCurrentProcess(
+                containerIdentifier: configuration.containerIdentifier
+            )
+            NSApp.registerForRemoteNotifications()
+        } catch {
+            NSLog(
+                "Noonmark CloudKit capability validation failed: %@",
+                error.localizedDescription
+            )
+        }
+    }
 }
 
 private struct LaunchAutomation {
@@ -253,6 +303,7 @@ private struct LaunchAutomation {
         append(ReactivationAtomicityE2EAutomation.fromCommandLine(), to: &actions)
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
         append(ICloudSyncE2EAutomation.fromCommandLine(), to: &actions)
+        append(CloudKitSyncE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteMutationAtomicityE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteMutationAtomicityUIE2EAutomation.fromCommandLine(), to: &actions)
@@ -2749,22 +2800,25 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
 
     @MainActor
     func run(on store: NoonmarkStore) {
-        do {
-            switch mode {
-            case .roundTrip:
-                try runRoundTrip(on: store)
-            case .importPersistenceFailure:
-                try runImportPersistenceFailure(on: store)
+        Task { @MainActor in
+            do {
+                switch mode {
+                case .roundTrip:
+                    try await runRoundTrip(on: store)
+                case .importPersistenceFailure:
+                    try await runImportPersistenceFailure(on: store)
+                }
+                try writeResult("ok")
+            } catch {
+                store.disarmPersistenceFailureForE2E()
+                try? writeResult("failed: \(error.localizedDescription)")
             }
-            try writeResult("ok")
-        } catch {
-            store.disarmPersistenceFailureForE2E()
-            try? writeResult("failed: \(error.localizedDescription)")
+            NSApp.terminate(nil)
         }
     }
 
     @MainActor
-    private func runRoundTrip(on store: NoonmarkStore) throws {
+    private func runRoundTrip(on store: NoonmarkStore) async throws {
         let title = "E2E 数据包任务"
         let chainID = try store.engine.createPoolTask(
             title: title,
@@ -2788,6 +2842,12 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
         expected.preferences.localFirstSyncPolicy.enabled = false
 
         try store.exportDataPackage(to: exportURL)
+        let exportedSnapshot = try NoonmarkDataPackage.read(from: exportURL)
+        guard exportedSnapshot.preferences.localFirstSyncPolicy.enabled == false else {
+            throw DataPackageE2EAutomationError.failed(
+                "导出的数据包携带了同步启用状态"
+            )
+        }
 
         let replacedTitle = "E2E 导入前替换任务"
         store.engine = NoonmarkEngine()
@@ -2798,7 +2858,7 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
                 "未能建立导入前的持久化替换状态"
             )
         }
-        try store.importDataPackage(from: exportURL)
+        try await store.importDataPackage(from: exportURL)
         guard store.engine.snapshot() == expected else {
             throw DataPackageE2EAutomationError.failed(
                 "导入后的完整 snapshot 与安全归一化后的导出 snapshot 不一致"
@@ -2807,7 +2867,7 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
     }
 
     @MainActor
-    private func runImportPersistenceFailure(on store: NoonmarkStore) throws {
+    private func runImportPersistenceFailure(on store: NoonmarkStore) async throws {
         let baselineTitle = "E2E 导入失败保留任务"
         _ = try store.engine.createPoolTask(
             title: baselineTitle,
@@ -2825,7 +2885,7 @@ private struct DataPackageE2EAutomation: LaunchAutomationRunnable {
 
         try store.armPersistenceFailureForE2E()
         do {
-            try store.importDataPackage(from: exportURL)
+            try await store.importDataPackage(from: exportURL)
             throw DataPackageE2EAutomationError.failed(
                 "导入写库失败却返回成功"
             )
@@ -2938,6 +2998,142 @@ private struct ICloudSyncE2EAutomation: LaunchAutomationRunnable {
 }
 
 private enum ICloudSyncE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            message
+        }
+    }
+}
+
+private struct CloudKitSyncE2EAutomation: LaunchAutomationRunnable {
+    enum Action: String {
+        case upload
+        case download
+        case cleanup
+    }
+
+    let action: Action
+    let expectedTitle: String?
+    let resultURL: URL
+
+    @MainActor
+    static func fromCommandLine() -> CloudKitSyncE2EAutomation? {
+        guard CommandLine.arguments.contains("--e2e-cloudkit-sync-live"),
+              let actionValue = NoonmarkStore.commandLineValue(
+                  after: "--e2e-cloudkit-sync-action"
+              ),
+              let action = Action(rawValue: actionValue),
+              let resultPath = NoonmarkStore.commandLineValue(
+                  after: "--e2e-cloudkit-sync-result-url"
+              )
+        else { return nil }
+        let expectedTitle = NoonmarkStore.commandLineValue(
+            after: "--e2e-cloudkit-sync-title"
+        )
+        guard action == .cleanup || expectedTitle?.isEmpty == false else {
+            return nil
+        }
+        return CloudKitSyncE2EAutomation(
+            action: action,
+            expectedTitle: expectedTitle,
+            resultURL: URL(fileURLWithPath: resultPath)
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        guard store.isCloudKitSyncConfigured else {
+            finish("failed: CloudKit transport is not explicitly configured")
+            return
+        }
+        Task { @MainActor in
+            if action == .cleanup {
+                do {
+                    try await store.deleteCloudKitLiveValidationZone()
+                    finish("ok")
+                } catch {
+                    finish("failed: \(error.localizedDescription)")
+                }
+                return
+            }
+
+            do {
+                if action == .upload, let expectedTitle {
+                    _ = try store.engine.createPoolTask(
+                        title: expectedTitle,
+                        descriptionText: "由真实签名 App 写入 CloudKit development zone。"
+                    )
+                    store.persist()
+                }
+                store.setLocalFirstSyncEndpoint(.iCloud)
+                store.setLocalFirstSyncMode(.manual)
+                try await store.enableCloudKitSyncAfterAccountCheck()
+                guard store.engine.preferences.localFirstSyncPolicy.enabled else {
+                    throw CloudKitSyncE2EAutomationError.failed(
+                        "CloudKit sync did not become enabled"
+                    )
+                }
+                store.syncLocalFolderNow()
+                waitForCompletion(on: store)
+            } catch {
+                finish("failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @MainActor
+    private func waitForCompletion(on store: NoonmarkStore) {
+        Task { @MainActor in
+            for _ in 0 ..< 600 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                let syncCompleted = store.isLocalFirstSyncing == false
+                    && store.localFirstSyncMessage?.hasPrefix("同步完成") == true
+                guard syncCompleted else { continue }
+                let downloadedRecordIsMissing = action == .download
+                    && containsExpectedTitle(in: store) == false
+                if downloadedRecordIsMissing {
+                    finish("failed: downloaded CloudKit record was not materialized")
+                    return
+                }
+                finish("ok")
+                return
+            }
+            finish(
+                "failed: \(store.localFirstSyncMessage ?? "CloudKit sync timed out without a status")"
+            )
+        }
+    }
+
+    @MainActor
+    private func containsExpectedTitle(in store: NoonmarkStore) -> Bool {
+        guard let expectedTitle else { return false }
+        return store.engine.taskPool().contains {
+            $0.definition.title == expectedTitle
+        }
+    }
+
+    @MainActor
+    private func finish(_ result: String) {
+        do {
+            try FileManager.default.createDirectory(
+                at: resultURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try result.write(to: resultURL, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog(
+                "Noonmark CloudKit E2E result write failed: %@",
+                String(describing: error)
+            )
+        }
+        NSApp.terminate(nil)
+    }
+}
+
+private enum CloudKitSyncE2EAutomationError: LocalizedError {
     case failed(String)
 
     var errorDescription: String? {
@@ -4763,6 +4959,7 @@ final class NoonmarkStore: ObservableObject {
     @Published var reviewAutosaveMessage: String?
     @Published var isLocalFirstSyncing = false
     @Published var localFirstSyncMessage: String?
+    @Published private(set) var cloudKitAccountAvailability: CloudKitAccountAvailability?
 
     let today = LocalDate("2026-07-05")
     private let repository: SQLiteEngineRepository?
@@ -4775,6 +4972,9 @@ final class NoonmarkStore: ObservableObject {
     )
     private var toastTask: Task<Void, Never>?
     private var localFirstSyncAutomationTask: Task<Void, Never>?
+    private var cloudKitAccountCheckTask: Task<Void, Never>?
+    private var retainedCloudKitSyncTransport: CloudKitSyncEngineTransport?
+    private var retainedCloudKitSyncLease: CloudKitSyncPersistenceLease?
     private var undoStack: [UndoEntry] = []
     private var persistenceFailuresRemainingForE2E = 0
 
@@ -4807,6 +5007,7 @@ final class NoonmarkStore: ObservableObject {
     deinit {
         toastTask?.cancel()
         localFirstSyncAutomationTask?.cancel()
+        cloudKitAccountCheckTask?.cancel()
     }
 
     var isHistory: Bool {
@@ -6047,6 +6248,10 @@ final class NoonmarkStore: ObservableObject {
             try commitEngineMutation { candidate in
                 candidate.updateDataMode(dataMode)
             }
+            if dataMode != .localFirst {
+                cancelCloudKitAccountCheck()
+                discardCloudKitTransport()
+            }
             restartLocalFirstSyncAutomation()
             showToast(copy.dataModeChangedToast(for: dataMode))
         } catch {
@@ -6056,10 +6261,13 @@ final class NoonmarkStore: ObservableObject {
 
     func setLocalFirstSyncEndpoint(_ endpoint: CloudSyncEndpointKind) {
         guard engine.preferences.localFirstSyncPolicy.endpoint != endpoint else { return }
+        if endpoint != .iCloud {
+            cancelCloudKitAccountCheck()
+        }
         var policy = engine.preferences.localFirstSyncPolicy
         policy.endpoint = endpoint
         let endpointIsUnavailable = supportsRunnableLocalFirstSync(endpoint) == false
-            || (endpoint == .iCloud && isICloudDriveAvailable == false)
+            || (endpoint == .iCloud && isICloudSyncEndpointAvailable == false)
         if endpointIsUnavailable {
             policy.enabled = false
         }
@@ -6074,6 +6282,9 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func setLocalFirstSyncEnabled(_ enabled: Bool) {
+        if enabled == false {
+            cancelCloudKitAccountCheck()
+        }
         guard engine.preferences.localFirstSyncPolicy.enabled != enabled else { return }
         var policy = engine.preferences.localFirstSyncPolicy
         if enabled {
@@ -6082,8 +6293,12 @@ final class NoonmarkStore: ObservableObject {
                 return
             }
             if policy.endpoint == .iCloud {
+                if cloudKitSyncConfiguration != nil {
+                    beginCloudKitSyncEnablement()
+                    return
+                }
                 do {
-                    _ = try ICloudDriveSyncTransport.defaultRootURL()
+                    try validateICloudSyncEndpoint()
                 } catch {
                     localFirstSyncMessage = error.localizedDescription
                     showToast(error.localizedDescription)
@@ -6099,18 +6314,150 @@ final class NoonmarkStore: ObservableObject {
         (try? ICloudDriveSyncTransport.defaultRootURL()) != nil
     }
 
+    var cloudKitSyncConfiguration: CloudKitSyncLaunchConfiguration? {
+        try? CloudKitSyncLaunchConfiguration.resolve(
+            arguments: CommandLine.arguments
+        )
+    }
+
+    var isCloudKitSyncConfigured: Bool {
+        cloudKitSyncConfiguration != nil
+    }
+
+    var isICloudSyncEndpointAvailable: Bool {
+        do {
+            try validateICloudSyncEndpoint()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func validateICloudSyncEndpoint() throws {
+        if let cloudKitSyncConfiguration {
+            try CloudKitEntitlementProbe.validateCurrentProcess(
+                containerIdentifier: cloudKitSyncConfiguration
+                    .containerIdentifier
+            )
+            guard let cloudKitAccountAvailability,
+                  cloudKitAccountAvailability.canSync
+            else {
+                throw CloudKitSyncEngineTransportError.accountUnavailable(
+                    cloudKitAccountAvailability ?? .couldNotDetermine
+                )
+            }
+        } else {
+            _ = try ICloudDriveSyncTransport.defaultRootURL()
+        }
+    }
+
+    func refreshCloudKitAccountAvailability() {
+        guard cloudKitSyncConfiguration != nil else {
+            cancelCloudKitAccountCheck()
+            if cloudKitAccountAvailability != nil {
+                cloudKitAccountAvailability = nil
+            }
+            return
+        }
+        cancelCloudKitAccountCheck()
+        cloudKitAccountCheckTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let availability = try await resolvedCloudKitAccountAvailability()
+                try Task.checkCancellation()
+                cloudKitAccountAvailability = availability
+                if availability.canSync {
+                    restoreLocalFirstSyncStatus()
+                } else if engine.preferences.localFirstSyncPolicy.endpoint == .iCloud {
+                    localFirstSyncMessage = CloudKitSyncEngineTransportError
+                        .accountUnavailable(availability)
+                        .localizedDescription
+                }
+                restartLocalFirstSyncAutomation()
+            } catch is CancellationError {
+                return
+            } catch {
+                cloudKitAccountAvailability = nil
+                if engine.preferences.localFirstSyncPolicy.endpoint == .iCloud {
+                    localFirstSyncMessage = error.localizedDescription
+                }
+                restartLocalFirstSyncAutomation()
+            }
+        }
+    }
+
+    func enableCloudKitSyncAfterAccountCheck() async throws {
+        let availability = try await resolvedCloudKitAccountAvailability()
+        try Task.checkCancellation()
+        cloudKitAccountAvailability = availability
+        guard availability.canSync else {
+            throw CloudKitSyncEngineTransportError.accountUnavailable(availability)
+        }
+        guard engine.preferences.dataMode == .localFirst,
+              engine.preferences.localFirstSyncPolicy.endpoint == .iCloud
+        else {
+            throw CloudKitSyncEngineTransportError.cloudKitFailure(
+                "CloudKit enablement was cancelled because the data mode or endpoint changed"
+            )
+        }
+        var policy = engine.preferences.localFirstSyncPolicy
+        guard policy.enabled == false else { return }
+        policy.enabled = true
+        try applyLocalFirstSyncPolicy(policy)
+    }
+
+    private func resolvedCloudKitAccountAvailability() async throws -> CloudKitAccountAvailability {
+        guard let databaseURL, cloudKitSyncConfiguration != nil else {
+            throw CloudKitSyncEngineTransportError.cloudKitFailure(
+                "CloudKit account validation requires a persistent database"
+            )
+        }
+        return try await cloudKitTransport(
+            databaseURL: databaseURL
+        ).accountAvailability()
+    }
+
+    private func beginCloudKitSyncEnablement() {
+        cancelCloudKitAccountCheck()
+        cloudKitAccountCheckTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await enableCloudKitSyncAfterAccountCheck()
+            } catch is CancellationError {
+                return
+            } catch {
+                localFirstSyncMessage = error.localizedDescription
+                showToast(error.localizedDescription)
+            }
+        }
+    }
+
+    private func cancelCloudKitAccountCheck() {
+        cloudKitAccountCheckTask?.cancel()
+        cloudKitAccountCheckTask = nil
+    }
+
     private func commitLocalFirstSyncPolicy(_ policy: LocalFirstCloudSyncPolicy) {
         do {
-            try commitEngineMutation { candidate in
-                candidate.updateLocalFirstSyncPolicy(policy)
-            }
-            localFirstSyncMessage = nil
-            resetPersistedLocalFirstSyncStatus()
-            restartLocalFirstSyncAutomation()
-            showToast(copy.localFirstSyncChangedToast)
+            try applyLocalFirstSyncPolicy(policy)
         } catch {
             showToast(error.localizedDescription)
         }
+    }
+
+    private func applyLocalFirstSyncPolicy(
+        _ policy: LocalFirstCloudSyncPolicy
+    ) throws {
+        try commitEngineMutation { candidate in
+            candidate.updateLocalFirstSyncPolicy(policy)
+        }
+        if policy.enabled == false || policy.endpoint != .iCloud {
+            discardCloudKitTransport()
+        }
+        localFirstSyncMessage = nil
+        resetPersistedLocalFirstSyncStatus()
+        restartLocalFirstSyncAutomation()
+        showToast(copy.localFirstSyncChangedToast)
     }
 
     func syncLocalFolderNow() {
@@ -6131,6 +6478,18 @@ final class NoonmarkStore: ObservableObject {
             return
         }
 
+        let transport: any SyncRecordTransport
+        do {
+            transport = try localFirstSyncTransport(
+                for: engine.preferences.localFirstSyncPolicy.endpoint,
+                databaseURL: databaseURL
+            )
+        } catch {
+            localFirstSyncMessage = "同步启动失败：\(error.localizedDescription)"
+            showToast(localFirstSyncMessage ?? error.localizedDescription)
+            return
+        }
+
         do {
             try save(engine)
         } catch {
@@ -6140,12 +6499,11 @@ final class NoonmarkStore: ObservableObject {
         }
         isLocalFirstSyncing = true
         localFirstSyncMessage = "同步中…"
-        let endpoint = engine.preferences.localFirstSyncPolicy.endpoint
-        Task { [databaseURL, endpoint] in
+        Task { [databaseURL, transport] in
             do {
                 let coordinator = SQLiteLocalFirstSyncCoordinator(
                     databaseURL: databaseURL,
-                    transport: try Self.localFirstSyncTransport(for: endpoint)
+                    transport: transport
                 )
                 let result = try await coordinator.sync()
                 let loaded = try SQLiteEngineRepository(databaseURL: databaseURL).load()
@@ -6186,15 +6544,76 @@ final class NoonmarkStore: ObservableObject {
         endpoint == .iCloud || endpoint == .localFolder
     }
 
-    private static func localFirstSyncTransport(for endpoint: CloudSyncEndpointKind) throws -> any SyncRecordTransport {
+    private func localFirstSyncTransport(
+        for endpoint: CloudSyncEndpointKind,
+        databaseURL: URL
+    ) throws -> any SyncRecordTransport {
         switch endpoint {
         case .iCloud:
+            if cloudKitSyncConfiguration != nil {
+                return try cloudKitTransport(databaseURL: databaseURL)
+            }
             return try ICloudDriveSyncTransport()
         case .localFolder:
-            return LocalFolderSyncTransport(rootURL: configuredSyncFolderURL())
+            return LocalFolderSyncTransport(
+                rootURL: Self.configuredSyncFolderURL()
+            )
         case .s3, .webDAV:
             throw ICloudDriveSyncTransportError.unavailable
         }
+    }
+
+    private func cloudKitTransport(
+        databaseURL: URL
+    ) throws -> CloudKitSyncEngineTransport {
+        if let retainedCloudKitSyncTransport {
+            return retainedCloudKitSyncTransport
+        }
+        guard let configuration = cloudKitSyncConfiguration else {
+            throw CloudKitSyncLaunchConfigurationError.invalidArguments
+        }
+        let lease = CloudKitSyncPersistenceLease()
+        let transport = try CloudKitSyncEngineTransport(
+            containerIdentifier: configuration.containerIdentifier,
+            persistence: SQLiteCloudKitSyncPersistence(
+                databaseURL: databaseURL,
+                lease: lease
+            ),
+            zoneName: configuration.zoneName
+        )
+        retainedCloudKitSyncLease = lease
+        retainedCloudKitSyncTransport = transport
+        return transport
+    }
+
+    private func discardCloudKitTransport() {
+        guard let transport = detachCloudKitTransport() else { return }
+        Task {
+            await transport.shutdown()
+        }
+    }
+
+    private func discardCloudKitTransportAndWait() async {
+        guard let transport = detachCloudKitTransport() else { return }
+        await transport.shutdown()
+    }
+
+    private func detachCloudKitTransport() -> CloudKitSyncEngineTransport? {
+        retainedCloudKitSyncLease?.invalidate()
+        retainedCloudKitSyncLease = nil
+        defer { retainedCloudKitSyncTransport = nil }
+        return retainedCloudKitSyncTransport
+    }
+
+    func deleteCloudKitLiveValidationZone() async throws {
+        guard let databaseURL else {
+            throw CloudKitSyncEngineTransportError.cloudKitFailure(
+                "CloudKit live validation requires a persistent database"
+            )
+        }
+        try await cloudKitTransport(
+            databaseURL: databaseURL
+        ).deleteLiveValidationZone()
     }
 
     private func restartLocalFirstSyncAutomation() {
@@ -6205,6 +6624,7 @@ final class NoonmarkStore: ObservableObject {
               engine.preferences.dataMode == .localFirst,
               policy.enabled,
               supportsRunnableLocalFirstSync(policy.endpoint),
+              policy.endpoint != .iCloud || isICloudSyncEndpointAvailable,
               policy.mode == .automatic
         else { return }
 
@@ -6235,7 +6655,7 @@ final class NoonmarkStore: ObservableObject {
         }
         if policy.endpoint == .iCloud {
             do {
-                _ = try ICloudDriveSyncTransport.defaultRootURL()
+                try validateICloudSyncEndpoint()
             } catch {
                 localFirstSyncMessage = error.localizedDescription
                 return
@@ -6295,22 +6715,27 @@ final class NoonmarkStore: ObservableObject {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            try importDataPackage(from: url)
-            showToast("已导入 \(url.lastPathComponent)")
-        } catch {
-            showToast("导入失败：\(error.localizedDescription)")
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await importDataPackage(from: url)
+                showToast("已导入 \(url.lastPathComponent)")
+            } catch {
+                showToast("导入失败：\(error.localizedDescription)")
+            }
         }
     }
 
     @discardableResult
     func exportDataPackage(to url: URL) throws -> DataPackageWriteReceipt {
-        try withSecurityScopedAccess(to: url) {
-            try NoonmarkDataPackage.write(engine.snapshot(), to: url)
+        var snapshot = engine.snapshot()
+        snapshot.preferences.localFirstSyncPolicy.enabled = false
+        return try withSecurityScopedAccess(to: url) {
+            try NoonmarkDataPackage.write(snapshot, to: url)
         }
     }
 
-    func importDataPackage(from url: URL) throws {
+    func importDataPackage(from url: URL) async throws {
         guard isLocalFirstSyncing == false else {
             throw DataPackageImportError.syncInProgress
         }
@@ -6319,8 +6744,10 @@ final class NoonmarkStore: ObservableObject {
         }
         snapshot.preferences.localFirstSyncPolicy.enabled = false
         let importedEngine = try NoonmarkEngine(snapshot: snapshot)
+        cancelCloudKitAccountCheck()
         localFirstSyncAutomationTask?.cancel()
         localFirstSyncAutomationTask = nil
+        await discardCloudKitTransportAndWait()
         do {
             try replacePersistedData(with: importedEngine)
         } catch {
@@ -8190,6 +8617,20 @@ struct AppCopy {
         language == .chinese
             ? "同步仓库已写入 iCloud Drive 本机镜像；云端上传由系统完成，可能存在短暂延迟。"
             : "The repository is written to the local iCloud Drive mirror; system upload may be briefly delayed."
+    }
+
+    var cloudKitSyncReady: String {
+        language == .chinese
+            ? "同步记录通过 CloudKit private database 交换；系统调度可能带来短暂延迟。"
+            : "Records sync through the CloudKit private database; system scheduling may introduce a short delay."
+    }
+
+    var cloudKitContainerTitle: String {
+        language == .chinese ? "CloudKit container" : "CloudKit container"
+    }
+
+    var cloudKitZoneTitle: String {
+        language == .chinese ? "CloudKit zone" : "CloudKit zone"
     }
 
     var remoteEndpointPlanned: String {
@@ -11006,13 +11447,20 @@ struct LocalFirstCloudSyncCard: View {
     }
 
     private var runtimeStatus: (text: String, color: Color) {
-        if policy.endpoint == .iCloud, store.isICloudDriveAvailable == false {
+        let iCloudIsUnavailable = policy.endpoint == .iCloud
+            && store.isICloudSyncEndpointAvailable == false
+        if iCloudIsUnavailable {
             return (store.copy.unavailable, Theme.warn)
         }
         if policy.enabled {
             return (store.copy.available, Theme.ok)
         }
         return (store.copy.localFirstSyncDisabled, Theme.text3)
+    }
+
+    private var displayedCloudKitConfiguration: CloudKitSyncLaunchConfiguration? {
+        guard policy.endpoint == .iCloud else { return nil }
+        return store.cloudKitSyncConfiguration
     }
 
     var body: some View {
@@ -11061,18 +11509,33 @@ struct LocalFirstCloudSyncCard: View {
                             .disabled(
                                 store.isLocalFirstSyncing
                                     || policy.enabled == false
-                                    || (policy.endpoint == .iCloud && store.isICloudDriveAvailable == false)
+                                    || (policy.endpoint == .iCloud
+                                        && store.isICloudSyncEndpointAvailable == false)
                             )
                             Text(
                                 policy.enabled
-                                    ? (policy.endpoint == .iCloud ? store.copy.iCloudSyncReady : store.copy.localFolderSyncReady)
+                                    ? (policy.endpoint == .iCloud
+                                        ? (store.isCloudKitSyncConfigured
+                                            ? store.copy.cloudKitSyncReady
+                                            : store.copy.iCloudSyncReady)
+                                        : store.copy.localFolderSyncReady)
                                     : store.copy.localFirstSyncDisabled
                             )
                                 .font(.noonmarkSystem(size: 11.5))
                                 .foregroundStyle(Theme.text3)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        if let endpointURL = NoonmarkStore.configuredLocalFirstSyncEndpointURL(for: policy.endpoint) {
+                        if let configuration = displayedCloudKitConfiguration {
+                            SettingsInfoRow(
+                                label: store.copy.cloudKitContainerTitle,
+                                value: configuration.containerIdentifier
+                            )
+                            SettingsInfoRow(
+                                label: store.copy.cloudKitZoneTitle,
+                                value: configuration.zoneName,
+                                last: store.localFirstSyncMessage == nil
+                            )
+                        } else if let endpointURL = NoonmarkStore.configuredLocalFirstSyncEndpointURL(for: policy.endpoint) {
                             if policy.endpoint == .iCloud {
                                 SettingsInfoRow(
                                     label: store.copy.iCloudDriveLocationTitle,
@@ -11141,7 +11604,7 @@ struct SyncOptionsCard: View {
         VStack(spacing: 0) {
             ForEach(Array(store.engine.syncEndpointOptions().enumerated()), id: \.element.kind) { index, option in
                 let iCloudUnavailable = option.kind == .iCloud
-                    && store.isICloudDriveAvailable == false
+                    && store.isICloudSyncEndpointAvailable == false
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(store.copy.syncTitle(for: option.kind))

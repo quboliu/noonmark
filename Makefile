@@ -1,4 +1,4 @@
-.PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-ai-provider-live test-all lint format format-check check
+.PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-ai-provider-live test-cloudkit-sync-live test-all lint format format-check check
 
 reset-dev-data:
 	scripts/reset-dev-data
@@ -50,6 +50,9 @@ test-e2e:
 
 test-ai-provider-live:
 	scripts/test-ai-provider-live
+
+test-cloudkit-sync-live:
+	scripts/test-cloudkit-sync-live
 
 test-all:
 	scripts/test-all

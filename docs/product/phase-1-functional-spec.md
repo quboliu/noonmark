@@ -13,7 +13,7 @@
 - 历史日轨迹不可删除、不可无痕改期、不可覆盖式编辑。
 - 未来计划可以调整，因为它尚未形成当日承诺。
 - 第一阶段只支持有限撤销，不能用撤销抹掉历史事实。
-- 当前提供经过写后校验的手动数据包导出 / 事务性导入，以及默认关闭的 iCloud Drive 记录同步；CloudKit、S3 与 WebDAV 仍未接入。
+- 当前提供经过写后校验的手动数据包导出／事务性导入，以及默认关闭的 iCloud Drive 记录同步；CloudKit `CKSyncEngine` adapter 只在签名 live 模式下显式启用，S3 与 WebDAV 仍未接入。
 - 烛龙是可选 sidecar；没有 AI provider 时普通清单功能必须完整可用。
 
 ## 数据模式与备份边界
@@ -471,7 +471,8 @@ func listSyncEndpointOptions() -> [SyncEndpointOption]
 - 第一期外观主题为冷灰和微暖纸感。
 - 第一期界面语言为中文和 English。
 - iCloud Drive 记录仓库与本地文件夹是显式启用的开发期端点；无 Apple Account 时 iCloud 必须显示不可用。
-- 自定义服务、S3、WebDAV 与最终 CloudKit adapter 是规划中入口，不能表现为已可用。
+- CloudKit adapter 只有在签名、container entitlement 与显式启动参数均有效时才替换 iCloud Drive；普通开发包不得把它表现为已可用。
+- 自定义服务、S3 与 WebDAV 是规划中入口，不能表现为已可用。
 
 ### SubtaskUseCase
 
@@ -560,7 +561,7 @@ func syncLocalFirstNow() async throws
 - 导入不得与同步并发；必须先在当前 schema 的隔离 SQLite staging 中完成保存与回读，再以 SQLite 原子整库替换恢复目标。旧任务事实与旧同步运行态不得残留，目标 Mac 的设备身份必须保留；staging 或替换失败时，原数据库与内存状态都不得改变。
 - 本地优先记录同步默认关闭，只有用户显式启用后才允许手动或按持久化间隔触发。
 - 跨设备偏好记录只包含主题与语言；数据模式、同步开关、端点、间隔、备份策略和设置页诗文都是设备本地配置。
-- 当前 iCloud Drive 与本地文件夹端点交换逐条 canonical 记录；S3、WebDAV 与 CloudKit adapter 尚未接入。
+- 当前 iCloud Drive、本地文件夹与受签名门禁保护的 CloudKit adapter 都交换逐条 canonical 记录；S3 与 WebDAV 尚未接入。
 - 任何端点都不得直接同步裸 SQLite 文件。
 
 ### UndoUseCase
@@ -665,7 +666,7 @@ func canUndoLastLocalAction() -> Bool
 - 小组件
 - Watch
 - 账号系统
-- 自动云同步
+- 默认开启或承诺实时到达的原生云同步
 - 周报 / 热力图 / 高级统计
 - 多人协作
 - 重复任务

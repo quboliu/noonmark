@@ -2144,8 +2144,7 @@ open -W -n "$app_path" --args \
   --page settings \
   --e2e-data-package-workflow \
   --e2e-data-package-url "$PWD/$data_package_json" \
-  --e2e-data-package-result-url "$PWD/$data_package_result" \
-  --e2e-quit-after-automation
+  --e2e-data-package-result-url "$PWD/$data_package_result"
 
 if [[ ! -f "$data_package_result" ]]; then
   echo "data package e2e result was not created: $data_package_result" >&2
@@ -2206,8 +2205,7 @@ open -W -n "$app_path" --args \
   --e2e-persistence-failure-automation \
   --e2e-data-package-import-failure \
   --e2e-data-package-url "$PWD/$data_package_failure_json" \
-  --e2e-data-package-result-url "$PWD/$data_package_failure_result" \
-  --e2e-quit-after-automation
+  --e2e-data-package-result-url "$PWD/$data_package_failure_result"
 
 if [[ ! -f "$data_package_failure_result" ]]; then
   echo "data package import-failure result was not created: $data_package_failure_result" >&2

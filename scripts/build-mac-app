@@ -31,12 +31,128 @@ bundle_dir="dist/${bundle_name}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
+cloudkit_container_id="${NOONMARK_CLOUDKIT_CONTAINER_ID:-}"
+cloudkit_environment="${NOONMARK_CLOUDKIT_ENVIRONMENT:-}"
+codesign_identity="${NOONMARK_CODESIGN_IDENTITY:-}"
+provisioning_profile="${NOONMARK_PROVISIONING_PROFILE:-}"
+cloudkit_signing_enabled=0
+decoded_profile=""
+claimed_entitlements=""
+
+cleanup() {
+  [[ -z "$decoded_profile" ]] || rm -f "$decoded_profile"
+  [[ -z "$claimed_entitlements" ]] || rm -f "$claimed_entitlements"
+}
+trap cleanup EXIT
+
+plist_value() {
+  /usr/libexec/PlistBuddy -c "Print :$1" "$2" 2>/dev/null
+}
+
+plist_array_contains() {
+  /usr/libexec/PlistBuddy -c "Print :$1" "$3" 2>/dev/null \
+    | sed -e '1d' -e '$d' -e 's/^[[:space:]]*//' \
+    | grep -Fqx "$2"
+}
+
+if [[ -n "$cloudkit_container_id" ]]; then
+  cloudkit_signing_enabled=1
+  if [[ ! "$cloudkit_container_id" =~ ^iCloud\.[A-Za-z0-9.-]+$ ]]; then
+    echo "invalid NOONMARK_CLOUDKIT_CONTAINER_ID: $cloudkit_container_id" >&2
+    exit 1
+  fi
+  case "$cloudkit_environment" in
+    Development)
+      aps_environment="development"
+      ;;
+    Production)
+      aps_environment="production"
+      ;;
+    *)
+      echo "CloudKit build requires NOONMARK_CLOUDKIT_ENVIRONMENT=Development or Production" >&2
+      exit 1
+      ;;
+  esac
+  if [[ -z "$codesign_identity" || "$codesign_identity" == "-" ]]; then
+    echo "CloudKit build requires a non-ad-hoc NOONMARK_CODESIGN_IDENTITY" >&2
+    exit 1
+  fi
+  if [[ -z "$provisioning_profile" || ! -f "$provisioning_profile" ]]; then
+    echo "CloudKit build requires an existing NOONMARK_PROVISIONING_PROFILE" >&2
+    exit 1
+  fi
+  if ! security find-identity -v -p codesigning \
+    | grep -Fq "$codesign_identity"; then
+    echo "CloudKit signing identity is not available in the current keychain" >&2
+    exit 1
+  fi
+
+  decoded_profile="$(mktemp -t noonmark-cloudkit-profile.XXXXXX)"
+  if ! security cms -D -i "$provisioning_profile" >"$decoded_profile"; then
+    echo "CloudKit provisioning profile could not be decoded" >&2
+    exit 1
+  fi
+  PROFILE_PLIST="$decoded_profile" swift -e '
+import Foundation
+import Darwin
+
+let path = ProcessInfo.processInfo.environment["PROFILE_PLIST"]!
+let data = try Data(contentsOf: URL(fileURLWithPath: path))
+let value = try PropertyListSerialization.propertyList(from: data, format: nil)
+guard let profile = value as? [String: Any],
+      let expiration = profile["ExpirationDate"] as? Date,
+      expiration > Date()
+else {
+    FileHandle.standardError.write(
+        Data("CloudKit provisioning profile is expired or malformed\n".utf8)
+    )
+    exit(1)
+}
+' >/dev/null
+
+  profile_team_identifier="$(plist_value "TeamIdentifier:0" "$decoded_profile")"
+  profile_app_identifier="$(
+    plist_value "Entitlements:application-identifier" "$decoded_profile" \
+      || plist_value "Entitlements:com.apple.application-identifier" "$decoded_profile"
+  )"
+  profile_bundle_identifier="${profile_app_identifier#*.}"
+  if [[ -z "$profile_team_identifier" \
+        || "$profile_bundle_identifier" != "$bundle_identifier" ]]; then
+    echo "CloudKit provisioning profile does not authorize $bundle_identifier" >&2
+    exit 1
+  fi
+  if ! plist_array_contains \
+    "Entitlements:com.apple.developer.icloud-container-identifiers" \
+    "$cloudkit_container_id" \
+    "$decoded_profile"; then
+    echo "CloudKit provisioning profile does not authorize $cloudkit_container_id" >&2
+    exit 1
+  fi
+  if ! plist_array_contains \
+    "Entitlements:com.apple.developer.icloud-services" \
+    "CloudKit" \
+    "$decoded_profile"; then
+    echo "CloudKit provisioning profile does not authorize the CloudKit service" >&2
+    exit 1
+  fi
+  if [[ "$(plist_value "Entitlements:com.apple.developer.icloud-container-environment" "$decoded_profile")" \
+        != "$cloudkit_environment" ]]; then
+    echo "CloudKit provisioning profile environment does not match $cloudkit_environment" >&2
+    exit 1
+  fi
+  if [[ "$(plist_value "Entitlements:com.apple.developer.aps-environment" "$decoded_profile")" \
+        != "$aps_environment" ]]; then
+    echo "CloudKit provisioning profile APNs environment does not match $aps_environment" >&2
+    exit 1
+  fi
+fi
 
 scripts/test-app-icon
 scripts/reset-dev-data
 swift build -c "$configuration" --product "$product"
 
 rm -rf "$bundle_dir"
+rm -f "dist/NoonmarkCloudKit.entitlements"
 mkdir -p "$macos_dir" "$resources_dir"
 
 binary_path=".build/arm64-apple-macosx/${configuration}/${product}"
@@ -84,6 +200,77 @@ cat > "${contents_dir}/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$bundle_dir" >/dev/null
+if [[ "$cloudkit_signing_enabled" -eq 1 ]]; then
+  /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "${contents_dir}/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string remote-notification" \
+    "${contents_dir}/Info.plist"
+  cp "$provisioning_profile" "${contents_dir}/embedded.provisionprofile"
+  entitlements_path="dist/NoonmarkCloudKit.entitlements"
+  cat >"$entitlements_path" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.application-identifier</key>
+  <string>${profile_app_identifier}</string>
+  <key>com.apple.developer.team-identifier</key>
+  <string>${profile_team_identifier}</string>
+  <key>com.apple.developer.icloud-container-identifiers</key>
+  <array>
+    <string>${cloudkit_container_id}</string>
+  </array>
+  <key>com.apple.developer.icloud-services</key>
+  <array>
+    <string>CloudKit</string>
+  </array>
+  <key>com.apple.developer.icloud-container-environment</key>
+  <string>${cloudkit_environment}</string>
+  <key>com.apple.developer.aps-environment</key>
+  <string>${aps_environment}</string>
+</dict>
+</plist>
+PLIST
+  codesign \
+    --force \
+    --sign "$codesign_identity" \
+    --entitlements "$entitlements_path" \
+    "$bundle_dir" >/dev/null
+
+  claimed_entitlements="$(mktemp -t noonmark-cloudkit-entitlements.XXXXXX)"
+  codesign --display --entitlements - --xml "$bundle_dir" \
+    >"$claimed_entitlements" 2>/dev/null
+  if [[ "$(plist_value "com.apple.application-identifier" "$claimed_entitlements")" \
+        != "$profile_app_identifier" \
+        || "$(plist_value "com.apple.developer.team-identifier" "$claimed_entitlements")" \
+        != "$profile_team_identifier" \
+        || "$(plist_value "com.apple.developer.icloud-container-environment" "$claimed_entitlements")" \
+        != "$cloudkit_environment" \
+        || "$(plist_value "com.apple.developer.aps-environment" "$claimed_entitlements")" \
+        != "$aps_environment" ]]; then
+    echo "signed app does not contain the expected CloudKit scalar entitlements" >&2
+    exit 1
+  fi
+  if ! plist_array_contains \
+    "com.apple.developer.icloud-container-identifiers" \
+    "$cloudkit_container_id" \
+    "$claimed_entitlements" \
+    || ! plist_array_contains \
+      "com.apple.developer.icloud-services" \
+      "CloudKit" \
+      "$claimed_entitlements"; then
+    echo "signed app does not contain the expected CloudKit array entitlements" >&2
+    exit 1
+  fi
+  signed_team_identifier="$(
+    codesign --display --verbose=4 "$bundle_dir" 2>&1 \
+      | awk -F= '/^TeamIdentifier=/{print $2}'
+  )"
+  if [[ "$signed_team_identifier" != "$profile_team_identifier" ]]; then
+    echo "signed app team does not match the provisioning profile" >&2
+    exit 1
+  fi
+else
+  codesign --force --sign - "$bundle_dir" >/dev/null
+fi
 scripts/test-app-icon-bundle "$bundle_dir"
 echo "$bundle_dir"

@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+required_environment=(
+  NOONMARK_CLOUDKIT_CONTAINER_ID
+  NOONMARK_CLOUDKIT_ENVIRONMENT
+  NOONMARK_CODESIGN_IDENTITY
+  NOONMARK_PROVISIONING_PROFILE
+)
+for name in "${required_environment[@]}"; do
+  if [[ -z "${!name:-}" ]]; then
+    echo "CloudKit live validation requires $name" >&2
+    exit 1
+  fi
+done
+if [[ "$NOONMARK_CLOUDKIT_ENVIRONMENT" != "Development" ]]; then
+  echo "CloudKit live validation only runs against the Development environment" >&2
+  exit 1
+fi
+
+zone_name="NoonmarkLiveValidation-$(date -u +%Y%m%d%H%M%S)-$$"
+artifact_dir="artifacts/e2e-cloudkit-sync-live"
+upload_database="$PWD/$artifact_dir/upload.sqlite"
+download_database="$PWD/$artifact_dir/download.sqlite"
+cleanup_database="$PWD/$artifact_dir/cleanup.sqlite"
+upload_result="$PWD/$artifact_dir/upload-result.txt"
+download_result="$PWD/$artifact_dir/download-result.txt"
+cleanup_result="$PWD/$artifact_dir/cleanup-result.txt"
+task_title="CloudKit live validation $zone_name"
+app_path="$PWD/dist/Noonmark.app"
+app_built=0
+
+rm -rf "$artifact_dir"
+mkdir -p "$artifact_dir"
+
+run_app_action() {
+  local action="$1"
+  local database="$2"
+  local result="$3"
+  rm -f "$result"
+  open -W -n "$app_path" --args \
+    --data-url "$database" \
+    --page settings \
+    --cloudkit-container-id "$NOONMARK_CLOUDKIT_CONTAINER_ID" \
+    --cloudkit-zone-name "$zone_name" \
+    --e2e-cloudkit-sync-live \
+    --e2e-cloudkit-sync-action "$action" \
+    --e2e-cloudkit-sync-title "$task_title" \
+    --e2e-cloudkit-sync-result-url "$result"
+}
+
+cleanup() {
+  local original_status=$?
+  local cleanup_status=0
+  trap - EXIT
+  if [[ "$app_built" -eq 1 ]]; then
+    if ! run_app_action cleanup "$cleanup_database" "$cleanup_result"; then
+      cleanup_status=1
+    elif [[ ! -f "$cleanup_result" || "$(cat "$cleanup_result")" != "ok" ]]; then
+      echo "CloudKit live-validation zone cleanup failed: $(cat "$cleanup_result" 2>/dev/null || echo missing-result)" >&2
+      cleanup_status=1
+    fi
+  fi
+  if [[ "$original_status" -ne 0 ]]; then
+    exit "$original_status"
+  fi
+  exit "$cleanup_status"
+}
+trap cleanup EXIT
+
+scripts/build-mac-app debug app >/dev/null
+app_built=1
+
+run_app_action upload "$upload_database" "$upload_result"
+if [[ ! -f "$upload_result" || "$(cat "$upload_result")" != "ok" ]]; then
+  echo "CloudKit upload App path failed: $(cat "$upload_result" 2>/dev/null || echo missing-result)" >&2
+  exit 1
+fi
+
+run_app_action download "$download_database" "$download_result"
+if [[ ! -f "$download_result" || "$(cat "$download_result")" != "ok" ]]; then
+  echo "CloudKit download App path failed: $(cat "$download_result" 2>/dev/null || echo missing-result)" >&2
+  exit 1
+fi
+
+for database in "$upload_database" "$download_database"; do
+  cloudkit_state_count="$(sqlite3 -noheader "$database" \
+    "SELECT count(*) FROM sync_metadata WHERE key = 'cloudkit.sync.persistence.v1';")"
+  sync_status_count="$(sqlite3 -noheader "$database" \
+    "SELECT count(*) FROM sync_metadata WHERE key = 'localFirst.sync.lastStatus';")"
+  if [[ "$cloudkit_state_count" -ne 1 || "$sync_status_count" -ne 1 ]]; then
+    echo "CloudKit App path did not persist engine state and sync status: $database" >&2
+    exit 1
+  fi
+done
+
+echo "Live CloudKit sync: signed App upload, independent App download, durable state, and isolated zone cleanup confirmed"

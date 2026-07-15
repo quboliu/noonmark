@@ -53,7 +53,11 @@ let package = Package(
         ),
         .target(
             name: "NoonmarkSync",
-            dependencies: ["NoonmarkCore"]
+            dependencies: ["NoonmarkCore"],
+            linkerSettings: [
+                .linkedFramework("CloudKit"),
+                .linkedFramework("Security")
+            ]
         ),
         .testTarget(
             name: "NoonmarkCoreTests",

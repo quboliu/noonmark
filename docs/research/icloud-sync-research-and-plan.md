@@ -8,7 +8,7 @@
 
 晷迹推荐采用 **CloudKit private database + CKSyncEngine + 自有 SQLite / NoonmarkCore 合并层**。
 
-2026-07-14 的当前实现先提供默认关闭的 **iCloud Drive 逐记录仓库端点**，用于验证通用同步协议、真实 App 事务边界和 Apple 系统上传。它不复制 SQLite，也不使用整个 JSON 数据包做同步；同时它不是最终 CloudKit adapter，不得据此删除下文的 CloudKit 发布门禁。决策与风险边界见 `docs/adr/0018-opt-in-icloud-drive-record-repository-before-cloudkit.md`。
+2026-07-14 的当前实现提供默认关闭的 **iCloud Drive 逐记录仓库端点**，并已实现受签名与显式启动参数门禁保护的 **CloudKit private database + CKSyncEngine adapter**。普通开发包继续使用已经真实验证的 iCloud Drive；CloudKit 尚未取得本机 Apple signing identity、provisioning profile 与 container 授权，因此 network live 不得标记为通过。决策与风险边界见 `docs/adr/0018-opt-in-icloud-drive-record-repository-before-cloudkit.md` 与 `docs/adr/0019-gate-cloudkit-sync-engine-behind-signed-live-validation.md`。
 
 不推荐：
 
@@ -39,15 +39,16 @@
 - `docs/adr/0004-use-insert-only-relational-model-not-event-sourcing.md` 明确：事实表是事实来源，`change_journal` 只能作为未来同步和诊断辅助流水，不是事实来源。
 - `NoonmarkCore` 已有稳定 ID、日期值对象、任务链、任务定义、日轨迹、子任务、每日复盘和偏好。
 - `NoonmarkStorage` 已有 `SQLiteEngineRepository`、`NoonmarkDataPackage`、`sync_settings` 表和 `sync_endpoint_options_view`；TaskChain 与 DayTrace 的结构化附言分别保存在 `note_entries_json`，不是单一文本字段。TaskDefinition 不存附言。
-- `NoonmarkSync` 已有设备身份、canonical records、journal、等待队列、terminal ledger、冲突、审计、确定性 merge、Local Folder 与 iCloud Drive transport。
+- `NoonmarkSync` 已有设备身份、canonical records、journal、等待队列、terminal ledger、冲突、审计、确定性 merge、Local Folder、iCloud Drive 与 CloudKit `CKSyncEngine` transport。
 - 当前 `AppPreferencesRecord` payload 已收窄为主题与语言；数据模式和同步配置不写入 journal payload，远端合并也保留本机配置。
-- 设置页可显式启用 / 关闭 iCloud Drive 记录同步，支持手动 / 自动触发，并展示等待、失败和未解决冲突计数；S3、WebDAV 与自定义服务仍标记为规划中。
+- 设置页可显式启用／关闭 iCloud 记录同步，支持手动／自动触发，并展示等待、失败和未解决冲突计数；普通 App 显示 iCloud Drive 路径，显式 CloudKit App 显示 container、zone 与真实 account status 门禁；S3、WebDAV 与自定义服务仍标记为规划中。
 - `scripts/test-icloud-sync-live` 已验证双 SQLite 合并、真实 `.app`、同步 metadata、仓库 ref 与 CloudDocs 上传完成信号。
+- CloudKit adapter 已覆盖 strict record codec、scope-bound durable mirror、engine state、account switch、zone／record deletion block、session 非重入持久化、数据包恢复前 lease 撤销与 engine 取消等待、entitlement／account preflight，以及真实 ad-hoc App 失败路径；`scripts/test-cloudkit-sync-live` 已建立签名 App 双 SQLite 上传／下载与隔离 zone 清理门禁。
 
 当前缺口：
 
-- 没有 CloudKit entitlement、container、schema、record mapping。
-- 没有 CloudKit server change token、zone lifecycle、push、quota、throttle 与 `retryAfterSeconds` 处理。
+- 本机没有有效 Apple signing identity、provisioning profile 与已授权 container，尚未运行 CloudKit Development 或 Production network live。
+- CloudKit schema 尚未在 Development 创建并部署到 Production；quota、throttle、网络中断与 `retryAfterSeconds` 仍缺真实服务故障取证。
 - 已有冲突持久化与计数，但没有面向用户的冲突处理列表。
 - 没有两台物理设备的到达、离线并发与恢复测试。
 

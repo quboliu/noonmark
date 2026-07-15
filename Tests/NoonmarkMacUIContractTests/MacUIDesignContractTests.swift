@@ -15,9 +15,10 @@ final class MacUIDesignContractTests: XCTestCase {
 
     func testCurrentShellLayoutMatchesCompactReference() {
         XCTAssertEqual(MacUIShellLayout.sidebarWidth, 220)
-        XCTAssertEqual(MacUIShellLayout.collapsedSidebarWidth, 76)
+        XCTAssertEqual(MacUIShellLayout.collapsedSidebarWidth, 0)
         XCTAssertEqual(MacUIShellLayout.detailRailWidth, 280)
         XCTAssertEqual(MacUIShellLayout.calendarRailWidth, 248)
+        XCTAssertEqual(MacUIShellLayout.windowToolbarHeight, 42)
         XCTAssertEqual(MacUIShellLayout.pageHorizontalPadding, 20)
         XCTAssertEqual(MacUIShellLayout.taskRowVerticalPadding, 8)
         XCTAssertEqual(MacUIShellLayout.detailPadding, 14)
@@ -115,6 +116,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.borderlessListRows))
         XCTAssertTrue(contract.globalElements.contains(.collapsibleSidebar))
         XCTAssertTrue(contract.globalElements.contains(.sidebarExpandedByDefault))
+        XCTAssertTrue(contract.globalElements.contains(.sidebarFullyHiddenWhenCollapsed))
         XCTAssertTrue(contract.globalElements.contains(.stableWindowFrameDuringSidebarToggle))
         XCTAssertTrue(contract.windowMetrics.contains(.defaultLaunch1200x768))
         XCTAssertTrue(contract.windowMetrics.contains(.minimum960x720))
@@ -122,6 +124,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.detailRailCollapsedByDefault))
         XCTAssertTrue(contract.globalElements.contains(.calendarUsesCollapsibleDetailRail))
         XCTAssertTrue(contract.globalElements.contains(.stableWindowFrameDuringDetailRailToggle))
+        XCTAssertTrue(contract.globalElements.contains(.spatiallySeparatedRailControls))
+        XCTAssertTrue(contract.globalElements.contains(.viewMenuRailCommands))
         XCTAssertTrue(contract.globalElements.contains(.adaptiveMainSurfaceWidth))
         XCTAssertTrue(contract.colorTokens.contains(.accent))
         XCTAssertTrue(contract.colorTokens.contains(.ok))

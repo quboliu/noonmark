@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 
 @main
 @MainActor
-final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
+final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private static var retainedDelegate: NoonmarkMacApp?
     private var window: NSWindow?
     private let store = NoonmarkStore()
@@ -158,8 +158,10 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
         let mainMenu = NSMenu()
         let appItem = NSMenuItem(title: copy.appName, action: nil, keyEquivalent: "")
         let editItem = NSMenuItem(title: copy.editMenu, action: nil, keyEquivalent: "")
+        let viewItem = NSMenuItem(title: copy.viewMenu, action: nil, keyEquivalent: "")
         mainMenu.addItem(appItem)
         mainMenu.addItem(editItem)
+        mainMenu.addItem(viewItem)
 
         let appMenu = NSMenu(title: copy.appName)
         appItem.submenu = appMenu
@@ -211,7 +213,49 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate {
             action: #selector(selectAllAction(_:)),
             keyEquivalent: "a"
         ).target = self
+
+        let viewMenu = NSMenu(title: copy.viewMenu)
+        viewItem.submenu = viewMenu
+        let sidebarItem = viewMenu.addItem(
+            withTitle: store.isSidebarExpanded ? copy.collapseSidebar : copy.expandSidebar,
+            action: #selector(toggleSidebarAction(_:)),
+            keyEquivalent: "s"
+        )
+        sidebarItem.keyEquivalentModifierMask = [.command, .control]
+        sidebarItem.target = self
+        let detailRailItem = viewMenu.addItem(
+            withTitle: store.isDetailRailExpanded ? copy.collapseDetailRail : copy.expandDetailRail,
+            action: #selector(toggleDetailRailAction(_:)),
+            keyEquivalent: "i"
+        )
+        detailRailItem.keyEquivalentModifierMask = [.command, .option]
+        detailRailItem.target = self
         NSApp.mainMenu = mainMenu
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(toggleSidebarAction(_:)):
+            menuItem.title = store.isSidebarExpanded
+                ? store.copy.collapseSidebar
+                : store.copy.expandSidebar
+            return true
+        case #selector(toggleDetailRailAction(_:)):
+            menuItem.title = store.isDetailRailExpanded
+                ? store.copy.collapseDetailRail
+                : store.copy.expandDetailRail
+            return store.hasDetailRailContent
+        default:
+            return true
+        }
+    }
+
+    @objc private func toggleSidebarAction(_ sender: Any?) {
+        store.toggleSidebar()
+    }
+
+    @objc private func toggleDetailRailAction(_ sender: Any?) {
+        store.toggleDetailRail()
     }
 
     @objc private func undoAction(_ sender: Any?) {
@@ -4864,6 +4908,12 @@ final class NoonmarkStore: ObservableObject {
             }
         }
 
+        var detailRailWidth: CGFloat {
+            self == .calendar
+                ? NoonmarkVisualMetrics.calendarRailWidth
+                : NoonmarkVisualMetrics.detailRailWidth
+        }
+
         init?(commandLineValue: String) {
             switch commandLineValue {
             case "day":
@@ -8300,9 +8350,16 @@ struct NoonmarkRootView: View {
 
     var body: some View {
         ZStack {
-            HStack(spacing: 0) {
-                Sidebar()
-                MainSurface()
+            VStack(spacing: 0) {
+                WindowToolbar()
+
+                HStack(spacing: 0) {
+                    if store.isSidebarExpanded {
+                        Sidebar()
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
+                    MainSurface()
+                }
             }
             .animation(.easeInOut(duration: 0.18), value: store.isSidebarExpanded)
             .background(Theme.background)
@@ -8427,6 +8484,7 @@ struct AppCopy {
     }
 
     var editMenu: String { language == .chinese ? "编辑" : "Edit" }
+    var viewMenu: String { language == .chinese ? "显示" : "View" }
     var quitApp: String { language == .chinese ? "退出晷迹" : "Quit Noonmark" }
     var undo: String { language == .chinese ? "撤销" : "Undo" }
     var redo: String { language == .chinese ? "重做" : "Redo" }
@@ -9013,6 +9071,48 @@ struct TrafficLightDots: View {
     }
 }
 
+struct WindowToolbar: View {
+    @EnvironmentObject private var store: NoonmarkStore
+
+    var body: some View {
+        ZStack {
+            HStack(spacing: 0) {
+                if store.isSidebarExpanded {
+                    Theme.sidebar
+                        .frame(width: NoonmarkVisualMetrics.sidebarWidth)
+                }
+                Theme.panel
+                    .frame(maxWidth: .infinity)
+                if store.shouldShowDetailRail {
+                    Theme.panel2
+                        .frame(width: store.page.detailRailWidth)
+                }
+            }
+
+            HStack(spacing: 10) {
+                TrafficLightDots()
+                SidebarToggleButton()
+                Spacer(minLength: 24)
+                if store.hasDetailRailContent {
+                    DetailRailToggleButton()
+                        .transition(.opacity)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .frame(height: NoonmarkVisualMetrics.windowToolbarHeight)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.line.opacity(0.55))
+                .frame(height: 1)
+        }
+        .background {
+            AppE2EViewAnchor(identifier: "shell.window-toolbar")
+        }
+        .animation(.easeInOut(duration: 0.18), value: store.shouldShowDetailRail)
+    }
+}
+
 struct Sidebar: View {
     @EnvironmentObject private var store: NoonmarkStore
 
@@ -9027,32 +9127,22 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            topControls
-
-            if store.isSidebarExpanded {
-                NavGroupTitle(store.copy.planGroup)
-            }
+            NavGroupTitle(store.copy.planGroup)
             ForEach(planPages) { page in
                 NavItem(
                     page: page,
                     label: store.navigationLabel(for: page),
-                    count: store.navigationCount(for: page),
-                    compact: store.isSidebarExpanded == false
+                    count: store.navigationCount(for: page)
                 )
             }
 
-            if store.isSidebarExpanded {
-                NavGroupTitle(store.copy.traceGroup)
-                    .padding(.top, 12)
-            } else {
-                Color.clear.frame(height: 12)
-            }
+            NavGroupTitle(store.copy.traceGroup)
+                .padding(.top, 12)
             ForEach(tracePages) { page in
                 NavItem(
                     page: page,
                     label: store.navigationLabel(for: page),
-                    count: store.navigationCount(for: page),
-                    compact: store.isSidebarExpanded == false
+                    count: store.navigationCount(for: page)
                 )
             }
 
@@ -9060,16 +9150,11 @@ struct Sidebar: View {
             NavItem(
                 page: .settings,
                 label: store.copy.navSettings,
-                count: 0,
-                compact: store.isSidebarExpanded == false
+                count: 0
             )
         }
-        .frame(
-            width: store.isSidebarExpanded
-                ? NoonmarkVisualMetrics.sidebarWidth
-                : NoonmarkVisualMetrics.collapsedSidebarWidth
-        )
-        .padding(.top, 10)
+        .frame(width: NoonmarkVisualMetrics.sidebarWidth)
+        .padding(.top, 14)
         .padding(.bottom, 10)
         .background(Theme.sidebar)
         .background {
@@ -9077,33 +9162,6 @@ struct Sidebar: View {
         }
         .overlay(alignment: .trailing) {
             Rectangle().fill(Theme.line.opacity(0.55)).frame(width: 1)
-        }
-    }
-
-    @ViewBuilder private var topControls: some View {
-        if store.isSidebarExpanded {
-            HStack(spacing: 8) {
-                TrafficLightDots()
-                Spacer(minLength: 8)
-                SidebarToggleButton()
-                if store.hasDetailRailContent {
-                    DetailRailToggleButton()
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 18)
-        } else {
-            VStack(spacing: 8) {
-                TrafficLightDots()
-                HStack(spacing: 8) {
-                    SidebarToggleButton()
-                    if store.hasDetailRailContent {
-                        DetailRailToggleButton()
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.bottom, 12)
         }
     }
 }
@@ -9121,20 +9179,17 @@ struct SidebarToggleButton: View {
         Button(action: store.toggleSidebar) {
             Image(systemName: "sidebar.left")
                 .font(.noonmarkRenderedSystem(size: 13, weight: .medium))
-                .frame(width: 26, height: 26)
+                .frame(width: 28, height: 28)
                 .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
-        .foregroundStyle(store.isSidebarExpanded ? Theme.text3 : Theme.accent)
+        .foregroundStyle(Theme.text2)
         .hoverSurface(
-            active: store.isSidebarExpanded == false,
             cornerRadius: 6,
             idleFill: .clear,
-            hoverFill: Theme.panel.opacity(0.78),
-            activeFill: Theme.accentSoft.opacity(0.72),
+            hoverFill: Theme.listRowHover,
             idleStroke: .clear,
-            hoverStroke: Theme.line.opacity(0.55),
-            activeStroke: Theme.accent.opacity(0.20)
+            hoverStroke: Theme.line.opacity(0.55)
         )
         .accessibilityLabel(label)
         .help(label)
@@ -9160,20 +9215,17 @@ struct DetailRailToggleButton: View {
         Button(action: store.toggleDetailRail) {
             Image(systemName: "sidebar.right")
                 .font(.noonmarkRenderedSystem(size: 13, weight: .medium))
-                .frame(width: 26, height: 26)
+                .frame(width: 28, height: 28)
                 .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
-        .foregroundStyle(store.isDetailRailExpanded ? Theme.accent : Theme.text3)
+        .foregroundStyle(Theme.text2)
         .hoverSurface(
-            active: store.isDetailRailExpanded,
             cornerRadius: 6,
             idleFill: .clear,
-            hoverFill: Theme.panel.opacity(0.78),
-            activeFill: Theme.accentSoft.opacity(0.72),
+            hoverFill: Theme.listRowHover,
             idleStroke: .clear,
-            hoverStroke: Theme.line.opacity(0.55),
-            activeStroke: Theme.accent.opacity(0.20)
+            hoverStroke: Theme.line.opacity(0.55)
         )
         .accessibilityLabel(label)
         .help(label)
@@ -9208,7 +9260,6 @@ struct NavItem: View {
     let page: NoonmarkStore.Page
     let label: String
     let count: Int
-    let compact: Bool
 
     var active: Bool { store.page == page }
 
@@ -9216,30 +9267,23 @@ struct NavItem: View {
         Button {
             store.selectPage(page)
         } label: {
-            Group {
-                if compact {
-                    navigationIcon
-                        .frame(maxWidth: .infinity)
-                } else {
-                    HStack(spacing: 10) {
-                        navigationIcon
-                        Text(label)
-                            .font(.noonmarkSystem(size: 14.5, weight: active ? .semibold : .medium))
-                            .foregroundStyle(active ? Theme.text1 : Theme.text2)
-                        Spacer()
-                        if count > 0 {
-                            Text("\(count)")
-                                .font(.noonmarkSystem(size: 12, weight: active ? .semibold : .regular))
-                                .foregroundStyle(Theme.text2)
-                                .padding(.horizontal, 7)
-                                .frame(minWidth: 21, minHeight: 18)
-                                .background(Capsule().fill(active ? Theme.panel.opacity(0.8) : Theme.chip))
-                        }
-                    }
-                    .padding(.leading, 14)
-                    .padding(.trailing, 12)
+            HStack(spacing: 10) {
+                navigationIcon
+                Text(label)
+                    .font(.noonmarkSystem(size: 14.5, weight: active ? .semibold : .medium))
+                    .foregroundStyle(active ? Theme.text1 : Theme.text2)
+                Spacer()
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.noonmarkSystem(size: 12, weight: active ? .semibold : .regular))
+                        .foregroundStyle(Theme.text2)
+                        .padding(.horizontal, 7)
+                        .frame(minWidth: 21, minHeight: 18)
+                        .background(Capsule().fill(active ? Theme.panel.opacity(0.8) : Theme.chip))
                 }
             }
+            .padding(.leading, 14)
+            .padding(.trailing, 12)
             .frame(height: NoonmarkVisualMetrics.navigationRowHeight)
             .hoverSurface(
                 active: active,
@@ -9259,7 +9303,7 @@ struct NavItem: View {
             }
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, compact ? 8 : 9)
+        .padding(.horizontal, 9)
         .padding(.vertical, 1.5)
         .accessibilityLabel(label)
         .help(label)
@@ -9286,12 +9330,6 @@ struct NavItem: View {
 
 struct MainSurface: View {
     @EnvironmentObject private var store: NoonmarkStore
-
-    private var detailRailWidth: CGFloat {
-        store.page == .calendar
-            ? NoonmarkVisualMetrics.calendarRailWidth
-            : NoonmarkVisualMetrics.detailRailWidth
-    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -9322,7 +9360,7 @@ struct MainSurface: View {
 
             if store.shouldShowDetailRail {
                 DetailRail()
-                    .frame(width: detailRailWidth)
+                    .frame(width: store.page.detailRailWidth)
                     .background {
                         AppE2EViewAnchor(identifier: "shell.detail-rail")
                     }

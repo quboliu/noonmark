@@ -13,9 +13,9 @@ enum NoonmarkVisualMetrics {
     )
 
     static let sidebarWidth = CGFloat(MacUIShellLayout.sidebarWidth)
-    static let collapsedSidebarWidth = CGFloat(MacUIShellLayout.collapsedSidebarWidth)
     static let detailRailWidth = CGFloat(MacUIShellLayout.detailRailWidth)
     static let calendarRailWidth = CGFloat(MacUIShellLayout.calendarRailWidth)
+    static let windowToolbarHeight = CGFloat(MacUIShellLayout.windowToolbarHeight)
     static let pageHorizontalPadding = CGFloat(MacUIShellLayout.pageHorizontalPadding)
     static let taskRowVerticalPadding = CGFloat(MacUIShellLayout.taskRowVerticalPadding)
     static let detailPadding = CGFloat(MacUIShellLayout.detailPadding)

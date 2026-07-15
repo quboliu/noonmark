@@ -575,10 +575,19 @@ enum DetailRailLayoutUIE2EDriver {
         }
 
         private func startSidebar(attemptsRemaining: Int = 80) {
-            guard let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
+            guard let viewMenu = NSApp.mainMenu?.item(withTitle: store.copy.viewMenu)?.submenu,
+                  let sidebarMenuItem = viewMenu.items.first(where: {
+                      $0.action == NSSelectorFromString("toggleSidebarAction:")
+                  }),
+                  let detailMenuItem = viewMenu.items.first(where: {
+                      $0.action == NSSelectorFromString("toggleDetailRailAction:")
+                  }),
+                  let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
+                  let toolbar = AppViewTreeE2E.view(identifier: "shell.window-toolbar"),
                   let middle = AppViewTreeE2E.view(identifier: "shell.middle-pane"),
                   let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar"),
-                  let toggle = AppViewTreeE2E.view(identifier: "shell.sidebar.toggle"),
+                  let sidebarToggle = AppViewTreeE2E.view(identifier: "shell.sidebar.toggle"),
+                  let detailToggle = AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle"),
                   AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail")
             else {
                 retry(attemptsRemaining, action: startSidebar) {
@@ -586,17 +595,30 @@ enum DetailRailLayoutUIE2EDriver {
                 }
                 return
             }
+            let toolbarFrame = AppViewTreeE2E.frameInWindow(for: toolbar)
+            let sidebarToggleFrame = AppViewTreeE2E.frameInWindow(for: sidebarToggle)
+            let detailToggleFrame = AppViewTreeE2E.frameInWindow(for: detailToggle)
             let sidebarWidth = AppViewTreeE2E.frameInWindow(for: sidebar).width
             guard store.isSidebarExpanded,
-                  abs(sidebarWidth - NoonmarkVisualMetrics.sidebarWidth) <= 1
+                  sidebarMenuItem.title == store.copy.collapseSidebar,
+                  sidebarMenuItem.keyEquivalent == "s",
+                  sidebarMenuItem.keyEquivalentModifierMask == [.command, .control],
+                  detailMenuItem.title == store.copy.expandDetailRail,
+                  detailMenuItem.keyEquivalent == "i",
+                  detailMenuItem.keyEquivalentModifierMask == [.command, .option],
+                  abs(sidebarWidth - NoonmarkVisualMetrics.sidebarWidth) <= 1,
+                  abs(toolbarFrame.width - window.frame.width) <= 1,
+                  abs(toolbarFrame.height - NoonmarkVisualMetrics.windowToolbarHeight) <= 1,
+                  sidebarToggleFrame.midX < toolbarFrame.width * 0.2,
+                  detailToggleFrame.midX > toolbarFrame.width * 0.8
             else {
-                finish("failed: 左栏没有默认展开或宽度不正确")
+                finish("failed: 左栏默认几何或窗口两端的栏位入口不正确")
                 return
             }
             initialWindowFrame = window.frame
             initialMiddleWidth = AppViewTreeE2E.frameInWindow(for: middle).width
             initialSidebarWidth = sidebarWidth
-            guard AppViewTreeE2E.click(toggle) else {
+            guard AppViewTreeE2E.click(sidebarToggle) else {
                 finish("failed: 无法用真实鼠标事件收起左栏")
                 return
             }
@@ -611,50 +633,27 @@ enum DetailRailLayoutUIE2EDriver {
                   let initialSidebarWidth,
                   let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
                   let middle = AppViewTreeE2E.view(identifier: "shell.middle-pane"),
-                  let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar"),
-                  let calendarNavigation = AppViewTreeE2E.view(identifier: "sidebar.nav.calendar")
+                  let toggle = AppViewTreeE2E.view(identifier: "shell.sidebar.toggle")
             else {
                 retry(attemptsRemaining, action: waitForCollapsedSidebar) {
-                    "failed: 左栏收起后缺少窗口、导航或几何锚点"
+                    "failed: 左栏收起后缺少窗口、开关或几何锚点"
                 }
                 return
             }
             let middleWidth = AppViewTreeE2E.frameInWindow(for: middle).width
-            let sidebarWidth = AppViewTreeE2E.frameInWindow(for: sidebar).width
-            let releasedWidth = initialSidebarWidth - sidebarWidth
             guard store.isSidebarExpanded == false,
                   window.frame == initialWindowFrame,
-                  abs(sidebarWidth - NoonmarkVisualMetrics.collapsedSidebarWidth) <= 1,
-                  abs(middleWidth - initialMiddleWidth - releasedWidth) <= 1
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.sidebar"),
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "sidebar.nav.calendar"),
+                  abs(middleWidth - initialMiddleWidth - initialSidebarWidth) <= 1
             else {
                 retry(attemptsRemaining, action: waitForCollapsedSidebar) {
-                    "failed: 收起左栏时窗口尺寸改变，或中栏没有接收释放宽度"
-                }
-                return
-            }
-            guard AppViewTreeE2E.click(calendarNavigation) else {
-                finish("failed: 左栏收起后无法通过图标导航")
-                return
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [self] in
-                waitForCollapsedSidebarNavigation()
-            }
-        }
-
-        private func waitForCollapsedSidebarNavigation(attemptsRemaining: Int = 60) {
-            guard store.page == .calendar,
-                  store.isSidebarExpanded == false,
-                  store.shouldShowDetailRail == false,
-                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail"),
-                  let toggle = AppViewTreeE2E.view(identifier: "shell.sidebar.toggle")
-            else {
-                retry(attemptsRemaining, action: waitForCollapsedSidebarNavigation) {
-                    "failed: 收起左栏后的图标导航没有进入默认收起右栏的日历"
+                    "failed: 左栏没有完全隐藏，窗口尺寸改变，或中栏没有接收完整宽度"
                 }
                 return
             }
             guard AppViewTreeE2E.click(toggle) else {
-                finish("failed: 无法用真实鼠标事件展开左栏")
+                finish("failed: 左栏完全隐藏后无法通过窗口入口重新展开")
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [self] in
@@ -668,10 +667,11 @@ enum DetailRailLayoutUIE2EDriver {
                   let initialSidebarWidth,
                   let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
                   let middle = AppViewTreeE2E.view(identifier: "shell.middle-pane"),
-                  let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar")
+                  let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar"),
+                  let calendarNavigation = AppViewTreeE2E.view(identifier: "sidebar.nav.calendar")
             else {
                 retry(attemptsRemaining, action: waitForExpandedSidebar) {
-                    "failed: 左栏展开后缺少窗口或几何锚点"
+                    "failed: 左栏展开后缺少窗口、导航或几何锚点"
                 }
                 return
             }
@@ -684,6 +684,27 @@ enum DetailRailLayoutUIE2EDriver {
             else {
                 retry(attemptsRemaining, action: waitForExpandedSidebar) {
                     "failed: 展开左栏后窗口或中栏没有恢复原始几何"
+                }
+                return
+            }
+            guard AppViewTreeE2E.click(calendarNavigation) else {
+                finish("failed: 左栏重新展开后无法通过真实鼠标导航")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [self] in
+                waitForExpandedSidebarNavigation()
+            }
+        }
+
+        private func waitForExpandedSidebarNavigation(attemptsRemaining: Int = 60) {
+            guard store.page == .calendar,
+                  store.isSidebarExpanded,
+                  store.shouldShowDetailRail == false,
+                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail"),
+                  AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil
+            else {
+                retry(attemptsRemaining, action: waitForExpandedSidebarNavigation) {
+                    "failed: 左栏恢复后的导航没有进入默认收起右栏的日历"
                 }
                 return
             }

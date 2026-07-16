@@ -113,7 +113,78 @@ enum MarkdownEditorUIE2EDriver {
                 }
                 return
             }
-            exerciseNativeEditing(in: textView)
+            exerciseTabFocus(in: textView)
+        }
+
+        private func exerciseTabFocus(in textView: NSTextView) {
+            guard focusMovesFromEditor(
+                textView,
+                modifiers: [],
+                direction: "Tab"
+            ), let backwardTextView = refocusedEditor(),
+                focusMovesFromEditor(
+                    backwardTextView,
+                    modifiers: .shift,
+                    direction: "Shift-Tab"
+                ), let editingTextView = refocusedEditor()
+            else {
+                return
+            }
+            exerciseNativeEditing(in: editingTextView)
+        }
+
+        private func focusMovesFromEditor(
+            _ textView: NSTextView,
+            modifiers: NSEvent.ModifierFlags,
+            direction: String
+        ) -> Bool {
+            textView.setSelectedRange(
+                NSRange(location: initialText.utf16.count, length: 0)
+            )
+            guard let window = textView.window,
+                  sendWindowTab(modifiers: modifiers)
+            else {
+                finish("failed: 无法向真实窗口投递 \(direction)")
+                return false
+            }
+            let nextResponder = window.firstResponder
+            guard nextResponder !== textView,
+                  let responderView = nextResponder as? NSView,
+                  responderView.window === window,
+                  textView.string == initialText,
+                  readback() == initialText
+            else {
+                finish(
+                    "failed: \(direction) 没有移动同窗焦点或错误修改描述 "
+                        + "text=\(textView.string) binding=\(readback()) "
+                        + "responder=\(String(describing: nextResponder))"
+                )
+                return false
+            }
+            return true
+        }
+
+        private func refocusedEditor() -> NSTextView? {
+            guard let textView = AppViewTreeE2E.view(
+                identifier: "detail.description.input"
+            ) as? NSTextView,
+                textView.string == initialText,
+                let window = textView.window
+            else {
+                finish("failed: 焦点移动后真实描述编辑器消失或内容改变")
+                return nil
+            }
+            window.makeKeyAndOrderFront(nil)
+            window.makeMain()
+            NSApp.activate(ignoringOtherApps: true)
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+            guard window.makeFirstResponder(textView),
+                  window.firstResponder === textView
+            else {
+                finish("failed: 焦点探针后无法重新聚焦真实描述编辑器")
+                return nil
+            }
+            return textView
         }
 
         private func exerciseNativeEditing(in textView: NSTextView) {
@@ -217,7 +288,45 @@ enum MarkdownEditorUIE2EDriver {
                 return
             }
 
-            waitForReadback(expected: textView.string)
+            beginOptionTabProbe(in: textView)
+        }
+
+        private func beginOptionTabProbe(in textView: NSTextView) {
+            let formattedText = textView.string
+            let replacementRange = (formattedText as NSString).range(of: " ")
+            guard replacementRange.location != NSNotFound,
+                  replacementRange.length == 1
+            else {
+                finish("failed: Option-Tab 探针没有找到唯一空格选区")
+                return
+            }
+            textView.setSelectedRange(replacementRange)
+            let indentedText = (formattedText as NSString).replacingCharacters(
+                in: replacementRange,
+                with: "    "
+            )
+            guard sendWindowTab(modifiers: .option) else {
+                finish("failed: 无法向真实窗口投递 Option-Tab")
+                return
+            }
+            let expectedSelection = NSRange(
+                location: replacementRange.location + 4,
+                length: 0
+            )
+            guard textView.string == indentedText,
+                  textView.window?.firstResponder === textView,
+                  textView.selectedRange() == expectedSelection
+            else {
+                finish(
+                    "failed: Option-Tab 没有插入四空格或保持编辑焦点 "
+                        + "text=\(textView.string) expected=\(indentedText) "
+                        + "selection=\(textView.selectedRange()) "
+                        + "expectedSelection=\(expectedSelection) "
+                        + "firstResponder=\(String(describing: textView.window?.firstResponder))"
+                )
+                return
+            }
+            waitForReadback(expected: indentedText)
         }
 
         private func waitForReadback(
@@ -288,6 +397,40 @@ enum MarkdownEditorUIE2EDriver {
                 return false
             }
             window.sendEvent(event)
+            return true
+        }
+
+        private func sendWindowTab(modifiers: NSEvent.ModifierFlags) -> Bool {
+            guard let window = e2eWindow else { return false }
+            let characters = modifiers.contains(.shift) ? "\u{19}" : "\t"
+            let timestamp = ProcessInfo.processInfo.systemUptime
+            guard let keyDown = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: modifiers,
+                timestamp: timestamp,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: "\t",
+                isARepeat: false,
+                keyCode: 48
+            ), let keyUp = NSEvent.keyEvent(
+                with: .keyUp,
+                location: .zero,
+                modifierFlags: modifiers,
+                timestamp: timestamp + 0.01,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: "\t",
+                isARepeat: false,
+                keyCode: 48
+            ) else {
+                return false
+            }
+            window.sendEvent(keyDown)
+            window.sendEvent(keyUp)
             return true
         }
 

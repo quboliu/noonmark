@@ -2037,11 +2037,11 @@ run_markdown_editor_ui_probe() {
     WHERE title = 'E2E Markdown 编辑'
       AND superseded_at IS NULL;
   ")"
-  if [[ "$persisted" != '**alpha beta!**' ]]; then
+  if [[ "$persisted" != '**alpha    beta!**' ]]; then
     echo "Markdown editor persistence probe failed: ${persisted:-missing}" >&2
     exit 1
   fi
-  echo "E2E Markdown native edit commands and persistence: $markdown_db"
+  echo "E2E Markdown native focus, edit commands, indentation, and persistence: $markdown_db"
 }
 
 run_copy_undo_persistence_probe() {

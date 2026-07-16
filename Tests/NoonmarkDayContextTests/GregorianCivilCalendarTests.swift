@@ -2,15 +2,15 @@ import NoonmarkCore
 @testable import NoonmarkDayContext
 import XCTest
 
-final class GregorianCivilCalendarTests: XCTestCase {
+final class GregorianLocalDateArithmeticTests: XCTestCase {
     func testDateOnlyArithmeticCrossesLeapDayWithoutUsingElapsedSeconds() throws {
-        let leapDay = try GregorianCivilCalendar.offset(
+        let leapDay = try GregorianLocalDateArithmetic.offset(
             LocalDate("2028-02-28"),
             byDays: 1
         )
         XCTAssertEqual(leapDay, LocalDate("2028-02-29"))
         XCTAssertEqual(
-            try GregorianCivilCalendar.dayDistance(
+            try GregorianLocalDateArithmetic.dayDistance(
                 from: LocalDate("2028-02-28"),
                 to: LocalDate("2028-03-01")
             ),
@@ -20,18 +20,18 @@ final class GregorianCivilCalendarTests: XCTestCase {
 
     func testMonthMetricsUseMondayAsFirstColumn() throws {
         XCTAssertEqual(
-            try GregorianCivilCalendar.daysInMonth(year: 2026, month: 2),
+            try GregorianLocalDateArithmetic.daysInMonth(year: 2026, month: 2),
             28
         )
         XCTAssertEqual(
-            try GregorianCivilCalendar.mondayLeadBlankCount(
+            try GregorianLocalDateArithmetic.mondayLeadBlankCount(
                 year: 2026,
                 month: 7
             ),
             2
         )
         XCTAssertEqual(
-            try GregorianCivilCalendar.shiftedMonth(
+            try GregorianLocalDateArithmetic.shiftedMonth(
                 from: LocalDate("2026-01-31"),
                 by: 1
             ),
@@ -42,7 +42,7 @@ final class GregorianCivilCalendarTests: XCTestCase {
     func testInvalidCivilDateFailsClosed() {
         let invalid = LocalDate(year: 2026, month: 2, day: 31)
         XCTAssertThrowsError(
-            try GregorianCivilCalendar.offset(invalid, byDays: 1)
+            try GregorianLocalDateArithmetic.offset(invalid, byDays: 1)
         ) { error in
             XCTAssertEqual(
                 error as? NaturalDayFailure,

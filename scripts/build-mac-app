@@ -34,8 +34,10 @@ resources_dir="${contents_dir}/Resources"
 cloudkit_container_id="${NOONMARK_CLOUDKIT_CONTAINER_ID:-}"
 cloudkit_environment="${NOONMARK_CLOUDKIT_ENVIRONMENT:-}"
 codesign_identity="${NOONMARK_CODESIGN_IDENTITY:-}"
+require_stable_ui_signing="${NOONMARK_REQUIRE_STABLE_UI_SIGNING:-0}"
 provisioning_profile="${NOONMARK_PROVISIONING_PROFILE:-}"
 cloudkit_signing_enabled=0
+stable_codesigning_enabled=0
 decoded_profile=""
 claimed_entitlements=""
 
@@ -44,6 +46,25 @@ cleanup() {
   [[ -z "$claimed_entitlements" ]] || rm -f "$claimed_entitlements"
 }
 trap cleanup EXIT
+
+if [[ -n "$codesign_identity" && "$codesign_identity" != "-" ]]; then
+  if ! security find-identity -v -p codesigning \
+    | grep -Fq "$codesign_identity"; then
+    echo "code-signing identity is not available in the current keychain: $codesign_identity" >&2
+    exit 1
+  fi
+  stable_codesigning_enabled=1
+fi
+if [[ "$require_stable_ui_signing" != "0" &&
+      "$require_stable_ui_signing" != "1" ]]; then
+  echo "NOONMARK_REQUIRE_STABLE_UI_SIGNING must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$require_stable_ui_signing" == "1" &&
+      "$stable_codesigning_enabled" -ne 1 ]]; then
+  echo "interactive UI validation requires a non-ad-hoc NOONMARK_CODESIGN_IDENTITY" >&2
+  exit 1
+fi
 
 plist_value() {
   /usr/libexec/PlistBuddy -c "Print :$1" "$2" 2>/dev/null
@@ -81,12 +102,6 @@ if [[ -n "$cloudkit_container_id" ]]; then
     echo "CloudKit build requires an existing NOONMARK_PROVISIONING_PROFILE" >&2
     exit 1
   fi
-  if ! security find-identity -v -p codesigning \
-    | grep -Fq "$codesign_identity"; then
-    echo "CloudKit signing identity is not available in the current keychain" >&2
-    exit 1
-  fi
-
   decoded_profile="$(mktemp -t noonmark-cloudkit-profile.XXXXXX)"
   if ! security cms -D -i "$provisioning_profile" >"$decoded_profile"; then
     echo "CloudKit provisioning profile could not be decoded" >&2
@@ -269,8 +284,20 @@ PLIST
     echo "signed app team does not match the provisioning profile" >&2
     exit 1
   fi
+elif [[ "$stable_codesigning_enabled" -eq 1 ]]; then
+  codesign --force --sign "$codesign_identity" "$bundle_dir" >/dev/null
 else
   codesign --force --sign - "$bundle_dir" >/dev/null
+fi
+
+if [[ "$require_stable_ui_signing" == "1" ]]; then
+  designated_requirement="$(codesign --display --requirements - "$bundle_dir" 2>&1)"
+  if [[ "$designated_requirement" == *"cdhash"* ||
+        "$designated_requirement" != *"identifier \"$bundle_identifier\""* ]]; then
+    echo "interactive UI bundle does not have a stable designated requirement" >&2
+    echo "$designated_requirement" >&2
+    exit 1
+  fi
 fi
 scripts/test-app-icon-bundle "$bundle_dir"
 echo "$bundle_dir"

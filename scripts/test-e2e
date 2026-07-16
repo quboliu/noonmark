@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/runtime-evidence
+
 configuration="${1:-debug}"
 if ! command -v sqlite3 >/dev/null 2>&1; then
   echo "missing required tool: sqlite3" >&2
@@ -30,6 +32,11 @@ expected_window_width="1200"
 expected_window_height="768"
 app_path="dist/${app_bundle_name}.app"
 app_executable_path="${app_path}/Contents/MacOS/${app_executable_name}"
+runtime_evidence_dir="artifacts/e2e-runtime"
+runtime_console_log="${runtime_evidence_dir}/unified.log"
+runtime_diagnostic_baseline="${runtime_evidence_dir}/diagnostic-baseline.txt"
+runtime_manifest="${runtime_evidence_dir}/manifest.txt"
+runtime_evidence_started=0
 export NOONMARK_E2E_APP_EXECUTABLE_NAME="$app_executable_name"
 export NOONMARK_E2E_APP_DISPLAY_NAME="$app_display_name"
 export NOONMARK_E2E_EXPECTED_WINDOW_WIDTH="$expected_window_width"
@@ -133,11 +140,41 @@ terminate_e2e_app() {
 }
 
 finish_e2e_session() {
+  local suite_status="${1:-0}"
+  local diagnostic_wait_attempts=30
+
+  trap - EXIT
   terminate_e2e_app >/dev/null 2>&1 || true
   if kill -0 "$display_assertion_pid" >/dev/null 2>&1; then
     kill "$display_assertion_pid" >/dev/null 2>&1 || true
     wait "$display_assertion_pid" 2>/dev/null || true
   fi
+  if [[ "$runtime_evidence_started" == "1" ]]; then
+    if ! runtime_evidence_stop_console_capture; then
+      suite_status=1
+    fi
+    if ! runtime_evidence_assert_clean_logs \
+      "E2E runtime evidence" \
+      "$runtime_console_log"; then
+      suite_status=1
+    fi
+    if [[ "$suite_status" -ne 0 ]]; then
+      diagnostic_wait_attempts=150
+    fi
+    if ! runtime_evidence_assert_no_new_diagnostics \
+      "$app_executable_name" \
+      "$runtime_diagnostic_baseline" \
+      "${runtime_evidence_dir}/DiagnosticReports" \
+      "$diagnostic_wait_attempts"; then
+      suite_status=1
+    fi
+    if ! runtime_evidence_write_manifest_finish \
+      "$runtime_manifest" \
+      "$suite_status"; then
+      suite_status=1
+    fi
+  fi
+  exit "$suite_status"
 }
 
 visible_e2e_windows() {
@@ -165,7 +202,20 @@ has_e2e_windows() {
 }
 
 terminate_e2e_app
-trap finish_e2e_session EXIT
+trap 'finish_e2e_session "$?"' EXIT
+rm -rf "$runtime_evidence_dir"
+mkdir -p "$runtime_evidence_dir"
+runtime_evidence_snapshot_diagnostics \
+  "$app_executable_name" \
+  "$runtime_diagnostic_baseline"
+runtime_evidence_write_manifest_start \
+  "$runtime_manifest" \
+  "$app_executable_name" \
+  "$app_path"
+runtime_evidence_start_console_capture \
+  "$app_executable_name" \
+  "$runtime_console_log"
+runtime_evidence_started=1
 
 find_window_id() {
   local expected_title="$1"
@@ -552,11 +602,8 @@ capture_app_screenshot() {
 assert_clean_app_log() {
   local label="$1"
   local log_path="$2"
-  local failure_pattern='Noonmark persistence (load|save) failed|Fatal error|Assertion failed|Precondition failed|Publishing changes from within view updates|Publishing changes from background threads|Modifying state during view update|AttributeGraph: cycle detected|SwiftUI.*(runtime warning|encountered an issue)|ForEach<.*ID .*occurs multiple times|the ID .*occurs multiple times within the collection|Unable to simultaneously satisfy constraints|NSLayoutConstraint.*(conflict|unsatisfiable)|Accessibility.*(action.*)?(failed|failure|rejected|could not|unable)|AX(UIElement)?.*(failed|failure)|kAXError'
 
-  if grep -E -i -n "$failure_pattern" "$log_path" >/dev/null 2>&1; then
-    echo "${label} app log contains a persistence, UI runtime, layout, or accessibility failure:" >&2
-    grep -E -i -n "$failure_pattern" "$log_path" >&2
+  if ! runtime_evidence_assert_clean_logs "$label" "$log_path"; then
     exit 1
   fi
 }
@@ -957,11 +1004,23 @@ guard roundedGap >= 10, roundedGap <= 14 else {
     print("title-description visible gap is \(visibleGap)pt; expected rounded 10...14pt")
     exit(3)
 }
-let forbidden = Set(["更换", "排期"])
-let redundantLabels = railObservations.compactMap { $0.topCandidates(1).first?.string }.filter(forbidden.contains)
+let visibleLabels = railObservations.compactMap {
+    $0.topCandidates(1).first?.string
+}
+let required = ["尚未进入任何", "Day Todo"]
+guard required.allSatisfy({ expected in
+    visibleLabels.contains { $0.contains(expected) }
+}) else {
+    print("pool detail is missing its scheduling consequence: \(visibleLabels)")
+    exit(4)
+}
+let forbidden = ["更换", "未排期", "任务链仍在任务池", "任务链状态", "活跃"]
+let redundantLabels = visibleLabels.filter { label in
+    forbidden.contains { label.contains($0) }
+}
 guard redundantLabels.isEmpty else {
     print("pool detail still contains redundant labels: \(redundantLabels)")
-    exit(4)
+    exit(6)
 }
 print(String(format: "title-description visible gap: %.2fpt", visibleGap))
 ' >"$result" 2>"$result_log"; then

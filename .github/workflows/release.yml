@@ -26,10 +26,12 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, noonmark-ui-e2e]
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
+      NOONMARK_CODESIGN_IDENTITY: ${{ vars.NOONMARK_UI_CODESIGN_IDENTITY }}
+      NOONMARK_REQUIRE_STABLE_UI_SIGNING: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -57,7 +59,9 @@ jobs:
           path: |
             dist
             artifacts/e2e
+            artifacts/e2e-runtime
             artifacts/dmg-install
+            artifacts/dmg-install-harness
           if-no-files-found: ignore
           retention-days: 14
       - name: Resolve release metadata

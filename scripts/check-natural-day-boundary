@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+day_context_dir="Sources/NoonmarkDayContext"
+app_dir="App/NoonmarkMacApp"
+
+if rg -n \
+  '^public (enum|struct|class) (Gregorian|NaturalDayEnvironmentSample)|^    public init' \
+  "${day_context_dir}"; then
+  echo "NoonmarkDayContext exposed a construction or Gregorian helper outside moment/observe/offset" >&2
+  exit 1
+fi
+
+if rg -n 'GregorianLocalDateArithmetic' "${app_dir}"; then
+  echo "NoonmarkMacApp bypassed the WorkspaceCivilCalendar boundary" >&2
+  exit 1
+fi
+
+if ! rg -q '^package enum GregorianLocalDateArithmetic' \
+  "${day_context_dir}/GregorianCivilCalendar.swift"; then
+  echo "Gregorian local-date arithmetic is no longer package-scoped" >&2
+  exit 1
+fi
+
+if ! rg -q '^package enum WorkspaceCivilCalendar' \
+  Sources/NoonmarkMacRuntime/WorkspaceCivilCalendar.swift; then
+  echo "Mac workspace civil-calendar facade is missing or not package-scoped" >&2
+  exit 1
+fi
+
+echo "Natural Day public API and Mac workspace seam: ok"

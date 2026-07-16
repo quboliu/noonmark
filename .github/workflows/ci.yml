@@ -30,19 +30,24 @@ jobs:
         run: scripts/check
 
   e2e:
-    name: Mac App E2E
-    runs-on: macos-15
+    name: Mac App E2E · Interactive WindowServer
+    runs-on: [self-hosted, macOS, noonmark-ui-e2e]
     timeout-minutes: 20
     needs: check
+    env:
+      NOONMARK_CODESIGN_IDENTITY: ${{ vars.NOONMARK_UI_CODESIGN_IDENTITY }}
+      NOONMARK_REQUIRE_STABLE_UI_SIGNING: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: App smoke path
+      - name: Verify interactive console and real App paths
         run: scripts/test-e2e
-      - name: Upload screenshots
+      - name: Upload E2E evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-screenshots
-          path: artifacts/e2e
+          name: e2e-evidence
+          path: |
+            artifacts/e2e
+            artifacts/e2e-runtime
           if-no-files-found: ignore
           retention-days: 14

@@ -39,12 +39,9 @@ struct PoolDetail: View {
                     editable: true
                 )
             }
-            HStack {
-                StatusPill(text: store.copy.unscheduled, color: Theme.accent)
-                Text(store.copy.poolTaskChainInPool)
-                    .font(.noonmarkSystem(size: 11))
-                    .foregroundStyle(Theme.text3)
-            }
+            Text(store.copy.poolNoDayTodoNotice)
+                .font(.noonmarkSystem(size: 11))
+                .foregroundStyle(Theme.text3)
             DetailSection(store.copy.classificationAndLabelsTitle) {
                 TaskClassificationEditor(
                     chainID: task.chain.id,
@@ -53,19 +50,6 @@ struct PoolDetail: View {
             }
             DetailSection(store.copy.subtasksTitle) {
                 PoolPlannedSubtasksSection(task: task)
-            }
-            DetailSection(store.copy.statusTitle) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(store.copy.poolNoDayTodoNotice)
-                    Text(store.copy.poolChainState(isActive: task.chain.state == .active))
-                }
-                .font(.noonmarkSystem(size: 12))
-                .foregroundStyle(Theme.text2)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
             }
             PoolNotesSection(chainID: task.chain.id, entries: task.chain.activeNoteEntries)
         }

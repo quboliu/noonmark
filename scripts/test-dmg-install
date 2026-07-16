@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+cd "$repo_root"
+
+source scripts/runtime-evidence
+
 dmg_path="${1:-dist/Noonmark.dmg}"
 app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
-work_dir="$PWD/artifacts/dmg-install"
+work_dir="${repo_root}/artifacts/dmg-install"
 install_dir="${work_dir}/Applications"
+helper_app="${repo_root}/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app"
+helper_executable_name="NoonmarkDMGInstallHarness"
+helper_executable="${helper_app}/Contents/MacOS/${helper_executable_name}"
+helper_bundle_identifier="app.noonmark.test.dmg-install-harness"
+production_bundle_identifier="app.noonmark.mac"
+task_title="dmgproductiontask"
 database_path=""
 redirected_database_path="${work_dir}/forbidden-redirect.sqlite"
 screenshot_path="${work_dir}/installed-day.png"
@@ -13,24 +25,52 @@ initial_launch_log="${work_dir}/initial-launch.log"
 initial_console_log="${work_dir}/initial-console.log"
 forbidden_automation_result="${work_dir}/forbidden-automation-result.txt"
 forbidden_automation_state="${work_dir}/forbidden-automation-state.json"
-mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-install.XXXXXX")"
+permission_ledger="${work_dir}/permission-preflight-ledger.tsv"
+permission_log="${work_dir}/permission-preflight.log"
+permission_console_log="${work_dir}/permission-preflight-console.log"
+exercise_ledger="${work_dir}/exercise-ledger.tsv"
+exercise_launch_log="${work_dir}/exercise-launch.log"
+exercise_helper_log="${work_dir}/exercise-helper.log"
+exercise_console_log="${work_dir}/exercise-console.log"
+exercise_screenshot_path="${work_dir}/installed-exercise-before-input.png"
+exercise_window_metadata_path="${work_dir}/installed-exercise-window.txt"
+restart_ledger="${work_dir}/restart-ledger.tsv"
+restart_launch_log="${work_dir}/restart-launch.log"
+restart_helper_log="${work_dir}/restart-helper.log"
+restart_console_log="${work_dir}/restart-console.log"
+restart_screenshot_path="${work_dir}/installed-restart.png"
+restart_window_metadata_path="${work_dir}/installed-restart-window.txt"
+task_identity_path="${work_dir}/task-identity.tsv"
+task_snapshot_before_path="${work_dir}/task-row-before-restart.txt"
+task_snapshot_after_path="${work_dir}/task-row-after-restart.txt"
+app_diagnostic_baseline="${work_dir}/diagnostics/noonmark-baseline.txt"
+helper_diagnostic_baseline="${work_dir}/diagnostics/harness-baseline.txt"
+diagnostic_artifact_dir="${work_dir}/diagnostic-reports"
+runtime_manifest_path="${work_dir}/runtime-manifest.txt"
+mountpoint=""
 executable_name="NoonmarkMacApp"
-active_console_pid=""
+installed_app=""
+installed_executable=""
+active_app_pid=""
+diagnostic_baselines_ready=0
+runtime_manifest_started=0
+mount_cleanup_armed=0
 
 required_tools=(
   awk
+  cmp
   ditto
   grep
   hdiutil
   log
   open
   pgrep
-  pkill
   ps
   screencapture
   sips
   sqlite3
   swift
+  tail
 )
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -43,113 +83,479 @@ if [[ ! -x /usr/libexec/PlistBuddy ]]; then
   exit 1
 fi
 
-terminate_installed_app() {
-  local running_pids
+process_uses_installed_executable() {
+  local pid="$1"
+  local expected_executable="$2"
+  local command_line
+  local ps_status
 
-  running_pids="$(pgrep -x "$executable_name" 2>/dev/null || true)"
-  if [[ -z "$running_pids" ]]; then
+  if [[ ! "$pid" =~ ^[0-9]+$ || -z "$expected_executable" ]]; then
+    return 2
+  fi
+  if command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
+    if [[ -z "$command_line" ]]; then
+      echo "ps returned an empty command for live pid $pid" >&2
+      return 2
+    fi
+  else
+    ps_status=$?
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      echo "failed to inspect live pid $pid with ps (status=$ps_status)" >&2
+      return 2
+    fi
+    return 1
+  fi
+  case "$command_line" in
+    "$expected_executable" | "$expected_executable "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+terminate_verified_app() {
+  local pid="${1:-}"
+  local expected_executable="${2:-}"
+
+  if [[ -z "$pid" ]]; then
     return 0
   fi
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -z "$expected_executable" ]] ||
+    ! process_uses_installed_executable "$pid" "$expected_executable"; then
+    echo "refusing to terminate unverified pid $pid" >&2
+    ps -ww -p "$pid" -o pid=,command= >&2 || true
+    return 1
+  fi
+  if [[ "$expected_executable" == "$installed_executable" &&
+    -n "$installed_app" ]] &&
+    ! process_has_installed_bundle_identity "$pid"; then
+    echo "refusing to terminate pid $pid without a current bundle identity match" >&2
+    return 1
+  fi
 
-  pkill -TERM -x "$executable_name" >/dev/null 2>&1 || true
+  kill -TERM "$pid" >/dev/null 2>&1 || true
   for _ in {1..40}; do
-    if ! pgrep -x "$executable_name" >/dev/null 2>&1; then
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.1
   done
 
-  pkill -KILL -x "$executable_name" >/dev/null 2>&1 || true
+  if ! process_uses_installed_executable "$pid" "$expected_executable"; then
+    echo "refusing to force-terminate pid $pid after its executable identity changed" >&2
+    ps -ww -p "$pid" -o pid=,command= >&2 || true
+    return 1
+  fi
+  if [[ "$expected_executable" == "$installed_executable" &&
+    -n "$installed_app" ]] &&
+    ! process_has_installed_bundle_identity "$pid"; then
+    echo "refusing to force-terminate pid $pid without a current bundle identity match" >&2
+    return 1
+  fi
+  kill -KILL "$pid" >/dev/null 2>&1 || true
   for _ in {1..20}; do
-    if ! pgrep -x "$executable_name" >/dev/null 2>&1; then
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.1
   done
 
-  echo "failed to terminate installed app process: $executable_name" >&2
+  echo "failed to terminate verified installed app pid: $pid" >&2
+  ps -ww -p "$pid" -o pid=,command= >&2 || true
+  return 1
+}
+
+cleanup() {
+  local original_status=$?
+  local final_status="$original_status"
+  local diagnostic_wait_attempts=30
+  local exact_pids=""
+  local remaining_pids=""
+  local verified_pid
+
+  trap - EXIT
+  set +e
+
+  if ! runtime_evidence_stop_console_capture; then
+    final_status=1
+  fi
+  if ! terminate_verified_app "$active_app_pid" "$installed_executable"; then
+    final_status=1
+  fi
+  active_app_pid=""
+  if ! exact_pids="$(matching_executable_pids)"; then
+    echo "failed to enumerate exact-path installed app processes during cleanup" >&2
+    final_status=1
+  else
+    while IFS= read -r verified_pid; do
+      [[ -n "$verified_pid" ]] || continue
+      if ! process_has_installed_bundle_identity "$verified_pid"; then
+        echo "refusing to terminate exact-path pid without bundle identity: $verified_pid" >&2
+        final_status=1
+        continue
+      fi
+      if ! terminate_verified_app "$verified_pid" "$installed_executable"; then
+        final_status=1
+      fi
+    done <<<"$exact_pids"
+  fi
+  if ! remaining_pids="$(matching_executable_pids)"; then
+    echo "failed to prove exact-path process cleanup" >&2
+    final_status=1
+  elif [[ -n "$remaining_pids" ]]; then
+    echo "exact-path installed app process survived cleanup: $remaining_pids" >&2
+    final_status=1
+  fi
+
+  if [[ "$mount_cleanup_armed" -eq 1 && -n "$mountpoint" ]]; then
+    if ! hdiutil detach "$mountpoint" -quiet >/dev/null 2>&1; then
+      echo "failed to detach DMG validation mountpoint: $mountpoint" >&2
+      final_status=1
+    fi
+    mount_cleanup_armed=0
+    if ! rmdir "$mountpoint" >/dev/null 2>&1; then
+      echo "failed to remove DMG validation mountpoint: $mountpoint" >&2
+      final_status=1
+    fi
+  fi
+
+  if [[ "$original_status" -ne 0 ]]; then
+    diagnostic_wait_attempts=150
+  fi
+  if [[ "$diagnostic_baselines_ready" -eq 1 ]]; then
+    if ! runtime_evidence_assert_no_new_diagnostics \
+      "$executable_name" \
+      "$app_diagnostic_baseline" \
+      "$diagnostic_artifact_dir" \
+      "$diagnostic_wait_attempts"; then
+      final_status=1
+    fi
+    if ! runtime_evidence_assert_no_new_diagnostics \
+      "$helper_executable_name" \
+      "$helper_diagnostic_baseline" \
+      "$diagnostic_artifact_dir" \
+      "$diagnostic_wait_attempts"; then
+      final_status=1
+    fi
+  fi
+  if [[ "$runtime_manifest_started" -eq 1 ]]; then
+    if ! runtime_evidence_write_manifest_finish \
+      "$runtime_manifest_path" \
+      "$final_status"; then
+      final_status=1
+    fi
+  fi
+
+  if [[ "$final_status" -ne 0 && "$original_status" -eq 0 ]]; then
+    echo "DMG install validation failed while collecting runtime evidence" >&2
+  fi
+  exit "$final_status"
+}
+trap cleanup EXIT
+
+matching_executable_pids() {
+  local candidate
+  local matches=""
+  local match_status
+  local pgrep_output=""
+  local pgrep_status
+
+  if [[ -z "$installed_executable" ]]; then
+    return 0
+  fi
+  if pgrep_output="$(pgrep -x "$executable_name" 2>/dev/null)"; then
+    :
+  else
+    pgrep_status=$?
+    if [[ "$pgrep_status" -eq 1 ]]; then
+      return 0
+    fi
+    echo "failed to enumerate $executable_name processes (pgrep=$pgrep_status)" >&2
+    return 2
+  fi
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    if process_uses_installed_executable "$candidate" "$installed_executable"; then
+      if [[ -n "$matches" ]]; then
+        matches+=$'\n'
+      fi
+      matches+="$candidate"
+    else
+      match_status=$?
+      if [[ "$match_status" -ge 2 ]]; then
+        return "$match_status"
+      fi
+    fi
+  done <<<"$pgrep_output"
+  if [[ -n "$matches" ]]; then
+    printf '%s\n' "$matches"
+  fi
+}
+
+matching_installed_pids() {
+  local candidate
+  local executable_pids=""
+  local matches=""
+
+  if [[ -z "$installed_app" ]]; then
+    return 0
+  fi
+  if ! executable_pids="$(matching_executable_pids)"; then
+    return 2
+  fi
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    if process_has_installed_bundle_identity "$candidate" 2>/dev/null; then
+      if [[ -n "$matches" ]]; then
+        matches+=$'\n'
+      fi
+      matches+="$candidate"
+    fi
+  done <<<"$executable_pids"
+  if [[ -n "$matches" ]]; then
+    printf '%s\n' "$matches"
+  fi
+}
+
+single_installed_pid() {
+  local pids
+
+  if ! pids="$(matching_installed_pids)"; then
+    return 2
+  fi
+  if [[ -z "$pids" || "$pids" == *$'\n'* ]]; then
+    return 1
+  fi
+  printf '%s\n' "$pids"
+}
+
+wait_for_installed_pid() {
+  local pid=""
+  local status
+
+  for _ in {1..80}; do
+    if pid="$(single_installed_pid)"; then
+      printf '%s\n' "$pid"
+      return 0
+    else
+      status=$?
+      if [[ "$status" -ge 2 ]]; then
+        echo "installed app process enumeration failed closed" >&2
+        return "$status"
+      fi
+    fi
+    sleep 0.1
+  done
+  echo "installed app did not expose exactly one verified $executable_name process" >&2
   pgrep -alf "$executable_name" >&2 || true
   return 1
 }
 
-stop_console_capture() {
-  local pid="$active_console_pid"
+run_verified_app_action() {
+  local pid="$1"
+  local action="$2"
 
-  active_console_pid=""
-  if [[ -z "$pid" ]]; then
-    return 0
+  if ! process_uses_installed_executable "$pid" "$installed_executable"; then
+    return 1
   fi
-  if kill -0 "$pid" >/dev/null 2>&1; then
-    kill -INT "$pid" >/dev/null 2>&1 || true
-    for _ in {1..20}; do
-      if ! kill -0 "$pid" >/dev/null 2>&1; then
-        break
-      fi
-      sleep 0.05
-    done
-  fi
-  if kill -0 "$pid" >/dev/null 2>&1; then
-    kill -TERM "$pid" >/dev/null 2>&1 || true
-  fi
-  wait "$pid" 2>/dev/null || true
+
+  NOONMARK_DMG_APP_PID="$pid" \
+    NOONMARK_DMG_APP_PATH="$installed_app" \
+    NOONMARK_DMG_BUNDLE_ID="$production_bundle_identifier" \
+    NOONMARK_DMG_APP_ACTION="$action" \
+    swift -e '
+import AppKit
+import Darwin
+import Foundation
+
+let environment = ProcessInfo.processInfo.environment
+guard let rawPID = environment["NOONMARK_DMG_APP_PID"],
+      let pid = Int32(rawPID),
+      let expectedPath = environment["NOONMARK_DMG_APP_PATH"],
+      let expectedBundleID = environment["NOONMARK_DMG_BUNDLE_ID"],
+      let action = environment["NOONMARK_DMG_APP_ACTION"],
+      action == "verify" || action == "terminate",
+      let app = NSRunningApplication(processIdentifier: pid),
+      app.isTerminated == false,
+      app.bundleIdentifier == expectedBundleID,
+      let bundleURL = app.bundleURL
+else {
+    fputs("installed process identity was unavailable\n", stderr)
+    exit(1)
+}
+let actual = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
+let expected = URL(fileURLWithPath: expectedPath)
+    .standardizedFileURL.resolvingSymlinksInPath().path
+guard actual == expected else {
+    fputs("installed process bundle path was \(actual), expected \(expected)\n", stderr)
+    exit(1)
+}
+if action == "terminate", app.terminate() == false {
+    fputs("verified production app rejected its termination request\n", stderr)
+    exit(1)
+}
+'
 }
 
-cleanup() {
-  local cleanup_status=0
-
-  stop_console_capture || cleanup_status=1
-  terminate_installed_app || cleanup_status=1
-  hdiutil detach "$mountpoint" -quiet >/dev/null 2>&1 || true
-  rmdir "$mountpoint" >/dev/null 2>&1 || true
-  return "$cleanup_status"
+process_has_installed_bundle_identity() {
+  run_verified_app_action "$1" verify
 }
-trap cleanup EXIT
 
-start_console_capture() {
+verify_installed_process_identity() {
+  local pid="$1"
+
+  if ! process_has_installed_bundle_identity "$pid"; then
+    echo "unexpected installed app identity for pid $pid" >&2
+    ps -ww -p "$pid" -o pid=,command= >&2 || true
+    return 1
+  fi
+}
+
+request_verified_app_termination() {
+  local pid="$1"
+
+  run_verified_app_action "$pid" terminate
+  if ! wait_for_pid_exit "$pid"; then
+    echo "verified installed app did not accept a graceful termination request" >&2
+    return 1
+  fi
+}
+
+wait_for_pid_exit() {
+  local pid="$1"
+
+  for _ in {1..80}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "process did not terminate after its verified termination action: $pid" >&2
+  return 1
+}
+
+start_runtime_capture() {
   local output_path="$1"
 
-  stop_console_capture
-  : >"$output_path"
-  /usr/bin/log stream \
-    --style compact \
-    --level info \
-    --predicate "process == \"$executable_name\"" \
-    >"$output_path" 2>&1 &
-  active_console_pid=$!
-  sleep 0.2
-  if ! kill -0 "$active_console_pid" >/dev/null 2>&1; then
-    wait "$active_console_pid" 2>/dev/null || true
-    active_console_pid=""
-    echo "failed to start installed app console capture: $output_path" >&2
-    cat "$output_path" >&2
-    exit 1
+  runtime_evidence_start_console_capture \
+    "$executable_name" \
+    "$output_path" \
+    "$helper_executable_name"
+}
+
+assert_helper_completed() {
+  local mode="$1"
+  local exit_status="$2"
+  local ledger_path="$3"
+  local helper_log_path="$4"
+  local last_line=""
+  local timestamp status step detail
+  local required_step step_count step_line previous_step_line=0
+  local required_steps=()
+
+  if [[ "$exit_status" -ne 0 ]]; then
+    echo "DMG install harness exited with status $exit_status in $mode mode" >&2
+    [[ -f "$ledger_path" ]] && cat "$ledger_path" >&2
+    [[ -f "$helper_log_path" ]] && cat "$helper_log_path" >&2
+    return 1
+  fi
+  if [[ ! -s "$ledger_path" ]]; then
+    echo "DMG install harness ledger is missing or empty: $ledger_path" >&2
+    return 1
+  fi
+  if grep -F $'\tFAIL\t' "$ledger_path" >/dev/null 2>&1; then
+    echo "DMG install harness recorded a failure in $mode mode" >&2
+    cat "$ledger_path" >&2
+    return 1
+  fi
+  if ! grep -F $'\tPASS\tpermissions\tAXIsProcessTrusted=true CGPreflightPostEventAccess=true' \
+    "$ledger_path" >/dev/null 2>&1; then
+    echo "DMG install harness did not prove both input permissions in $mode mode" >&2
+    cat "$ledger_path" >&2
+    return 1
+  fi
+
+  case "$mode" in
+    preflight)
+      required_steps=(arguments permissions complete)
+      ;;
+    exercise)
+      required_steps=(
+        arguments
+        permissions
+        target
+        main-window
+        settings-menu
+        settings-window
+        settings-close
+        quick-entry-menu
+        quick-entry-input
+        quick-entry-add
+        exercise-title-visible
+        quit
+        complete
+      )
+      ;;
+    restart)
+      required_steps=(
+        arguments
+        permissions
+        target
+        main-window
+        restart-title-visible
+        quit
+        complete
+      )
+      ;;
+    *)
+      echo "unknown DMG install harness mode: $mode" >&2
+      return 1
+      ;;
+  esac
+  for required_step in "${required_steps[@]}"; do
+    IFS=$'\t' read -r step_count step_line < <(
+      awk -F $'\t' -v expected="$required_step" '
+        $2 == "PASS" && $3 == expected { count += 1; line = NR }
+        END { printf "%d\t%d\n", count, line }
+      ' "$ledger_path"
+    )
+    if [[ "$step_count" -ne 1 || "$step_line" -le "$previous_step_line" ]]; then
+      echo "DMG install harness step $required_step was absent, duplicated, or out of order in $mode mode" >&2
+      cat "$ledger_path" >&2
+      return 1
+    fi
+    previous_step_line="$step_line"
+  done
+
+  last_line="$(tail -n 1 "$ledger_path")"
+  IFS=$'\t' read -r timestamp status step detail <<<"$last_line"
+  if [[ -z "$timestamp" || "$status" != "PASS" || "$step" != "complete" ||
+    "$detail" != "mode=$mode" ]]; then
+    echo "DMG install harness did not finish $mode mode: $last_line" >&2
+    return 1
   fi
 }
 
-assert_clean_app_logs() {
-  local label="$1"
-  shift
-  local log_path
-  local failure_pattern
+run_helper() {
+  local mode="$1"
+  local pid="$2"
+  local ledger_path="$3"
+  local helper_log_path="$4"
+  local helper_status
 
-  failure_pattern='Noonmark startup failed|Noonmark persistence (load|save) failed|Noonmark sync identity load failed|Noonmark natural-day timer (could not|produced)|Fatal error|Assertion failed|Precondition failed|EXC_BAD_ACCESS|Segmentation fault|Abort trap|Publishing changes from within view updates|Publishing changes from background threads|Modifying state during view update|AttributeGraph: cycle detected|SwiftUI.*(runtime warning|encountered an issue)|ForEach<.*ID .*occurs multiple times|the ID .*occurs multiple times within the collection|Unable to simultaneously satisfy constraints|NSLayoutConstraint.*(conflict|unsatisfiable)|Accessibility.*(action.*)?(failed|failure|rejected|could not|unable)|AX(UIElement)?.*(failed|failure)|kAXError'
-
-  for log_path in "$@"; do
-    if [[ ! -f "$log_path" ]]; then
-      echo "$label log was not created: $log_path" >&2
-      exit 1
-    fi
-    if grep -E -i -n "$failure_pattern" "$log_path" >/dev/null 2>&1; then
-      echo "$label contains a startup, persistence, runtime, layout, or accessibility failure: $log_path" >&2
-      grep -E -i -n "$failure_pattern" "$log_path" >&2
-      exit 1
-    fi
-    if grep -E -i -n '^log: (could not|failed|invalid)' "$log_path" >/dev/null 2>&1; then
-      echo "$label console capture itself failed: $log_path" >&2
-      cat "$log_path" >&2
-      exit 1
-    fi
-  done
+  rm -f "$ledger_path" "$helper_log_path"
+  set +e
+  "$helper_executable" \
+    --mode "$mode" \
+    --pid "$pid" \
+    --app-path "$installed_app" \
+    --task-title "$task_title" \
+    --ledger "$ledger_path" \
+    >"$helper_log_path" 2>&1
+  helper_status=$?
+  set -e
+  assert_helper_completed "$mode" "$helper_status" "$ledger_path" "$helper_log_path"
 }
 
 current_day_metadata() {
@@ -178,44 +584,6 @@ let localDay = String(format: "%04d-%02d-%02d", year, month, day)
 let title = "晷迹 · Day Todo — \(formatter.string(from: now))"
 print("\(localDay)|\(title)")
 '
-}
-
-single_installed_pid() {
-  local pids
-
-  pids="$(pgrep -x "$executable_name" 2>/dev/null || true)"
-  if [[ -z "$pids" || "$pids" == *$'\n'* ]]; then
-    return 1
-  fi
-  printf '%s\n' "$pids"
-}
-
-wait_for_installed_pid() {
-  local pid=""
-
-  for _ in {1..80}; do
-    if pid="$(single_installed_pid)"; then
-      printf '%s\n' "$pid"
-      return 0
-    fi
-    sleep 0.1
-  done
-  echo "installed app did not expose exactly one $executable_name process" >&2
-  pgrep -alf "$executable_name" >&2 || true
-  return 1
-}
-
-verify_installed_process_path() {
-  local pid="$1"
-  local installed_executable="$2"
-  local command_line
-
-  command_line="$(ps -p "$pid" -o command=)"
-  if [[ "$command_line" != *"$installed_executable"* ]]; then
-    echo "unexpected installed app executable for pid $pid: $command_line" >&2
-    echo "expected executable path: $installed_executable" >&2
-    exit 1
-  fi
 }
 
 find_main_window_metadata() {
@@ -326,8 +694,354 @@ wait_for_main_window_metadata() {
   return 1
 }
 
-scripts/reset-dev-data
-terminate_installed_app
+run_permission_preflight() {
+  local helper_status
+
+  rm -f "$permission_ledger" "$permission_log" "$permission_console_log"
+  start_runtime_capture "$permission_console_log"
+  set +e
+  "$helper_executable" \
+    --mode preflight \
+    --ledger "$permission_ledger" \
+    >"$permission_log" 2>&1
+  helper_status=$?
+  set -e
+  runtime_evidence_stop_console_capture
+  assert_helper_completed \
+    "preflight" \
+    "$helper_status" \
+    "$permission_ledger" \
+    "$permission_log"
+  runtime_evidence_assert_clean_logs \
+    "DMG install harness permission preflight" \
+    "$permission_log" \
+    "$permission_console_log"
+  if [[ -e "$database_path" ]]; then
+    echo "permission preflight unexpectedly created production persistence: $database_path" >&2
+    return 1
+  fi
+}
+
+CAPTURED_WINDOW_ID=""
+CAPTURED_WINDOW_DAY=""
+CAPTURED_WINDOW_TITLE=""
+CAPTURED_WINDOW_WIDTH=""
+CAPTURED_WINDOW_HEIGHT=""
+
+capture_window_evidence() {
+  local pid="$1"
+  local destination_screenshot="$2"
+  local destination_metadata="$3"
+  local phase="$4"
+  local metadata window_id natural_day expected_title width height
+
+  metadata="$(wait_for_main_window_metadata "$pid")"
+  IFS='|' read -r window_id natural_day expected_title <<<"$metadata"
+  if [[ -z "$window_id" || -z "$natural_day" || -z "$expected_title" ]]; then
+    echo "$phase window metadata was incomplete: $metadata" >&2
+    return 1
+  fi
+
+  screencapture -x -o -l"$window_id" "$destination_screenshot"
+  if [[ ! -s "$destination_screenshot" ]]; then
+    echo "$phase screenshot was not created: $destination_screenshot" >&2
+    return 1
+  fi
+  width="$(sips -g pixelWidth "$destination_screenshot" | awk '/pixelWidth/ {print $2}')"
+  height="$(sips -g pixelHeight "$destination_screenshot" | awk '/pixelHeight/ {print $2}')"
+  if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 ||
+    "${width:-0}" -gt 4800 || "${height:-0}" -gt 3200 ]]; then
+    echo "invalid $phase screenshot size: ${width:-unknown}x${height:-unknown}" >&2
+    return 1
+  fi
+
+  {
+    printf 'phase=%s\n' "$phase"
+    printf 'pid=%s\n' "$pid"
+    printf 'bundle_identifier=%s\n' "$production_bundle_identifier"
+    printf 'bundle_path=%s\n' "$installed_app"
+    printf 'executable_path=%s\n' "$installed_executable"
+    printf 'window_id=%s\n' "$window_id"
+    printf 'natural_day=%s\n' "$natural_day"
+    printf 'title=%s\n' "$expected_title"
+    printf 'screenshot=%s\n' "$destination_screenshot"
+    printf 'pixel_size=%sx%s\n' "$width" "$height"
+  } >"$destination_metadata"
+
+  CAPTURED_WINDOW_ID="$window_id"
+  CAPTURED_WINDOW_DAY="$natural_day"
+  CAPTURED_WINDOW_TITLE="$expected_title"
+  CAPTURED_WINDOW_WIDTH="$width"
+  CAPTURED_WINDOW_HEIGHT="$height"
+}
+
+PRODUCTION_PHASE_DAY=""
+
+run_production_helper_phase() {
+  local mode="$1"
+  local ledger_path
+  local launch_log_path
+  local helper_log_path
+  local console_log_path
+  local phase_screenshot_path
+  local phase_window_metadata_path
+  local phase_label
+  local pid
+
+  case "$mode" in
+    exercise)
+      ledger_path="$exercise_ledger"
+      launch_log_path="$exercise_launch_log"
+      helper_log_path="$exercise_helper_log"
+      console_log_path="$exercise_console_log"
+      phase_screenshot_path="$exercise_screenshot_path"
+      phase_window_metadata_path="$exercise_window_metadata_path"
+      phase_label="production exercise"
+      ;;
+    restart)
+      ledger_path="$restart_ledger"
+      launch_log_path="$restart_launch_log"
+      helper_log_path="$restart_helper_log"
+      console_log_path="$restart_console_log"
+      phase_screenshot_path="$restart_screenshot_path"
+      phase_window_metadata_path="$restart_window_metadata_path"
+      phase_label="production restart"
+      ;;
+    *)
+      echo "unsupported production helper phase: $mode" >&2
+      return 1
+      ;;
+  esac
+
+  rm -f \
+    "$ledger_path" \
+    "$launch_log_path" \
+    "$helper_log_path" \
+    "$console_log_path"
+  start_runtime_capture "$console_log_path"
+  : >"$launch_log_path"
+  /usr/bin/open -n "$installed_app" >"$launch_log_path" 2>&1
+  pid="$(wait_for_installed_pid)"
+  verify_installed_process_identity "$pid"
+  active_app_pid="$pid"
+  capture_window_evidence \
+    "$pid" \
+    "$phase_screenshot_path" \
+    "$phase_window_metadata_path" \
+    "$phase_label"
+  PRODUCTION_PHASE_DAY="$CAPTURED_WINDOW_DAY"
+
+  run_helper \
+    "$mode" \
+    "$pid" \
+    "$ledger_path" \
+    "$helper_log_path"
+  wait_for_pid_exit "$pid"
+  active_app_pid=""
+  runtime_evidence_stop_console_capture
+  runtime_evidence_assert_clean_logs \
+    "installed $phase_label" \
+    "$launch_log_path" \
+    "$helper_log_path" \
+    "$console_log_path"
+}
+
+assert_database_integrity() {
+  local label="$1"
+  local integrity
+
+  if [[ ! -f "$database_path" ]]; then
+    echo "$label did not create persistence database: $database_path" >&2
+    return 1
+  fi
+  integrity="$(sqlite3 "$database_path" 'PRAGMA integrity_check;')"
+  if [[ "$integrity" != "ok" ]]; then
+    echo "$label persistence integrity_check failed: $integrity" >&2
+    return 1
+  fi
+}
+
+assert_blank_persistence() {
+  local counts
+  local days chains definitions traces subtasks preferences
+
+  assert_database_integrity "installed negative canary"
+  counts="$(sqlite3 -separator $'\t' "$database_path" '
+    SELECT
+      (SELECT count(*) FROM days),
+      (SELECT count(*) FROM task_chains),
+      (SELECT count(*) FROM task_definitions),
+      (SELECT count(*) FROM day_traces),
+      (SELECT count(*) FROM subtasks),
+      (SELECT count(*) FROM app_preferences);
+  ')"
+  IFS=$'\t' read -r \
+    days chains definitions traces subtasks preferences <<<"$counts"
+  if [[ "$days" -ne 0 || "$chains" -ne 0 || "$definitions" -ne 0 ||
+    "$traces" -ne 0 || "$subtasks" -ne 0 || "$preferences" -ne 1 ]]; then
+    echo "invalid installed app empty persistence counts: days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences" >&2
+    return 1
+  fi
+  {
+    printf 'integrity_check=ok\n'
+    printf 'days=%s\n' "$days"
+    printf 'task_chains=%s\n' "$chains"
+    printf 'task_definitions=%s\n' "$definitions"
+    printf 'day_traces=%s\n' "$traces"
+    printf 'subtasks=%s\n' "$subtasks"
+    printf 'app_preferences=%s\n' "$preferences"
+  } >"${work_dir}/negative-canary-persistence.txt"
+}
+
+TASK_IDENTITY_LINE=""
+
+capture_task_snapshot() {
+  local expected_day="$1"
+  local output_path="$2"
+  local counts identity_line row_json
+  local title_count matching_count chains definitions traces days preferences
+  local trace_id chain_id definition_id actual_day trace_status chain_state
+  local definition_sequence definition_title
+
+  if [[ ! "$expected_day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "refusing to query an invalid natural day: $expected_day" >&2
+    return 1
+  fi
+  assert_database_integrity "installed production task"
+
+  counts="$(sqlite3 -separator $'\t' "$database_path" "
+    SELECT
+      (SELECT count(*)
+       FROM task_definitions
+       WHERE title = '$task_title'),
+      (SELECT count(*)
+       FROM day_traces AS trace
+       JOIN task_chains AS chain ON chain.id = trace.chain_id
+       JOIN task_definitions AS definition ON definition.id = trace.definition_id
+       WHERE definition.title = '$task_title'
+         AND trace.date = '$expected_day'
+         AND trace.status = 'pending'
+         AND chain.state = 'active'
+         AND definition.superseded_at IS NULL
+         AND definition.superseded_by_definition_id IS NULL),
+      (SELECT count(*) FROM task_chains),
+      (SELECT count(*) FROM task_definitions),
+      (SELECT count(*) FROM day_traces),
+      (SELECT count(*) FROM days),
+      (SELECT count(*) FROM app_preferences);
+  ")"
+  IFS=$'\t' read -r \
+    title_count matching_count chains definitions traces days preferences <<<"$counts"
+  if [[ "$title_count" -ne 1 || "$matching_count" -ne 1 ||
+    "$chains" -ne 1 || "$definitions" -ne 1 || "$traces" -ne 1 ||
+    "$days" -ne 1 || "$preferences" -ne 1 ]]; then
+    echo "invalid installed production task counts: title=$title_count matching=$matching_count chains=$chains definitions=$definitions traces=$traces days=$days preferences=$preferences" >&2
+    return 1
+  fi
+
+  identity_line="$(sqlite3 -separator $'\t' "$database_path" "
+    SELECT
+      trace.id,
+      chain.id,
+      definition.id,
+      trace.date,
+      trace.status,
+      chain.state,
+      definition.sequence,
+      definition.title
+    FROM day_traces AS trace
+    JOIN task_chains AS chain ON chain.id = trace.chain_id
+    JOIN task_definitions AS definition ON definition.id = trace.definition_id
+    WHERE definition.title = '$task_title'
+      AND trace.date = '$expected_day'
+      AND trace.status = 'pending'
+      AND chain.state = 'active'
+      AND definition.superseded_at IS NULL
+      AND definition.superseded_by_definition_id IS NULL;
+  ")"
+  if [[ -z "$identity_line" || "$identity_line" == *$'\n'* ]]; then
+    echo "installed production task did not resolve to one identity row" >&2
+    return 1
+  fi
+  IFS=$'\t' read -r \
+    trace_id chain_id definition_id actual_day trace_status chain_state \
+    definition_sequence definition_title <<<"$identity_line"
+  if [[ -z "$trace_id" || -z "$chain_id" || -z "$definition_id" ||
+    "$actual_day" != "$expected_day" || "$trace_status" != "pending" ||
+    "$chain_state" != "active" || ! "$definition_sequence" =~ ^[0-9]+$ ||
+    "$definition_title" != "$task_title" ]]; then
+    echo "installed production task identity was invalid: $identity_line" >&2
+    return 1
+  fi
+
+  row_json="$(sqlite3 "$database_path" "
+    SELECT json_object(
+      'trace', json_object(
+        'id', trace.id,
+        'chain_id', trace.chain_id,
+        'definition_id', trace.definition_id,
+        'date', trace.date,
+        'status', trace.status,
+        'priority', trace.priority,
+        'continuation_seq', trace.continuation_seq,
+        'description_text', trace.description_text,
+        'note_entries_json', trace.note_entries_json,
+        'manual_progress_percent', trace.manual_progress_percent,
+        'continued_from_trace_id', trace.continued_from_trace_id,
+        'changed_to_trace_id', trace.changed_to_trace_id,
+        'created_at', trace.created_at,
+        'created_at_bits', trace.created_at_bits,
+        'content_updated_at', trace.content_updated_at,
+        'content_updated_at_bits', trace.content_updated_at_bits,
+        'completed_at', trace.completed_at,
+        'completed_at_bits', trace.completed_at_bits,
+        'settled_at', trace.settled_at,
+        'settled_at_bits', trace.settled_at_bits
+      ),
+      'chain', json_object(
+        'id', chain.id,
+        'state', chain.state,
+        'note_entries_json', chain.note_entries_json,
+        'created_at', chain.created_at,
+        'created_at_bits', chain.created_at_bits,
+        'updated_at', chain.updated_at,
+        'updated_at_bits', chain.updated_at_bits
+      ),
+      'definition', json_object(
+        'id', definition.id,
+        'chain_id', definition.chain_id,
+        'sequence', definition.sequence,
+        'title', definition.title,
+        'description_text', definition.description_text,
+        'planned_subtasks_json', definition.planned_subtasks_json,
+        'created_at', definition.created_at,
+        'content_updated_at', definition.content_updated_at,
+        'superseded_at', definition.superseded_at,
+        'superseded_by_definition_id', definition.superseded_by_definition_id
+      )
+    )
+    FROM day_traces AS trace
+    JOIN task_chains AS chain ON chain.id = trace.chain_id
+    JOIN task_definitions AS definition ON definition.id = trace.definition_id
+    WHERE definition.title = '$task_title'
+      AND trace.date = '$expected_day'
+      AND trace.status = 'pending'
+      AND chain.state = 'active'
+      AND definition.superseded_at IS NULL
+      AND definition.superseded_by_definition_id IS NULL;
+  ")"
+  if [[ -z "$row_json" || "$row_json" == *$'\n'* ]]; then
+    echo "installed production task full-row snapshot was invalid" >&2
+    return 1
+  fi
+
+  {
+    printf 'integrity_check=ok\n'
+    printf 'identity=%s\n' "$identity_line"
+    printf 'joined_row=%s\n' "$row_json"
+  } >"$output_path"
+  TASK_IDENTITY_LINE="$identity_line"
+}
 
 database_path="$(swift -e '
 import Foundation
@@ -353,9 +1067,25 @@ if [[ ! -f "$dmg_path" ]]; then
   exit 1
 fi
 
+scripts/build-dmg-install-harness release
+if [[ ! -d "$helper_app" || ! -x "$helper_executable" ]]; then
+  echo "DMG install harness build did not create its fixed app bundle: $helper_app" >&2
+  exit 1
+fi
+helper_info_plist="${helper_app}/Contents/Info.plist"
+actual_helper_identifier="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$helper_info_plist"
+)"
+if [[ "$actual_helper_identifier" != "$helper_bundle_identifier" ]]; then
+  echo "DMG install harness has an unexpected bundle identifier: $actual_helper_identifier" >&2
+  exit 1
+fi
+
 rm -rf "$work_dir"
 mkdir -p "$install_dir"
 
+mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-install.XXXXXX")"
+mount_cleanup_armed=1
 hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$mountpoint" -quiet
 source_app="${mountpoint}/${app_short_name}.app"
 installed_app="${install_dir}/${app_short_name}.app"
@@ -374,13 +1104,41 @@ fi
 
 executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")"
 bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")"
-if [[ "$bundle_identifier" != "app.noonmark.mac" ]]; then
+if [[ "$bundle_identifier" != "$production_bundle_identifier" ]]; then
   echo "installed app has an unexpected production bundle identifier: $bundle_identifier" >&2
   exit 1
 fi
 installed_executable="${installed_app}/Contents/MacOS/${executable_name}"
 if [[ ! -x "$installed_executable" ]]; then
   echo "installed app binary is not executable: $installed_executable" >&2
+  exit 1
+fi
+
+runtime_evidence_snapshot_diagnostics \
+  "$executable_name" \
+  "$app_diagnostic_baseline"
+runtime_evidence_snapshot_diagnostics \
+  "$helper_executable_name" \
+  "$helper_diagnostic_baseline"
+diagnostic_baselines_ready=1
+runtime_evidence_write_manifest_start \
+  "$runtime_manifest_path" \
+  "$executable_name" \
+  "$installed_app"
+{
+  printf 'production_bundle_identifier=%s\n' "$production_bundle_identifier"
+  printf 'production_executable=%s\n' "$installed_executable"
+  printf 'helper_process=%s\n' "$helper_executable_name"
+  printf 'helper_bundle_identifier=%s\n' "$helper_bundle_identifier"
+  printf 'helper_bundle=%s\n' "$helper_app"
+} >>"$runtime_manifest_path"
+runtime_manifest_started=1
+
+run_permission_preflight
+
+scripts/reset-dev-data
+if [[ -e "$database_path" ]]; then
+  echo "reset-dev-data left production persistence before the negative canary: $database_path" >&2
   exit 1
 fi
 
@@ -391,7 +1149,7 @@ rm -f \
   "$forbidden_automation_result" \
   "$forbidden_automation_state"
 : >"$initial_launch_log"
-start_console_capture "$initial_console_log"
+start_runtime_capture "$initial_console_log"
 /usr/bin/open -n "$installed_app" --args \
   --data-url "$redirected_database_path" \
   --page settings \
@@ -401,13 +1159,18 @@ start_console_capture "$initial_console_log"
   >"$initial_launch_log" 2>&1
 
 installed_pid="$(wait_for_installed_pid)"
-verify_installed_process_path "$installed_pid" "$installed_executable"
-window_metadata="$(wait_for_main_window_metadata "$installed_pid")"
-IFS='|' read -r window_id initial_day expected_window_title <<<"$window_metadata"
-if [[ -z "$window_id" || -z "$initial_day" || -z "$expected_window_title" ]]; then
-  echo "installed app window metadata was incomplete: $window_metadata" >&2
-  exit 1
-fi
+verify_installed_process_identity "$installed_pid"
+active_app_pid="$installed_pid"
+capture_window_evidence \
+  "$installed_pid" \
+  "$screenshot_path" \
+  "$window_metadata_path" \
+  "negative-canary"
+window_id="$CAPTURED_WINDOW_ID"
+initial_day="$CAPTURED_WINDOW_DAY"
+expected_window_title="$CAPTURED_WINDOW_TITLE"
+width="$CAPTURED_WINDOW_WIDTH"
+height="$CAPTURED_WINDOW_HEIGHT"
 if [[ -e "$redirected_database_path" || -e "$forbidden_automation_result" ||
   -e "$forbidden_automation_state" ]]; then
   echo "production DMG accepted an internal launch argument" >&2
@@ -419,60 +1182,64 @@ if [[ -e "$redirected_database_path" || -e "$forbidden_automation_result" ||
   exit 1
 fi
 
-screencapture -x -o -l"$window_id" "$screenshot_path"
-if [[ ! -s "$screenshot_path" ]]; then
-  echo "installed app screenshot was not created: $screenshot_path" >&2
-  exit 1
-fi
-width="$(sips -g pixelWidth "$screenshot_path" | awk '/pixelWidth/ {print $2}')"
-height="$(sips -g pixelHeight "$screenshot_path" | awk '/pixelHeight/ {print $2}')"
-
-if [[ "${width:-0}" -lt 1200 || "${height:-0}" -lt 700 ||
-  "${width:-0}" -gt 4800 || "${height:-0}" -gt 3200 ]]; then
-  echo "invalid installed app screenshot size: ${width:-unknown}x${height:-unknown}" >&2
-  exit 1
-fi
-
-printf 'pid=%s\nwindow_id=%s\nnatural_day=%s\ntitle=%s\n' \
-  "$installed_pid" \
-  "$window_id" \
-  "$initial_day" \
-  "$expected_window_title" \
-  >"$window_metadata_path"
-
-terminate_installed_app
-stop_console_capture
-assert_clean_app_logs \
-  "installed blank-app launch" \
+request_verified_app_termination "$installed_pid"
+active_app_pid=""
+runtime_evidence_stop_console_capture
+runtime_evidence_assert_clean_logs \
+  "installed negative canary" \
   "$initial_launch_log" \
   "$initial_console_log"
+assert_blank_persistence
 
-if [[ ! -f "$database_path" ]]; then
-  echo "installed app did not create persistence database: $database_path" >&2
+scripts/reset-dev-data
+if [[ -e "$database_path" ]]; then
+  echo "reset-dev-data left negative-canary persistence before production exercise: $database_path" >&2
   exit 1
 fi
 
-read -r days chains definitions traces subtasks preferences < <(
-  sqlite3 -separator " " "$database_path" "
-    SELECT
-      (SELECT count(*) FROM days),
-      (SELECT count(*) FROM task_chains),
-      (SELECT count(*) FROM task_definitions),
-      (SELECT count(*) FROM day_traces),
-      (SELECT count(*) FROM subtasks),
-      (SELECT count(*) FROM app_preferences);
-  "
-)
+rm -f \
+  "$task_identity_path" \
+  "$task_snapshot_before_path" \
+  "$task_snapshot_after_path"
 
-if [[ "$days" -ne 0 || "$chains" -ne 0 || "$definitions" -ne 0 ||
-  "$traces" -ne 0 || "$subtasks" -ne 0 || "$preferences" -ne 1 ]]; then
-  echo "invalid installed app empty persistence counts: days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences" >&2
+run_production_helper_phase exercise
+exercise_day="$PRODUCTION_PHASE_DAY"
+
+IFS='|' read -r current_day_after_exercise _ < <(current_day_metadata)
+if [[ "$current_day_after_exercise" != "$exercise_day" ]]; then
+  echo "natural day crossed while creating the production task: window=$exercise_day current=$current_day_after_exercise" >&2
+  exit 1
+fi
+capture_task_snapshot "$exercise_day" "$task_snapshot_before_path"
+{
+  printf 'trace_id\tchain_id\tdefinition_id\tdate\ttrace_status\tchain_state\tdefinition_sequence\ttitle\n'
+  printf '%s\n' "$TASK_IDENTITY_LINE"
+} >"$task_identity_path"
+
+run_production_helper_phase restart
+restart_day="$PRODUCTION_PHASE_DAY"
+if [[ "$restart_day" != "$exercise_day" ]]; then
+  echo "natural day crossed before the persistence restart check: created=$exercise_day restart=$restart_day" >&2
+  exit 1
+fi
+
+capture_task_snapshot "$exercise_day" "$task_snapshot_after_path"
+if ! cmp -s "$task_snapshot_before_path" "$task_snapshot_after_path"; then
+  echo "installed production task identity changed across a no-argument restart" >&2
+  echo "before restart:" >&2
+  cat "$task_snapshot_before_path" >&2
+  echo "after restart:" >&2
+  cat "$task_snapshot_after_path" >&2
   exit 1
 fi
 
 echo "DMG install smoke: $installed_app"
 echo "Installed dynamic main window: $expected_window_title (natural_day=$initial_day)"
 echo "Installed app screenshot: $screenshot_path (${width}x${height})"
-echo "Installed blank app persistence: $database_path (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"
 echo "Installed release ignored internal data, page, and E2E launch arguments"
-echo "Installed app logs are clean: $initial_console_log"
+echo "Installed production Settings and Quick Entry used real WindowServer input: $exercise_ledger"
+echo "Installed production task persisted as pending/active/current: $task_identity_path"
+echo "Installed production restart exposed the same task through AX: $restart_ledger"
+echo "Installed production joined-row identity remained byte-for-byte stable: $task_snapshot_after_path"
+echo "Installed app and helper unified logs are clean: $exercise_console_log, $restart_console_log"
+echo "Installed runtime diagnostics are guarded: $runtime_manifest_path"

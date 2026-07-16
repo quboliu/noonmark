@@ -305,10 +305,6 @@ extension AppCopy {
     }
 
     var completionNodeTitle: String { language == .chinese ? "完成节点" : "Completion" }
-    var poolTaskChainInPool: String {
-        language == .chinese ? "任务链仍在任务池" : "Task chain remains in the Task Pool"
-    }
-
     var poolNoDayTodoNotice: String {
         language == .chinese
             ? "尚未进入任何 Day Todo。排期后会生成对应日期的日轨迹。"
@@ -403,15 +399,6 @@ extension AppCopy {
         language == .chinese
             ? "这条任务轨迹形成时未设置分组或标签。"
             : "No group or tags were set when this trail was created."
-    }
-
-    func poolChainState(isActive: Bool) -> String {
-        switch (language, isActive) {
-        case (.chinese, true): "任务链状态：活跃"
-        case (.chinese, false): "任务链状态：已关闭"
-        case (.english, true): "Task chain: Active"
-        case (.english, false): "Task chain: Closed"
-        }
     }
 
     func detailRailHint(for page: NoonmarkStore.Page) -> String {

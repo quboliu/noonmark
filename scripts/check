@@ -36,6 +36,12 @@ scripts/test-deterministic-sim
 echo "==> UI localization literal guard"
 scripts/check-ui-localization
 
+echo "==> Natural Day public boundary"
+scripts/check-natural-day-boundary
+
+echo "==> Runtime evidence guard"
+scripts/test-runtime-evidence
+
 echo "==> SwiftLint"
 swiftlint lint --quiet
 

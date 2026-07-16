@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source scripts/runtime-evidence
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-runtime-evidence.XXXXXX")"
+diagnostic_dir="${work_dir}/DiagnosticReports"
+baseline="${work_dir}/baseline.txt"
+artifact_dir="${work_dir}/artifacts"
+manifest="${work_dir}/manifest.txt"
+trap 'rm -rf "$work_dir"' EXIT
+mkdir -p "$diagnostic_dir"
+
+clean_log="${work_dir}/clean.log"
+failure_log="${work_dir}/failure.log"
+console_log="${work_dir}/console.log"
+premature_console_log="${work_dir}/premature-console.log"
+printf 'normal app lifecycle\n' >"$clean_log"
+runtime_evidence_assert_clean_logs "clean fixture" "$clean_log"
+
+runtime_evidence_start_console_capture \
+  "NoonmarkRuntimeEvidenceFixture" \
+  "$console_log"
+runtime_evidence_stop_console_capture
+runtime_evidence_assert_clean_logs "console fixture" "$console_log"
+
+runtime_evidence_start_console_capture \
+  "NoonmarkRuntimeEvidencePrematureFixture" \
+  "$premature_console_log"
+premature_console_pid="$RUNTIME_EVIDENCE_CONSOLE_PID"
+kill -TERM "$premature_console_pid"
+wait "$premature_console_pid" 2>/dev/null || true
+if runtime_evidence_stop_console_capture; then
+  echo "runtime evidence accepted a prematurely exited console capture" >&2
+  exit 1
+fi
+
+printf 'process exited due to SIGSEGV\n' >"$failure_log"
+if runtime_evidence_assert_clean_logs "crash fixture" "$failure_log"; then
+  echo "runtime evidence accepted a crash marker" >&2
+  exit 1
+fi
+
+touch "${diagnostic_dir}/NoonmarkFixture-older.ips"
+runtime_evidence_snapshot_diagnostics \
+  "NoonmarkFixture" \
+  "$baseline" \
+  "$diagnostic_dir"
+touch "${diagnostic_dir}/NoonmarkFixture-new.ips"
+if runtime_evidence_assert_no_new_diagnostics \
+  "NoonmarkFixture" \
+  "$baseline" \
+  "$artifact_dir" \
+  1 \
+  "$diagnostic_dir"; then
+  echo "runtime evidence accepted a new diagnostic report" >&2
+  exit 1
+fi
+if [[ ! -f "${artifact_dir}/NoonmarkFixture-new.ips" ||
+      -f "${artifact_dir}/NoonmarkFixture-older.ips" ]]; then
+  echo "runtime evidence copied the wrong diagnostic reports" >&2
+  exit 1
+fi
+
+blocked_parent="${work_dir}/not-a-directory"
+touch "$blocked_parent"
+if runtime_evidence_snapshot_diagnostics \
+  "NoonmarkFixture" \
+  "${blocked_parent}/snapshot.txt" \
+  "$diagnostic_dir"; then
+  echo "runtime evidence accepted an unwritable diagnostic snapshot path" >&2
+  exit 1
+fi
+
+if runtime_evidence_assert_no_new_diagnostics \
+  "NoonmarkFixture" \
+  "${work_dir}/missing-baseline.txt" \
+  "$artifact_dir" \
+  1 \
+  "$diagnostic_dir"; then
+  echo "runtime evidence accepted a missing diagnostic baseline" >&2
+  exit 1
+fi
+
+if runtime_evidence_write_manifest_finish \
+  "${work_dir}/missing-manifest.txt" \
+  0; then
+  echo "runtime evidence accepted a missing start manifest" >&2
+  exit 1
+fi
+runtime_evidence_write_manifest_start \
+  "$manifest" \
+  "NoonmarkFixture" \
+  "/Applications/NoonmarkFixture.app"
+runtime_evidence_write_manifest_finish "$manifest" 0
+if ! grep -Fq 'suite_exit_status=0' "$manifest"; then
+  echo "runtime evidence did not finish its manifest" >&2
+  exit 1
+fi
+
+echo "Runtime evidence log and DiagnosticReports guards: ok"

@@ -9,6 +9,10 @@ let package = Package(
     ],
     products: [
         .executable(name: "NoonmarkMacApp", targets: ["NoonmarkMacApp"]),
+        .executable(
+            name: "NoonmarkDMGInstallHarness",
+            targets: ["NoonmarkDMGInstallHarness"]
+        ),
         .library(name: "NoonmarkCore", targets: ["NoonmarkCore"]),
         .library(name: "NoonmarkDayContext", targets: ["NoonmarkDayContext"]),
         .library(name: "NoonmarkMacRuntime", targets: ["NoonmarkMacRuntime"]),
@@ -28,6 +32,10 @@ let package = Package(
             ],
             path: "App/NoonmarkMacApp",
             exclude: ["Resources"]
+        ),
+        .executableTarget(
+            name: "NoonmarkDMGInstallHarness",
+            path: "Tools/NoonmarkDMGInstallHarness"
         ),
         .target(name: "NoonmarkCore"),
         .target(

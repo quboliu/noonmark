@@ -118,13 +118,18 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
 
     private func exercise(on store: NoonmarkStore) async throws {
         let mainWindow = try await visibleMainWindow()
+        let input = try WindowServerInputDriver()
         try assertMenuContract(copy: store.copy)
         guard taskRecord(titled: Self.fixtureTitle, in: store) == nil else {
             throw Failure.failed("isolated command database already contained the fixture")
         }
 
         try await exerciseSettingsShortcut(mainWindow: mainWindow, copy: store.copy)
-        try await exerciseQuickEntry(mainWindow: mainWindow, store: store)
+        try await exerciseQuickEntry(
+            mainWindow: mainWindow,
+            store: store,
+            input: input
+        )
 
         let created = try requireTaskRecord(titled: Self.fixtureTitle, in: store)
         guard created.trace.date == store.today,
@@ -146,7 +151,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         try await exerciseSearch(
             mainWindow: mainWindow,
             store: store,
-            expectedTraceID: restored.trace.id
+            expectedTraceID: restored.trace.id,
+            input: input
         )
 
         try writeState(
@@ -162,6 +168,7 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     private func verifyRestart(on store: NoonmarkStore) async throws {
         let expected = try readState()
         let mainWindow = try await visibleMainWindow()
+        let input = try WindowServerInputDriver()
         try assertMenuContract(copy: store.copy)
 
         let restored = try requireTaskRecord(titled: expected.taskTitle, in: store)
@@ -181,7 +188,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         try await exerciseSearch(
             mainWindow: mainWindow,
             store: store,
-            expectedTraceID: restored.trace.id
+            expectedTraceID: restored.trace.id,
+            input: input
         )
     }
 
@@ -245,7 +253,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
 
     private func exerciseQuickEntry(
         mainWindow: NSWindow,
-        store: NoonmarkStore
+        store: NoonmarkStore,
+        input: WindowServerInputDriver
     ) async throws {
         try await activate(mainWindow)
         try performMenuShortcut(
@@ -277,7 +286,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
 
         let editor = try await focusedTextEditor(
             identifier: "quick-entry.field",
-            in: panel
+            in: panel,
+            input: input
         )
         guard editor.string.isEmpty else {
             throw Failure.failed("Quick Entry did not start with an empty editor")
@@ -365,7 +375,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     private func exerciseSearch(
         mainWindow: NSWindow,
         store: NoonmarkStore,
-        expectedTraceID: DayTraceID
+        expectedTraceID: DayTraceID,
+        input: WindowServerInputDriver
     ) async throws {
         try await activate(mainWindow)
         mainWindow.makeFirstResponder(nil)
@@ -399,7 +410,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
 
         let editor = try await focusedTextEditor(
             identifier: "search.field",
-            in: searchWindow
+            in: searchWindow,
+            input: input
         )
         if editor.string.isEmpty == false {
             try replaceEditorContents(with: "", in: editor)
@@ -674,7 +686,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
 
     private func focusedTextEditor(
         identifier: String,
-        in window: NSWindow
+        in window: NSWindow,
+        input: WindowServerInputDriver
     ) async throws -> NSTextView {
         var identifiedView: NSView?
         try await waitUntil("text field was missing: \(identifier)") {
@@ -690,9 +703,11 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         guard let clickTarget else {
             throw Failure.failed("editable text field was missing: \(identifier)")
         }
-        guard realClick(clickTarget) else {
-            throw Failure.failed("text field rejected a real mouse click: \(identifier)")
-        }
+        try await click(
+            clickTarget,
+            identifier: identifier,
+            input: input
+        )
 
         var editor: NSTextView?
         try await waitUntil("text field did not become first responder: \(identifier)") {
@@ -823,46 +838,39 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         )
     }
 
-    private func realClick(_ view: NSView) -> Bool {
+    private func click(
+        _ view: NSView,
+        identifier: String,
+        input: WindowServerInputDriver
+    ) async throws {
         guard let window = view.window,
               window.isVisible,
+              window.isKeyWindow,
+              NSApp.isActive,
               view.isHiddenOrHasHiddenAncestor == false,
               view.bounds.width > 0,
               view.bounds.height > 0
         else {
-            return false
+            throw Failure.failed(
+                "text field was not available for WindowServer click: \(identifier)"
+            )
         }
-        let point = view.convert(
+        let windowPoint = view.convert(
             NSPoint(x: view.bounds.midX, y: view.bounds.midY),
             to: nil
         )
-        let timestamp = ProcessInfo.processInfo.systemUptime
-        guard let mouseDown = NSEvent.mouseEvent(
-            with: .leftMouseDown,
-            location: point,
-            modifierFlags: [],
-            timestamp: timestamp,
-            windowNumber: window.windowNumber,
-            context: nil,
-            eventNumber: 0,
-            clickCount: 1,
-            pressure: 1
-        ), let mouseUp = NSEvent.mouseEvent(
-            with: .leftMouseUp,
-            location: point,
-            modifierFlags: [],
-            timestamp: timestamp + 0.01,
-            windowNumber: window.windowNumber,
-            context: nil,
-            eventNumber: 0,
-            clickCount: 1,
-            pressure: 0
-        ) else {
-            return false
+        do {
+            let coordinate = try input.pointerCoordinate(
+                windowPoint: windowPoint,
+                in: window
+            )
+            try await input.postClick(at: coordinate, modifiers: [])
+        } catch {
+            throw Failure.failed(
+                "WindowServer click failed for \(identifier): "
+                    + error.localizedDescription
+            )
         }
-        NSApp.postEvent(mouseDown, atStart: false)
-        NSApp.postEvent(mouseUp, atStart: false)
-        return true
     }
 
     private func visibleMainWindow() async throws -> NSWindow {

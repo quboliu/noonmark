@@ -6,8 +6,8 @@ import NoonmarkCore
 /// The module always calculates in UTC at noon. It never interprets a civil date
 /// through the device's current time zone and never substitutes the current time
 /// when an invalid date or arithmetic overflow is encountered.
-public enum GregorianCivilCalendar {
-    public static func offset(
+package enum GregorianLocalDateArithmetic {
+    package static func offset(
         _ date: LocalDate,
         byDays days: Int
     ) throws -> LocalDate {
@@ -23,7 +23,7 @@ public enum GregorianCivilCalendar {
         return try localDate(from: shifted)
     }
 
-    public static func dayDistance(
+    package static func dayDistance(
         from start: LocalDate,
         to end: LocalDate
     ) throws -> Int {
@@ -39,7 +39,7 @@ public enum GregorianCivilCalendar {
         return distance
     }
 
-    public static func daysInMonth(year: Int, month: Int) throws -> Int {
+    package static func daysInMonth(year: Int, month: Int) throws -> Int {
         let first = try foundationDate(
             from: LocalDate(year: year, month: month, day: 1)
         )
@@ -53,7 +53,7 @@ public enum GregorianCivilCalendar {
         return count
     }
 
-    public static func mondayLeadBlankCount(
+    package static func mondayLeadBlankCount(
         year: Int,
         month: Int
     ) throws -> Int {
@@ -63,7 +63,7 @@ public enum GregorianCivilCalendar {
         return (calendar.component(.weekday, from: first) + 5) % 7
     }
 
-    public static func shiftedMonth(
+    package static func shiftedMonth(
         from date: LocalDate,
         by months: Int
     ) throws -> LocalDate {
@@ -81,7 +81,7 @@ public enum GregorianCivilCalendar {
         return LocalDate(year: result.year, month: result.month, day: 1)
     }
 
-    public static func foundationDate(from date: LocalDate) throws -> Date {
+    package static func foundationDate(from date: LocalDate) throws -> Date {
         var components = DateComponents()
         components.calendar = calendar
         components.timeZone = calendar.timeZone

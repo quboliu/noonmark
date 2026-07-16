@@ -6,7 +6,7 @@ public struct NaturalDayState: Equatable, Sendable {
     public let timeZoneIdentifier: String
     public let localeIdentifier: String
 
-    public init(
+    package init(
         today: LocalDate,
         timeZoneIdentifier: String,
         localeIdentifier: String
@@ -23,7 +23,7 @@ public struct NaturalDayMoment: Equatable, Sendable {
 
     public var today: LocalDate { state.today }
 
-    public init(instant: Date, state: NaturalDayState) {
+    package init(instant: Date, state: NaturalDayState) {
         self.instant = instant
         self.state = state
     }
@@ -96,7 +96,7 @@ public final class NaturalDayObservation {
     }
 }
 
-public struct NaturalDayEnvironmentSample: Equatable, Sendable {
+package struct NaturalDayEnvironmentSample: Equatable {
     package let instant: Date
     package let timeZoneIdentifier: String
     package let localeIdentifier: String
@@ -164,7 +164,7 @@ public final class NaturalDayContext {
     }
 
     public func offset(_ date: LocalDate, byDays days: Int) throws -> LocalDate {
-        try GregorianCivilCalendar.offset(date, byDays: days)
+        try GregorianLocalDateArithmetic.offset(date, byDays: days)
     }
 
     private func startEnvironmentIfNeeded() {

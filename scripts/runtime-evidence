@@ -1,0 +1,325 @@
+#!/usr/bin/env bash
+
+if [[ "${NOONMARK_RUNTIME_EVIDENCE_LOADED:-0}" == "1" ]]; then
+  return 0
+fi
+NOONMARK_RUNTIME_EVIDENCE_LOADED=1
+
+NOONMARK_RUNTIME_FAILURE_PATTERN='Noonmark startup failed|Noonmark persistence (load|save) failed|Noonmark sync identity load failed|Noonmark natural-day timer (could not|produced)|Fatal error|Assertion failed|Precondition failed|EXC_BAD_ACCESS|Segmentation fault|Abort trap|exited due to SIG|Generating crash report|Publishing changes from within view updates|Publishing changes from background threads|Modifying state during view update|AttributeGraph: cycle detected|SwiftUI.*(runtime warning|encountered an issue)|ForEach<.*ID .*occurs multiple times|the ID .*occurs multiple times within the collection|Unable to simultaneously satisfy constraints|NSLayoutConstraint.*(conflict|unsatisfiable)|Accessibility.*(action.*)?(failed|failure|rejected|could not|unable)|AX(UIElement)?.*(failed|failure)|kAXError'
+RUNTIME_EVIDENCE_CONSOLE_PID=""
+RUNTIME_EVIDENCE_CONSOLE_PARENT_PID=""
+RUNTIME_EVIDENCE_CONSOLE_COMMAND=""
+
+runtime_evidence_clear_console_identity() {
+  RUNTIME_EVIDENCE_CONSOLE_PID=""
+  RUNTIME_EVIDENCE_CONSOLE_PARENT_PID=""
+  RUNTIME_EVIDENCE_CONSOLE_COMMAND=""
+}
+
+runtime_evidence_capture_console_identity() {
+  local pid="$1"
+  local observed_command
+  local observed_parent
+
+  if ! observed_parent="$(ps -p "$pid" -o ppid= 2>/dev/null)"; then
+    return 1
+  fi
+  observed_parent="${observed_parent//[[:space:]]/}"
+  if ! observed_command="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
+    return 1
+  fi
+  if [[ "$observed_parent" != "$$" ||
+        "$observed_command" != "/usr/bin/log stream "* ]]; then
+    return 1
+  fi
+  RUNTIME_EVIDENCE_CONSOLE_PARENT_PID="$observed_parent"
+  RUNTIME_EVIDENCE_CONSOLE_COMMAND="$observed_command"
+}
+
+runtime_evidence_console_identity_matches() {
+  local pid="$1"
+  local observed_command
+  local observed_parent
+
+  [[ -n "$RUNTIME_EVIDENCE_CONSOLE_PARENT_PID" &&
+    -n "$RUNTIME_EVIDENCE_CONSOLE_COMMAND" ]] || return 1
+  if ! observed_parent="$(ps -p "$pid" -o ppid= 2>/dev/null)"; then
+    return 1
+  fi
+  observed_parent="${observed_parent//[[:space:]]/}"
+  if ! observed_command="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
+    return 1
+  fi
+  [[ "$observed_parent" == "$RUNTIME_EVIDENCE_CONSOLE_PARENT_PID" &&
+    "$observed_command" == "$RUNTIME_EVIDENCE_CONSOLE_COMMAND" ]]
+}
+
+runtime_evidence_start_console_capture() {
+  local process_name="$1"
+  local output_path="$2"
+  local predicate
+
+  shift 2
+
+  if ! runtime_evidence_stop_console_capture; then
+    return 1
+  fi
+  if ! mkdir -p "$(dirname "$output_path")"; then
+    echo "failed to create runtime evidence directory: $output_path" >&2
+    return 1
+  fi
+  if ! printf 'runtime_evidence_capture_started=%s\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$output_path"; then
+    echo "failed to create runtime console log: $output_path" >&2
+    return 1
+  fi
+  predicate="process == \"$process_name\" OR eventMessage CONTAINS[c] \"$process_name\""
+  for process_name in "$@"; do
+    predicate="${predicate} OR process == \"$process_name\" OR eventMessage CONTAINS[c] \"$process_name\""
+  done
+  /usr/bin/log stream \
+    --style compact \
+    --level info \
+    --predicate "$predicate" \
+    >>"$output_path" 2>&1 &
+  RUNTIME_EVIDENCE_CONSOLE_PID=$!
+  sleep 0.2
+  if ! kill -0 "$RUNTIME_EVIDENCE_CONSOLE_PID" >/dev/null 2>&1; then
+    wait "$RUNTIME_EVIDENCE_CONSOLE_PID" 2>/dev/null || true
+    runtime_evidence_clear_console_identity
+    echo "failed to start runtime console capture: $output_path" >&2
+    cat "$output_path" >&2
+    return 1
+  fi
+  if ! runtime_evidence_capture_console_identity \
+    "$RUNTIME_EVIDENCE_CONSOLE_PID"; then
+    echo "runtime console PID did not match this shell's /usr/bin/log stream child" >&2
+    ps -ww -p "$RUNTIME_EVIDENCE_CONSOLE_PID" \
+      -o pid=,ppid=,command= >&2 || true
+    runtime_evidence_clear_console_identity
+    return 1
+  fi
+}
+
+runtime_evidence_stop_console_capture() {
+  local pid="$RUNTIME_EVIDENCE_CONSOLE_PID"
+
+  if [[ -z "$pid" ]]; then
+    return 0
+  fi
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    wait "$pid" 2>/dev/null || true
+    runtime_evidence_clear_console_identity
+    echo "runtime console capture exited before it was stopped: pid=$pid" >&2
+    return 1
+  fi
+  if ! runtime_evidence_console_identity_matches "$pid"; then
+    echo "refusing to signal an unverified runtime console PID: $pid" >&2
+    runtime_evidence_clear_console_identity
+    return 1
+  fi
+  if ! kill -INT "$pid" >/dev/null 2>&1; then
+    echo "failed to interrupt runtime console capture: pid=$pid" >&2
+    runtime_evidence_clear_console_identity
+    return 1
+  fi
+  for _ in {1..20}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      wait "$pid" 2>/dev/null || true
+      runtime_evidence_clear_console_identity
+      return 0
+    fi
+    sleep 0.05
+  done
+  if ! runtime_evidence_console_identity_matches "$pid"; then
+    echo "refusing to terminate a reused runtime console PID: $pid" >&2
+    runtime_evidence_clear_console_identity
+    return 1
+  fi
+  if ! kill -TERM "$pid" >/dev/null 2>&1; then
+    echo "failed to terminate runtime console capture: pid=$pid" >&2
+    runtime_evidence_clear_console_identity
+    return 1
+  fi
+  for _ in {1..20}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      wait "$pid" 2>/dev/null || true
+      runtime_evidence_clear_console_identity
+      return 0
+    fi
+    sleep 0.05
+  done
+  if runtime_evidence_console_identity_matches "$pid"; then
+    kill -KILL "$pid" >/dev/null 2>&1 || true
+  fi
+  wait "$pid" 2>/dev/null || true
+  runtime_evidence_clear_console_identity
+  echo "runtime console capture required a forced kill: pid=$pid" >&2
+  return 1
+}
+
+runtime_evidence_assert_clean_logs() {
+  local label="$1"
+  shift
+  local grep_status
+  local log_path
+
+  for log_path in "$@"; do
+    if [[ ! -f "$log_path" ]]; then
+      echo "$label log was not created: $log_path" >&2
+      return 1
+    fi
+    if grep -E -i -n "$NOONMARK_RUNTIME_FAILURE_PATTERN" \
+      "$log_path" >/dev/null 2>&1; then
+      echo "$label contains a runtime, persistence, layout, or accessibility failure: $log_path" >&2
+      grep -E -i -n "$NOONMARK_RUNTIME_FAILURE_PATTERN" "$log_path" >&2
+      return 1
+    else
+      grep_status=$?
+      if [[ "$grep_status" -ne 1 ]]; then
+        echo "$label log could not be inspected: $log_path (grep=$grep_status)" >&2
+        return 1
+      fi
+    fi
+    if grep -E -i -n '^log: (could not|failed|invalid)' \
+      "$log_path" >/dev/null 2>&1; then
+      echo "$label console capture itself failed: $log_path" >&2
+      cat "$log_path" >&2
+      return 1
+    else
+      grep_status=$?
+      if [[ "$grep_status" -ne 1 ]]; then
+        echo "$label console log could not be inspected: $log_path (grep=$grep_status)" >&2
+        return 1
+      fi
+    fi
+  done
+}
+
+runtime_evidence_snapshot_diagnostics() {
+  local process_name="$1"
+  local snapshot_path="$2"
+  local diagnostic_dir="${3:-${HOME}/Library/Logs/DiagnosticReports}"
+  local unsorted_path="${snapshot_path}.unsorted"
+
+  if ! mkdir -p "$(dirname "$snapshot_path")"; then
+    echo "failed to create diagnostic snapshot directory: $snapshot_path" >&2
+    return 1
+  fi
+  if [[ ! -d "$diagnostic_dir" ]]; then
+    if ! : >"$snapshot_path"; then
+      echo "failed to create empty diagnostic snapshot: $snapshot_path" >&2
+      return 1
+    fi
+    return 0
+  fi
+  if ! find "$diagnostic_dir" -maxdepth 1 -type f \
+    \( -name "${process_name}-*.ips" \
+    -o -name "${process_name}-*.crash" \
+    -o -name "${process_name}-*.hang" \
+    -o -name "${process_name}-*.spin" \) \
+    -print >"$unsorted_path"; then
+    echo "failed to snapshot DiagnosticReports for $process_name" >&2
+    rm -f "$unsorted_path"
+    return 1
+  fi
+  if ! LC_ALL=C sort "$unsorted_path" >"$snapshot_path"; then
+    echo "failed to sort DiagnosticReports snapshot for $process_name" >&2
+    rm -f "$unsorted_path"
+    return 1
+  fi
+  if ! rm -f "$unsorted_path"; then
+    echo "failed to remove DiagnosticReports staging snapshot: $unsorted_path" >&2
+    return 1
+  fi
+}
+
+runtime_evidence_assert_no_new_diagnostics() {
+  local process_name="$1"
+  local baseline_path="$2"
+  local artifact_dir="$3"
+  local wait_attempts="${4:-1}"
+  local diagnostic_dir="${5:-${HOME}/Library/Logs/DiagnosticReports}"
+  local current_path="${baseline_path}.current"
+  local new_path="${baseline_path}.new"
+  local attempt
+
+  if [[ ! -f "$baseline_path" || ! -r "$baseline_path" ]]; then
+    echo "diagnostic baseline is missing or unreadable: $baseline_path" >&2
+    return 1
+  fi
+  for ((attempt = 1; attempt <= wait_attempts; attempt += 1)); do
+    if ! runtime_evidence_snapshot_diagnostics \
+      "$process_name" \
+      "$current_path" \
+      "$diagnostic_dir"; then
+      return 1
+    fi
+    if ! comm -13 "$baseline_path" "$current_path" >"$new_path"; then
+      echo "failed to compare DiagnosticReports for $process_name" >&2
+      return 1
+    fi
+    if [[ -s "$new_path" ]]; then
+      break
+    fi
+    if [[ "$attempt" -lt "$wait_attempts" ]]; then
+      sleep 0.1
+    fi
+  done
+
+  if [[ ! -s "$new_path" ]]; then
+    rm -f "$current_path" "$new_path"
+    return 0
+  fi
+
+  if ! mkdir -p "$artifact_dir"; then
+    echo "failed to create diagnostic artifact directory: $artifact_dir" >&2
+    return 1
+  fi
+  while IFS= read -r report_path; do
+    [[ -n "$report_path" ]] || continue
+    if ! cp "$report_path" "$artifact_dir/"; then
+      echo "failed to preserve diagnostic report: $report_path" >&2
+      return 1
+    fi
+    echo "new diagnostic report: $report_path" >&2
+  done <"$new_path"
+  rm -f "$current_path" "$new_path"
+  return 1
+}
+
+runtime_evidence_write_manifest_start() {
+  local manifest_path="$1"
+  local process_name="$2"
+  local bundle_path="$3"
+
+  if ! mkdir -p "$(dirname "$manifest_path")"; then
+    echo "failed to create runtime manifest directory: $manifest_path" >&2
+    return 1
+  fi
+  if ! {
+    printf 'process=%s\n' "$process_name"
+    printf 'bundle=%s\n' "$bundle_path"
+    printf 'started_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  } >"$manifest_path"; then
+    echo "failed to create runtime manifest: $manifest_path" >&2
+    return 1
+  fi
+}
+
+runtime_evidence_write_manifest_finish() {
+  local manifest_path="$1"
+  local exit_status="$2"
+
+  if [[ ! -f "$manifest_path" ]]; then
+    echo "runtime manifest is missing before finish: $manifest_path" >&2
+    return 1
+  fi
+  if ! {
+    printf 'finished_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf 'suite_exit_status=%s\n' "$exit_status"
+  } >>"$manifest_path"; then
+    echo "failed to finish runtime manifest: $manifest_path" >&2
+    return 1
+  fi
+}

@@ -146,28 +146,7 @@ extension NoonmarkStore {
         case .calendar:
             return "\(copy.appName) · \(copy.navCalendar) — \(displayDate(selectedCalendarDate))"
         default:
-            return "\(copy.appName) · \(windowPageTitle)"
-        }
-    }
-
-    private var windowPageTitle: String {
-        switch page {
-        case .day:
-            return copy.navDay
-        case .pool:
-            return copy.navPool
-        case .future:
-            return copy.navFuture
-        case .unfinished:
-            return copy.navUnfinished
-        case .completed:
-            return copy.navCompleted
-        case .calendar:
-            return copy.navCalendar
-        case .zhulong:
-            return copy.navZhulong
-        case .settings:
-            return copy.navSettings
+            return "\(copy.appName) · \(navigationLabel(for: page))"
         }
     }
 
@@ -821,7 +800,7 @@ extension NoonmarkStore {
 
     static func offset(_ date: LocalDate, by days: Int) -> LocalDate {
         requireCivilDate {
-            try GregorianCivilCalendar.offset(date, byDays: days)
+            try WorkspaceCivilCalendar.offset(date, byDays: days)
         }
     }
 
@@ -876,27 +855,21 @@ extension NoonmarkStore {
         dateTimeFormatter.narrowWeekdaySymbolsStartingMonday()
     }
 
-    static func gregorianDate(_ date: LocalDate) -> Date {
-        requireCivilDate {
-            try GregorianCivilCalendar.foundationDate(from: date)
-        }
-    }
-
     static func dayDistance(from start: LocalDate, to end: LocalDate) -> Int {
         requireCivilDate {
-            try GregorianCivilCalendar.dayDistance(from: start, to: end)
+            try WorkspaceCivilCalendar.dayDistance(from: start, to: end)
         }
     }
 
     static func daysInMonth(year: Int, month: Int) -> Int {
         requireCivilDate {
-            try GregorianCivilCalendar.daysInMonth(year: year, month: month)
+            try WorkspaceCivilCalendar.daysInMonth(year: year, month: month)
         }
     }
 
     static func mondayLeadBlankCount(year: Int, month: Int) -> Int {
         requireCivilDate {
-            try GregorianCivilCalendar.mondayLeadBlankCount(
+            try WorkspaceCivilCalendar.mondayLeadBlankCount(
                 year: year,
                 month: month
             )
@@ -905,7 +878,7 @@ extension NoonmarkStore {
 
     static func shiftedMonth(from date: LocalDate, by delta: Int) -> LocalDate {
         requireCivilDate {
-            try GregorianCivilCalendar.shiftedMonth(from: date, by: delta)
+            try WorkspaceCivilCalendar.shiftedMonth(from: date, by: delta)
         }
     }
 

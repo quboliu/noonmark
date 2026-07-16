@@ -282,8 +282,9 @@ struct CalendarDayInsight {
         let continuationSummary = store.copy.calendarContinuationSummary(continuationCount)
         let changeSummary = store.copy.calendarChangeSummary(stats.changed + changedTargets)
         let riskSummary = store.copy.calendarRiskSummary(
-            isHistory: date < store.today,
-            isFuture: date > store.today,
+            position: date < store.today
+                ? .history
+                : (date > store.today ? .future : .today),
             unresolved: stats.unfinished + stats.abandoned,
             pending: pending,
             total: stats.total

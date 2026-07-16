@@ -534,10 +534,57 @@ struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
             }
 
             store.page = .calendar
+            store.setLanguage(.chinese)
             store.selectedCalendarDate = store.today
-            let insight = CalendarDayInsight.make(for: store.selectedCalendarDate, store: store)
-            guard insight.hasEnhancedContent else {
-                throw SummarySidebarE2EAutomationError.failed("calendar day insight was empty")
+            for index in 1 ... 4 {
+                let chainID = try store.engine.createPoolTask(
+                    title: "E2E 当日风险文案 \(index)",
+                    now: Date()
+                )
+                _ = try store.engine.scheduleFromPool(
+                    chainID: chainID,
+                    date: store.today,
+                    today: store.today,
+                    now: Date()
+                )
+            }
+            let todayInsight = CalendarDayInsight.make(
+                for: store.selectedCalendarDate,
+                store: store
+            )
+            guard todayInsight.hasEnhancedContent,
+                  todayInsight.riskSummary.contains("延续复制"),
+                  todayInsight.riskSummary.contains("改期") == false
+            else {
+                throw SummarySidebarE2EAutomationError.failed(
+                    "today calendar risk did not preserve continuation semantics"
+                )
+            }
+
+            let futureDate = NoonmarkStore.offset(store.today, by: 30)
+            for index in 1 ... 4 {
+                let chainID = try store.engine.createPoolTask(
+                    title: "E2E 未来风险文案 \(index)",
+                    now: Date()
+                )
+                _ = try store.engine.scheduleFromPool(
+                    chainID: chainID,
+                    date: futureDate,
+                    today: store.today,
+                    now: Date()
+                )
+            }
+            let futureInsight = CalendarDayInsight.make(
+                for: futureDate,
+                store: store
+            )
+            guard futureInsight.hasEnhancedContent,
+                  futureInsight.riskSummary.contains("改期"),
+                  futureInsight.riskSummary.contains("延续复制") == false
+            else {
+                throw SummarySidebarE2EAutomationError.failed(
+                    "future calendar risk did not use plan-draft language"
+                )
             }
 
             try writeResult("ok")

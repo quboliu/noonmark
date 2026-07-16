@@ -1,3 +1,5 @@
+import NoonmarkMacRuntime
+
 extension AppCopy {
     var invalidDateSelection: String {
         language == .chinese
@@ -229,34 +231,16 @@ extension AppCopy {
     }
 
     func calendarRiskSummary(
-        isHistory: Bool,
-        isFuture: Bool,
+        position: CalendarDayPosition,
         unresolved: Int,
         pending: Int,
         total: Int
     ) -> String {
-        if isHistory, unresolved > 0 {
-            return language == .chinese
-                ? "历史日有 \(unresolved) 项未闭环或废弃，适合补写原因。"
-                : "This past day has \(unresolved) unresolved or dropped item\(unresolved == 1 ? "" : "s"); add the reason to the review."
-        }
-        if isHistory == false, pending >= 4 {
-            return language == .chinese
-                ? "待完成任务偏多，建议先调整当日优先级或改期到其他日期。"
-                : "There are many pending tasks; reorder them or move some to another day."
-        }
-        if isFuture, total == 0 {
-            return language == .chinese
-                ? "未来日暂无计划，可保持空白或从任务池排期。"
-                : "This future day has no plans; leave it open or schedule from the Task Pool."
-        }
-        if total == 0 {
-            return language == .chinese
-                ? "当天没有任务记录。"
-                : "No tasks were recorded that day."
-        }
-        return language == .chinese
-            ? "当天风险可控，重点看未完成和延续项。"
-            : "Risk is manageable; focus on unfinished and continued tasks."
+        AppPresentation(language: language).calendarInsight.riskSummary(
+            position: position,
+            unresolved: unresolved,
+            pending: pending,
+            total: total
+        )
     }
 }

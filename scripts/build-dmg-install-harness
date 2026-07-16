@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+configuration="${1:-debug}"
+product="NoonmarkDMGInstallHarness"
+bundle_identifier="app.noonmark.test.dmg-install-harness"
+executable_name="NoonmarkDMGInstallHarness"
+bundle_dir="artifacts/dmg-install-harness/${executable_name}.app"
+contents_dir="${bundle_dir}/Contents"
+macos_dir="${contents_dir}/MacOS"
+codesign_identity="${NOONMARK_CODESIGN_IDENTITY:-}"
+require_stable_ui_signing="${NOONMARK_REQUIRE_STABLE_UI_SIGNING:-0}"
+stable_codesigning_enabled=0
+
+case "$configuration" in
+  debug|release)
+    ;;
+  *)
+    echo "configuration must be debug or release" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$require_stable_ui_signing" != "0" &&
+      "$require_stable_ui_signing" != "1" ]]; then
+  echo "NOONMARK_REQUIRE_STABLE_UI_SIGNING must be 0 or 1" >&2
+  exit 1
+fi
+
+if [[ -n "$codesign_identity" && "$codesign_identity" != "-" ]]; then
+  if ! security find-identity -v -p codesigning \
+    | grep -Fq "$codesign_identity"; then
+    echo "code-signing identity is not available in the current keychain: $codesign_identity" >&2
+    exit 1
+  fi
+  stable_codesigning_enabled=1
+fi
+if [[ "$require_stable_ui_signing" == "1" &&
+      "$stable_codesigning_enabled" -ne 1 ]]; then
+  echo "interactive UI validation requires a non-ad-hoc NOONMARK_CODESIGN_IDENTITY" >&2
+  exit 1
+fi
+
+scripts/reset-dev-data
+swift build -c "$configuration" --product "$product"
+
+rm -rf "$bundle_dir"
+mkdir -p "$macos_dir"
+
+binary_path=".build/arm64-apple-macosx/${configuration}/${product}"
+if [[ ! -x "$binary_path" ]]; then
+  binary_path=".build/${configuration}/${product}"
+fi
+if [[ ! -x "$binary_path" ]]; then
+  echo "built harness executable was not found: $binary_path" >&2
+  exit 1
+fi
+
+cp "$binary_path" "${macos_dir}/${executable_name}"
+chmod +x "${macos_dir}/${executable_name}"
+
+cat >"${contents_dir}/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>Noonmark DMG Install Harness</string>
+  <key>CFBundleExecutable</key>
+  <string>${executable_name}</string>
+  <key>CFBundleIdentifier</key>
+  <string>${bundle_identifier}</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>${executable_name}</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+
+if [[ "$stable_codesigning_enabled" -eq 1 ]]; then
+  codesign --force --sign "$codesign_identity" "$bundle_dir" >/dev/null
+else
+  codesign --force --sign - "$bundle_dir" >/dev/null
+fi
+codesign --verify --deep --strict "$bundle_dir"
+
+actual_identifier="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${contents_dir}/Info.plist"
+)"
+if [[ "$actual_identifier" != "$bundle_identifier" ]]; then
+  echo "unexpected harness bundle identifier: $actual_identifier" >&2
+  exit 1
+fi
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "${contents_dir}/Info.plist")" \
+      != "true" ]]; then
+  echo "DMG install harness must remain an LSUIElement agent" >&2
+  exit 1
+fi
+
+designated_requirement="$(codesign --display --requirements - "$bundle_dir" 2>&1)"
+signed_identifier="$(
+  codesign --display --verbose=4 "$bundle_dir" 2>&1 \
+    | awk -F= '/^Identifier=/{print $2}'
+)"
+if [[ "$signed_identifier" != "$bundle_identifier" ]]; then
+  echo "signed harness has the wrong identifier: $signed_identifier" >&2
+  exit 1
+fi
+if [[ "$require_stable_ui_signing" == "1" ]]; then
+  if [[ "$designated_requirement" == *"cdhash"* ||
+        "$designated_requirement" != *"identifier \"$bundle_identifier\""* ]]; then
+    echo "interactive UI harness does not have a stable designated requirement" >&2
+    echo "$designated_requirement" >&2
+    exit 1
+  fi
+fi
+
+echo "$bundle_dir"

@@ -44,6 +44,7 @@ if [[ ! -f "$plist_path" ]]; then
 fi
 
 scripts/test-app-icon-bundle "$app_path"
+scripts/verify-mac-app-metadata "$app_path"
 
 if [[ ! -L "${mountpoint}/Applications" ]]; then
   echo "DMG missing Applications shortcut" >&2

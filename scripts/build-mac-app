@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/app-icon-common
+source scripts/codesign-common
 
 configuration="${1:-debug}"
 profile="${2:-app}"
@@ -47,24 +48,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -n "$codesign_identity" && "$codesign_identity" != "-" ]]; then
-  if ! security find-identity -v -p codesigning \
-    | grep -Fq "$codesign_identity"; then
-    echo "code-signing identity is not available in the current keychain: $codesign_identity" >&2
-    exit 1
-  fi
-  stable_codesigning_enabled=1
-fi
-if [[ "$require_stable_ui_signing" != "0" &&
-      "$require_stable_ui_signing" != "1" ]]; then
-  echo "NOONMARK_REQUIRE_STABLE_UI_SIGNING must be 0 or 1" >&2
-  exit 1
-fi
-if [[ "$require_stable_ui_signing" == "1" &&
-      "$stable_codesigning_enabled" -ne 1 ]]; then
-  echo "interactive UI validation requires a non-ad-hoc NOONMARK_CODESIGN_IDENTITY" >&2
-  exit 1
-fi
+noonmark_resolve_codesign_identity \
+  "$codesign_identity" \
+  "$require_stable_ui_signing"
+codesign_identity="$NOONMARK_RESOLVED_CODESIGN_IDENTITY"
+stable_codesigning_enabled="$NOONMARK_STABLE_CODESIGNING_ENABLED"
 
 plist_value() {
   /usr/libexec/PlistBuddy -c "Print :$1" "$2" 2>/dev/null
@@ -211,6 +199,19 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <true/>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeDescription</key>
+      <string>Noonmark Task Priority</string>
+      <key>UTTypeIdentifier</key>
+      <string>app.noonmark.task-priority</string>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST
@@ -291,13 +292,10 @@ else
 fi
 
 if [[ "$require_stable_ui_signing" == "1" ]]; then
-  designated_requirement="$(codesign --display --requirements - "$bundle_dir" 2>&1)"
-  if [[ "$designated_requirement" == *"cdhash"* ||
-        "$designated_requirement" != *"identifier \"$bundle_identifier\""* ]]; then
-    echo "interactive UI bundle does not have a stable designated requirement" >&2
-    echo "$designated_requirement" >&2
-    exit 1
-  fi
+  noonmark_verify_stable_designated_requirement \
+    "$bundle_dir" \
+    "$bundle_identifier"
 fi
+scripts/verify-mac-app-metadata "$bundle_dir"
 scripts/test-app-icon-bundle "$bundle_dir"
 echo "$bundle_dir"

@@ -263,6 +263,10 @@
 - 侧栏语义色以真实截图中每个 glyph crop 的 hue pixel probe 验证；`day.png` 的 Day／任务池／未来／未完成／已完成／日历有效像素数分别为 206／316／366／198／175／284，`zhulong.png` 的烛龙有效像素数为 153。默认 E2E 同时要求两张截图通过。
 - 拖放分段诊断显示四个真实 SwiftUI destination 均已挂载，但旧路径一次也未进入 `isTargeted`；数据层和 SQLite 均未发生变更。运行证据确认 `CGWarpMouseCursorPosition` 只移动光标，而 `window.postEvent` 只进入 AppKit 本地队列，无法建立 WindowServer 左键状态或原生 drag session。
 - E2E 输入已收束为共享 `WindowServerInputDriver`：登录 session 使用单一 retained `.combinedSessionState` source，把 AppKit window point 显式转换为 Quartz global point 并 round-trip 对账，所有 down／drag／up 都发布到 `.cghidEventTap`。拖放状态机等待 source cursor、系统 button state、精确 destination targeted、精确 payload accepted 和 button release；异常路径只要曾投递 down 就无条件以同一 source／gesture 补发 up，确认释放后才恢复光标。选择点击和 `NSOpenPanel` 键盘路径复用同一权限与 source policy。
+- 解锁后的真实授权探针已经证明用户为两个精确 ad-hoc bundle 配置的 Accessibility 权限有效；直接执行 helper 时 TCC 把 Terminal 识别为 responsible process，经 LaunchServices 启动同一 helper 时 `AXIsProcessTrusted` 与 event-posting preflight 均为真。DMG helper 因此改为 LaunchServices 启动，并用 launch token、bundle／path／command identity、`EVFILT_PROC` 与 kernel exit status 对账真实进程。
+- workspace 原生拖放已进入 WindowServer 左键状态并建立 native drag session；unified log 随后揭露 `app.noonmark.task-priority` 未在 App `Info.plist` 导出的根因。当前 build 已声明该 exported UTI，App build、DMG 验证与安装验收均新增 metadata fail-closed 门禁。
+- 交互 E2E 与 DMG 安装入口现在自行强制稳定签名：显式 identity 优先，否则只自动选择 Keychain 中唯一有效的 `Apple Development` identity；零个或多个候选均拒绝继续。解析、脱敏和真实零身份失败路径已进入 `make check`。
+- Xcode Apple Account／Team 登录态、开发证书、匹配私钥、有效期与 Code Signing 用途均已由命令行确认。首次实际 `codesign` 的 unified log 揭露 `leaf MissingIntermediate`；叶子证书要求 WWDR G3，但 Keychain 只有旧 WWDR。经 Apple PKI 取得、校验并导入 `Worldwide Developer Relations - G3` 后，`security` 已报告一个有效 identity，真实临时签名、严格验证、稳定 designated requirement 与项目自动解析器均通过。
 - `scripts/package-dmg release` 已生成 `dist/Noonmark.dmg`；`scripts/verify-dmg` 已通过挂载内容、签名、canonical icon 和 optical variant 校验。
 
 ### 可回退实施节点
@@ -276,7 +280,8 @@
 
 ### 最终门禁状态
 
-- 当前登录 session 报告 `CGSSessionScreenIsLocked=Yes`，真实 App 无法成为 main／key window；`scripts/test-e2e` 在启动应用前正确 fail-closed。除此之外，最后一次解锁运行的 `artifacts/e2e-data-import-ui/exercise-result.txt` 已证明当前 E2E bundle 尚未取得 WindowServer event-posting／Accessibility 授权。该 bundle 目前是 ad-hoc 签名且 designated requirement 为 cdhash，最终源码稳定后必须重新构建、由用户给该精确 bundle 授权，再连续重跑 workspace-only、完整 E2E 和 DMG 安装启动；不得用本地 `NSEvent` 注入或模拟结果替代。
+- 当前登录 session 已解锁，用户此前为两个精确 ad-hoc bundle 配置的 Accessibility 授权已由 LaunchServices 真实启动探针验证。问题不在授权步骤，而在 ad-hoc 重编译会改变 `cdhash` identity，以及 App bundle 曾漏报拖放 UTI；两项根因的代码与门禁均已补齐。
+- 本机已经具备一个有效 `Apple Development` identity，项目解析器可自动选取。最后的正向门禁需要重建两个固定的稳定签名 bundle，用户只需对该版本作最后一次 Accessibility 授权，再连续重跑 workspace-only、完整 E2E、最新 DMG 验证与安装启动。不得用 Terminal 权限、本地 `NSEvent` 注入或模拟结果替代。
 - VoiceOver、Full Keyboard Access 与系统辅助设置组合仍是发布前人工门禁；当前自动化只覆盖 label、trait、keyboard action、environment policy 与可见 presentation。
 - 当前没有用户确认的真实 App reference，视觉回归仍不设默认 baseline；当前没有 Docker／deployed endpoint，不虚构容器或线上验证。
 

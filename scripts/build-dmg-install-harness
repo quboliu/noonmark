@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/codesign-common
+
 configuration="${1:-debug}"
 product="NoonmarkDMGInstallHarness"
 bundle_identifier="app.noonmark.test.dmg-install-harness"
@@ -21,25 +23,11 @@ case "$configuration" in
     ;;
 esac
 
-if [[ "$require_stable_ui_signing" != "0" &&
-      "$require_stable_ui_signing" != "1" ]]; then
-  echo "NOONMARK_REQUIRE_STABLE_UI_SIGNING must be 0 or 1" >&2
-  exit 1
-fi
-
-if [[ -n "$codesign_identity" && "$codesign_identity" != "-" ]]; then
-  if ! security find-identity -v -p codesigning \
-    | grep -Fq "$codesign_identity"; then
-    echo "code-signing identity is not available in the current keychain: $codesign_identity" >&2
-    exit 1
-  fi
-  stable_codesigning_enabled=1
-fi
-if [[ "$require_stable_ui_signing" == "1" &&
-      "$stable_codesigning_enabled" -ne 1 ]]; then
-  echo "interactive UI validation requires a non-ad-hoc NOONMARK_CODESIGN_IDENTITY" >&2
-  exit 1
-fi
+noonmark_resolve_codesign_identity \
+  "$codesign_identity" \
+  "$require_stable_ui_signing"
+codesign_identity="$NOONMARK_RESOLVED_CODESIGN_IDENTITY"
+stable_codesigning_enabled="$NOONMARK_STABLE_CODESIGNING_ENABLED"
 
 scripts/reset-dev-data
 swift build -c "$configuration" --product "$product"
@@ -112,7 +100,6 @@ if [[ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "${contents_dir}/Info.p
   exit 1
 fi
 
-designated_requirement="$(codesign --display --requirements - "$bundle_dir" 2>&1)"
 signed_identifier="$(
   codesign --display --verbose=4 "$bundle_dir" 2>&1 \
     | awk -F= '/^Identifier=/{print $2}'
@@ -122,12 +109,9 @@ if [[ "$signed_identifier" != "$bundle_identifier" ]]; then
   exit 1
 fi
 if [[ "$require_stable_ui_signing" == "1" ]]; then
-  if [[ "$designated_requirement" == *"cdhash"* ||
-        "$designated_requirement" != *"identifier \"$bundle_identifier\""* ]]; then
-    echo "interactive UI harness does not have a stable designated requirement" >&2
-    echo "$designated_requirement" >&2
-    exit 1
-  fi
+  noonmark_verify_stable_designated_requirement \
+    "$bundle_dir" \
+    "$bundle_identifier"
 fi
 
 echo "$bundle_dir"

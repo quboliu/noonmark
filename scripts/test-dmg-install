@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The LaunchServices helper posts physical WindowServer input. Require a stable
+# designated requirement so its one-time TCC authorization survives rebuilds.
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 cd "$repo_root"
@@ -52,6 +56,16 @@ executable_name="NoonmarkMacApp"
 installed_app=""
 installed_executable=""
 active_app_pid=""
+active_helper_pid=""
+active_helper_mode=""
+active_helper_token=""
+active_helper_observer_pid=""
+active_helper_observer_parent_pid=""
+active_helper_observer_token=""
+last_helper_stderr_log=""
+last_helper_launch_log=""
+last_helper_observer_log=""
+last_helper_exit_result=""
 diagnostic_baselines_ready=0
 runtime_manifest_started=0
 mount_cleanup_armed=0
@@ -71,6 +85,7 @@ required_tools=(
   sqlite3
   swift
   tail
+  uuidgen
 )
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -109,6 +124,299 @@ process_uses_installed_executable() {
     "$expected_executable" | "$expected_executable "*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+process_has_helper_command_identity() {
+  local pid="$1"
+  local mode="$2"
+  local token="$3"
+  local command_line
+  local executable_status
+
+  if [[ "$mode" != "preflight" && "$mode" != "exercise" &&
+    "$mode" != "restart" ]] ||
+    [[ ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    return 2
+  fi
+  process_uses_installed_executable "$pid" "$helper_executable" || {
+    executable_status=$?
+    return "$executable_status"
+  }
+  if ! command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      echo "failed to inspect live helper pid $pid" >&2
+      return 2
+    fi
+    return 1
+  fi
+  case " $command_line " in
+    *" --mode $mode "*" --launch-token $token "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+process_has_helper_bundle_identity() {
+  local pid="$1"
+  local wait_seconds="${2:-0}"
+
+  if ! process_uses_installed_executable "$pid" "$helper_executable"; then
+    return 1
+  fi
+  if [[ ! "$wait_seconds" =~ ^[0-9]+$ ]]; then
+    return 2
+  fi
+
+  NOONMARK_DMG_HELPER_PID="$pid" \
+    NOONMARK_DMG_HELPER_PATH="$helper_app" \
+    NOONMARK_DMG_HELPER_BUNDLE_ID="$helper_bundle_identifier" \
+    NOONMARK_DMG_HELPER_IDENTITY_WAIT_SECONDS="$wait_seconds" \
+    swift -e '
+import AppKit
+import Darwin
+import Foundation
+
+let environment = ProcessInfo.processInfo.environment
+guard let rawPID = environment["NOONMARK_DMG_HELPER_PID"],
+      let pid = Int32(rawPID),
+      let expectedPath = environment["NOONMARK_DMG_HELPER_PATH"],
+      let expectedBundleID = environment["NOONMARK_DMG_HELPER_BUNDLE_ID"],
+      let rawWaitSeconds = environment["NOONMARK_DMG_HELPER_IDENTITY_WAIT_SECONDS"],
+      let waitSeconds = TimeInterval(rawWaitSeconds), waitSeconds >= 0
+else {
+    fputs("helper process identity was unavailable\n", stderr)
+    exit(1)
+}
+
+let expected = URL(fileURLWithPath: expectedPath)
+    .standardizedFileURL.resolvingSymlinksInPath().path
+let deadline = ProcessInfo.processInfo.systemUptime + waitSeconds
+repeat {
+    if let app = NSRunningApplication(processIdentifier: pid), app.isTerminated == false {
+        if let bundleID = app.bundleIdentifier, let bundleURL = app.bundleURL {
+            guard bundleID == expectedBundleID else {
+                fputs("helper process bundle id was \(bundleID), expected \(expectedBundleID)\n", stderr)
+                exit(1)
+            }
+            let actual = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
+            guard actual == expected else {
+                fputs("helper process bundle path was \(actual), expected \(expected)\n", stderr)
+                exit(1)
+            }
+            exit(0)
+        }
+    }
+    if ProcessInfo.processInfo.systemUptime >= deadline { break }
+    usleep(25000)
+} while true
+
+fputs("helper process LaunchServices identity was unavailable before the deadline\n", stderr)
+exit(1)
+'
+}
+
+helper_process_identity_matches() {
+  local pid="$1"
+  local mode="$2"
+  local token="$3"
+  local wait_seconds="${4:-0}"
+
+  process_has_helper_command_identity "$pid" "$mode" "$token" &&
+    process_has_helper_bundle_identity "$pid" "$wait_seconds"
+}
+
+matching_owned_helper_pids() {
+  local mode="$1"
+  local token="$2"
+  local candidate
+  local command_line
+  local matches=""
+  local match_status
+  local process_table=""
+
+  if ! process_table="$(ps -axww -o pid=,command= 2>/dev/null)"; then
+    echo "failed to enumerate processes while locating the token-scoped helper" >&2
+    return 2
+  fi
+  while read -r candidate command_line; do
+    [[ -n "$candidate" ]] || continue
+    case "$command_line" in
+      "$helper_executable" | "$helper_executable "*) ;;
+      *) continue ;;
+    esac
+    if process_has_helper_command_identity "$candidate" "$mode" "$token"; then
+      if [[ -n "$matches" ]]; then
+        matches+=$'\n'
+      fi
+      matches+="$candidate"
+    else
+      match_status=$?
+      if [[ "$match_status" -ge 2 ]]; then
+        return "$match_status"
+      fi
+    fi
+  done <<<"$process_table"
+  if [[ -n "$matches" ]]; then
+    printf '%s\n' "$matches"
+  fi
+}
+
+terminate_verified_helper() {
+  local pid="${1:-}"
+  local mode="${2:-}"
+  local token="${3:-}"
+
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! helper_process_identity_matches "$pid" "$mode" "$token"; then
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "refusing to terminate helper pid without exact command and bundle identity: $pid" >&2
+    ps -ww -p "$pid" -o pid=,command= >&2 || true
+    return 1
+  fi
+
+  kill -TERM "$pid" >/dev/null 2>&1 || true
+  for _ in {1..40}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  if ! helper_process_identity_matches "$pid" "$mode" "$token"; then
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "refusing to force-terminate helper pid after its identity changed: $pid" >&2
+    ps -ww -p "$pid" -o pid=,command= >&2 || true
+    return 1
+  fi
+  kill -KILL "$pid" >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  echo "failed to terminate verified helper pid: $pid" >&2
+  ps -ww -p "$pid" -o pid=,command= >&2 || true
+  return 1
+}
+
+helper_observer_is_owned_child() {
+  local pid="$1"
+  local expected_parent="$2"
+  local expected_token="$3"
+  local observed_parent
+  local command_line
+  local observer_module="NoonmarkExitObserver_${expected_token//-/}"
+
+  if ! observed_parent="$(ps -p "$pid" -o ppid= 2>/dev/null)"; then
+    return 1
+  fi
+  observed_parent="${observed_parent//[[:space:]]/}"
+  if [[ "$observed_parent" != "$expected_parent" ]] ||
+    ! command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
+    return 1
+  fi
+  case " $command_line " in
+    *" -module-name $observer_module "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+stop_active_helper_observer() {
+  local pid="$active_helper_observer_pid"
+  local expected_parent="$active_helper_observer_parent_pid"
+  local expected_token="$active_helper_observer_token"
+
+  if [[ -z "$pid" ]]; then
+    return 0
+  fi
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    if ! helper_observer_is_owned_child "$pid" "$expected_parent" "$expected_token"; then
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        wait "$pid" >/dev/null 2>&1 || true
+        active_helper_observer_pid=""
+        active_helper_observer_parent_pid=""
+        active_helper_observer_token=""
+        return 0
+      fi
+      echo "refusing to signal an unverified helper exit observer: $pid" >&2
+      return 1
+    fi
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+    for _ in {1..20}; do
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.05
+    done
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      if ! helper_observer_is_owned_child "$pid" "$expected_parent" "$expected_token"; then
+        if ! kill -0 "$pid" >/dev/null 2>&1; then
+          wait "$pid" >/dev/null 2>&1 || true
+          active_helper_observer_pid=""
+          active_helper_observer_parent_pid=""
+          active_helper_observer_token=""
+          return 0
+        fi
+        echo "refusing to force-terminate a reused observer pid: $pid" >&2
+        return 1
+      fi
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+    fi
+  fi
+  wait "$pid" >/dev/null 2>&1 || true
+  active_helper_observer_pid=""
+  active_helper_observer_parent_pid=""
+  active_helper_observer_token=""
+}
+
+cleanup_owned_helper_processes() {
+  local mode="$active_helper_mode"
+  local token="$active_helper_token"
+  local owned_pids=""
+  local remaining_pids=""
+  local pid
+
+  if [[ -z "$mode" || -z "$token" ]]; then
+    return 0
+  fi
+  if ! owned_pids="$(matching_owned_helper_pids "$mode" "$token")"; then
+    echo "failed to enumerate helper processes owned by this launch token" >&2
+    return 1
+  fi
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      continue
+    fi
+    if ! process_has_helper_bundle_identity "$pid"; then
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        continue
+      fi
+      echo "refusing to terminate token-matched helper without bundle identity: $pid" >&2
+      return 1
+    fi
+    if ! terminate_verified_helper "$pid" "$mode" "$token"; then
+      return 1
+    fi
+  done <<<"$owned_pids"
+  if ! remaining_pids="$(matching_owned_helper_pids "$mode" "$token")"; then
+    echo "failed to prove token-scoped helper cleanup" >&2
+    return 1
+  fi
+  if [[ -n "$remaining_pids" ]]; then
+    echo "token-scoped helper process survived cleanup: $remaining_pids" >&2
+    return 1
+  fi
+  active_helper_pid=""
+  active_helper_mode=""
+  active_helper_token=""
 }
 
 terminate_verified_app() {
@@ -177,7 +485,10 @@ cleanup() {
   trap - EXIT
   set +e
 
-  if ! runtime_evidence_stop_console_capture; then
+  if ! cleanup_owned_helper_processes; then
+    final_status=1
+  fi
+  if ! stop_active_helper_observer; then
     final_status=1
   fi
   if ! terminate_verified_app "$active_app_pid" "$installed_executable"; then
@@ -205,6 +516,9 @@ cleanup() {
     final_status=1
   elif [[ -n "$remaining_pids" ]]; then
     echo "exact-path installed app process survived cleanup: $remaining_pids" >&2
+    final_status=1
+  fi
+  if ! runtime_evidence_stop_console_capture; then
     final_status=1
   fi
 
@@ -444,24 +758,370 @@ start_runtime_capture() {
     "$helper_executable_name"
 }
 
+dump_helper_evidence() {
+  local ledger_path="$1"
+  local helper_log_path="$2"
+  local helper_stderr_path="$3"
+  local helper_launch_path="$4"
+  local observer_log_path="$5"
+  local exit_result_path="$6"
+  local evidence_path
+
+  for evidence_path in \
+    "$ledger_path" \
+    "$helper_log_path" \
+    "$helper_stderr_path" \
+    "$helper_launch_path" \
+    "$observer_log_path" \
+    "$exit_result_path"; do
+    if [[ -f "$evidence_path" ]]; then
+      echo "helper evidence: $evidence_path" >&2
+      cat "$evidence_path" >&2
+    fi
+  done
+}
+
+HELPER_PROCESS_PID=""
+
+wait_for_helper_process_record() {
+  local mode="$1"
+  local token="$2"
+  local ledger_path="$3"
+  local process_count process_detail
+  local mode_field pid_field token_field extra_field
+  local helper_pid owned_pids
+
+  HELPER_PROCESS_PID=""
+  for _ in {1..400}; do
+    if [[ -f "$ledger_path" ]]; then
+      if grep -F $'\tFAIL\t' "$ledger_path" >/dev/null 2>&1; then
+        echo "DMG install harness failed before its process identity was verified" >&2
+        return 1
+      fi
+      IFS=$'\t' read -r process_count process_detail < <(
+        awk -F $'\t' '
+          $2 == "PASS" && $3 == "process" { count += 1; detail = $4 }
+          END { printf "%d\t%s\n", count, detail }
+        ' "$ledger_path"
+      )
+      if [[ "$process_count" -gt 1 ]]; then
+        echo "DMG install harness emitted duplicate process records" >&2
+        return 1
+      fi
+      if [[ "$process_count" -eq 1 ]]; then
+        read -r mode_field pid_field token_field extra_field <<<"$process_detail"
+        if [[ -n "${extra_field:-}" || "$mode_field" != "mode=$mode" ||
+          "$pid_field" != helper_pid=* || "$token_field" != "launch_token=$token" ]]; then
+          echo "invalid helper process record: $process_detail" >&2
+          return 1
+        fi
+        helper_pid="${pid_field#helper_pid=}"
+        if [[ ! "$helper_pid" =~ ^[0-9]+$ || "$helper_pid" -le 0 ]]; then
+          echo "invalid helper pid in process record: $helper_pid" >&2
+          return 1
+        fi
+        active_helper_pid="$helper_pid"
+        if ! helper_process_identity_matches "$helper_pid" "$mode" "$token" 3; then
+          echo "helper process failed exact executable, command, bundle, or path identity" >&2
+          ps -ww -p "$helper_pid" -o pid=,command= >&2 || true
+          return 1
+        fi
+        if ! owned_pids="$(matching_owned_helper_pids "$mode" "$token")"; then
+          echo "failed to enumerate the token-scoped helper process" >&2
+          return 1
+        fi
+        if [[ "$owned_pids" != "$helper_pid" ]]; then
+          echo "launch token did not identify exactly one helper pid: $owned_pids" >&2
+          return 1
+        fi
+        HELPER_PROCESS_PID="$helper_pid"
+        return 0
+      fi
+    fi
+    sleep 0.025
+  done
+  echo "timed out waiting for the LaunchServices helper process record" >&2
+  return 1
+}
+
+start_helper_exit_observer() {
+  local mode="$1"
+  local helper_pid="$2"
+  local token="$3"
+  local gate_path="$4"
+  local result_path="$5"
+  local observer_log_path="$6"
+  local observer_module="NoonmarkExitObserver_${token//-/}"
+
+  : >"$observer_log_path"
+  NOONMARK_HELPER_MODE="$mode" \
+    NOONMARK_HELPER_PID="$helper_pid" \
+    NOONMARK_HELPER_TOKEN="$token" \
+    NOONMARK_HELPER_GATE_PATH="$gate_path" \
+    NOONMARK_HELPER_EXIT_RESULT_PATH="$result_path" \
+    swift -module-name "$observer_module" -e '
+import Darwin
+import Foundation
+
+enum ObserverFailure: LocalizedError {
+    case invalidConfiguration
+    case queueUnavailable(Int32)
+    case registrationFailed(Int32)
+    case waitFailed(Int32, Int32)
+    case unexpectedEvent(UInt32)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidConfiguration:
+            "invalid helper exit observer configuration"
+        case let .queueUnavailable(code):
+            "kqueue creation failed with errno=\(code)"
+        case let .registrationFailed(code):
+            "EVFILT_PROC registration failed with errno=\(code)"
+        case let .waitFailed(count, code):
+            "EVFILT_PROC wait returned count=\(count) errno=\(code)"
+        case let .unexpectedEvent(flags):
+            "EVFILT_PROC omitted NOTE_EXIT or NOTE_EXITSTATUS: fflags=\(flags)"
+        }
+    }
+}
+
+func writeAtomically(_ value: String, to path: String) throws {
+    try Data(value.utf8).write(
+        to: URL(fileURLWithPath: path),
+        options: .atomic
+    )
+}
+
+let environment = ProcessInfo.processInfo.environment
+let resultPath = environment["NOONMARK_HELPER_EXIT_RESULT_PATH"] ?? ""
+do {
+    guard let mode = environment["NOONMARK_HELPER_MODE"],
+          ["preflight", "exercise", "restart"].contains(mode),
+          let rawPID = environment["NOONMARK_HELPER_PID"],
+          let pid = UInt64(rawPID), pid > 0,
+          let token = environment["NOONMARK_HELPER_TOKEN"],
+          UUID(uuidString: token)?.uuidString == token,
+          let gatePath = environment["NOONMARK_HELPER_GATE_PATH"],
+          gatePath.hasPrefix("/"),
+          resultPath.hasPrefix("/")
+    else {
+        throw ObserverFailure.invalidConfiguration
+    }
+
+    let queue = kqueue()
+    guard queue >= 0 else {
+        throw ObserverFailure.queueUnavailable(errno)
+    }
+    defer { close(queue) }
+
+    var change = kevent64_s(
+        ident: pid,
+        filter: Int16(EVFILT_PROC),
+        flags: UInt16(EV_ADD | EV_ENABLE | EV_ONESHOT),
+        fflags: UInt32(NOTE_EXIT) | UInt32(NOTE_EXITSTATUS),
+        data: 0,
+        udata: 0,
+        ext: (0, 0)
+    )
+    let registrationCount = withUnsafePointer(to: &change) { pointer in
+        kevent64(queue, pointer, 1, nil, 0, 0, nil)
+    }
+    guard registrationCount == 0 else {
+        throw ObserverFailure.registrationFailed(errno)
+    }
+
+    let gate = "mode=\(mode)\n"
+        + "helper_pid=\(pid)\n"
+        + "launch_token=\(token)\n"
+        + "observer=EVFILT_PROC+NOTE_EXITSTATUS\n"
+    try writeAtomically(gate, to: gatePath)
+
+    var event = kevent64_s()
+    let eventCount = withUnsafeMutablePointer(to: &event) { pointer in
+        kevent64(queue, nil, 0, pointer, 1, 0, nil)
+    }
+    guard eventCount == 1 else {
+        throw ObserverFailure.waitFailed(eventCount, errno)
+    }
+    let requiredFlags = UInt32(NOTE_EXIT) | UInt32(NOTE_EXITSTATUS)
+    guard event.fflags & requiredFlags == requiredFlags else {
+        throw ObserverFailure.unexpectedEvent(event.fflags)
+    }
+
+    let rawStatus = Int32(truncatingIfNeeded: event.data)
+    let statusBits = rawStatus & 0x7F
+    let normalExit = statusBits == 0
+    let exitCode = normalExit ? Int((rawStatus >> 8) & 0xFF) : -1
+    let signal = normalExit ? 0 : Int(statusBits)
+    let result = "status=PASS\n"
+        + "mode=\(mode)\n"
+        + "helper_pid=\(pid)\n"
+        + "launch_token=\(token)\n"
+        + "fflags=0x\(String(event.fflags, radix: 16, uppercase: true))\n"
+        + "raw_status=\(rawStatus)\n"
+        + "normal_exit=\(normalExit)\n"
+        + "exit_code=\(exitCode)\n"
+        + "signal=\(signal)\n"
+    try writeAtomically(result, to: resultPath)
+} catch {
+    let message = error.localizedDescription
+        .replacingOccurrences(of: "\r", with: " ")
+        .replacingOccurrences(of: "\n", with: " ")
+    if resultPath.hasPrefix("/") {
+        try? writeAtomically("status=FAIL\nmessage=\(message)\n", to: resultPath)
+    }
+    FileHandle.standardError.write(Data("exit observer failed: \(message)\n".utf8))
+    exit(EXIT_FAILURE)
+}
+' >"$observer_log_path" 2>&1 &
+  active_helper_observer_pid=$!
+  active_helper_observer_parent_pid=$$
+  active_helper_observer_token="$token"
+}
+
+helper_observer_is_running() {
+  local pid="$active_helper_observer_pid"
+  local expected_parent="$active_helper_observer_parent_pid"
+  local expected_token="$active_helper_observer_token"
+  local state
+
+  [[ -n "$pid" ]] || return 1
+  if ! helper_observer_is_owned_child "$pid" "$expected_parent" "$expected_token"; then
+    return 1
+  fi
+  if ! state="$(ps -p "$pid" -o state= 2>/dev/null)"; then
+    return 1
+  fi
+  state="${state//[[:space:]]/}"
+  [[ -n "$state" && "$state" != Z* ]]
+}
+
+wait_for_helper_observer_gate() {
+  local mode="$1"
+  local helper_pid="$2"
+  local token="$3"
+  local gate_path="$4"
+  local result_path="$5"
+  local actual_gate expected_gate
+
+  expected_gate="mode=$mode
+helper_pid=$helper_pid
+launch_token=$token
+observer=EVFILT_PROC+NOTE_EXITSTATUS"
+  for _ in {1..400}; do
+    if [[ -s "$gate_path" ]]; then
+      actual_gate="$(<"$gate_path")"
+      if [[ "$actual_gate" != "$expected_gate" ]]; then
+        echo "helper exit observer gate did not match this launch" >&2
+        return 1
+      fi
+      return 0
+    fi
+    if [[ -s "$result_path" ]]; then
+      echo "helper exit observer failed before arming" >&2
+      return 1
+    fi
+    if ! helper_observer_is_running; then
+      echo "helper exit observer exited before arming" >&2
+      return 1
+    fi
+    sleep 0.025
+  done
+  echo "timed out waiting for the helper exit observer to arm" >&2
+  return 1
+}
+
+wait_for_helper_exit_result() {
+  local helper_pid="$1"
+  local mode="$2"
+  local token="$3"
+  local result_path="$4"
+  local observer_status
+
+  for _ in {1..2400}; do
+    if [[ -s "$result_path" ]]; then
+      break
+    fi
+    if ! helper_observer_is_running; then
+      echo "helper exit observer exited without a result" >&2
+      return 1
+    fi
+    if kill -0 "$helper_pid" >/dev/null 2>&1 &&
+      ! process_has_helper_command_identity "$helper_pid" "$mode" "$token"; then
+      echo "helper pid identity changed before its exit was observed: $helper_pid" >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+  if [[ ! -s "$result_path" ]]; then
+    echo "timed out waiting for the helper kernel exit status" >&2
+    return 1
+  fi
+
+  set +e
+  wait "$active_helper_observer_pid"
+  observer_status=$?
+  set -e
+  active_helper_observer_pid=""
+  active_helper_observer_parent_pid=""
+  active_helper_observer_token=""
+  if [[ "$observer_status" -ne 0 ]]; then
+    echo "helper exit observer exited with status $observer_status" >&2
+    return 1
+  fi
+
+  for _ in {1..20}; do
+    if ! kill -0 "$helper_pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  echo "helper kernel exit event arrived while pid remained live: $helper_pid" >&2
+  return 1
+}
+
 assert_helper_completed() {
   local mode="$1"
-  local exit_status="$2"
-  local ledger_path="$3"
-  local helper_log_path="$4"
+  local ledger_path="$2"
+  local helper_log_path="$3"
+  local helper_stderr_path="$4"
+  local helper_launch_path="$5"
+  local observer_log_path="$6"
+  local exit_result_path="$7"
+  local helper_pid="$8"
+  local token="$9"
   local last_line=""
   local timestamp status step detail
   local required_step step_count step_line previous_step_line=0
   local required_steps=()
 
-  if [[ "$exit_status" -ne 0 ]]; then
-    echo "DMG install harness exited with status $exit_status in $mode mode" >&2
-    [[ -f "$ledger_path" ]] && cat "$ledger_path" >&2
-    [[ -f "$helper_log_path" ]] && cat "$helper_log_path" >&2
+  if ! awk -v mode="$mode" -v pid="$helper_pid" -v token="$token" '
+    NR == 1 { valid += ($0 == "status=PASS") }
+    NR == 2 { valid += ($0 == "mode=" mode) }
+    NR == 3 { valid += ($0 == "helper_pid=" pid) }
+    NR == 4 { valid += ($0 == "launch_token=" token) }
+    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]+$/) }
+    NR == 6 { valid += ($0 == "raw_status=0") }
+    NR == 7 { valid += ($0 == "normal_exit=true") }
+    NR == 8 { valid += ($0 == "exit_code=0") }
+    NR == 9 { valid += ($0 == "signal=0") }
+    END { exit !(NR == 9 && valid == 9) }
+  ' "$exit_result_path"; then
+    echo "DMG install harness did not expose a normal kernel exit status in $mode mode" >&2
     return 1
   fi
   if [[ ! -s "$ledger_path" ]]; then
     echo "DMG install harness ledger is missing or empty: $ledger_path" >&2
+    return 1
+  fi
+  if ! cmp -s "$ledger_path" "$helper_log_path"; then
+    echo "DMG install harness stdout did not exactly match its synchronized ledger" >&2
+    return 1
+  fi
+  if [[ -s "$helper_stderr_path" || -s "$helper_launch_path" ||
+    -s "$observer_log_path" ]]; then
+    echo "DMG install harness emitted unexpected stderr, launcher, or observer output" >&2
     return 1
   fi
   if grep -F $'\tFAIL\t' "$ledger_path" >/dev/null 2>&1; then
@@ -478,11 +1138,13 @@ assert_helper_completed() {
 
   case "$mode" in
     preflight)
-      required_steps=(arguments permissions complete)
+      required_steps=(arguments process exit-observer permissions complete)
       ;;
     exercise)
       required_steps=(
         arguments
+        process
+        exit-observer
         permissions
         target
         main-window
@@ -500,6 +1162,8 @@ assert_helper_completed() {
     restart)
       required_steps=(
         arguments
+        process
+        exit-observer
         permissions
         target
         main-window
@@ -528,6 +1192,19 @@ assert_helper_completed() {
     previous_step_line="$step_line"
   done
 
+  if ! awk -F $'\t' \
+    -v process_detail="mode=$mode helper_pid=$helper_pid launch_token=$token" \
+    -v observer_detail="helper_pid=$helper_pid launch_token=$token observer=EVFILT_PROC+NOTE_EXITSTATUS" '
+      $2 == "PASS" && $3 == "process" && $4 == process_detail { process_count += 1 }
+      $2 == "PASS" && $3 == "exit-observer" && $4 == observer_detail {
+        observer_count += 1
+      }
+      END { exit !(process_count == 1 && observer_count == 1) }
+    ' "$ledger_path"; then
+    echo "DMG install harness process or exit-observer identity detail was invalid" >&2
+    return 1
+  fi
+
   last_line="$(tail -n 1 "$ledger_path")"
   IFS=$'\t' read -r timestamp status step detail <<<"$last_line"
   if [[ -z "$timestamp" || "$status" != "PASS" || "$step" != "complete" ||
@@ -542,20 +1219,184 @@ run_helper() {
   local pid="$2"
   local ledger_path="$3"
   local helper_log_path="$4"
-  local helper_status
+  local helper_log_base="${helper_log_path%.log}"
+  local helper_stderr_path="${helper_log_base}-stderr.log"
+  local helper_launch_path="${helper_log_base}-launch.log"
+  local observer_log_path="${helper_log_base}-exit-observer.log"
+  local observer_gate_path="${helper_log_base}-exit-observer-gate.txt"
+  local exit_result_path="${helper_log_base}-exit-status.txt"
+  local token
+  local helper_pid
+  local open_status
+  local remaining_pids
+  local helper_args=()
 
-  rm -f "$ledger_path" "$helper_log_path"
+  token="$(uuidgen)"
+  if [[ ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    echo "uuidgen returned an invalid helper launch token" >&2
+    return 1
+  fi
+  helper_args=(
+    --mode "$mode"
+    --ledger "$ledger_path"
+    --launch-token "$token"
+    --start-gate "$observer_gate_path"
+  )
+  if [[ "$mode" != "preflight" ]]; then
+    helper_args+=(
+      --pid "$pid"
+      --app-path "$installed_app"
+      --task-title "$task_title"
+    )
+  fi
+
+  rm -f \
+    "$ledger_path" \
+    "$helper_log_path" \
+    "$helper_stderr_path" \
+    "$helper_launch_path" \
+    "$observer_log_path" \
+    "$observer_gate_path" \
+    "$exit_result_path"
+  : >"$helper_log_path"
+  : >"$helper_stderr_path"
+  : >"$helper_launch_path"
+  : >"$observer_log_path"
+
+  last_helper_stderr_log="$helper_stderr_path"
+  last_helper_launch_log="$helper_launch_path"
+  last_helper_observer_log="$observer_log_path"
+  last_helper_exit_result="$exit_result_path"
+  active_helper_pid=""
+  active_helper_mode="$mode"
+  active_helper_token="$token"
+
   set +e
-  "$helper_executable" \
-    --mode "$mode" \
-    --pid "$pid" \
-    --app-path "$installed_app" \
-    --task-title "$task_title" \
-    --ledger "$ledger_path" \
-    >"$helper_log_path" 2>&1
-  helper_status=$?
+  /usr/bin/open \
+    -n \
+    -g \
+    --stdout "$helper_log_path" \
+    --stderr "$helper_stderr_path" \
+    "$helper_app" \
+    --args "${helper_args[@]}" \
+    >"$helper_launch_path" 2>&1
+  open_status=$?
   set -e
-  assert_helper_completed "$mode" "$helper_status" "$ledger_path" "$helper_log_path"
+  if [[ "$open_status" -ne 0 ]]; then
+    echo "LaunchServices rejected the $mode helper launch: status=$open_status" >&2
+    dump_helper_evidence \
+      "$ledger_path" \
+      "$helper_log_path" \
+      "$helper_stderr_path" \
+      "$helper_launch_path" \
+      "$observer_log_path" \
+      "$exit_result_path"
+    return 1
+  fi
+  if [[ -s "$helper_launch_path" ]]; then
+    echo "LaunchServices emitted unexpected output for the $mode helper launch" >&2
+    dump_helper_evidence \
+      "$ledger_path" \
+      "$helper_log_path" \
+      "$helper_stderr_path" \
+      "$helper_launch_path" \
+      "$observer_log_path" \
+      "$exit_result_path"
+    return 1
+  fi
+
+  if ! wait_for_helper_process_record "$mode" "$token" "$ledger_path"; then
+    dump_helper_evidence \
+      "$ledger_path" \
+      "$helper_log_path" \
+      "$helper_stderr_path" \
+      "$helper_launch_path" \
+      "$observer_log_path" \
+      "$exit_result_path"
+    return 1
+  fi
+  helper_pid="$HELPER_PROCESS_PID"
+  start_helper_exit_observer \
+    "$mode" \
+    "$helper_pid" \
+    "$token" \
+    "$observer_gate_path" \
+    "$exit_result_path" \
+    "$observer_log_path"
+  if ! wait_for_helper_observer_gate \
+    "$mode" \
+    "$helper_pid" \
+    "$token" \
+    "$observer_gate_path" \
+    "$exit_result_path"; then
+    dump_helper_evidence \
+      "$ledger_path" \
+      "$helper_log_path" \
+      "$helper_stderr_path" \
+      "$helper_launch_path" \
+      "$observer_log_path" \
+      "$exit_result_path"
+    return 1
+  fi
+  if ! wait_for_helper_exit_result \
+    "$helper_pid" \
+    "$mode" \
+    "$token" \
+    "$exit_result_path"; then
+    dump_helper_evidence \
+      "$ledger_path" \
+      "$helper_log_path" \
+      "$helper_stderr_path" \
+      "$helper_launch_path" \
+      "$observer_log_path" \
+      "$exit_result_path"
+    return 1
+  fi
+  if ! assert_helper_completed \
+    "$mode" \
+    "$ledger_path" \
+    "$helper_log_path" \
+    "$helper_stderr_path" \
+    "$helper_launch_path" \
+    "$observer_log_path" \
+    "$exit_result_path" \
+    "$helper_pid" \
+    "$token"; then
+    dump_helper_evidence \
+      "$ledger_path" \
+      "$helper_log_path" \
+      "$helper_stderr_path" \
+      "$helper_launch_path" \
+      "$observer_log_path" \
+      "$exit_result_path"
+    return 1
+  fi
+
+  if ! remaining_pids="$(matching_owned_helper_pids "$mode" "$token")"; then
+    echo "failed to prove helper process exit after $mode" >&2
+    dump_helper_evidence \
+      "$ledger_path" \
+      "$helper_log_path" \
+      "$helper_stderr_path" \
+      "$helper_launch_path" \
+      "$observer_log_path" \
+      "$exit_result_path"
+    return 1
+  fi
+  if [[ -n "$remaining_pids" ]]; then
+    echo "helper process remained after its observed exit: $remaining_pids" >&2
+    dump_helper_evidence \
+      "$ledger_path" \
+      "$helper_log_path" \
+      "$helper_stderr_path" \
+      "$helper_launch_path" \
+      "$observer_log_path" \
+      "$exit_result_path"
+    return 1
+  fi
+  active_helper_pid=""
+  active_helper_mode=""
+  active_helper_token=""
 }
 
 current_day_metadata() {
@@ -695,26 +1536,20 @@ wait_for_main_window_metadata() {
 }
 
 run_permission_preflight() {
-  local helper_status
-
   rm -f "$permission_ledger" "$permission_log" "$permission_console_log"
   start_runtime_capture "$permission_console_log"
-  set +e
-  "$helper_executable" \
-    --mode preflight \
-    --ledger "$permission_ledger" \
-    >"$permission_log" 2>&1
-  helper_status=$?
-  set -e
-  runtime_evidence_stop_console_capture
-  assert_helper_completed \
+  run_helper \
     "preflight" \
-    "$helper_status" \
+    "" \
     "$permission_ledger" \
     "$permission_log"
+  runtime_evidence_stop_console_capture
   runtime_evidence_assert_clean_logs \
     "DMG install harness permission preflight" \
     "$permission_log" \
+    "$last_helper_stderr_log" \
+    "$last_helper_launch_log" \
+    "$last_helper_observer_log" \
     "$permission_console_log"
   if [[ -e "$database_path" ]]; then
     echo "permission preflight unexpectedly created production persistence: $database_path" >&2
@@ -843,6 +1678,9 @@ run_production_helper_phase() {
     "installed $phase_label" \
     "$launch_log_path" \
     "$helper_log_path" \
+    "$last_helper_stderr_log" \
+    "$last_helper_launch_log" \
+    "$last_helper_observer_log" \
     "$console_log_path"
 }
 
@@ -1113,6 +1951,7 @@ if [[ ! -x "$installed_executable" ]]; then
   echo "installed app binary is not executable: $installed_executable" >&2
   exit 1
 fi
+scripts/verify-mac-app-metadata "$installed_app"
 
 runtime_evidence_snapshot_diagnostics \
   "$executable_name" \

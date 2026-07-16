@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+app_path="${1:-dist/Noonmark.app}"
+plist_path="${app_path}/Contents/Info.plist"
+expected_drag_type="app.noonmark.task-priority"
+
+if [[ ! -d "$app_path" ]]; then
+  echo "missing app bundle for metadata verification: $app_path" >&2
+  exit 1
+fi
+if [[ ! -f "$plist_path" ]]; then
+  echo "app bundle is missing Info.plist: $plist_path" >&2
+  exit 1
+fi
+
+if ! drag_type_identifier="$(
+  plutil -extract \
+    UTExportedTypeDeclarations.0.UTTypeIdentifier \
+    raw \
+    "$plist_path" \
+    2>/dev/null
+)"; then
+  drag_type_identifier=""
+fi
+if ! drag_type_conformance="$(
+  plutil -extract \
+    UTExportedTypeDeclarations.0.UTTypeConformsTo.0 \
+    raw \
+    "$plist_path" \
+    2>/dev/null
+)"; then
+  drag_type_conformance=""
+fi
+if ! drag_type_description="$(
+  plutil -extract \
+    UTExportedTypeDeclarations.0.UTTypeDescription \
+    raw \
+    "$plist_path" \
+    2>/dev/null
+)"; then
+  drag_type_description=""
+fi
+
+if [[ "$drag_type_identifier" != "$expected_drag_type" ]]; then
+  echo "app bundle does not export $expected_drag_type: ${drag_type_identifier:-missing}" >&2
+  exit 1
+fi
+if [[ "$drag_type_conformance" != "public.data" ]]; then
+  echo "app drag type does not conform to public.data: ${drag_type_conformance:-missing}" >&2
+  exit 1
+fi
+if [[ -z "$drag_type_description" ]]; then
+  echo "app drag type is missing its description" >&2
+  exit 1
+fi
+
+echo "Verified exported task-priority drag type for $app_path"

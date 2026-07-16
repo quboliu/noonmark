@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+
+noonmark_resolve_codesign_identity() {
+  local requested_identity="${1:-}"
+  local stable_signing_required="${2:-0}"
+  local identities_output=""
+  local apple_development_count="0"
+
+  NOONMARK_RESOLVED_CODESIGN_IDENTITY=""
+  NOONMARK_STABLE_CODESIGNING_ENABLED=0
+
+  if [[ "$stable_signing_required" != "0" &&
+        "$stable_signing_required" != "1" ]]; then
+    echo "NOONMARK_REQUIRE_STABLE_UI_SIGNING must be 0 or 1" >&2
+    return 1
+  fi
+
+  if [[ -z "$requested_identity" ]]; then
+    if [[ "$stable_signing_required" != "1" ]]; then
+      return 0
+    fi
+  elif [[ "$requested_identity" == "-" ]]; then
+    if [[ "$stable_signing_required" == "1" ]]; then
+      echo "interactive UI validation does not accept ad-hoc signing" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  if ! identities_output="$(security find-identity -v -p codesigning 2>/dev/null)"; then
+    echo "could not inspect code-signing identities in the current keychain" >&2
+    return 1
+  fi
+
+  if [[ -n "$requested_identity" ]]; then
+    if ! printf '%s\n' "$identities_output" | awk -v requested="$requested_identity" '
+      /^[[:space:]]*[0-9]+\)/ {
+        fingerprint = $2
+        if (requested == fingerprint) {
+          fingerprint_match = 1
+        }
+        quote = index($0, "\"")
+        if (quote == 0) {
+          next
+        }
+        name = substr($0, quote + 1)
+        sub(/"[[:space:]]*$/, "", name)
+        if (requested == name) {
+          name_fingerprints[fingerprint] = 1
+        }
+      }
+      END {
+        if (fingerprint_match) {
+          exit 0
+        }
+        for (fingerprint in name_fingerprints) {
+          name_fingerprint_count += 1
+        }
+        exit name_fingerprint_count == 1 ? 0 : 1
+      }
+    '; then
+      echo "the requested code-signing identity is unavailable or ambiguous in the current keychain" >&2
+      return 1
+    fi
+    NOONMARK_RESOLVED_CODESIGN_IDENTITY="$requested_identity"
+    NOONMARK_STABLE_CODESIGNING_ENABLED=1
+    return 0
+  fi
+
+  apple_development_count="$({
+    printf '%s\n' "$identities_output" | awk '
+      /^[[:space:]]*[0-9]+\)/ {
+        quote = index($0, "\"")
+        if (quote == 0) {
+          next
+        }
+        name = substr($0, quote + 1)
+        sub(/"[[:space:]]*$/, "", name)
+        if (index(name, "Apple Development:") == 1) {
+          fingerprints[$2] = 1
+        }
+      }
+      END {
+        for (fingerprint in fingerprints) {
+          count += 1
+        }
+        print count + 0
+      }
+    '
+  })"
+
+  if [[ "$apple_development_count" -eq 0 ]]; then
+    echo "interactive UI validation requires one Apple Development identity" >&2
+    echo "create it in Xcode > Settings... > Accounts > Team > Manage Certificates..." >&2
+    return 1
+  fi
+  if [[ "$apple_development_count" -ne 1 ]]; then
+    echo "multiple Apple Development identities are available; set NOONMARK_CODESIGN_IDENTITY explicitly" >&2
+    return 1
+  fi
+
+  NOONMARK_RESOLVED_CODESIGN_IDENTITY="$({
+    printf '%s\n' "$identities_output" | awk '
+      /^[[:space:]]*[0-9]+\)/ {
+        quote = index($0, "\"")
+        if (quote == 0) {
+          next
+        }
+        name = substr($0, quote + 1)
+        sub(/"[[:space:]]*$/, "", name)
+        if (index(name, "Apple Development:") == 1) {
+          fingerprints[$2] = 1
+        }
+      }
+      END {
+        for (fingerprint in fingerprints) {
+          print fingerprint
+          exit
+        }
+      }
+    '
+  })"
+  if [[ -z "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" ]]; then
+    echo "could not resolve the Apple Development identity" >&2
+    return 1
+  fi
+  NOONMARK_STABLE_CODESIGNING_ENABLED=1
+}
+
+noonmark_verify_stable_designated_requirement() {
+  local bundle_path="${1:-}"
+  local expected_identifier="${2:-}"
+  local designated_requirement=""
+
+  if [[ -z "$bundle_path" || -z "$expected_identifier" ]]; then
+    echo "stable designated-requirement verification is missing its bundle input" >&2
+    return 1
+  fi
+  if ! designated_requirement="$(
+    codesign --display --requirements - "$bundle_path" 2>&1
+  )"; then
+    echo "could not inspect the signed bundle designated requirement" >&2
+    return 1
+  fi
+  if [[ "$designated_requirement" == *"cdhash"* ||
+        "$designated_requirement" != *"identifier \"$expected_identifier\""* ]]; then
+    echo "signed bundle does not have the required stable designated requirement" >&2
+    return 1
+  fi
+}

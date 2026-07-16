@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Physical WindowServer input is meaningful only when rebuilds preserve the
+# App's designated requirement and the user's one-time TCC authorization.
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+
 source scripts/runtime-evidence
 
 configuration="${1:-debug}"

@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source scripts/codesign-common
+
+first_fingerprint="1111111111111111111111111111111111111111"
+second_fingerprint="2222222222222222222222222222222222222222"
+fake_security_mode="unused"
+fake_security_calls=0
+fake_codesign_mode="unused"
+fake_codesign_bundle="/tmp/Noonmark Test.app"
+fake_codesign_identifier="app.noonmark.test"
+
+security() {
+  if [[ "$*" != "find-identity -v -p codesigning" ]]; then
+    echo "unexpected security invocation" >&2
+    return 1
+  fi
+  fake_security_calls=$((fake_security_calls + 1))
+  case "$fake_security_mode" in
+    none)
+      echo "     0 valid identities found"
+      ;;
+    one)
+      echo "  1) ${first_fingerprint} \"Apple Development: Test Developer (TEAMONE)\""
+      echo "     1 valid identities found"
+      ;;
+    two)
+      echo "  1) ${first_fingerprint} \"Apple Development: Test Developer (TEAMONE)\""
+      echo "  2) ${second_fingerprint} \"Apple Development: Other Developer (TEAMTWO)\""
+      echo "     2 valid identities found"
+      ;;
+    duplicate-certificate)
+      echo "  1) ${first_fingerprint} \"Apple Development: Test Developer (TEAMONE)\""
+      echo "  2) ${first_fingerprint} \"Apple Development: Test Developer (TEAMONE)\""
+      echo "     2 valid identities found"
+      ;;
+    duplicate-name)
+      echo "  1) ${first_fingerprint} \"Apple Development: Test Developer (TEAMONE)\""
+      echo "  2) ${second_fingerprint} \"Apple Development: Test Developer (TEAMONE)\""
+      echo "     2 valid identities found"
+      ;;
+    mixed)
+      echo "  1) ${first_fingerprint} \"Developer ID Application: Test Developer (TEAMONE)\""
+      echo "  2) ${second_fingerprint} \"Apple Development: Test Developer (TEAMONE)\""
+      echo "     2 valid identities found"
+      ;;
+    unavailable)
+      return 1
+      ;;
+    *)
+      echo "security should not have been called" >&2
+      return 1
+      ;;
+  esac
+}
+
+codesign() {
+  if [[ "$*" != "--display --requirements - $fake_codesign_bundle" ]]; then
+    echo "unexpected codesign invocation" >&2
+    return 1
+  fi
+  case "$fake_codesign_mode" in
+    stable)
+      echo "designated => anchor apple generic and identifier \"$fake_codesign_identifier\""
+      ;;
+    ad-hoc)
+      echo "designated => cdhash H\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\""
+      ;;
+    wrong-identifier)
+      echo "designated => anchor apple generic and identifier \"app.noonmark.other\""
+      ;;
+    unavailable)
+      return 1
+      ;;
+    *)
+      echo "codesign should not have been called" >&2
+      return 1
+      ;;
+  esac
+}
+
+fail() {
+  echo "$1" >&2
+  exit 1
+}
+
+fake_security_mode="unused"
+noonmark_resolve_codesign_identity "" "0"
+[[ "$fake_security_calls" -eq 0 ]] || fail "optional ad-hoc signing inspected the keychain"
+[[ -z "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" ]] || fail "optional signing resolved an identity"
+[[ "$NOONMARK_STABLE_CODESIGNING_ENABLED" -eq 0 ]] || fail "optional signing became stable"
+
+fake_security_mode="one"
+noonmark_resolve_codesign_identity "" "1"
+[[ "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" == "$first_fingerprint" ]] \
+  || fail "unique Apple Development identity was not selected"
+[[ "$NOONMARK_STABLE_CODESIGNING_ENABLED" -eq 1 ]] \
+  || fail "unique Apple Development identity was not marked stable"
+
+fake_security_mode="mixed"
+noonmark_resolve_codesign_identity "Developer ID Application: Test Developer (TEAMONE)" "1"
+[[ "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" == \
+  "Developer ID Application: Test Developer (TEAMONE)" ]] \
+  || fail "explicit identity name was not preserved"
+noonmark_resolve_codesign_identity "" "1"
+[[ "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" == "$second_fingerprint" ]] \
+  || fail "unique Apple Development identity was not selected from mixed identities"
+
+fake_security_mode="one"
+noonmark_resolve_codesign_identity "$first_fingerprint" "1"
+[[ "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" == "$first_fingerprint" ]] \
+  || fail "explicit identity fingerprint was not preserved"
+
+fake_security_mode="duplicate-certificate"
+noonmark_resolve_codesign_identity "" "1"
+[[ "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" == "$first_fingerprint" ]] \
+  || fail "duplicate entries for one certificate were treated as different identities"
+noonmark_resolve_codesign_identity "Apple Development: Test Developer (TEAMONE)" "1"
+[[ "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" == \
+  "Apple Development: Test Developer (TEAMONE)" ]] \
+  || fail "one certificate duplicated across keychains became ambiguous"
+
+if noonmark_resolve_codesign_identity "-" "1" >/dev/null 2>&1; then
+  fail "required stable signing accepted ad-hoc identity"
+fi
+if noonmark_resolve_codesign_identity "" "invalid" >/dev/null 2>&1; then
+  fail "invalid stable-signing flag was accepted"
+fi
+
+fake_security_mode="none"
+if noonmark_resolve_codesign_identity "" "1" >/dev/null 2>&1; then
+  fail "required stable signing accepted zero identities"
+fi
+
+fake_security_mode="two"
+if noonmark_resolve_codesign_identity "" "1" >/dev/null 2>&1; then
+  fail "required stable signing guessed among multiple identities"
+fi
+noonmark_resolve_codesign_identity "$second_fingerprint" "1"
+[[ "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" == "$second_fingerprint" ]] \
+  || fail "explicit fingerprint did not override multiple automatic candidates"
+noonmark_resolve_codesign_identity \
+  "Apple Development: Other Developer (TEAMTWO)" "1"
+[[ "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" == \
+  "Apple Development: Other Developer (TEAMTWO)" ]] \
+  || fail "explicit name did not override multiple automatic candidates"
+
+fake_security_mode="duplicate-name"
+if noonmark_resolve_codesign_identity \
+  "Apple Development: Test Developer (TEAMONE)" "1" >/dev/null 2>&1; then
+  fail "explicit identity name guessed between distinct certificates"
+fi
+
+fake_security_mode="one"
+missing_identity="Apple Development: Missing Secret Identity (MISSING)"
+missing_error="$(mktemp -t noonmark-codesign-error.XXXXXX)"
+trap 'rm -f "$missing_error"' EXIT
+if noonmark_resolve_codesign_identity "$missing_identity" "1" \
+  >/dev/null 2>"$missing_error"; then
+  fail "unavailable explicit identity was accepted"
+fi
+if grep -Fq "$missing_identity" "$missing_error"; then
+  fail "unavailable explicit identity leaked into diagnostics"
+fi
+
+fake_security_mode="unavailable"
+if noonmark_resolve_codesign_identity "" "1" >/dev/null 2>&1; then
+  fail "keychain inspection failure was accepted"
+fi
+
+fake_codesign_mode="stable"
+noonmark_verify_stable_designated_requirement \
+  "$fake_codesign_bundle" \
+  "$fake_codesign_identifier"
+
+fake_codesign_mode="ad-hoc"
+if noonmark_verify_stable_designated_requirement \
+  "$fake_codesign_bundle" "$fake_codesign_identifier" >/dev/null 2>&1; then
+  fail "stable designated-requirement guard accepted cdhash identity"
+fi
+
+fake_codesign_mode="wrong-identifier"
+if noonmark_verify_stable_designated_requirement \
+  "$fake_codesign_bundle" "$fake_codesign_identifier" >/dev/null 2>&1; then
+  fail "stable designated-requirement guard accepted the wrong bundle identifier"
+fi
+
+fake_codesign_mode="unavailable"
+if noonmark_verify_stable_designated_requirement \
+  "$fake_codesign_bundle" "$fake_codesign_identifier" >/dev/null 2>&1; then
+  fail "stable designated-requirement guard accepted an inspection failure"
+fi
+
+echo "Code-signing policy checks passed"

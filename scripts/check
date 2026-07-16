@@ -42,6 +42,9 @@ scripts/check-natural-day-boundary
 echo "==> Runtime evidence guard"
 scripts/test-runtime-evidence
 
+echo "==> Code-signing policy"
+scripts/test-codesign-common
+
 echo "==> SwiftLint"
 swiftlint lint --quiet
 

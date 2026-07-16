@@ -19,6 +19,8 @@ enum NoonmarkDMGInstallHarness {
         let appPath: String
         let taskTitle: String
         let ledgerPath: String
+        let launchToken: String
+        let startGatePath: String
 
         static func parse(_ arguments: [String]) throws -> Self {
             var values: [String: String] = [:]
@@ -35,7 +37,15 @@ enum NoonmarkDMGInstallHarness {
                 }
                 index += 2
             }
-            let allowed = Set(["--mode", "--pid", "--app-path", "--task-title", "--ledger"])
+            let allowed = Set([
+                "--mode",
+                "--pid",
+                "--app-path",
+                "--task-title",
+                "--ledger",
+                "--launch-token",
+                "--start-gate"
+            ])
             let unknown = Set(values.keys).subtracting(allowed)
             guard unknown.isEmpty else {
                 throw HarnessFailure.invalidArguments(
@@ -43,16 +53,23 @@ enum NoonmarkDMGInstallHarness {
                 )
             }
             guard let rawMode = values["--mode"], let mode = Mode(rawValue: rawMode),
-                  let ledgerPath = values["--ledger"], ledgerPath.isEmpty == false
+                  let ledgerPath = values["--ledger"], ledgerPath.isEmpty == false,
+                  let rawLaunchToken = values["--launch-token"],
+                  let launchToken = UUID(uuidString: rawLaunchToken)?.uuidString,
+                  launchToken == rawLaunchToken,
+                  let startGatePath = values["--start-gate"],
+                  Self.isAbsoluteSingleLinePath(startGatePath)
             else {
                 throw HarnessFailure.invalidArguments(
-                    "required: --mode preflight|exercise|restart --ledger PATH"
+                    "required: --mode preflight|exercise|restart --ledger PATH "
+                        + "--launch-token UUID --start-gate ABSOLUTE_PATH"
                 )
             }
             if mode == .preflight {
-                guard values.count == 2 else {
+                guard values.count == 4 else {
                     throw HarnessFailure.invalidArguments(
-                        "preflight accepts only --mode preflight --ledger PATH"
+                        "preflight accepts only --mode preflight --ledger PATH "
+                            + "--launch-token UUID --start-gate ABSOLUTE_PATH"
                     )
                 }
                 return Self(
@@ -60,7 +77,9 @@ enum NoonmarkDMGInstallHarness {
                     pid: 0,
                     appPath: "",
                     taskTitle: "",
-                    ledgerPath: ledgerPath
+                    ledgerPath: ledgerPath,
+                    launchToken: launchToken,
+                    startGatePath: startGatePath
                 )
             }
             guard
@@ -83,8 +102,21 @@ enum NoonmarkDMGInstallHarness {
                 pid: parsedPID,
                 appPath: appPath,
                 taskTitle: taskTitle,
-                ledgerPath: ledgerPath
+                ledgerPath: ledgerPath,
+                launchToken: launchToken,
+                startGatePath: startGatePath
             )
+        }
+
+        private static func isAbsoluteSingleLinePath(_ path: String) -> Bool {
+            guard path.hasPrefix("/"),
+                  path.unicodeScalars.allSatisfy({
+                      CharacterSet.controlCharacters.contains($0) == false
+                  })
+            else {
+                return false
+            }
+            return URL(fileURLWithPath: path).standardizedFileURL.path == path
         }
     }
 
@@ -115,6 +147,21 @@ enum NoonmarkDMGInstallHarness {
             try ledger?.pass(
                 "arguments",
                 configuration.argumentDetail
+            )
+            let helperPID = getpid()
+            try ledger?.pass(
+                "process",
+                "mode=\(configuration.mode.rawValue) helper_pid=\(helperPID) "
+                    + "launch_token=\(configuration.launchToken)"
+            )
+            try waitForExitObserver(
+                configuration: configuration,
+                helperPID: helperPID
+            )
+            try ledger?.pass(
+                "exit-observer",
+                "helper_pid=\(helperPID) launch_token=\(configuration.launchToken) "
+                    + "observer=EVFILT_PROC+NOTE_EXITSTATUS"
             )
 
             let input = try WindowServerInputDriver()
@@ -153,6 +200,54 @@ enum NoonmarkDMGInstallHarness {
             FileHandle.standardError.write(Data("harness failed: \(message)\n".utf8))
             exit(EXIT_FAILURE)
         }
+    }
+
+    private static func waitForExitObserver(
+        configuration: Configuration,
+        helperPID: pid_t
+    ) throws {
+        let gateURL = URL(fileURLWithPath: configuration.startGatePath)
+        let expected = "mode=\(configuration.mode.rawValue)\n"
+            + "helper_pid=\(helperPID)\n"
+            + "launch_token=\(configuration.launchToken)\n"
+            + "observer=EVFILT_PROC+NOTE_EXITSTATUS\n"
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(30))
+
+        repeat {
+            var status = stat()
+            if lstat(configuration.startGatePath, &status) == 0 {
+                guard status.st_mode & S_IFMT == S_IFREG else {
+                    throw HarnessFailure.contract(
+                        "exit observer gate is not a regular file"
+                    )
+                }
+                let actual: String
+                do {
+                    actual = try String(contentsOf: gateURL, encoding: .utf8)
+                } catch {
+                    throw HarnessFailure.contract(
+                        "exit observer gate could not be read: \(error.localizedDescription)"
+                    )
+                }
+                guard actual == expected else {
+                    throw HarnessFailure.contract(
+                        "exit observer gate did not match this helper process"
+                    )
+                }
+                return
+            }
+            if errno != ENOENT {
+                throw HarnessFailure.contract(
+                    "exit observer gate could not be inspected: errno=\(errno)"
+                )
+            }
+            usleep(25000)
+        } while clock.now < deadline
+
+        throw HarnessFailure.contract(
+            "timed out waiting for the verified exit observer gate"
+        )
     }
 
     private static func validateProductionTarget(

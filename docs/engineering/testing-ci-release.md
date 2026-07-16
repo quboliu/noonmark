@@ -39,6 +39,14 @@ Neon 的可借鉴点：
 - Live iCloud Sync：真实 Apple Account / iCloud Drive 手动测试，入口为 `scripts/test-icloud-sync-live`，不进入默认 `make check`；覆盖双 SQLite record merge、真实 `.app` 同步、SQLite status、仓库 ref 与 `brctl` 上传完成信号。
 - Live CloudKit Sync：真实签名 App / CloudKit Development container 手动测试，入口为 `scripts/test-cloudkit-sync-live`，不进入默认 `make check`；要求 Apple signing identity、provisioning profile 与 container 授权，覆盖独立 SQLite 上传／下载、`CKSyncEngine` state 落盘和隔离 test zone 清理。缺少任一外部条件必须失败，不能以 mock 或 ad-hoc 结果代替。
 
+## 本机稳定签名与 TCC
+
+`scripts/test-e2e` 和 `scripts/test-dmg-install` 会自行强制稳定签名，不接受 ad-hoc 身份。两个 build 入口共用同一解析器，优先使用调用方显式传入的 `NOONMARK_CODESIGN_IDENTITY`；未显式传入时，只会自动选择当前 Keychain 中唯一有效的 `Apple Development` 身份。零个候选时给出一次性 Xcode 创建路径，多个候选时 fail-closed 并要求显式选择，绝不猜测 Team。解析器只把证书 fingerprint 留在当前进程内，不写入仓库或日志，私钥始终留在 Keychain。
+
+本机只有一个开发身份时，用户只需在 `Xcode > Settings... > Accounts > Team > Manage Certificates...` 创建一次 `Apple Development` 证书，不需要在每次命令前设置环境变量。测试 App 固定使用 `app.noonmark.mac.e2e`，DMG helper 固定使用 `app.noonmark.test.dmg-install-harness`；稳定签名门禁同时拒绝含 `cdhash` 的 designated requirement。首次改用稳定签名后，需要把 `dist/NoonmarkMacAppE2E.app` 和 `artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app` 最后加入一次 `System Settings > Privacy & Security > Accessibility`。后续只要 Team、签名类别和 bundle identifier 不变，正常重编译不得再依赖重复授权。
+
+CI／release runner 继续通过受保护的 GitHub variable 显式指定身份；拥有多个开发 Team 的本机也应使用显式选择。证书或私钥不得提交、不得以明文导出到仓库，也不得为了绕过 TCC 改为给 Terminal 注入真实 App 行为。
+
 ## 命令
 
 ```bash
@@ -140,7 +148,9 @@ Release：
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App 数据包 round-trip 探针，验证设置页导出路径生成 JSON，随后通过导入路径恢复任务和复盘数据到 SQLite。
 - 2026-07-14：数据包 E2E 升级为完整 snapshot 对账，先在非空库加入替换任务，再验证导入会移除旧事实、关闭同步并精确恢复导出 snapshot；另注入导入写库失败，验证内存状态与重启后的 SQLite 都保留导入前数据。导出文件写后回读并生成 SHA-256 回执，Storage 测试另覆盖 staging 失败回滚、旧同步运行态清除与目标设备身份保留。
 - 2026-07-14：`scripts/test-icloud-sync-live` 已通过，证据覆盖双 SQLite 合并、真实 E2E App 显式启用与同步、`localFirst.sync.lastStatus` 落盘、仓库 `refs/latest` 和 CloudDocs 上传完成。它仍不是两台物理设备或 CloudKit production 验收。
-- 2026-07-14：CloudKit `CKSyncEngine` adapter、SQLite durable mirror、非重入 session 持久化、account／zone／record 删除阻断、entitlement 与 account preflight、签名输入门禁及独立 test zone live 脚本已落地；CloudKit 专项测试和真实 ad-hoc App 缺 entitlement 失败路径通过。本机没有有效 code-signing identity，因此 `scripts/test-cloudkit-sync-live` 尚未运行成功，不得描述为真实 CloudKit 到达证据。
+- 2026-07-14：CloudKit `CKSyncEngine` adapter、SQLite durable mirror、非重入 session 持久化、account／zone／record 删除阻断、entitlement 与 account preflight、签名输入门禁及独立 test zone live 脚本已落地；CloudKit 专项测试和真实 ad-hoc App 缺 entitlement 失败路径通过。当时本机没有有效 code-signing identity，因此 `scripts/test-cloudkit-sync-live` 尚未运行成功，不得描述为真实 CloudKit 到达证据。
+- 2026-07-16：交互验收入口已强制稳定签名，并新增唯一 `Apple Development` 身份自动发现、显式身份优先、零／多候选 fail-closed 和错误脱敏测试；本轮 `make check` 通过 590 项测试，1 项 live iCloud 明确跳过，0 失败。
+- 2026-07-16：Xcode 已生成有效期与 Code Signing 用途均正确的 `Apple Development` 叶子证书和匹配私钥，但本机 Keychain 只有旧 WWDR intermediate，`security find-identity -v -p codesigning` 因缺少证书要求的 G3 issuer 而报告零个有效身份。依据叶子 AIA、issuer OU 与 Authority Key Identifier，从 Apple PKI 下载并校验 `Worldwide Developer Relations - G3` 后导入登录 Keychain；当前已报告一个有效身份，真实临时 `codesign`、严格验证、无 `cdhash` designated requirement 与项目自动解析器均通过。稳定签名 App 的 TCC 与真实 WindowServer 正向证据仍须在最终 bundle 构建后取得。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App Provider 配置 round-trip 探针，验证非密配置经 UserDefaults 回读、dummy API Key 经 Keychain 回读，并在验证后清理。
 - 2026-07-06：`make package-dmg` 通过，生成 `dist/Noonmark.dmg` 与 `dist/Noonmark.dmg.sha256`，`shasum -a 256 -c dist/Noonmark.dmg.sha256` 通过。
 - 2026-07-06：`scripts/test-dmg-install dist/Noonmark.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。

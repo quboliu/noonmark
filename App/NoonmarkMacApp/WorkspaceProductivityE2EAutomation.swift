@@ -510,9 +510,11 @@ private final class WorkspaceDragEventPump: NSObject {
     }
 
     @objc private func finalizeAfterEventTracking(_ timer: Timer) {
+        // The target/selector timer is only retained by this property and the run loop.
+        // Read its payload before invalidation and releasing our final strong reference.
+        let shouldRestoreCursor = timer.userInfo as? Bool ?? true
         timer.invalidate()
         finalizationTimer = nil
-        let shouldRestoreCursor = timer.userInfo as? Bool ?? true
         if input.isLeftButtonDown {
             failure = failure.map { $0 + "; finalization observed left button down" }
                 ?? "finalization observed left button down"

@@ -31,6 +31,13 @@ jobs:
 
   e2e:
     name: Mac App E2E · Interactive WindowServer
+    # Never execute mutable pull-request code on the persistent runner that owns
+    # the UI signing identity and pre-authorized TCC entries. Pull requests keep
+    # the hosted check job; the real GUI gate runs only after merge to main (or
+    # an explicit workflow dispatch whose selected ref is main).
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: [self-hosted, macOS, noonmark-ui-e2e]
     timeout-minutes: 20
     needs: check

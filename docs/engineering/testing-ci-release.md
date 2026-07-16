@@ -31,7 +31,7 @@ Neon 的可借鉴点：
 - IT：跨模块集成测试，当前入口为 `scripts/test-integration`，覆盖 Storage schema、Core 类型契约和 SQLite repository 核心状态 round-trip；结构化附言必须验证稳定身份、编辑时间、删除墓碑及 `note_entries_json` 读写一致。
 - 数据包测试：随 Storage IT 运行，覆盖完整 snapshot round-trip、canonical bytes、写后回读与 SHA-256 回执、重复键拒绝和断裂引用拒绝。
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
-- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，默认会先按开发 clean-cut 规则终止旧开发 App 并清除默认本地数据，再打包和打开隔离测试副本 `dist/NoonmarkMacAppE2E.app`；在同一次套件内，每次切换场景前等待测试副本完全退出，以避免 macOS WindowServer 竞态。测试结束后如需手动体验，统一通过 `scripts/run-mac-app` 重新清理、构建和启动当前版本。
+- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，默认会先按开发 clean-cut 规则终止旧开发 App 并清除默认本地数据，再打包和打开隔离测试副本 `dist/NoonmarkMacAppE2E.app`；在同一次套件内，每次切换场景前等待测试副本完全退出，以避免 macOS WindowServer 竞态。套件同时保存 unified log、DiagnosticReports 差分与运行 manifest，任何新增崩溃、持久化、布局或辅助功能错误均 fail-closed。测试结束后如需手动体验，统一通过 `scripts/run-mac-app` 重新清理、构建和启动当前版本。
   截图场景以 `scripts/test-e2e` 内的 `scenarios` 清单为唯一事实源，覆盖所有顶层页面、主要详情态、分类管理与任务详情分类编辑展开态、烛龙工作流和设置分区；其中 `pool-detail-classification-edit` 验证标签输入只在请求后展开。完整 E2E 还包含默认汇总侧栏 / 日历分析、当天子任务完成撤回和难度修改、附言逐条编辑 / 删除后重启、SQLite JSON 墓碑对账、废弃任务链留在未完成池、重新启用只取消废弃标记、烛龙导航随设置隐藏 / 显示等真实 App 探针。UI 调试时可用 `NOONMARK_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `NOONMARK_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。测试副本固定为当前唯一的 `NoonmarkMacAppE2E` 身份，不接受 executable 或 bundle ID override。
 - UI 视觉证据：当前只以真实 `.app` 的 E2E 截图、交互断言、Accessibility 标识、日志和持久化探针作为自动化证据。归档 HTML 原型已经不代表当前产品，不得作为视觉 oracle，也不得通过上调阈值吸收结构差异。`scripts/test-visual-regression` 只提供显式的两图比较能力；只有用户确认过的真实 App 截图才能传入 `NOONMARK_VISUAL_REFERENCE` 建立 reference，当前尚未固化默认 reference，因此该入口不进入 CI 或 release 门禁。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
@@ -94,12 +94,17 @@ scripts/test-visual-regression
 
 ## CI 策略
 
-每次 push / PR：
+每次 pull request：
 
 - 安装 SwiftLint / SwiftFormat。
 - 运行 `scripts/check`。
-- 运行 `scripts/test-e2e`，验证真实 `.app` 可启动并生成截图 artifact。
 - 不在默认 push / PR 中运行 live AI provider smoke；它需要人工或受保护的 secret 环境显式触发。
+
+合并到 `main` 或在 `main` ref 上手动触发：
+
+- 先在 GitHub-hosted Mac 运行 `scripts/check`。
+- 通过后才在带固定 `noonmark-ui-e2e` label、稳定签名身份与预授权 TCC 的持久交互式 Mac runner 运行 `scripts/test-e2e`，并上传截图与运行时证据。
+- self-hosted E2E job 必须以 job-level ref／event 条件拒绝 `pull_request` 和非 `main` 的 `workflow_dispatch`。未合并 PR 可以修改仓库脚本，因此绝不得在持有签名资产和交互权限的持久 runner 上执行。
 
 Nightly：
 
@@ -110,11 +115,11 @@ Release：
 
 - 通过 `v*` tag 或 `workflow_dispatch` 显式提供 tag 触发。
 - 重新跑 `scripts/check`。
-- 重新跑 `scripts/test-e2e`，确认真实 Mac app 启动路径仍可用。
+- 在稳定签名、预授权 TCC 的交互式 release runner 重新跑 `scripts/test-e2e`，确认真实 Mac app 启动路径仍可用。
 - 用 release 配置打包 `.app`。
 - 生成可直接下载安装的 `Noonmark.dmg`、`Noonmark.app.zip` 与 SHA256。
 - 校验 DMG checksum、挂载内容、`.app` bundle、可执行文件、`Info.plist` 和 Applications shortcut。
-- 挂载 DMG 后复制 `.app` 到临时 Applications 目录，从复制后的 App 启动、截图并验证正常模式 SQLite 持久化。
+- 挂载 DMG 后复制 `.app` 到临时 Applications 目录，由不进入发行包的独立 `NoonmarkDMGInstallHarness.app` 通过真实 WindowServer 输入打开 Settings、Quick Entry、建立任务、退出并重启；同时以 AX 可见性、截图、ledger、unified log、DiagnosticReports 与完整 SQLite joined-row 对账验证持久化。
 - 校验 zip checksum。
 - 上传 `dist/`、E2E 截图和 DMG 安装烟测产物，随后创建或更新 GitHub Release 并上传正式产物。
 

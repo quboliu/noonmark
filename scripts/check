@@ -1,52 +1,154 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-required_tools=(swift xcodebuild xcrun swiftlint swiftformat sips iconutil)
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
 
-for tool in "${required_tools[@]}"; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "missing required tool: $tool" >&2
-    exit 1
+# shellcheck source=scripts/evidence-common
+source scripts/evidence-common
+
+check_evidence_dir="artifacts/audit-final/make-check"
+check_log="${check_evidence_dir}/make-check.log"
+check_manifest="${check_evidence_dir}/manifest.txt"
+check_inventory="${check_evidence_dir}/artifact-inventory.sha256"
+source_start_fragment="${check_evidence_dir}/source-start.fragment"
+source_end_fragment="${check_evidence_dir}/source-end.fragment"
+evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
+
+# A failed preflight must replace, not preserve, an older successful report.
+evidence_prepare_fresh_directory "$repo_root" "$check_evidence_dir"
+evidence_capture_source "$repo_root" source "$source_start_fragment"
+evidence_begin_manifest \
+  "$check_manifest" \
+  "make-check" \
+  "$evidence_run_id" \
+  "repository" \
+  "full"
+evidence_append_snapshot "$check_manifest" "$source_start_fragment"
+
+run_check_suite() {
+  local required_tools=(swift xcodebuild xcrun swiftlint swiftformat sips iconutil)
+
+  for tool in "${required_tools[@]}"; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      echo "missing required tool: $tool" >&2
+      return 1
+    fi
+  done
+
+  echo "==> Xcode"
+  xcodebuild -version
+  xcrun --find xctest >/dev/null
+
+  echo "==> App icon"
+  scripts/test-app-icon
+
+  echo "==> Swift build"
+  scripts/reset-dev-data
+  swift build
+
+  echo "==> Unit tests"
+  scripts/test-unit
+
+  echo "==> Integration tests"
+  scripts/test-integration
+
+  echo "==> System tests"
+  scripts/test-system
+
+  echo "==> Deterministic simulation tests"
+  scripts/test-deterministic-sim
+
+  echo "==> UI localization literal guard"
+  scripts/check-ui-localization
+
+  echo "==> Natural Day public boundary"
+  scripts/check-natural-day-boundary
+
+  echo "==> Runtime evidence guard"
+  scripts/test-runtime-evidence
+
+  echo "==> Validation evidence provenance"
+  scripts/test-evidence-common
+
+  echo "==> E2E and writer-lease evidence contract"
+  scripts/test-e2e-evidence-contract
+
+  echo "==> DMG evidence contract"
+  scripts/test-dmg-evidence-contract
+
+  echo "==> Code-signing policy"
+  scripts/test-codesign-common
+
+  echo "==> DMG observer lifecycle"
+  scripts/test-dmg-install-observer
+
+  echo "==> SwiftLint"
+  swiftlint lint --quiet
+
+  echo "==> SwiftFormat lint"
+  scripts/format --lint
+}
+
+set +e
+(
+  set -euo pipefail
+  run_check_suite
+) 2>&1 | tee "$check_log"
+pipeline_status=("${PIPESTATUS[@]}")
+set -e
+suite_status="${pipeline_status[0]}"
+if [[ "${pipeline_status[1]}" -ne 0 ]]; then
+  suite_status=1
+fi
+
+if evidence_capture_source "$repo_root" source_end "$source_end_fragment"; then
+  evidence_append_snapshot "$check_manifest" "$source_end_fragment" || \
+    suite_status=1
+else
+  suite_status=1
+fi
+evidence_append \
+  "$check_manifest" \
+  "check_log_path" \
+  "$check_log" || suite_status=1
+evidence_append \
+  "$check_manifest" \
+  "check_log_sha256" \
+  "$(shasum -a 256 "$check_log" | awk '{print $1}')" || suite_status=1
+if evidence_inventory \
+  "$repo_root" \
+  "$check_inventory" \
+  "$check_log" \
+  "$source_start_fragment" \
+  "$source_end_fragment"; then
+  evidence_append \
+    "$check_manifest" \
+    "artifact_inventory_sha256" \
+    "$(shasum -a 256 "$check_inventory" | awk '{print $1}')" || \
+    suite_status=1
+else
+  suite_status=1
+fi
+
+required_keys=(
+  source_worktree_tree_oid
+  source_end_worktree_tree_oid
+  check_log_path
+  check_log_sha256
+  artifact_inventory_sha256
+)
+if ! evidence_finish_manifest \
+  "$check_manifest" \
+  "$suite_status" \
+  "${required_keys[@]}"; then
+  suite_status=1
+  if ! evidence_manifest_has_key "$check_manifest" suite_exit_status; then
+    evidence_finish_manifest \
+      "$check_manifest" \
+      1 \
+      "${required_keys[@]}" || true
   fi
-done
+fi
 
-echo "==> Xcode"
-xcodebuild -version
-xcrun --find xctest >/dev/null
-
-echo "==> App icon"
-scripts/test-app-icon
-
-echo "==> Swift build"
-scripts/reset-dev-data
-swift build
-
-echo "==> Unit tests"
-scripts/test-unit
-
-echo "==> Integration tests"
-scripts/test-integration
-
-echo "==> System tests"
-scripts/test-system
-
-echo "==> Deterministic simulation tests"
-scripts/test-deterministic-sim
-
-echo "==> UI localization literal guard"
-scripts/check-ui-localization
-
-echo "==> Natural Day public boundary"
-scripts/check-natural-day-boundary
-
-echo "==> Runtime evidence guard"
-scripts/test-runtime-evidence
-
-echo "==> Code-signing policy"
-scripts/test-codesign-common
-
-echo "==> SwiftLint"
-swiftlint lint --quiet
-
-echo "==> SwiftFormat lint"
-scripts/format --lint
+exit "$suite_status"

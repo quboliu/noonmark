@@ -7,13 +7,13 @@ enum ChainReactivationEnvelopeError: Error, Equatable {
     case noncanonicalPayload
 }
 
-/// 一次真实「恢复废弃」操作留下的 immutable 同步见证。
+/// 一次真实「恢复废弃」或 snapshot redo 操作留下的 immutable 同步见证。
 ///
 /// current chain/trace 只能描述最终状态，无法证明 active/pending 是恢复废弃产生，
 /// 还是旧分支经其他操作碰巧形成。见证因此携带操作边界两侧的完整事实；接收端
 /// 只有同时观察到精确的废弃前态与恢复后态时，才允许反转废弃历史。
 struct ChainReactivationEnvelope: Codable, Equatable {
-    static let currentFormatVersion = 1
+    static let currentFormatVersion = 2
 
     private enum CodingKeys: String, CodingKey {
         case formatVersion
@@ -28,15 +28,15 @@ struct ChainReactivationEnvelope: Codable, Equatable {
     let operationID: UUID
     let abandonedChain: TaskChain
     let restoredChain: TaskChain
-    let abandonedTrace: DayTrace
-    let restoredTrace: DayTrace
+    let abandonedTrace: DayTrace?
+    let restoredTrace: DayTrace?
 
     init(
         operationID: UUID = UUID(),
         abandonedChain: TaskChain,
         restoredChain: TaskChain,
-        abandonedTrace: DayTrace,
-        restoredTrace: DayTrace
+        abandonedTrace: DayTrace? = nil,
+        restoredTrace: DayTrace? = nil
     ) throws {
         formatVersion = Self.currentFormatVersion
         self.operationID = operationID
@@ -65,11 +65,11 @@ struct ChainReactivationEnvelope: Codable, Equatable {
             TaskChain.self,
             forKey: .restoredChain
         )
-        abandonedTrace = try container.decode(
+        abandonedTrace = try container.decodeIfPresent(
             DayTrace.self,
             forKey: .abandonedTrace
         )
-        restoredTrace = try container.decode(
+        restoredTrace = try container.decodeIfPresent(
             DayTrace.self,
             forKey: .restoredTrace
         )
@@ -83,8 +83,14 @@ struct ChainReactivationEnvelope: Codable, Equatable {
         try container.encode(operationID, forKey: .operationID)
         try container.encode(abandonedChain, forKey: .abandonedChain)
         try container.encode(restoredChain, forKey: .restoredChain)
-        try container.encode(abandonedTrace, forKey: .abandonedTrace)
-        try container.encode(restoredTrace, forKey: .restoredTrace)
+        try container.encodeIfPresent(
+            abandonedTrace,
+            forKey: .abandonedTrace
+        )
+        try container.encodeIfPresent(
+            restoredTrace,
+            forKey: .restoredTrace
+        )
     }
 
     static func decode(_ data: Data) throws -> Self {
@@ -109,7 +115,7 @@ struct ChainReactivationEnvelope: Codable, Equatable {
     /// 或倒退到更早的 owner clock。
     func authorizesRestoredSuccessor(
         chain currentChain: TaskChain,
-        trace currentTrace: DayTrace
+        trace currentTrace: DayTrace?
     ) -> Bool {
         guard currentChain.id == restoredChain.id,
               currentChain.createdAt == restoredChain.createdAt,
@@ -118,10 +124,23 @@ struct ChainReactivationEnvelope: Codable, Equatable {
               noteFacts(
                   in: currentChain.noteEntries,
                   contain: restoredChain.noteEntries
-              ),
+              )
+        else {
+            return false
+        }
+
+        guard let restoredTrace else {
+            return abandonedTrace == nil && currentTrace == nil
+        }
+        guard abandonedTrace != nil,
+              let currentTrace,
               traceIdentityMatches(currentTrace, restoredTrace),
-              currentTrace.contentUpdatedAt >= restoredTrace.contentUpdatedAt,
-              traceStatusCanFollowRestoration(currentTrace.status),
+              currentTrace.contentUpdatedAt
+              >= restoredTrace.contentUpdatedAt,
+              traceStatusCanFollowRestoration(
+                  currentTrace.status,
+                  restoredStatus: restoredTrace.status
+              ),
               noteFacts(
                   in: currentTrace.noteEntries,
                   contain: restoredTrace.noteEntries
@@ -129,7 +148,6 @@ struct ChainReactivationEnvelope: Codable, Equatable {
         else {
             return false
         }
-
         guard currentTrace.contentUpdatedAt == restoredTrace.contentUpdatedAt else {
             return true
         }
@@ -147,31 +165,65 @@ struct ChainReactivationEnvelope: Codable, Equatable {
               abandonedChain.state == .abandoned,
               restoredChain.state == .active,
               abandonedChain.noteEntries == restoredChain.noteEntries,
-              abandonedChain.updatedAt == abandonedTrace.contentUpdatedAt,
-              abandonedChain.updatedAt == abandonedTrace.settledAt,
-              restoredChain.updatedAt == restoredTrace.contentUpdatedAt,
               restoredChain.updatedAt > abandonedChain.updatedAt
         else {
             throw ChainReactivationEnvelopeError.invalidWitness(
                 "chain facts do not form one reactivation boundary"
             )
         }
-        guard abandonedTrace.chainID == abandonedChain.id,
-              restoredTrace.chainID == restoredChain.id,
-              abandonedTrace.status == .abandoned,
-              traceIdentityAndContentMatch(abandonedTrace, restoredTrace)
-        else {
+        guard (abandonedTrace == nil) == (restoredTrace == nil) else {
             throw ChainReactivationEnvelopeError.invalidWitness(
-                "trace facts do not form one reactivation boundary"
+                "reactivation trace boundary is incomplete"
             )
         }
-        let validRestoredStatus = restoredTrace.status == .pending
-            && restoredTrace.settledAt == nil
-            || restoredTrace.status == .unfinished
-            && restoredTrace.settledAt == abandonedTrace.settledAt
-        guard validRestoredStatus else {
+        guard let abandonedTrace, let restoredTrace else {
+            return
+        }
+        guard abandonedChain.updatedAt
+                == abandonedTrace.contentUpdatedAt,
+              abandonedChain.updatedAt == abandonedTrace.settledAt,
+              restoredChain.updatedAt == restoredTrace.contentUpdatedAt,
+              abandonedTrace.chainID == abandonedChain.id,
+              restoredTrace.chainID == restoredChain.id
+        else {
             throw ChainReactivationEnvelopeError.invalidWitness(
-                "restored trace status is not a reactivation result"
+                "trace facts do not share the chain restoration clock"
+            )
+        }
+        if abandonedTrace.status == .abandoned {
+            let validRestoredStatus = restoredTrace.status == .pending
+                && restoredTrace.settledAt == nil
+                || restoredTrace.status == .unfinished
+                && restoredTrace.settledAt
+                == abandonedTrace.settledAt
+            guard validRestoredStatus,
+                  traceIdentityAndContentMatch(
+                      abandonedTrace,
+                      restoredTrace
+                  )
+            else {
+                throw ChainReactivationEnvelopeError.invalidWitness(
+                    "trace facts do not form one abandoned reactivation boundary"
+                )
+            }
+            return
+        }
+        guard abandonedTrace.status == .cancelledDraft,
+              restoredTrace.status == .pending,
+              abandonedTrace.draftCancellationID != nil,
+              abandonedTrace.draftCancelledOn != nil,
+              abandonedTrace.settledAt != nil,
+              restoredTrace.draftCancellationID
+              == abandonedTrace.draftCancellationID,
+              restoredTrace.draftCancelledOn == nil,
+              restoredTrace.settledAt == nil,
+              snapshotUndoTraceIdentityAndContentMatch(
+                  abandonedTrace,
+                  restoredTrace
+              )
+        else {
+            throw ChainReactivationEnvelopeError.invalidWitness(
+                "trace facts do not form one snapshot redo boundary"
             )
         }
     }
@@ -193,6 +245,8 @@ struct ChainReactivationEnvelope: Codable, Equatable {
             && abandoned.changedToTraceID == restored.changedToTraceID
             && abandoned.createdAt == restored.createdAt
             && abandoned.completedAt == restored.completedAt
+            && abandoned.draftCancellationID == restored.draftCancellationID
+            && abandoned.draftCancelledOn == restored.draftCancelledOn
     }
 
     private func traceIdentityMatches(
@@ -207,16 +261,39 @@ struct ChainReactivationEnvelope: Codable, Equatable {
     }
 
     private func traceStatusCanFollowRestoration(
-        _ current: TraceStatus
+        _ current: TraceStatus,
+        restoredStatus: TraceStatus
     ) -> Bool {
-        switch restoredTrace.status {
+        switch restoredStatus {
         case .pending:
             current != .abandoned
         case .unfinished:
             current == .unfinished || current == .continued
-        case .completed, .continued, .changed, .returnedToPool, .abandoned:
+        case .completed, .continued, .changed, .returnedToPool,
+             .cancelledDraft, .abandoned:
             false
         }
+    }
+
+    private func snapshotUndoTraceIdentityAndContentMatch(
+        _ cancelled: DayTrace,
+        _ restored: DayTrace
+    ) -> Bool {
+        cancelled.id == restored.id
+            && cancelled.chainID == restored.chainID
+            && cancelled.definitionID == restored.definitionID
+            && cancelled.date == restored.date
+            && cancelled.priority == restored.priority
+            && cancelled.continuationSeq == restored.continuationSeq
+            && cancelled.descriptionText == restored.descriptionText
+            && cancelled.noteEntries == restored.noteEntries
+            && cancelled.manualProgressPercent
+            == restored.manualProgressPercent
+            && cancelled.continuedFromTraceID
+            == restored.continuedFromTraceID
+            && cancelled.changedToTraceID == restored.changedToTraceID
+            && cancelled.createdAt == restored.createdAt
+            && cancelled.completedAt == restored.completedAt
     }
 
     private func traceBaseFieldsMatch(
@@ -232,6 +309,8 @@ struct ChainReactivationEnvelope: Codable, Equatable {
             && current.changedToTraceID == restored.changedToTraceID
             && current.completedAt == restored.completedAt
             && current.settledAt == restored.settledAt
+            && current.draftCancellationID == restored.draftCancellationID
+            && current.draftCancelledOn == restored.draftCancelledOn
     }
 
     private func noteFacts(

@@ -86,15 +86,25 @@ public struct LocalInsightAnalyzer: Sendable {
             }
         }
 
-        if scope.unfinishedPool.isEmpty == false {
-            let fact = "未完成池按任务链去重后有 \(scope.unfinishedPool.count) 条任务链仍需处理。"
+        let visibleUnfinishedPool = scope.unfinishedPool.filter { item in
+            item.unfinishedTraces.contains { $0.trace.formsDayHistory }
+                || item.activeTrace?.trace.formsDayHistory == true
+        }
+        if visibleUnfinishedPool.isEmpty == false {
+            let fact = "未完成池按任务链去重后有 \(visibleUnfinishedPool.count) 条任务链仍需处理。"
             evidence.append(
                 AIEvidence(
                     metric: "unfinished_chain_count",
-                    value: Double(scope.unfinishedPool.count),
+                    value: Double(visibleUnfinishedPool.count),
                     unit: "条",
                     fact: fact,
-                    relatedDates: uniqueDates(scope.unfinishedPool.flatMap { $0.unfinishedTraces.map(\.trace.date) })
+                    relatedDates: uniqueDates(
+                        visibleUnfinishedPool.flatMap { item in
+                            item.unfinishedTraces
+                                .filter { $0.trace.formsDayHistory }
+                                .map(\.trace.date)
+                        }
+                    )
                 )
             )
             facts.append(fact)
@@ -115,23 +125,34 @@ public struct LocalInsightAnalyzer: Sendable {
         var seen = Set<DayTraceID>()
         var traces: [AITraceSnapshot] = []
 
-        for trace in scope.dayTodos.flatMap(\.traces) where seen.insert(trace.trace.id).inserted {
+        let dayTraces = scope.dayTodos
+            .flatMap(\.traces)
+            .filter { $0.trace.formsDayHistory }
+        for trace in dayTraces where seen.insert(trace.trace.id).inserted {
             traces.append(trace)
         }
 
         let unfinishedTraces = scope.unfinishedPool.flatMap { item in
             item.unfinishedTraces + (item.activeTrace.map { [$0] } ?? [])
         }
+        .filter { $0.trace.formsDayHistory }
         for trace in unfinishedTraces where seen.insert(trace.trace.id).inserted {
             traces.append(trace)
         }
 
-        for item in scope.completedPool {
-            for trace in item.trajectory.traces {
+        for item in scope.completedPool where item.trace.formsDayHistory {
+            for trace in item.trajectory.traces where trace.formsDayHistory {
                 guard let definition = scope.completedPool.first(where: { $0.trace.definitionID == trace.definitionID })?.definition else {
                     continue
                 }
-                let snapshot = AITraceSnapshot(trace: trace, definition: definition, subtasks: [], subtaskProgress: emptyProgress)
+                guard let snapshot = AITraceSnapshot(
+                    trace: trace,
+                    definition: definition,
+                    subtasks: [],
+                    subtaskProgress: emptyProgress
+                ) else {
+                    continue
+                }
                 if seen.insert(trace.id).inserted {
                     traces.append(snapshot)
                 }

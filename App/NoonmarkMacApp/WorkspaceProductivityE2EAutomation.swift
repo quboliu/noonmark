@@ -2,6 +2,8 @@ import AppKit
 import CoreGraphics
 import Foundation
 import NoonmarkCore
+import NoonmarkMacE2ESupport
+import NoonmarkMacRuntime
 import NoonmarkStorage
 
 @MainActor
@@ -24,14 +26,17 @@ enum WorkspaceDragE2EDiagnostics {
 
     private static var events: [Event] = []
     private(set) static var pointerEvidence: [String] = []
+    private(set) static var workspaceWidths: [CGFloat] = []
 
     static var isEnabled: Bool {
         AppLaunchArguments.contains("--e2e-workspace-productivity-exercise")
+            || AppLaunchArguments.contains("--e2e-workspace-restoration-exercise")
     }
 
     static func reset() {
         events = []
         pointerEvidence = []
+        workspaceWidths = []
     }
 
     static func recordTarget(traceID: DayTraceID, isTargeted: Bool) {
@@ -59,10 +64,30 @@ enum WorkspaceDragE2EDiagnostics {
         pointerEvidence.append(evidence)
     }
 
+    static func recordWorkspaceWidth(_ width: CGFloat) {
+        guard isEnabled else { return }
+        workspaceWidths.append(width)
+    }
+
+    static func workspaceWidthStayed(
+        near expectedWidth: CGFloat,
+        tolerance: CGFloat
+    ) -> Bool {
+        workspaceWidths.isEmpty == false
+            && workspaceWidths.allSatisfy {
+                abs($0 - expectedWidth) <= tolerance
+            }
+    }
+
     static var report: String {
-        [
+        let workspaceWidthRange = workspaceWidths.min().map { minimum in
+            let maximum = workspaceWidths.max() ?? minimum
+            return "\(minimum)...\(maximum)"
+        } ?? "none"
+        return [
             "events=[\(events.map(\.report).joined(separator: ";"))]",
-            "pointer=[\(pointerEvidence.joined(separator: ";"))]"
+            "pointer=[\(pointerEvidence.joined(separator: ";"))]",
+            "workspaceWidths=\(workspaceWidthRange)"
         ].joined(separator: " ")
     }
 
@@ -97,7 +122,7 @@ enum WorkspaceDragE2EDiagnostics {
 }
 
 @MainActor
-private final class WorkspaceDragEventPump: NSObject {
+final class WindowServerDragEventPump: NSObject {
     private enum Phase {
         case waitingForSource
         case waitingForButtonDown
@@ -111,11 +136,16 @@ private final class WorkspaceDragEventPump: NSObject {
 
     private let window: NSWindow
     private let input: WindowServerInputDriver
-    private let points: [CGPoint]
-    private let sourcePoint: CGPoint
-    private let targetPoint: CGPoint
-    private let sourceTraceID: DayTraceID
-    private let targetTraceID: DayTraceID
+    private let expectedSourceCoordinate: WindowServerInputDriver.PointerCoordinate
+    private let expectedTargetCoordinate: WindowServerInputDriver.PointerCoordinate
+    private let resolveSource: @MainActor () throws
+        -> WindowServerInputDriver.PointerCoordinate
+    private let resolveTarget: @MainActor () throws
+        -> WindowServerInputDriver.PointerCoordinate
+    private var sourcePoint: CGPoint
+    private var targetPoint: CGPoint
+    private let sourceTraceID: DayTraceID?
+    private let targetTraceID: DayTraceID?
     private let expectsNativePath: Bool
     private let originalCursorPoint: CGPoint?
     private let gestureNumber: Int64
@@ -137,43 +167,36 @@ private final class WorkspaceDragEventPump: NSObject {
     init(
         window: NSWindow,
         input: WindowServerInputDriver,
-        sourcePoint: CGPoint,
-        targetPoint: CGPoint,
-        sourceTraceID: DayTraceID,
-        targetTraceID: DayTraceID,
+        sourceCoordinate: WindowServerInputDriver.PointerCoordinate,
+        targetCoordinate: WindowServerInputDriver.PointerCoordinate,
+        resolveSource: @escaping @MainActor () throws
+            -> WindowServerInputDriver.PointerCoordinate,
+        resolveTarget: @escaping @MainActor () throws
+            -> WindowServerInputDriver.PointerCoordinate,
+        sourceTraceID: DayTraceID? = nil,
+        targetTraceID: DayTraceID? = nil,
         expectsNativePath: Bool
     ) {
         self.window = window
         self.input = input
-        self.sourcePoint = sourcePoint
-        self.targetPoint = targetPoint
+        expectedSourceCoordinate = sourceCoordinate
+        expectedTargetCoordinate = targetCoordinate
+        self.resolveSource = resolveSource
+        self.resolveTarget = resolveTarget
+        sourcePoint = sourceCoordinate.quartzPoint
+        targetPoint = targetCoordinate.quartzPoint
         self.sourceTraceID = sourceTraceID
         self.targetTraceID = targetTraceID
         self.expectsNativePath = expectsNativePath
-        lastLocation = sourcePoint
-        points = (1 ... 30).map { step in
-            let progress = CGFloat(step) / 30
-            return CGPoint(
-                x: sourcePoint.x + (targetPoint.x - sourcePoint.x) * progress,
-                y: sourcePoint.y + (targetPoint.y - sourcePoint.y) * progress
-            )
-        }
+        lastLocation = sourceCoordinate.quartzPoint
         originalCursorPoint = input.currentPointerLocation
         gestureNumber = input.nextMouseGestureNumber()
         super.init()
     }
 
     func start() throws {
-        guard input.isLeftButtonDown == false else {
-            throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "combined-session left button was already down before drag"
-            )
-        }
-        guard isExpectedWindowActive else {
-            throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "main window lost focus before WindowServer drag started"
-            )
-        }
+        sourcePoint = try validatedSource(buttonState: .up).quartzPoint
+        targetPoint = try validatedTarget(buttonState: .up).quartzPoint
         try input.postMouse(
             type: .mouseMoved,
             at: sourcePoint,
@@ -233,15 +256,18 @@ private final class WorkspaceDragEventPump: NSObject {
     }
 
     private func waitForSourcePosition() throws {
-        guard isExpectedWindowActive else {
-            throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "main window lost focus while positioning the drag pointer"
-            )
-        }
+        sourcePoint = try validatedSource(buttonState: .up).quartzPoint
         let pointerReachedSource = input.currentPointerLocation.map {
             pointsAreNear($0, sourcePoint)
         } ?? false
         if pointerReachedSource {
+            sourcePoint = try validatedSource(buttonState: .up).quartzPoint
+            guard input.currentPointerLocation.map({
+                pointsAreNear($0, sourcePoint)
+            }) == true else {
+                phaseAttempts = 0
+                return
+            }
             try input.postMouse(
                 type: .leftMouseDown,
                 at: sourcePoint,
@@ -273,11 +299,7 @@ private final class WorkspaceDragEventPump: NSObject {
     }
 
     private func waitForButtonDown() throws {
-        guard isExpectedWindowActive else {
-            throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "main window lost focus before WindowServer confirmed mouse-down"
-            )
-        }
+        _ = try validatedSource(buttonState: .any)
         if input.isLeftButtonDown {
             phase = .dragging
             phaseAttempts = 0
@@ -295,17 +317,17 @@ private final class WorkspaceDragEventPump: NSObject {
     }
 
     private func postDragEvent() throws {
-        guard isExpectedWindowActive, input.isLeftButtonDown else {
-            throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "native drag lost its window or combined-session button state"
-            )
-        }
-        guard index < points.count else {
+        targetPoint = try validatedTarget(buttonState: .down).quartzPoint
+        guard index < 30 else {
             phase = .waitingForTarget
             phaseAttempts = 0
             return
         }
-        let location = points[index]
+        let progress = CGFloat(index + 1) / 30
+        let location = CGPoint(
+            x: sourcePoint.x + (targetPoint.x - sourcePoint.x) * progress,
+            y: sourcePoint.y + (targetPoint.y - sourcePoint.y) * progress
+        )
         try input.postMouse(
             type: .leftMouseDragged,
             at: location,
@@ -317,13 +339,20 @@ private final class WorkspaceDragEventPump: NSObject {
     }
 
     private func waitForNativeTarget() throws {
-        guard isExpectedWindowActive, input.isLeftButtonDown else {
-            throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "native drag lost focus or button state at its destination"
+        targetPoint = try validatedTarget(buttonState: .down).quartzPoint
+        let targetIsReady: Bool
+        if expectsNativePath {
+            guard let targetTraceID else {
+                throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                    "native drag expected a target trace identifier"
+                )
+            }
+            targetIsReady = WorkspaceDragE2EDiagnostics.hasTargeted(
+                targetTraceID
             )
+        } else {
+            targetIsReady = true
         }
-        let targetIsReady = expectsNativePath == false
-            || WorkspaceDragE2EDiagnostics.hasTargeted(targetTraceID)
         if targetIsReady {
             phase = .dwellingAtTarget
             dwellFramesRemaining = 6
@@ -347,11 +376,7 @@ private final class WorkspaceDragEventPump: NSObject {
     }
 
     private func dwellAtTarget() throws {
-        guard isExpectedWindowActive, input.isLeftButtonDown else {
-            throw WorkspaceProductivityE2EAutomation.Failure.failed(
-                "native drag lost focus or button state during target dwell"
-            )
-        }
+        targetPoint = try validatedTarget(buttonState: .down).quartzPoint
         guard dwellFramesRemaining > 0 else {
             try postMouseUp(at: targetPoint)
             return
@@ -367,6 +392,12 @@ private final class WorkspaceDragEventPump: NSObject {
     }
 
     private func postMouseUp(at location: CGPoint) throws {
+        let resolvedTarget = try validatedTarget(buttonState: .down)
+        guard pointsAreNear(location, resolvedTarget.quartzPoint) else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "native drag destination moved before WindowServer mouse-up"
+            )
+        }
         try input.postMouse(
             type: .leftMouseUp,
             at: location,
@@ -412,6 +443,12 @@ private final class WorkspaceDragEventPump: NSObject {
     }
 
     private func waitForNativeDrop() {
+        guard let sourceTraceID, let targetTraceID else {
+            beginFailure(
+                "native drag expected source and target trace identifiers"
+            )
+            return
+        }
         if WorkspaceDragE2EDiagnostics.completedNativePath(
             sourceTraceID: sourceTraceID,
             targetTraceID: targetTraceID
@@ -436,7 +473,7 @@ private final class WorkspaceDragEventPump: NSObject {
                 "event-pump-failure=\(message)"
             )
         }
-        if postedMouseDown {
+        if postedMouseDown || input.isLeftButtonDown {
             do {
                 try input.postMouse(
                     type: .leftMouseUp,
@@ -554,11 +591,33 @@ private final class WorkspaceDragEventPump: NSObject {
         WorkspaceDragE2EDiagnostics.recordPointerEvidence("event-pump-finalized=true")
     }
 
-    private var isExpectedWindowActive: Bool {
-        NSApp.isActive
-            && window.isVisible
-            && window.isMiniaturized == false
-            && window.isKeyWindow
+    private func validatedSource(
+        buttonState: WindowServerExpectedButtonState
+    ) throws -> WindowServerInputDriver.PointerCoordinate {
+        let coordinate = try resolveSource()
+        try input.requireResolvedTarget(
+            coordinate,
+            matching: expectedSourceCoordinate,
+            expectedButtonState: buttonState
+        )
+        return coordinate
+    }
+
+    private func validatedTarget(
+        buttonState: WindowServerExpectedButtonState
+    ) throws -> WindowServerInputDriver.PointerCoordinate {
+        let coordinate = try resolveTarget()
+        try input.requireResolvedTarget(
+            coordinate,
+            matching: expectedTargetCoordinate,
+            expectedButtonState: buttonState
+        )
+        guard coordinate.window === window else {
+            throw WorkspaceProductivityE2EAutomation.Failure.failed(
+                "native drag target moved to a different window"
+            )
+        }
+        return coordinate
     }
 
     private func pointsAreNear(_ lhs: CGPoint, _ rhs: CGPoint) -> Bool {
@@ -578,6 +637,11 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
 
     private struct ProbeState: Codable {
         let reorderedDayTraceIDs: [String]
+        let resolvedParentTraceID: String
+        let resolvedSubtaskID: String
+        let resolvedSubtaskCompletedAt: Date
+        let blockingTraceID: String
+        let blockingSubtaskID: String
         let scheduledPoolChainIDs: [String]
         let returnedFutureChainIDs: [String]
     }
@@ -585,9 +649,17 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
     private struct Fixture {
         let engine: NoonmarkEngine
         let dayTraceIDs: [DayTraceID]
+        let resolvedSubtaskID: SubtaskID
+        let resolvedSubtaskCompletedAt: Date
+        let blockingTraceID: DayTraceID
+        let blockingSubtaskID: SubtaskID
         let poolChainIDs: [TaskChainID]
         let futureTraceIDs: [DayTraceID]
         let futureChainIDs: [TaskChainID]
+
+        var allDayTraceIDs: [DayTraceID] {
+            dayTraceIDs + [blockingTraceID]
+        }
     }
 
     fileprivate enum Failure: LocalizedError {
@@ -617,6 +689,9 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         "E2E workspace future B",
         "E2E workspace future C"
     ]
+    private static let resolvedSubtaskTitle = "E2E workspace processed subtask"
+    private static let blockingParentTitle = "E2E workspace blocked parent"
+    private static let blockingSubtaskTitle = "E2E workspace open subtask"
 
     private let mode: Mode
     private let stateURL: URL
@@ -671,7 +746,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
 
     private func exercise(on store: NoonmarkStore) async throws {
         let window = try await visibleMainWindow()
-        let fixture = try makeFixture(today: store.today)
+        let fixture = try makeFixture(on: store)
         store.engine = fixture.engine
         store.page = .day
         store.selectedDate = store.today
@@ -683,7 +758,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("workspace fixture was not committed to SQLite")
         }
         try await waitForRows(
-            fixture.dayTraceIDs.map(dayIdentifier),
+            fixture.allDayTraceIDs.map(dayIdentifier),
             failure: "day workspace rows did not render"
         )
 
@@ -700,7 +775,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         try await exerciseSelectAllCommand(
             store: store,
             window: window,
-            traceIDs: fixture.dayTraceIDs
+            traceIDs: fixture.allDayTraceIDs
         )
 
         try await ensureMainWindowActive(window)
@@ -757,7 +832,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
 
         try await exerciseAtomicBulkCompletion(
             store: store,
-            traceIDs: fixture.dayTraceIDs
+            fixture: fixture
         )
         try await exerciseTerminalPriorityDragRejection(
             store: store,
@@ -777,6 +852,11 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         try writeState(
             ProbeState(
                 reorderedDayTraceIDs: reorderedDayTraceIDs.map(\.description),
+                resolvedParentTraceID: fixture.dayTraceIDs[0].description,
+                resolvedSubtaskID: fixture.resolvedSubtaskID.description,
+                resolvedSubtaskCompletedAt: fixture.resolvedSubtaskCompletedAt,
+                blockingTraceID: fixture.blockingTraceID.description,
+                blockingSubtaskID: fixture.blockingSubtaskID.description,
                 scheduledPoolChainIDs: fixture.poolChainIDs.map(\.description),
                 returnedFutureChainIDs: fixture.futureChainIDs.map(\.description)
             )
@@ -860,18 +940,85 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
 
     private func exerciseAtomicBulkCompletion(
         store: NoonmarkStore,
-        traceIDs: [DayTraceID]
+        fixture: Fixture
     ) async throws {
         guard let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }) else {
             throw Failure.failed("main window disappeared before bulk completion")
         }
         try await ensureMainWindowActive(window)
+
+        let traceIDs = fixture.dayTraceIDs
         try performMenuShortcut(key: "a", keyCode: 0, modifiers: .command)
+        let mixedTraceIDs = traceIDs + [fixture.blockingTraceID]
+        try await waitForSelection(
+            store,
+            expected: mixedTraceIDs.map { .dayTrace($0) },
+            visibleCount: mixedTraceIDs.count
+        )
+        let blockedBaseline = store.engine.snapshot()
+        let blockedSelection = store.workspaceSelection
+        let blockedUndoCount = store.undoStack.count
+        let blockedRedoCount = store.redoStack.count
+        let blockedRevision = store.engineRevision
+        let blockedToast = store.toast
+        let blockedFailure = store.operationFailureNotice
+        try await waitUntil("open-subtask selection exposed bulk completion") {
+            traceIDs.allSatisfy {
+                (try? store.engine.completionCapability(
+                    for: $0,
+                    today: store.today
+                )) == .available(.complete)
+            }
+                && (try? store.engine.completionCapability(
+                    for: fixture.blockingTraceID,
+                    today: store.today
+                )) == .unavailable(.openSubtasks)
+                && store.canBulkCompleteSelection == false
+                && AppViewTreeE2E.hasNoVisibleView(
+                    identifier: "workspace.bulk.complete.e2e"
+                )
+                && AppViewTreeE2E.view(
+                    identifier: "workspace.bulk.clear.e2e"
+                ) != nil
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        guard store.engine.snapshot() == blockedBaseline,
+              try persistedSnapshot() == blockedBaseline,
+              store.workspaceSelection == blockedSelection,
+              store.undoStack.count == blockedUndoCount,
+              store.redoStack.count == blockedRedoCount,
+              store.engineRevision == blockedRevision,
+              store.toast == blockedToast,
+              store.operationFailureNotice == blockedFailure,
+              selectionCountVerification() == mixedTraceIDs.count
+        else {
+            throw Failure.failed(
+                "open-subtask bulk selection changed facts or presentation state"
+            )
+        }
+
+        try await click("workspace.bulk.clear.e2e")
+        try await waitUntil("mixed bulk selection did not clear") {
+            store.workspaceSelection.isEmpty
+                && AppViewTreeE2E.hasNoVisibleView(
+                    identifier: "workspace.selection.count.e2e"
+                )
+        }
+        try await click(dayIdentifier(traceIDs[0]))
+        for traceID in traceIDs.dropFirst() {
+            try await click(dayIdentifier(traceID), modifiers: .command)
+        }
         try await waitForSelection(
             store,
             expected: traceIDs.map { .dayTrace($0) },
             visibleCount: traceIDs.count
         )
+        try await waitUntil("resolved-subtask selection hid bulk completion") {
+            store.canBulkCompleteSelection
+                && AppViewTreeE2E.view(
+                    identifier: "workspace.bulk.complete.e2e"
+                ) != nil
+        }
 
         let baseline = store.engine.snapshot()
         let baselineSelection = store.workspaceSelection
@@ -903,6 +1050,24 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
                 && AppViewTreeE2E.hasNoVisibleView(
                     identifier: "workspace.selection.count.e2e"
                 )
+        }
+        guard let resolvedSubtask = store.engine.subtasks[fixture.resolvedSubtaskID],
+              let blockingTrace = store.engine.traces[fixture.blockingTraceID],
+              let blockingSubtask = store.engine.subtasks[fixture.blockingSubtaskID],
+              resolvedSubtask.status == .completed,
+              resolvedSubtask.completedAt == fixture.resolvedSubtaskCompletedAt,
+              blockingTrace.status == .pending,
+              blockingTrace.completedAt == nil,
+              blockingTrace.settledAt == nil,
+              blockingSubtask.traceID == fixture.blockingTraceID,
+              blockingSubtask.status == .pending,
+              blockingSubtask.completedAt == nil,
+              blockingSubtask.settledAt == nil,
+              try persistedSnapshot() == store.engine.snapshot()
+        else {
+            throw Failure.failed(
+                "bulk completion changed resolved or blocking subtask facts"
+            )
         }
     }
 
@@ -1005,6 +1170,19 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             traceIDs.map(futureIdentifier),
             failure: "future workspace rows did not render"
         )
+        let staleSearchResult = WorkspaceSearchIndex(engine: store.engine)
+            .search(Self.futureTitles[0])
+            .first { result in
+                if case let .trace(traceID, _, _) = result.destination {
+                    return traceID == traceIDs[0]
+                }
+                return false
+            }
+        guard let staleSearchResult else {
+            throw Failure.failed(
+                "future trace was missing from the pre-cancellation search index"
+            )
+        }
 
         try await click(futureIdentifier(traceIDs[0]))
         try await click(futureIdentifier(traceIDs[2]), modifiers: .shift)
@@ -1017,26 +1195,73 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         try await waitUntil("bulk future return did not reach the Task Pool") {
             store.page == .pool
                 && traceIDs.allSatisfy {
-                    store.engine.traces[$0]?.status == .returnedToPool
+                    store.engine.traces[$0]?.status == .cancelledDraft
                 }
                 && chainIDs.allSatisfy { chainID in
                     store.engine.taskPool().contains { $0.chain.id == chainID }
                 }
+                && store.engine.futurePlans(today: store.today).allSatisfy {
+                    traceIDs.contains($0.trace.id) == false
+                }
                 && store.workspaceSelection.isEmpty
+        }
+        guard try persistedSnapshot() == store.engine.snapshot() else {
+            throw Failure.failed(
+                "bulk future return did not persist its cancellation facts"
+            )
+        }
+        store.revealSearchResult(staleSearchResult)
+        guard store.selectedTrace == nil,
+              store.selectedTraceID == nil,
+              store.workspaceSelection.isEmpty
+        else {
+            throw Failure.failed(
+                "stale search result revealed an internal cancelled draft"
+            )
         }
     }
 
     private func verifyRestart(on store: NoonmarkStore) async throws {
         let state = try readState()
         let reorderedIDs = try state.reorderedDayTraceIDs.map(dayTraceID)
+        let resolvedParentTraceID = try dayTraceID(state.resolvedParentTraceID)
+        let resolvedSubtaskID = try subtaskID(state.resolvedSubtaskID)
+        let blockingTraceID = try dayTraceID(state.blockingTraceID)
+        let blockingSubtaskID = try subtaskID(state.blockingSubtaskID)
         let scheduledPoolIDs = try state.scheduledPoolChainIDs.map(taskChainID)
         let returnedFutureIDs = try state.returnedFutureChainIDs.map(taskChainID)
         let returnedFutureTasksArePooled = returnedFutureIDs.allSatisfy { chainID in
             store.engine.taskPool().contains { $0.chain.id == chainID }
         }
+        let returnedFutureDraftsAreCancelled = returnedFutureIDs.allSatisfy { chainID in
+            store.engine.traces.values.contains {
+                $0.chainID == chainID
+                    && $0.status == .cancelledDraft
+                    && $0.formsDayHistory == false
+            }
+        }
         let completedTasksWereRetained = reorderedIDs.allSatisfy {
             store.engine.traces[$0]?.status == .completed
         }
+        let completionCapabilityFactsWereRetained: Bool = {
+            guard let resolvedSubtask = store.engine.subtasks[resolvedSubtaskID],
+                  let blockingTrace = store.engine.traces[blockingTraceID],
+                  let blockingSubtask = store.engine.subtasks[blockingSubtaskID]
+            else {
+                return false
+            }
+            return reorderedIDs.contains(resolvedParentTraceID)
+                && resolvedSubtask.traceID == resolvedParentTraceID
+                && resolvedSubtask.status == .completed
+                && resolvedSubtask.completedAt == state.resolvedSubtaskCompletedAt
+                && blockingTrace.status == .pending
+                && blockingTrace.completedAt == nil
+                && blockingTrace.settledAt == nil
+                && blockingSubtask.traceID == blockingTraceID
+                && blockingSubtask.status == .pending
+                && blockingSubtask.completedAt == nil
+                && blockingSubtask.settledAt == nil
+        }()
         let scheduledTasksWereRetained = scheduledPoolIDs.allSatisfy { chainID in
             store.engine.traces.values.contains {
                 $0.chainID == chainID
@@ -1046,8 +1271,10 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         }
         let restartStateIsValid = try persistedSnapshot() == store.engine.snapshot()
             && completedTasksWereRetained
+            && completionCapabilityFactsWereRetained
             && scheduledTasksWereRetained
             && returnedFutureTasksArePooled
+            && returnedFutureDraftsAreCancelled
         guard restartStateIsValid else {
             throw Failure.failed("restarted engine did not retain bulk operations")
         }
@@ -1080,49 +1307,102 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
-    private func makeFixture(today: LocalDate) throws -> Fixture {
+    private func makeFixture(on store: NoonmarkStore) throws -> Fixture {
         let engine = NoonmarkEngine()
+        let fixtureInstantCount = Self.dayTitles.count * 2
+            + 5
+            + Self.poolTitles.count
+            + Self.futureTitles.count * 2
+        var timeline = try E2EFixtureTimeline(
+            store: store,
+            eventCount: fixtureInstantCount
+        )
+        let today = timeline.today
         let futureDate = NoonmarkStore.offset(today, by: 1)
-        var timestamp = Date(timeIntervalSince1970: 1_783_267_200)
-        func nextInstant() -> Date {
-            defer { timestamp = timestamp.addingTimeInterval(1) }
-            return timestamp
-        }
 
         var dayTraceIDs: [DayTraceID] = []
         for title in Self.dayTitles {
-            let chainID = try engine.createPoolTask(title: title, now: nextInstant())
+            let chainID = try engine.createPoolTask(
+                title: title,
+                now: timeline.nextInstant()
+            )
             dayTraceIDs.append(
                 try engine.scheduleFromPool(
                     chainID: chainID,
                     date: today,
                     today: today,
-                    now: nextInstant()
+                    now: timeline.nextInstant()
                 )
             )
         }
 
+        let resolvedSubtaskID = try engine.addSubtask(
+            traceID: dayTraceIDs[0],
+            title: Self.resolvedSubtaskTitle,
+            now: timeline.nextInstant()
+        )
+        try engine.completeSubtask(
+            resolvedSubtaskID,
+            today: today,
+            now: timeline.nextInstant()
+        )
+        guard let resolvedSubtaskCompletedAt =
+            engine.subtasks[resolvedSubtaskID]?.completedAt
+        else {
+            throw Failure.failed(
+                "workspace resolved subtask did not capture its completion time"
+            )
+        }
+
+        let blockingChainID = try engine.createPoolTask(
+            title: Self.blockingParentTitle,
+            now: timeline.nextInstant()
+        )
+        let blockingTraceID = try engine.scheduleFromPool(
+            chainID: blockingChainID,
+            date: today,
+            today: today,
+            now: timeline.nextInstant()
+        )
+        let blockingSubtaskID = try engine.addSubtask(
+            traceID: blockingTraceID,
+            title: Self.blockingSubtaskTitle,
+            now: timeline.nextInstant()
+        )
+
         let poolChainIDs = try Self.poolTitles.map { title in
-            try engine.createPoolTask(title: title, now: nextInstant())
+            try engine.createPoolTask(
+                title: title,
+                now: timeline.nextInstant()
+            )
         }
 
         var futureTraceIDs: [DayTraceID] = []
         var futureChainIDs: [TaskChainID] = []
         for title in Self.futureTitles {
-            let chainID = try engine.createPoolTask(title: title, now: nextInstant())
+            let chainID = try engine.createPoolTask(
+                title: title,
+                now: timeline.nextInstant()
+            )
             let traceID = try engine.scheduleFromPool(
                 chainID: chainID,
                 date: futureDate,
                 today: today,
-                now: nextInstant()
+                now: timeline.nextInstant()
             )
             futureChainIDs.append(chainID)
             futureTraceIDs.append(traceID)
         }
 
+        _ = try timeline.finish()
+
         return Fixture(
             engine: engine,
             dayTraceIDs: dayTraceIDs,
+            resolvedSubtaskID: resolvedSubtaskID,
+            resolvedSubtaskCompletedAt: resolvedSubtaskCompletedAt,
+            blockingTraceID: blockingTraceID,
+            blockingSubtaskID: blockingSubtaskID,
             poolChainIDs: poolChainIDs,
             futureTraceIDs: futureTraceIDs,
             futureChainIDs: futureChainIDs
@@ -1176,17 +1456,40 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         else {
             throw Failure.failed("missing visible click target \(identifier)")
         }
-        let windowPoint = view.convert(
-            NSPoint(x: view.bounds.midX, y: view.bounds.midY),
-            to: nil
-        )
         do {
             let input = try WindowServerInputDriver()
-            let coordinate = try input.pointerCoordinate(
-                windowPoint: windowPoint,
-                in: window
+            let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
+                guard let currentView = AppViewTreeE2E.view(
+                    identifier: identifier
+                ), let currentWindow = currentView.window,
+                currentWindow === window,
+                currentWindow.isKeyWindow,
+                currentView.isHiddenOrHasHiddenAncestor == false,
+                currentView.bounds.width > 0,
+                currentView.bounds.height > 0
+                else {
+                    throw Failure.failed(
+                        "click target changed before WindowServer mouseDown: \(identifier)"
+                    )
+                }
+                let currentPoint = currentView.convert(
+                    NSPoint(
+                        x: currentView.bounds.midX,
+                        y: currentView.bounds.midY
+                    ),
+                    to: nil
+                )
+                return try input.pointerCoordinate(
+                    windowPoint: currentPoint,
+                    in: currentWindow
+                )
+            }
+            let coordinate = try resolveTarget()
+            try await input.postClick(
+                at: coordinate,
+                modifiers: modifiers,
+                resolveTarget: resolveTarget
             )
-            try await input.postClick(at: coordinate, modifiers: modifiers)
         } catch {
             throw Failure.failed(
                 "WindowServer click failed for \(identifier): "
@@ -1201,7 +1504,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         sourceTraceID: DayTraceID,
         targetTraceID: DayTraceID,
         expectsNativePath: Bool
-    ) throws -> WorkspaceDragEventPump {
+    ) throws -> WindowServerDragEventPump {
         guard let source = AppViewTreeE2E.view(identifier: sourceIdentifier),
               let target = AppViewTreeE2E.view(identifier: targetIdentifier),
               let window = source.window,
@@ -1235,25 +1538,73 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         )
         do {
             let input = try WindowServerInputDriver()
-            let sourceCoordinate = try input.pointerCoordinate(
-                windowPoint: sourcePoint,
-                in: window
-            )
-            let targetCoordinate = try input.pointerCoordinate(
-                windowPoint: targetPoint,
-                in: window
-            )
+            let resolveSource:
+                @MainActor @Sendable () throws
+                -> WindowServerInputDriver.PointerCoordinate = {
+                guard let currentSource = AppViewTreeE2E.view(
+                    identifier: sourceIdentifier
+                ), currentSource.window === window,
+                currentSource.isHiddenOrHasHiddenAncestor == false,
+                currentSource.bounds.width > 0,
+                currentSource.bounds.height > 0
+                else {
+                    throw Failure.failed(
+                        "drag source changed before WindowServer event"
+                    )
+                }
+                let currentPoint = currentSource.convert(
+                    NSPoint(
+                        x: currentSource.bounds.midX,
+                        y: currentSource.bounds.midY
+                    ),
+                    to: nil
+                )
+                return try input.pointerCoordinate(
+                    windowPoint: currentPoint,
+                    in: window
+                )
+            }
+            let resolveTarget:
+                @MainActor @Sendable () throws
+                -> WindowServerInputDriver.PointerCoordinate = {
+                guard let currentTarget = AppViewTreeE2E.view(
+                    identifier: targetIdentifier
+                ), currentTarget.window === window,
+                currentTarget.isHiddenOrHasHiddenAncestor == false,
+                currentTarget.bounds.width > 0,
+                currentTarget.bounds.height > 0
+                else {
+                    throw Failure.failed(
+                        "drag destination changed before WindowServer event"
+                    )
+                }
+                let currentPoint = currentTarget.convert(
+                    NSPoint(
+                        x: currentTarget.bounds.midX,
+                        y: currentTarget.bounds.midY
+                    ),
+                    to: nil
+                )
+                return try input.pointerCoordinate(
+                    windowPoint: currentPoint,
+                    in: window
+                )
+            }
+            let sourceCoordinate = try resolveSource()
+            let targetCoordinate = try resolveTarget()
             WorkspaceDragE2EDiagnostics.recordPointerEvidence(
                 "source-coordinate=\(sourceCoordinate.report)"
             )
             WorkspaceDragE2EDiagnostics.recordPointerEvidence(
                 "target-coordinate=\(targetCoordinate.report)"
             )
-            let eventPump = WorkspaceDragEventPump(
+            let eventPump = WindowServerDragEventPump(
                 window: window,
                 input: input,
-                sourcePoint: sourceCoordinate.quartzPoint,
-                targetPoint: targetCoordinate.quartzPoint,
+                sourceCoordinate: sourceCoordinate,
+                targetCoordinate: targetCoordinate,
+                resolveSource: resolveSource,
+                resolveTarget: resolveTarget,
                 sourceTraceID: sourceTraceID,
                 targetTraceID: targetTraceID,
                 expectsNativePath: expectsNativePath
@@ -1388,6 +1739,13 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("invalid persisted task chain ID \(value)")
         }
         return TaskChainID(uuid)
+    }
+
+    private func subtaskID(_ value: String) throws -> SubtaskID {
+        guard let uuid = UUID(uuidString: value) else {
+            throw Failure.failed("invalid persisted subtask ID \(value)")
+        }
+        return SubtaskID(uuid)
     }
 
     private func dayIdentifier(_ traceID: DayTraceID) -> String {

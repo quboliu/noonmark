@@ -181,16 +181,32 @@ extension AppCopy {
         language == .chinese ? "拼写与语法" : "Spelling and Grammar"
     }
 
+    var showSpellingAndGrammar: String {
+        language == .chinese ? "显示拼写与语法" : "Show Spelling and Grammar"
+    }
+
     var checkSpelling: String {
-        language == .chinese ? "检查拼写" : "Check Spelling"
+        language == .chinese ? "立即检查文稿" : "Check Document Now"
     }
 
     var checkSpellingWhileTyping: String {
         language == .chinese ? "键入时检查拼写" : "Check Spelling While Typing"
     }
 
+    var checkGrammarWithSpelling: String {
+        language == .chinese ? "随拼写检查语法" : "Check Grammar With Spelling"
+    }
+
+    var correctSpellingAutomatically: String {
+        language == .chinese ? "自动纠正拼写" : "Correct Spelling Automatically"
+    }
+
     var minimize: String { language == .chinese ? "最小化" : "Minimize" }
     var zoom: String { language == .chinese ? "缩放" : "Zoom" }
+    var enterFullScreen: String {
+        language == .chinese ? "进入全屏幕" : "Enter Full Screen"
+    }
+
     var bringAllToFront: String {
         language == .chinese ? "前置全部窗口" : "Bring All to Front"
     }

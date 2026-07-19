@@ -138,10 +138,10 @@ extension NoonmarkStore {
     var canBulkCompleteSelection: Bool {
         let traceIDs = selectedDayTraceIDs
         return traceIDs.count > 1 && traceIDs.allSatisfy { traceID in
-            guard let trace = engine.traces[traceID] else { return false }
-            return trace.date == today
-                && trace.status == .pending
-                && engine.subtaskProgress(for: traceID).canCompleteParent
+            (try? engine.completionCapability(
+                for: traceID,
+                today: today
+            )) == .available(.complete)
         }
     }
 
@@ -291,9 +291,14 @@ extension NoonmarkStore {
         _ item: WorkspaceSelectionItem,
         modifiers: WorkspaceSelectionModifiers
     ) {
+        let availableItems = orderedWorkspaceSelectionItems
+        guard availableItems.contains(item) else {
+            clearSelection()
+            return
+        }
         workspaceSelection.select(
             item,
-            in: orderedWorkspaceSelectionItems,
+            in: availableItems,
             modifiers: modifiers
         )
         applyPrimaryWorkspaceSelection(preferred: item)

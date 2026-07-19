@@ -120,6 +120,8 @@ struct TraceTimelineSection: View {
             return Theme.ok
         case .abandoned, .returnedToPool:
             return Theme.text3
+        case .cancelledDraft:
+            preconditionFailure("Internal trace status cannot appear in completed details")
         default:
             return Theme.accent
         }
@@ -131,7 +133,9 @@ struct TraceTimelineSection: View {
 
     var chainTraces: [DayTrace] {
         store.engine.traces.values
-            .filter { $0.chainID == trace.chainID }
+            .filter {
+                $0.chainID == trace.chainID && $0.formsDayHistory
+            }
             .sorted { $0.date < $1.date }
     }
 }

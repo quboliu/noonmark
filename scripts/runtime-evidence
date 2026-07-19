@@ -268,7 +268,6 @@ runtime_evidence_assert_no_new_diagnostics() {
   done
 
   if [[ ! -s "$new_path" ]]; then
-    rm -f "$current_path" "$new_path"
     return 0
   fi
 
@@ -284,7 +283,6 @@ runtime_evidence_assert_no_new_diagnostics() {
     fi
     echo "new diagnostic report: $report_path" >&2
   done <"$new_path"
-  rm -f "$current_path" "$new_path"
   return 1
 }
 

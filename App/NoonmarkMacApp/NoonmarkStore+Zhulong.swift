@@ -172,20 +172,34 @@ extension NoonmarkStore {
     }
 
     func confirmAndApplyCurrentZhulongTodoDiff() {
-        guard prepareNaturalDayForUserMutation() != nil else { return }
-        if zhulongWorkspace.hasActiveTodoAuthorization == false {
-            zhulongWorkspace.authorizeCurrentTodoDiff(against: engine, today: today)
+        guard isLocalFirstSyncing == false else {
+            showOperationFailure(
+                .sync,
+                error: DataPackageImportError.syncInProgress
+            )
+            return
         }
-        guard zhulongWorkspace.hasActiveTodoAuthorization else { return }
-        guard let updatedEngine = zhulongWorkspace.applyCurrentTodoDiff(
+        guard let moment = prepareNaturalDayForUserMutation() else { return }
+        guard let result = zhulongWorkspace.applyCurrentTodoDiff(
             to: engine,
             today: today,
-            persistEngine: { [self] candidate in try save(candidate) }
+            reference: moment.instant,
+            persistEngine: { [self] candidate, applyAt in
+                try savePendingZhulongApplication(
+                    candidate,
+                    mutationAt: applyAt
+                )
+            },
+            reconcileEnginePersistenceFailure: { [self] pending in
+                try reconcileZhulongEnginePersistenceFailure(for: pending)
+            }
         ) else { return }
-        engine = updatedEngine
+        engine = result.engine
         clearUndoHistory()
         normalizeSelection()
-        showToast(copy.todoDiffApplied)
+        if result.commitCompleted {
+            showToast(copy.todoDiffApplied)
+        }
     }
 
     func publishCurrentZhulongDailyReview(summary: String?, tomorrowNote: String?) {
@@ -198,27 +212,49 @@ extension NoonmarkStore {
     func confirmAndSaveCurrentZhulongDailyReview(
         interruptAfterEnginePersisted: Bool = false
     ) {
-        guard prepareNaturalDayForUserMutation() != nil else { return }
-        if zhulongWorkspace.hasActiveDailyReviewAuthorization == false {
-            zhulongWorkspace.authorizeCurrentDailyReview(against: engine)
+        guard isLocalFirstSyncing == false else {
+            showOperationFailure(
+                .sync,
+                error: DataPackageImportError.syncInProgress
+            )
+            return
         }
-        guard zhulongWorkspace.hasActiveDailyReviewAuthorization else { return }
-        guard let updatedEngine = zhulongWorkspace.applyCurrentDailyReview(
+        guard let moment = prepareNaturalDayForUserMutation() else { return }
+        guard let result = zhulongWorkspace.applyCurrentDailyReview(
             to: engine,
-            persistEngine: { [self] candidate in try save(candidate) },
+            reference: moment.instant,
+            persistEngine: { [self] candidate, applyAt in
+                try savePendingZhulongApplication(
+                    candidate,
+                    mutationAt: applyAt
+                )
+            },
+            reconcileEnginePersistenceFailure: { [self] pending in
+                try reconcileZhulongEnginePersistenceFailure(for: pending)
+            },
             interruptAfterEnginePersisted: interruptAfterEnginePersisted
         ) else { return }
-        engine = updatedEngine
+        engine = result.engine
         clearUndoHistory()
         normalizeSelection()
-        showToast(copy.confirmedReviewSaved)
+        if result.commitCompleted {
+            showToast(copy.confirmedReviewSaved)
+        }
     }
 
     func recoverPendingZhulongApplication() {
         guard repository != nil else { return }
         engine = zhulongWorkspace.recoverPendingApplication(
             currentEngine: engine,
-            persistEngine: { [self] candidate in try save(candidate) }
+            persistEngine: { [self] candidate, changedAt in
+                try savePendingZhulongApplication(
+                    candidate,
+                    mutationAt: changedAt
+                )
+            },
+            reconcileEnginePersistenceFailure: { [self] pending in
+                try reconcileZhulongEnginePersistenceFailure(for: pending)
+            }
         )
         clearUndoHistory()
     }

@@ -143,10 +143,70 @@ enum NoonmarkMainMenuFactory {
             to: editMenu
         )
         editMenu.addItem(.separator())
+        let findMenu = NSMenu(title: copy.findMenu)
+        addSubmenu(findMenu, title: copy.findMenu, to: editMenu)
+        addTextFinderItem(
+            copy.find,
+            finderAction: .showFindInterface,
+            key: "f",
+            to: findMenu
+        )
+        addTextFinderItem(
+            copy.findNext,
+            finderAction: .nextMatch,
+            key: "g",
+            to: findMenu
+        )
+        addTextFinderItem(
+            copy.findPrevious,
+            finderAction: .previousMatch,
+            key: "g",
+            modifiers: [.command, .shift],
+            to: findMenu
+        )
+
+        let spellingMenu = NSMenu(title: copy.spellingAndGrammar)
+        addSubmenu(spellingMenu, title: copy.spellingAndGrammar, to: editMenu)
+        addItem(
+            copy.showSpellingAndGrammar,
+            action: #selector(NSTextView.showGuessPanel(_:)),
+            key: ":",
+            target: nil,
+            to: spellingMenu
+        )
+        addItem(
+            copy.checkSpelling,
+            action: #selector(NSTextView.checkSpelling(_:)),
+            key: ";",
+            target: nil,
+            to: spellingMenu
+        )
+        spellingMenu.addItem(.separator())
+        addItem(
+            copy.checkSpellingWhileTyping,
+            action: #selector(NSTextView.toggleContinuousSpellChecking(_:)),
+            target: nil,
+            to: spellingMenu
+        )
+        addItem(
+            copy.checkGrammarWithSpelling,
+            action: #selector(NSTextView.toggleGrammarChecking(_:)),
+            target: nil,
+            to: spellingMenu
+        )
+        addItem(
+            copy.correctSpellingAutomatically,
+            action: #selector(NSTextView.toggleAutomaticSpellingCorrection(_:)),
+            target: nil,
+            to: spellingMenu
+        )
+
+        editMenu.addItem(.separator())
         addItem(
             copy.searchCommand,
             action: NoonmarkMenuAction.showSearch,
             key: "f",
+            modifiers: [.command, .shift],
             target: target,
             to: editMenu
         )
@@ -180,6 +240,14 @@ enum NoonmarkMainMenuFactory {
             to: windowMenu
         )
         addItem(copy.zoom, action: #selector(NSWindow.performZoom(_:)), target: nil, to: windowMenu)
+        addItem(
+            copy.enterFullScreen,
+            action: #selector(NSWindow.toggleFullScreen(_:)),
+            key: "f",
+            modifiers: [.command, .control],
+            target: nil,
+            to: windowMenu
+        )
         windowMenu.addItem(.separator())
         addItem(
             copy.mainWindowCommand,
@@ -200,8 +268,6 @@ enum NoonmarkMainMenuFactory {
         addItem(
             copy.noonmarkHelp,
             action: NoonmarkMenuAction.showHelp,
-            key: "?",
-            modifiers: [.command, .shift],
             target: target,
             to: helpMenu
         )
@@ -218,6 +284,34 @@ enum NoonmarkMainMenuFactory {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.submenu = menu
         mainMenu.addItem(item)
+    }
+
+    private static func addSubmenu(
+        _ submenu: NSMenu,
+        title: String,
+        to menu: NSMenu
+    ) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        menu.addItem(item)
+    }
+
+    private static func addTextFinderItem(
+        _ title: String,
+        finderAction: NSTextFinder.Action,
+        key: String,
+        modifiers: NSEvent.ModifierFlags = [.command],
+        to menu: NSMenu
+    ) {
+        let item = addItem(
+            title,
+            action: #selector(NSTextView.performTextFinderAction(_:)),
+            key: key,
+            modifiers: modifiers,
+            target: nil,
+            to: menu
+        )
+        item.tag = finderAction.rawValue
     }
 
     @discardableResult

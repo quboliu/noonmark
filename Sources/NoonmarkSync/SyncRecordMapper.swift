@@ -8,7 +8,7 @@ public enum SyncRecordMapperError: Error, Equatable, Sendable {
 }
 
 public struct SyncRecordMapper: Sendable {
-    public static let currentOrdinaryPayloadFormatVersion = 1
+    public static let currentOrdinaryPayloadFormatVersion = 3
 
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -38,8 +38,7 @@ public struct SyncRecordMapper: Sendable {
 
     public func records(
         from snapshot: NoonmarkSnapshot,
-        modifiedBy deviceID: SyncDeviceID,
-        preferencesUpdatedAt: Date = Date(timeIntervalSince1970: 0)
+        modifiedBy deviceID: SyncDeviceID
     ) throws -> [SyncRecord] {
         guard snapshot.classifications == TaskClassificationState() else {
             throw SyncRecordMapperError.classificationStateRequiresCommitRecords
@@ -49,7 +48,16 @@ public struct SyncRecordMapper: Sendable {
             + snapshot.definitions.map { try record(for: $0, modifiedBy: deviceID) }
             + snapshot.traces.map { try record(for: $0, modifiedBy: deviceID) }
             + snapshot.subtasks.map { try record(for: $0, modifiedBy: deviceID) }
-            + [try record(for: AppPreferencesEnvelope(preferences: snapshot.preferences, updatedAt: preferencesUpdatedAt), modifiedBy: deviceID)]
+            + [
+                try record(
+                    for: AppPreferencesEnvelope(
+                        preferences: snapshot.preferences
+                    ),
+                    modifiedBy: SyncDeviceID(
+                        snapshot.preferences.themeLanguageWriterID
+                    )
+                )
+            ]
     }
 
     public func record(for day: Day, modifiedBy deviceID: SyncDeviceID) throws -> SyncRecord {
@@ -135,7 +143,7 @@ public struct SyncRecordMapper: Sendable {
                 id: "subtask:\(subtask.id.rawValue.uuidString)",
                 type: .subtask,
                 entityID: subtask.id.rawValue.uuidString,
-                modifiedAt: subtask.settledAt ?? subtask.completedAt ?? subtask.createdAt,
+                modifiedAt: subtask.updatedAt,
                 deviceID: deviceID
             ),
             payload: subtask
@@ -143,15 +151,27 @@ public struct SyncRecordMapper: Sendable {
     }
 
     public func record(for envelope: AppPreferencesEnvelope, modifiedBy deviceID: SyncDeviceID) throws -> SyncRecord {
-        try makeRecord(
+        var canonicalEnvelope = envelope
+        let usesUnspecifiedWriter =
+            canonicalEnvelope.writerDeviceID
+                == AppPreferencesEnvelope.unspecifiedWriterDeviceID
+        if usesUnspecifiedWriter {
+            canonicalEnvelope.writerDeviceID = deviceID
+        }
+        guard canonicalEnvelope.updatedAt.timeIntervalSinceReferenceDate.isFinite,
+              canonicalEnvelope.writerDeviceID == deviceID
+        else {
+            throw SyncRecordMapperError.invalidPayload(.appPreferences)
+        }
+        return try makeRecord(
             header: RecordHeader(
                 id: "preferences:default",
                 type: .appPreferences,
                 entityID: "default",
-                modifiedAt: envelope.updatedAt,
+                modifiedAt: canonicalEnvelope.updatedAt,
                 deviceID: deviceID
             ),
-            payload: envelope
+            payload: canonicalEnvelope
         )
     }
 
@@ -260,6 +280,11 @@ public struct SyncRecordMapper: Sendable {
             id: "subtask:\(subtask.id.description)",
             entityID: subtask.id.description
         )
+        guard record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+                == subtask.updatedAt.timeIntervalSinceReferenceDate.bitPattern
+        else {
+            throw SyncRecordMapperError.invalidPayload(.subtask)
+        }
         return subtask
     }
 
@@ -267,6 +292,13 @@ public struct SyncRecordMapper: Sendable {
         try require(record, type: .appPreferences)
         let envelope = try decode(AppPreferencesEnvelope.self, from: record)
         try requireIdentity(record, id: "preferences:default", entityID: "default")
+        guard record.modifiedAt.timeIntervalSinceReferenceDate.isFinite,
+              record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+              == envelope.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+              record.modifiedByDeviceID == envelope.writerDeviceID
+        else {
+            throw SyncRecordMapperError.invalidPayload(.appPreferences)
+        }
         return envelope
     }
 
@@ -278,7 +310,11 @@ public struct SyncRecordMapper: Sendable {
             let envelope = try ClassificationCommitEnvelope.decode(record.payload)
             guard try envelope.canonicalData() == record.payload,
                   record.entityID == envelope.changeRecord.id.uuidString,
-                  record.id.rawValue == "classification-commit:\(record.entityID)"
+                  record.id.rawValue == "classification-commit:\(record.entityID)",
+                  record.modifiedAt.timeIntervalSinceReferenceDate.isFinite,
+                  record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+                  == envelope.changeRecord.committedAt
+                      .timeIntervalSinceReferenceDate.bitPattern
             else {
                 throw SyncRecordMapperError.invalidPayload(.classificationCommit)
             }
@@ -298,7 +334,11 @@ public struct SyncRecordMapper: Sendable {
             let envelope = try TraceClassificationEventEnvelope.decode(record.payload)
             guard record.entityID == envelope.event.id.uuidString,
                   record.id.rawValue
-                  == "trace-classification-event:\(record.entityID)"
+                  == "trace-classification-event:\(record.entityID)",
+                  record.modifiedAt.timeIntervalSinceReferenceDate.isFinite,
+                  record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+                  == envelope.event.capturedAt
+                      .timeIntervalSinceReferenceDate.bitPattern
             else {
                 throw SyncRecordMapperError.invalidPayload(
                     .traceClassificationEvent

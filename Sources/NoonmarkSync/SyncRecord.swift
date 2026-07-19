@@ -2,12 +2,37 @@ import Foundation
 import NoonmarkCore
 
 public struct SyncDeviceID: Codable, Hashable, Sendable, CustomStringConvertible {
+    private enum CodingKeys: String, CodingKey {
+        case rawValue
+    }
+
     public let rawValue: String
 
     public init(_ rawValue: String = UUID().uuidString) {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         precondition(trimmed.isEmpty == false, "device id cannot be empty")
         self.rawValue = trimmed
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawValue = try container.decode(String.self, forKey: .rawValue)
+        let trimmed = rawValue.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard trimmed.isEmpty == false else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .rawValue,
+                in: container,
+                debugDescription: "device id cannot be empty"
+            )
+        }
+        self.rawValue = trimmed
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(rawValue, forKey: .rawValue)
     }
 
     public var description: String { rawValue }
@@ -28,7 +53,7 @@ public enum SyncEntityType: String, Codable, CaseIterable, Hashable, Sendable {
             || self == .traceClassificationEvent
     }
 
-    var dependencyOrder: Int {
+    public var dependencyOrder: Int {
         switch self {
         case .taskChain:
             0
@@ -56,12 +81,37 @@ public enum SyncOperation: String, Codable, Hashable, Sendable {
 }
 
 public struct SyncRecordID: Codable, Hashable, Sendable, CustomStringConvertible {
+    private enum CodingKeys: String, CodingKey {
+        case rawValue
+    }
+
     public let rawValue: String
 
     public init(_ rawValue: String) {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         precondition(trimmed.isEmpty == false, "sync record id cannot be empty")
         self.rawValue = trimmed
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawValue = try container.decode(String.self, forKey: .rawValue)
+        let trimmed = rawValue.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard trimmed.isEmpty == false else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .rawValue,
+                in: container,
+                debugDescription: "sync record id cannot be empty"
+            )
+        }
+        self.rawValue = trimmed
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(rawValue, forKey: .rawValue)
     }
 
     public var description: String { rawValue }
@@ -109,7 +159,7 @@ public struct SyncRecord: Codable, Equatable, Sendable {
         )
     }
 
-    init(
+    public init(
         id: SyncRecordID,
         entityType: SyncEntityType,
         entityID: String,
@@ -221,20 +271,36 @@ public enum SyncRecordPayload: Equatable, Sendable {
 }
 
 public struct AppPreferencesEnvelope: Codable, Equatable, Sendable {
+    static let unspecifiedWriterDeviceID = SyncDeviceID(
+        "noonmark.unspecified-preference-writer"
+    )
+
     public var theme: AppTheme
     public var language: AppLanguage
     public var updatedAt: Date
+    public var writerDeviceID: SyncDeviceID
 
-    public init(preferences: AppPreferences, updatedAt: Date) {
+    public init(preferences: AppPreferences) {
         theme = preferences.theme
         language = preferences.language
-        self.updatedAt = updatedAt
+        updatedAt = preferences.themeLanguageUpdatedAt
+        writerDeviceID = SyncDeviceID(
+            preferences.themeLanguageWriterID
+        )
     }
 
-    public init(theme: AppTheme, language: AppLanguage, updatedAt: Date) {
+    public init(
+        theme: AppTheme,
+        language: AppLanguage,
+        updatedAt: Date,
+        writerDeviceID: SyncDeviceID = SyncDeviceID(
+            "noonmark.unspecified-preference-writer"
+        )
+    ) {
         self.theme = theme
         self.language = language
         self.updatedAt = updatedAt
+        self.writerDeviceID = writerDeviceID
     }
 }
 
@@ -279,9 +345,10 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
     public var state: SyncChangeState
     public var retryCount: Int
     public var lastError: String?
-    /// Immutable classification commit、trace classification event，以及 task-chain
-    /// reactivation witness 直接随 journal 持久化 wire payload。
-    /// 其他实体仍从保存后的 current snapshot 物化，且必须保持为 `nil`。
+    /// Journal 会保存无法从当前 snapshot 安全重建的 mutation evidence：
+    /// immutable classification records、task-chain reactivation witness，以及
+    /// app-preferences 每一次 mutation 当时的 ordinary current-record payload。
+    /// 这项 journal 约束不等于 transport immutable CAS 约束。
     public var recordPayload: Data?
 
     public init(
@@ -297,7 +364,7 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
         recordPayload: Data? = nil
     ) {
         precondition(
-            Self.hasValidRecordPayloadShape(
+            Self.hasValidJournalPayloadShape(
                 entityType: entityType,
                 recordPayload: recordPayload
             ),
@@ -319,14 +386,14 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let entityType = try container.decode(SyncEntityType.self, forKey: .entityType)
         let recordPayload = try container.decodeIfPresent(Data.self, forKey: .recordPayload)
-        guard Self.hasValidRecordPayloadShape(
+        guard Self.hasValidJournalPayloadShape(
             entityType: entityType,
             recordPayload: recordPayload
         ) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .recordPayload,
                 in: container,
-                debugDescription: "immutable sync journal payload invariant is invalid"
+                debugDescription: "sync journal payload invariant is invalid"
             )
         }
         id = try container.decode(UUID.self, forKey: .id)
@@ -341,18 +408,18 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
         self.recordPayload = recordPayload
     }
 
-    var hasValidRecordPayloadInvariant: Bool {
-        Self.hasValidRecordPayloadShape(
+    var hasValidJournalPayloadInvariant: Bool {
+        Self.hasValidJournalPayloadShape(
             entityType: entityType,
             recordPayload: recordPayload
         )
     }
 
-    public static func hasValidRecordPayloadShape(
+    public static func hasValidJournalPayloadShape(
         entityType: SyncEntityType,
         recordPayload: Data?
     ) -> Bool {
-        if entityType.requiresImmutableRecordPayload {
+        if entityType.requiresImmutableRecordPayload || entityType == .appPreferences {
             return recordPayload?.isEmpty == false
         }
         if entityType == .taskChain {

@@ -1,7 +1,7 @@
 extension AppCopy {
     // MARK: - Settings and Provider
 
-    var organizationTitle: String { language == .chinese ? "组织" : "Organization" }
+    var organizationTitle: String { language == .chinese ? "组织" : "Organisation" }
     var chineseLanguage: String { language == .chinese ? "中文" : "Chinese" }
     var englishLanguage: String { "English" }
     var settingsPoemPlaceholder: String {

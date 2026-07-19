@@ -2,8 +2,17 @@ import Foundation
 import NoonmarkCore
 import SQLite3
 
+private let sqliteInvariantWhitespaceCharacters =
+    "char(9,10,11,12,13,32,133,160,5760," +
+    "8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202," +
+    "8232,8233,8239,8287,12288,65279)"
+
+private func sqliteNonemptyInvariant(_ column: String) -> String {
+    "length(trim(\(column), \(sqliteInvariantWhitespaceCharacters))) > 0"
+}
+
 public enum SQLiteSchema {
-    public static let version = 1
+    public static let version = 3
 
     public static let statements: [String] = [
         """
@@ -11,14 +20,20 @@ public enum SQLiteSchema {
         """,
         """
         CREATE TABLE IF NOT EXISTS days (
-            id TEXT NOT NULL,
+            id TEXT NOT NULL UNIQUE,
             date TEXT PRIMARY KEY NOT NULL,
             locked_at TEXT,
+            locked_at_bits INTEGER CHECK (
+                locked_at_bits IS NULL OR typeof(locked_at_bits) = 'integer'
+            ),
             review_summary TEXT,
             review_unfinished_reason TEXT,
             review_tomorrow_note TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
+            updated_at TEXT NOT NULL,
+            updated_at_bits INTEGER NOT NULL CHECK (typeof(updated_at_bits) = 'integer'),
+            CHECK ((locked_at IS NULL) = (locked_at_bits IS NULL))
         )
         """,
         """
@@ -1360,9 +1375,17 @@ public enum SQLiteSchema {
             description_text TEXT,
             planned_subtasks_json TEXT,
             created_at TEXT NOT NULL,
+            created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
             content_updated_at TEXT NOT NULL,
+            content_updated_at_bits INTEGER NOT NULL CHECK (
+                typeof(content_updated_at_bits) = 'integer'
+            ),
             superseded_at TEXT,
+            superseded_at_bits INTEGER CHECK (
+                superseded_at_bits IS NULL OR typeof(superseded_at_bits) = 'integer'
+            ),
             superseded_by_definition_id TEXT REFERENCES task_definitions(id),
+            CHECK ((superseded_at IS NULL) = (superseded_at_bits IS NULL)),
             UNIQUE (chain_id, sequence)
         )
         """,
@@ -1385,6 +1408,7 @@ public enum SQLiteSchema {
                     'continued',
                     'changed',
                     'returnedToPool',
+                    'cancelledDraft',
                     'abandoned'
                 )
             ),
@@ -1413,9 +1437,40 @@ public enum SQLiteSchema {
             settled_at_bits INTEGER CHECK (
                 settled_at_bits IS NULL OR typeof(settled_at_bits) = 'integer'
             ),
+            draft_cancellation_id TEXT CHECK (
+                draft_cancellation_id IS NULL OR length(draft_cancellation_id) = 36
+            ),
+            draft_cancelled_on TEXT,
             CHECK ((completed_at IS NULL) = (completed_at_bits IS NULL)),
-            CHECK ((settled_at IS NULL) = (settled_at_bits IS NULL))
+            CHECK ((settled_at IS NULL) = (settled_at_bits IS NULL)),
+            CHECK (
+                (
+                    status = 'cancelledDraft'
+                    AND draft_cancellation_id IS NOT NULL
+                    AND draft_cancelled_on IS NOT NULL
+                    AND date >= draft_cancelled_on
+                    AND completed_at IS NULL
+                    AND settled_at IS NOT NULL
+                    AND changed_to_trace_id IS NULL
+                    AND (
+                        date = draft_cancelled_on
+                        OR (
+                            manual_progress_percent IS NULL
+                            AND continued_from_trace_id IS NULL
+                        )
+                    )
+                )
+                OR (
+                    status <> 'cancelledDraft'
+                    AND draft_cancelled_on IS NULL
+                )
+            )
         )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_draft_cancellation_id
+        ON day_traces(draft_cancellation_id)
+        WHERE draft_cancellation_id IS NOT NULL
         """,
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_trace_per_chain
@@ -1759,20 +1814,65 @@ public enum SQLiteSchema {
                     'completed',
                     'unfinished',
                     'continued',
-                    'abandoned'
+                    'abandoned',
+                    'cancelledDraft'
                 )
             ),
             difficulty INTEGER NOT NULL DEFAULT 1 CHECK (difficulty IN (1, 2, 3)),
             position INTEGER NOT NULL,
             continued_from_subtask_id TEXT REFERENCES subtasks(id),
             created_at TEXT NOT NULL,
+            created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
+            updated_at TEXT NOT NULL,
+            updated_at_bits INTEGER NOT NULL CHECK (typeof(updated_at_bits) = 'integer'),
             completed_at TEXT,
-            settled_at TEXT
+            completed_at_bits INTEGER CHECK (
+                completed_at_bits IS NULL OR typeof(completed_at_bits) = 'integer'
+            ),
+            settled_at TEXT,
+            settled_at_bits INTEGER CHECK (
+                settled_at_bits IS NULL OR typeof(settled_at_bits) = 'integer'
+            ),
+            draft_cancellation_id TEXT,
+            CHECK ((completed_at IS NULL) = (completed_at_bits IS NULL)),
+            CHECK ((settled_at IS NULL) = (settled_at_bits IS NULL)),
+            CHECK (
+                (
+                    status = 'pending'
+                    AND completed_at IS NULL
+                    AND settled_at IS NULL
+                )
+                OR (
+                    status = 'completed'
+                    AND completed_at IS NOT NULL
+                    AND settled_at IS NULL
+                )
+                OR (
+                    status IN ('unfinished', 'continued', 'abandoned')
+                    AND completed_at IS NULL
+                    AND settled_at IS NOT NULL
+                )
+                OR (
+                    status = 'cancelledDraft'
+                    AND completed_at IS NULL
+                    AND settled_at IS NOT NULL
+                    AND draft_cancellation_id IS NOT NULL
+                )
+            )
         )
         """,
         """
-        CREATE INDEX IF NOT EXISTS idx_subtasks_trace_position
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_subtask_draft_cancellation_id
+        ON subtasks(draft_cancellation_id)
+        WHERE draft_cancellation_id IS NOT NULL
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_subtasks_trace_position
         ON subtasks(trace_id, position)
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_subtasks_trace_lineage
+        ON subtasks(trace_id, lineage_id)
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_subtasks_lineage
@@ -1788,14 +1888,18 @@ public enum SQLiteSchema {
         """
         CREATE TABLE IF NOT EXISTS sync_device_identity (
             id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
-            device_id TEXT NOT NULL,
+            device_id TEXT NOT NULL CHECK (
+                \(sqliteNonemptyInvariant("device_id"))
+            ),
             display_name TEXT,
             created_at TEXT NOT NULL
         )
         """,
         """
         CREATE TABLE IF NOT EXISTS sync_metadata (
-            key TEXT PRIMARY KEY NOT NULL,
+            key TEXT PRIMARY KEY NOT NULL CHECK (
+                \(sqliteNonemptyInvariant("key"))
+            ),
             value BLOB,
             updated_at TEXT NOT NULL
         )
@@ -1814,14 +1918,20 @@ public enum SQLiteSchema {
             operation TEXT NOT NULL CHECK (operation IN ('upsert', 'delete')),
             changed_at TEXT NOT NULL,
             changed_at_bits INTEGER NOT NULL CHECK (typeof(changed_at_bits) = 'integer'),
-            device_id TEXT NOT NULL,
+            device_id TEXT NOT NULL CHECK (
+                \(sqliteNonemptyInvariant("device_id"))
+            ),
             sync_state TEXT NOT NULL CHECK (sync_state IN ('pendingUpload', 'uploaded', 'failed')),
             retry_count INTEGER NOT NULL DEFAULT 0,
             last_error TEXT,
             record_payload BLOB,
             CHECK (
                 (
-                    entity_type IN ('classificationCommit', 'traceClassificationEvent')
+                    entity_type IN (
+                        'appPreferences',
+                        'classificationCommit',
+                        'traceClassificationEvent'
+                    )
                     AND record_payload IS NOT NULL
                     AND length(record_payload) > 0
                 )
@@ -1830,7 +1940,12 @@ public enum SQLiteSchema {
                     AND (record_payload IS NULL OR length(record_payload) > 0)
                 )
                 OR (
-                    entity_type NOT IN ('classificationCommit', 'traceClassificationEvent', 'taskChain')
+                    entity_type NOT IN (
+                        'appPreferences',
+                        'classificationCommit',
+                        'traceClassificationEvent',
+                        'taskChain'
+                    )
                     AND record_payload IS NULL
                 )
             )
@@ -1845,7 +1960,11 @@ public enum SQLiteSchema {
             record_id TEXT PRIMARY KEY NOT NULL CHECK (length(record_id) > 0),
             generation_id TEXT NOT NULL UNIQUE CHECK (length(generation_id) = 36),
             entity_type TEXT NOT NULL CHECK (
-                entity_type IN ('classificationCommit', 'traceClassificationEvent')
+                entity_type IN (
+                    'day', 'taskChain', 'taskDefinition', 'dayTrace',
+                    'subtask', 'appPreferences', 'classificationCommit',
+                    'traceClassificationEvent'
+                )
             ),
             entity_id TEXT NOT NULL CHECK (length(entity_id) > 0),
             operation TEXT NOT NULL CHECK (operation = 'upsert'),
@@ -1854,6 +1973,9 @@ public enum SQLiteSchema {
                 length(CAST(modified_by_device_id AS BLOB)) > 0
             ),
             payload BLOB NOT NULL CHECK (length(payload) > 0),
+            reactivation_witnesses BLOB NOT NULL CHECK (
+                length(reactivation_witnesses) > 0
+            ),
             first_seen_at_bits INTEGER NOT NULL CHECK (typeof(first_seen_at_bits) = 'integer'),
             last_attempted_at_bits INTEGER NOT NULL CHECK (typeof(last_attempted_at_bits) = 'integer'),
             attempt_count INTEGER NOT NULL CHECK (
@@ -1869,9 +1991,10 @@ public enum SQLiteSchema {
                 ON DELETE CASCADE,
             dependency_kind TEXT NOT NULL CHECK (
                 dependency_kind IN (
-                    'taskChain', 'dayTrace', 'category', 'label',
+                    'day', 'taskChain', 'dayTrace', 'taskDefinition', 'subtask',
+                    'category', 'label',
                     'classificationEvent', 'classificationCommit',
-                    'classificationRevision'
+                    'classificationRevision', 'currentSnapshotIntegrity'
                 )
             ),
             dependency_id TEXT NOT NULL CHECK (length(dependency_id) > 0),
@@ -1888,8 +2011,13 @@ public enum SQLiteSchema {
             conflict_type TEXT NOT NULL,
             entity_type TEXT NOT NULL,
             entity_id TEXT NOT NULL,
-            local_record_id TEXT,
-            remote_record_id TEXT NOT NULL,
+            local_record_id TEXT CHECK (
+                local_record_id IS NULL OR
+                \(sqliteNonemptyInvariant("local_record_id"))
+            ),
+            remote_record_id TEXT NOT NULL CHECK (
+                \(sqliteNonemptyInvariant("remote_record_id"))
+            ),
             local_payload BLOB,
             remote_payload BLOB NOT NULL CHECK (length(remote_payload) > 0),
             detected_at TEXT NOT NULL,
@@ -1919,9 +2047,44 @@ public enum SQLiteSchema {
             direction TEXT NOT NULL CHECK (direction IN ('upload', 'download', 'merge')),
             entity_type TEXT NOT NULL,
             entity_id TEXT NOT NULL,
-            action TEXT NOT NULL,
+            source_evidence_id TEXT CHECK (
+                source_evidence_id IS NULL OR (
+                    length(source_evidence_id) = 64
+                    AND source_evidence_id NOT GLOB '*[^0-9a-f]*'
+                )
+            ),
+            canonical_evidence_id TEXT CHECK (
+                canonical_evidence_id IS NULL OR (
+                    length(canonical_evidence_id) = 64
+                    AND canonical_evidence_id NOT GLOB '*[^0-9a-f]*'
+                )
+            ),
+            action TEXT NOT NULL CHECK (
+                \(sqliteNonemptyInvariant("action"))
+            ),
             created_at TEXT NOT NULL,
             message TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS engine_snapshot_generation (
+            id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+            epoch TEXT NOT NULL CHECK (length(epoch) = 36),
+            revision INTEGER NOT NULL CHECK (revision >= 0)
+        )
+        """,
+        """
+        INSERT OR IGNORE INTO engine_snapshot_generation(id, epoch, revision)
+        VALUES (
+            1,
+            lower(
+                hex(randomblob(4)) || '-' ||
+                hex(randomblob(2)) || '-' ||
+                hex(randomblob(2)) || '-' ||
+                hex(randomblob(2)) || '-' ||
+                hex(randomblob(6))
+            ),
+            0
         )
         """,
         """
@@ -1929,7 +2092,13 @@ public enum SQLiteSchema {
             id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
             theme TEXT NOT NULL CHECK (theme IN ('coolGray', 'warmPaper')),
             language TEXT NOT NULL CHECK (language IN ('chinese', 'english')),
-            updated_at TEXT NOT NULL
+            theme_language_updated_at TEXT NOT NULL,
+            theme_language_updated_at_bits INTEGER NOT NULL CHECK (
+                typeof(theme_language_updated_at_bits) = 'integer'
+            ),
+            theme_language_writer_id TEXT NOT NULL CHECK (
+                length(trim(theme_language_writer_id)) > 0
+            )
         )
         """,
         """
@@ -1954,7 +2123,8 @@ public enum SQLiteSchema {
         WHERE c.state = 'active'
           AND NOT EXISTS (
               SELECT 1 FROM day_traces t
-              WHERE t.chain_id = c.id AND t.status != 'returnedToPool'
+              WHERE t.chain_id = c.id
+                AND t.status NOT IN ('returnedToPool', 'cancelledDraft')
           )
         """,
         """
@@ -2021,6 +2191,7 @@ public enum SQLiteSchema {
             SELECT first.id
             FROM day_traces first
             WHERE first.chain_id = t.chain_id
+              AND first.status != 'cancelledDraft'
             ORDER BY first.date, first.continuation_seq, first.priority, first.created_at
             LIMIT 1
         )
@@ -2043,7 +2214,9 @@ public enum SQLiteSchema {
             history.completed_at,
             history.settled_at
         FROM day_traces done
-        JOIN day_traces history ON history.chain_id = done.chain_id
+        JOIN day_traces history
+          ON history.chain_id = done.chain_id
+         AND history.status != 'cancelledDraft'
         WHERE done.status = 'completed'
         """,
         """
@@ -2063,7 +2236,9 @@ public enum SQLiteSchema {
             s.completed_at,
             s.settled_at
         FROM day_traces done
-        JOIN day_traces t ON t.chain_id = done.chain_id
+        JOIN day_traces t
+          ON t.chain_id = done.chain_id
+         AND t.status != 'cancelledDraft'
         JOIN subtasks s ON s.trace_id = t.id
         WHERE done.status = 'completed'
         """,
@@ -2090,6 +2265,7 @@ public enum SQLiteSchema {
         JOIN day_traces t ON t.id = s.trace_id
         JOIN task_definitions d ON d.id = t.definition_id
         WHERE s.status = 'completed'
+          AND t.status != 'cancelledDraft'
         """,
         """
         CREATE VIEW IF NOT EXISTS sync_endpoint_options_view AS
@@ -2121,6 +2297,7 @@ public enum SQLiteSchema {
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         JOIN task_chains c ON c.id = t.chain_id
+        WHERE t.status != 'cancelledDraft'
         """
     ]
 }

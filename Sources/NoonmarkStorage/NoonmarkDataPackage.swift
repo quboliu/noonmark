@@ -13,7 +13,7 @@ public struct DataPackageWriteReceipt: Equatable, Sendable {
 }
 
 public enum NoonmarkDataPackage {
-    private static let currentFormatVersion = 1
+    private static let currentFormatVersion = 2
 
     public static func encode(_ snapshot: NoonmarkSnapshot) throws -> Data {
         try validate(snapshot)
@@ -25,19 +25,9 @@ public enum NoonmarkDataPackage {
         guard header.formatVersion == currentFormatVersion else {
             throw DataPackageError.unsupportedFormatVersion(header.formatVersion)
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let bitPattern = try container.decode(UInt64.self)
-            let seconds = Double(bitPattern: bitPattern)
-            guard seconds.isFinite else {
-                throw DecodingError.dataCorruptedError(
-                    in: container,
-                    debugDescription: "data package date must be finite"
-                )
-            }
-            return Date(timeIntervalSinceReferenceDate: seconds)
-        }
+        let decoder = ExactDateJSONCoding.decoder(
+            nonFiniteDateDescription: "data package date must be finite"
+        )
         let snapshot = try decoder.decode(DataPackageEnvelope.self, from: data).snapshot
         try validate(snapshot)
         let inputJSON = try canonicalJSON(from: data)
@@ -46,7 +36,7 @@ public enum NoonmarkDataPackage {
               try jsonShape(of: inputJSON.object) == jsonShape(of: encodedJSON.object)
         else {
             throw DataPackageError.malformedDataPackage(
-                "数据包不符合 current v1 的 canonical 结构与编码"
+                "数据包不符合 current v2 的 canonical 结构与编码"
             )
         }
         return snapshot
@@ -80,20 +70,9 @@ public enum NoonmarkDataPackage {
     private static func currentJSON(
         for snapshot: NoonmarkSnapshot
     ) throws -> (data: Data, object: Any) {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .custom { date, encoder in
-            guard date.timeIntervalSinceReferenceDate.isFinite else {
-                throw EncodingError.invalidValue(
-                    date,
-                    .init(
-                        codingPath: encoder.codingPath,
-                        debugDescription: "data package date must be finite"
-                    )
-                )
-            }
-            var container = encoder.singleValueContainer()
-            try container.encode(date.timeIntervalSinceReferenceDate.bitPattern)
-        }
+        let encoder = ExactDateJSONCoding.encoder(
+            nonFiniteDateDescription: "data package date must be finite"
+        )
         let encoded = try encoder.encode(
             DataPackageEnvelope(formatVersion: currentFormatVersion, snapshot: snapshot)
         )
@@ -262,6 +241,13 @@ private extension NoonmarkDataPackage {
         try validateClassificationSnapshots(snapshot, traceIDs: traceIDs)
         try validateClassificationEvents(snapshot, traceIDs: traceIDs)
         try snapshot.classifications.validateIntegrity()
+        do {
+            try snapshot.validateIntegrity()
+        } catch let error as NoonmarkError {
+            throw DataPackageError.malformedDataPackage(
+                error.localizedDescription
+            )
+        }
     }
 
     static func validateUniqueFields(_ snapshot: NoonmarkSnapshot) throws {

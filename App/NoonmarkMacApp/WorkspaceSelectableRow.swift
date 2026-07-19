@@ -36,6 +36,7 @@ struct WorkspaceSelectableRow: ViewModifier {
                     break
                 }
             }
+            .accessibilityElement(children: .contain)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .accessibilityIdentifier("\(item.e2eIdentifier).ax")
             .accessibilityAction {

@@ -6,7 +6,7 @@ import SQLite3
 public struct SyncPendingDownloadRecord: Equatable, Sendable {
     public let record: SyncRecord
     public let generationID: UUID
-    public let dependencies: [ClassificationCommitDependency]
+    public let dependencies: [SyncRecordDependency]
     public let firstSeenAt: Date
     public let lastAttemptedAt: Date
     public let attemptCount: Int
@@ -14,7 +14,7 @@ public struct SyncPendingDownloadRecord: Equatable, Sendable {
     public init(
         record: SyncRecord,
         generationID: UUID,
-        dependencies: [ClassificationCommitDependency],
+        dependencies: [SyncRecordDependency],
         firstSeenAt: Date,
         lastAttemptedAt: Date,
         attemptCount: Int
@@ -30,9 +30,11 @@ public struct SyncPendingDownloadRecord: Equatable, Sendable {
 
 struct SQLiteSyncDownloadCommit {
     let snapshot: NoonmarkSnapshot
+    let observedEngineGeneration: SQLiteEngineSnapshotGeneration
     let conflicts: [SyncConflict]
     let waiting: [SyncWaitingRecord]
     let terminal: [SyncPendingDownloadRecord]
+    let observedPending: [SyncPendingDownloadRecord]
     let auditEntries: [SyncAuditLogEntry]
     let metadata: SyncMetadataEntry
     let attemptedAt: Date
@@ -75,7 +77,7 @@ public final class SQLiteSyncRepository {
             on: database
         ) { statement in
             SyncDeviceIdentity(
-                deviceID: SyncDeviceID(try string(statement, 0)),
+                deviceID: SyncDeviceID(try nonemptyString(statement, 0)),
                 displayName: try optionalString(statement, 1),
                 createdAt: try date(statement, 2)
             )
@@ -101,7 +103,11 @@ public final class SQLiteSyncRepository {
         ) { statement in
             bind(key, to: 1, in: statement)
         } row: { statement in
-            SyncMetadataEntry(key: try string(statement, 0), value: data(statement, 1), updatedAt: try date(statement, 2))
+            SyncMetadataEntry(
+                key: try nonemptyString(statement, 0),
+                value: data(statement, 1),
+                updatedAt: try date(statement, 2)
+            )
         }.first
     }
 
@@ -130,29 +136,34 @@ public final class SQLiteSyncRepository {
             device_id, sync_state, retry_count, last_error, record_payload
         FROM change_journal
         WHERE (? IS NULL OR sync_state = ?)
-        ORDER BY changed_at,
-            CASE entity_type
-                WHEN 'taskChain' THEN 0
-                WHEN 'taskDefinition' THEN 1
-                WHEN 'day' THEN 2
-                WHEN 'classificationCommit' THEN 3
-                WHEN 'dayTrace' THEN 4
-                WHEN 'traceClassificationEvent' THEN 5
-                WHEN 'subtask' THEN 6
-                WHEN 'appPreferences' THEN 7
-                ELSE 8
-            END,
-            entity_id,
-            id
-        LIMIT ?
         """
-        return try query(sql, on: database) { statement in
+        let entries = try query(sql, on: database) { statement in
             bind(state?.rawValue, to: 1, in: statement)
             bind(state?.rawValue, to: 2, in: statement)
-            bind(limit ?? Int(Int32.max), to: 3, in: statement)
         } row: { statement in
             try journalEntry(from: statement)
         }
+        let ordered = entries.sorted(by: journalEntryComesBefore)
+        guard let limit, limit >= 0 else { return ordered }
+        return Array(ordered.prefix(limit))
+    }
+
+    private func journalEntryComesBefore(
+        _ lhs: SyncJournalEntry,
+        _ rhs: SyncJournalEntry
+    ) -> Bool {
+        if lhs.changedAt != rhs.changedAt {
+            return lhs.changedAt < rhs.changedAt
+        }
+        let lhsOrder = lhs.entityType.dependencyOrder
+        let rhsOrder = rhs.entityType.dependencyOrder
+        if lhsOrder != rhsOrder {
+            return lhsOrder < rhsOrder
+        }
+        if lhs.entityID != rhs.entityID {
+            return lhs.entityID < rhs.entityID
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
     }
 
     public func markJournalEntriesUploaded(_ ids: [UUID]) throws {
@@ -200,7 +211,7 @@ public final class SQLiteSyncRepository {
         }
     }
 
-    public func reconcilePendingDownloads(
+    func reconcilePendingDownloads(
         waiting: [SyncWaitingRecord],
         terminal: [SyncPendingDownloadRecord],
         attemptedAt: Date
@@ -220,6 +231,7 @@ public final class SQLiteSyncRepository {
             try reconcilePendingDownloads(
                 waiting: waiting,
                 terminal: terminal,
+                observedPending: nil,
                 attemptedAt: attemptedAt,
                 into: database
             )
@@ -238,6 +250,7 @@ public final class SQLiteSyncRepository {
             terminal: commit.terminal,
             attemptedAt: commit.attemptedAt
         )
+        try validateObservedPendingTokens(commit.observedPending)
         let preparedConflicts: [(conflict: SyncConflict, remotePayload: Data)] = try commit.conflicts.map {
             ($0, try validatedConflictRemotePayload($0))
         }
@@ -248,6 +261,10 @@ public final class SQLiteSyncRepository {
         try applySchema(on: database)
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
+            try engineRepository.compareAndAdvanceEngineSnapshotGeneration(
+                observed: commit.observedEngineGeneration,
+                in: database
+            )
             try engineRepository.persistValidatedSnapshot(commit.snapshot, into: database)
             for prepared in preparedConflicts {
                 try saveConflict(
@@ -262,6 +279,7 @@ public final class SQLiteSyncRepository {
             try reconcilePendingDownloads(
                 waiting: commit.waiting,
                 terminal: commit.terminal,
+                observedPending: commit.observedPending,
                 attemptedAt: commit.attemptedAt,
                 into: database
             )
@@ -331,6 +349,26 @@ public final class SQLiteSyncRepository {
         }
     }
 
+    /// Every exact conflict variant for an immutable identity which has reached
+    /// terminal state. The one-row terminal ledger remains the deterministic
+    /// anchor, while this evidence set preserves all provider facts needed to
+    /// terminate descendants after a restart.
+    public func terminalRejectionEvidence() throws -> [SyncTerminalRejection] {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try execute("BEGIN DEFERRED TRANSACTION", on: database)
+        do {
+            let rejections = try terminalRejectionEvidence(from: database)
+            try execute("COMMIT", on: database)
+            return rejections
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
     public func resolveConflict(id: UUID, resolution: SyncConflictResolution, resolvedAt: Date = Date()) throws {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
@@ -361,7 +399,9 @@ public final class SQLiteSyncRepository {
         try applySchema(on: database)
         return try query(
             """
-            SELECT id, direction, entity_type, entity_id, action, created_at, message
+            SELECT id, direction, entity_type, entity_id,
+                source_evidence_id, canonical_evidence_id,
+                action, created_at, message
             FROM sync_audit_log
             ORDER BY created_at DESC, id
             LIMIT ?
@@ -381,7 +421,7 @@ private extension SQLiteSyncRepository {
 
     struct PendingDependencyRow {
         let recordID: SyncRecordID
-        let dependency: ClassificationCommitDependency
+        let dependency: SyncRecordDependency
     }
 
     static func makeDateFormatter() -> ISO8601DateFormatter {
@@ -441,7 +481,7 @@ private extension SQLiteSyncRepository {
         }
         guard waiting.allSatisfy({ waitingRecordIsCurrent($0) }) else {
             throw SQLiteRepositoryError.invalidStoredValue(
-                "only current classification commits can wait for download dependencies"
+                "only valid current sync records can wait for download dependencies"
             )
         }
         guard waiting.allSatisfy({ $0.dependencies.isEmpty == false }) else {
@@ -462,6 +502,7 @@ private extension SQLiteSyncRepository {
     func reconcilePendingDownloads(
         waiting: [SyncWaitingRecord],
         terminal: [SyncPendingDownloadRecord],
+        observedPending: [SyncPendingDownloadRecord]?,
         attemptedAt: Date,
         into database: Database?
     ) throws {
@@ -470,7 +511,43 @@ private extension SQLiteSyncRepository {
                 ($0.record.id, $0)
             }
         )
+        let observedByID = observedPending.map {
+            Dictionary(uniqueKeysWithValues: $0.map {
+                ($0.record.id, $0)
+            })
+        }
+        if let observedByID {
+            let reconciledIDs = Set(waiting.map(\.remoteRecordID)).union(
+                terminal.map(\.record.id)
+            )
+            for (recordID, observed) in observedByID
+            where reconciledIDs.contains(recordID) == false {
+                guard let stored = storedByID[recordID],
+                      pendingDownloadTokensMatch(stored, observed)
+                else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "retained pending download changed after the merge snapshot was read"
+                    )
+                }
+            }
+        }
         for pending in waiting {
+            if let observedByID {
+                let stored = storedByID[pending.record.id]
+                if let observed = observedByID[pending.record.id] {
+                    guard let stored,
+                          pendingDownloadTokensMatch(stored, observed)
+                    else {
+                        throw SQLiteRepositoryError.invalidStoredValue(
+                            "pending download changed after the merge snapshot was read"
+                        )
+                    }
+                } else if stored != nil {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "pending download was inserted after the merge snapshot was read"
+                    )
+                }
+            }
             try upsertPendingDownload(
                 pending,
                 stored: storedByID[pending.record.id],
@@ -492,6 +569,18 @@ private extension SQLiteSyncRepository {
             ) { statement in
                 bind(observed.record.id.rawValue, to: 1, in: statement)
             }
+        }
+    }
+
+    func validateObservedPendingTokens(
+        _ observed: [SyncPendingDownloadRecord]
+    ) throws {
+        guard Set(observed.map(\.record.id)).count == observed.count,
+              observed.allSatisfy(pendingDownloadTokenIsValid)
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "observed pending download tokens are invalid or duplicated"
+            )
         }
     }
 
@@ -542,7 +631,7 @@ private extension SQLiteSyncRepository {
               stored.entityID == conflict.entityID,
               stored.localRecordID == conflict.localRecordID,
               stored.remoteRecordID == conflict.remoteRecordID,
-              recordsMatchExactly(stored.remoteRecord, conflict.remoteRecord)
+              stored.remoteRecord.exactlyMatches(conflict.remoteRecord)
         else {
             throw SQLiteRepositoryError.invalidStoredValue(
                 "sync conflict identity collided with different canonical evidence"
@@ -566,7 +655,12 @@ private extension SQLiteSyncRepository {
             """
             INSERT INTO sync_terminal_rejections(entity_type, entity_id, conflict_id)
             VALUES (?, ?, ?)
-            ON CONFLICT(entity_type, entity_id) DO NOTHING
+            ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                conflict_id = CASE
+                    WHEN excluded.conflict_id < sync_terminal_rejections.conflict_id
+                        THEN excluded.conflict_id
+                    ELSE sync_terminal_rejections.conflict_id
+                END
             """,
             on: database
         ) { statement in
@@ -587,9 +681,20 @@ private extension SQLiteSyncRepository {
         } row: { statement in
             try uuid(statement, 0)
         }
-        guard storedConflictIDs == [rejection.conflict.id] else {
+        guard storedConflictIDs.count == 1,
+              let storedConflictID = storedConflictIDs.first,
+              let storedConflict = try storedConflict(
+                  id: storedConflictID,
+                  from: database
+              ),
+              let storedRejection = SyncTerminalRejection(
+                  conflict: storedConflict
+              ),
+              storedRejection.identity == rejection.identity,
+              storedConflictID.uuidString <= rejection.conflict.id.uuidString
+        else {
             throw SQLiteRepositoryError.invalidStoredValue(
-                "terminal immutable record identity collided with different evidence"
+                "terminal immutable record identity has no deterministic evidence anchor"
             )
         }
     }
@@ -598,9 +703,11 @@ private extension SQLiteSyncRepository {
         try run(
             """
             INSERT INTO sync_audit_log(
-                id, direction, entity_type, entity_id, action, created_at, message
+                id, direction, entity_type, entity_id,
+                source_evidence_id, canonical_evidence_id,
+                action, created_at, message
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             on: database
         ) { statement in
@@ -608,9 +715,11 @@ private extension SQLiteSyncRepository {
             bind(entry.direction.rawValue, to: 2, in: statement)
             bind(entry.entityType.rawValue, to: 3, in: statement)
             bind(entry.entityID, to: 4, in: statement)
-            bind(entry.action, to: 5, in: statement)
-            bind(entry.createdAt, to: 6, in: statement)
-            bind(entry.message, to: 7, in: statement)
+            bind(entry.sourceEvidenceID?.rawValue, to: 5, in: statement)
+            bind(entry.canonicalEvidenceID?.rawValue, to: 6, in: statement)
+            bind(entry.action, to: 7, in: statement)
+            bind(entry.createdAt, to: 8, in: statement)
+            bind(entry.message, to: 9, in: statement)
         }
     }
 
@@ -649,7 +758,7 @@ private extension SQLiteSyncRepository {
         let pending = try query(
             """
             SELECT record_id, generation_id, entity_type, entity_id, operation, modified_at_bits,
-                modified_by_device_id, payload, first_seen_at_bits,
+                modified_by_device_id, payload, reactivation_witnesses, first_seen_at_bits,
                 last_attempted_at_bits, attempt_count
             FROM sync_pending_download_records
             ORDER BY record_id
@@ -658,9 +767,7 @@ private extension SQLiteSyncRepository {
         ) { statement in
             let recordID = try syncRecordID(statement, 0)
             let generationID = try uuid(statement, 1)
-            guard let entityType = SyncEntityType(rawValue: try string(statement, 2)),
-                  entityType.requiresImmutableRecordPayload
-            else {
+            guard let entityType = SyncEntityType(rawValue: try string(statement, 2)) else {
                 throw SQLiteRepositoryError.invalidStoredValue(
                     "invalid pending download entity type"
                 )
@@ -679,16 +786,19 @@ private extension SQLiteSyncRepository {
                 operation: operation,
                 modifiedAt: try exactDate(statement, 5),
                 modifiedByDeviceID: SyncDeviceID(try nonemptyString(statement, 6)),
-                payload: data(statement, 7)
+                payload: data(statement, 7),
+                reactivationWitnesses: try reactivationWitnesses(
+                    from: data(statement, 8)
+                )
             )
             guard waitingRecordIsCurrent(record) else {
                 throw SQLiteRepositoryError.invalidStoredValue(
-                    "pending download payload is not a current immutable classification record"
+                    "pending download payload is not a valid current sync record"
                 )
             }
-            let firstSeenAt = try exactDate(statement, 8)
-            let lastAttemptedAt = try exactDate(statement, 9)
-            let attemptCount = try int(statement, 10)
+            let firstSeenAt = try exactDate(statement, 9)
+            let lastAttemptedAt = try exactDate(statement, 10)
+            let attemptCount = try int(statement, 11)
             guard lastAttemptedAt >= firstSeenAt, attemptCount >= 1 else {
                 throw SQLiteRepositoryError.invalidStoredValue(
                     "pending download attempt metadata is invalid"
@@ -725,9 +835,10 @@ private extension SQLiteSyncRepository {
         into database: Database?
     ) throws {
         if let stored {
-            guard stored.record == waiting.record else {
+            guard waiting.record.id == stored.record.id
+            else {
                 throw SQLiteRepositoryError.invalidStoredValue(
-                    "pending download record identity collision: \(waiting.record.id.rawValue)"
+                    "pending download replacement changed record identity: \(waiting.record.id.rawValue)"
                 )
             }
             guard attemptedAt >= stored.lastAttemptedAt else {
@@ -735,26 +846,42 @@ private extension SQLiteSyncRepository {
                     "pending download attempt time moved backwards"
                 )
             }
+            let witnesses = try canonicalReactivationWitnessesData(
+                waiting.record.reactivationWitnesses
+            )
             try run(
                 """
                 UPDATE sync_pending_download_records
-                SET last_attempted_at_bits = ?, attempt_count = attempt_count + 1
+                SET entity_type = ?, entity_id = ?, operation = ?,
+                    modified_at_bits = ?, modified_by_device_id = ?, payload = ?,
+                    reactivation_witnesses = ?, last_attempted_at_bits = ?,
+                    attempt_count = attempt_count + 1
                 WHERE record_id = ?
                 """,
                 on: database
             ) { statement in
-                bindExactDate(attemptedAt, to: 1, in: statement)
-                bind(waiting.record.id.rawValue, to: 2, in: statement)
+                bind(waiting.record.entityType.rawValue, to: 1, in: statement)
+                bind(waiting.record.entityID, to: 2, in: statement)
+                bind(waiting.record.operation.rawValue, to: 3, in: statement)
+                bindExactDate(waiting.record.modifiedAt, to: 4, in: statement)
+                bind(waiting.record.modifiedByDeviceID.rawValue, to: 5, in: statement)
+                bind(waiting.record.payload, to: 6, in: statement)
+                bind(witnesses, to: 7, in: statement)
+                bindExactDate(attemptedAt, to: 8, in: statement)
+                bind(waiting.record.id.rawValue, to: 9, in: statement)
             }
         } else {
+            let witnesses = try canonicalReactivationWitnessesData(
+                waiting.record.reactivationWitnesses
+            )
             try run(
                 """
                 INSERT INTO sync_pending_download_records(
                     record_id, generation_id, entity_type, entity_id, operation, modified_at_bits,
-                    modified_by_device_id, payload, first_seen_at_bits,
+                    modified_by_device_id, payload, reactivation_witnesses, first_seen_at_bits,
                     last_attempted_at_bits, attempt_count
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """,
                 on: database
             ) { statement in
@@ -766,8 +893,9 @@ private extension SQLiteSyncRepository {
                 bindExactDate(waiting.record.modifiedAt, to: 6, in: statement)
                 bind(waiting.record.modifiedByDeviceID.rawValue, to: 7, in: statement)
                 bind(waiting.record.payload, to: 8, in: statement)
-                bindExactDate(attemptedAt, to: 9, in: statement)
+                bind(witnesses, to: 9, in: statement)
                 bindExactDate(attemptedAt, to: 10, in: statement)
+                bindExactDate(attemptedAt, to: 11, in: statement)
             }
         }
 
@@ -799,33 +927,92 @@ private extension SQLiteSyncRepository {
         let recordID = try syncRecordID(statement, 0)
         let kind = try string(statement, 1)
         let rawID = try string(statement, 2)
-        let dependency: ClassificationCommitDependency
+        return PendingDependencyRow(
+            recordID: recordID,
+            dependency: try pendingDependency(kind: kind, rawID: rawID)
+        )
+    }
+
+    func pendingDependency(
+        kind: String,
+        rawID: String
+    ) throws -> SyncRecordDependency {
         switch kind {
-        case "taskChain":
-            dependency = .taskChain(TaskChainID(try pendingDependencyUUID(rawID, kind: kind)))
-        case "dayTrace":
-            dependency = .dayTrace(DayTraceID(try pendingDependencyUUID(rawID, kind: kind)))
-        case "category":
-            dependency = .category(TaskCategoryID(try pendingDependencyUUID(rawID, kind: kind)))
-        case "label":
-            dependency = .label(TaskLabelID(try pendingDependencyUUID(rawID, kind: kind)))
-        case "classificationEvent":
-            dependency = .classificationEvent(try pendingDependencyUUID(rawID, kind: kind))
-        case "classificationCommit":
-            dependency = .classificationCommit(try pendingDependencyUUID(rawID, kind: kind))
+        case "day":
+            return .day(try pendingDependencyLocalDate(rawID))
         case "classificationRevision":
             guard let revision = UInt64(rawID), revision.description == rawID else {
                 throw SQLiteRepositoryError.invalidStoredValue(
                     "invalid pending classification revision dependency"
                 )
             }
-            dependency = .classificationRevision(revision)
+            return .classificationRevision(revision)
+        case "currentSnapshotIntegrity":
+            guard rawID == "snapshot" else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "invalid pending current snapshot integrity dependency"
+                )
+            }
+            return .currentSnapshotIntegrity
+        default:
+            return try pendingUUIDDependency(kind: kind, rawID: rawID)
+        }
+    }
+
+    func pendingDependencyLocalDate(_ rawValue: String) throws -> LocalDate {
+        let parts = rawValue.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              let year = Int(parts[0]),
+              let month = Int(parts[1]),
+              let day = Int(parts[2]),
+              (1 ... 12).contains(month),
+              (1 ... 31).contains(day),
+              String(format: "%04d-%02d-%02d", year, month, day) == rawValue
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid pending day dependency identity"
+            )
+        }
+        return LocalDate(year: year, month: month, day: day)
+    }
+
+    func pendingUUIDDependency(
+        kind: String,
+        rawID: String
+    ) throws -> SyncRecordDependency {
+        let supportedKinds: Set = [
+            "taskChain", "taskDefinition", "dayTrace", "subtask",
+            "category", "label", "classificationEvent",
+            "classificationCommit"
+        ]
+        guard supportedKinds.contains(kind) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid pending download dependency kind"
+            )
+        }
+        let id = try pendingDependencyUUID(rawID, kind: kind)
+        switch kind {
+        case "taskChain":
+            return .taskChain(TaskChainID(id))
+        case "taskDefinition":
+            return .taskDefinition(TaskDefinitionID(id))
+        case "dayTrace":
+            return .dayTrace(DayTraceID(id))
+        case "subtask":
+            return .subtask(SubtaskID(id))
+        case "category":
+            return .category(TaskCategoryID(id))
+        case "label":
+            return .label(TaskLabelID(id))
+        case "classificationEvent":
+            return .classificationEvent(id)
+        case "classificationCommit":
+            return .classificationCommit(id)
         default:
             throw SQLiteRepositoryError.invalidStoredValue(
                 "invalid pending download dependency kind"
             )
         }
-        return PendingDependencyRow(recordID: recordID, dependency: dependency)
     }
 
     func pendingDependencyUUID(_ rawID: String, kind: String) throws -> UUID {
@@ -838,29 +1025,15 @@ private extension SQLiteSyncRepository {
     }
 
     func dependencyFact(
-        _ dependency: ClassificationCommitDependency
+        _ dependency: SyncRecordDependency
     ) -> (kind: String, id: String) {
-        switch dependency {
-        case let .taskChain(id):
-            ("taskChain", id.description)
-        case let .dayTrace(id):
-            ("dayTrace", id.description)
-        case let .category(id):
-            ("category", id.description)
-        case let .label(id):
-            ("label", id.description)
-        case let .classificationEvent(id):
-            ("classificationEvent", id.uuidString)
-        case let .classificationCommit(id):
-            ("classificationCommit", id.uuidString)
-        case let .classificationRevision(revision):
-            ("classificationRevision", revision.description)
-        }
+        let fact = dependency.sqliteFact
+        return (fact.kind, fact.id)
     }
 
     func dependencySort(
-        _ lhs: ClassificationCommitDependency,
-        _ rhs: ClassificationCommitDependency
+        _ lhs: SyncRecordDependency,
+        _ rhs: SyncRecordDependency
     ) -> Bool {
         let lhsFact = dependencyFact(lhs)
         let rhsFact = dependencyFact(rhs)
@@ -872,18 +1045,17 @@ private extension SQLiteSyncRepository {
     }
 
     func waitingRecordIsCurrent(_ record: SyncRecord) -> Bool {
-        guard record.entityType.requiresImmutableRecordPayload,
-              record.operation == .upsert,
+        guard record.operation == .upsert,
               record.payload.isEmpty == false
         else { return false }
         guard let payload = try? SyncRecordMapper().payload(from: record) else {
             return false
         }
         switch payload {
-        case .classificationCommit, .traceClassificationEvent:
+        case .day, .taskChain, .taskDefinition, .dayTrace, .subtask,
+             .appPreferences, .classificationCommit,
+             .traceClassificationEvent:
             return true
-        case .day, .taskChain, .taskDefinition, .dayTrace, .subtask, .appPreferences:
-            return false
         }
     }
 
@@ -903,25 +1075,50 @@ private extension SQLiteSyncRepository {
         _ observed: SyncPendingDownloadRecord
     ) -> Bool {
         stored.generationID == observed.generationID
-            && recordsMatchExactly(stored.record, observed.record)
+            && stored.record.exactlyMatches(observed.record)
             && stored.dependencies == observed.dependencies
             && exactDateBits(stored.firstSeenAt) == exactDateBits(observed.firstSeenAt)
             && exactDateBits(stored.lastAttemptedAt) == exactDateBits(observed.lastAttemptedAt)
             && stored.attemptCount == observed.attemptCount
     }
 
-    func recordsMatchExactly(_ lhs: SyncRecord, _ rhs: SyncRecord) -> Bool {
-        lhs.id == rhs.id
-            && lhs.entityType == rhs.entityType
-            && lhs.entityID == rhs.entityID
-            && lhs.operation == rhs.operation
-            && exactDateBits(lhs.modifiedAt) == exactDateBits(rhs.modifiedAt)
-            && lhs.modifiedByDeviceID == rhs.modifiedByDeviceID
-            && lhs.payload == rhs.payload
-    }
-
     func dateIsFinite(_ value: Date) -> Bool {
         value.timeIntervalSinceReferenceDate.isFinite
+    }
+
+    func canonicalReactivationWitnessesData(
+        _ witnesses: [Data]
+    ) throws -> Data {
+        try JSONEncoder().encode(witnesses)
+    }
+
+    func reactivationWitnesses(from canonicalData: Data) throws -> [Data] {
+        do {
+            let witnesses = try JSONDecoder().decode([Data].self, from: canonicalData)
+            guard try canonicalReactivationWitnessesData(witnesses) == canonicalData,
+                  witnesses == canonicalWitnesses(witnesses)
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "pending download reactivation witnesses are not canonical"
+                )
+            }
+            return witnesses
+        } catch let error as SQLiteRepositoryError {
+            throw error
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "pending download reactivation witnesses are invalid"
+            )
+        }
+    }
+
+    func canonicalWitnesses(_ witnesses: [Data]) -> [Data] {
+        var unique: [Data] = []
+        for witness in witnesses.sorted(by: { $0.lexicographicallyPrecedes($1) })
+        where unique.last != witness {
+            unique.append(witness)
+        }
+        return unique
     }
 
     func exactDateBits(_ value: Date) -> UInt64 {
@@ -1075,6 +1272,23 @@ private extension SQLiteSyncRepository {
         return try string(statement, index)
     }
 
+    func optionalNonemptyString(
+        _ statement: Statement?,
+        _ index: Int32
+    ) throws -> String? {
+        guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
+            return nil
+        }
+        return try nonemptyString(statement, index)
+    }
+
+    func optionalSyncRecordID(
+        _ statement: Statement?,
+        _ index: Int32
+    ) throws -> SyncRecordID? {
+        try optionalNonemptyString(statement, index).map(SyncRecordID.init)
+    }
+
     func int(_ statement: Statement?, _ index: Int32) throws -> Int {
         guard sqlite3_column_type(statement, index) == SQLITE_INTEGER else {
             throw SQLiteRepositoryError.invalidStoredValue(
@@ -1149,12 +1363,12 @@ private extension SQLiteSyncRepository {
             )
         }
         let recordPayload = optionalData(statement, 10)
-        guard SyncJournalEntry.hasValidRecordPayloadShape(
+        guard SyncJournalEntry.hasValidJournalPayloadShape(
             entityType: entityType,
             recordPayload: recordPayload
         ) else {
             throw SQLiteRepositoryError.invalidStoredValue(
-                "immutable sync journal payload invariant is invalid"
+                "sync journal payload invariant is invalid"
             )
         }
         return SyncJournalEntry(
@@ -1163,7 +1377,7 @@ private extension SQLiteSyncRepository {
             entityID: try string(statement, 2),
             operation: operation,
             changedAt: changedAt,
-            deviceID: SyncDeviceID(try string(statement, 6)),
+            deviceID: SyncDeviceID(try nonemptyString(statement, 6)),
             state: state,
             retryCount: try int(statement, 8),
             lastError: try optionalString(statement, 9),
@@ -1216,6 +1430,39 @@ private extension SQLiteSyncRepository {
         )
     }
 
+    func terminalRejectionEvidence(
+        from database: Database?
+    ) throws -> [SyncTerminalRejection] {
+        try query(
+            """
+            SELECT conflict.id, conflict.conflict_type, conflict.entity_type,
+                conflict.entity_id, conflict.local_record_id, conflict.remote_record_id,
+                conflict.remote_payload, conflict.detected_at, conflict.resolution,
+                conflict.message, terminal.entity_type, terminal.entity_id
+            FROM sync_terminal_rejections terminal
+            JOIN sync_conflicts conflict
+                ON conflict.entity_type = terminal.entity_type
+                AND conflict.entity_id = terminal.entity_id
+            ORDER BY terminal.entity_type, terminal.entity_id, conflict.id
+            """,
+            on: database,
+            row: { statement in
+                let conflict = try conflict(from: statement)
+                let storedEntityType = try string(statement, 10)
+                let storedEntityID = try string(statement, 11)
+                guard let rejection = SyncTerminalRejection(conflict: conflict),
+                      rejection.identity.entityType.rawValue == storedEntityType,
+                      rejection.identity.entityID == storedEntityID
+                else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "terminal provider evidence does not match its anchored identity"
+                    )
+                }
+                return rejection
+            }
+        )
+    }
+
     func conflict(from statement: Statement?) throws -> SyncConflict {
         guard let type = SyncConflictType(rawValue: try string(statement, 1)) else {
             throw SQLiteRepositoryError.invalidStoredValue("invalid sync conflict type")
@@ -1224,7 +1471,7 @@ private extension SQLiteSyncRepository {
             throw SQLiteRepositoryError.invalidStoredValue("invalid sync conflict entity type")
         }
         let entityID = try string(statement, 3)
-        let remoteRecordID = SyncRecordID(try string(statement, 5))
+        let remoteRecordID = try syncRecordID(statement, 5)
         let remoteRecord = try conflictRemoteRecord(
             from: data(statement, 6),
             expectedID: remoteRecordID,
@@ -1239,7 +1486,7 @@ private extension SQLiteSyncRepository {
             type: type,
             entityType: entityType,
             entityID: entityID,
-            localRecordID: try optionalString(statement, 4).map(SyncRecordID.init),
+            localRecordID: try optionalSyncRecordID(statement, 4),
             remoteRecord: remoteRecord,
             detectedAt: try date(statement, 7),
             message: try optionalString(statement, 9) ?? "Stored sync conflict",
@@ -1298,10 +1545,27 @@ private extension SQLiteSyncRepository {
             direction: direction,
             entityType: entityType,
             entityID: try string(statement, 3),
-            action: try string(statement, 4),
-            createdAt: try date(statement, 5),
-            message: try optionalString(statement, 6)
+            sourceEvidenceID: try evidenceID(statement, 4),
+            canonicalEvidenceID: try evidenceID(statement, 5),
+            action: try nonemptyString(statement, 6),
+            createdAt: try date(statement, 7),
+            message: try optionalString(statement, 8)
         )
+    }
+
+    func evidenceID(
+        _ statement: Statement?,
+        _ index: Int32
+    ) throws -> SyncRecordEvidenceID? {
+        guard let rawValue = try optionalString(statement, index) else {
+            return nil
+        }
+        guard let evidenceID = SyncRecordEvidenceID(rawValue: rawValue) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "sync audit evidence ID is not lowercase SHA-256"
+            )
+        }
+        return evidenceID
     }
 
     func lastError(_ database: Database?) -> String {

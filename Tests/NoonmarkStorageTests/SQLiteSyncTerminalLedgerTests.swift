@@ -14,7 +14,9 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         let fixture = try makeClassificationCausalConflictFixture()
         try engineRepository.save(fixture.receiverSnapshot)
 
-        let transport = InMemorySyncTransport(records: [fixture.parentRecord])
+        let transport = try InMemorySyncTransport(
+            records: [fixture.parentRecord]
+        )
         let first = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -125,7 +127,9 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
             for: child,
             modifiedBy: SyncDeviceID("remote-mac")
         )
-        let transport = InMemorySyncTransport(records: [siblingRecord, parentRecord])
+        let transport = try InMemorySyncTransport(
+            records: [siblingRecord, parentRecord]
+        )
 
         let first = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
@@ -150,6 +154,96 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         XCTAssertTrue(try syncRepository.pendingDownloads().isEmpty)
         XCTAssertEqual(try syncRepository.terminalRejections().count, 3)
         XCTAssertEqual(try engineRepository.load().snapshot(), engine.snapshot())
+    }
+
+    func testAllRejectedVariantProviderFactsSurviveCoordinatorRestart() async throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let receiver = NoonmarkEngine()
+        let chainID = try receiver.createPoolTask(
+            title: "跨重启 provider evidence",
+            now: now
+        )
+        let traceID = try receiver.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let baseline = receiver.snapshot()
+        try engineRepository.save(baseline)
+        let sharedCommitID = uuid("B3000000-0000-0000-0000-000000000001")
+        let firstCategory = TaskCategory(
+            id: TaskCategoryID(uuid("B3000000-0000-0000-0000-000000000002")),
+            name: "持久 provider 甲",
+            colorHex: "#2A6FDB",
+            now: now.addingTimeInterval(1)
+        )
+        let secondCategory = TaskCategory(
+            id: TaskCategoryID(uuid("B3000000-0000-0000-0000-000000000003")),
+            name: "持久 provider 乙",
+            colorHex: "#0E9488",
+            now: now.addingTimeInterval(1)
+        )
+        let firstCommit = try classificationCreateRecord(
+            category: firstCategory,
+            commitID: sharedCommitID,
+            deviceID: "terminal-provider-a"
+        )
+        let secondCommit = try classificationCreateRecord(
+            category: secondCategory,
+            commitID: sharedCommitID,
+            deviceID: "terminal-provider-b"
+        )
+        let transport = HostileFixtureSyncTransport(
+            uncheckedRecords: [firstCommit, secondCommit]
+        )
+
+        let collision = try await SQLiteSyncDownloadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        ).downloadAndMerge(detectedAt: now.addingTimeInterval(10))
+
+        XCTAssertEqual(collision.appliedCount, 0)
+        XCTAssertEqual(collision.waitingCount, 0)
+        XCTAssertEqual(collision.conflictCount, 2)
+        XCTAssertEqual(try syncRepository.unresolvedConflicts().count, 2)
+
+        let mapper = SyncRecordMapper()
+        let events = try [
+            classificationEventRecord(
+                id: uuid("B3000000-0000-0000-0000-000000000004"),
+                traceID: traceID,
+                category: firstCategory,
+                mapper: mapper
+            ),
+            classificationEventRecord(
+                id: uuid("B3000000-0000-0000-0000-000000000005"),
+                traceID: traceID,
+                category: secondCategory,
+                mapper: mapper
+            )
+        ]
+        await transport.removeAll()
+        try await transport.push(events)
+
+        let afterRestart = try await SQLiteSyncDownloadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        ).downloadAndMerge(detectedAt: now.addingTimeInterval(20))
+
+        XCTAssertEqual(afterRestart.appliedCount, 0)
+        XCTAssertEqual(afterRestart.waitingCount, 0)
+        XCTAssertEqual(afterRestart.conflictCount, 2)
+        XCTAssertTrue(try syncRepository.pendingDownloads().isEmpty)
+        XCTAssertEqual(try engineRepository.load().snapshot(), baseline)
+        XCTAssertEqual(
+            try syncRepository.unresolvedConflicts().filter {
+                $0.type == .traceClassificationEventRejected
+            }.count,
+            2
+        )
     }
 
     func testExactConflictEvidenceDoesNotMultiplyAndKeepLocalResolutionIsSticky() async throws {
@@ -318,6 +412,72 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         )
     }
 
+    private func classificationCreateRecord(
+        category: TaskCategory,
+        commitID: UUID,
+        deviceID: String
+    ) throws -> SyncRecord {
+        let before = TaskClassificationState()
+        let changeRecord = ClassificationChangeRecord(
+            id: commitID,
+            planID: UUID(),
+            interactionID: UUID(),
+            source: .deterministicDomainAction(reason: "terminal provider test"),
+            decisionID: nil,
+            changes: [
+                .create(
+                    kind: .category,
+                    itemID: category.id.description,
+                    name: category.name,
+                    colorHex: category.colorHex
+                )
+            ],
+            committedAt: category.createdAt,
+            revision: 1,
+            planDigest: String(repeating: "b", count: 64)
+        )
+        let after = TaskClassificationState(
+            revision: 1,
+            categories: [category.id: category],
+            changeRecords: [changeRecord]
+        )
+        return try SyncRecordMapper().record(
+            for: ClassificationCommitEnvelope(
+                before: before,
+                after: after,
+                changeRecord: changeRecord
+            ),
+            modifiedBy: SyncDeviceID(deviceID)
+        )
+    }
+
+    private func classificationEventRecord(
+        id: UUID,
+        traceID: DayTraceID,
+        category: TaskCategory,
+        mapper: SyncRecordMapper
+    ) throws -> SyncRecord {
+        try mapper.record(
+            for: TraceClassificationEventEnvelope(
+                event: TraceClassificationSnapshot(
+                    id: id,
+                    traceID: traceID,
+                    status: .continued,
+                    category: HistoricalCategoryValue(
+                        id: category.id,
+                        name: category.name,
+                        colorHex: category.colorHex
+                    ),
+                    labels: [],
+                    capturedAt: now.addingTimeInterval(2),
+                    revision: 1
+                ),
+                predecessorEventID: nil
+            ),
+            modifiedBy: SyncDeviceID("terminal-provider-event")
+        )
+    }
+
     private func assertExactConflictEvidenceIsSticky(
         resolution: SyncConflictResolution,
         suffix: String
@@ -334,7 +494,9 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
             modifiedByDeviceID: SyncDeviceID("remote-mac"),
             payload: Data([0x00, 0x7F, 0x80, 0xFF])
         )
-        let transport = InMemorySyncTransport(records: [remoteRecord])
+        let transport = HostileFixtureSyncTransport(
+            uncheckedRecords: [remoteRecord]
+        )
 
         let first = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,

@@ -4,6 +4,17 @@ import NoonmarkCore
 import XCTest
 
 final class AppPresentationTests: XCTestCase {
+    func testApplicationLanguageOwnsTheSwiftUISystemControlLocale() {
+        XCTAssertEqual(
+            AppPresentation(language: .chinese).interfaceLocale.identifier,
+            "zh-Hans-SG"
+        )
+        XCTAssertEqual(
+            AppPresentation(language: .english).interfaceLocale.identifier,
+            "en-SG"
+        )
+    }
+
     func testClassificationManagerCopyCoversVisibleAndAccessibilityText() {
         let chinese = AppPresentation(language: .chinese).classificationManager
         let english = AppPresentation(language: .english).classificationManager

@@ -18,6 +18,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUIShellLayout.collapsedSidebarWidth, 0)
         XCTAssertEqual(MacUIShellLayout.detailRailWidth, 280)
         XCTAssertEqual(MacUIShellLayout.calendarRailWidth, 248)
+        XCTAssertEqual(MacUICalendarInsightRowLayout.labelLineLimit, 1)
+        XCTAssertTrue(MacUICalendarInsightRowLayout.usesSharedIntrinsicLabelColumn)
         XCTAssertEqual(MacUIShellLayout.toolbarButtonSize, 28)
         XCTAssertEqual(MacUIShellLayout.pageHorizontalPadding, 20)
         XCTAssertEqual(MacUIShellLayout.taskRowVerticalPadding, 8)
@@ -28,6 +30,49 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUIIconMetrics.navigationSize, 14)
         XCTAssertEqual(MacUIAccessibilityLayout.minimumInteractiveTargetSize, 28)
         XCTAssertEqual(MacUIShellLayout.navigationRowHeight, 34)
+    }
+
+    func testGlobalMotionContractIncludesToastRiseAndDateStripSelection() {
+        let globalElements = MacUIDesignContract.current.globalElements
+
+        XCTAssertTrue(globalElements.contains(.riseToastAnimation))
+        XCTAssertTrue(globalElements.contains(.dateStripSelectionAnimation))
+        XCTAssertTrue(globalElements.contains(.reduceMotion))
+        XCTAssertEqual(MacUIAnimationMetrics.toastRiseDuration, 0.20)
+        XCTAssertEqual(MacUIAnimationMetrics.dateStripSpringResponse, 0.24)
+        XCTAssertEqual(MacUIAnimationMetrics.dateStripSpringDampingFraction, 0.74)
+    }
+
+    func testDayTaskRowKeepsIdentityFirstAndCompletionAtTheTrailingEdge() {
+        XCTAssertEqual(MacUITaskRowLayout.completionControlSize, 28)
+        XCTAssertEqual(MacUITaskRowLayout.accessorySpacing, 12)
+        XCTAssertTrue((12 ... 16).contains(MacUITaskRowLayout.accessorySpacing))
+        XCTAssertTrue(MacUITaskRowLayout.identityPrecedesAccessories)
+        XCTAssertTrue(MacUITaskRowLayout.completionFollowsAccessories)
+        XCTAssertTrue(MacUITaskRowLayout.flexibleSpaceFollowsAccessories)
+    }
+
+    func testCalendarRailRowsKeepOneReadableStatusAndExposeFullTitles() {
+        XCTAssertEqual(MacUICalendarDetailRowLayout.titlePointSize, 12.5)
+        XCTAssertEqual(MacUICalendarDetailRowLayout.titleLineLimit, 2)
+        XCTAssertEqual(MacUICalendarDetailRowLayout.metadataPointSize, 10.5)
+        XCTAssertEqual(MacUICalendarDetailRowLayout.horizontalPadding, 10)
+        XCTAssertEqual(MacUICalendarDetailRowLayout.verticalPadding, 8)
+        XCTAssertEqual(MacUICalendarDetailRowLayout.statusRepresentationCount, 1)
+        XCTAssertTrue(MacUICalendarDetailRowLayout.exposesFullTitleToAccessibility)
+    }
+
+    func testTaskLabelPatchesUseQuietSolidBoundaries() {
+        XCTAssertEqual(MacUITaskLabelPatchLayout.semanticFillOpacity, 0.10)
+        XCTAssertEqual(MacUITaskLabelPatchLayout.borderLineWidth, 1)
+        XCTAssertFalse(MacUITaskLabelPatchLayout.usesDashedBorder)
+        XCTAssertFalse(MacUITaskLabelPatchLayout.overflowUsesDashedBorder)
+    }
+
+    func testFuturePlanDetailUsesOneCompactMetadataLine() {
+        XCTAssertEqual(MacUIFuturePlanDetailLayout.metadataSpacing, 8)
+        XCTAssertEqual(MacUIFuturePlanDetailLayout.summaryCardCount, 0)
+        XCTAssertEqual(MacUIFuturePlanDetailLayout.noticeCount, 1)
     }
 
     func testTypographyCompactsReadableTextWithoutShrinkingMicrocopy() {

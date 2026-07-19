@@ -1,3 +1,4 @@
+import Foundation
 import NoonmarkCore
 
 public enum AppPresentationErrorContext: Sendable {
@@ -84,6 +85,15 @@ public struct AppPresentation: Sendable {
 
     public init(language: AppLanguage) {
         self.language = language
+    }
+
+    public var interfaceLocale: Locale {
+        switch language {
+        case .chinese:
+            Locale(identifier: "zh-Hans-SG")
+        case .english:
+            Locale(identifier: "en-SG")
+        }
     }
 
     public var groupManagement: GroupManagementCopy {

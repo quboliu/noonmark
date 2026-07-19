@@ -10,22 +10,52 @@ enum SeedClockE2EVerifier {
             _ = try NoonmarkEngine(snapshot: snapshot)
             try expectDayCreationPrecedesTraces(in: store.engine)
             try expectClassificationAuditChronology(in: snapshot.classifications)
+            try expectRelativeDateEnvelope(
+                in: store.engine,
+                today: store.today
+            )
             try expectCompletion(
                 title: "回复设计合同邮件",
-                expected: timestamp(year: 2026, month: 7, day: 3, hour: 11, minute: 20),
+                expected: timestamp(
+                    on: NoonmarkStore.offset(store.today, by: -2),
+                    hour: 11,
+                    minute: 20
+                ),
                 in: store.engine
             )
             try expectCompletion(
                 title: "写本周周报",
-                expected: timestamp(year: 2026, month: 7, day: 4, hour: 17, minute: 45),
+                expected: timestamp(
+                    on: NoonmarkStore.offset(store.today, by: -1),
+                    hour: 17,
+                    minute: 45
+                ),
                 in: store.engine
             )
             try expectCompletion(
                 title: "晨跑 5 公里",
-                expected: timestamp(year: 2026, month: 7, day: 5, hour: 7, minute: 36),
+                expected: timestamp(on: store.today, hour: 7, minute: 36),
                 in: store.engine
             )
-            try expectOKRProgressAndNote(in: store.engine)
+            try expectFuturePlan(
+                title: "准备周一站会要点",
+                expectedDate: NoonmarkStore.offset(store.today, by: 1),
+                in: store.engine
+            )
+            try expectFuturePlan(
+                title: "整理六月发票报销",
+                expectedDate: NoonmarkStore.offset(store.today, by: 2),
+                in: store.engine
+            )
+            try expectFuturePlan(
+                title: "预订团队聚餐餐厅",
+                expectedDate: NoonmarkStore.offset(store.today, by: 1),
+                in: store.engine
+            )
+            try expectOKRProgressAndNote(
+                in: store.engine,
+                today: store.today
+            )
             result = "ok"
         } catch {
             result = "failed: \(error.localizedDescription)"
@@ -85,20 +115,40 @@ enum SeedClockE2EVerifier {
         }
     }
 
+    private static func expectRelativeDateEnvelope(
+        in engine: NoonmarkEngine,
+        today: LocalDate
+    ) throws {
+        let earliest = NoonmarkStore.offset(today, by: -4)
+        let tomorrow = NoonmarkStore.offset(today, by: 1)
+        let latest = NoonmarkStore.offset(today, by: 2)
+        guard engine.traces.values.allSatisfy({ trace in
+            trace.date >= earliest && trace.date <= latest
+        }) else {
+            throw SeedClockE2EError.traceOutsideRelativeDateEnvelope
+        }
+        guard engine.traces.values.allSatisfy({ trace in
+            if trace.date > today {
+                return (trace.date == tomorrow || trace.date == latest)
+                    && trace.status == .pending
+            }
+            return trace.date == today || trace.status != .pending
+        }) else {
+            throw SeedClockE2EError.traceStatusOutsideRelativeDateEnvelope
+        }
+    }
+
     private static func expectOKRProgressAndNote(
-        in engine: NoonmarkEngine
+        in engine: NoonmarkEngine,
+        today: LocalDate
     ) throws {
         let progressTime = try timestamp(
-            year: 2026,
-            month: 7,
-            day: 5,
+            on: today,
             hour: 14,
             minute: 0
         )
         let noteTime = try timestamp(
-            year: 2026,
-            month: 7,
-            day: 5,
+            on: today,
             hour: 14,
             minute: 20
         )
@@ -117,6 +167,22 @@ enum SeedClockE2EVerifier {
         }
     }
 
+    private static func expectFuturePlan(
+        title: String,
+        expectedDate: LocalDate,
+        in engine: NoonmarkEngine
+    ) throws {
+        guard let definition = engine.definitions.values.first(where: {
+            $0.title == title
+        }), let trace = engine.traces.values.first(where: {
+            $0.definitionID == definition.id
+        }), trace.date == expectedDate,
+            trace.status == .pending
+        else {
+            throw SeedClockE2EError.futurePlanMismatch(title)
+        }
+    }
+
     private static func expectCompletion(
         title: String,
         expected: Date,
@@ -132,9 +198,7 @@ enum SeedClockE2EVerifier {
     }
 
     private static func timestamp(
-        year: Int,
-        month: Int,
-        day: Int,
+        on date: LocalDate,
         hour: Int,
         minute: Int
     ) throws -> Date {
@@ -146,9 +210,9 @@ enum SeedClockE2EVerifier {
         calendar.locale = Locale(identifier: "en_US_POSIX")
         calendar.timeZone = timeZone
         guard let value = calendar.date(from: DateComponents(
-            year: year,
-            month: month,
-            day: day,
+            year: date.year,
+            month: date.month,
+            day: date.day,
             hour: hour,
             minute: minute
         )) else {
@@ -166,8 +230,11 @@ private struct ClassificationAuditFact {
 private enum SeedClockE2EError: LocalizedError {
     case completionMismatch(String)
     case dayCreatedAfterTrace(String)
+    case futurePlanMismatch(String)
     case classificationAuditMovedBackwards
     case okrTimelineMismatch
+    case traceOutsideRelativeDateEnvelope
+    case traceStatusOutsideRelativeDateEnvelope
     case invalidFixtureCalendar
 
     var errorDescription: String? {
@@ -176,10 +243,16 @@ private enum SeedClockE2EError: LocalizedError {
             "seed completion time mismatch: \(title)"
         case let .dayCreatedAfterTrace(date):
             "seed day was created after one of its traces: \(date)"
+        case let .futurePlanMismatch(title):
+            "seed future plan date mismatch: \(title)"
         case .classificationAuditMovedBackwards:
             "seed classification audit time moved backwards"
         case .okrTimelineMismatch:
             "seed OKR progress or note time mismatch"
+        case .traceOutsideRelativeDateEnvelope:
+            "seed trace fell outside today - 4 through today + 2"
+        case .traceStatusOutsideRelativeDateEnvelope:
+            "seed trace status did not match its relative date"
         case .invalidFixtureCalendar:
             "seed fixture calendar is invalid"
         }

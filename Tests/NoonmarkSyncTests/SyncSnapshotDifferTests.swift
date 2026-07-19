@@ -52,8 +52,17 @@ final class SyncSnapshotDifferTests: XCTestCase {
         let oldSnapshot = engine.snapshot()
 
         engine.updateDailyReview(date: today, summary: "已复盘", unfinishedReason: nil, tomorrowNote: nil, now: later)
-        try engine.updateSubtaskDifficulty(subtaskID, difficulty: .hard, today: today)
-        engine.updateTheme(.warmPaper)
+        try engine.updateSubtaskDifficulty(
+            subtaskID,
+            difficulty: .hard,
+            today: today,
+            now: later
+        )
+        try engine.updateTheme(
+            .warmPaper,
+            writerID: "mac-a",
+            now: later
+        )
 
         let entries = try SyncSnapshotDiffer().journalEntries(
             from: oldSnapshot,
@@ -64,11 +73,28 @@ final class SyncSnapshotDifferTests: XCTestCase {
 
         XCTAssertEqual(entries.map(\.entityType), [.day, .subtask, .appPreferences])
         XCTAssertEqual(entries.map(\.entityID).last, "default")
+        let preferencesEntry = try XCTUnwrap(
+            entries.first { $0.entityType == .appPreferences }
+        )
+        let materialized = try SyncRecordMaterializer().record(
+            for: preferencesEntry,
+            in: engine.snapshot()
+        )
+        let envelope = try SyncRecordMapper().decodeAppPreferences(materialized)
+
+        XCTAssertEqual(preferencesEntry.recordPayload, materialized.payload)
+        XCTAssertEqual(envelope.theme, .warmPaper)
+        XCTAssertEqual(envelope.language, .chinese)
+        XCTAssertEqual(
+            envelope.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            later.timeIntervalSinceReferenceDate.bitPattern
+        )
     }
 
     func testDeviceLocalConfigurationDoesNotCreatePreferenceSyncRecords() throws {
         let engine = NoonmarkEngine()
         let oldSnapshot = engine.snapshot()
+        let originalClock = oldSnapshot.preferences.themeLanguageUpdatedAt
         engine.updateDataMode(.onlineFirst)
         engine.updateBackupPolicy(
             ScheduledBackupPolicy(frequency: .weekly, destination: .s3)
@@ -93,6 +119,75 @@ final class SyncSnapshotDifferTests: XCTestCase {
         )
 
         XCTAssertTrue(entries.isEmpty)
+        XCTAssertEqual(
+            engine.preferences.themeLanguageUpdatedAt
+                .timeIntervalSinceReferenceDate.bitPattern,
+            originalClock.timeIntervalSinceReferenceDate.bitPattern
+        )
+    }
+
+    func testPreferenceJournalRequiresOneExactThemeLanguageTransactionClock() throws {
+        let oldSnapshot = NoonmarkEngine().snapshot()
+        var missingClockAdvance = oldSnapshot
+        missingClockAdvance.preferences = AppPreferences(
+            theme: .warmPaper,
+            language: .chinese,
+            themeLanguageUpdatedAt: oldSnapshot.preferences
+                .themeLanguageUpdatedAt
+        )
+        XCTAssertThrowsError(
+            try SyncSnapshotDiffer().journalEntries(
+                from: oldSnapshot,
+                to: missingClockAdvance,
+                changedAt: later,
+                deviceID: SyncDeviceID("mac-missing-clock")
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncSnapshotDifferError,
+                .themeLanguageClockDidNotAdvance
+            )
+        }
+
+        var clockWithoutValues = oldSnapshot
+        clockWithoutValues.preferences = AppPreferences(
+            theme: oldSnapshot.preferences.theme,
+            language: oldSnapshot.preferences.language,
+            themeLanguageUpdatedAt: later
+        )
+        XCTAssertThrowsError(
+            try SyncSnapshotDiffer().journalEntries(
+                from: oldSnapshot,
+                to: clockWithoutValues,
+                changedAt: later,
+                deviceID: SyncDeviceID("mac-clock-only")
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncSnapshotDifferError,
+                .themeLanguageClockChangedWithoutValues
+            )
+        }
+
+        var mismatchedJournalClock = oldSnapshot
+        mismatchedJournalClock.preferences = AppPreferences(
+            theme: .warmPaper,
+            language: .chinese,
+            themeLanguageUpdatedAt: later
+        )
+        XCTAssertThrowsError(
+            try SyncSnapshotDiffer().journalEntries(
+                from: oldSnapshot,
+                to: mismatchedJournalClock,
+                changedAt: later.addingTimeInterval(1),
+                deviceID: SyncDeviceID("mac-journal-clock")
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncSnapshotDifferError,
+                .themeLanguageClockDoesNotMatchJournal
+            )
+        }
     }
 
     func testPoolNoteEditAndDeleteBecomeCurrentTaskChainSyncRecord() throws {
@@ -206,7 +301,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
             for: entries,
             in: newSnapshot
         )
-        let merged = SyncRecordMerger().merge(
+        let merged = try SyncRecordMerger().merge(
             records: records,
             into: oldSnapshot,
             detectedAt: later
@@ -272,7 +367,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
             for: entries,
             in: newSnapshot
         )
-        let merged = SyncRecordMerger().merge(
+        let merged = try SyncRecordMerger().merge(
             records: records,
             into: oldSnapshot,
             detectedAt: later
@@ -334,7 +429,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
             $0.entityType == .taskChain && $0.entityID == chainID.description
         })
 
-        let merged = SyncRecordMerger().merge(
+        let merged = try SyncRecordMerger().merge(
             records: try SyncRecordMaterializer().records(
                 for: entries,
                 in: newSnapshot
@@ -467,7 +562,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
             for: entries,
             in: newSnapshot
         )
-        let merged = SyncRecordMerger().merge(
+        let merged = try SyncRecordMerger().merge(
             records: records,
             into: oldSnapshot,
             detectedAt: later
@@ -528,7 +623,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
             return XCTFail("精确重命名 no-op 必须保持 rename typed delta")
         }
 
-        let merged = SyncRecordMerger().merge(
+        let merged = try SyncRecordMerger().merge(
             records: try SyncRecordMaterializer().records(for: entries, in: newSnapshot),
             into: oldSnapshot,
             detectedAt: later
@@ -714,7 +809,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
         XCTAssertEqual(entry.entityType, .classificationCommit)
         XCTAssertEqual(entry.entityID, receipt.changeRecordID.uuidString)
         let records = try SyncRecordMaterializer().records(for: entries, in: after)
-        let merged = SyncRecordMerger().merge(records: records, into: before)
+        let merged = try SyncRecordMerger().merge(records: records, into: before)
         XCTAssertTrue(merged.conflicts.isEmpty, "conflicts=\(merged.conflicts)")
         XCTAssertTrue(merged.waitingRecords.isEmpty)
         XCTAssertEqual(merged.snapshot, after)

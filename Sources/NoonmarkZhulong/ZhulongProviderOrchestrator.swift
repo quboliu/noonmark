@@ -2,6 +2,10 @@ import Foundation
 
 public protocol ZhulongSessionRepository: Sendable {
     func save(_ session: ZhulongSession) throws
+    func save(
+        _ replacement: ZhulongSession,
+        replacing expected: ZhulongSession
+    ) throws
     func load(_ id: ZhulongSessionID) throws -> ZhulongSession
 }
 
@@ -73,7 +77,8 @@ public actor ZhulongProviderOrchestrator {
         guard activeSessionIDs.contains(sessionID) == false else {
             throw ZhulongProviderOrchestrationError.providerRunStillActive
         }
-        var session = try repository.load(sessionID)
+        let sessionBeforeRun = try repository.load(sessionID)
+        var session = sessionBeforeRun
         guard session.authorization?.providerIdentity == provider.configurationIdentity else {
             throw ZhulongProviderOrchestrationError.providerIdentityMismatch
         }
@@ -85,12 +90,13 @@ public actor ZhulongProviderOrchestrator {
             providerIdentity: provider.configurationIdentity,
             startedAt: timing.startedAt
         )
-        try repository.save(session)
+        try repository.save(session, replacing: sessionBeforeRun)
         activeSessionIDs.insert(sessionID)
         defer { activeSessionIDs.remove(sessionID) }
 
         let result = await provider.complete(request)
-        session = try repository.load(sessionID)
+        let sessionBeforeResponse = try repository.load(sessionID)
+        session = sessionBeforeResponse
         guard session.providerSends.last(where: { $0.runID == request.runID })?.status == .running else {
             throw ZhulongProviderOrchestrationError.providerRunSuperseded
         }
@@ -121,10 +127,16 @@ public actor ZhulongProviderOrchestrator {
                     message: "Provider 返回了无效内容"
                 )
                 try session.recordProviderFailure(failure, runID: request.runID, now: resultDate)
-                try repository.save(session)
+                try repository.save(
+                    session,
+                    replacing: sessionBeforeResponse
+                )
                 throw ZhulongProviderOrchestrationError.providerFailed(failure.code)
             }
-            try repository.save(session)
+            try repository.save(
+                session,
+                replacing: sessionBeforeResponse
+            )
             return session
         case let .failure(failure):
             let recordedFailure = validatedFailure(failure)
@@ -133,7 +145,10 @@ public actor ZhulongProviderOrchestrator {
                 runID: request.runID,
                 now: resultDate
             )
-            try repository.save(session)
+            try repository.save(
+                session,
+                replacing: sessionBeforeResponse
+            )
             throw ZhulongProviderOrchestrationError.providerFailed(recordedFailure.code)
         }
     }
@@ -144,7 +159,8 @@ public actor ZhulongProviderOrchestrator {
         replacementContent: String,
         now: Date = Date()
     ) throws -> ZhulongSession {
-        var session = try repository.load(sessionID)
+        let persistedSession = try repository.load(sessionID)
+        var session = persistedSession
         var correctionDate = now
         if session.phase == .providerRunning {
             guard let send = session.providerSends.last,
@@ -172,7 +188,7 @@ public actor ZhulongProviderOrchestrator {
             replacementContent: replacementContent,
             now: correctionDate
         )
-        try repository.save(session)
+        try repository.save(session, replacing: persistedSession)
         return session
     }
 
@@ -207,9 +223,10 @@ public actor ZhulongProviderOrchestrator {
         guard activeSessionIDs.contains(sessionID) == false else {
             throw ZhulongProviderOrchestrationError.providerRunStillActive
         }
-        var session = try repository.load(sessionID)
+        let persistedSession = try repository.load(sessionID)
+        var session = persistedSession
         try session.recoverInterruptedProviderRun(now: now)
-        try repository.save(session)
+        try repository.save(session, replacing: persistedSession)
         return session
     }
 

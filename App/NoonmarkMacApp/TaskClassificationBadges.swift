@@ -1,6 +1,7 @@
 import Foundation
 import NoonmarkCore
 import NoonmarkMacRuntime
+import NoonmarkMacUIContract
 import SwiftUI
 
 struct TaskClassificationAccessibilityNamespace: Hashable {
@@ -194,10 +195,16 @@ struct TaskLabelPatch: View {
         }
         .padding(.horizontal, 6)
         .frame(height: 22)
-        .background(RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.10)))
+        .background(
+            RoundedRectangle(cornerRadius: 3)
+                .fill(color.opacity(MacUITaskLabelPatchLayout.semanticFillOpacity))
+        )
         .overlay {
             RoundedRectangle(cornerRadius: 3)
-                .stroke(color.opacity(0.48), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                .stroke(
+                    Theme.line,
+                    lineWidth: CGFloat(MacUITaskLabelPatchLayout.borderLineWidth)
+                )
         }
         .background {
             AppE2EViewAnchor(
@@ -228,7 +235,10 @@ private struct ClassificationOverflowButton: View {
                 .background(RoundedRectangle(cornerRadius: 3).fill(Theme.chip))
                 .overlay {
                     RoundedRectangle(cornerRadius: 3)
-                        .stroke(Theme.line2.opacity(0.72), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                        .stroke(
+                            Theme.line,
+                            lineWidth: CGFloat(MacUITaskLabelPatchLayout.borderLineWidth)
+                        )
                 }
                 .contentShape(Rectangle())
         }

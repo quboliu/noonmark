@@ -42,18 +42,15 @@ struct FuturePlanDetail: View {
                 )
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: NoonmarkVisualMetrics.futurePlanMetadataSpacing) {
                 PlanMetaPill(text: store.copy.planDraft, color: Theme.navFuture)
-                Text("\(store.displayDate(trace.date)) \(store.weekday(trace.date))")
-                    .font(.noonmarkSystem(size: 11))
-                    .foregroundStyle(Theme.text3)
+                Text(store.displayDate(trace.date))
+                Text("\(store.copy.priorityTitle) \(trace.priority)")
+                Text(store.copy.notDue)
             }
-
-            PlanSummaryCard(items: [
-                PlanSummaryItem(label: store.copy.dateTitle, value: store.displayDate(trace.date), color: Theme.navFuture),
-                PlanSummaryItem(label: store.copy.priorityTitle, value: "\(trace.priority)", color: Theme.text2),
-                PlanSummaryItem(label: store.copy.statusTitle, value: store.copy.notDue, color: Theme.text2)
-            ])
+            .font(.noonmarkSystem(size: 10.5, weight: .medium))
+            .foregroundStyle(Theme.text3)
+            .lineLimit(1)
 
             Notice(text: store.copy.futurePlanNotice, tone: .locked)
 
@@ -80,36 +77,5 @@ struct FuturePlanDetail: View {
         store.selectedDate = trace.date
         store.page = .day
         store.selectTrace(trace.id)
-    }
-}
-
-struct PlanSummaryItem {
-    let label: String
-    let value: String
-    let color: Color
-}
-
-struct PlanSummaryCard: View {
-    let items: [PlanSummaryItem]
-
-    var body: some View {
-        VStack(spacing: 7) {
-            ForEach(items, id: \.label) { item in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(item.label)
-                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                        .foregroundStyle(Theme.text3)
-                        .frame(width: 44, alignment: .leading)
-                    Text(item.value)
-                        .font(.noonmarkSystem(size: 11.5, weight: .medium))
-                        .foregroundStyle(item.color)
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.navFuture.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
     }
 }

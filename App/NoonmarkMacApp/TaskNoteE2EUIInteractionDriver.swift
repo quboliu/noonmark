@@ -24,6 +24,7 @@ enum TaskNoteE2EUIInteractionDriver {
         private let state: TaskNoteE2EState
         private let editedBody: String
         private let resultURL: URL
+        private var actionMenuIdentity: AppViewTreeE2E.PresentationWindowIdentity?
 
         init(state: TaskNoteE2EState, editedBody: String, resultURL: URL) {
             self.state = state
@@ -42,7 +43,12 @@ enum TaskNoteE2EUIInteractionDriver {
 
         private func selectEditMenuItem() {
             waitFor("编辑附言菜单项") { [self] in
-                guard let item = element(identifier: editedMenuIdentifier) else { return false }
+                guard let item = element(identifier: editedMenuIdentifier),
+                      let identity = AppViewTreeE2E.mappedPresentationWindow(
+                          identifier: editedMenuIdentifier
+                      )
+                else { return false }
+                actionMenuIdentity = identity
                 return click(item)
             } onSuccess: { [self] in
                 enterEditedBody()
@@ -51,6 +57,9 @@ enum TaskNoteE2EUIInteractionDriver {
 
         private func enterEditedBody() {
             waitFor("附言编辑器") { [self] in
+                guard let actionMenuIdentity,
+                      AppViewTreeE2E.isPresentationWindowOpen(actionMenuIdentity) == false
+                else { return false }
                 guard let textView = element(
                     identifier: "\(editedEditorIdentifier).input"
                 ) as? NSTextView else {
@@ -92,14 +101,20 @@ enum TaskNoteE2EUIInteractionDriver {
 
         private func selectDeleteMenuItem() {
             waitFor("删除附言菜单项") { [self] in
-                guard let item = element(identifier: deletedMenuIdentifier) else { return false }
+                guard let item = element(identifier: deletedMenuIdentifier),
+                      let identity = AppViewTreeE2E.mappedPresentationWindow(
+                          identifier: deletedMenuIdentifier
+                      )
+                else { return false }
+                actionMenuIdentity = identity
                 return click(item)
             } onSuccess: { [self] in
                 waitFor("删除后的附言行消失") { [self] in
-                    AppViewTreeE2E.hasNoVisibleView(
+                    guard let actionMenuIdentity else { return false }
+                    return AppViewTreeE2E.hasNoVisibleView(
                         identifier: deletedEntryStateIdentifier
                     )
-                        && AppViewTreeE2E.hasNoAttachedPresentationWindows()
+                        && AppViewTreeE2E.isPresentationWindowOpen(actionMenuIdentity) == false
                 } onSuccess: { [self] in
                     finish(with: "ok")
                 }

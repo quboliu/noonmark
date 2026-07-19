@@ -7,9 +7,14 @@ import NoonmarkSync
 
 extension NoonmarkStore {
     func setTheme(_ theme: AppTheme) {
+        guard engine.preferences.theme != theme else { return }
         do {
-            try commitEngineMutation(undoPolicy: .invalidate) { candidate in
-                candidate.updateTheme(theme)
+            try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
+                try candidate.updateTheme(
+                    theme,
+                    writerID: self.themeLanguageWriterID,
+                    now: moment.instant
+                )
             }
             Theme.apply(theme)
         } catch {
@@ -20,8 +25,12 @@ extension NoonmarkStore {
     func setLanguage(_ language: AppLanguage) {
         guard engine.preferences.language != language else { return }
         do {
-            try commitEngineMutation(undoPolicy: .invalidate) { candidate in
-                candidate.updateLanguage(language)
+            try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
+                try candidate.updateLanguage(
+                    language,
+                    writerID: self.themeLanguageWriterID,
+                    now: moment.instant
+                )
             }
             onLanguageChange?()
         } catch {
@@ -33,7 +42,7 @@ extension NoonmarkStore {
         var policy = engine.preferences.settingsPoemDisplayPolicy
         policy.enabled = enabled
         do {
-            try commitEngineMutation(undoPolicy: .invalidate) { candidate in
+            try commitEngineMutation(undoPolicy: .invalidate) { candidate, _ in
                 candidate.updateSettingsPoemDisplayPolicy(policy)
             }
         } catch {
@@ -41,11 +50,16 @@ extension NoonmarkStore {
         }
     }
 
+    private var themeLanguageWriterID: String {
+        syncDeviceIdentity?.deviceID.rawValue
+            ?? AppPreferences.defaultLocalThemeLanguageWriterID
+    }
+
     func setSettingsPoemText(_ text: String) {
         var policy = engine.preferences.settingsPoemDisplayPolicy
         policy.text = text
         do {
-            try commitEngineMutation(undoPolicy: .invalidate) { candidate in
+            try commitEngineMutation(undoPolicy: .invalidate) { candidate, _ in
                 candidate.updateSettingsPoemDisplayPolicy(policy)
             }
         } catch {
@@ -57,7 +71,7 @@ extension NoonmarkStore {
         var policy = engine.preferences.settingsPoemDisplayPolicy
         policy.text = SettingsPoemDisplayPolicy.defaultText
         do {
-            try commitEngineMutation(undoPolicy: .invalidate) { candidate in
+            try commitEngineMutation(undoPolicy: .invalidate) { candidate, _ in
                 candidate.updateSettingsPoemDisplayPolicy(policy)
             }
             showToast(copy.settingsPoemResetToast)
@@ -69,7 +83,7 @@ extension NoonmarkStore {
     func setDataMode(_ dataMode: AppDataMode) {
         guard engine.preferences.dataMode != dataMode else { return }
         do {
-            try commitEngineMutation(undoPolicy: .invalidate) { candidate in
+            try commitEngineMutation(undoPolicy: .invalidate) { candidate, _ in
                 candidate.updateDataMode(dataMode)
             }
             if dataMode != .localFirst {
@@ -274,7 +288,7 @@ extension NoonmarkStore {
     private func applyLocalFirstSyncPolicy(
         _ policy: LocalFirstCloudSyncPolicy
     ) throws {
-        try commitEngineMutation(undoPolicy: .invalidate) { candidate in
+        try commitEngineMutation(undoPolicy: .invalidate) { candidate, _ in
             candidate.updateLocalFirstSyncPolicy(policy)
         }
         if policy.enabled == false || policy.endpoint != .iCloud {
@@ -291,7 +305,7 @@ extension NoonmarkStore {
     }
 
     private func runLocalFolderSync(showToastOnSuccess: Bool) {
-        guard prepareNaturalDayForUserMutation() != nil else { return }
+        guard let naturalDay = prepareNaturalDayForUserMutation() else { return }
         guard engine.preferences.dataMode == .localFirst,
               engine.preferences.localFirstSyncPolicy.enabled,
               supportsRunnableLocalFirstSync(engine.preferences.localFirstSyncPolicy.endpoint)
@@ -318,7 +332,12 @@ extension NoonmarkStore {
         }
 
         do {
-            try save(engine)
+            try save(
+                engine,
+                mutationAt: engine.nextMutationDate(
+                    reference: naturalDay.instant
+                )
+            )
         } catch {
             showOperationFailure(.persistence, error: error)
             localFirstSyncMessage = operationFailure
@@ -380,14 +399,16 @@ extension NoonmarkStore {
         _ loaded: NoonmarkEngine,
         moment: NaturalDayMoment
     ) throws {
+        try assertEngineWriteAllowed()
         let previousToday = today
         let followsToday = selectedDate == previousToday
         let calendarFollowsToday = selectedCalendarDate == previousToday
         let candidate = try dayRolloverCoordinator.reconcile(
             engine: loaded,
-            moment: moment,
-            persist: save
-        )
+            moment: moment
+        ) { candidate, mutationInstant in
+            try save(candidate, mutationAt: mutationInstant)
+        }
         engine = candidate
         clearUndoHistory()
         naturalDayState = moment.state
@@ -481,6 +502,7 @@ extension NoonmarkStore {
     func restartLocalFirstSyncAutomation() {
         localFirstSyncAutomationTask?.cancel()
         localFirstSyncAutomationTask = nil
+        guard (try? assertEngineWriteAllowed()) != nil else { return }
         let policy = engine.preferences.localFirstSyncPolicy
         guard databaseURL != nil,
               engine.preferences.dataMode == .localFirst,

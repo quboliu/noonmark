@@ -31,11 +31,22 @@ struct LaunchAutomation {
                 )
             }
         }
+        if let mutationClockAutomation = MutationClockE2EAutomation.fromCommandLine() {
+            actions.append { store, environment in
+                mutationClockAutomation.run(
+                    on: store,
+                    environment: environment
+                )
+            }
+        }
 
         append(ProviderE2EAutomation.fromCommandLine(), to: &actions)
+        append(DataRootProcessLeaseE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongStreamE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongTodoDiffE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongPersistenceE2EAutomation.fromCommandLine(), to: &actions)
+        append(ZhulongExactRecoveryE2EAutomation.fromCommandLine(), to: &actions)
+        append(ZhulongPendingGateE2EAutomation.fromCommandLine(), to: &actions)
         append(ClassificationE2EAutomation.fromCommandLine(), to: &actions)
         append(WorkflowE2EAutomation.fromCommandLine(), to: &actions)
         append(LifecycleE2EAutomation.fromCommandLine(), to: &actions)
@@ -61,6 +72,7 @@ struct LaunchAutomation {
         append(ZhulongNavigationE2EAutomation.fromCommandLine(), to: &actions)
         append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)
         append(SummarySidebarE2EAutomation.fromCommandLine(), to: &actions)
+        append(UnfinishedActionE2EAutomation.fromCommandLine(), to: &actions)
         append(PoolListLayoutE2EAutomation.fromCommandLine(), to: &actions)
         append(PoolContextMenuActionE2EAutomation.fromCommandLine(), to: &actions)
         append(PoolContextMenuPresentationE2EAutomation.fromCommandLine(), to: &actions)
@@ -68,9 +80,13 @@ struct LaunchAutomation {
         append(WindowCloseBehaviorE2EAutomation.fromCommandLine(), to: &actions)
         append(WorkspaceRestorationE2EAutomation.fromCommandLine(), to: &actions)
         append(NativeCommandSurfaceE2EAutomation.fromCommandLine(), to: &actions)
+        append(CompletionControlE2EAutomation.fromCommandLine(), to: &actions)
         append(WorkspaceProductivityE2EAutomation.fromCommandLine(), to: &actions)
         append(DataImportUIE2EAutomation.fromCommandLine(), to: &actions)
+        append(PreferencesClockE2EAutomation.fromCommandLine(), to: &actions)
+        append(EnglishScreenshotFixtureE2EAutomation.fromCommandLine(), to: &actions)
         append(LaunchSelectionE2EAutomation.fromCommandLine(), to: &actions)
+        append(EnglishScreenshotUIE2EAutomation.fromCommandLine(), to: &actions)
         append(UIEntryE2EAutomation.fromCommandLine(), to: &actions)
 
         if let seedClockResultPath = AppLaunchArguments.value(
@@ -111,7 +127,7 @@ struct LaunchAutomation {
 
         if quitsAfterAutomation {
             store.persist()
-            NSApp.terminate(nil)
+            E2EApplicationTermination.schedule()
         }
     }
 
@@ -130,4 +146,16 @@ struct LaunchAutomation {
 protocol LaunchAutomationRunnable {
     @MainActor
     func run(on store: NoonmarkStore)
+}
+
+@MainActor
+enum E2EApplicationTermination {
+    static func schedule(after delay: TimeInterval = 0.2) {
+        NSLog("Noonmark E2E termination scheduled after %.3f seconds", delay)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            NSLog("Noonmark E2E termination request started")
+            NSApp.terminate(nil)
+            NSLog("Noonmark E2E termination request returned")
+        }
+    }
 }

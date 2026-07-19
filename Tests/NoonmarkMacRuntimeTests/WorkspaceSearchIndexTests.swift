@@ -58,6 +58,68 @@ final class WorkspaceSearchIndexTests: XCTestCase {
         XCTAssertTrue(index.search("launch", limit: 0).isEmpty)
     }
 
+    func testCancelledFutureDraftAndItsSubtasksAreNotSearchable() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "Hidden cancelled plan",
+            now: start
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: LocalDate("2026-07-16"),
+            today: today,
+            now: start.addingTimeInterval(1)
+        )
+        _ = try engine.addSubtask(
+            traceID: traceID,
+            title: "Hidden cancelled subtask",
+            now: start.addingTimeInterval(2)
+        )
+        try engine.returnToPool(
+            traceID: traceID,
+            today: today,
+            now: start.addingTimeInterval(3)
+        )
+
+        let index = WorkspaceSearchIndex(engine: engine)
+        XCTAssertTrue(index.search("Hidden cancelled plan").allSatisfy {
+            $0.destination == .pool(chainID: chainID)
+        })
+        XCTAssertTrue(index.search("Hidden cancelled subtask").isEmpty)
+    }
+
+    func testSnapshotUndoCancelledSubtaskIsNotSearchableUnderVisibleTrace() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "Visible parent",
+            now: start
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: start.addingTimeInterval(1)
+        )
+        let before = engine.snapshot()
+        _ = try engine.addSubtask(
+            traceID: traceID,
+            title: "Snapshot undo hidden child",
+            now: start.addingTimeInterval(2)
+        )
+        let undone = try NoonmarkEngine(snapshot: before)
+        try undone.prepareSnapshotUndo(
+            replacing: engine.snapshot(),
+            now: start.addingTimeInterval(3)
+        )
+
+        let index = WorkspaceSearchIndex(engine: undone)
+        XCTAssertTrue(index.search("Visible parent").contains {
+            $0.destination
+                == .trace(id: traceID, date: today, status: .pending)
+        })
+        XCTAssertTrue(index.search("Snapshot undo hidden child").isEmpty)
+    }
+
     private func makeFixture() throws -> (
         engine: NoonmarkEngine,
         poolChainID: TaskChainID,

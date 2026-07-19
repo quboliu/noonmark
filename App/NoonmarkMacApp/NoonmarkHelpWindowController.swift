@@ -5,6 +5,7 @@ import SwiftUI
 final class NoonmarkHelpWindowController: NSWindowController {
     static let windowIdentifier = NSUserInterfaceItemIdentifier("Noonmark.HelpWindow")
     static let frameAutosaveName = "Noonmark.HelpWindow.Frame"
+    static let minimumContentSize = NSSize(width: 520, height: 420)
 
     private let store: NoonmarkStore
 
@@ -13,8 +14,6 @@ final class NoonmarkHelpWindowController: NSWindowController {
         let root = NoonmarkHelpView()
             .environmentObject(store)
             .preferredColorScheme(.light)
-        let hostingView = NSHostingView(rootView: root)
-        hostingView.sizingOptions = []
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 560),
@@ -24,10 +23,13 @@ final class NoonmarkHelpWindowController: NSWindowController {
         )
         window.identifier = Self.windowIdentifier
         window.title = store.copy.noonmarkHelp
-        window.contentMinSize = NSSize(width: 520, height: 420)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-        window.contentView = hostingView
+        window.enableNoonmarkDynamicKeyViewLoop()
+        window.installNoonmarkResizableHostingContent(
+            root,
+            minimumContentSize: Self.minimumContentSize
+        )
 
         super.init(window: window)
         windowFrameAutosaveName = Self.frameAutosaveName

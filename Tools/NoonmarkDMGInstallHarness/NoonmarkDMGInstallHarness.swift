@@ -6,11 +6,13 @@ import Foundation
 @main
 enum NoonmarkDMGInstallHarness {
     private static let expectedProductionBundleIdentifier = "app.noonmark.mac"
+    private static let expectedE2EBundleIdentifier = "app.noonmark.mac.e2e"
 
     enum Mode: String {
         case preflight
         case exercise
         case restart
+        case e2eInspect = "e2e-inspect"
     }
 
     struct Configuration {
@@ -21,6 +23,9 @@ enum NoonmarkDMGInstallHarness {
         let ledgerPath: String
         let launchToken: String
         let startGatePath: String
+        let windowNumber: CGWindowID
+        let windowTitle: String
+        let expectationsPath: String
 
         static func parse(_ arguments: [String]) throws -> Self {
             var values: [String: String] = [:]
@@ -44,7 +49,10 @@ enum NoonmarkDMGInstallHarness {
                 "--task-title",
                 "--ledger",
                 "--launch-token",
-                "--start-gate"
+                "--start-gate",
+                "--window-number",
+                "--window-title",
+                "--expectations"
             ])
             let unknown = Set(values.keys).subtracting(allowed)
             guard unknown.isEmpty else {
@@ -61,7 +69,7 @@ enum NoonmarkDMGInstallHarness {
                   Self.isAbsoluteSingleLinePath(startGatePath)
             else {
                 throw HarnessFailure.invalidArguments(
-                    "required: --mode preflight|exercise|restart --ledger PATH "
+                    "required: --mode preflight|exercise|restart|e2e-inspect --ledger PATH "
                         + "--launch-token UUID --start-gate ABSOLUTE_PATH"
                 )
             }
@@ -79,7 +87,43 @@ enum NoonmarkDMGInstallHarness {
                     taskTitle: "",
                     ledgerPath: ledgerPath,
                     launchToken: launchToken,
-                    startGatePath: startGatePath
+                    startGatePath: startGatePath,
+                    windowNumber: 0,
+                    windowTitle: "",
+                    expectationsPath: ""
+                )
+            }
+            if mode == .e2eInspect {
+                guard values.count == 9,
+                      let rawPID = values["--pid"],
+                      let parsedPID = Int32(rawPID),
+                      parsedPID > 0,
+                      let appPath = values["--app-path"],
+                      Self.isAbsoluteSingleLinePath(appPath),
+                      let rawWindowNumber = values["--window-number"],
+                      let windowNumber = CGWindowID(rawWindowNumber),
+                      windowNumber > 0,
+                      let windowTitle = values["--window-title"],
+                      Self.isNonemptySingleLineText(windowTitle),
+                      let expectationsPath = values["--expectations"],
+                      Self.isAbsoluteSingleLinePath(expectationsPath)
+                else {
+                    throw HarnessFailure.invalidArguments(
+                        "e2e-inspect requires exact --pid, --app-path, "
+                            + "--window-number, --window-title and --expectations"
+                    )
+                }
+                return Self(
+                    mode: mode,
+                    pid: parsedPID,
+                    appPath: appPath,
+                    taskTitle: "",
+                    ledgerPath: ledgerPath,
+                    launchToken: launchToken,
+                    startGatePath: startGatePath,
+                    windowNumber: windowNumber,
+                    windowTitle: windowTitle,
+                    expectationsPath: expectationsPath
                 )
             }
             guard
@@ -104,8 +148,17 @@ enum NoonmarkDMGInstallHarness {
                 taskTitle: taskTitle,
                 ledgerPath: ledgerPath,
                 launchToken: launchToken,
-                startGatePath: startGatePath
+                startGatePath: startGatePath,
+                windowNumber: 0,
+                windowTitle: "",
+                expectationsPath: ""
             )
+        }
+
+        private static func isNonemptySingleLineText(_ text: String) -> Bool {
+            text.isEmpty == false && text.unicodeScalars.allSatisfy {
+                CharacterSet.controlCharacters.contains($0) == false
+            }
         }
 
         private static func isAbsoluteSingleLinePath(_ path: String) -> Bool {
@@ -174,7 +227,7 @@ enum NoonmarkDMGInstallHarness {
                 exit(EXIT_SUCCESS)
             }
 
-            let target = try validateProductionTarget(
+            let target = try validateTarget(
                 configuration: configuration,
                 ledger: ledger
             )
@@ -191,6 +244,8 @@ enum NoonmarkDMGInstallHarness {
                 try runner.exercise()
             case .restart:
                 try runner.verifyRestart()
+            case .e2eInspect:
+                try runner.inspectE2EAccessibility()
             }
             try ledger?.pass("complete", "mode=\(configuration.mode.rawValue)")
             exit(EXIT_SUCCESS)
@@ -250,10 +305,13 @@ enum NoonmarkDMGInstallHarness {
         )
     }
 
-    private static func validateProductionTarget(
+    private static func validateTarget(
         configuration: Configuration,
         ledger: HarnessLedger?
     ) throws -> AXTarget {
+        let expectedBundleIdentifier = configuration.mode == .e2eInspect
+            ? expectedE2EBundleIdentifier
+            : expectedProductionBundleIdentifier
         guard let running = NSRunningApplication(
             processIdentifier: configuration.pid
         ), running.isTerminated == false else {
@@ -261,10 +319,10 @@ enum NoonmarkDMGInstallHarness {
                 "pid \(configuration.pid) is not a running application"
             )
         }
-        guard running.bundleIdentifier == expectedProductionBundleIdentifier else {
+        guard running.bundleIdentifier == expectedBundleIdentifier else {
             throw HarnessFailure.targetIdentity(
                 "bundle id was \(running.bundleIdentifier ?? "nil"), expected "
-                    + expectedProductionBundleIdentifier
+                    + expectedBundleIdentifier
             )
         }
         guard let bundleURL = running.bundleURL else {
@@ -282,14 +340,14 @@ enum NoonmarkDMGInstallHarness {
         let target = AXTarget(pid: configuration.pid)
         try target.waitUntilFrontmost()
         guard running.isActive else {
-            throw HarnessFailure.targetIdentity("production app is not frontmost")
+            throw HarnessFailure.targetIdentity("target app is not frontmost")
         }
         guard target.windows().isEmpty == false else {
-            throw HarnessFailure.targetIdentity("production app exposes no AX windows")
+            throw HarnessFailure.targetIdentity("target app exposes no AX windows")
         }
         try ledger?.pass(
             "target",
-            "bundle=\(expectedProductionBundleIdentifier) path=\(actualURL.path) "
+            "bundle=\(expectedBundleIdentifier) path=\(actualURL.path) "
                 + "frontmost=true windows=\(target.windows().count)"
         )
         return target
@@ -299,7 +357,105 @@ enum NoonmarkDMGInstallHarness {
 private extension NoonmarkDMGInstallHarness.Configuration {
     var argumentDetail: String {
         if mode == .preflight { return "mode=preflight" }
+        if mode == .e2eInspect {
+            return "mode=\(mode.rawValue) pid=\(pid) app=\(appPath) "
+                + "window_number=\(windowNumber) window=\(windowTitle) "
+                + "expectations=\(expectationsPath)"
+        }
         return "mode=\(mode.rawValue) pid=\(pid) app=\(appPath)"
+    }
+}
+
+private struct E2EAccessibilityExpectation {
+    static let recordPrefix = "classification_remove_button="
+    static let expectedTaskTitle =
+        "Coordinate the launch readiness review with accessibility owners"
+    static let expectedTagNames = Set([
+        "Accessibility",
+        "Launch Readiness"
+    ])
+
+    let identifier: String
+    let label: String
+    let tagName: String
+
+    static func load(from path: String) throws -> [Self] {
+        var status = stat()
+        guard lstat(path, &status) == 0,
+              status.st_mode & S_IFMT == S_IFREG,
+              status.st_size > 0,
+              status.st_size <= 16384
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E AX expectations are not a bounded regular file"
+            )
+        }
+        let url = URL(fileURLWithPath: path)
+        let initial = try Data(contentsOf: url)
+        let current = try Data(contentsOf: url)
+        guard initial == current,
+              let text = String(data: initial, encoding: .utf8),
+              text.split(separator: "\n").count(where: {
+                  $0 == "classification_remove_button_count=2"
+              }) == 1
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E AX expectations changed while being read or lost their count"
+            )
+        }
+        let records = try text.split(separator: "\n").compactMap { line -> Self? in
+            guard line.hasPrefix(recordPrefix) else { return nil }
+            let payload = line.dropFirst(recordPrefix.count)
+            let fields = payload.split(
+                separator: "\t",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            )
+            guard fields.count == 2 else {
+                throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                    "E2E AX expectation is not identifier-tab-label"
+                )
+            }
+            let identifier = String(fields[0])
+            let label = String(fields[1])
+            let components = identifier.split(separator: ".")
+            guard components.count == 5,
+                  components[0] == "classification",
+                  components[1] == "editor",
+                  components[2] == "remove-label",
+                  UUID(uuidString: String(components[3])) != nil,
+                  UUID(uuidString: String(components[4])) != nil,
+                  label.hasPrefix("Remove the tag “"),
+                  label.hasSuffix("” from “\(expectedTaskTitle)”"),
+                  label.unicodeScalars.allSatisfy({
+                      CharacterSet.controlCharacters.contains($0) == false
+                  })
+            else {
+                throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                    "E2E AX expectation identity or English label is invalid"
+                )
+            }
+            let tagName = label
+                .dropFirst("Remove the tag “".count)
+                .dropLast("” from “\(expectedTaskTitle)”".count)
+            return Self(
+                identifier: identifier,
+                label: label,
+                tagName: String(tagName)
+            )
+        }
+        guard records.count == 2,
+              Set(records.map(\.identifier)).count == 2,
+              Set(records.map(\.tagName)) == expectedTagNames,
+              Set(records.map {
+                  $0.identifier.split(separator: ".")[3]
+              }).count == 1
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E AX expectations are not the exact two selected-task tag controls"
+            )
+        }
+        return records.sorted { $0.identifier < $1.identifier }
     }
 }
 
@@ -333,6 +489,183 @@ private final class Runner {
         try assertMainWindow()
         try assertTaskTitleVisible(step: "restart-title-visible")
         try quitThroughAppMenu()
+    }
+
+    func inspectE2EAccessibility() throws {
+        let expectations = try E2EAccessibilityExpectation.load(
+            from: configuration.expectationsPath
+        )
+        let cgWindow = try exactCGWindow()
+        let cgWindowFrame = cgWindow.frame
+        let initialWindows = target.windows()
+        let matchingWindows = initialWindows.filter { window in
+            target.string(window, kAXRoleAttribute as String)
+                == kAXWindowRole as String
+                && target.string(window, kAXTitleAttribute as String)
+                == configuration.windowTitle
+                && target.frame(window) == cgWindowFrame
+        }
+        guard matchingWindows.count == 1 else {
+            let observedWindows = initialWindows.map { window in
+                let role = target.string(window, kAXRoleAttribute as String) ?? "nil"
+                let title = target.string(window, kAXTitleAttribute as String) ?? "nil"
+                let frame = target.frame(window).map { String(describing: $0) } ?? "nil"
+                return "role=\(role) title=\(title) frame=\(frame)"
+            }
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E AX target window count was \(matchingWindows.count), expected 1; "
+                    + "CG frame=\(cgWindowFrame) observed=\(observedWindows)"
+            )
+        }
+        let window = matchingWindows[0]
+        let windowFrame = try target.requiredFrame(
+            window,
+            description: "E2E English Day window"
+        )
+        guard windowFrame.width >= 960, windowFrame.height >= 720 else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E English Day window is below its minimum size: \(windowFrame)"
+            )
+        }
+        try ledger?.pass(
+            "e2e-window",
+            "window_number=\(configuration.windowNumber) "
+                + "cg_title=\(cgWindow.title == nil ? "private" : "matched") "
+                + "ax_title=\(configuration.windowTitle) cg_frame=\(cgWindowFrame) "
+                + "ax_frame=\(windowFrame) correlation=unique exact=true"
+        )
+
+        let descendants = try target.strictDescendants(of: window)
+        let removeButtons = descendants.filter {
+            $0.identifier?.hasPrefix(
+                "classification.editor.remove-label."
+            ) == true
+        }
+        guard removeButtons.count == 2 else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E selected detail exposed \(removeButtons.count) remove-tag AX controls, expected 2"
+            )
+        }
+
+        var evidence: [String] = []
+        for expectation in expectations {
+            let matches = descendants.filter {
+                $0.identifier == expectation.identifier
+            }
+            guard matches.count == 1 else {
+                let observed = removeButtons.map { button in
+                    let identifier = button.identifier ?? "nil"
+                    let title = button.title ?? "nil"
+                    let description = button.description ?? "nil"
+                    return "id=\(identifier) role=\(button.role) "
+                        + "title=\(title) description=\(description)"
+                }
+                throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                    "E2E AX identifier \(expectation.identifier) "
+                        + "matched \(matches.count) controls; observed=\(observed)"
+                )
+            }
+            let match = matches[0]
+            let publishedLabels = Set(
+                [match.title, match.description]
+                    .compactMap { $0 }
+                    .filter { $0.isEmpty == false }
+            )
+            let frame = try target.requiredFrame(
+                match,
+                description: expectation.identifier
+            )
+            guard match.role == kAXButtonRole as String,
+                  publishedLabels.contains(expectation.label),
+                  match.enabled == true,
+                  match.hidden != true,
+                  windowFrame.contains(frame)
+            else {
+                throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                    "E2E AX control mismatch id=\(expectation.identifier) "
+                        + "role=\(match.role) labels=\(publishedLabels.sorted()) "
+                        + "enabled=\(match.enabled.map(String.init) ?? "nil") "
+                        + "hidden=\(match.hidden.map(String.init) ?? "nil") "
+                        + "frame=\(frame) window=\(windowFrame)"
+                )
+            }
+            evidence.append(
+                "tag=\(expectation.tagName) id=\(expectation.identifier) "
+                    + "role=AXButton enabled=true "
+                    + "hidden=\(match.hidden.map(String.init) ?? "nil") frame=\(frame)"
+            )
+        }
+
+        let currentWindows = target.windows()
+        let currentCGWindow = try exactCGWindow()
+        guard currentWindows.count == initialWindows.count,
+              currentWindows.contains(where: { CFEqual($0, window) }),
+              target.string(window, kAXTitleAttribute as String)
+              == configuration.windowTitle,
+              target.frame(window) == cgWindowFrame,
+              currentCGWindow.frame == cgWindowFrame
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E AX target window identity changed during inspection"
+            )
+        }
+        try ledger?.pass(
+            "e2e-remove-buttons",
+            "count=2 unique=true \(evidence.joined(separator: " | "))"
+        )
+    }
+
+    private func exactCGWindow() throws -> (frame: CGRect, title: String?) {
+        guard let records = CGWindowListCopyWindowInfo(
+            [.optionIncludingWindow],
+            configuration.windowNumber
+        ) as? [[String: Any]], records.count == 1
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "CGWindowNumber \(configuration.windowNumber) did not resolve exactly once"
+            )
+        }
+        let record = records[0]
+        let ownerPID = (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+        let windowNumber = (record[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        let title = record[kCGWindowName as String] as? String
+        let layer = (record[kCGWindowLayer as String] as? NSNumber)?.intValue
+        let isOnscreen = (record[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue
+        let alpha = (record[kCGWindowAlpha as String] as? NSNumber)?.doubleValue
+        guard let bounds = record[kCGWindowBounds as String] as? [String: Any],
+              let x = (bounds["X"] as? NSNumber)?.doubleValue,
+              let y = (bounds["Y"] as? NSNumber)?.doubleValue,
+              let width = (bounds["Width"] as? NSNumber)?.doubleValue,
+              let height = (bounds["Height"] as? NSNumber)?.doubleValue
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "CGWindowNumber \(configuration.windowNumber) has no complete bounds"
+            )
+        }
+        let frame = CGRect(x: x, y: y, width: width, height: height)
+        guard ownerPID == configuration.pid,
+              windowNumber == configuration.windowNumber,
+              title == nil || title == configuration.windowTitle,
+              layer == 0,
+              isOnscreen == true,
+              let alpha,
+              alpha > 0,
+              frame.isNull == false,
+              frame.isInfinite == false,
+              frame.width >= 2,
+              frame.height >= 2
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "CG window identity mismatch "
+                    + "pid=\(ownerPID.map { String($0) } ?? "nil") "
+                    + "number=\(windowNumber.map { String($0) } ?? "nil") "
+                    + "title=\(title ?? "nil") "
+                    + "layer=\(layer.map { String($0) } ?? "nil") "
+                    + "onscreen=\(isOnscreen.map { String($0) } ?? "nil") "
+                    + "alpha=\(alpha.map { String($0) } ?? "nil") frame=\(frame)"
+            )
+        }
+        return (frame: frame, title: title)
     }
 
     private func assertMainWindow() throws {

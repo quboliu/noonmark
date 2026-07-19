@@ -63,12 +63,20 @@ struct EnginePersistenceCommitError: LocalizedError {
 
 enum StoreMutationGateError: LocalizedError {
     case exclusiveOperationInProgress
+    case pendingZhulongApplication
 
     var errorDescription: String? {
         switch self {
         case .exclusiveOperationInProgress:
             "数据替换正在进行，请完成后再修改任务。"
+        case .pendingZhulongApplication:
+            "烛龙应用仍待恢复，请先完成恢复再修改任务。"
         }
+    }
+
+    var isPendingZhulongApplication: Bool {
+        if case .pendingZhulongApplication = self { return true }
+        return false
     }
 }
 
@@ -539,6 +547,7 @@ final class NoonmarkStore: ObservableObject {
 
     let dayContext: NaturalDayContext
     let dayRolloverCoordinator = DayRolloverCoordinator()
+    let dataRootProcessLease: NoonmarkDataRootProcessLease?
     let repository: SQLiteEngineRepository?
     let databaseURL: URL?
     let syncDeviceIdentity: SyncDeviceIdentity?
@@ -562,6 +571,7 @@ final class NoonmarkStore: ObservableObject {
     var shouldPauseNextDataImportCommitForE2E = false
     var dataImportCommitContinuationForE2E: CheckedContinuation<Void, Never>?
     var isDataImportCommitPausedForE2E = false
+    var pendingZhulongEngineWriteAuthorized = false
 
     init(dayContext: NaturalDayContext) throws {
         let initialMoment = try dayContext.moment()
@@ -579,12 +589,16 @@ final class NoonmarkStore: ObservableObject {
             && AppLaunchArguments.value(after: "--data-url") != nil
             && Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e"
         if AppLaunchArguments.contains("--ephemeral") {
+            dataRootProcessLease = nil
             repository = nil
             databaseURL = nil
             syncDeviceIdentity = nil
-            seed()
+            try seed()
         } else {
             let configuredDatabaseURL = Self.configuredDatabaseURL()
+            dataRootProcessLease = try NoonmarkDataRootProcessLease.acquire(
+                dataRootURL: configuredDatabaseURL.deletingLastPathComponent()
+            )
             databaseURL = configuredDatabaseURL
             repository = SQLiteEngineRepository(databaseURL: configuredDatabaseURL)
             syncDeviceIdentity = Self.loadOrCreateSyncDeviceIdentity(
@@ -593,7 +607,7 @@ final class NoonmarkStore: ObservableObject {
             try loadOrSeed()
         }
         recoverPendingZhulongApplication()
-        try reconcileNaturalDay(initialMoment, signal: .subscription)
+        try reconcileNaturalDayAtLaunch(initialMoment)
         Theme.apply(engine.preferences.theme)
         restoreLocalFirstSyncStatus()
         restartLocalFirstSyncAutomation()

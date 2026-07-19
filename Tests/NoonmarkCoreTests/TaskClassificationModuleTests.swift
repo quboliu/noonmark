@@ -6,9 +6,10 @@ final class TaskClassificationModuleTests: XCTestCase {
     private let day2 = LocalDate("2026-07-06")
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    func testLocalClassificationMutationDateAdvancesPastFutureFacts() throws {
+    func testMutationClockAdvancesPastClassificationOnlyFutureFacts() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "未来时间分类", now: now)
+        let classificationTime = now.addingTimeInterval(100)
         let initialPlan = try engine.prepareClassification(
             .setCurrent(
                 TaskClassificationDraft(
@@ -19,18 +20,18 @@ final class TaskClassificationModuleTests: XCTestCase {
             ),
             source: .userDirect,
             interactionID: UUID(),
-            now: now
+            now: classificationTime
         )
         _ = try engine.commitClassification(
             initialPlan,
             confirmation: .user(decisionID: UUID()),
-            now: now
+            now: classificationTime
         )
 
-        let mutationDate = engine.nextClassificationMutationDate(
-            reference: Date(timeIntervalSince1970: 1_700_000_000)
+        let mutationDate = try engine.nextMutationDate(
+            reference: now.addingTimeInterval(50)
         )
-        XCTAssertGreaterThan(mutationDate, now)
+        XCTAssertGreaterThan(mutationDate, classificationTime)
 
         let categoryID = try XCTUnwrap(engine.snapshot().classifications.categories.keys.first)
         let removalPlan = try engine.prepareClassification(
@@ -2522,15 +2523,88 @@ final class TaskClassificationModuleTests: XCTestCase {
         XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
     }
 
-    func testRemovingUnclassifiedUnscheduledTaskStillDeletesItCompletely() throws {
+    func testRemovingUnclassifiedUnscheduledTaskRetainsHiddenIdentityFacts() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "删除无历史任务", now: now)
+        let definitionID = try XCTUnwrap(
+            engine.taskPool().first {
+                $0.chain.id == chainID
+            }?.definition.id
+        )
 
-        let outcome = try engine.removeTaskFromPool(chainID: chainID, now: now)
+        let outcome = try engine.removeTaskFromPool(
+            chainID: chainID,
+            now: now.addingTimeInterval(1)
+        )
 
         XCTAssertEqual(outcome, .deleted)
-        XCTAssertNil(engine.chains[chainID])
-        XCTAssertTrue(engine.definitions.values.allSatisfy { $0.chainID != chainID })
+        XCTAssertEqual(engine.chains[chainID]?.state, .abandoned)
+        XCTAssertEqual(engine.definitions[definitionID]?.chainID, chainID)
+        XCTAssertFalse(engine.taskPool().contains { $0.chain.id == chainID })
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testRemovingClassifiedCancelledFutureDraftClosesGhostCurrentRelations() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "移出已取消未来草稿",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: chainID,
+                category: .new(name: "未来工程", colorHex: "#2A6FDB"),
+                labels: [.new(name: "隐藏草稿", colorHex: "#0E9488")]
+            ),
+            to: engine,
+            interactionID: "92000000-0000-0000-0000-000000000001",
+            decisionID: "92000000-0000-0000-0000-000000000002"
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day2,
+            today: day1,
+            now: now.addingTimeInterval(10)
+        )
+        try engine.returnToPool(
+            traceID: traceID,
+            today: day1,
+            now: now.addingTimeInterval(20)
+        )
+
+        let outcome = try engine.removeTaskFromPool(
+            chainID: chainID,
+            now: now.addingTimeInterval(30)
+        )
+
+        XCTAssertEqual(outcome, .removedKeepingHistory)
+        XCTAssertEqual(engine.chains[chainID]?.state, .abandoned)
+        XCTAssertTrue(engine.taskPool().isEmpty)
+        XCTAssertTrue(engine.futurePlans(today: day1).isEmpty)
+        XCTAssertTrue(engine.getDayTodo(date: day2).traces.isEmpty)
+
+        let projection = try taskProjection(
+            from: engine.classification(.task(chainID))
+        )
+        XCTAssertNil(projection.category)
+        XCTAssertTrue(projection.labels.isEmpty)
+        guard case let .catalog(catalog) = try engine.classification(.catalog) else {
+            return XCTFail("预期分类目录")
+        }
+        XCTAssertEqual(
+            catalog.categories.first { $0.name == "未来工程" }?
+                .currentUsageCount,
+            0
+        )
+        XCTAssertEqual(
+            catalog.labels.first { $0.name == "隐藏草稿" }?
+                .currentUsageCount,
+            0
+        )
+        XCTAssertEqual(
+            engine.snapshot().classifications.relationHistory.count,
+            2
+        )
         XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
     }
 

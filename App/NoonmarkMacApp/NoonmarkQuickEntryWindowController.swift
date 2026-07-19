@@ -30,6 +30,7 @@ final class NoonmarkQuickEntryWindowController: NSWindowController {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.tabbingMode = .disallowed
+        panel.enableNoonmarkDynamicKeyViewLoop()
         panel.contentView = hostingView
 
         super.init(window: panel)

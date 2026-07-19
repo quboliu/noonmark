@@ -1,0 +1,1439 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd -P)"
+cd "$repo_root"
+
+# shellcheck source=scripts/evidence-common
+source scripts/evidence-common
+# shellcheck source=scripts/runtime-evidence
+source scripts/runtime-evidence
+
+scope="full"
+if [[ "${1:-}" == "--scope" ]]; then
+  if [[ $# -lt 2 ]]; then
+    echo "usage: $0 [--scope runtime|full] [e2e lease [package install]]" >&2
+    exit 2
+  fi
+  scope="$2"
+  shift 2
+fi
+case "$scope" in
+  runtime | full) ;;
+  *)
+    echo "validation evidence scope must be runtime or full" >&2
+    exit 2
+    ;;
+esac
+
+e2e_manifest="${1:-artifacts/e2e-runtime/manifest.txt}"
+lease_manifest="${2:-artifacts/e2e-data-root-process-lease/manifest.txt}"
+package_manifest="${3:-dist/Noonmark.dmg.manifest}"
+install_manifest="${4:-artifacts/dmg-install/runtime-manifest.txt}"
+expected_english_scenarios="english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
+english_ledger="$(dirname "$e2e_manifest")/english-scenario-ledger.tsv"
+install_evidence_dir="$(dirname "$install_manifest")"
+e2e_evidence_dir="$(dirname "$e2e_manifest")"
+lease_evidence_dir="$(dirname "$lease_manifest")"
+if [[ "$e2e_evidence_dir" == /* ]]; then
+  e2e_evidence_absolute="$e2e_evidence_dir"
+else
+  e2e_evidence_absolute="$repo_root/$e2e_evidence_dir"
+fi
+if [[ "$lease_evidence_dir" == /* ]]; then
+  lease_evidence_absolute="$lease_evidence_dir"
+else
+  lease_evidence_absolute="$repo_root/$lease_evidence_dir"
+fi
+e2e_inventory="${e2e_evidence_dir}/artifact-inventory.sha256"
+lease_inventory="${lease_evidence_dir}/artifact-inventory.sha256"
+install_inventory="$(dirname "$install_evidence_dir")/dmg-install-artifact-inventory.sha256"
+
+require_equal_manifest_value() {
+  local left_manifest="$1"
+  local left_key="$2"
+  local right_manifest="$3"
+  local right_key="$4"
+  local label="$5"
+  local left_value
+  local right_value
+
+  left_value="$(evidence_read "$left_manifest" "$left_key")"
+  right_value="$(evidence_read "$right_manifest" "$right_key")"
+  if [[ "$left_value" != "$right_value" ]]; then
+    echo "development-validation evidence disagrees for $label" >&2
+    return 1
+  fi
+}
+
+require_same_bundle_evidence() {
+  local manifest="$1"
+  local start_prefix="$2"
+  local end_prefix="$3"
+  local label="$4"
+  local suffix
+
+  evidence_require_manifest \
+    "$manifest" \
+    "${start_prefix}_stable_required=1" \
+    "${start_prefix}_codesign_deep_strict=1" \
+    "${end_prefix}_stable_required=1" \
+    "${end_prefix}_codesign_deep_strict=1"
+  for suffix in \
+    binary_sha256 \
+    codesign_identifier \
+    codesign_kind \
+    codesign_identity_sha1 \
+    codesign_identity_sha256 \
+    codesign_team_identifier \
+    codesign_authority \
+    designated_requirement_sha256; do
+    require_equal_manifest_value \
+      "$manifest" \
+      "${start_prefix}_${suffix}" \
+      "$manifest" \
+      "${end_prefix}_${suffix}" \
+      "$label $suffix"
+  done
+}
+
+require_bundle_evidence_equal() {
+  local left_manifest="$1"
+  local left_prefix="$2"
+  local right_manifest="$3"
+  local right_prefix="$4"
+  local label="$5"
+  local suffix
+
+  for suffix in \
+    binary_sha256 \
+    codesign_identifier \
+    codesign_kind \
+    codesign_identity_sha1 \
+    codesign_identity_sha256 \
+    codesign_team_identifier \
+    codesign_authority \
+    designated_requirement_sha256; do
+    require_equal_manifest_value \
+      "$left_manifest" \
+      "${left_prefix}_${suffix}" \
+      "$right_manifest" \
+      "${right_prefix}_${suffix}" \
+      "$label $suffix"
+  done
+}
+
+require_file_sha256() {
+  local manifest="$1"
+  local key="$2"
+  local path="$3"
+  local label="$4"
+  local expected
+  local actual
+
+  if [[ ! -f "$path" || -L "$path" ]]; then
+    echo "$label is missing: $path" >&2
+    return 1
+  fi
+  expected="$(evidence_read "$manifest" "$key")"
+  actual="$(shasum -a 256 "$path" | awk '{print $1}')"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "$label does not match $key" >&2
+    return 1
+  fi
+}
+
+require_preserved_bundle() {
+  local manifest="$1"
+  local prefix="$2"
+  local bundle="$3"
+  local label="$4"
+  local observed
+
+  if [[ ! -d "$bundle" || -L "$bundle" ]]; then
+    echo "$label preserved bundle is missing or unsafe: $bundle" >&2
+    return 1
+  fi
+  observed="$(mktemp "${TMPDIR:-/tmp}/noonmark-observed-bundle.XXXXXX")" ||
+    return 1
+  if ! evidence_capture_bundle "$bundle" 1 observed "$observed"; then
+    rm -f "$observed"
+    echo "$label preserved bundle failed strict signed evidence capture" >&2
+    return 1
+  fi
+  if ! require_bundle_evidence_equal \
+    "$manifest" \
+    "$prefix" \
+    "$observed" \
+    observed \
+    "$label preserved bundle"; then
+    rm -f "$observed"
+    return 1
+  fi
+  rm -f "$observed"
+}
+
+require_clean_diagnostic_evidence() {
+  local directory="$1"
+  local prefix="$2"
+  local label="$3"
+  local baseline="${directory}/${prefix}diagnostic-baseline.txt"
+  local final="${baseline}.current"
+  local diff="${baseline}.new"
+  local result="${directory}/${prefix}diagnostic-result.txt"
+
+  for path in "$baseline" "$final" "$diff" "$result"; do
+    if [[ ! -f "$path" ]]; then
+      echo "$label diagnostic evidence is missing: $path" >&2
+      return 1
+    fi
+  done
+  if [[ -s "$diff" ]] ||
+    [[ "$(<"$result")" != "new_diagnostic_count=0" ]]; then
+    echo "$label diagnostic evidence reports a new crash or failure" >&2
+    return 1
+  fi
+}
+
+require_safe_repo_relative_path() {
+  local path="$1"
+
+  if [[ -z "$path" || "$path" == /* || "$path" == *$'\n'* ||
+    "$path" == *$'\r'* ]]; then
+    return 1
+  fi
+  case "/$path/" in
+    */../* | */./*) return 1 ;;
+  esac
+}
+
+expected_english_oracles() {
+  local scenario="$1"
+  local base="screenshot_vision_ocr_no_han"
+
+  case "$scenario" in
+    english-day)
+      printf '%s\n' \
+        "${base}+day_header_pixel+in_app_view_tree_ax+external_ax"
+      ;;
+    english-day-wide)
+      printf '%s\n' "${base}+day_header_pixel+in_app_view_tree_ax"
+      ;;
+    english-day-history-header)
+      printf '%s\n' \
+        "${base}+day_header_pixel+in_app_responsive_contract"
+      ;;
+    english-pool | english-future | english-unfinished | \
+      english-completed | english-calendar)
+      printf '%s\n' "${base}+in_app_view_tree_ax"
+      ;;
+    english-settings)
+      printf '%s\n' "${base}+settings_sidebar_vision_ocr"
+      ;;
+    english-zhulong)
+      printf '%s\n' "$base"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+require_png_evidence() {
+  local path="$1"
+  local label="$2"
+  local magic
+  local dimensions
+  local width
+  local height
+
+  if [[ ! -f "$path" || -L "$path" ]]; then
+    echo "$label PNG is missing or unsafe: $path" >&2
+    return 1
+  fi
+  magic="$(LC_ALL=C od -An -tx1 -N8 "$path" | tr -d ' \n')"
+  if [[ "$magic" != "89504e470d0a1a0a" ]]; then
+    echo "$label is not a PNG file" >&2
+    return 1
+  fi
+  if ! dimensions="$(/usr/bin/sips -g pixelWidth -g pixelHeight "$path" 2>/dev/null)"; then
+    echo "$label PNG could not be decoded" >&2
+    return 1
+  fi
+  width="$(awk '/pixelWidth:/ { print $2 }' <<<"$dimensions")"
+  height="$(awk '/pixelHeight:/ { print $2 }' <<<"$dimensions")"
+  if [[ ! "$width" =~ ^[0-9]+$ || ! "$height" =~ ^[0-9]+$ ]] ||
+    (( width < 100 || height < 100 )); then
+    echo "$label PNG dimensions are implausible: ${width:-unknown}x${height:-unknown}" >&2
+    return 1
+  fi
+}
+
+require_settings_window_geometry() {
+  local detail="$1"
+
+  if ! printf '%s\n' "$detail" | awk '
+    {
+      value = $0
+      if (value !~ /^independent=true window=\([-0-9.]+, [-0-9.]+, [-0-9.]+, [-0-9.]+\) sidebar=\([-0-9.]+, [-0-9.]+, [-0-9.]+, [-0-9.]+\) content=\([-0-9.]+, [-0-9.]+, [-0-9.]+, [-0-9.]+\)$/) {
+        exit 1
+      }
+      sub(/^independent=true window=\(/, "", value)
+      gsub(/\) sidebar=\(/, ", ", value)
+      gsub(/\) content=\(/, ", ", value)
+      sub(/\)$/, "", value)
+      count = split(value, values, /, /)
+      if (count != 12) exit 1
+      for (field = 1; field <= count; field += 1) {
+        if (values[field] !~ /^-?[0-9]+([.][0-9]+)?$/) exit 1
+      }
+
+      windowX = values[1] + 0
+      windowY = values[2] + 0
+      windowWidth = values[3] + 0
+      windowHeight = values[4] + 0
+      sidebarX = values[5] + 0
+      sidebarY = values[6] + 0
+      sidebarWidth = values[7] + 0
+      sidebarHeight = values[8] + 0
+      contentX = values[9] + 0
+      contentY = values[10] + 0
+      contentWidth = values[11] + 0
+      contentHeight = values[12] + 0
+      tolerance = 0.01
+
+      if (windowWidth < 680 || windowHeight < 500 ||
+          sidebarWidth <= 0 || sidebarHeight <= 0 ||
+          contentWidth <= 0 || contentHeight <= 0) exit 1
+      if (sidebarX < windowX - tolerance || sidebarY < windowY - tolerance ||
+          sidebarX + sidebarWidth > windowX + windowWidth + tolerance ||
+          sidebarY + sidebarHeight > windowY + windowHeight + tolerance ||
+          contentX < windowX - tolerance || contentY < windowY - tolerance ||
+          contentX + contentWidth > windowX + windowWidth + tolerance ||
+          contentY + contentHeight > windowY + windowHeight + tolerance) exit 1
+      if (!(sidebarX + sidebarWidth <= contentX + tolerance ||
+            contentX + contentWidth <= sidebarX + tolerance ||
+            sidebarY + sidebarHeight <= contentY + tolerance ||
+            contentY + contentHeight <= sidebarY + tolerance)) exit 1
+    }
+  '; then
+    echo "DMG install exercise ledger has invalid Settings window geometry" >&2
+    return 1
+  fi
+}
+
+require_install_window_metadata() {
+  local mode="$1"
+  local path="$2"
+  local ledger="$3"
+  local screenshot="$4"
+  local expected_bundle_path="$5"
+  local expected_executable_path="$6"
+  local expected_bundle_identifier="$7"
+  local arguments_detail
+  local ledger_pid
+  local ledger_app_path
+  local metadata_pid
+  local natural_day
+  local normalized_day
+  local month
+  local month_day
+  local expected_title
+  local dimensions
+  local width
+  local height
+
+  if [[ ! -f "$path" || -L "$path" ]] ||
+    ! awk '
+      BEGIN {
+        expected[1] = "phase"
+        expected[2] = "pid"
+        expected[3] = "bundle_identifier"
+        expected[4] = "bundle_path"
+        expected[5] = "executable_path"
+        expected[6] = "window_id"
+        expected[7] = "natural_day"
+        expected[8] = "title"
+        expected[9] = "screenshot"
+        expected[10] = "pixel_size"
+      }
+      {
+        prefix = expected[NR] "="
+        if (NR > 10 || index($0, prefix) != 1 ||
+            length(substr($0, length(prefix) + 1)) == 0) exit 1
+      }
+      END { exit !(NR == 10) }
+    ' "$path"; then
+    echo "DMG install $mode window metadata is incomplete or unsafe" >&2
+    return 1
+  fi
+
+  arguments_detail="$(awk -F $'\t' '$3 == "arguments" { print $4 }' "$ledger")"
+  if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/Noonmark\.app)$ ]]; then
+    echo "DMG install $mode ledger cannot be bound to window metadata" >&2
+    return 1
+  fi
+  ledger_pid="${BASH_REMATCH[1]}"
+  ledger_app_path="${BASH_REMATCH[2]}"
+  metadata_pid="$(evidence_read "$path" pid)"
+  if [[ "$(evidence_read "$path" phase)" != "production $mode" ]] ||
+    [[ "$metadata_pid" != "$ledger_pid" ]] ||
+    [[ "$(evidence_read "$path" bundle_identifier)" != "$expected_bundle_identifier" ]] ||
+    [[ "$ledger_app_path" != "$expected_bundle_path" ]] ||
+    [[ "$(evidence_read "$path" bundle_path)" != "$expected_bundle_path" ]] ||
+    [[ "$(evidence_read "$path" executable_path)" != "$expected_executable_path" ]] ||
+    [[ ! "$(evidence_read "$path" window_id)" =~ ^[1-9][0-9]*$ ]] ||
+    [[ "$(evidence_read "$path" screenshot)" != "$screenshot" ]]; then
+    echo "DMG install $mode ledger disagrees with archived window metadata" >&2
+    return 1
+  fi
+
+  natural_day="$(evidence_read "$path" natural_day)"
+  if [[ ! "$natural_day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] ||
+    ! normalized_day="$(/bin/date -j -f '%Y-%m-%d' "$natural_day" '+%Y-%m-%d' 2>/dev/null)" ||
+    [[ "$normalized_day" != "$natural_day" ]]; then
+    echo "DMG install $mode window metadata has an invalid natural day" >&2
+    return 1
+  fi
+  month="$((10#${natural_day:5:2}))"
+  month_day="$((10#${natural_day:8:2}))"
+  expected_title="晷迹 · Day Todo — ${month}月${month_day}日"
+  if [[ "$(evidence_read "$path" title)" != "$expected_title" ]]; then
+    echo "DMG install $mode window title disagrees with its natural day" >&2
+    return 1
+  fi
+
+  dimensions="$(/usr/bin/sips -g pixelWidth -g pixelHeight "$screenshot" 2>/dev/null)"
+  width="$(awk '/pixelWidth:/ { print $2 }' <<<"$dimensions")"
+  height="$(awk '/pixelHeight:/ { print $2 }' <<<"$dimensions")"
+  if [[ "$(evidence_read "$path" pixel_size)" != "${width}x${height}" ]]; then
+    echo "DMG install $mode window metadata disagrees with its screenshot dimensions" >&2
+    return 1
+  fi
+}
+
+require_install_process_log() {
+  local mode="$1"
+  local path="$2"
+  local expected_pid="$3"
+  local expected_bundle_path="$4"
+  local expected_executable_path="$5"
+  local expected_bundle_identifier="$6"
+  local expected_natural_day="$7"
+  local install_started="$8"
+  local install_finished="$9"
+  local capture_started
+  local capture_epoch
+  local install_started_epoch
+  local install_finished_epoch
+  local identity_rows
+  local identity_count
+  local identity_row
+  local audit_token
+  local audit_pid_hex
+  local audit_pid
+  local process_pids
+  local process_days
+  local process_line
+  local process_day
+  local process_timestamp
+  local process_epoch
+
+  if [[ ! -f "$path" || -L "$path" ]]; then
+    echo "DMG install $mode system runtime log is missing or unsafe" >&2
+    return 1
+  fi
+  capture_started="$(evidence_read "$path" runtime_evidence_capture_started)"
+  if [[ ! "$capture_started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+    [[ ! "$install_started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+    [[ ! "$install_finished" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+    ! capture_epoch="$(/bin/date -j -u -f '%Y-%m-%dT%H:%M:%SZ' \
+      "$capture_started" '+%s' 2>/dev/null)" ||
+    ! install_started_epoch="$(/bin/date -j -u -f '%Y-%m-%dT%H:%M:%SZ' \
+      "$install_started" '+%s' 2>/dev/null)" ||
+    ! install_finished_epoch="$(/bin/date -j -u -f '%Y-%m-%dT%H:%M:%SZ' \
+      "$install_finished" '+%s' 2>/dev/null)"; then
+    echo "DMG install $mode system runtime log has an invalid capture time" >&2
+    return 1
+  fi
+
+  process_pids="$(
+    sed -nE 's/.*NoonmarkMacApp\[([0-9]+):[^]]*\].*/\1/p' "$path" |
+      sort -u | paste -sd, -
+  )"
+  if [[ "$process_pids" != "$expected_pid" ]]; then
+    echo "DMG install $mode archived PID disagrees with the system runtime log" >&2
+    return 1
+  fi
+  identity_rows="$(grep -F "pid=$expected_pid appInfo=" "$path" || true)"
+  identity_count="$(
+    awk 'length($0) > 0 { count += 1 } END { print count + 0 }' \
+      <<<"$identity_rows"
+  )"
+  if [[ "$identity_count" != "1" ]]; then
+    echo "DMG install $mode system runtime log has duplicate or contradictory App identity" >&2
+    return 1
+  fi
+  identity_row="$identity_rows"
+  if [[ "$identity_row" != \
+      *"\"CFBundleExecutablePath\"=\"$expected_executable_path\""* ]] ||
+    [[ "$identity_row" != \
+      *"\"CFBundleIdentifier\"=\"$expected_bundle_identifier\""* ]] ||
+    [[ "$identity_row" != *"\"LSBundlePath\"=\"$expected_bundle_path\""* ]] ||
+    [[ ! "$identity_row" =~ LSAuditToken\"=\$([0-9A-F]{64}) ]]; then
+    echo "DMG install $mode system runtime log has duplicate or contradictory App identity" >&2
+    return 1
+  fi
+  audit_token="${BASH_REMATCH[1]}"
+  audit_pid_hex="${audit_token:40:8}"
+  audit_pid="$(
+    printf '%d' "$((16#${audit_pid_hex:6:2}${audit_pid_hex:4:2}${audit_pid_hex:2:2}${audit_pid_hex:0:2}))"
+  )"
+  if [[ "$audit_pid" != "$expected_pid" ]]; then
+    echo "DMG install $mode visible PID disagrees with its kernel audit token" >&2
+    return 1
+  fi
+  process_days="$(
+    sed -nE \
+      "s/^([0-9]{4}-[0-9]{2}-[0-9]{2}) .*NoonmarkMacApp\\[$expected_pid:.*/\\1/p" \
+      "$path" | sort -u | paste -sd, -
+  )"
+  if [[ "$process_days" != "$expected_natural_day" ]]; then
+    echo "DMG install $mode process dates disagree with its natural day" >&2
+    return 1
+  fi
+  process_line="$(
+    grep -m 1 -E \
+      "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}[.]?[0-9]* .*NoonmarkMacApp\\[$expected_pid:" \
+      "$path" || true
+  )"
+  process_day="${process_line%% *}"
+  if [[ -z "$process_line" || "$process_day" != "$expected_natural_day" ]]; then
+    echo "DMG install $mode natural day disagrees with the system runtime log" >&2
+    return 1
+  fi
+  process_timestamp="${process_line:0:19}"
+  if ! process_epoch="$(/bin/date -j -f '%Y-%m-%d %H:%M:%S' \
+    "$process_timestamp" '+%s' 2>/dev/null)" ||
+    ((install_started_epoch > capture_epoch)) ||
+    ((capture_epoch > process_epoch)) ||
+    ((process_epoch > install_finished_epoch)) ||
+    ((process_epoch - capture_epoch > 120)); then
+    echo "DMG install $mode system runtime timeline is outside its install manifest" >&2
+    return 1
+  fi
+}
+
+require_install_task_identity() {
+  local path="$1"
+  local identity_line
+  local trace_id
+  local chain_id
+  local definition_id
+  local natural_day
+  local trace_status
+  local chain_state
+  local definition_sequence
+  local definition_title
+  local uuid_pattern='^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$'
+
+  if [[ ! -f "$path" || -L "$path" ]] ||
+    ! awk -F $'\t' '
+      NR == 1 {
+        valid += ($0 == "trace_id\tchain_id\tdefinition_id\tdate\ttrace_status\tchain_state\tdefinition_sequence\ttitle")
+      }
+      NR == 2 {
+        valid += (NF == 8 && $1 != "" && $2 != "" && $3 != "" &&
+          $4 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ &&
+          $5 == "pending" && $6 == "active" && $7 ~ /^[0-9]+$/ &&
+          $8 == "dmgproductiontask")
+      }
+      END { exit !(NR == 2 && valid == 2) }
+    ' "$path"; then
+    echo "installed task independent identity ledger is incomplete or unsafe" >&2
+    return 1
+  fi
+  identity_line="$(tail -n 1 "$path")"
+  IFS=$'\t' read -r \
+    trace_id chain_id definition_id natural_day trace_status chain_state \
+    definition_sequence definition_title <<<"$identity_line"
+  if [[ ! "$trace_id" =~ $uuid_pattern ]] ||
+    [[ ! "$chain_id" =~ $uuid_pattern ]] ||
+    [[ ! "$definition_id" =~ $uuid_pattern ]]; then
+    echo "installed task independent identity ledger has an invalid UUID schema" >&2
+    return 1
+  fi
+}
+
+require_install_ledger_semantics() {
+  local mode="$1"
+  local path="$2"
+  local expected_steps="$3"
+  local actual_steps
+
+  if [[ ! -f "$path" || -L "$path" ]]; then
+    echo "DMG install $mode ledger is missing or unsafe" >&2
+    return 1
+  fi
+  if ! actual_steps="$(awk -F $'\t' '
+    NF != 4 ||
+      $1 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ ||
+      $2 != "PASS" || $3 == "" || $4 == "" { exit 1 }
+    { steps = steps (steps == "" ? "" : ",") $3 }
+    END { if (NR == 0) exit 1; print steps }
+  ' "$path")"; then
+    echo "DMG install $mode ledger has an invalid row" >&2
+    return 1
+  fi
+  if [[ "$actual_steps" != "$expected_steps" ]]; then
+    echo "DMG install $mode ledger has an incomplete or reordered phase set" >&2
+    return 1
+  fi
+  if [[ "$(awk -F $'\t' '$3 == "permissions" && $4 == "AXIsProcessTrusted=true CGPreflightPostEventAccess=true" { count += 1 } END { print count + 0 }' "$path")" != "1" ]] ||
+    [[ "$(tail -n 1 "$path")" != *$'\tPASS\tcomplete\t'"mode=$mode" ]]; then
+    echo "DMG install $mode ledger lacks its exact permission or completion proof" >&2
+    return 1
+  fi
+
+  local arguments_detail
+  local process_detail
+  local observer_detail
+  local helper_pid
+  local launch_token
+  local app_path
+  arguments_detail="$(awk -F $'\t' '$3 == "arguments" { print $4 }' "$path")"
+  process_detail="$(awk -F $'\t' '$3 == "process" { print $4 }' "$path")"
+  observer_detail="$(awk -F $'\t' '$3 == "exit-observer" { print $4 }' "$path")"
+  if [[ ! "$process_detail" =~ ^mode=$mode[[:space:]]helper_pid=([1-9][0-9]*)[[:space:]]launch_token=([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})$ ]]; then
+    echo "DMG install $mode ledger has an invalid helper process proof" >&2
+    return 1
+  fi
+  helper_pid="${BASH_REMATCH[1]}"
+  launch_token="${BASH_REMATCH[2]}"
+  if [[ "$observer_detail" != \
+    "helper_pid=$helper_pid launch_token=$launch_token observer=EVFILT_PROC+NOTE_EXITSTATUS" ]]; then
+    echo "DMG install $mode ledger has a mismatched exit-observer proof" >&2
+    return 1
+  fi
+
+  if [[ "$mode" == "preflight" ]]; then
+    if [[ "$arguments_detail" != "mode=preflight" ]]; then
+      echo "DMG install preflight ledger has an invalid arguments proof" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/Noonmark\.app)$ ]]; then
+    echo "DMG install $mode ledger has an invalid installed App arguments proof" >&2
+    return 1
+  fi
+  app_path="${BASH_REMATCH[2]}"
+  if [[ "$(awk -F $'\t' '$3 == "target" { print $4 }' "$path")" != \
+    "bundle=app.noonmark.mac path=$app_path frontmost=true windows=1" ]]; then
+    echo "DMG install $mode ledger has an invalid target proof" >&2
+    return 1
+  fi
+  if [[ "$(awk -F $'\t' '$3 == "main-window" { print $4 }' "$path")" != \
+    "native AXWindow is visible" ]]; then
+    echo "DMG install $mode ledger has an invalid main-window proof" >&2
+    return 1
+  fi
+  if [[ "$(awk -F $'\t' '$3 == "quit-menu" { print $4 }' "$path")" != \
+    "title=退出晷迹 shortcut=Command-q" ]] ||
+    [[ "$(awk -F $'\t' '$3 == "quit" { print $4 }' "$path")" != \
+      "terminated via real App menu click" ]]; then
+    echo "DMG install $mode ledger has an invalid native quit proof" >&2
+    return 1
+  fi
+
+  if [[ "$mode" == "exercise" ]]; then
+    local settings_window_detail
+    local title_visible_pattern
+    settings_window_detail="$(
+      awk -F $'\t' '$3 == "settings-window" { print $4 }' "$path"
+    )"
+    title_visible_pattern='^title=dmgproductiontask visibleAXMatches=[1-9][0-9]*$'
+    if [[ "$(awk -F $'\t' '$3 == "settings-menu" { print $4 }' "$path")" != \
+      "title=设置… shortcut=Command-," ]] ||
+      ! require_settings_window_geometry "$settings_window_detail" ||
+      [[ "$(awk -F $'\t' '$3 == "settings-close" { print $4 }' "$path")" != \
+        "closed with real WindowServer click" ]] ||
+      [[ "$(awk -F $'\t' '$3 == "quick-entry-menu" { print $4 }' "$path")" != \
+        "title=快速记录… shortcut=Command-n" ]] ||
+      [[ "$(awk -F $'\t' '$3 == "quick-entry-input" { print $4 }' "$path")" != \
+        "value=dmgproductiontask source=cghidEventTap" ]] ||
+      [[ "$(awk -F $'\t' '$3 == "quick-entry-add" { print $4 }' "$path")" != \
+        "panel dismissed after real click" ]] ||
+      [[ ! "$(awk -F $'\t' '$3 == "exercise-title-visible" { print $4 }' "$path")" =~ $title_visible_pattern ]]; then
+      echo "DMG install exercise ledger has an invalid Settings, Quick Entry, input, or title proof" >&2
+      return 1
+    fi
+  elif [[ ! "$(awk -F $'\t' '$3 == "restart-title-visible" { print $4 }' "$path")" =~ \
+    ^title=dmgproductiontask[[:space:]]visibleAXMatches=[1-9][0-9]*$ ]]; then
+    echo "DMG install restart ledger has an invalid persisted-title proof" >&2
+    return 1
+  fi
+}
+
+require_install_task_snapshot() {
+  local path="$1"
+  local label="$2"
+  local expected_identity_line="$3"
+
+  if [[ ! -f "$path" || -L "$path" ]] ||
+    ! awk -F $'\t' '
+      NR == 1 { valid += ($0 == "integrity_check=ok") }
+      NR == 2 {
+        sub(/^identity=/, "", $1)
+        valid += (NF == 8 && $1 != "" && $2 != "" && $3 != "" &&
+          $4 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ &&
+          $5 == "pending" && $6 == "active" && $7 ~ /^[0-9]+$/ &&
+          $8 == "dmgproductiontask")
+      }
+      NR == 3 {
+        valid += ($0 ~ /^joined_row=\{"trace":\{/ &&
+          $0 ~ /,"chain":\{/ && $0 ~ /,"definition":\{/)
+      }
+      END { exit !(NR == 3 && valid == 3) }
+    ' "$path"; then
+    echo "$label is not a complete installed task row snapshot" >&2
+    return 1
+  fi
+
+  local identity_line
+  local trace_id
+  local chain_id
+  local definition_id
+  local natural_day
+  local trace_status
+  local chain_state
+  local definition_sequence
+  local definition_title
+  local joined_json
+  local json_path
+  identity_line="$(sed -n '2s/^identity=//p' "$path")"
+  if [[ "$identity_line" != "$expected_identity_line" ]]; then
+    echo "installed task snapshot disagrees with its independent identity ledger" >&2
+    return 1
+  fi
+  IFS=$'\t' read -r \
+    trace_id chain_id definition_id natural_day trace_status chain_state \
+    definition_sequence definition_title <<<"$identity_line"
+  joined_json="$(sed -n '3s/^joined_row=//p' "$path")"
+  json_path="$(mktemp "${TMPDIR:-/tmp}/noonmark-task-snapshot.XXXXXX.json")"
+  printf '%s\n' "$joined_json" >"$json_path"
+  if [[ "$(/usr/bin/plutil -extract trace.id raw -o - "$json_path" 2>/dev/null)" != "$trace_id" ]] ||
+    [[ "$(/usr/bin/plutil -extract trace.chain_id raw -o - "$json_path")" != "$chain_id" ]] ||
+    [[ "$(/usr/bin/plutil -extract trace.definition_id raw -o - "$json_path")" != "$definition_id" ]] ||
+    [[ "$(/usr/bin/plutil -extract trace.date raw -o - "$json_path")" != "$natural_day" ]] ||
+    [[ "$(/usr/bin/plutil -extract trace.status raw -o - "$json_path")" != "$trace_status" ]] ||
+    [[ "$(/usr/bin/plutil -extract chain.id raw -o - "$json_path")" != "$chain_id" ]] ||
+    [[ "$(/usr/bin/plutil -extract chain.state raw -o - "$json_path")" != "$chain_state" ]] ||
+    [[ "$(/usr/bin/plutil -extract definition.id raw -o - "$json_path")" != "$definition_id" ]] ||
+    [[ "$(/usr/bin/plutil -extract definition.chain_id raw -o - "$json_path")" != "$chain_id" ]] ||
+    [[ "$(/usr/bin/plutil -extract definition.sequence raw -o - "$json_path")" != "$definition_sequence" ]] ||
+    [[ "$(/usr/bin/plutil -extract definition.title raw -o - "$json_path")" != "$definition_title" ]]; then
+    rm -f "$json_path"
+    echo "$label identity disagrees with its joined SQLite row" >&2
+    return 1
+  fi
+  rm -f "$json_path"
+}
+
+runtime_manifests=("$e2e_manifest" "$lease_manifest")
+if [[ "$scope" == "full" ]]; then
+  runtime_manifests+=("$package_manifest" "$install_manifest")
+fi
+for manifest in "${runtime_manifests[@]}"; do
+  evidence_require_manifest \
+    "$manifest" \
+    "evidence_schema_version=1" \
+    "suite_mode=full" \
+    "suite_exit_status=0"
+done
+
+evidence_require_manifest \
+  "$e2e_manifest" \
+  "suite=mac-app-e2e" \
+  "english_scenario_verified_count=10" \
+  "english_scenario_verified_set=${expected_english_scenarios}" \
+  "app_binary_unchanged=true" \
+  "helper_binary_unchanged=true" \
+  "windowserver_input_cleanup_result=ok"
+evidence_require_manifest \
+  "$lease_manifest" \
+  "suite=data-root-process-lease-e2e" \
+  "app_binary_unchanged=true" \
+  "intentional_signal=SIGKILL" \
+  "intentional_sigkill_phase=sigkill-holder" \
+  "intentional_signal_expected_status=137" \
+  "intentional_sigkill_observed_status=137"
+if [[ "$scope" == "full" ]]; then
+  evidence_require_manifest \
+    "$package_manifest" \
+    "suite=package-dmg" \
+    "configuration=release" \
+    "source_tree_unchanged=true" \
+    "app_binary_unchanged=true" \
+    "app_signature_unchanged=true"
+  evidence_require_manifest \
+    "$install_manifest" \
+    "suite=dmg-install" \
+    "configuration=release" \
+    "source_tree_unchanged=true" \
+    "installed_app_binary_unchanged=true" \
+    "installed_app_signature_unchanged=true" \
+    "helper_binary_unchanged=true" \
+    "helper_signature_unchanged=true" \
+    "diagnostic_diff_status=clean"
+fi
+
+current_source_fragment="$(
+  mktemp "${TMPDIR:-/tmp}/noonmark-current-source.XXXXXX"
+)"
+evidence_capture_source "$repo_root" current "$current_source_fragment"
+for source_suffix in head_commit head_tree_oid worktree_tree_oid tree_dirty; do
+  if ! require_equal_manifest_value \
+    "$current_source_fragment" \
+    "current_${source_suffix}" \
+    "$e2e_manifest" \
+    "source_${source_suffix}" \
+    "current source $source_suffix"; then
+    rm -f "$current_source_fragment"
+    echo "development-validation evidence is stale for the current worktree" >&2
+    exit 1
+  fi
+done
+rm -f "$current_source_fragment"
+
+expected_e2e_binary="$(
+  evidence_read "$e2e_manifest" "app_binary_sha256_before"
+)"
+if [[ ! -f "$english_ledger" ]] ||
+  [[ "$(head -n 1 "$english_ledger")" != \
+    $'scenario\tapp_binary_sha256\tscreenshot_sha256\toracles\texternal_ax' ]] ||
+  [[ "$(awk -F $'\t' 'NR > 1 { print $1 }' "$english_ledger" | paste -sd, -)" != \
+    "$expected_english_scenarios" ]] ||
+  ! awk -F $'\t' -v expected_binary="$expected_e2e_binary" '
+    NR == 1 { next }
+    NF != 5 || $2 != expected_binary || length($3) != 64 ||
+      $3 !~ /^[0-9a-f]+$/ { exit 1 }
+    $5 != "true" && $5 != "false" { exit 1 }
+    $5 == "true" && $1 != "english-day" { exit 1 }
+    ($1 == "english-settings" || $1 == "english-zhulong") && $5 != "false" { exit 1 }
+    END { if (NR != 11) exit 1 }
+  ' "$english_ledger"; then
+  echo "full English E2E ledger is missing, incomplete, or cross-binary" >&2
+  exit 1
+fi
+actual_english_ledger_sha256="$(
+  shasum -a 256 "$english_ledger" | awk '{print $1}'
+)"
+recorded_english_ledger_sha256="$(
+  evidence_read "$e2e_manifest" "english_scenario_ledger_sha256"
+)"
+if [[ "$actual_english_ledger_sha256" != \
+  "$recorded_english_ledger_sha256" ]]; then
+  echo "English E2E ledger does not match its manifest hash" >&2
+  exit 1
+fi
+
+english_screenshot_oracle_args=()
+while IFS=$'\t' read -r \
+  scenario scenario_binary recorded_screenshot_sha256 recorded_oracles \
+  recorded_external_ax; do
+  screenshot_path="$repo_root/artifacts/e2e/${scenario}.png"
+  if [[ "$(expected_english_oracles "$scenario")" != "$recorded_oracles" ]]; then
+    echo "English E2E scenario has an unexpected oracle set: $scenario" >&2
+    exit 1
+  fi
+  require_png_evidence "$screenshot_path" "English E2E $scenario screenshot"
+  actual_screenshot_sha256="$(
+    shasum -a 256 "$screenshot_path" | awk '{print $1}'
+  )"
+  if [[ "$actual_screenshot_sha256" != "$recorded_screenshot_sha256" ]]; then
+    echo "English E2E screenshot disagrees with its ledger digest: $scenario" >&2
+    exit 1
+  fi
+  english_screenshot_oracle_args+=("$scenario" "$screenshot_path")
+done < <(tail -n +2 "$english_ledger")
+verify_english_screenshot_content() {
+  local english_oracle_result
+  local english_oracle_error
+
+  english_oracle_result="$(
+    mktemp "${TMPDIR:-/tmp}/noonmark-english-oracles.XXXXXX"
+  )"
+  english_oracle_error="${english_oracle_result}.stderr"
+  if ! /usr/bin/xcrun swift \
+    scripts/verify-english-screenshot-content.swift \
+    "${english_screenshot_oracle_args[@]}" \
+    >"$english_oracle_result" 2>"$english_oracle_error"; then
+    echo "English E2E screenshots failed independent Vision content verification" >&2
+    cat "$english_oracle_error" >&2
+    rm -f "$english_oracle_result" "$english_oracle_error"
+    return 1
+  fi
+  if [[ "$(wc -l <"$english_oracle_result" | tr -d ' ')" != "10" ]]; then
+    echo "English E2E independent Vision verifier returned an incomplete result" >&2
+    rm -f "$english_oracle_result" "$english_oracle_error"
+    return 1
+  fi
+  rm -f "$english_oracle_result" "$english_oracle_error"
+}
+
+for runtime_artifact in \
+  "$(dirname "$lease_manifest")/summary.txt" \
+  "$(dirname "$lease_manifest")/unified.log" \
+  "$(dirname "$lease_manifest")/diagnostic-result.txt" \
+  "$(dirname "$e2e_manifest")/unified.log" \
+  "$(dirname "$e2e_manifest")/diagnostic-result.txt" \
+  "$(dirname "$e2e_manifest")/runtime-manifest.txt" \
+  "$(dirname "$e2e_manifest")/windowserver-input-cleanup-result.txt" \
+  "$english_ledger" \
+  "$e2e_inventory" \
+  "$lease_inventory" \
+  "$(dirname "$e2e_manifest")/helper-diagnostic-result.txt"; do
+  if [[ ! -s "$runtime_artifact" ]]; then
+    echo "runtime evidence artifact is missing or empty: $runtime_artifact" >&2
+    exit 1
+  fi
+done
+
+require_clean_diagnostic_evidence "$e2e_evidence_dir" "" "E2E App"
+require_clean_diagnostic_evidence "$e2e_evidence_dir" "helper-" "E2E helper"
+require_clean_diagnostic_evidence "$lease_evidence_dir" "" "lease App"
+runtime_evidence_assert_clean_logs \
+  "E2E archived evidence" \
+  "$e2e_evidence_dir/unified.log"
+runtime_evidence_assert_clean_logs \
+  "lease archived evidence" \
+  "$lease_evidence_dir/unified.log"
+if [[ "$(grep -Fxc 'suite_exit_status=0' \
+  "$e2e_evidence_dir/runtime-manifest.txt")" != "1" ]]; then
+  echo "E2E runtime manifest is missing its exact successful finish" >&2
+  exit 1
+fi
+require_file_sha256 \
+  "$e2e_manifest" \
+  artifact_inventory_sha256 \
+  "$e2e_inventory" \
+  "E2E artifact inventory"
+require_file_sha256 \
+  "$e2e_manifest" \
+  windowserver_input_cleanup_result_sha256 \
+  "$e2e_evidence_dir/windowserver-input-cleanup-result.txt" \
+  "E2E WindowServer input cleanup result"
+require_file_sha256 \
+  "$lease_manifest" \
+  artifact_inventory_sha256 \
+  "$lease_inventory" \
+  "lease artifact inventory"
+evidence_verify_inventory "$repo_root" "$e2e_inventory"
+evidence_verify_inventory "$repo_root" "$lease_inventory"
+e2e_required_inventory_paths=(
+  "$e2e_evidence_absolute/unified.log"
+  "$e2e_evidence_absolute/runtime-manifest.txt"
+  "$e2e_evidence_absolute/windowserver-input-cleanup-result.txt"
+  "$e2e_evidence_absolute/windowserver-input-cleanup.log"
+  "$e2e_evidence_absolute/english-scenario-ledger.tsv"
+  "$e2e_evidence_absolute/diagnostic-baseline.txt"
+  "$e2e_evidence_absolute/diagnostic-baseline.txt.current"
+  "$e2e_evidence_absolute/diagnostic-baseline.txt.new"
+  "$e2e_evidence_absolute/diagnostic-result.txt"
+  "$e2e_evidence_absolute/helper-diagnostic-baseline.txt"
+  "$e2e_evidence_absolute/helper-diagnostic-baseline.txt.current"
+  "$e2e_evidence_absolute/helper-diagnostic-baseline.txt.new"
+  "$e2e_evidence_absolute/helper-diagnostic-result.txt"
+  "$e2e_evidence_absolute/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
+  "$e2e_evidence_absolute/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
+)
+IFS=, read -r -a english_scenario_inventory_names <<< \
+  "$expected_english_scenarios"
+for scenario in "${english_scenario_inventory_names[@]}"; do
+  e2e_required_inventory_paths+=("$repo_root/artifacts/e2e/${scenario}.png")
+done
+evidence_require_inventory_paths \
+  "$repo_root" \
+  "$e2e_inventory" \
+  "${e2e_required_inventory_paths[@]}"
+evidence_require_inventory_paths \
+  "$repo_root" \
+  "$lease_inventory" \
+  "$lease_evidence_absolute/summary.txt" \
+  "$lease_evidence_absolute/unified.log" \
+  "$lease_evidence_absolute/diagnostic-baseline.txt" \
+  "$lease_evidence_absolute/diagnostic-baseline.txt.current" \
+  "$lease_evidence_absolute/diagnostic-baseline.txt.new" \
+  "$lease_evidence_absolute/diagnostic-result.txt" \
+  "$lease_evidence_absolute/intentional-termination-ledger.tsv" \
+  "$lease_evidence_absolute/sigkill-report.txt" \
+  "$lease_evidence_absolute/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
+require_preserved_bundle \
+  "$e2e_manifest" \
+  app \
+  "$e2e_evidence_absolute/app-snapshot/NoonmarkMacAppE2E.app" \
+  "E2E App"
+require_preserved_bundle \
+  "$e2e_manifest" \
+  helper \
+  "$e2e_evidence_absolute/helper-snapshot/NoonmarkDMGInstallHarness.app" \
+  "E2E helper"
+require_preserved_bundle \
+  "$lease_manifest" \
+  app \
+  "$lease_evidence_absolute/app-snapshot/NoonmarkMacAppE2E.app" \
+  "lease App"
+
+sigkill_report="${lease_evidence_dir}/sigkill-report.txt"
+intentional_termination_ledger="${lease_evidence_dir}/intentional-termination-ledger.tsv"
+require_file_sha256 \
+  "$lease_manifest" \
+  intentional_sigkill_report_sha256 \
+  "$sigkill_report" \
+  "lease SIGKILL report"
+require_file_sha256 \
+  "$lease_manifest" \
+  intentional_termination_ledger_sha256 \
+  "$intentional_termination_ledger" \
+  "lease intentional-termination ledger"
+if ! cmp -s "$sigkill_report" "$intentional_termination_ledger"; then
+  echo "lease SIGKILL report disagrees with its termination ledger" >&2
+  exit 1
+fi
+evidence_verify_sigkill_allowlist \
+  "$sigkill_report" \
+  "$(evidence_read "$lease_manifest" intentional_sigkill_pid):SIGKILL:sigkill-holder:137:$(evidence_read "$lease_manifest" app_binary_sha256)"
+
+if [[ "$scope" == "full" ]]; then
+  for diagnostic_spec in \
+    "app_diagnostic_baseline_sha256:diagnostics/noonmark-baseline.txt" \
+    "app_diagnostic_final_sha256:diagnostics/noonmark-final.txt" \
+    "app_diagnostic_diff_sha256:diagnostics/noonmark-diff.txt" \
+    "helper_diagnostic_baseline_sha256:diagnostics/harness-baseline.txt" \
+    "helper_diagnostic_final_sha256:diagnostics/harness-final.txt" \
+    "helper_diagnostic_diff_sha256:diagnostics/harness-diff.txt"; do
+    diagnostic_key="${diagnostic_spec%%:*}"
+    diagnostic_path="${install_evidence_dir}/${diagnostic_spec#*:}"
+    if [[ ! -f "$diagnostic_path" ]] ||
+      [[ "$(shasum -a 256 "$diagnostic_path" | awk '{print $1}')" != \
+        "$(evidence_read "$install_manifest" "$diagnostic_key")" ]]; then
+      echo "installed runtime diagnostic evidence is missing or hash-mismatched: $diagnostic_key" >&2
+      exit 1
+    fi
+  done
+  if ! cmp -s \
+    "${install_evidence_dir}/diagnostics/noonmark-baseline.txt" \
+    "${install_evidence_dir}/diagnostics/noonmark-final.txt" ||
+    ! cmp -s \
+      "${install_evidence_dir}/diagnostics/harness-baseline.txt" \
+      "${install_evidence_dir}/diagnostics/harness-final.txt" ||
+    [[ -s "${install_evidence_dir}/diagnostics/noonmark-diff.txt" ]] ||
+    [[ -s "${install_evidence_dir}/diagnostics/harness-diff.txt" ]]; then
+    echo "installed App or helper produced a DiagnosticReports delta" >&2
+    exit 1
+  fi
+fi
+
+related_manifests=("$lease_manifest")
+if [[ "$scope" == "full" ]]; then
+  related_manifests+=("$package_manifest" "$install_manifest")
+fi
+for manifest in "${related_manifests[@]}"; do
+  require_equal_manifest_value \
+    "$e2e_manifest" \
+    "evidence_run_id" \
+    "$manifest" \
+    "evidence_run_id" \
+    "evidence run ID"
+  require_equal_manifest_value \
+    "$e2e_manifest" \
+    "source_worktree_tree_oid" \
+    "$manifest" \
+    "source_worktree_tree_oid" \
+    "source worktree tree"
+done
+
+require_equal_manifest_value \
+  "$e2e_manifest" \
+  "app_binary_sha256_before" \
+  "$e2e_manifest" \
+  "app_binary_sha256_after" \
+  "E2E App binary stability"
+require_equal_manifest_value \
+  "$e2e_manifest" \
+  "app_binary_sha256" \
+  "$e2e_manifest" \
+  "app_binary_sha256_before" \
+  "E2E App captured start digest"
+require_equal_manifest_value \
+  "$e2e_manifest" \
+  "app_binary_sha256_after" \
+  "$e2e_manifest" \
+  "app_end_binary_sha256" \
+  "E2E App captured end digest"
+require_equal_manifest_value \
+  "$e2e_manifest" \
+  "helper_binary_sha256" \
+  "$e2e_manifest" \
+  "helper_binary_sha256_before" \
+  "E2E helper captured start digest"
+require_equal_manifest_value \
+  "$e2e_manifest" \
+  "helper_binary_sha256_before" \
+  "$e2e_manifest" \
+  "helper_binary_sha256_after" \
+  "E2E helper binary stability"
+require_equal_manifest_value \
+  "$e2e_manifest" \
+  "helper_binary_sha256_after" \
+  "$e2e_manifest" \
+  "helper_end_binary_sha256" \
+  "E2E helper captured end digest"
+require_equal_manifest_value \
+  "$lease_manifest" \
+  "app_binary_sha256" \
+  "$lease_manifest" \
+  "app_binary_sha256_end" \
+  "lease App binary stability"
+
+require_equal_manifest_value \
+  "$e2e_manifest" \
+  "source_worktree_tree_oid" \
+  "$e2e_manifest" \
+  "source_end_worktree_tree_oid" \
+  "E2E source tree stability"
+require_equal_manifest_value \
+  "$lease_manifest" \
+  "source_worktree_tree_oid" \
+  "$lease_manifest" \
+  "source_end_worktree_tree_oid" \
+  "lease source tree stability"
+require_same_bundle_evidence "$e2e_manifest" app app_end "E2E App"
+require_same_bundle_evidence "$e2e_manifest" helper helper_end "E2E helper"
+require_same_bundle_evidence "$lease_manifest" app app_end "lease App"
+
+signed_bundle_specs=(
+  "$e2e_manifest:helper"
+  "$lease_manifest:app"
+)
+if [[ "$scope" == "full" ]]; then
+  signed_bundle_specs+=(
+    "$package_manifest:app"
+    "$install_manifest:mounted_app"
+    "$install_manifest:installed_app"
+    "$install_manifest:helper"
+  )
+fi
+for manifest_and_prefix in "${signed_bundle_specs[@]}"; do
+  manifest="${manifest_and_prefix%:*}"
+  prefix="${manifest_and_prefix##*:}"
+  evidence_require_manifest \
+    "$manifest" \
+    "${prefix}_stable_required=1" \
+    "${prefix}_codesign_deep_strict=1"
+  require_equal_manifest_value \
+    "$e2e_manifest" \
+    "app_codesign_identity_sha256" \
+    "$manifest" \
+    "${prefix}_codesign_identity_sha256" \
+    "Apple signing leaf identity"
+  require_equal_manifest_value \
+    "$e2e_manifest" \
+    "app_codesign_team_identifier" \
+    "$manifest" \
+    "${prefix}_codesign_team_identifier" \
+    "Apple signing Team"
+  require_equal_manifest_value \
+    "$e2e_manifest" \
+    "app_codesign_authority" \
+    "$manifest" \
+    "${prefix}_codesign_authority" \
+    "Apple signing authority"
+done
+
+if [[ "$scope" == "runtime" ]]; then
+  verify_english_screenshot_content
+  echo "Runtime development-validation evidence is internally consistent"
+  exit 0
+fi
+
+require_equal_manifest_value \
+  "$package_manifest" \
+  "source_worktree_tree_oid" \
+  "$package_manifest" \
+  "source_end_worktree_tree_oid" \
+  "package source tree stability"
+require_same_bundle_evidence "$package_manifest" app app_end "package App"
+
+require_equal_manifest_value \
+  "$install_manifest" \
+  "source_worktree_tree_oid" \
+  "$install_manifest" \
+  "source_end_worktree_tree_oid" \
+  "install source tree stability"
+require_same_bundle_evidence \
+  "$install_manifest" \
+  installed_app \
+  installed_app_end \
+  "installed App"
+require_same_bundle_evidence \
+  "$install_manifest" \
+  helper \
+  helper_end \
+  "install helper"
+
+require_bundle_evidence_equal \
+  "$package_manifest" \
+  app \
+  "$install_manifest" \
+  mounted_app \
+  "package and mounted App"
+require_bundle_evidence_equal \
+  "$package_manifest" \
+  app \
+  "$install_manifest" \
+  installed_app \
+  "package and installed App"
+
+require_file_sha256 \
+  "$install_manifest" \
+  artifact_inventory_sha256 \
+  "$install_inventory" \
+  "install artifact inventory"
+evidence_verify_inventory "$repo_root" "$install_inventory"
+evidence_require_inventory_paths \
+  "$repo_root" \
+  "$install_inventory" \
+  "$repo_root/dist/Noonmark.dmg" \
+  "$repo_root/dist/Noonmark.dmg.sha256" \
+  "$repo_root/dist/Noonmark.dmg.manifest" \
+  "$repo_root/artifacts/dmg-install/Applications/Noonmark.app/Contents/MacOS/NoonmarkMacApp" \
+  "$repo_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness" \
+  "$repo_root/artifacts/dmg-install/installed-day.png" \
+  "$repo_root/artifacts/dmg-install/installed-exercise-before-input.png" \
+  "$repo_root/artifacts/dmg-install/installed-restart.png" \
+  "$repo_root/artifacts/dmg-install/installed-exercise-window.txt" \
+  "$repo_root/artifacts/dmg-install/installed-restart-window.txt" \
+  "$repo_root/artifacts/dmg-install/exercise-console.log" \
+  "$repo_root/artifacts/dmg-install/restart-console.log" \
+  "$repo_root/artifacts/dmg-install/permission-preflight-ledger.tsv" \
+  "$repo_root/artifacts/dmg-install/exercise-ledger.tsv" \
+  "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
+  "$repo_root/artifacts/dmg-install/task-identity.tsv" \
+  "$repo_root/artifacts/dmg-install/task-row-before-restart.txt" \
+  "$repo_root/artifacts/dmg-install/task-row-after-restart.txt" \
+  "$repo_root/artifacts/dmg-install/diagnostics/noonmark-baseline.txt" \
+  "$repo_root/artifacts/dmg-install/diagnostics/noonmark-final.txt" \
+  "$repo_root/artifacts/dmg-install/diagnostics/noonmark-diff.txt" \
+  "$repo_root/artifacts/dmg-install/diagnostics/harness-baseline.txt" \
+  "$repo_root/artifacts/dmg-install/diagnostics/harness-final.txt" \
+  "$repo_root/artifacts/dmg-install/diagnostics/harness-diff.txt"
+require_png_evidence \
+  "$repo_root/artifacts/dmg-install/installed-day.png" \
+  "installed App initial screenshot"
+require_png_evidence \
+  "$repo_root/artifacts/dmg-install/installed-exercise-before-input.png" \
+  "installed App exercise screenshot"
+require_png_evidence \
+  "$repo_root/artifacts/dmg-install/installed-restart.png" \
+  "installed App restart screenshot"
+require_install_ledger_semantics \
+  preflight \
+  "$repo_root/artifacts/dmg-install/permission-preflight-ledger.tsv" \
+  "arguments,process,exit-observer,permissions,complete"
+require_install_ledger_semantics \
+  exercise \
+  "$repo_root/artifacts/dmg-install/exercise-ledger.tsv" \
+  "arguments,process,exit-observer,permissions,target,main-window,settings-menu,settings-window,settings-close,quick-entry-menu,quick-entry-input,quick-entry-add,exercise-title-visible,quit-menu,quit,complete"
+require_install_ledger_semantics \
+  restart \
+  "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
+  "arguments,process,exit-observer,permissions,target,main-window,restart-title-visible,quit-menu,quit,complete"
+installed_bundle_path="$repo_root/artifacts/dmg-install/Applications/Noonmark.app"
+installed_executable_path="$(evidence_read "$install_manifest" production_executable)"
+production_bundle_identifier="$(
+  evidence_read "$install_manifest" production_bundle_identifier
+)"
+if [[ "$installed_executable_path" != \
+    "$installed_bundle_path/Contents/MacOS/NoonmarkMacApp" ]] ||
+  [[ "$production_bundle_identifier" != "app.noonmark.mac" ]]; then
+  echo "install manifest does not identify the archived production App" >&2
+  exit 1
+fi
+exercise_window_metadata="$repo_root/artifacts/dmg-install/installed-exercise-window.txt"
+restart_window_metadata="$repo_root/artifacts/dmg-install/installed-restart-window.txt"
+require_install_window_metadata \
+  exercise \
+  "$exercise_window_metadata" \
+  "$repo_root/artifacts/dmg-install/exercise-ledger.tsv" \
+  "$repo_root/artifacts/dmg-install/installed-exercise-before-input.png" \
+  "$installed_bundle_path" \
+  "$installed_executable_path" \
+  "$production_bundle_identifier"
+require_install_window_metadata \
+  restart \
+  "$restart_window_metadata" \
+  "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
+  "$repo_root/artifacts/dmg-install/installed-restart.png" \
+  "$installed_bundle_path" \
+  "$installed_executable_path" \
+  "$production_bundle_identifier"
+exercise_natural_day="$(evidence_read "$exercise_window_metadata" natural_day)"
+restart_natural_day="$(evidence_read "$restart_window_metadata" natural_day)"
+require_install_process_log \
+  exercise \
+  "$repo_root/artifacts/dmg-install/exercise-console.log" \
+  "$(evidence_read "$exercise_window_metadata" pid)" \
+  "$installed_bundle_path" \
+  "$installed_executable_path" \
+  "$production_bundle_identifier" \
+  "$exercise_natural_day" \
+  "$(evidence_read "$install_manifest" started_at)" \
+  "$(evidence_read "$install_manifest" finished_at)"
+require_install_process_log \
+  restart \
+  "$repo_root/artifacts/dmg-install/restart-console.log" \
+  "$(evidence_read "$restart_window_metadata" pid)" \
+  "$installed_bundle_path" \
+  "$installed_executable_path" \
+  "$production_bundle_identifier" \
+  "$restart_natural_day" \
+  "$(evidence_read "$install_manifest" started_at)" \
+  "$(evidence_read "$install_manifest" finished_at)"
+task_identity="$repo_root/artifacts/dmg-install/task-identity.tsv"
+require_install_task_identity "$task_identity"
+independent_task_identity="$(tail -n 1 "$task_identity")"
+IFS=$'\t' read -r \
+  _ _ _ independent_task_day _ _ _ _ <<<"$independent_task_identity"
+if [[ "$independent_task_day" != "$exercise_natural_day" ]] ||
+  [[ "$exercise_natural_day" != "$restart_natural_day" ]]; then
+  echo "installed task natural day disagrees with archived window evidence" >&2
+  exit 1
+fi
+task_snapshot_before="$repo_root/artifacts/dmg-install/task-row-before-restart.txt"
+task_snapshot_after="$repo_root/artifacts/dmg-install/task-row-after-restart.txt"
+require_install_task_snapshot \
+  "$task_snapshot_before" \
+  "installed task snapshot before restart" \
+  "$independent_task_identity"
+require_install_task_snapshot \
+  "$task_snapshot_after" \
+  "installed task snapshot after restart" \
+  "$independent_task_identity"
+if ! cmp -s "$task_snapshot_before" "$task_snapshot_after"; then
+  echo "installed task snapshots changed across restart" >&2
+  exit 1
+fi
+require_preserved_bundle \
+  "$package_manifest" \
+  app \
+  "$repo_root/dist/Noonmark.app" \
+  "package App"
+require_preserved_bundle \
+  "$install_manifest" \
+  installed_app \
+  "$repo_root/artifacts/dmg-install/Applications/Noonmark.app" \
+  "installed App"
+require_preserved_bundle \
+  "$install_manifest" \
+  helper \
+  "$repo_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app" \
+  "install helper"
+
+dmg_path="$(evidence_read "$package_manifest" dmg_path)"
+if ! require_safe_repo_relative_path "$dmg_path"; then
+  echo "package manifest contains an unsafe DMG path" >&2
+  exit 1
+fi
+dmg_absolute="${repo_root}/${dmg_path}"
+checksum_absolute="${dmg_absolute}.sha256"
+package_inventory="${dmg_absolute}.inventory.sha256"
+require_file_sha256 \
+  "$package_manifest" \
+  dmg_sha256 \
+  "$dmg_absolute" \
+  "packaged DMG"
+require_file_sha256 \
+  "$package_manifest" \
+  dmg_checksum_sha256 \
+  "$checksum_absolute" \
+  "packaged DMG checksum file"
+require_file_sha256 \
+  "$package_manifest" \
+  artifact_inventory_sha256 \
+  "$package_inventory" \
+  "package artifact inventory"
+evidence_verify_inventory "$repo_root" "$package_inventory"
+evidence_require_inventory_paths \
+  "$repo_root" \
+  "$package_inventory" \
+  "$repo_root/dist/Noonmark.dmg" \
+  "$repo_root/dist/Noonmark.dmg.sha256" \
+  "$repo_root/dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp"
+if ! (cd "$repo_root" && shasum -a 256 -c "${dmg_path}.sha256" >/dev/null); then
+  echo "packaged DMG does not match its checksum file" >&2
+  exit 1
+fi
+if ! scripts/verify-dmg "$dmg_path" >/dev/null; then
+  echo "packaged DMG failed fresh mounted verification" >&2
+  exit 1
+fi
+
+require_equal_manifest_value \
+  "$package_manifest" \
+  "app_binary_sha256" \
+  "$install_manifest" \
+  "package_app_binary_sha256" \
+  "packaged App binary"
+require_equal_manifest_value \
+  "$package_manifest" \
+  "app_binary_sha256" \
+  "$install_manifest" \
+  "mounted_app_binary_sha256" \
+  "mounted App binary"
+require_equal_manifest_value \
+  "$package_manifest" \
+  "app_binary_sha256" \
+  "$install_manifest" \
+  "installed_app_binary_sha256" \
+  "installed App binary"
+require_equal_manifest_value \
+  "$package_manifest" \
+  "app_designated_requirement_sha256" \
+  "$install_manifest" \
+  "mounted_app_designated_requirement_sha256" \
+  "mounted App designated requirement"
+require_equal_manifest_value \
+  "$package_manifest" \
+  "app_designated_requirement_sha256" \
+  "$install_manifest" \
+  "installed_app_designated_requirement_sha256" \
+  "installed App designated requirement"
+require_equal_manifest_value \
+  "$package_manifest" \
+  "dmg_sha256" \
+  "$install_manifest" \
+  "dmg_sha256" \
+  "DMG SHA-256"
+require_equal_manifest_value \
+  "$package_manifest" \
+  "dmg_checksum_sha256" \
+  "$install_manifest" \
+  "dmg_checksum_sha256" \
+  "DMG checksum file SHA-256"
+
+actual_package_manifest_sha256="$(
+  shasum -a 256 "$package_manifest" | awk '{print $1}'
+)"
+recorded_package_manifest_sha256="$(
+  evidence_read "$install_manifest" "package_manifest_sha256"
+)"
+if [[ "$actual_package_manifest_sha256" != \
+  "$recorded_package_manifest_sha256" ]]; then
+  echo "install evidence does not bind the exact package manifest" >&2
+  exit 1
+fi
+
+verify_english_screenshot_content
+echo "Full development-validation evidence is internally consistent"

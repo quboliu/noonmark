@@ -66,14 +66,26 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
 public extension NoonmarkSnapshot {
     func validateIntegrity() throws {
         try classifications.validateIntegrity()
+        guard preferences.themeLanguageUpdatedAt
+            .timeIntervalSinceReferenceDate.isFinite,
+              preferences.themeLanguageWriterID.trimmingCharacters(
+                  in: .whitespacesAndNewlines
+              ).isEmpty == false
+        else {
+            throw NoonmarkError.invalidInput(
+                "app preferences contain an invalid theme and language version"
+            )
+        }
 
+        let dayDates = Set(days.map(\.date))
         let chainIDs = Set(chains.map(\.id))
         let traceIDs = Set(traces.map(\.id))
-        guard chainIDs.count == chains.count else {
-            throw NoonmarkError.invalidInput("snapshot contains duplicate task chain identities")
-        }
-        guard traceIDs.count == traces.count else {
-            throw NoonmarkError.invalidInput("snapshot contains duplicate trace identities")
+        try validateUniqueIdentities()
+        let chainsByID = Dictionary(
+            uniqueKeysWithValues: chains.map { ($0.id, $0) }
+        )
+        for day in days {
+            try validateDayTodoClock(day)
         }
         for chain in chains {
             guard chain.createdAt.timeIntervalSinceReferenceDate.isFinite,
@@ -93,6 +105,10 @@ public extension NoonmarkSnapshot {
                 terminalDates: [definition.supersededAt],
                 owner: "task definition"
             )
+            try validatePlannedSubtaskFacts(
+                in: definition,
+                chainCreatedAt: chainsByID[definition.chainID]?.createdAt
+            )
         }
         for trace in traces {
             try validateContentClock(
@@ -101,13 +117,276 @@ public extension NoonmarkSnapshot {
                 terminalDates: [trace.completedAt, trace.settledAt],
                 owner: "day trace"
             )
+            if TrajectoryTopologyValidator.firstSelfContainedIssue(
+                in: trace
+            ) != nil {
+                throw NoonmarkError.invalidInput(
+                    "day trace contains invalid status or progress facts"
+                )
+            }
             try validateTaskNoteEntries(trace.noteEntries, owner: "day trace")
         }
+        for subtask in subtasks {
+            try subtask.validateIntegrity()
+        }
+        let definitionsByID = Dictionary(
+            uniqueKeysWithValues: definitions.map { ($0.id, $0) }
+        )
+        let tracesByID = Dictionary(
+            uniqueKeysWithValues: traces.map { ($0.id, $0) }
+        )
+        try validateParentReferences(
+            dayDates: dayDates,
+            chainIDs: chainIDs,
+            definitionsByID: definitionsByID,
+            tracesByID: tracesByID
+        )
+        try validateDefinitionTopology(
+            chainIDs: chainIDs,
+            definitionsByID: definitionsByID
+        )
+        try validateTrajectoryTopology()
+        try validateCancelledDraftFacts()
         try validateClassificationReferences(
             chainIDs: chainIDs,
             traceIDs: traceIDs
         )
         try validateCurrentAndHistoricalClassificationSources(chainIDs: chainIDs)
+    }
+
+    private func validateUniqueIdentities() throws {
+        let dayDates = Set(days.map(\.date))
+        let dayIDs = Set(days.map(\.id))
+        let chainIDs = Set(chains.map(\.id))
+        let definitionIDs = Set(definitions.map(\.id))
+        let traceIDs = Set(traces.map(\.id))
+        let subtaskIDs = Set(subtasks.map(\.id))
+        guard dayDates.count == days.count else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains duplicate Day Todo dates"
+            )
+        }
+        guard dayIDs.count == days.count else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains duplicate Day Todo identities"
+            )
+        }
+        guard chainIDs.count == chains.count else {
+            throw NoonmarkError.invalidInput("snapshot contains duplicate task chain identities")
+        }
+        guard definitionIDs.count == definitions.count else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains duplicate task definition identities"
+            )
+        }
+        guard traceIDs.count == traces.count else {
+            throw NoonmarkError.invalidInput("snapshot contains duplicate trace identities")
+        }
+        guard subtaskIDs.count == subtasks.count else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains duplicate subtask identities"
+            )
+        }
+    }
+
+    private func validatePlannedSubtaskFacts(
+        in definition: TaskDefinition,
+        chainCreatedAt: Date?
+    ) throws {
+        guard let issue = TaskDefinitionValidator.firstSelfContainedIssue(
+            in: definition,
+            chainCreatedAt: chainCreatedAt
+        ) else {
+            return
+        }
+        switch issue {
+        case .invalidPlannedSubtasks:
+            throw NoonmarkError.invalidInput(
+                "task definition contains invalid planned subtask facts"
+            )
+        case .invalidContentClock:
+            throw NoonmarkError.invalidInput(
+                "task definition contains an invalid content clock"
+            )
+        case .invalidTitle:
+            throw NoonmarkError.invalidInput(
+                "task definition contains an invalid title"
+            )
+        case .invalidSequence, .incompleteSupersession, .selfSuccessor,
+             .missingDefinitionForChain, .duplicateSequence,
+             .invalidCurrentCount, .missingSuccessor,
+             .crossChainSuccessor, .successorCycle:
+            throw NoonmarkError.invalidInput(
+                "snapshot contains invalid task definition topology"
+            )
+        }
+    }
+
+    private func validateParentReferences(
+        dayDates: Set<LocalDate>,
+        chainIDs: Set<TaskChainID>,
+        definitionsByID: [TaskDefinitionID: TaskDefinition],
+        tracesByID: [DayTraceID: DayTrace]
+    ) throws {
+        guard definitions.allSatisfy({
+            chainIDs.contains($0.chainID)
+                && ($0.supersededByDefinitionID.map {
+                    definitionsByID[$0] != nil
+                } ?? true)
+        }), traces.allSatisfy({ trace in
+            guard chainIDs.contains(trace.chainID),
+                  dayDates.contains(trace.date),
+                  let definition = definitionsByID[trace.definitionID]
+            else {
+                return false
+            }
+            return definition.chainID == trace.chainID
+        }), subtasks.allSatisfy({
+            tracesByID[$0.traceID] != nil
+        }) else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains invalid parent references"
+            )
+        }
+    }
+
+    private func validateTrajectoryTopology() throws {
+        guard let issue = TrajectoryTopologyValidator.topologyIssues(
+            traces: traces,
+            subtasks: subtasks
+        ).first else {
+            return
+        }
+        switch issue {
+        case .duplicateSubtaskPosition, .noncontiguousSubtaskPosition,
+             .duplicateSubtaskLineage,
+             .missingSubtaskParent, .missingSubtaskContinuationSource,
+             .missingSubtaskContinuationTarget,
+             .reusedSubtaskContinuationSource,
+             .invalidSubtaskContinuation, .subtaskContinuationCycle:
+            throw NoonmarkError.invalidInput(
+                "snapshot contains invalid subtask topology"
+            )
+        case .invalidTraceClock, .invalidTraceStatusFacts,
+             .invalidTraceProgress, .invalidTraceSequence,
+             .duplicateActiveTrace, .duplicateVisiblePriority,
+             .missingTraceContinuationSource,
+             .missingTraceContinuationTarget,
+             .reusedTraceContinuationSource,
+             .invalidTraceContinuation, .missingChangedTraceTarget,
+             .reusedChangedTraceTarget, .invalidChangedTraceLink,
+             .traceCausalCycle, .reusedDraftCancellationIdentity:
+            throw NoonmarkError.invalidInput(
+                "snapshot contains invalid day trace topology"
+            )
+        }
+    }
+
+    private func validateDefinitionTopology(
+        chainIDs: Set<TaskChainID>,
+        definitionsByID: [TaskDefinitionID: TaskDefinition]
+    ) throws {
+        let issues = TaskDefinitionValidator.topologyIssues(
+            definitions: Array(definitionsByID.values),
+            chainIDs: chainIDs
+        )
+        guard issues.isEmpty else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains invalid task definition topology"
+            )
+        }
+    }
+
+    private func validateCancelledDraftFacts() throws {
+        let cancelledDraftTraceIDs = Set(
+            traces
+                .filter { $0.status == .cancelledDraft }
+                .map(\.id)
+        )
+        let draftCancellationIDs = traces.compactMap(\.draftCancellationID)
+        guard Set(draftCancellationIDs).count == draftCancellationIDs.count else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains duplicate trace draft cancellation identities"
+            )
+        }
+        guard traces.allSatisfy({ trace in
+            if trace.status == .cancelledDraft {
+                guard trace.draftCancellationID != nil,
+                      let draftCancelledOn = trace.draftCancelledOn
+                else {
+                    return false
+                }
+                let isSnapshotUndoCancellation =
+                    trace.date == draftCancelledOn
+                let isFutureDraftCancellation =
+                    trace.date > draftCancelledOn
+                        && trace.manualProgressPercent == nil
+                        && trace.continuedFromTraceID == nil
+                return (isSnapshotUndoCancellation
+                    || isFutureDraftCancellation)
+                    && trace.completedAt == nil
+                    && trace.settledAt != nil
+                    && trace.changedToTraceID == nil
+            }
+            return trace.draftCancelledOn == nil
+        }) else {
+            throw NoonmarkError.invalidInput(
+                "cancelled trace draft contains invalid terminal facts"
+            )
+        }
+        let cancelledDraftSubtasks = subtasks.filter {
+            cancelledDraftTraceIDs.contains($0.traceID)
+        }
+        let cancelledDraftSubtaskIDs = Set(cancelledDraftSubtasks.map(\.id))
+        guard cancelledDraftSubtasks.allSatisfy({
+            $0.status == .pending
+                && $0.completedAt == nil
+                && $0.settledAt == nil
+        }), subtasks.allSatisfy({
+            $0.continuedFromSubtaskID.map {
+                cancelledDraftSubtaskIDs.contains($0) == false
+            } ?? true
+        }), traces.allSatisfy({
+            $0.continuedFromTraceID.map {
+                cancelledDraftTraceIDs.contains($0) == false
+            } ?? true
+        }), traces.allSatisfy({
+            $0.changedToTraceID.map {
+                cancelledDraftTraceIDs.contains($0) == false
+            } ?? true
+        }) else {
+            throw NoonmarkError.invalidInput(
+                "cancelled trace draft contains referenced history facts"
+            )
+        }
+        let cancelledSubtasks = subtasks.filter {
+            $0.status == .cancelledDraft
+        }
+        let cancelledSubtaskIDs = Set(cancelledSubtasks.map(\.id))
+        let subtaskCancellationIDs = subtasks.compactMap(
+            \.draftCancellationID
+        )
+        guard Set(subtaskCancellationIDs).count
+                == subtaskCancellationIDs.count,
+              subtasks.allSatisfy({
+                  $0.continuedFromSubtaskID.map {
+                      cancelledSubtaskIDs.contains($0) == false
+                  } ?? true
+              })
+        else {
+            throw NoonmarkError.invalidInput(
+                "cancelled subtask draft contains invalid cancellation facts"
+            )
+        }
+        guard classifications.snapshotsByTraceID.keys.allSatisfy({
+            cancelledDraftTraceIDs.contains($0) == false
+        }), classifications.snapshotEventsByTraceID.keys.allSatisfy({
+            cancelledDraftTraceIDs.contains($0) == false
+        }) else {
+            throw NoonmarkError.invalidInput(
+                "cancelled trace draft cannot contain historical classification facts"
+            )
+        }
     }
 
     private func validateTaskNoteEntries(
@@ -125,6 +404,28 @@ public extension NoonmarkSnapshot {
             throw NoonmarkError.invalidInput("\(owner) contains an invalid task note tombstone")
         case .invalidActiveBody:
             throw NoonmarkError.invalidInput("\(owner) contains an invalid active task note")
+        }
+    }
+
+    private func validateDayTodoClock(_ day: Day) throws {
+        guard TaskNoteEntry.isValidMutationTime(
+            day.updatedAt,
+            notBefore: day.createdAt
+        ) else {
+            throw NoonmarkError.invalidInput(
+                "Day Todo contains an invalid content clock"
+            )
+        }
+        if let lockedAt = day.lockedAt {
+            guard TaskNoteEntry.isValidMutationTime(
+                lockedAt,
+                notBefore: day.createdAt
+            ), day.updatedAt >= lockedAt
+            else {
+                throw NoonmarkError.invalidInput(
+                    "Day Todo contains an invalid content clock"
+                )
+            }
         }
     }
 
@@ -236,6 +537,41 @@ public extension NoonmarkSnapshot {
             }
         case .create, .hardDelete, .rename, .lifecycle:
             break
+        }
+    }
+}
+
+public extension Subtask {
+    func validateIntegrity() throws {
+        let terminalDates = [completedAt, settledAt].compactMap { $0 }
+        let clockIsValid = TaskNoteEntry.isValidMutationTime(
+            updatedAt,
+            notBefore: createdAt
+        ) && terminalDates.allSatisfy {
+            TaskNoteEntry.isValidMutationTime($0, notBefore: createdAt)
+                && $0 <= updatedAt
+        }
+        let statusFactsAreValid = switch status {
+        case .pending:
+            completedAt == nil && settledAt == nil
+        case .completed:
+            completedAt != nil && settledAt == nil
+        case .unfinished, .continued, .abandoned:
+            completedAt == nil && settledAt != nil
+        case .cancelledDraft:
+            completedAt == nil
+                && settledAt != nil
+                && draftCancellationID != nil
+        }
+        guard clockIsValid,
+              statusFactsAreValid,
+              title.trimmingCharacters(in: .whitespacesAndNewlines) == title,
+              title.isEmpty == false,
+              position > 0
+        else {
+            throw NoonmarkError.invalidInput(
+                "subtask contains invalid status or clock facts"
+            )
         }
     }
 }

@@ -40,6 +40,46 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertEqual(permissions & 0o777, 0o600)
     }
 
+    func testCompareAndSwapReplacesExactExpectedSession() throws {
+        let repository = makeRepository(key: key)
+        let expected = try ZhulongSession(
+            primaryIntent: "原子更新烛龙会话",
+            proposedScopes: [.taskPool],
+            now: now
+        )
+        var replacement = expected
+        try replacement.pause(now: now.addingTimeInterval(1))
+        try repository.save(expected)
+
+        try repository.save(replacement, replacing: expected)
+
+        XCTAssertEqual(try repository.load(expected.id), replacement)
+    }
+
+    func testCompareAndSwapRejectsStaleExpectedSessionWithoutOverwritingThirdState() throws {
+        let repository = makeRepository(key: key)
+        let expected = try ZhulongSession(
+            primaryIntent: "拒绝过期烛龙会话",
+            proposedScopes: [.taskPool],
+            now: now
+        )
+        var replacement = expected
+        try replacement.pause(now: now.addingTimeInterval(1))
+        var thirdState = expected
+        try thirdState.pause(now: now.addingTimeInterval(2))
+        try repository.save(thirdState)
+
+        XCTAssertThrowsError(
+            try repository.save(replacement, replacing: expected)
+        ) { error in
+            XCTAssertEqual(
+                error as? ZhulongSidecarRepositoryError,
+                .sessionConflict
+            )
+        }
+        XCTAssertEqual(try repository.load(expected.id), thirdState)
+    }
+
     func testEncryptedRepositoryRoundTripsTypedWorkflowPurpose() throws {
         let repository = makeRepository(key: key)
         let session = try ZhulongSession(

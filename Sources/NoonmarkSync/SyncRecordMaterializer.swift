@@ -4,6 +4,7 @@ import NoonmarkCore
 public enum SyncRecordMaterializerError: Error, Equatable, Sendable {
     case missingEntity(SyncEntityType, String)
     case unsupportedDelete(SyncEntityType, String)
+    case invalidJournalPayload(SyncEntityType, String)
     case invalidImmutablePayload(SyncEntityType, String)
 }
 
@@ -19,8 +20,8 @@ public struct SyncRecordMaterializer: Sendable {
     }
 
     public func record(for entry: SyncJournalEntry, in snapshot: NoonmarkSnapshot) throws -> SyncRecord {
-        guard entry.hasValidRecordPayloadInvariant else {
-            throw SyncRecordMaterializerError.invalidImmutablePayload(
+        guard entry.hasValidJournalPayloadInvariant else {
+            throw SyncRecordMaterializerError.invalidJournalPayload(
                 entry.entityType,
                 entry.entityID
             )
@@ -41,7 +42,7 @@ public struct SyncRecordMaterializer: Sendable {
         case .subtask:
             return try subtaskRecord(for: entry, in: snapshot)
         case .appPreferences:
-            return try preferencesRecord(for: entry, in: snapshot)
+            return try preferencesRecord(for: entry)
         case .classificationCommit:
             return try classificationCommitRecord(for: entry)
         case .traceClassificationEvent:
@@ -101,14 +102,34 @@ public struct SyncRecordMaterializer: Sendable {
         return try mapper.record(for: subtask, modifiedBy: entry.deviceID)
     }
 
-    private func preferencesRecord(for entry: SyncJournalEntry, in snapshot: NoonmarkSnapshot) throws -> SyncRecord {
-        guard entry.entityID == "default" else {
-            throw SyncRecordMaterializerError.missingEntity(entry.entityType, entry.entityID)
+    private func preferencesRecord(
+        for entry: SyncJournalEntry
+    ) throws -> SyncRecord {
+        guard entry.entityID == "default",
+              let payload = entry.recordPayload
+        else {
+            throw SyncRecordMaterializerError.invalidJournalPayload(
+                entry.entityType,
+                entry.entityID
+            )
         }
-        return try mapper.record(
-            for: AppPreferencesEnvelope(preferences: snapshot.preferences, updatedAt: entry.changedAt),
-            modifiedBy: entry.deviceID
+        let record = SyncRecord(
+            id: SyncRecordID("preferences:default"),
+            entityType: .appPreferences,
+            entityID: "default",
+            modifiedAt: entry.changedAt,
+            modifiedByDeviceID: entry.deviceID,
+            payload: payload
         )
+        do {
+            _ = try mapper.decodeAppPreferences(record)
+            return record
+        } catch {
+            throw SyncRecordMaterializerError.invalidJournalPayload(
+                entry.entityType,
+                entry.entityID
+            )
+        }
     }
 
     private func classificationCommitRecord(

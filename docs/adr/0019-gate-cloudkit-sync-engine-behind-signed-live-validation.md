@@ -8,7 +8,7 @@
 
 通用同步层已经负责 canonical `SyncRecord`、journal、确定性 merge、等待队列、冲突、审计与 SQLite 原子提交。CloudKit adapter 的职责是把这些记录可靠地映射到 CloudKit，并处理 account、zone、push 与 `CKSyncEngine` 持久化状态；它不得绕过通用领域合并层直接写任务事实。
 
-当前机器没有有效 Apple code-signing identity，也没有仓库可证明的 provisioning profile 或 CloudKit container 授权。Ad-hoc 进程直接构造未授权 `CKContainer` 会触发进程级失败，因此 entitlement 检查必须发生在创建 container 之前。没有真实签名条件时，只能验证 adapter 的本地契约与失败边界，不能宣称 CloudKit live 已通过。
+当前机器已经有一个有效 `Apple Development: muxunting@icloud.com (X429Q6S5SH)` code-signing identity，WWDR G3 issuer、稳定 designated requirement、真实 E2E App 与开发签名 DMG 路径也已经验证。这个 identity 只证明本机可以稳定签名，不能自动产生 provisioning profile、CloudKit container allowlist、Development／Production environment entitlement 或 APNs entitlement；仓库当前仍没有可用于本协议 live 门禁的 profile 与 container 授权。因此 entitlement 检查仍必须发生在创建 `CKContainer` 前，已通过的 iCloud Drive／CloudDocs 逐记录仓库验证也不能被描述为 CloudKit `CKSyncEngine` live。
 
 ## Decision
 
@@ -26,8 +26,8 @@
 - 灰度：默认关闭；无显式 CloudKit 参数时继续走 iCloud Drive。CloudKit 参数只用于签名开发包与 live 验证，未完成两台物理设备和 Production schema 验收前不得成为默认端点。
 - 监控：设置页与 `localFirst.sync.lastStatus` 展示最近同步结果；`cloudkit.sync.persistence.v1` 保留 engine state、account、zone 与阻断原因；CloudKit 错误只记录 code 与 retry delay，不记录用户 payload 或 device token。
 - 回滚：移除 CloudKit 启动参数即可回到 iCloud Drive transport；关闭同步只停止传输，不删除本机 SQLite 事实。遇到 account switch、zone 删除或外部 record 删除时保持阻断，必须由后续显式恢复流程处理，不自动清空或重建正式 zone。
-- 当前门禁：本机 `security find-identity -v -p codesigning` 为 0 个有效 identity，因此只验证了 adapter、持久化、真实 ad-hoc App 的 entitlement preflight 与签名输入失败路径；CloudKit development／production 网络 live 尚未通过。
+- 当前门禁：本机 `security find-identity -v -p codesigning` 返回唯一有效 Apple Development identity；稳定签名已不再是阻断。仓库仍缺少与 App ID、CloudKit container、Development environment 和 APNs entitlement 匹配的 provisioning profile，`scripts/test-cloudkit-sync-live` 因而尚未取得 Development 网络 live 证据；Production schema 与两台物理设备 live 也未通过。
 
 ## Consequences
 
-CloudKit adapter 已具备可审查、可持久化、可隔离验证和可回滚的接入边界，同时不会降低当前可用的 iCloud Drive 同步与数据包恢复能力。后续取得 Apple Developer 签名资产后，可以直接运行 live 门禁取得真实 CloudKit 证据；在此之前，产品与文档必须继续显示当前实际 transport，不得把 adapter 存在等同于云端已经可用。
+CloudKit adapter 已具备可审查、可持久化、可隔离验证和可回滚的接入边界，同时不会降低当前可用的 iCloud Drive 同步与数据包恢复能力。后续取得匹配的 provisioning profile 与 container entitlement 后，可以用现有 Apple Development identity 运行 Development live 门禁；在该证据以及 Production／双物理设备门禁完成前，产品与文档必须继续显示当前实际 transport，不得把 adapter 存在或稳定签名等同于 CloudKit 已经可用。

@@ -29,6 +29,12 @@ struct DatePickerSheet: View {
         )
     }
 
+    private var interfaceLocale: Locale {
+        AppPresentation(
+            language: store.engine.preferences.language
+        ).interfaceLocale
+    }
+
     private var initialLocalDate: LocalDate {
         switch state.purpose {
         case .gotoDay:
@@ -76,6 +82,7 @@ struct DatePickerSheet: View {
             }
             .labelsHidden()
             .datePickerStyle(.graphical)
+            .environment(\.locale, interfaceLocale)
             .accessibilityLabel(state.purpose.title(copy: store.copy))
 
             if let validationMessage {

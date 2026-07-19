@@ -74,7 +74,8 @@ private func compareDataArrays(
     return compare(lhs.count, rhs.count)
 }
 
-extension SyncRecord {
+public extension SyncRecord {
+    /// Compares every record fact, including the exact timestamp bit pattern.
     func exactlyMatches(_ other: SyncRecord) -> Bool {
         self == other
             && modifiedAt.timeIntervalSinceReferenceDate.bitPattern

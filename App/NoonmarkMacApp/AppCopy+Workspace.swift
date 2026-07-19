@@ -35,6 +35,10 @@ extension AppCopy {
         language == .chinese ? "没有匹配结果" : "No matches"
     }
 
+    var searchNoResultsHint: String {
+        language == .chinese ? "请尝试其他关键词。" : "Try a different keyword."
+    }
+
     var searchTaskKind: String {
         language == .chinese ? "任务" : "Task"
     }

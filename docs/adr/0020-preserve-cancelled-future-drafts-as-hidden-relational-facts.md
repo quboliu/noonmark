@@ -1,0 +1,28 @@
+# 把已取消计划草稿保存为隐藏关系事实
+
+**Status**: Accepted
+
+未来计划在日期到达前回到任务池，对用户必须是无痕操作：原日期不形成日轨迹、复盘、统计、搜索结果或 AI 证据。但晷迹采用不可删除的关系事实、逐记录同步和有限撤销；若直接删除计划草稿，会失去跨设备取消依据，也会让旧同步记录复活已经回池的计划。
+
+## Decision
+
+- 未来 `pending` 计划草稿回池时，不物理删除 `day_traces` 与其子任务。原记录进入内部状态 `cancelledDraft`，写入唯一 `draftCancellationID`、取消自然日 `draftCancelledOn` 与 `settledAt`。
+- `cancelledDraft` 不是第一期用户状态，也不构成 Day 历史。Day Todo、未来计划、日历、复盘统计、搜索、完成轨迹、子任务记录、导入摘要、烛龙日结、AI scope／prompt 和 UI presentation 必须显式排除它；任务池则把仅剩 `returnedToPool`／`cancelledDraft` 的活跃任务链视为可排期。
+- 隐藏草稿的子任务仅保留为待完成关系事实，不得完成、结算、延续或被其他轨迹引用。隐藏草稿不得持有延续／变更指针或历史分类快照。
+- snapshot、SQLite、数据包、同步 merge 与烛龙持久化恢复都必须验证取消身份唯一、取消日期早于草稿日期、终态字段完整和所有引用边界。任何伪造或不完整事实 fail-closed。
+- `Cmd+Z` 恢复计划草稿时，只接受同一取消身份、内容未被历史改写且目标 Day 未锁定的 `cancelledDraft -> pending` 前向新版本；恢复后保留取消身份作为同步见证，但清除取消日期和结算时间。
+- UI 不为 `cancelledDraft` 提供文案、颜色或图标映射。若内部状态越过投影边界，presentation 层立即失败，不把它伪装成“已回池”或普通计划。
+
+## Consequences
+
+- 用户仍只看到“计划草稿回到任务池”，不会看到取消状态或幽灵轨迹。
+- 取消操作具备稳定同步身份、可审查撤销和 append-only 持久化能力，旧设备不能用较旧 `pending` 记录静默复活草稿。
+- 所有新增用户投影必须以 `formsDayHistory`／`isUserPresentable` 或等价 SQL 条件明确声明是否接受内部事实；不能只依赖上游调用方恰好过滤。
+- 当前项目尚未发布，schema 继续遵守 clean cut：不迁移或兼容旧开发库，每次构建与测试前整体重建当前版本数据。
+
+## Risk And Rollout
+
+- 风险等级：P。主要风险是内部事实泄漏到用户界面、统计或 Provider prompt，以及同步错误接受缺少取消见证的旧记录。
+- 灰度：仅在专用分支通过 Core／Storage／Sync／AI／Zhulong 测试、真实 `.app` E2E、SQLite 重启探针和 DMG 安装启动后合并；没有能力不对等的旧删除路径。
+- 监控：运行时 console 不得出现内部状态 presentation、SwiftUI 发布时序、持久化或同步警告；E2E 和 SQLite probe 同时对账隐藏记录数、可见未来计划数与任务池数。
+- 回滚：以普通 `git revert` 回退本 ADR 对应提交，并按 clean cut 重建开发数据；不得只移除投影过滤而保留新状态，也不得恢复物理删除而继续接受新同步记录。

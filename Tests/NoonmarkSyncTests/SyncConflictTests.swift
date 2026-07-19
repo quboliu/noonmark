@@ -33,4 +33,45 @@ final class SyncConflictTests: XCTestCase {
 
         XCTAssertEqual(first.id, repeated.id)
     }
+
+    func testCanonicalEvidenceDistinguishesReactivationWitnesses() {
+        let commonID = SyncRecordID("chain:witness-conflict")
+        let commonClock = Date(timeIntervalSinceReferenceDate: 42.125)
+        let firstRecord = SyncRecord(
+            id: commonID,
+            entityType: .taskChain,
+            entityID: "witness-conflict",
+            modifiedAt: commonClock,
+            modifiedByDeviceID: SyncDeviceID("remote-device"),
+            payload: Data([0x01, 0x02]),
+            reactivationWitnesses: [Data([0xAA])]
+        )
+        let secondRecord = SyncRecord(
+            id: commonID,
+            entityType: .taskChain,
+            entityID: "witness-conflict",
+            modifiedAt: commonClock,
+            modifiedByDeviceID: SyncDeviceID("remote-device"),
+            payload: Data([0x01, 0x02]),
+            reactivationWitnesses: [Data([0xBB])]
+        )
+
+        let first = SyncConflict(
+            type: .invalidRecordPayload,
+            entityType: .taskChain,
+            entityID: "witness-conflict",
+            remoteRecord: firstRecord,
+            message: "first witness"
+        )
+        let second = SyncConflict(
+            type: .invalidRecordPayload,
+            entityType: .taskChain,
+            entityID: "witness-conflict",
+            remoteRecord: secondRecord,
+            message: "second witness"
+        )
+
+        XCTAssertNotEqual(first.id, second.id)
+        XCTAssertNotEqual(first.canonicalEvidenceID, second.canonicalEvidenceID)
+    }
 }

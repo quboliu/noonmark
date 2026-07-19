@@ -120,7 +120,7 @@ struct FuturePlanRow: View {
             else {
                 return false
             }
-            return store.reorderTrace(
+            return store.enqueueTraceReorder(
                 moving.traceID,
                 before: item.trace.id
             )

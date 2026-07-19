@@ -8,10 +8,18 @@ final class SyncRecordMapperTests: XCTestCase {
 
     func testSnapshotRecordsRoundTripThroughGenericPayloads() throws {
         let engine = try makeEngine()
+        try engine.updateTheme(
+            .warmPaper,
+            writerID: "mac-a",
+            now: now
+        )
         let mapper = SyncRecordMapper()
         let deviceID = SyncDeviceID("mac-a")
 
-        let records = try mapper.records(from: engine.snapshot(), modifiedBy: deviceID, preferencesUpdatedAt: now)
+        let records = try mapper.records(
+            from: engine.snapshot(),
+            modifiedBy: deviceID
+        )
 
         XCTAssertTrue(records.contains { $0.id.rawValue.hasPrefix("day:") && $0.entityType == .day })
         XCTAssertTrue(records.contains { $0.id.rawValue.hasPrefix("chain:") && $0.entityType == .taskChain })
@@ -22,15 +30,33 @@ final class SyncRecordMapperTests: XCTestCase {
         XCTAssertTrue(records.allSatisfy { $0.modifiedByDeviceID == deviceID })
 
         let traceRecord = try XCTUnwrap(records.first { $0.entityType == .dayTrace })
+        let preferenceRecord = try XCTUnwrap(
+            records.first { $0.entityType == .appPreferences }
+        )
         let decodedTrace = try mapper.decodeDayTrace(traceRecord)
+        let decodedPreferences = try mapper.decodeAppPreferences(
+            preferenceRecord
+        )
 
         XCTAssertEqual(decodedTrace, try XCTUnwrap(engine.snapshot().traces.first))
+        XCTAssertEqual(
+            preferenceRecord.modifiedAt.timeIntervalSinceReferenceDate
+                .bitPattern,
+            now.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(
+            decodedPreferences.updatedAt.timeIntervalSinceReferenceDate
+                .bitPattern,
+            now.timeIntervalSinceReferenceDate.bitPattern
+        )
     }
 
     func testPreferenceRecordContainsOnlyCrossDeviceAppearanceFields() throws {
         var preferences = AppPreferences(
             theme: .warmPaper,
             language: .english,
+            themeLanguageUpdatedAt: now,
+            themeLanguageWriterID: "mac-private-config",
             dataMode: .onlineFirst
         )
         preferences.localFirstSyncPolicy = LocalFirstCloudSyncPolicy(
@@ -40,10 +66,7 @@ final class SyncRecordMapperTests: XCTestCase {
         )
         let mapper = SyncRecordMapper()
         let record = try mapper.record(
-            for: AppPreferencesEnvelope(
-                preferences: preferences,
-                updatedAt: now
-            ),
+            for: AppPreferencesEnvelope(preferences: preferences),
             modifiedBy: SyncDeviceID("mac-private-config")
         )
 
@@ -53,10 +76,64 @@ final class SyncRecordMapperTests: XCTestCase {
         let payload = try XCTUnwrap(object["payload"] as? [String: Any])
         let decoded = try mapper.decodeAppPreferences(record)
 
-        XCTAssertEqual(Set(payload.keys), ["theme", "language", "updatedAt"])
+        XCTAssertEqual(
+            Set(payload.keys),
+            ["theme", "language", "updatedAt", "writerDeviceID"]
+        )
         XCTAssertEqual(decoded.theme, .warmPaper)
         XCTAssertEqual(decoded.language, .english)
         XCTAssertEqual(decoded.updatedAt, now)
+        XCTAssertEqual(
+            decoded.writerDeviceID,
+            SyncDeviceID("mac-private-config")
+        )
+    }
+
+    func testPreferenceRecordRejectsWriterHeaderMismatch() {
+        XCTAssertThrowsError(
+            try SyncRecordMapper().record(
+                for: AppPreferencesEnvelope(
+                    theme: .warmPaper,
+                    language: .english,
+                    updatedAt: now,
+                    writerDeviceID: SyncDeviceID("mac-payload")
+                ),
+                modifiedBy: SyncDeviceID("mac-header")
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecordMapperError,
+                .invalidPayload(.appPreferences)
+            )
+        }
+    }
+
+    func testPreferenceRecordRejectsHeaderPayloadClockMismatch() throws {
+        let mapper = SyncRecordMapper()
+        let exactClock = Date(
+            timeIntervalSinceReferenceDate: 805_912_493.447_825
+        )
+        var record = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: exactClock
+            ),
+            modifiedBy: SyncDeviceID("mac-clock-mismatch")
+        )
+        record.modifiedAt = Date(
+            timeIntervalSinceReferenceDate: exactClock
+                .timeIntervalSinceReferenceDate.nextUp
+        )
+
+        XCTAssertThrowsError(
+            try mapper.decodeAppPreferences(record)
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecordMapperError,
+                .invalidPayload(.appPreferences)
+            )
+        }
     }
 
     func testNoteMutationTimeDrivesTaskChainAndTraceRecordFreshness() throws {
@@ -114,6 +191,50 @@ final class SyncRecordMapperTests: XCTestCase {
         XCTAssertEqual(traceRecord.modifiedAt, noteUpdatedAt)
     }
 
+    func testSubtaskUpdatedAtDrivesRecordFreshnessAndRoundTripsExactly() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "子任务同步时间",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let subtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "调整难度",
+            now: now
+        )
+        let updatedAt = now.addingTimeInterval(10.125)
+        try engine.updateSubtaskDifficulty(
+            subtaskID,
+            difficulty: .hard,
+            today: today,
+            now: updatedAt
+        )
+        let mapper = SyncRecordMapper()
+        let record = try mapper.record(
+            for: try XCTUnwrap(engine.subtasks[subtaskID]),
+            modifiedBy: SyncDeviceID("mac-subtask")
+        )
+        let restored = try mapper.decodeSubtask(record)
+
+        XCTAssertEqual(record.modifiedAt, updatedAt)
+        XCTAssertEqual(
+            restored.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            updatedAt.timeIntervalSinceReferenceDate.bitPattern
+        )
+
+        var forgedHeader = record
+        forgedHeader.modifiedAt = updatedAt.addingTimeInterval(1)
+        assertInvalidPayload(forgedHeader, type: .subtask) {
+            try mapper.decodeSubtask(forgedHeader)
+        }
+    }
+
     func testDecodeRejectsMismatchedEntityType() throws {
         let engine = try makeEngine()
         let mapper = SyncRecordMapper()
@@ -140,7 +261,7 @@ final class SyncRecordMapperTests: XCTestCase {
             JSONSerialization.jsonObject(with: record.payload) as? [String: Any]
         )
         XCTAssertEqual(Set(object.keys), ["formatVersion", "payload"])
-        XCTAssertEqual(object["formatVersion"] as? Int, 1)
+        XCTAssertEqual(object["formatVersion"] as? Int, 3)
 
         let restored = try mapper.decodeTaskChain(record)
         XCTAssertEqual(
@@ -164,7 +285,7 @@ final class SyncRecordMapperTests: XCTestCase {
         )
 
         var unknownVersion = currentObject
-        unknownVersion["formatVersion"] = 2
+        unknownVersion["formatVersion"] = 1
         var unknownVersionRecord = current
         unknownVersionRecord.payload = try JSONSerialization.data(
             withJSONObject: unknownVersion,
@@ -256,6 +377,29 @@ final class SyncRecordMapperTests: XCTestCase {
             try mapper.payload(from: record),
             .classificationCommit(envelope)
         )
+
+        var forgedClockRecord = record
+        forgedClockRecord.modifiedAt = Date(
+            timeIntervalSinceReferenceDate: record.modifiedAt
+                .timeIntervalSinceReferenceDate.nextUp
+        )
+        assertInvalidPayload(
+            forgedClockRecord,
+            type: .classificationCommit
+        ) {
+            try mapper.decodeClassificationCommit(forgedClockRecord)
+        }
+
+        var nonfiniteClockRecord = record
+        nonfiniteClockRecord.modifiedAt = Date(
+            timeIntervalSinceReferenceDate: .nan
+        )
+        assertInvalidPayload(
+            nonfiniteClockRecord,
+            type: .classificationCommit
+        ) {
+            try mapper.decodeClassificationCommit(nonfiniteClockRecord)
+        }
 
         var unknownFieldObject = try XCTUnwrap(
             JSONSerialization.jsonObject(with: record.payload) as? [String: Any]
@@ -361,6 +505,29 @@ final class SyncRecordMapperTests: XCTestCase {
                 .event.capturedAt.timeIntervalSinceReferenceDate.bitPattern,
             event.capturedAt.timeIntervalSinceReferenceDate.bitPattern
         )
+
+        var forgedClockRecord = record
+        forgedClockRecord.modifiedAt = Date(
+            timeIntervalSinceReferenceDate: record.modifiedAt
+                .timeIntervalSinceReferenceDate.nextUp
+        )
+        assertInvalidPayload(
+            forgedClockRecord,
+            type: .traceClassificationEvent
+        ) {
+            try mapper.decodeTraceClassificationEvent(forgedClockRecord)
+        }
+
+        var nonfiniteClockRecord = record
+        nonfiniteClockRecord.modifiedAt = Date(
+            timeIntervalSinceReferenceDate: .infinity
+        )
+        assertInvalidPayload(
+            nonfiniteClockRecord,
+            type: .traceClassificationEvent
+        ) {
+            try mapper.decodeTraceClassificationEvent(nonfiniteClockRecord)
+        }
 
         var object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: record.payload) as? [String: Any]

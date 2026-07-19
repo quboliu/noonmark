@@ -242,71 +242,6 @@ private enum ZhulongNavigationE2EAutomationError: LocalizedError {
     }
 }
 
-struct SubtaskMutationE2EAutomation: LaunchAutomationRunnable {
-    var resultURL: URL?
-
-    @MainActor
-    static func fromCommandLine() -> SubtaskMutationE2EAutomation? {
-        guard AppLaunchArguments.contains("--e2e-subtask-mutation") else { return nil }
-        let resultURL = AppLaunchArguments.value(after: "--e2e-subtask-mutation-result-url")
-            .map { URL(fileURLWithPath: $0) }
-        return SubtaskMutationE2EAutomation(resultURL: resultURL)
-    }
-
-    @MainActor
-    func run(on store: NoonmarkStore) {
-        do {
-            store.page = .day
-            store.selectedDate = store.today
-            guard let trace = store.engine.getDayTodo(date: store.today).traces.first(where: { store.subtasks(for: $0.id).contains { $0.status == .pending } }),
-                  let subtask = store.subtasks(for: trace.id).first(where: { $0.status == .pending })
-            else {
-                throw SubtaskMutationE2EAutomationError.failed("missing current pending subtask")
-            }
-
-            store.selectTrace(trace.id)
-            store.toggleSubtask(subtask.id)
-            try expect(store.engine.subtasks[subtask.id]?.status == .completed, "subtask did not complete")
-            try expect(store.engine.subtasks[subtask.id]?.completedAt != nil, "completedAt was not recorded")
-
-            store.toggleSubtask(subtask.id)
-            try expect(store.engine.subtasks[subtask.id]?.status == .pending, "subtask did not undo completion")
-            try expect(store.engine.subtasks[subtask.id]?.completedAt == nil, "completedAt was not cleared")
-
-            store.setSubtaskDifficulty(subtask.id, difficulty: .hard)
-            try expect(store.engine.subtasks[subtask.id]?.difficulty == .hard, "subtask difficulty did not update")
-
-            try writeResult("ok")
-        } catch {
-            try? writeResult("failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func expect(_ condition: Bool, _ message: String) throws {
-        guard condition else { throw SubtaskMutationE2EAutomationError.failed(message) }
-    }
-
-    private func writeResult(_ result: String) throws {
-        guard let resultURL else { return }
-        try FileManager.default.createDirectory(
-            at: resultURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try result.write(to: resultURL, atomically: true, encoding: .utf8)
-    }
-}
-
-private enum SubtaskMutationE2EAutomationError: LocalizedError {
-    case failed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case let .failed(message):
-            return message
-        }
-    }
-}
-
 struct WindowResizeE2EAutomation: LaunchAutomationRunnable {
     var resultURL: URL?
 
@@ -501,96 +436,415 @@ struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
 
     @MainActor
     func run(on store: NoonmarkStore) {
-        do {
-            store.page = .pool
-            store.clearSelection()
-            store.zhulongProviderDraft.enabled = true
-            store.isDetailRailExpanded = false
-            guard store.usesZhulongContextRail,
-                  store.hasDetailRailContent,
-                  store.shouldShowDetailRail == false
-            else {
-                throw SummarySidebarE2EAutomationError.failed("enabled zhulong context rail was unavailable")
-            }
-            store.toggleDetailRail()
-
-            for page in [NoonmarkStore.Page.pool, .future, .unfinished, .completed] {
-                store.page = page
-                store.clearSelection()
-                guard store.usesZhulongContextRail,
-                      store.hasDetailRailContent,
-                      store.shouldShowDetailRail
-                else {
-                    throw SummarySidebarE2EAutomationError.failed("\(page.rawValue) zhulong context rail was unavailable")
+        Task { @MainActor in
+            do {
+                let fixture = try installFixture(on: store)
+                let input = try WindowServerInputDriver()
+                try await exerciseLocalSummaryRails(
+                    store: store,
+                    poolChainID: fixture.poolChainID,
+                    input: input
+                )
+                try await exerciseCalendarAndTimeline(
+                    store: store,
+                    fixture: fixture
+                )
+                try writeResult("ok")
+            } catch {
+                if let resultURL {
+                    AppViewTreeE2E.writeDump(beside: resultURL)
                 }
+                try? writeResult("failed: \(error.localizedDescription)")
             }
-
-            store.page = .pool
-            if let task = store.engine.taskPool().first {
-                store.selectPool(task.chain.id)
-            }
-            guard store.hasActiveDetailSelection, store.shouldShowDetailRail else {
-                throw SummarySidebarE2EAutomationError.failed("selection detail rail did not override local analysis")
-            }
-
-            store.page = .calendar
-            store.setLanguage(.chinese)
-            store.selectedCalendarDate = store.today
-            for index in 1 ... 4 {
-                let chainID = try store.engine.createPoolTask(
-                    title: "E2E 当日风险文案 \(index)",
-                    now: Date()
-                )
-                _ = try store.engine.scheduleFromPool(
-                    chainID: chainID,
-                    date: store.today,
-                    today: store.today,
-                    now: Date()
-                )
-            }
-            let todayInsight = CalendarDayInsight.make(
-                for: store.selectedCalendarDate,
-                store: store
-            )
-            guard todayInsight.hasEnhancedContent,
-                  todayInsight.riskSummary.contains("延续复制"),
-                  todayInsight.riskSummary.contains("改期") == false
-            else {
-                throw SummarySidebarE2EAutomationError.failed(
-                    "today calendar risk did not preserve continuation semantics"
-                )
-            }
-
-            let futureDate = NoonmarkStore.offset(store.today, by: 30)
-            for index in 1 ... 4 {
-                let chainID = try store.engine.createPoolTask(
-                    title: "E2E 未来风险文案 \(index)",
-                    now: Date()
-                )
-                _ = try store.engine.scheduleFromPool(
-                    chainID: chainID,
-                    date: futureDate,
-                    today: store.today,
-                    now: Date()
-                )
-            }
-            let futureInsight = CalendarDayInsight.make(
-                for: futureDate,
-                store: store
-            )
-            guard futureInsight.hasEnhancedContent,
-                  futureInsight.riskSummary.contains("改期"),
-                  futureInsight.riskSummary.contains("延续复制") == false
-            else {
-                throw SummarySidebarE2EAutomationError.failed(
-                    "future calendar risk did not use plan-draft language"
-                )
-            }
-
-            try writeResult("ok")
-        } catch {
-            try? writeResult("failed: \(error)")
+            E2EApplicationTermination.schedule()
         }
+    }
+
+    @MainActor
+    private func installFixture(
+        on store: NoonmarkStore
+    ) throws -> Fixture {
+        store.engine = NoonmarkEngine()
+        store.setLanguage(.chinese)
+        store.zhulongProviderDraft.enabled = false
+        var timeline = try E2EFixtureTimeline(
+            store: store,
+            eventCount: 26
+        )
+        let today = timeline.today
+        let yesterday = NoonmarkStore.offset(today, by: -1)
+        let tomorrow = NoonmarkStore.offset(today, by: 1)
+
+        let poolChainID = try store.engine.createPoolTask(
+            title: "E2E 本地摘要任务池",
+            descriptionText: "本地摘要不依赖烛龙。",
+            now: try timeline.nextInstant()
+        )
+
+        let futureChainID = try store.engine.createPoolTask(
+            title: "E2E 本地摘要未来计划",
+            now: try timeline.nextInstant()
+        )
+        _ = try store.engine.scheduleFromPool(
+            chainID: futureChainID,
+            date: tomorrow,
+            today: today,
+            now: try timeline.nextInstant()
+        )
+
+        let unfinishedChainID = try store.engine.createPoolTask(
+            title: "E2E 已延续待完成",
+            now: try timeline.nextInstant()
+        )
+        let historicalTraceID = try store.engine.scheduleFromPool(
+            chainID: unfinishedChainID,
+            date: yesterday,
+            today: yesterday,
+            now: try timeline.nextInstant()
+        )
+        try store.engine.settleDays(
+            upTo: today,
+            now: try timeline.nextInstant()
+        )
+        let activeTraceID = try store.engine.continueTrace(
+            traceID: historicalTraceID,
+            targetDate: today,
+            today: today,
+            now: try timeline.nextInstant()
+        )
+
+        let completedChainID = try store.engine.createPoolTask(
+            title: "E2E 日历完成热度",
+            now: try timeline.nextInstant()
+        )
+        let completedTraceID = try store.engine.scheduleFromPool(
+            chainID: completedChainID,
+            date: today,
+            today: today,
+            now: try timeline.nextInstant()
+        )
+        try store.engine.markCompleted(
+            traceID: completedTraceID,
+            today: today,
+            now: try timeline.nextInstant()
+        )
+
+        for index in 1 ... 4 {
+            let chainID = try store.engine.createPoolTask(
+                title: "E2E 当日风险文案 \(index)",
+                now: try timeline.nextInstant()
+            )
+            _ = try store.engine.scheduleFromPool(
+                chainID: chainID,
+                date: today,
+                today: today,
+                now: try timeline.nextInstant()
+            )
+        }
+
+        let futureDate = NoonmarkStore.offset(today, by: 30)
+        for index in 1 ... 4 {
+            let chainID = try store.engine.createPoolTask(
+                title: "E2E 未来风险文案 \(index)",
+                now: try timeline.nextInstant()
+            )
+            _ = try store.engine.scheduleFromPool(
+                chainID: chainID,
+                date: futureDate,
+                today: today,
+                now: try timeline.nextInstant()
+            )
+        }
+        _ = try timeline.finish()
+
+        return Fixture(
+            poolChainID: poolChainID,
+            historicalTraceID: historicalTraceID,
+            activeTraceID: activeTraceID,
+            completedTraceID: completedTraceID,
+            futureDate: futureDate
+        )
+    }
+
+    @MainActor
+    private func exerciseLocalSummaryRails(
+        store: NoonmarkStore,
+        poolChainID: TaskChainID,
+        input: WindowServerInputDriver
+    ) async throws {
+        store.page = .pool
+        store.clearSelection()
+        store.isDetailRailExpanded = false
+        guard AppViewTreeE2E.activateMainWindow() else {
+            throw SummarySidebarE2EAutomationError.failed(
+                "main window could not become active"
+            )
+        }
+        try await waitUntil("local summary toolbar route did not settle") {
+            store.detailRailRoute == .pageSummary(.pool)
+                && store.hasDetailRailContent
+                && store.shouldShowDetailRail == false
+                && AppViewTreeE2E.view(
+                    identifier: "shell.detail-rail.toggle"
+                ) != nil
+                && AppViewTreeE2E.hasNoVisibleView(
+                    identifier: "shell.detail-rail"
+                )
+        }
+        try await click(
+            identifier: "shell.detail-rail.toggle",
+            input: input
+        )
+
+        let pages: [NoonmarkStore.Page] = [
+            .pool,
+            .future,
+            .unfinished,
+            .completed
+        ]
+        for page in pages {
+            store.page = page
+            store.clearSelection()
+            try await assertSummary(
+                page: page,
+                store: store,
+                zhulongEnabled: false
+            )
+        }
+
+        store.page = .pool
+        store.clearSelection()
+        let poolRowIdentifier = "workspace.item.pool.\(poolChainID.description)"
+        try await waitUntil("real Task Pool row was unavailable") {
+            AppViewTreeE2E.view(identifier: poolRowIdentifier) != nil
+        }
+        try await click(identifier: poolRowIdentifier, input: input)
+        try await waitUntil("selection detail did not replace page summary") {
+            store.selectedPoolTask?.chain.id == poolChainID
+                && store.detailRailRoute == .selection
+                && AppViewTreeE2E.hasNoVisibleView(
+                    identifier: "detail.summary.pool"
+                )
+        }
+        store.clearSelection()
+        try await assertSummary(
+            page: .pool,
+            store: store,
+            zhulongEnabled: false
+        )
+
+        store.zhulongProviderDraft.enabled = true
+        for page in pages {
+            store.page = page
+            store.clearSelection()
+            try await assertSummary(
+                page: page,
+                store: store,
+                zhulongEnabled: true
+            )
+        }
+    }
+
+    @MainActor
+    private func assertSummary(
+        page: NoonmarkStore.Page,
+        store: NoonmarkStore,
+        zhulongEnabled: Bool
+    ) async throws {
+        let prefix = "detail.summary.\(page.rawValue)"
+        try await waitUntil("\(page.rawValue) local summary was not visible") {
+            store.detailRailRoute == .pageSummary(page)
+                && store.shouldShowDetailRail
+                && AppViewTreeE2E.view(identifier: prefix) != nil
+                && AppViewTreeE2E.view(
+                    identifier: "\(prefix).metrics"
+                ) != nil
+                && AppViewTreeE2E.view(
+                    identifier: "\(prefix).signals"
+                ) != nil
+                && AppViewTreeE2E.view(
+                    identifier: "\(prefix).recommendations"
+                ) != nil
+                && (
+                    zhulongEnabled
+                        ? AppViewTreeE2E.view(
+                            identifier: "\(prefix).zhulong-action"
+                        ) != nil
+                        : AppViewTreeE2E.view(
+                            identifier: "\(prefix).zhulong-hint"
+                        ) != nil
+                )
+                && (
+                    zhulongEnabled
+                        ? AppViewTreeE2E.hasNoVisibleView(
+                            identifier: "\(prefix).zhulong-hint"
+                        )
+                        : AppViewTreeE2E.hasNoVisibleView(
+                            identifier: "\(prefix).zhulong-action"
+                        )
+                )
+        }
+    }
+
+    @MainActor
+    private func exerciseCalendarAndTimeline(
+        store: NoonmarkStore,
+        fixture: Fixture
+    ) async throws {
+        store.zhulongProviderDraft.enabled = false
+        store.page = .calendar
+        store.selectedCalendarDate = store.today
+        let todaySummary = store.engine.calendarSummary(for: store.today)
+        let heatIdentifier = "calendar.date-cell.\(store.today.description).heat"
+        let completedDotIdentifier = "calendar.trace.\(fixture.completedTraceID.description).status-dot"
+        let pendingDotIdentifier = "calendar.trace.\(fixture.activeTraceID.description).status-dot"
+        try await waitUntil("calendar heat or status-dot contract was unavailable") {
+            guard let heat = AppViewTreeE2E.view(identifier: heatIdentifier),
+                  let completedDot = AppViewTreeE2E.view(
+                      identifier: completedDotIdentifier
+                  ),
+                  let pendingDot = AppViewTreeE2E.view(
+                      identifier: pendingDotIdentifier
+                  )
+            else {
+                return false
+            }
+            return AppViewTreeE2E.verificationText(for: heat)
+                == "\(todaySummary.heatLevel)"
+                && AppViewTreeE2E.verificationText(for: completedDot)
+                == TraceStatus.completed.rawValue
+                && AppViewTreeE2E.verificationText(for: pendingDot)
+                == TraceStatus.pending.rawValue
+        }
+
+        let todayInsight = CalendarDayInsight.make(
+            for: store.today,
+            store: store
+        )
+        guard todayInsight.hasEnhancedContent,
+              todayInsight.riskSummary.contains("延续复制"),
+              todayInsight.riskSummary.contains("改期") == false
+        else {
+            throw SummarySidebarE2EAutomationError.failed(
+                "today calendar risk did not preserve continuation semantics"
+            )
+        }
+        let futureInsight = CalendarDayInsight.make(
+            for: fixture.futureDate,
+            store: store
+        )
+        guard futureInsight.hasEnhancedContent,
+              futureInsight.riskSummary.contains("改期"),
+              futureInsight.riskSummary.contains("延续复制") == false
+        else {
+            throw SummarySidebarE2EAutomationError.failed(
+                "future calendar risk did not use plan-draft language"
+            )
+        }
+
+        store.page = .day
+        store.selectedDate = store.today
+        store.selectTrace(fixture.activeTraceID)
+        let continued = try trace(fixture.historicalTraceID, in: store)
+        let pending = try trace(fixture.activeTraceID, in: store)
+        try await assertTimelineNode(continued, store: store)
+        try await assertTimelineNode(pending, store: store)
+    }
+
+    @MainActor
+    private func assertTimelineNode(
+        _ trace: DayTrace,
+        store: NoonmarkStore
+    ) async throws {
+        let identifier = "timeline.trace.\(trace.id.description)"
+        let expected = [
+            trace.status.rawValue,
+            trace.status.uiStyle.glyph,
+            store.copy.traceStatusLabel(trace.status)
+        ].joined(separator: "|")
+        try await waitUntil(
+            "\(trace.status.rawValue) timeline style did not use shared mapping"
+        ) {
+            guard let anchor = AppViewTreeE2E.view(identifier: identifier) else {
+                return false
+            }
+            return AppViewTreeE2E.verificationText(for: anchor) == expected
+        }
+    }
+
+    @MainActor
+    private func trace(
+        _ id: DayTraceID,
+        in store: NoonmarkStore
+    ) throws -> DayTrace {
+        guard let trace = store.engine.traces[id] else {
+            throw SummarySidebarE2EAutomationError.failed(
+                "timeline fixture trace was missing"
+            )
+        }
+        return trace
+    }
+
+    @MainActor
+    private func click(
+        identifier: String,
+        input: WindowServerInputDriver
+    ) async throws {
+        guard let view = AppViewTreeE2E.view(identifier: identifier),
+              let window = view.window,
+              window.isKeyWindow,
+              NSApp.isActive
+        else {
+            throw SummarySidebarE2EAutomationError.failed(
+                "visible WindowServer click target was missing: \(identifier)"
+            )
+        }
+        let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
+            guard let currentView = AppViewTreeE2E.view(identifier: identifier),
+                  let currentWindow = currentView.window,
+                  currentWindow === window,
+                  currentWindow.isKeyWindow,
+                  currentView.isHiddenOrHasHiddenAncestor == false,
+                  currentView.bounds.width > 0,
+                  currentView.bounds.height > 0
+            else {
+                throw SummarySidebarE2EAutomationError.failed(
+                    "WindowServer click target changed before mouseDown: \(identifier)"
+                )
+            }
+            let currentPoint = currentView.convert(
+                NSPoint(
+                    x: currentView.bounds.midX,
+                    y: currentView.bounds.midY
+                ),
+                to: nil
+            )
+            return try input.pointerCoordinate(
+                windowPoint: currentPoint,
+                in: currentWindow
+            )
+        }
+        let coordinate = try resolveTarget()
+        try await input.postClick(
+            at: coordinate,
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
+    }
+
+    @MainActor
+    private func waitUntil(
+        _ failure: String,
+        attempts: Int = 80,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        for _ in 0 ..< attempts {
+            if condition() {
+                return
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        throw SummarySidebarE2EAutomationError.failed(failure)
     }
 
     private func writeResult(_ result: String) throws {
@@ -600,6 +854,14 @@ struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
             withIntermediateDirectories: true
         )
         try result.write(to: resultURL, atomically: true, encoding: .utf8)
+    }
+
+    private struct Fixture {
+        let poolChainID: TaskChainID
+        let historicalTraceID: DayTraceID
+        let activeTraceID: DayTraceID
+        let completedTraceID: DayTraceID
+        let futureDate: LocalDate
     }
 }
 

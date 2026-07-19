@@ -1,0 +1,1725 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-evidence-contract.XXXXXX")"
+fixture_root="$(cd "$fixture_root" && pwd -P)"
+
+cleanup() {
+  rm -rf "$fixture_root"
+}
+trap cleanup EXIT
+
+mkdir -p "$fixture_root/scripts" "$fixture_root/bin" "$fixture_root/dist/Noonmark.app"
+cp "$repo_root/scripts/package-dmg" "$fixture_root/scripts/package-dmg"
+cp "$repo_root/scripts/verify-dmg" "$fixture_root/scripts/verify-dmg"
+
+: >"$fixture_root/dist/Noonmark.dmg"
+: >"$fixture_root/dist/Noonmark.dmg.sha256"
+: >"$fixture_root/dist/Noonmark.dmg.manifest"
+: >"$fixture_root/dist/Noonmark.dmg.inventory.sha256"
+
+cat >"$fixture_root/scripts/build-mac-app" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+for stale_path in \
+  dist/Noonmark.app \
+  dist/Noonmark.dmg \
+  dist/Noonmark.dmg.sha256 \
+  dist/Noonmark.dmg.inventory.sha256; do
+  if [[ -e "$stale_path" ]]; then
+    echo "package-dmg left stale evidence before build: $stale_path" >&2
+    exit 91
+  fi
+done
+if [[ ! -f dist/Noonmark.dmg.manifest ]] ||
+  ! grep -Fqx 'suite=package-dmg' dist/Noonmark.dmg.manifest ||
+  grep -Fq 'suite_exit_status=' dist/Noonmark.dmg.manifest; then
+  echo "package-dmg did not replace the stale manifest with a fresh unfinished run" >&2
+  exit 91
+fi
+if [[ "${NOONMARK_REQUIRE_STABLE_UI_SIGNING:-}" != "1" ]]; then
+  echo "package-dmg did not require stable signing for its build" >&2
+  exit 92
+fi
+mkdir -p dist/Noonmark.app/Contents/MacOS
+printf 'fixture-production-binary\n' >dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp
+chmod +x dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp
+printf '<plist/>\n' >dist/Noonmark.app/Contents/Info.plist
+SCRIPT
+chmod +x "$fixture_root/scripts/build-mac-app"
+
+cp "$repo_root/scripts/evidence-common" "$fixture_root/scripts/evidence-common"
+cp \
+  "$repo_root/scripts/verify-development-validation-evidence" \
+  "$fixture_root/scripts/verify-development-validation-evidence"
+cp \
+  "$repo_root/scripts/runtime-evidence" \
+  "$fixture_root/scripts/runtime-evidence"
+cp \
+  "$repo_root/scripts/verify-english-screenshot-content.swift" \
+  "$fixture_root/scripts/verify-english-screenshot-content.swift"
+chmod +x "$fixture_root/scripts/verify-development-validation-evidence"
+
+cat >"$fixture_root/bin/ditto" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+cp -R "$1" "$2"
+SCRIPT
+chmod +x "$fixture_root/bin/ditto"
+
+cat >"$fixture_root/bin/hdiutil" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+mode="$1"
+shift
+if [[ "$mode" != "create" ]]; then
+  if [[ "$mode" == "attach" ]]; then
+    dmg_path="$1"
+    mountpoint=""
+    while [[ "$#" -gt 0 ]]; do
+      if [[ "$1" == "-mountpoint" ]]; then
+        mountpoint="$2"
+        break
+      fi
+      shift
+    done
+    [[ -n "$mountpoint" ]]
+    cp -R "${dmg_path}.mount/." "$mountpoint/"
+    exit 0
+  fi
+  if [[ "$mode" == "detach" ]]; then
+    exit 0
+  fi
+  echo "unexpected fixture hdiutil mode: $mode" >&2
+  exit 93
+fi
+srcfolder=""
+arguments=("$@")
+for ((index = 0; index < ${#arguments[@]}; index += 1)); do
+  if [[ "${arguments[$index]}" == "-srcfolder" ]]; then
+    srcfolder="${arguments[$((index + 1))]}"
+  fi
+done
+dmg_path="${arguments[$((${#arguments[@]} - 1))]}"
+[[ -n "$srcfolder" ]]
+rm -rf "${dmg_path}.mount"
+mkdir -p "${dmg_path}.mount"
+cp -R "$srcfolder/." "${dmg_path}.mount/"
+printf 'fixture-dmg\n' >"$dmg_path"
+SCRIPT
+chmod +x "$fixture_root/bin/hdiutil"
+
+cat >"$fixture_root/bin/codesign" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${FIXTURE_CODESIGN_LOG:?}"
+target="${@: -1}"
+case "$target" in
+  *NoonmarkMacAppE2E.app) identifier="app.noonmark.mac.e2e" ;;
+  *NoonmarkDMGInstallHarness.app)
+    identifier="app.noonmark.test.dmg-install-harness"
+    ;;
+  *) identifier="app.noonmark.mac" ;;
+esac
+case " $* " in
+  *" --verify "*) exit 0 ;;
+  *" --display --verbose=4 "*)
+    cat <<DETAILS
+Identifier=$identifier
+TeamIdentifier=FIXTURETEAM
+Authority=Apple Development: Fixture
+Signature=Developer
+DETAILS
+    ;;
+  *" --display --requirements - "*)
+    printf 'designated => identifier "%s" and anchor apple generic\n' \
+      "$identifier"
+    ;;
+  *" --display --extract-certificates="*)
+    certificate_prefix="${2#*=}"
+    printf 'fixture-certificate\n' >"${certificate_prefix}0"
+    ;;
+  *) echo "unexpected fixture codesign invocation: $*" >&2; exit 94 ;;
+esac
+SCRIPT
+chmod +x "$fixture_root/bin/codesign"
+
+cat >"$fixture_root/bin/plutil" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "-extract" && "$2" == "CFBundleExecutable" ]]; then
+  case "${@: -1}" in
+    *NoonmarkMacAppE2E.app/*) echo "NoonmarkMacAppE2E" ;;
+    *NoonmarkDMGInstallHarness.app/*) echo "NoonmarkDMGInstallHarness" ;;
+    *) echo "NoonmarkMacApp" ;;
+  esac
+  exit 0
+fi
+echo "unexpected fixture plutil invocation: $*" >&2
+exit 95
+SCRIPT
+chmod +x "$fixture_root/bin/plutil"
+
+for verifier in test-app-icon-bundle verify-mac-app-metadata; do
+  cat >"$fixture_root/scripts/$verifier" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ -d "$1" ]]
+SCRIPT
+  chmod +x "$fixture_root/scripts/$verifier"
+done
+
+cat >"$fixture_root/.gitignore" <<'EOF'
+dist/
+artifacts/
+*.log
+*.stdout
+*.stderr
+EOF
+(
+  cd "$fixture_root"
+  git init -q
+  git config user.name "Noonmark Evidence Fixture"
+  git config user.email "fixture@noonmark.invalid"
+  git add .
+  git commit -qm "fixture"
+)
+
+set +e
+(
+  cd "$fixture_root"
+  FIXTURE_CODESIGN_LOG="$fixture_root/codesign.log" \
+  NOONMARK_EVIDENCE_RUN_ID="fixture-run" \
+    PATH="$fixture_root/bin:$PATH" \
+    scripts/package-dmg release
+) >"$fixture_root/package.stdout" 2>"$fixture_root/package.stderr"
+package_status=$?
+set -e
+
+if [[ "$package_status" -ne 0 ]]; then
+  echo "package-dmg violated its pre-build clean/signing contract (status=$package_status)" >&2
+  cat "$fixture_root/package.stderr" >&2
+  [[ ! -f "$fixture_root/codesign.log" ]] || cat "$fixture_root/codesign.log" >&2
+  exit 1
+fi
+
+if [[ ! -s "$fixture_root/dist/Noonmark.dmg.manifest" ]]; then
+  echo "package-dmg did not emit a provenance manifest beside the DMG" >&2
+  exit 1
+fi
+
+for requirement in \
+  "evidence_schema_version=1" \
+  "evidence_run_id=fixture-run" \
+  "suite=package-dmg" \
+  "configuration=release" \
+  "suite_mode=full" \
+  "app_codesign_team_identifier=FIXTURETEAM" \
+  "app_codesign_deep_strict=1" \
+  "app_stable_required=1" \
+  "suite_exit_status=0"; do
+  if ! grep -Fqx "$requirement" "$fixture_root/dist/Noonmark.dmg.manifest"; then
+    echo "package manifest is missing $requirement" >&2
+    cat "$fixture_root/dist/Noonmark.dmg.manifest" >&2
+    exit 1
+  fi
+done
+if ! grep -Eq '^source_worktree_tree_oid=[0-9a-f]{40}$' \
+  "$fixture_root/dist/Noonmark.dmg.manifest"; then
+  echo "package manifest lacks the exact Git worktree tree OID" >&2
+  cat "$fixture_root/dist/Noonmark.dmg.manifest" >&2
+  exit 1
+fi
+
+if ! grep -Eq -- \
+  '^--verify --deep --strict .*/Noonmark\.app$' \
+  "$fixture_root/codesign.log"; then
+  echo "verify-dmg did not run deep strict signature verification on the mounted app" >&2
+  cat "$fixture_root/codesign.log" >&2 2>/dev/null || true
+  exit 1
+fi
+
+cp \
+  "$fixture_root/dist/Noonmark.dmg.manifest" \
+  "$fixture_root/dist/Noonmark.dmg.manifest.valid"
+sed -i '' \
+  's/^app_binary_sha256=.*/app_binary_sha256=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' \
+  "$fixture_root/dist/Noonmark.dmg.manifest"
+set +e
+(
+  cd "$fixture_root"
+  FIXTURE_CODESIGN_LOG="$fixture_root/codesign.log" \
+    PATH="$fixture_root/bin:$PATH" \
+    scripts/verify-dmg dist/Noonmark.dmg
+) >"$fixture_root/verify-tampered.stdout" 2>"$fixture_root/verify-tampered.stderr"
+tampered_status=$?
+set -e
+if [[ "$tampered_status" -eq 0 ]]; then
+  echo "verify-dmg accepted a mounted binary that disagreed with the package manifest" >&2
+  exit 1
+fi
+mv \
+  "$fixture_root/dist/Noonmark.dmg.manifest.valid" \
+  "$fixture_root/dist/Noonmark.dmg.manifest"
+
+export FIXTURE_CODESIGN_LOG="$fixture_root/codesign.log"
+export PATH="$fixture_root/bin:$PATH"
+mkdir -p \
+  "$fixture_root/artifacts/e2e-runtime" \
+  "$fixture_root/artifacts/e2e-data-root-process-lease" \
+  "$fixture_root/artifacts/dmg-install/diagnostics" \
+  "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS" \
+  "$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS" \
+  "$fixture_root/artifacts/e2e-data-root-process-lease/app-snapshot" \
+  "$fixture_root/artifacts/dmg-install/Applications" \
+  "$fixture_root/artifacts/dmg-install-harness"
+printf 'fixture\n' \
+  >"$fixture_root/artifacts/e2e-data-root-process-lease/summary.txt"
+printf 'runtime_evidence_capture_started=fixture\n' \
+  >"$fixture_root/artifacts/e2e-data-root-process-lease/unified.log"
+printf 'new_diagnostic_count=0\n' \
+  >"$fixture_root/artifacts/e2e-runtime/diagnostic-result.txt"
+printf 'new_diagnostic_count=0\n' \
+  >"$fixture_root/artifacts/e2e-runtime/helper-diagnostic-result.txt"
+printf 'new_diagnostic_count=0\n' \
+  >"$fixture_root/artifacts/e2e-data-root-process-lease/diagnostic-result.txt"
+printf 'runtime_evidence_capture_started=fixture\n' \
+  >"$fixture_root/artifacts/e2e-runtime/unified.log"
+cat >"$fixture_root/artifacts/e2e-runtime/runtime-manifest.txt" <<'EOF'
+process=NoonmarkMacAppE2E
+bundle=dist/NoonmarkMacAppE2E.app
+started_at=2026-07-17T00:00:00Z
+finished_at=2026-07-17T00:00:01Z
+suite_exit_status=0
+EOF
+for diagnostic in \
+  diagnostic-baseline.txt \
+  diagnostic-baseline.txt.current \
+  diagnostic-baseline.txt.new \
+  helper-diagnostic-baseline.txt \
+  helper-diagnostic-baseline.txt.current \
+  helper-diagnostic-baseline.txt.new; do
+  : >"$fixture_root/artifacts/e2e-runtime/$diagnostic"
+done
+for diagnostic in \
+  diagnostic-baseline.txt \
+  diagnostic-baseline.txt.current \
+  diagnostic-baseline.txt.new; do
+  : >"$fixture_root/artifacts/e2e-data-root-process-lease/$diagnostic"
+done
+for diagnostic in \
+  noonmark-baseline.txt \
+  noonmark-final.txt \
+  noonmark-diff.txt \
+  harness-baseline.txt \
+  harness-final.txt \
+  harness-diff.txt; do
+  : >"$fixture_root/artifacts/dmg-install/diagnostics/$diagnostic"
+done
+printf 'fixture-e2e-binary\n' \
+  >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
+printf '<plist/>\n' \
+  >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/Info.plist"
+chmod +x \
+  "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
+cp -R \
+  "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app" \
+  "$fixture_root/artifacts/e2e-data-root-process-lease/app-snapshot/NoonmarkMacAppE2E.app"
+printf 'fixture-helper-binary\n' \
+  >"$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
+printf '<plist/>\n' \
+  >"$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/Info.plist"
+chmod +x \
+  "$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
+cp -R \
+  "$fixture_root/dist/Noonmark.app" \
+  "$fixture_root/artifacts/dmg-install/Applications/Noonmark.app"
+cp -R \
+  "$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app" \
+  "$fixture_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app"
+for install_screenshot in \
+  installed-day.png \
+  installed-exercise-before-input.png \
+  installed-restart.png; do
+  cp \
+    "$repo_root/App/NoonmarkMacApp/Resources/AppIcon-master.png" \
+    "$fixture_root/artifacts/dmg-install/$install_screenshot"
+done
+cat >"$fixture_root/artifacts/dmg-install/permission-preflight-ledger.tsv" <<'EOF'
+2026-07-17T00:00:00Z	PASS	arguments	mode=preflight
+2026-07-17T00:00:00Z	PASS	process	mode=preflight helper_pid=101 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+2026-07-17T00:00:00Z	PASS	exit-observer	helper_pid=101 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE observer=EVFILT_PROC+NOTE_EXITSTATUS
+2026-07-17T00:00:00Z	PASS	permissions	AXIsProcessTrusted=true CGPreflightPostEventAccess=true
+2026-07-17T00:00:00Z	PASS	complete	mode=preflight
+EOF
+cat >"$fixture_root/artifacts/dmg-install/exercise-ledger.tsv" <<EOF
+2026-07-17T00:00:01Z	PASS	arguments	mode=exercise pid=201 app=$fixture_root/artifacts/dmg-install/Applications/Noonmark.app
+2026-07-17T00:00:01Z	PASS	process	mode=exercise helper_pid=202 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-FFFFFFFFFFFF
+2026-07-17T00:00:01Z	PASS	exit-observer	helper_pid=202 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-FFFFFFFFFFFF observer=EVFILT_PROC+NOTE_EXITSTATUS
+2026-07-17T00:00:01Z	PASS	permissions	AXIsProcessTrusted=true CGPreflightPostEventAccess=true
+2026-07-17T00:00:01Z	PASS	target	bundle=app.noonmark.mac path=$fixture_root/artifacts/dmg-install/Applications/Noonmark.app frontmost=true windows=1
+2026-07-17T00:00:01Z	PASS	main-window	native AXWindow is visible
+2026-07-17T00:00:01Z	PASS	settings-menu	title=设置… shortcut=Command-,
+2026-07-17T00:00:01Z	PASS	settings-window	independent=true window=(0.0, 432.0, 820.0, 720.0) sidebar=(0.0, 484.0, 240.0, 668.0) content=(241.0, 484.0, 579.0, 668.0)
+2026-07-17T00:00:01Z	PASS	settings-close	closed with real WindowServer click
+2026-07-17T00:00:01Z	PASS	quick-entry-menu	title=快速记录… shortcut=Command-n
+2026-07-17T00:00:01Z	PASS	quick-entry-input	value=dmgproductiontask source=cghidEventTap
+2026-07-17T00:00:01Z	PASS	quick-entry-add	panel dismissed after real click
+2026-07-17T00:00:01Z	PASS	exercise-title-visible	title=dmgproductiontask visibleAXMatches=2
+2026-07-17T00:00:01Z	PASS	quit-menu	title=退出晷迹 shortcut=Command-q
+2026-07-17T00:00:01Z	PASS	quit	terminated via real App menu click
+2026-07-17T00:00:01Z	PASS	complete	mode=exercise
+EOF
+cat >"$fixture_root/artifacts/dmg-install/restart-ledger.tsv" <<EOF
+2026-07-17T00:00:02Z	PASS	arguments	mode=restart pid=301 app=$fixture_root/artifacts/dmg-install/Applications/Noonmark.app
+2026-07-17T00:00:02Z	PASS	process	mode=restart helper_pid=302 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-111111111111
+2026-07-17T00:00:02Z	PASS	exit-observer	helper_pid=302 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-111111111111 observer=EVFILT_PROC+NOTE_EXITSTATUS
+2026-07-17T00:00:02Z	PASS	permissions	AXIsProcessTrusted=true CGPreflightPostEventAccess=true
+2026-07-17T00:00:02Z	PASS	target	bundle=app.noonmark.mac path=$fixture_root/artifacts/dmg-install/Applications/Noonmark.app frontmost=true windows=1
+2026-07-17T00:00:02Z	PASS	main-window	native AXWindow is visible
+2026-07-17T00:00:02Z	PASS	restart-title-visible	title=dmgproductiontask visibleAXMatches=1
+2026-07-17T00:00:02Z	PASS	quit-menu	title=退出晷迹 shortcut=Command-q
+2026-07-17T00:00:02Z	PASS	quit	terminated via real App menu click
+2026-07-17T00:00:02Z	PASS	complete	mode=restart
+EOF
+cat >"$fixture_root/artifacts/dmg-install/installed-exercise-window.txt" <<EOF
+phase=production exercise
+pid=201
+bundle_identifier=app.noonmark.mac
+bundle_path=$fixture_root/artifacts/dmg-install/Applications/Noonmark.app
+executable_path=$fixture_root/artifacts/dmg-install/Applications/Noonmark.app/Contents/MacOS/NoonmarkMacApp
+window_id=401
+natural_day=2026-07-17
+title=晷迹 · Day Todo — 7月17日
+screenshot=$fixture_root/artifacts/dmg-install/installed-exercise-before-input.png
+pixel_size=1024x1024
+EOF
+cat >"$fixture_root/artifacts/dmg-install/installed-restart-window.txt" <<EOF
+phase=production restart
+pid=301
+bundle_identifier=app.noonmark.mac
+bundle_path=$fixture_root/artifacts/dmg-install/Applications/Noonmark.app
+executable_path=$fixture_root/artifacts/dmg-install/Applications/Noonmark.app/Contents/MacOS/NoonmarkMacApp
+window_id=402
+natural_day=2026-07-17
+title=晷迹 · Day Todo — 7月17日
+screenshot=$fixture_root/artifacts/dmg-install/installed-restart.png
+pixel_size=1024x1024
+EOF
+fixture_process_timestamp="$(
+  /bin/date -r "$(
+    /bin/date -j -u -f '%Y-%m-%dT%H:%M:%SZ' \
+      '2026-07-17T12:00:00Z' '+%s'
+  )" '+%Y-%m-%d %H:%M:%S'
+)"
+fixture_restart_process_timestamp="$(
+  /bin/date -r "$(
+    /bin/date -j -u -f '%Y-%m-%dT%H:%M:%SZ' \
+      '2026-07-17T12:00:02Z' '+%s'
+  )" '+%Y-%m-%d %H:%M:%S'
+)"
+cat >"$fixture_root/artifacts/dmg-install/exercise-console.log" <<EOF
+runtime_evidence_capture_started=2026-07-17T12:00:00Z
+$fixture_process_timestamp.100 I  CoreServicesUIAgent[51:abc] [com.apple.launchservices:cas] notifying server side, pid=201 appInfo={ "CFBundleExecutablePath"="$fixture_root/artifacts/dmg-install/Applications/Noonmark.app/Contents/MacOS/NoonmarkMacApp", "CFBundleIdentifier"="app.noonmark.mac", "LSAuditToken"=\$0000000000000000000000000000000000000000C90000000000000000000000, "LSBundlePath"="$fixture_root/artifacts/dmg-install/Applications/Noonmark.app" }
+$fixture_process_timestamp.200 I  NoonmarkMacApp[201:def] [com.apple.launchservices:cas] fixture process launch
+EOF
+cat >"$fixture_root/artifacts/dmg-install/restart-console.log" <<EOF
+runtime_evidence_capture_started=2026-07-17T12:00:01Z
+$fixture_restart_process_timestamp.300 I  CoreServicesUIAgent[51:abc] [com.apple.launchservices:cas] notifying server side, pid=301 appInfo={ "CFBundleExecutablePath"="$fixture_root/artifacts/dmg-install/Applications/Noonmark.app/Contents/MacOS/NoonmarkMacApp", "CFBundleIdentifier"="app.noonmark.mac", "LSAuditToken"=\$00000000000000000000000000000000000000002D0100000000000000000000, "LSBundlePath"="$fixture_root/artifacts/dmg-install/Applications/Noonmark.app" }
+$fixture_restart_process_timestamp.400 I  NoonmarkMacApp[301:def] [com.apple.launchservices:cas] fixture process restart
+EOF
+cat >"$fixture_root/artifacts/dmg-install/task-row-before-restart.txt" <<'EOF'
+integrity_check=ok
+identity=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE	BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF	CCCCCCCC-DDDD-EEEE-FFFF-000000000000	2026-07-17	pending	active	1	dmgproductiontask
+joined_row={"trace":{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","chain_id":"BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF","definition_id":"CCCCCCCC-DDDD-EEEE-FFFF-000000000000","date":"2026-07-17","status":"pending","priority":1},"chain":{"id":"BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF","state":"active"},"definition":{"id":"CCCCCCCC-DDDD-EEEE-FFFF-000000000000","chain_id":"BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF","sequence":1,"title":"dmgproductiontask"}}
+EOF
+cp \
+  "$fixture_root/artifacts/dmg-install/task-row-before-restart.txt" \
+  "$fixture_root/artifacts/dmg-install/task-row-after-restart.txt"
+cat >"$fixture_root/artifacts/dmg-install/task-identity.tsv" <<'EOF'
+trace_id	chain_id	definition_id	date	trace_status	chain_state	definition_sequence	title
+AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE	BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF	CCCCCCCC-DDDD-EEEE-FFFF-000000000000	2026-07-17	pending	active	1	dmgproductiontask
+EOF
+empty_sha256="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/dmg-install/diagnostics/noonmark-baseline.txt" |
+    awk '{print $1}'
+)"
+
+app_binary_sha256="$(
+  awk -F= '$1 == "app_binary_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+dmg_sha256="$(
+  awk -F= '$1 == "dmg_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+dmg_checksum_sha256="$(
+  awk -F= '$1 == "dmg_checksum_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+package_manifest_sha256="$(
+  shasum -a 256 "$fixture_root/dist/Noonmark.dmg.manifest" | awk '{print $1}'
+)"
+source_head_commit="$(awk -F= '$1 == "source_head_commit" { print $2 }' "$fixture_root/dist/Noonmark.dmg.manifest")"
+source_head_tree_oid="$(awk -F= '$1 == "source_head_tree_oid" { print $2 }' "$fixture_root/dist/Noonmark.dmg.manifest")"
+source_worktree_tree_oid="$(awk -F= '$1 == "source_worktree_tree_oid" { print $2 }' "$fixture_root/dist/Noonmark.dmg.manifest")"
+source_tree_dirty="$(awk -F= '$1 == "source_tree_dirty" { print $2 }' "$fixture_root/dist/Noonmark.dmg.manifest")"
+codesign_identity_sha1="$(awk -F= '$1 == "app_codesign_identity_sha1" { print $2 }' "$fixture_root/dist/Noonmark.dmg.manifest")"
+codesign_identity_sha256="$(awk -F= '$1 == "app_codesign_identity_sha256" { print $2 }' "$fixture_root/dist/Noonmark.dmg.manifest")"
+designated_requirement_sha256="$(awk -F= '$1 == "app_designated_requirement_sha256" { print $2 }' "$fixture_root/dist/Noonmark.dmg.manifest")"
+e2e_designated_requirement_sha256="$(
+  printf '%s' \
+    'designated => identifier "app.noonmark.mac.e2e" and anchor apple generic' |
+    shasum -a 256 | awk '{print $1}'
+)"
+helper_designated_requirement_sha256="$(
+  printf '%s' \
+    'designated => identifier "app.noonmark.test.dmg-install-harness" and anchor apple generic' |
+    shasum -a 256 | awk '{print $1}'
+)"
+common_manifest_fields="source_head_commit=$source_head_commit
+source_head_tree_oid=$source_head_tree_oid
+source_worktree_tree_oid=$source_worktree_tree_oid
+source_tree_dirty=$source_tree_dirty
+app_codesign_identifier=app.noonmark.mac.e2e
+app_codesign_kind=development
+app_codesign_identity_sha1=$codesign_identity_sha1
+app_codesign_identity_sha256=$codesign_identity_sha256
+app_codesign_team_identifier=FIXTURETEAM
+app_codesign_authority=Apple Development: Fixture
+app_designated_requirement_sha256=$e2e_designated_requirement_sha256
+app_codesign_deep_strict=1
+app_stable_required=1"
+
+english_fixture_binary="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E" |
+    awk '{print $1}'
+)"
+helper_fixture_binary="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness" |
+    awk '{print $1}'
+)"
+printf 'scenario\tapp_binary_sha256\tscreenshot_sha256\toracles\texternal_ax\n' \
+  >"$fixture_root/artifacts/e2e-runtime/english-scenario-ledger.tsv"
+mkdir -p "$fixture_root/artifacts/e2e"
+NOONMARK_FIXTURE_SCREENSHOT_ROOT="$fixture_root/artifacts/e2e" \
+  /usr/bin/xcrun swift -e '
+import AppKit
+import Foundation
+
+let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["NOONMARK_FIXTURE_SCREENSHOT_ROOT"]!)
+let values: [String: (String, Int, Int)] = [
+    "english-day": ("Coordinate the launch readiness", 1920, 1440),
+    "english-day-wide": ("Coordinate the launch readiness", 2880, 1800),
+    "english-day-history-header": ("History locked", 1920, 1440),
+    "english-pool": ("Draft the post-launch accessibility follow-up", 2400, 1536),
+    "english-future": ("Run the release candidate VoiceOver walkthrough", 2400, 1536),
+    "english-unfinished": ("Review the unresolved keyboard navigation findings", 2400, 1536),
+    "english-completed": ("Approve the final English navigation copy", 2400, 1536),
+    "english-calendar": ("A whole-month trace overview", 2400, 1536),
+    "english-settings": ("Settings\nZhulong Configuration\nWrite & Privacy Boundaries", 1640, 1440),
+    "english-zhulong": ("Clarify what is vague and keep what is underway moving", 2400, 1536),
+]
+for (scenario, value) in values {
+    let (text, width, height) = value
+    let bitmap = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: width,
+        pixelsHigh: height,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+    )!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    NSColor.white.setFill()
+    NSRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)).fill()
+    (text as NSString).draw(
+        in: NSRect(
+            x: 120,
+            y: 160,
+            width: CGFloat(width - 240),
+            height: CGFloat(height - 320)
+        ),
+        withAttributes: [
+            .font: NSFont.systemFont(ofSize: 52, weight: .semibold),
+            .foregroundColor: NSColor.black,
+        ]
+    )
+    NSGraphicsContext.restoreGraphicsState()
+    let data = bitmap.representation(using: .png, properties: [:])!
+    try data.write(to: root.appendingPathComponent("\(scenario).png"))
+}
+'
+IFS=, read -r -a english_fixture_scenarios <<< \
+  "english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
+for scenario in "${english_fixture_scenarios[@]}"; do
+  external_ax=false
+  [[ "$scenario" != "english-day" ]] || external_ax=true
+  case "$scenario" in
+    english-day)
+      oracles="screenshot_vision_ocr_no_han+day_header_pixel+in_app_view_tree_ax+external_ax"
+      ;;
+    english-day-wide)
+      oracles="screenshot_vision_ocr_no_han+day_header_pixel+in_app_view_tree_ax"
+      ;;
+    english-day-history-header)
+      oracles="screenshot_vision_ocr_no_han+day_header_pixel+in_app_responsive_contract"
+      ;;
+    english-pool | english-future | english-unfinished | \
+      english-completed | english-calendar)
+      oracles="screenshot_vision_ocr_no_han+in_app_view_tree_ax"
+      ;;
+    english-settings)
+      oracles="screenshot_vision_ocr_no_han+settings_sidebar_vision_ocr"
+      ;;
+    english-zhulong)
+      oracles="screenshot_vision_ocr_no_han"
+      ;;
+  esac
+  english_fixture_screenshot="$(
+    shasum -a 256 "$fixture_root/artifacts/e2e/${scenario}.png" |
+      awk '{print $1}'
+  )"
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$scenario" \
+    "$english_fixture_binary" \
+    "$english_fixture_screenshot" \
+    "$oracles" \
+    "$external_ax" \
+    >>"$fixture_root/artifacts/e2e-runtime/english-scenario-ledger.tsv"
+done
+english_ledger_sha256="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/e2e-runtime/english-scenario-ledger.tsv" |
+    awk '{print $1}'
+)"
+printf 'ok' \
+  >"$fixture_root/artifacts/e2e-runtime/windowserver-input-cleanup-result.txt"
+: >"$fixture_root/artifacts/e2e-runtime/windowserver-input-cleanup.log"
+windowserver_input_cleanup_result_sha256="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/e2e-runtime/windowserver-input-cleanup-result.txt" |
+    awk '{print $1}'
+)"
+(
+  cd "$fixture_root"
+  source scripts/evidence-common
+  evidence_inventory \
+    "$PWD" \
+    artifacts/e2e-runtime/artifact-inventory.sha256 \
+    artifacts/e2e-runtime \
+    artifacts/e2e
+  evidence_inventory \
+    "$PWD" \
+    artifacts/dmg-install-artifact-inventory.sha256 \
+    dist/Noonmark.dmg \
+    dist/Noonmark.dmg.sha256 \
+    dist/Noonmark.dmg.manifest \
+    artifacts/dmg-install-harness \
+    artifacts/dmg-install
+)
+e2e_inventory_sha256="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/e2e-runtime/artifact-inventory.sha256" |
+    awk '{print $1}'
+)"
+install_inventory_sha256="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/dmg-install-artifact-inventory.sha256" |
+    awk '{print $1}'
+)"
+
+cat >"$fixture_root/artifacts/e2e-runtime/manifest.txt" <<EOF
+evidence_schema_version=1
+suite=mac-app-e2e
+evidence_run_id=fixture-run
+configuration=release
+suite_mode=full
+started_at=2026-07-17T00:00:00Z
+$common_manifest_fields
+source_end_worktree_tree_oid=$source_worktree_tree_oid
+app_binary_sha256=$english_fixture_binary
+app_binary_sha256_before=$english_fixture_binary
+app_binary_sha256_after=$english_fixture_binary
+app_binary_unchanged=true
+app_end_binary_sha256=$english_fixture_binary
+app_end_codesign_identifier=app.noonmark.mac.e2e
+app_end_codesign_kind=development
+app_end_codesign_identity_sha1=$codesign_identity_sha1
+app_end_codesign_identity_sha256=$codesign_identity_sha256
+app_end_codesign_team_identifier=FIXTURETEAM
+app_end_codesign_authority=Apple Development: Fixture
+app_end_designated_requirement_sha256=$e2e_designated_requirement_sha256
+app_end_codesign_deep_strict=1
+app_end_stable_required=1
+helper_binary_sha256=$helper_fixture_binary
+helper_binary_sha256_before=$helper_fixture_binary
+helper_binary_sha256_after=$helper_fixture_binary
+helper_binary_unchanged=true
+helper_codesign_identifier=app.noonmark.test.dmg-install-harness
+helper_codesign_kind=development
+helper_codesign_identity_sha1=$codesign_identity_sha1
+helper_codesign_identity_sha256=$codesign_identity_sha256
+helper_codesign_team_identifier=FIXTURETEAM
+helper_codesign_authority=Apple Development: Fixture
+helper_designated_requirement_sha256=$helper_designated_requirement_sha256
+helper_codesign_deep_strict=1
+helper_stable_required=1
+helper_end_binary_sha256=$helper_fixture_binary
+helper_end_codesign_identifier=app.noonmark.test.dmg-install-harness
+helper_end_codesign_kind=development
+helper_end_codesign_identity_sha1=$codesign_identity_sha1
+helper_end_codesign_identity_sha256=$codesign_identity_sha256
+helper_end_codesign_team_identifier=FIXTURETEAM
+helper_end_codesign_authority=Apple Development: Fixture
+helper_end_designated_requirement_sha256=$helper_designated_requirement_sha256
+helper_end_codesign_deep_strict=1
+helper_end_stable_required=1
+english_scenario_verified_count=10
+english_scenario_verified_set=english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong
+english_scenario_ledger_sha256=$english_ledger_sha256
+windowserver_input_cleanup_result=ok
+windowserver_input_cleanup_result_path=artifacts/e2e-runtime/windowserver-input-cleanup-result.txt
+windowserver_input_cleanup_result_sha256=$windowserver_input_cleanup_result_sha256
+windowserver_input_cleanup_log_path=artifacts/e2e-runtime/windowserver-input-cleanup.log
+artifact_inventory_sha256=$e2e_inventory_sha256
+finished_at=2026-07-17T00:00:01Z
+suite_exit_status=0
+EOF
+
+cat >"$fixture_root/artifacts/e2e-data-root-process-lease/intentional-termination-ledger.tsv" <<EOF
+phase	pid	parent_pid	signal	reason	expected_status	observed_status	binary_path	binary_sha256
+sigkill-holder	4321	1234	SIGKILL	data-root-process-lease-reacquisition	137	137	/fixture/NoonmarkMacAppE2E	$english_fixture_binary
+EOF
+cp \
+  "$fixture_root/artifacts/e2e-data-root-process-lease/intentional-termination-ledger.tsv" \
+  "$fixture_root/artifacts/e2e-data-root-process-lease/sigkill-report.txt"
+sigkill_report_sha256="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/e2e-data-root-process-lease/sigkill-report.txt" |
+    awk '{print $1}'
+)"
+intentional_termination_ledger_sha256="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/e2e-data-root-process-lease/intentional-termination-ledger.tsv" |
+    awk '{print $1}'
+)"
+(
+  cd "$fixture_root"
+  source scripts/evidence-common
+  evidence_inventory \
+    "$PWD" \
+    artifacts/e2e-data-root-process-lease/artifact-inventory.sha256 \
+    artifacts/e2e-data-root-process-lease
+)
+lease_inventory_sha256="$(
+  shasum -a 256 \
+    "$fixture_root/artifacts/e2e-data-root-process-lease/artifact-inventory.sha256" |
+    awk '{print $1}'
+)"
+
+cat >"$fixture_root/artifacts/e2e-data-root-process-lease/manifest.txt" <<EOF
+evidence_schema_version=1
+suite=data-root-process-lease-e2e
+evidence_run_id=fixture-run
+configuration=release
+suite_mode=full
+started_at=2026-07-17T00:00:00Z
+$common_manifest_fields
+app_binary_sha256=$english_fixture_binary
+app_binary_sha256_end=$english_fixture_binary
+app_binary_unchanged=true
+source_end_worktree_tree_oid=$source_worktree_tree_oid
+app_end_binary_sha256=$english_fixture_binary
+app_end_codesign_identifier=app.noonmark.mac.e2e
+app_end_codesign_kind=development
+app_end_codesign_identity_sha1=$codesign_identity_sha1
+app_end_codesign_identity_sha256=$codesign_identity_sha256
+app_end_codesign_team_identifier=FIXTURETEAM
+app_end_codesign_authority=Apple Development: Fixture
+app_end_designated_requirement_sha256=$e2e_designated_requirement_sha256
+app_end_codesign_deep_strict=1
+app_end_stable_required=1
+intentional_signal=SIGKILL
+intentional_sigkill_phase=sigkill-holder
+intentional_signal_expected_status=137
+intentional_sigkill_pid=4321
+intentional_sigkill_observed_status=137
+intentional_sigkill_report_sha256=$sigkill_report_sha256
+intentional_termination_ledger_sha256=$intentional_termination_ledger_sha256
+artifact_inventory_sha256=$lease_inventory_sha256
+finished_at=2026-07-17T00:00:01Z
+suite_exit_status=0
+EOF
+
+cat >"$fixture_root/artifacts/dmg-install/runtime-manifest.txt" <<EOF
+evidence_schema_version=1
+suite=dmg-install
+evidence_run_id=fixture-run
+configuration=release
+suite_mode=full
+started_at=2026-07-17T11:59:59Z
+production_bundle_identifier=app.noonmark.mac
+production_executable=$fixture_root/artifacts/dmg-install/Applications/Noonmark.app/Contents/MacOS/NoonmarkMacApp
+source_head_commit=$source_head_commit
+source_head_tree_oid=$source_head_tree_oid
+source_worktree_tree_oid=$source_worktree_tree_oid
+source_end_worktree_tree_oid=$source_worktree_tree_oid
+source_tree_dirty=$source_tree_dirty
+mounted_app_binary_sha256=$app_binary_sha256
+mounted_app_codesign_identifier=app.noonmark.mac
+mounted_app_codesign_kind=development
+mounted_app_codesign_identity_sha1=$codesign_identity_sha1
+mounted_app_codesign_identity_sha256=$codesign_identity_sha256
+mounted_app_codesign_team_identifier=FIXTURETEAM
+mounted_app_codesign_authority=Apple Development: Fixture
+mounted_app_designated_requirement_sha256=$designated_requirement_sha256
+mounted_app_codesign_deep_strict=1
+mounted_app_stable_required=1
+installed_app_binary_sha256=$app_binary_sha256
+installed_app_codesign_identifier=app.noonmark.mac
+installed_app_codesign_kind=development
+installed_app_codesign_identity_sha1=$codesign_identity_sha1
+installed_app_codesign_identity_sha256=$codesign_identity_sha256
+installed_app_codesign_team_identifier=FIXTURETEAM
+installed_app_codesign_authority=Apple Development: Fixture
+installed_app_designated_requirement_sha256=$designated_requirement_sha256
+installed_app_codesign_deep_strict=1
+installed_app_stable_required=1
+installed_app_end_binary_sha256=$app_binary_sha256
+installed_app_end_codesign_identifier=app.noonmark.mac
+installed_app_end_codesign_kind=development
+installed_app_end_codesign_identity_sha1=$codesign_identity_sha1
+installed_app_end_codesign_identity_sha256=$codesign_identity_sha256
+installed_app_end_codesign_team_identifier=FIXTURETEAM
+installed_app_end_codesign_authority=Apple Development: Fixture
+installed_app_end_designated_requirement_sha256=$designated_requirement_sha256
+installed_app_end_codesign_deep_strict=1
+installed_app_end_stable_required=1
+helper_binary_sha256=$helper_fixture_binary
+helper_codesign_identifier=app.noonmark.test.dmg-install-harness
+helper_codesign_kind=development
+helper_codesign_identity_sha1=$codesign_identity_sha1
+helper_codesign_identity_sha256=$codesign_identity_sha256
+helper_codesign_team_identifier=FIXTURETEAM
+helper_codesign_authority=Apple Development: Fixture
+helper_designated_requirement_sha256=$helper_designated_requirement_sha256
+helper_codesign_deep_strict=1
+helper_stable_required=1
+helper_end_binary_sha256=$helper_fixture_binary
+helper_end_codesign_identifier=app.noonmark.test.dmg-install-harness
+helper_end_codesign_kind=development
+helper_end_codesign_identity_sha1=$codesign_identity_sha1
+helper_end_codesign_identity_sha256=$codesign_identity_sha256
+helper_end_codesign_team_identifier=FIXTURETEAM
+helper_end_codesign_authority=Apple Development: Fixture
+helper_end_designated_requirement_sha256=$helper_designated_requirement_sha256
+helper_end_codesign_deep_strict=1
+helper_end_stable_required=1
+source_tree_unchanged=true
+installed_app_binary_unchanged=true
+installed_app_signature_unchanged=true
+helper_binary_unchanged=true
+helper_signature_unchanged=true
+artifact_inventory_sha256=$install_inventory_sha256
+package_app_binary_sha256=$app_binary_sha256
+dmg_sha256=$dmg_sha256
+dmg_checksum_sha256=$dmg_checksum_sha256
+package_manifest_sha256=$package_manifest_sha256
+diagnostic_diff_status=clean
+app_diagnostic_baseline_sha256=$empty_sha256
+app_diagnostic_final_sha256=$empty_sha256
+app_diagnostic_diff_sha256=$empty_sha256
+helper_diagnostic_baseline_sha256=$empty_sha256
+helper_diagnostic_final_sha256=$empty_sha256
+helper_diagnostic_diff_sha256=$empty_sha256
+finished_at=2026-07-17T12:00:05Z
+suite_exit_status=0
+EOF
+
+if ! (
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt \
+    dist/Noonmark.dmg.manifest \
+    artifacts/dmg-install/runtime-manifest.txt
+) >"$fixture_root/cross-validator.stdout" \
+  2>"$fixture_root/cross-validator.stderr"; then
+  echo "valid full evidence fixture was rejected" >&2
+  cat "$fixture_root/cross-validator.stdout" >&2
+  cat "$fixture_root/cross-validator.stderr" >&2
+  exit 1
+fi
+
+if ! (
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    --scope runtime \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt
+) >"$fixture_root/runtime-validator.stdout" \
+  2>"$fixture_root/runtime-validator.stderr"; then
+  echo "valid runtime evidence fixture was rejected" >&2
+  cat "$fixture_root/runtime-validator.stdout" >&2
+  cat "$fixture_root/runtime-validator.stderr" >&2
+  exit 1
+fi
+
+e2e_manifest="$fixture_root/artifacts/e2e-runtime/manifest.txt"
+e2e_manifest_pristine="$fixture_root/artifacts/e2e-runtime/manifest.pristine"
+cp "$e2e_manifest" "$e2e_manifest_pristine"
+sed -i '' '/^windowserver_input_cleanup_result=/d' "$e2e_manifest"
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    --scope runtime \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt
+) >"$fixture_root/runtime-validator-missing-input-cleanup.stdout" \
+  2>"$fixture_root/runtime-validator-missing-input-cleanup.stderr"
+missing_input_cleanup_status=$?
+set -e
+mv "$e2e_manifest_pristine" "$e2e_manifest"
+if [[ "$missing_input_cleanup_status" -eq 0 ]]; then
+  echo "runtime validator accepted missing WindowServer input cleanup evidence" >&2
+  exit 1
+fi
+
+tracked_runtime_evidence="$fixture_root/scripts/runtime-evidence"
+tracked_runtime_evidence_pristine="$fixture_root/artifacts/runtime-evidence.pristine"
+cp "$tracked_runtime_evidence" "$tracked_runtime_evidence_pristine"
+printf '\n# stale evidence source-tree canary\n' >>"$tracked_runtime_evidence"
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    --scope runtime \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt
+) >"$fixture_root/runtime-validator-stale-worktree.stdout" \
+  2>"$fixture_root/runtime-validator-stale-worktree.stderr"
+stale_worktree_status=$?
+set -e
+if [[ "$stale_worktree_status" -eq 0 ]]; then
+  echo "runtime validator accepted evidence from a stale source worktree" >&2
+  exit 1
+fi
+mv "$tracked_runtime_evidence_pristine" "$tracked_runtime_evidence"
+
+lease_manifest="$fixture_root/artifacts/e2e-data-root-process-lease/manifest.txt"
+lease_manifest_pristine="$fixture_root/artifacts/e2e-data-root-process-lease/manifest.pristine"
+cp "$lease_manifest" "$lease_manifest_pristine"
+
+expect_runtime_manifest_mutation_rejected() {
+  local label="$1"
+  local mutation="$2"
+  local status
+
+  cp "$lease_manifest_pristine" "$lease_manifest"
+  sed -i '' "$mutation" "$lease_manifest"
+  set +e
+  (
+    cd "$fixture_root"
+    scripts/verify-development-validation-evidence \
+      --scope runtime \
+      artifacts/e2e-runtime/manifest.txt \
+      artifacts/e2e-data-root-process-lease/manifest.txt
+  ) >"$fixture_root/runtime-validator-${label}.stdout" \
+    2>"$fixture_root/runtime-validator-${label}.stderr"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    echo "runtime validator accepted evidence mutation: $label" >&2
+    exit 1
+  fi
+}
+
+expect_runtime_manifest_mutation_rejected \
+  replaced-run-id \
+  's/^evidence_run_id=.*/evidence_run_id=replaced-run/'
+expect_runtime_manifest_mutation_rejected \
+  replaced-source-tree \
+  's/^source_worktree_tree_oid=.*/source_worktree_tree_oid=replaced/'
+expect_runtime_manifest_mutation_rejected \
+  replaced-signing-identity \
+  's/^app_codesign_identity_sha256=.*/app_codesign_identity_sha256=replaced/'
+expect_runtime_manifest_mutation_rejected \
+  replaced-signing-team \
+  's/^app_codesign_team_identifier=.*/app_codesign_team_identifier=REPLACEDTEAM/'
+expect_runtime_manifest_mutation_rejected \
+  replaced-intentional-phase \
+  's/^intentional_sigkill_phase=.*/intentional_sigkill_phase=replaced-phase/'
+cp "$lease_manifest_pristine" "$lease_manifest"
+
+e2e_manifest="$fixture_root/artifacts/e2e-runtime/manifest.txt"
+e2e_manifest_pristine="$fixture_root/artifacts/e2e-runtime/manifest.pristine"
+cp "$e2e_manifest" "$e2e_manifest_pristine"
+
+expect_e2e_manifest_mutation_rejected() {
+  local label="$1"
+  local mutation="$2"
+  local status
+
+  cp "$e2e_manifest_pristine" "$e2e_manifest"
+  sed -i '' "$mutation" "$e2e_manifest"
+  set +e
+  (
+    cd "$fixture_root"
+    scripts/verify-development-validation-evidence \
+      --scope runtime \
+      artifacts/e2e-runtime/manifest.txt \
+      artifacts/e2e-data-root-process-lease/manifest.txt
+  ) >"$fixture_root/runtime-validator-${label}.stdout" \
+    2>"$fixture_root/runtime-validator-${label}.stderr"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    echo "runtime validator accepted E2E evidence mutation: $label" >&2
+    exit 1
+  fi
+}
+
+expect_e2e_manifest_mutation_rejected \
+  missing-helper-before-digest \
+  '/^helper_binary_sha256_before=/d'
+expect_e2e_manifest_mutation_rejected \
+  helper-signing-team \
+  's/^helper_codesign_team_identifier=.*/helper_codesign_team_identifier=OTHERTEAM/; s/^helper_end_codesign_team_identifier=.*/helper_end_codesign_team_identifier=OTHERTEAM/'
+cp "$e2e_manifest_pristine" "$e2e_manifest"
+
+e2e_inventory="$fixture_root/artifacts/e2e-runtime/artifact-inventory.sha256"
+e2e_inventory_pristine="${e2e_inventory}.pristine"
+cp "$e2e_inventory" "$e2e_inventory_pristine"
+
+refresh_inventory_record() {
+  local inventory_path="$1"
+  local relative_path="$2"
+  local artifact_path="$fixture_root/$relative_path"
+  local digest
+  local size
+  local staged
+
+  digest="$(shasum -a 256 "$artifact_path" | awk '{print $1}')"
+  size="$(stat -f '%z' "$artifact_path")"
+  staged="${inventory_path}.refresh"
+  awk -F $'\t' -v OFS=$'\t' \
+    -v expected="$relative_path" -v digest="$digest" -v size="$size" '
+      $3 == expected { $1 = digest; $2 = size; found += 1 }
+      { print }
+      END { exit !(found == 1) }
+    ' "$inventory_path" >"$staged"
+  mv "$staged" "$inventory_path"
+}
+
+refresh_e2e_manifest_bindings() {
+  local ledger_relative="artifacts/e2e-runtime/english-scenario-ledger.tsv"
+  local ledger_sha256
+  local inventory_sha256
+
+  ledger_sha256="$(shasum -a 256 "$english_ledger" | awk '{print $1}')"
+  refresh_inventory_record "$e2e_inventory" "$ledger_relative"
+  inventory_sha256="$(shasum -a 256 "$e2e_inventory" | awk '{print $1}')"
+  sed -i '' \
+    -e "s/^english_scenario_ledger_sha256=.*/english_scenario_ledger_sha256=${ledger_sha256}/" \
+    -e "s/^artifact_inventory_sha256=.*/artifact_inventory_sha256=${inventory_sha256}/" \
+    "$e2e_manifest"
+}
+
+expect_runtime_semantic_mutation_rejected() {
+  local label="$1"
+  local expected_message="$2"
+  local status
+
+  set +e
+  (
+    cd "$fixture_root"
+    scripts/verify-development-validation-evidence \
+      --scope runtime \
+      artifacts/e2e-runtime/manifest.txt \
+      artifacts/e2e-data-root-process-lease/manifest.txt
+  ) >"$fixture_root/runtime-validator-${label}.stdout" \
+    2>"$fixture_root/runtime-validator-${label}.stderr"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    echo "runtime validator accepted semantic mutation: $label" >&2
+    exit 1
+  fi
+  if ! grep -F "$expected_message" \
+    "$fixture_root/runtime-validator-${label}.stderr" >/dev/null; then
+    echo "runtime validator rejected $label for the wrong reason" >&2
+    cat "$fixture_root/runtime-validator-${label}.stderr" >&2
+    exit 1
+  fi
+}
+
+english_ledger="$fixture_root/artifacts/e2e-runtime/english-scenario-ledger.tsv"
+english_ledger_pristine="$fixture_root/artifacts/e2e-runtime/english-scenario-ledger.pristine"
+english_day="$fixture_root/artifacts/e2e/english-day.png"
+english_day_pristine="$fixture_root/artifacts/e2e-runtime/english-day.pristine.png"
+cp "$english_ledger" "$english_ledger_pristine"
+cp "$english_day" "$english_day_pristine"
+
+awk -F $'\t' -v OFS=$'\t' '
+  $1 == "english-day" {
+    $3 = "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+  { print }
+' "$english_ledger" >"${english_ledger}.wrong-digest"
+mv "${english_ledger}.wrong-digest" "$english_ledger"
+refresh_e2e_manifest_bindings
+expect_runtime_semantic_mutation_rejected \
+  english-screenshot-digest \
+  "English E2E screenshot disagrees with its ledger digest"
+cp "$english_ledger_pristine" "$english_ledger"
+cp "$e2e_inventory_pristine" "$e2e_inventory"
+cp "$e2e_manifest_pristine" "$e2e_manifest"
+
+sed -i '' \
+  '2s/screenshot_vision_ocr_no_han[^\t]*/screenshot_vision_ocr_no_han/' \
+  "$english_ledger"
+refresh_e2e_manifest_bindings
+expect_runtime_semantic_mutation_rejected \
+  english-oracle-set \
+  "English E2E scenario has an unexpected oracle set"
+cp "$english_ledger_pristine" "$english_ledger"
+cp "$e2e_inventory_pristine" "$e2e_inventory"
+cp "$e2e_manifest_pristine" "$e2e_manifest"
+
+printf 'not-a-png\n' >"$english_day"
+invalid_png_sha256="$(shasum -a 256 "$english_day" | awk '{print $1}')"
+awk -F $'\t' -v OFS=$'\t' -v digest="$invalid_png_sha256" '
+  $1 == "english-day" { $3 = digest }
+  { print }
+' "$english_ledger" >"${english_ledger}.invalid-png"
+mv "${english_ledger}.invalid-png" "$english_ledger"
+refresh_inventory_record "$e2e_inventory" "artifacts/e2e/english-day.png"
+refresh_e2e_manifest_bindings
+expect_runtime_semantic_mutation_rejected \
+  english-invalid-png \
+  "English E2E english-day screenshot is not a PNG file"
+cp "$english_day_pristine" "$english_day"
+cp "$english_ledger_pristine" "$english_ledger"
+cp "$e2e_inventory_pristine" "$e2e_inventory"
+cp "$e2e_manifest_pristine" "$e2e_manifest"
+
+cp "$fixture_root/artifacts/e2e/english-day-history-header.png" "$english_day"
+wrong_scene_sha256="$(shasum -a 256 "$english_day" | awk '{print $1}')"
+awk -F $'\t' -v OFS=$'\t' -v digest="$wrong_scene_sha256" '
+  $1 == "english-day" { $3 = digest }
+  { print }
+' "$english_ledger" >"${english_ledger}.wrong-scene"
+mv "${english_ledger}.wrong-scene" "$english_ledger"
+refresh_inventory_record "$e2e_inventory" "artifacts/e2e/english-day.png"
+refresh_e2e_manifest_bindings
+expect_runtime_semantic_mutation_rejected \
+  english-wrong-scene \
+  "English E2E screenshots failed independent Vision content verification"
+cp "$english_day_pristine" "$english_day"
+cp "$english_ledger_pristine" "$english_ledger"
+cp "$e2e_inventory_pristine" "$e2e_inventory"
+cp "$e2e_manifest_pristine" "$e2e_manifest"
+
+printf 'tampered\n' >>"$e2e_inventory"
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    --scope runtime \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt
+) >"$fixture_root/runtime-validator-tampered-inventory.stdout" \
+  2>"$fixture_root/runtime-validator-tampered-inventory.stderr"
+tampered_inventory_status=$?
+set -e
+if [[ "$tampered_inventory_status" -eq 0 ]]; then
+  echo "runtime validator accepted a tampered artifact inventory" >&2
+  exit 1
+fi
+mv "$e2e_inventory_pristine" "$e2e_inventory"
+
+cp "$e2e_inventory" "$e2e_inventory_pristine"
+sed -i '' '/artifacts\/e2e\/english-settings\.png$/d' "$e2e_inventory"
+inventory_without_settings_sha256="$(
+  shasum -a 256 "$e2e_inventory" | awk '{print $1}'
+)"
+cp "$e2e_manifest_pristine" "$e2e_manifest"
+sed -i '' \
+  "s/^artifact_inventory_sha256=.*/artifact_inventory_sha256=${inventory_without_settings_sha256}/" \
+  "$e2e_manifest"
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    --scope runtime \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt
+) >"$fixture_root/runtime-validator-missing-inventory-entry.stdout" \
+  2>"$fixture_root/runtime-validator-missing-inventory-entry.stderr"
+missing_inventory_entry_status=$?
+set -e
+if [[ "$missing_inventory_entry_status" -eq 0 ]]; then
+  echo "runtime validator accepted an inventory missing a required screenshot" >&2
+  exit 1
+fi
+mv "$e2e_inventory_pristine" "$e2e_inventory"
+cp "$e2e_manifest_pristine" "$e2e_manifest"
+
+e2e_unified_log="$fixture_root/artifacts/e2e-runtime/unified.log"
+e2e_unified_log_pristine="${e2e_unified_log}.pristine"
+e2e_inventory_log_pristine="$fixture_root/e2e-inventory-log.pristine"
+cp "$e2e_unified_log" "$e2e_unified_log_pristine"
+cp "$e2e_inventory" "$e2e_inventory_log_pristine"
+printf 'Fatal error: fixture scanner canary\n' >"$e2e_unified_log"
+unified_log_digest="$(shasum -a 256 "$e2e_unified_log" | awk '{print $1}')"
+unified_log_size="$(stat -f '%z' "$e2e_unified_log")"
+sed -i '' \
+  "s#^[0-9a-f][0-9a-f]*[[:space:]][[:space:]]*[0-9][0-9]*[[:space:]][[:space:]]*artifacts/e2e-runtime/unified.log#${unified_log_digest}\t${unified_log_size}\tartifacts/e2e-runtime/unified.log#" \
+  "$e2e_inventory"
+scanner_canary_inventory_sha256="$(
+  shasum -a 256 "$e2e_inventory" | awk '{print $1}'
+)"
+sed -i '' \
+  "s/^artifact_inventory_sha256=.*/artifact_inventory_sha256=${scanner_canary_inventory_sha256}/" \
+  "$e2e_manifest"
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    --scope runtime \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt
+) >"$fixture_root/runtime-validator-log-scanner.stdout" \
+  2>"$fixture_root/runtime-validator-log-scanner.stderr"
+scanner_canary_status=$?
+set -e
+if [[ "$scanner_canary_status" -eq 0 ]]; then
+  echo "runtime validator accepted a failure pattern in an inventory-bound log" >&2
+  exit 1
+fi
+mv "$e2e_unified_log_pristine" "$e2e_unified_log"
+mv "$e2e_inventory_log_pristine" "$e2e_inventory"
+cp "$e2e_manifest_pristine" "$e2e_manifest"
+
+sigkill_report="$fixture_root/artifacts/e2e-data-root-process-lease/sigkill-report.txt"
+sigkill_report_pristine="${sigkill_report}.pristine"
+cp "$sigkill_report" "$sigkill_report_pristine"
+printf 'unexpected-extra-row\n' >>"$sigkill_report"
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    --scope runtime \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt
+) >"$fixture_root/runtime-validator-tampered-sigkill.stdout" \
+  2>"$fixture_root/runtime-validator-tampered-sigkill.stderr"
+tampered_sigkill_status=$?
+set -e
+if [[ "$tampered_sigkill_status" -eq 0 ]]; then
+  echo "runtime validator accepted a tampered SIGKILL report" >&2
+  exit 1
+fi
+mv "$sigkill_report_pristine" "$sigkill_report"
+
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    --scope full \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt \
+    artifacts/missing-package-manifest.txt \
+    artifacts/missing-install-manifest.txt
+) >"$fixture_root/full-validator-missing.stdout" \
+  2>"$fixture_root/full-validator-missing.stderr"
+missing_full_status=$?
+set -e
+if [[ "$missing_full_status" -eq 0 ]]; then
+  echo "full evidence scope accepted missing package and install manifests" >&2
+  exit 1
+fi
+
+package_manifest="$fixture_root/dist/Noonmark.dmg.manifest"
+package_manifest_pristine="$fixture_root/dist/Noonmark.dmg.manifest.cross-pristine"
+install_manifest="$fixture_root/artifacts/dmg-install/runtime-manifest.txt"
+install_manifest_before_package_mutation="${install_manifest}.before-package-mutation"
+cp "$package_manifest" "$package_manifest_pristine"
+cp "$install_manifest" "$install_manifest_before_package_mutation"
+sed -i '' \
+  's/^source_end_worktree_tree_oid=.*/source_end_worktree_tree_oid=replaced/' \
+  "$package_manifest"
+mutated_package_manifest_sha256="$(
+  shasum -a 256 "$package_manifest" | awk '{print $1}'
+)"
+sed -i '' \
+  "s/^package_manifest_sha256=.*/package_manifest_sha256=${mutated_package_manifest_sha256}/" \
+  "$install_manifest"
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    --scope full \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt \
+    dist/Noonmark.dmg.manifest \
+    artifacts/dmg-install/runtime-manifest.txt
+) >"$fixture_root/full-validator-package-end.stdout" \
+  2>"$fixture_root/full-validator-package-end.stderr"
+mutated_package_end_status=$?
+set -e
+if [[ "$mutated_package_end_status" -eq 0 ]]; then
+  echo "full validator accepted a replaced package source end state" >&2
+  exit 1
+fi
+mv "$package_manifest_pristine" "$package_manifest"
+mv "$install_manifest_before_package_mutation" "$install_manifest"
+
+install_manifest_pristine="$fixture_root/artifacts/dmg-install/runtime-manifest.pristine"
+cp "$install_manifest" "$install_manifest_pristine"
+
+install_inventory="$fixture_root/artifacts/dmg-install-artifact-inventory.sha256"
+install_inventory_pristine="$fixture_root/artifacts/dmg-install/inventory.pristine"
+cp "$install_inventory" "$install_inventory_pristine"
+
+refresh_install_manifest_binding() {
+  local relative_path="$1"
+  local inventory_sha256
+
+  refresh_inventory_record "$install_inventory" "$relative_path"
+  inventory_sha256="$(shasum -a 256 "$install_inventory" | awk '{print $1}')"
+  sed -i '' \
+    "s/^artifact_inventory_sha256=.*/artifact_inventory_sha256=${inventory_sha256}/" \
+    "$install_manifest"
+}
+
+expect_install_semantic_mutation_rejected() {
+  local label="$1"
+  local expected_message="$2"
+  local status
+
+  set +e
+  (
+    cd "$fixture_root"
+    scripts/verify-development-validation-evidence \
+      artifacts/e2e-runtime/manifest.txt \
+      artifacts/e2e-data-root-process-lease/manifest.txt \
+      dist/Noonmark.dmg.manifest \
+      artifacts/dmg-install/runtime-manifest.txt
+  ) >"$fixture_root/cross-validator-${label}.stdout" \
+    2>"$fixture_root/cross-validator-${label}.stderr"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    echo "cross-validator accepted install semantic mutation: $label" >&2
+    exit 1
+  fi
+  if ! grep -F "$expected_message" \
+    "$fixture_root/cross-validator-${label}.stderr" >/dev/null; then
+    echo "cross-validator rejected $label for the wrong reason" >&2
+    cat "$fixture_root/cross-validator-${label}.stderr" >&2
+    exit 1
+  fi
+}
+
+task_after="$fixture_root/artifacts/dmg-install/task-row-after-restart.txt"
+task_after_pristine="$fixture_root/artifacts/dmg-install/task-row-after-restart.pristine"
+task_before="$fixture_root/artifacts/dmg-install/task-row-before-restart.txt"
+task_before_pristine="$fixture_root/artifacts/dmg-install/task-row-before-restart.pristine"
+task_identity="$fixture_root/artifacts/dmg-install/task-identity.tsv"
+task_identity_pristine="$fixture_root/artifacts/dmg-install/task-identity.pristine"
+cp "$task_after" "$task_after_pristine"
+cp "$task_before" "$task_before_pristine"
+cp "$task_identity" "$task_identity_pristine"
+sed -i '' '3s/"priority":1/"priority":2/' "$task_after"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/task-row-after-restart.txt"
+expect_install_semantic_mutation_rejected \
+  changed-task-after-restart \
+  "installed task snapshots changed across restart"
+cp "$task_after_pristine" "$task_after"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' '3s/AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE/DDDDDDDD-BBBB-CCCC-DDDD-EEEEEEEEEEEE/' \
+  "$task_before" "$task_after"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/task-row-before-restart.txt"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/task-row-after-restart.txt"
+expect_install_semantic_mutation_rejected \
+  contradictory-task-snapshots \
+  "identity disagrees with its joined SQLite row"
+cp "$task_before_pristine" "$task_before"
+cp "$task_after_pristine" "$task_after"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  -e 's/AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE/FORGED-TRACE/g' \
+  -e 's/BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF/FORGED-CHAIN/g' \
+  -e 's/CCCCCCCC-DDDD-EEEE-FFFF-000000000000/FORGED-DEFINITION/g' \
+  "$task_identity" "$task_before" "$task_after"
+refresh_install_manifest_binding "artifacts/dmg-install/task-identity.tsv"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/task-row-before-restart.txt"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/task-row-after-restart.txt"
+expect_install_semantic_mutation_rejected \
+  self-consistent-forged-task-uuid-schema \
+  "installed task independent identity ledger has an invalid UUID schema"
+cp "$task_identity_pristine" "$task_identity"
+cp "$task_before_pristine" "$task_before"
+cp "$task_after_pristine" "$task_after"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  -e 's/AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE/DDDDDDDD-BBBB-CCCC-DDDD-EEEEEEEEEEEE/g' \
+  -e 's/BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF/EEEEEEEE-CCCC-DDDD-EEEE-FFFFFFFFFFFF/g' \
+  -e 's/CCCCCCCC-DDDD-EEEE-FFFF-000000000000/FFFFFFFF-DDDD-EEEE-FFFF-000000000000/g' \
+  "$task_before" "$task_after"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/task-row-before-restart.txt"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/task-row-after-restart.txt"
+expect_install_semantic_mutation_rejected \
+  forged-task-identities \
+  "installed task snapshot disagrees with its independent identity ledger"
+cp "$task_before_pristine" "$task_before"
+cp "$task_after_pristine" "$task_after"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' 's/2026-07-17/2099-01-01/g' "$task_before" "$task_after"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/task-row-before-restart.txt"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/task-row-after-restart.txt"
+expect_install_semantic_mutation_rejected \
+  forged-task-natural-day \
+  "installed task snapshot disagrees with its independent identity ledger"
+cp "$task_before_pristine" "$task_before"
+cp "$task_after_pristine" "$task_after"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+exercise_ledger="$fixture_root/artifacts/dmg-install/exercise-ledger.tsv"
+exercise_ledger_pristine="$fixture_root/artifacts/dmg-install/exercise-ledger.pristine"
+exercise_window="$fixture_root/artifacts/dmg-install/installed-exercise-window.txt"
+exercise_window_pristine="$fixture_root/artifacts/dmg-install/installed-exercise-window.pristine"
+restart_window="$fixture_root/artifacts/dmg-install/installed-restart-window.txt"
+restart_window_pristine="$fixture_root/artifacts/dmg-install/installed-restart-window.pristine"
+exercise_console="$fixture_root/artifacts/dmg-install/exercise-console.log"
+exercise_console_pristine="$fixture_root/artifacts/dmg-install/exercise-console.pristine"
+restart_console="$fixture_root/artifacts/dmg-install/restart-console.log"
+restart_console_pristine="$fixture_root/artifacts/dmg-install/restart-console.pristine"
+cp "$exercise_ledger" "$exercise_ledger_pristine"
+cp "$exercise_window" "$exercise_window_pristine"
+cp "$restart_window" "$restart_window_pristine"
+cp "$exercise_console" "$exercise_console_pristine"
+cp "$restart_console" "$restart_console_pristine"
+sed -i '' '/\tsettings-window\t/d' "$exercise_ledger"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+expect_install_semantic_mutation_rejected \
+  incomplete-exercise-ledger \
+  "DMG install exercise ledger has an incomplete or reordered phase set"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' 's/pid=201/pid=999999/g' "$exercise_ledger" "$exercise_window"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/installed-exercise-window.txt"
+expect_install_semantic_mutation_rejected \
+  self-consistent-forged-exercise-pid \
+  "DMG install exercise archived PID disagrees with the system runtime log"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$exercise_window_pristine" "$exercise_window"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  -e 's/pid=201/pid=901/g' \
+  -e 's/NoonmarkMacApp\[201:/NoonmarkMacApp[901:/g' \
+  "$exercise_ledger" "$exercise_window" "$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/installed-exercise-window.txt"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  self-consistent-visible-pid-versus-audit-token \
+  "DMG install exercise visible PID disagrees with its kernel audit token"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$exercise_window_pristine" "$exercise_window"
+cp "$exercise_console_pristine" "$exercise_console"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+printf '%s\n' \
+  '2026-07-17 08:00:02.000 I  CoreServicesUIAgent[51:abc] notifying server side, pid=201 appInfo={ "CFBundleExecutablePath"="/tmp/Forged.app/Contents/MacOS/Forged", "CFBundleIdentifier"="forged.bundle", "LSAuditToken"=$0000000000000000000000000000000000000000C90000000000000000000000, "LSBundlePath"="/tmp/Forged.app" }' \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  contradictory-same-pid-system-identity \
+  "DMG install exercise system runtime log has duplicate or contradictory App identity"
+cp "$exercise_console_pristine" "$exercise_console"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+printf '%s\n' \
+  '2099-01-01 00:00:00.000 I  NoonmarkMacApp[201:forged] cross-day fixture process' \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  cross-day-same-pid-system-process \
+  "DMG install exercise process dates disagree with its natural day"
+cp "$exercise_console_pristine" "$exercise_console"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  's/runtime_evidence_capture_started=.*/runtime_evidence_capture_started=2099-01-01T00:00:00Z/' \
+  "$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  future-system-capture-start \
+  "DMG install exercise system runtime timeline is outside its install manifest"
+cp "$exercise_console_pristine" "$exercise_console"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  -e 's/2026-07-17/2099-01-01/g' \
+  -e 's/7月17日/1月1日/g' \
+  "$exercise_window" "$restart_window"
+sed -i '' 's/2026-07-17/2099-01-01/g' \
+  "$task_identity" "$task_before" "$task_after"
+for forged_day_artifact in \
+  installed-exercise-window.txt \
+  installed-restart-window.txt \
+  task-identity.tsv \
+  task-row-before-restart.txt \
+  task-row-after-restart.txt; do
+  refresh_install_manifest_binding \
+    "artifacts/dmg-install/$forged_day_artifact"
+done
+expect_install_semantic_mutation_rejected \
+  self-consistent-forged-natural-day \
+  "DMG install exercise process dates disagree with its natural day"
+cp "$exercise_window_pristine" "$exercise_window"
+cp "$restart_window_pristine" "$restart_window"
+cp "$task_identity_pristine" "$task_identity"
+cp "$task_before_pristine" "$task_before"
+cp "$task_after_pristine" "$task_after"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  -e 's/2026-07-17/2099-01-01/g' \
+  -e 's/7月17日/1月1日/g' \
+  "$exercise_window" "$restart_window"
+sed -i '' 's/2026-07-17/2099-01-01/g' \
+  "$task_identity" "$task_before" "$task_after" \
+  "$exercise_console" "$restart_console"
+for forged_timeline_artifact in \
+  installed-exercise-window.txt \
+  installed-restart-window.txt \
+  task-identity.tsv \
+  task-row-before-restart.txt \
+  task-row-after-restart.txt \
+  exercise-console.log \
+  restart-console.log; do
+  refresh_install_manifest_binding \
+    "artifacts/dmg-install/$forged_timeline_artifact"
+done
+expect_install_semantic_mutation_rejected \
+  self-consistent-forged-system-timeline \
+  "DMG install exercise system runtime timeline is outside its install manifest"
+cp "$exercise_window_pristine" "$exercise_window"
+cp "$restart_window_pristine" "$restart_window"
+cp "$task_identity_pristine" "$task_identity"
+cp "$task_before_pristine" "$task_before"
+cp "$task_after_pristine" "$task_after"
+cp "$exercise_console_pristine" "$exercise_console"
+cp "$restart_console_pristine" "$restart_console"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  -e 's#pid=201 app=[^[:space:]]*#pid=999999 app=/tmp/forged/Applications/Noonmark.app#' \
+  -e 's#path=[^[:space:]]* frontmost=true#path=/tmp/forged/Applications/Noonmark.app frontmost=true#' \
+  "$exercise_ledger"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+expect_install_semantic_mutation_rejected \
+  self-consistent-forged-exercise-target \
+  "DMG install exercise ledger disagrees with archived window metadata"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  's/independent=true window=([^)]*) sidebar=([^)]*) content=([^)]*)/independent=true window=() sidebar=() content=()/' \
+  "$exercise_ledger"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+expect_install_semantic_mutation_rejected \
+  empty-settings-geometry \
+  "DMG install exercise ledger has invalid Settings window geometry"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  's/\ttarget\tbundle=app.noonmark.mac[^\t]*/\ttarget\tfrontmost-looking-fixture/' \
+  "$exercise_ledger"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+expect_install_semantic_mutation_rejected \
+  forged-exercise-target \
+  "DMG install exercise ledger has an invalid target proof"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+install_screenshot="$fixture_root/artifacts/dmg-install/installed-restart.png"
+install_screenshot_pristine="$fixture_root/artifacts/dmg-install/installed-restart.pristine.png"
+cp "$install_screenshot" "$install_screenshot_pristine"
+printf 'not-a-png\n' >"$install_screenshot"
+refresh_install_manifest_binding "artifacts/dmg-install/installed-restart.png"
+expect_install_semantic_mutation_rejected \
+  invalid-install-screenshot \
+  "installed App restart screenshot is not a PNG file"
+cp "$install_screenshot_pristine" "$install_screenshot"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+expect_install_manifest_mutation_rejected() {
+  local label="$1"
+  local mutation="$2"
+  local status
+
+  cp "$install_manifest_pristine" "$install_manifest"
+  sed -i '' "$mutation" "$install_manifest"
+  set +e
+  (
+    cd "$fixture_root"
+    scripts/verify-development-validation-evidence \
+      artifacts/e2e-runtime/manifest.txt \
+      artifacts/e2e-data-root-process-lease/manifest.txt \
+      dist/Noonmark.dmg.manifest \
+      artifacts/dmg-install/runtime-manifest.txt
+  ) >"$fixture_root/cross-validator-${label}.stdout" \
+    2>"$fixture_root/cross-validator-${label}.stderr"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    echo "cross-validator accepted install evidence mutation: $label" >&2
+    exit 1
+  fi
+}
+
+expect_install_manifest_mutation_rejected \
+  missing-source-stability \
+  '/^source_tree_unchanged=/d'
+expect_install_manifest_mutation_rejected \
+  false-source-stability \
+  's/^source_tree_unchanged=.*/source_tree_unchanged=false/'
+expect_install_manifest_mutation_rejected \
+  replaced-source-end \
+  's/^source_end_worktree_tree_oid=.*/source_end_worktree_tree_oid=replaced/'
+expect_install_manifest_mutation_rejected \
+  missing-installed-stability \
+  '/^installed_app_binary_unchanged=/d'
+expect_install_manifest_mutation_rejected \
+  replaced-installed-end \
+  's/^installed_app_end_binary_sha256=.*/installed_app_end_binary_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  false-installed-signature-stability \
+  's/^installed_app_signature_unchanged=.*/installed_app_signature_unchanged=false/'
+expect_install_manifest_mutation_rejected \
+  missing-helper-stability \
+  '/^helper_binary_unchanged=/d'
+expect_install_manifest_mutation_rejected \
+  replaced-helper-end \
+  's/^helper_end_binary_sha256=.*/helper_end_binary_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  false-helper-signature-stability \
+  's/^helper_signature_unchanged=.*/helper_signature_unchanged=false/'
+
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  's/^installed_app_binary_sha256=.*/installed_app_binary_sha256=0000000000000000000000000000000000000000000000000000000000000000/' \
+  "$fixture_root/artifacts/dmg-install/runtime-manifest.txt"
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt \
+    dist/Noonmark.dmg.manifest \
+    artifacts/dmg-install/runtime-manifest.txt
+) >"$fixture_root/cross-validator-tampered.stdout" \
+  2>"$fixture_root/cross-validator-tampered.stderr"
+cross_tampered_status=$?
+set -e
+if [[ "$cross_tampered_status" -eq 0 ]]; then
+  echo "cross-validator accepted a substituted installed binary" >&2
+  exit 1
+fi
+
+require_literal() {
+  local path="$1"
+  local literal="$2"
+  if ! grep -F "$literal" "$path" >/dev/null; then
+    echo "$path is missing DMG evidence contract: $literal" >&2
+    exit 1
+  fi
+}
+
+require_order() {
+  local path="$1"
+  local earlier="$2"
+  local later="$3"
+  local earlier_line
+  local later_line
+
+  earlier_line="$(grep -nF "$earlier" "$path" | head -1 | cut -d: -f1 || true)"
+  later_line="$(grep -nF "$later" "$path" | head -1 | cut -d: -f1 || true)"
+  if [[ -z "$earlier_line" || -z "$later_line" ]] ||
+    (( earlier_line >= later_line )); then
+    echo "$path does not run '$earlier' before '$later'" >&2
+    exit 1
+  fi
+}
+
+require_literal "$repo_root/scripts/test-dmg-install" "source scripts/evidence-common"
+require_literal "$repo_root/scripts/test-dmg-install" "scripts/verify-dmg"
+require_literal "$repo_root/scripts/test-dmg-install" "package_manifest_path="
+require_literal "$repo_root/scripts/test-dmg-install" 'evidence_capture_bundle "$source_app" 1 "mounted_app"'
+require_literal "$repo_root/scripts/test-dmg-install" 'evidence_capture_bundle "$installed_app" 1 "installed_app"'
+require_literal "$repo_root/scripts/test-dmg-install" 'evidence_capture_bundle "$helper_app" 1 "helper"'
+require_literal "$repo_root/scripts/test-dmg-install" "app_diagnostic_final="
+require_literal "$repo_root/scripts/test-dmg-install" "helper_diagnostic_final="
+require_literal "$repo_root/scripts/test-dmg-install" "app_diagnostic_diff="
+require_literal "$repo_root/scripts/test-dmg-install" "helper_diagnostic_diff="
+require_literal "$repo_root/scripts/test-dmg-install" "dmg_sha256"
+require_order \
+  "$repo_root/scripts/test-dmg-install" \
+  'rm -rf "$work_dir" "$helper_evidence_root"' \
+  'scripts/build-dmg-install-harness release'
+
+echo "DMG evidence contract fixture passed"

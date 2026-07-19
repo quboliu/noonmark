@@ -332,7 +332,9 @@ struct TaskClassificationEditor: View {
             .frame(width: 28, height: 28)
             .contentShape(Rectangle())
             .buttonStyle(.plain)
-            .accessibilityIdentifier("classification.editor.remove-label.\(chainID.description).\(label.id)")
+            .accessibilityIdentifier(
+                "classification.editor.remove-label.\(chainID.description).\(label.accessibilityIdentifierComponent)"
+            )
             .accessibilityLabel(
                 copy.removeTagAccessibilityLabel(
                     taskTitle: taskTitle,
@@ -353,7 +355,9 @@ struct TaskClassificationEditor: View {
                 .frame(height: 24)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("classification.editor.label-chip.\(chainID.description).\(label.id)")
+        .accessibilityIdentifier(
+            "classification.editor.label-chip.\(chainID.description).\(label.accessibilityIdentifierComponent)"
+        )
         .accessibilityLabel(
             copy.taskTagAccessibilityLabel(
                 taskTitle: taskTitle,
@@ -518,6 +522,20 @@ private extension TaskClassificationEditor {
             case let .new(id):
                 "new:\(id.uuidString)"
             }
+        }
+
+        var accessibilityIdentifierComponent: String {
+            let component: String = switch reference {
+            case let .existing(id):
+                id
+            case let .new(id):
+                id.uuidString
+            }
+            assert(
+                UUID(uuidString: component) != nil,
+                "classification AX identifiers require a canonical UUID component"
+            )
+            return component
         }
 
         var choice: TaskLabelChoice {

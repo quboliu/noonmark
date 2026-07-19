@@ -1524,27 +1524,6 @@ public struct TaskClassificationState: Codable, Equatable, Sendable {
     }
 }
 
-public extension NoonmarkEngine {
-    /// Returns a timestamp suitable for a new local classification fact without
-    /// weakening stale-write validation for imported or synchronized facts.
-    func nextClassificationMutationDate(reference: Date = Date()) -> Date {
-        let currentRelationDates = classificationState.currentByChainID.values.flatMap { current in
-            [current.category?.updatedAt].compactMap { $0 } + current.labels.map(\.updatedAt)
-        }
-        var dates = [reference]
-        dates.append(contentsOf: classificationState.categories.values.map(\.updatedAt))
-        dates.append(contentsOf: classificationState.labels.values.map(\.updatedAt))
-        dates.append(contentsOf: currentRelationDates)
-        dates.append(contentsOf: classificationState.relationHistory.map(\.removedAt))
-        dates.append(contentsOf: classificationState.categoryMerges.values.map(\.mergedAt))
-        dates.append(contentsOf: classificationState.labelMerges.values.map(\.mergedAt))
-        dates.append(contentsOf: classificationState.categoryDeletionTombstones.values.map(\.deletedAt))
-        dates.append(contentsOf: classificationState.labelDeletionTombstones.values.map(\.deletedAt))
-        dates.append(contentsOf: classificationState.changeRecords.map(\.committedAt))
-        return (dates.max() ?? reference).addingTimeInterval(0.001)
-    }
-}
-
 struct ClassificationMutationContext {
     let source: ClassificationSource
     let decisionID: UUID?

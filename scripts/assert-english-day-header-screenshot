@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ne 3 ]]; then
+  echo "usage: $0 SCREENSHOT EXPECTED_FULL_DATE EXPECTED_TODAY_SURFACE_COUNT" >&2
+  exit 64
+fi
+
+screenshot="$1"
+expected_full_date="$2"
+expected_today_surface_count="$3"
+
+if [[ ! -f "$screenshot" ]]; then
+  echo "English Day header screenshot is missing: $screenshot" >&2
+  exit 66
+fi
+if [[ ! "$expected_today_surface_count" =~ ^[0-9]+$ ]]; then
+  echo "expected Today surface count must be a non-negative integer" >&2
+  exit 64
+fi
+
+NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" \
+  NOONMARK_E2E_EXPECTED_FULL_DATE="$expected_full_date" \
+  NOONMARK_E2E_EXPECTED_TODAY_SURFACE_COUNT="$expected_today_surface_count" \
+  swift -e '
+import AppKit
+import Darwin
+import Foundation
+import Vision
+
+struct Candidate {
+    let text: String
+    let confidence: Float
+    let box: CGRect
+}
+
+func normalized(_ text: String) -> String {
+    text
+        .split(whereSeparator: { $0.isWhitespace })
+        .joined(separator: " ")
+        .lowercased()
+}
+
+let environment = ProcessInfo.processInfo.environment
+guard let path = environment["NOONMARK_E2E_OCR_IMAGE"],
+      let expectedFullDate = environment["NOONMARK_E2E_EXPECTED_FULL_DATE"],
+      let expectedTodayCountRaw = environment["NOONMARK_E2E_EXPECTED_TODAY_SURFACE_COUNT"],
+      let expectedTodayCount = Int(expectedTodayCountRaw),
+      let image = NSImage(contentsOfFile: path),
+      let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+else {
+    fputs("unable to load English Day header OCR inputs\n", stderr)
+    exit(1)
+}
+
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.recognitionLanguages = ["en-US"]
+request.usesLanguageCorrection = false
+try VNImageRequestHandler(cgImage: cgImage).perform([request])
+
+let candidates = (request.results ?? []).compactMap { observation -> Candidate? in
+    guard let candidate = observation.topCandidates(1).first else { return nil }
+    return Candidate(
+        text: candidate.string,
+        confidence: candidate.confidence,
+        box: observation.boundingBox
+    )
+}
+let headerCandidates = candidates.filter { $0.box.minY >= 0.84 }
+let headerText = normalized(headerCandidates.map(\.text).joined(separator: " "))
+let expectedDate = normalized(expectedFullDate)
+let exactDateIsVisible = headerText.contains(expectedDate)
+let ellipsisIsVisible = headerCandidates.contains { candidate in
+    candidate.text.contains("…") || candidate.text.contains("...")
+}
+let todaySurfaceCount = headerCandidates
+    .flatMap { candidate in
+        candidate.text.split { character in
+            character.isLetter == false && character.isNumber == false
+        }
+    }
+    .filter { $0.lowercased() == "today" }
+    .count
+
+for candidate in headerCandidates {
+    print(
+        String(
+            format: "ocr\ttext=%@\tconfidence=%.4f\tbox=%.5f,%.5f,%.5f,%.5f",
+            candidate.text,
+            candidate.confidence,
+            candidate.box.minX,
+            candidate.box.minY,
+            candidate.box.width,
+            candidate.box.height
+        )
+    )
+}
+print("header_expected_full_date=\(expectedFullDate)")
+print("header_exact_full_date_visible=\(exactDateIsVisible)")
+print("header_ellipsis_visible=\(ellipsisIsVisible)")
+print("header_today_surface_count=\(todaySurfaceCount)")
+
+var failures: [String] = []
+if exactDateIsVisible == false {
+    failures.append("full date is not visible in header pixels: \(expectedFullDate)")
+}
+if ellipsisIsVisible {
+    failures.append("ellipsis is visible in header pixels")
+}
+if todaySurfaceCount != expectedTodayCount {
+    failures.append(
+        "Today surface count is \(todaySurfaceCount), expected \(expectedTodayCount)"
+    )
+}
+if failures.isEmpty == false {
+    for failure in failures {
+        fputs("failed: \(failure)\n", stderr)
+    }
+    exit(1)
+}
+'

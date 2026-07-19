@@ -74,9 +74,12 @@ public struct WorkspaceSearchIndex: Sendable {
         }
 
         for trace in engine.traces.values {
+            guard trace.formsDayHistory else { continue }
             guard let definition = engine.definitions[trace.definitionID] else { continue }
             let actualSubtasks = engine.subtasks.values
-                .filter { $0.traceID == trace.id }
+                .filter {
+                    $0.traceID == trace.id && $0.isUserPresentable
+                }
                 .sorted { $0.position < $1.position }
             let chainNotes = engine.chains[trace.chainID]?.activeNoteEntries ?? []
             let contextParts: [String?] = [

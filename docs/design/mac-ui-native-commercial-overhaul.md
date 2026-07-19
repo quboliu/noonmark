@@ -2,12 +2,12 @@
 
 ## 文档状态
 
-- 日期：2026-07-15
+- 日期：2026-07-16
 - Task-ID：`mac-ui-native-commercial-overhaul`
 - 分支：`codex/ui-native-commercial-overhaul`
 - 任务等级：P
-- 状态：实施中
-- 范围：本轮 UI 精细度、商业化美观、原生 macOS UI／UX、无障碍、本地化与发布体验审查的完整闭环
+- 状态：仓库内实施收口中；发布门禁待 UI-018 人工验收及 UI-019 外部发行资产
+- 范围：本轮 UI 精细度、商业化美观、原生 macOS UI／UX、无障碍、本地化与发布体验审查的仓库内闭环与剩余发布边界
 
 本文是本轮审查的持久记忆和实施契约。结论以源码与真实 `.app` 运行产物为依据；归档 HTML 原型不是视觉 oracle。实现不得以删功能、提高视觉回归阈值或保留能力不对等的旧／新路径来换取通过。
 
@@ -255,19 +255,31 @@
 - 当日优先级现在只允许待完成日轨迹参与。领域层重排只交换 pending 投影占用的既有 priority 槽位，终态日轨迹的 priority 与 `contentUpdatedAt` 不变；Store 邻接计算与 SwiftUI drag／drop availability 使用同一边界。
 - `changeTrace` 产生的新承诺改为追加到当日末尾，避免覆盖既有 priority；`updatePriority` 从裸整数 setter 收束为 pending 槽位重排语义，并为 rank 冲突增加稳定 tie-break。
 - 真实 File → Import → `NSOpenPanel` → 取消／确认 → SQLite → 重启路径已进入默认 E2E，不再由环境变量选择性跳过。
+- 未来计划回池不再覆盖或删除关系事实：Core 使用 append-only `cancelledDraft` 保存取消身份，所有用户 projection、搜索、烛龙、AI 与同步路径显式排除内部事实；恢复只追加带 witness 的前向版本。
+- Core 建立唯一 `DayTraceCompletionCapability`，完成 glyph、context menu、bulk 与 `markCompleted`／`undoCompleted` 共用 evaluator；已处理完子任务的父任务可完成／撤销，只有当前 trace 的开放子任务阻止完成。
+- Settings、Search 与 Help 共用 `installNoonmarkResizableHostingContent`，SwiftUI minimum frame、hosting `.minSize` 和 AppKit content minimum 成为同一尺寸契约。
+- 父任务和子任务完成控件补齐稳定 AX identifier、button trait 与 capability label；E2E 只用 AX 读取状态，所有 mutation 均通过真实 WindowServer 输入。
+- `WindowServerInputDriver` 对 pointer settle、left-button down／up 和异常释放 fail-closed；Help 的 `⌘?` 归还 `NSApp.helpMenu` 标准语义，并由物理 `Shift-Command-/` 验证 menu tracking。
+- Natural Day rollover 失败重试覆盖 completion mutation；跨日持久化失败时 snapshot、旧日 trace status 与已应用日期保持不变，重试成功后才发布新自然日。
+- Storage 使用共享 UInt64 bit-pattern 日期 codec；SQLite 保存可读投影与 exact bits 并对账，planned subtask、note 和数据包 nested JSON 复用同一 codec，非有限日期一律拒绝。
+- 数据包失败导入 E2E 会先证明可重试 preview 保留，再撤下确认 sheet、等待没有 attached sheet 后经共享终止器退出；脚本对“已写结果但进程未退出”限时 fail-closed。
 
 ### 已取得的证据
 
-- 当前分支最新 `make check` 通过全部默认 build、UT、IT、ST 与确定性仿真；UI localization guard、SwiftLint 与 SwiftFormat lint 均通过。精确测试数以最终门禁运行报告为准，不在实施中固化中途计数。
-- 完整真实 `.app` 截图套件曾连续生成 38 张中／英文页面与 presentation 截图，并通过 OCR、菜单、窗口、task note、导入、SQLite、restart 与原子失败探针；其后新增 workspace productivity probe 揭露了拖放事件注入未进入 WindowServer destination negotiation，门禁没有把该失败吞掉。
+- 最终 `make check` exit 0：build、UT／IT／ST、896 项测试、确定性仿真、UI localization literal guard、Natural Day public boundary、runtime evidence、三套 validation evidence contract、code-signing policy、DMG observer lifecycle、SwiftLint 与 SwiftFormat 均通过；仅 1 项明确 opt-in 的 live iCloud 测试按设计跳过，0 失败、0 lint violation、0 format drift。manifest 绑定最终 source start／end tree、日志 SHA 与 fresh inventory；真实 App 与 DMG 同源链以 issue ledger 的最终 run 为准。
+- 最新稳定签名完整真实 `.app` E2E exit 0，生成中／英文全页面与 presentation 截图，并通过 OCR、菜单、窗口、Help、completion control、workspace productivity、task note、导入、SQLite、restart、Natural Day 和原子失败探针；所有新增运行日志与 Diagnostic Reports 门禁干净。
 - 侧栏语义色以真实截图中每个 glyph crop 的 hue pixel probe 验证；`day.png` 的 Day／任务池／未来／未完成／已完成／日历有效像素数分别为 206／316／366／198／175／284，`zhulong.png` 的烛龙有效像素数为 153。默认 E2E 同时要求两张截图通过。
 - 拖放分段诊断显示四个真实 SwiftUI destination 均已挂载，但旧路径一次也未进入 `isTargeted`；数据层和 SQLite 均未发生变更。运行证据确认 `CGWarpMouseCursorPosition` 只移动光标，而 `window.postEvent` 只进入 AppKit 本地队列，无法建立 WindowServer 左键状态或原生 drag session。
 - E2E 输入已收束为共享 `WindowServerInputDriver`：登录 session 使用单一 retained `.combinedSessionState` source，把 AppKit window point 显式转换为 Quartz global point 并 round-trip 对账，所有 down／drag／up 都发布到 `.cghidEventTap`。拖放状态机等待 source cursor、系统 button state、精确 destination targeted、精确 payload accepted 和 button release；异常路径只要曾投递 down 就无条件以同一 source／gesture 补发 up，确认释放后才恢复光标。选择点击和 `NSOpenPanel` 键盘路径复用同一权限与 source policy。
 - 解锁后的真实授权探针已经证明用户为两个精确 ad-hoc bundle 配置的 Accessibility 权限有效；直接执行 helper 时 TCC 把 Terminal 识别为 responsible process，经 LaunchServices 启动同一 helper 时 `AXIsProcessTrusted` 与 event-posting preflight 均为真。DMG helper 因此改为 LaunchServices 启动，并用 launch token、bundle／path／command identity、`EVFILT_PROC` 与 kernel exit status 对账真实进程。
 - workspace 原生拖放已进入 WindowServer 左键状态并建立 native drag session；unified log 随后揭露 `app.noonmark.task-priority` 未在 App `Info.plist` 导出的根因。当前 build 已声明该 exported UTI，App build、DMG 验证与安装验收均新增 metadata fail-closed 门禁。
+- E2E seed fixture 已从固定 2026-07-01 至 2026-07-07 改为相对当前自然日的 `today-4...today+2`。`seed()` 现在传播领域错误而不是以 assertion 终止；2030-07-01 的真实 `.app` probe 同时验证未来计划仍为 pending，覆盖“测试日期过期后启动崩溃”的回归。
+- split workspace 现在区分页面自动详情宽度与用户自定义宽度：Day 等标准页默认 280pt，日历默认 248pt；用户真实拖动第二条 divider 后切换为全局自定义宽度，并由原生 autosave 跨页面、折叠与重启恢复。第一条 divider 的 sidebar 宽度独立保存，不受详情栏自动模式重置。恢复 E2E 使用真实 WindowServer divider drag，并覆盖 calendar → Day 自动宽度纠正、sidebar 264pt 与 detail 336pt 的跨重启保持。
+- Settings sidebar 与六个 pane 同时保留 SwiftUI Accessibility identifier 和无视觉、非 AX、hit-test 穿透的 AppKit E2E anchor。真实窗口探针验证独立 key/main window、原生 sidebar、自动生成的 Settings toolbar 不携带主工作区栏位按钮，以及关闭后主窗口 frame 和栏位状态不变。
 - 交互 E2E 与 DMG 安装入口现在自行强制稳定签名：显式 identity 优先，否则只自动选择 Keychain 中唯一有效的 `Apple Development` identity；零个或多个候选均拒绝继续。解析、脱敏和真实零身份失败路径已进入 `make check`。
 - Xcode Apple Account／Team 登录态、开发证书、匹配私钥、有效期与 Code Signing 用途均已由命令行确认。首次实际 `codesign` 的 unified log 揭露 `leaf MissingIntermediate`；叶子证书要求 WWDR G3，但 Keychain 只有旧 WWDR。经 Apple PKI 取得、校验并导入 `Worldwide Developer Relations - G3` 后，`security` 已报告一个有效 identity，真实临时签名、严格验证、稳定 designated requirement 与项目自动解析器均通过。
-- `scripts/package-dmg release` 已生成 `dist/Noonmark.dmg`；`scripts/verify-dmg` 已通过挂载内容、签名、canonical icon 和 optical variant 校验。
+- `scripts/package-dmg release` 已生成 `dist/Noonmark.dmg`；`scripts/verify-dmg` 已通过 checksum、挂载内容、严格 code signature、canonical icon、optical variant 与 exported drag UTI 校验。App 使用稳定 `Apple Development` identity，TeamIdentifier 为 `7436PPJ79X`。
+- `scripts/test-dmg-install dist/Noonmark.dmg` exit 0：从镜像复制出的生产 App 忽略内部 E2E 参数，通过真实 WindowServer 输入打开 Settings／Quick Entry、创建任务、退出并重启；同一任务经 AX 可见，SQLite joined row 逐字节保持，App／helper unified log 与 Diagnostic Reports 均干净。`spctl` 因非 Developer ID 且未公证而拒绝，符合公开发行 fail-closed 边界。
 
 ### 可回退实施节点
 
@@ -280,11 +292,13 @@
 
 ### 最终门禁状态
 
-- 当前登录 session 已解锁，用户此前为两个精确 ad-hoc bundle 配置的 Accessibility 授权已由 LaunchServices 真实启动探针验证。问题不在授权步骤，而在 ad-hoc 重编译会改变 `cdhash` identity，以及 App bundle 曾漏报拖放 UTI；两项根因的代码与门禁均已补齐。
-- 本机已经具备一个有效 `Apple Development` identity，项目解析器可自动选取。最后的正向门禁需要重建两个固定的稳定签名 bundle，用户只需对该版本作最后一次 Accessibility 授权，再连续重跑 workspace-only、完整 E2E、最新 DMG 验证与安装启动。不得用 Terminal 权限、本地 `NSEvent` 注入或模拟结果替代。
+- 两个固定稳定签名 bundle 的 Accessibility 授权已经由 LaunchServices 真实启动探针验证；问题不在重复授权，而在旧 ad-hoc 重编译会改变 `cdhash` identity，以及 App bundle 曾漏报拖放 UTI。稳定 `Apple Development` identity、固定 bundle identifier、UTI 元数据和自动解析器已经共同消除这两个根因。
+- 所有仓库内可自动执行的正向门禁均已通过；脚本在锁屏时仍 fail-closed，并以 `caffeinate` 保持显示器和交互 session，不得用 Terminal 权限、本地 `NSEvent` 注入或模拟结果替代。
 - VoiceOver、Full Keyboard Access 与系统辅助设置组合仍是发布前人工门禁；当前自动化只覆盖 label、trait、keyboard action、environment policy 与可见 presentation。
+- 原 release workflow 会把 Apple Development 签名产物直接写入 GitHub Release，现已降级为只读、仅限 `main` 手动触发的开发签名发行验收，并明确输出 `development-signed-not-for-distribution` artifact。公开发行在取得 Developer ID Application 证书，并补齐 Hardened Runtime、secure timestamp、notarization、staple 与 Gatekeeper 验收前保持 fail-closed；开发签名 DMG 不得冒充商业发行产物。
 - 当前没有用户确认的真实 App reference，视觉回归仍不设默认 baseline；当前没有 Docker／deployed endpoint，不虚构容器或线上验证。
+- 本轮没有剩余的仓库内重大 blocker；剩余发布边界只有 UI-018 的人工辅助功能组合验收，以及 UI-019 的 Developer ID／公证外部资产。
 
 ## 完成定义
 
-只有在所有成功标准和验证矩阵均取得证据、独立 code review 没有未解决的 Standards／Spec 问题、分支已提交且本文状态改为“完成”后，本轮才闭环。单独的 build、单测、截图或文档都不能代表完成。
+仓库内完成要求成功标准中可自动执行的门禁、独立 Standards／Spec review 与分支提交全部完成；UI-018／UI-019 不得在仓库内伪造通过。只有人工辅助功能组合验收及 Developer ID／公证／Gatekeeper 门禁另行完成后，才可把产品状态描述为可公开商业发布。单独的 build、单测、截图或文档都不能代表仓库内闭环。

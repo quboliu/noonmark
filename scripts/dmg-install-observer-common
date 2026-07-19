@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+
+# Caller contract:
+# - active_helper_observer_pid identifies a direct child of the current shell.
+# - the observer writes gate and result artifacts atomically.
+# - the observer has its own bounded kernel wait, so joining it cannot hang
+#   beyond the protocol timeout.
+
+start_helper_exit_observer_process() {
+  local mode="$1"
+  local helper_pid="$2"
+  local token="$3"
+  local gate_path="$4"
+  local result_path="$5"
+  local observer_log_path="$6"
+  local timeout_seconds="$7"
+  local observer_script_path="$8"
+  local observer_module="NoonmarkExitObserver_${token//-/}"
+
+  if [[ ! "$timeout_seconds" =~ ^[1-9][0-9]*$ ||
+    "$timeout_seconds" -gt 3600 ]]; then
+    echo "helper exit observer timeout is invalid: $timeout_seconds" >&2
+    return 1
+  fi
+  if [[ ! -f "$observer_script_path" ]]; then
+    echo "helper exit observer script is missing: $observer_script_path" >&2
+    return 1
+  fi
+
+  : >"$observer_log_path"
+  NOONMARK_HELPER_MODE="$mode" \
+    NOONMARK_HELPER_PID="$helper_pid" \
+    NOONMARK_HELPER_TOKEN="$token" \
+    NOONMARK_HELPER_GATE_PATH="$gate_path" \
+    NOONMARK_HELPER_EXIT_RESULT_PATH="$result_path" \
+    NOONMARK_HELPER_EXIT_TIMEOUT_SECONDS="$timeout_seconds" \
+    swift -module-name "$observer_module" \
+    "$observer_script_path" \
+    >"$observer_log_path" 2>&1 &
+  active_helper_observer_pid=$!
+  active_helper_observer_parent_pid=$$
+  active_helper_observer_token="$token"
+}
+
+assert_helper_observer_gate_matches() {
+  local gate_path="$1"
+  local expected_gate="$2"
+  local actual_gate
+
+  if ! actual_gate="$(<"$gate_path")"; then
+    echo "helper exit observer gate could not be read" >&2
+    return 1
+  fi
+  if [[ "$actual_gate" != "$expected_gate" ]]; then
+    echo "helper exit observer gate did not match this launch" >&2
+    return 1
+  fi
+}
+
+wait_for_helper_observer_gate() {
+  local mode="$1"
+  local helper_pid="$2"
+  local token="$3"
+  local gate_path="$4"
+  local result_path="$5"
+  local expected_gate
+
+  expected_gate="mode=$mode
+helper_pid=$helper_pid
+launch_token=$token
+observer=EVFILT_PROC+NOTE_EXITSTATUS"
+  for _ in {1..400}; do
+    if [[ -s "$result_path" ]]; then
+      if [[ ! -s "$gate_path" ]]; then
+        echo "helper exit observer failed before arming" >&2
+        return 1
+      fi
+      if ! assert_helper_observer_gate_matches "$gate_path" "$expected_gate"; then
+        return 1
+      fi
+      return 0
+    fi
+    if [[ -s "$gate_path" ]]; then
+      if ! assert_helper_observer_gate_matches "$gate_path" "$expected_gate"; then
+        return 1
+      fi
+      return 0
+    fi
+    sleep 0.025
+  done
+  echo "timed out waiting for the helper exit observer to arm" >&2
+  return 1
+}
+
+wait_for_helper_exit_result() {
+  local helper_pid="$1"
+  local mode="$2"
+  local token="$3"
+  local result_path="$4"
+  local observer_pid="$active_helper_observer_pid"
+  local observer_status
+
+  if [[ ! "$observer_pid" =~ ^[0-9]+$ || "$observer_pid" -le 0 ]]; then
+    echo "helper exit observer pid is missing or invalid" >&2
+    return 1
+  fi
+
+  # `wait` is the authoritative completion boundary for this direct child.
+  # A prior file-size snapshot must never be combined with a later process
+  # snapshot: the observer may atomically publish its result between them.
+  if wait "$observer_pid"; then
+    observer_status=0
+  else
+    observer_status=$?
+  fi
+  active_helper_observer_pid=""
+  active_helper_observer_parent_pid=""
+  active_helper_observer_token=""
+
+  if [[ "$observer_status" -ne 0 ]]; then
+    echo "helper exit observer exited with status $observer_status" >&2
+    return 1
+  fi
+  if [[ ! -s "$result_path" ]]; then
+    echo "helper exit observer completed without a result" >&2
+    return 1
+  fi
+
+  # The result's exact mode, pid, token, flags and status are validated by
+  # assert_helper_completed. Keep this join responsible only for lifecycle.
+  : "$helper_pid" "$mode" "$token"
+}

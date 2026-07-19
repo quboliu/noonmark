@@ -7,6 +7,48 @@ final class NoonmarkEngineTests: XCTestCase {
     private let day3 = LocalDate("2026-07-07")
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testNextMutationDateUsesReferenceAfterEveryPersistedClock() throws {
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(title: "逻辑时钟基线", now: now)
+        let reference = now.addingTimeInterval(10)
+
+        XCTAssertEqual(
+            try engine.nextMutationDate(reference: reference),
+            reference
+        )
+    }
+
+    func testNextMutationDateAdvancesPastPersistedClockWhenReferenceDoesNot() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "逻辑时钟前沿", now: now)
+        let noteAt = now.addingTimeInterval(20)
+        _ = try engine.appendPoolNote(
+            chainID: chainID,
+            body: "未来写入",
+            now: noteAt
+        )
+
+        let next = try engine.nextMutationDate(
+            reference: now.addingTimeInterval(10)
+        )
+
+        XCTAssertGreaterThan(next, noteAt)
+        XCTAssertEqual(
+            next.timeIntervalSinceReferenceDate,
+            noteAt.timeIntervalSinceReferenceDate.nextUp
+        )
+    }
+
+    func testNextMutationDateRejectsNonFiniteReference() throws {
+        let engine = NoonmarkEngine()
+
+        XCTAssertThrowsError(
+            try engine.nextMutationDate(
+                reference: Date(timeIntervalSinceReferenceDate: .infinity)
+            )
+        )
+    }
+
     func testSchedulingFromPoolCreatesDayTraceAndRemovesFromTaskPool() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "  写一期规格  ", now: now)
@@ -165,13 +207,29 @@ final class NoonmarkEngineTests: XCTestCase {
         )
     }
 
-    func testTaskPoolRemovalDeletesUnscheduledAndPreservesReturnedHistory() throws {
+    func testTaskPoolRemovalHidesUnscheduledFactsAndPreservesReturnedHistory() throws {
         let engine = NoonmarkEngine()
         let unscheduledChainID = try engine.createPoolTask(title: "未排期删除", now: now)
+        let unscheduledDefinitionID = try XCTUnwrap(
+            engine.taskPool().first {
+                $0.chain.id == unscheduledChainID
+            }?.definition.id
+        )
 
-        try engine.removeTaskFromPool(chainID: unscheduledChainID, now: now)
-        XCTAssertNil(engine.chains[unscheduledChainID])
-        XCTAssertTrue(engine.definitions.values.allSatisfy { $0.chainID != unscheduledChainID })
+        let unscheduledOutcome = try engine.removeTaskFromPool(
+            chainID: unscheduledChainID,
+            now: now.addingTimeInterval(1)
+        )
+        XCTAssertEqual(unscheduledOutcome, .deleted)
+        XCTAssertEqual(engine.chains[unscheduledChainID]?.state, .abandoned)
+        XCTAssertEqual(
+            engine.definitions[unscheduledDefinitionID]?.chainID,
+            unscheduledChainID
+        )
+        XCTAssertFalse(
+            engine.taskPool().contains { $0.chain.id == unscheduledChainID }
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
 
         let returnedChainID = try engine.createPoolTask(title: "回池删除", now: now)
         let returnedTraceID = try engine.scheduleFromPool(chainID: returnedChainID, date: day1, today: day1, now: now)
@@ -361,9 +419,181 @@ final class NoonmarkEngineTests: XCTestCase {
         _ = try engine.addSubtask(traceID: traceID, title: "未来计划子任务", now: now)
 
         try engine.returnToPool(traceID: traceID, today: day1, now: now)
-        XCTAssertNil(engine.traces[traceID])
-        XCTAssertTrue(engine.subtasks.isEmpty)
+        XCTAssertEqual(engine.traces[traceID]?.status, .cancelledDraft)
+        XCTAssertEqual(engine.traces[traceID]?.settledAt, now)
+        XCTAssertNotNil(engine.traces[traceID]?.draftCancellationID)
+        XCTAssertEqual(engine.traces[traceID]?.draftCancelledOn, day1)
+        XCTAssertEqual(engine.subtasks.values.filter { $0.traceID == traceID }.count, 1)
+        XCTAssertTrue(engine.getDayTodo(date: day2).traces.isEmpty)
+        XCTAssertTrue(engine.futurePlans(today: day1).isEmpty)
         XCTAssertEqual(engine.taskPool().map(\.chain.id), [chainID])
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+
+        try engine.updatePoolTask(
+            chainID: chainID,
+            title: "回池后仍可编辑",
+            now: now.addingTimeInterval(1)
+        )
+        let rescheduledID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day2,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+        XCTAssertEqual(engine.traces[rescheduledID]?.status, .pending)
+        XCTAssertEqual(
+            engine.getDayTodo(date: day2).traces.map(\.id),
+            [rescheduledID]
+        )
+    }
+
+    func testCancelledFutureDraftStaysOutOfEveryCompletedHistoryProjection() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "先取消再完成", now: now)
+        let cancelledTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day3,
+            today: day1,
+            now: now
+        )
+        let cancelledSubtaskID = try engine.addSubtask(
+            traceID: cancelledTraceID,
+            title: "不得进入完成轨迹的草稿子任务",
+            now: now.addingTimeInterval(1)
+        )
+        try engine.returnToPool(
+            traceID: cancelledTraceID,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+
+        let completedTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+        let completedSubtaskID = try engine.addSubtask(
+            traceID: completedTraceID,
+            title: "真实完成子任务",
+            now: now.addingTimeInterval(4)
+        )
+        try engine.completeSubtask(
+            completedSubtaskID,
+            today: day1,
+            now: now.addingTimeInterval(5)
+        )
+        try engine.markCompleted(
+            traceID: completedTraceID,
+            today: day1,
+            now: now.addingTimeInterval(6)
+        )
+
+        let presentableStatuses: [TraceStatus] = [
+            .pending,
+            .completed,
+            .unfinished,
+            .continued,
+            .changed,
+            .returnedToPool,
+            .abandoned
+        ]
+        XCTAssertFalse(TraceStatus.cancelledDraft.formsDayHistory)
+        XCTAssertFalse(TraceStatus.cancelledDraft.isUserPresentable)
+        XCTAssertTrue(presentableStatuses.allSatisfy(\.isUserPresentable))
+        XCTAssertEqual(engine.calendarSummary(for: day3).total, 0)
+        XCTAssertEqual(engine.calendarSummary(for: day3).heatLevel, 0)
+        XCTAssertEqual(engine.dailyReviewStats(date: day3).total, 0)
+
+        let completedItem = try XCTUnwrap(engine.completedPool().first)
+        XCTAssertEqual(completedItem.trace.id, completedTraceID)
+        XCTAssertEqual(completedItem.trajectory.startDate, day1)
+        XCTAssertEqual(completedItem.trajectory.traces.map(\.id), [completedTraceID])
+        XCTAssertEqual(
+            completedItem.trajectory.subtaskTrajectories
+                .flatMap(\.records)
+                .map(\.subtask.id),
+            [completedSubtaskID]
+        )
+        XCTAssertFalse(
+            completedItem.trajectory.subtaskTrajectories
+                .flatMap(\.records)
+                .contains { $0.subtask.id == cancelledSubtaskID }
+        )
+        XCTAssertEqual(
+            engine.completedSubtaskRecords().map(\.subtask.id),
+            [completedSubtaskID]
+        )
+    }
+
+    func testCancelledFutureDraftIntegrityFailsClosedForForgedFacts() throws {
+        let engine = NoonmarkEngine()
+        let firstChainID = try engine.createPoolTask(
+            title: "第一项未来草稿",
+            now: now
+        )
+        let firstTraceID = try engine.scheduleFromPool(
+            chainID: firstChainID,
+            date: day2,
+            today: day1,
+            now: now
+        )
+        let firstSubtaskID = try engine.addSubtask(
+            traceID: firstTraceID,
+            title: "不可伪造成历史的子任务",
+            now: now
+        )
+        try engine.returnToPool(
+            traceID: firstTraceID,
+            today: day1,
+            now: now
+        )
+
+        let secondChainID = try engine.createPoolTask(
+            title: "第二项未来草稿",
+            now: now
+        )
+        let secondTraceID = try engine.scheduleFromPool(
+            chainID: secondChainID,
+            date: day3,
+            today: day1,
+            now: now
+        )
+        try engine.returnToPool(
+            traceID: secondTraceID,
+            today: day1,
+            now: now
+        )
+
+        var missingWitness = engine.snapshot()
+        missingWitness.traces[
+            try XCTUnwrap(missingWitness.traces.firstIndex { $0.id == firstTraceID })
+        ].draftCancellationID = nil
+        XCTAssertThrowsError(try missingWitness.validateIntegrity())
+
+        var invalidCancellationDate = engine.snapshot()
+        invalidCancellationDate.traces[
+            try XCTUnwrap(invalidCancellationDate.traces.firstIndex { $0.id == firstTraceID })
+        ].draftCancelledOn = day3
+        XCTAssertThrowsError(try invalidCancellationDate.validateIntegrity())
+
+        var duplicateWitness = engine.snapshot()
+        let firstCancellationID = try XCTUnwrap(
+            duplicateWitness.traces.first { $0.id == firstTraceID }?
+                .draftCancellationID
+        )
+        duplicateWitness.traces[
+            try XCTUnwrap(duplicateWitness.traces.firstIndex { $0.id == secondTraceID })
+        ].draftCancellationID = firstCancellationID
+        XCTAssertThrowsError(try duplicateWitness.validateIntegrity())
+
+        var historicalChild = engine.snapshot()
+        let subtaskIndex = try XCTUnwrap(
+            historicalChild.subtasks.firstIndex { $0.id == firstSubtaskID }
+        )
+        historicalChild.subtasks[subtaskIndex].status = .completed
+        historicalChild.subtasks[subtaskIndex].completedAt = now
+        XCTAssertThrowsError(try historicalChild.validateIntegrity())
     }
 
     func testContinuationCopiesOnlyOpenSubtasks() throws {
@@ -371,14 +601,36 @@ final class NoonmarkEngineTests: XCTestCase {
         let chainID = try engine.createPoolTask(title: "子任务延续", now: now)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
         let doneSubtaskID = try engine.addSubtask(traceID: traceID, title: "已完成子任务", now: now)
-        _ = try engine.addSubtask(traceID: traceID, title: "未完成子任务", now: now)
-        try engine.completeSubtask(doneSubtaskID, today: day1, now: now)
-        try engine.settleDays(upTo: day2, now: now)
+        let openSubtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "未完成子任务",
+            now: now
+        )
+        let completedAt = now.addingTimeInterval(1)
+        let settledAt = now.addingTimeInterval(2)
+        let continuedAt = now.addingTimeInterval(3)
+        try engine.completeSubtask(
+            doneSubtaskID,
+            today: day1,
+            now: completedAt
+        )
+        try engine.settleDays(upTo: day2, now: settledAt)
 
-        let continuedID = try engine.continueTrace(traceID: traceID, targetDate: day2, today: day2, now: now)
+        XCTAssertEqual(engine.subtasks[openSubtaskID]?.status, .unfinished)
+        XCTAssertEqual(engine.subtasks[openSubtaskID]?.updatedAt, settledAt)
+
+        let continuedID = try engine.continueTrace(
+            traceID: traceID,
+            targetDate: day2,
+            today: day2,
+            now: continuedAt
+        )
         let copied = engine.subtasks.values.filter { $0.traceID == continuedID }
 
         XCTAssertEqual(copied.map(\.title), ["未完成子任务"])
+        XCTAssertEqual(engine.subtasks[openSubtaskID]?.status, .continued)
+        XCTAssertEqual(engine.subtasks[openSubtaskID]?.updatedAt, continuedAt)
+        XCTAssertEqual(copied.map(\.updatedAt), [continuedAt])
     }
 
     func testCurrentDayCompletedSubtaskCanBeUndone() throws {
@@ -386,16 +638,33 @@ final class NoonmarkEngineTests: XCTestCase {
         let chainID = try engine.createPoolTask(title: "当天子任务撤回", now: now)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
         let subtaskID = try engine.addSubtask(traceID: traceID, title: "先完成再撤回", now: now)
+        let completedAt = now.addingTimeInterval(1)
+        let undoneAt = now.addingTimeInterval(2)
 
-        try engine.completeSubtask(subtaskID, today: day1, now: now)
+        try engine.completeSubtask(
+            subtaskID,
+            today: day1,
+            now: completedAt
+        )
         XCTAssertEqual(engine.subtasks[subtaskID]?.status, .completed)
-        XCTAssertNotNil(engine.subtasks[subtaskID]?.completedAt)
+        XCTAssertEqual(engine.subtasks[subtaskID]?.completedAt, completedAt)
+        XCTAssertEqual(engine.subtasks[subtaskID]?.updatedAt, completedAt)
 
-        try engine.undoCompletedSubtask(subtaskID, today: day1)
+        try engine.undoCompletedSubtask(
+            subtaskID,
+            today: day1,
+            now: undoneAt
+        )
 
         XCTAssertEqual(engine.subtasks[subtaskID]?.status, .pending)
         XCTAssertNil(engine.subtasks[subtaskID]?.completedAt)
+        XCTAssertEqual(engine.subtasks[subtaskID]?.updatedAt, undoneAt)
         XCTAssertEqual(engine.subtaskProgress(for: traceID).pending, 1)
+        XCTAssertEqual(
+            try engine.nextMutationDate(reference: now)
+                .timeIntervalSinceReferenceDate,
+            undoneAt.timeIntervalSinceReferenceDate.nextUp
+        )
     }
 
     func testHistoricalCompletedSubtaskCannotBeUndone() throws {
@@ -406,7 +675,13 @@ final class NoonmarkEngineTests: XCTestCase {
 
         try engine.completeSubtask(subtaskID, today: day1, now: now)
 
-        XCTAssertThrowsError(try engine.undoCompletedSubtask(subtaskID, today: day2))
+        XCTAssertThrowsError(
+            try engine.undoCompletedSubtask(
+                subtaskID,
+                today: day2,
+                now: now.addingTimeInterval(1)
+            )
+        )
         XCTAssertEqual(engine.subtasks[subtaskID]?.status, .completed)
         XCTAssertNotNil(engine.subtasks[subtaskID]?.completedAt)
     }
@@ -509,6 +784,76 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.subtasks[subtaskID]?.status, .pending)
         XCTAssertNil(engine.unfinishedPool().first?.activeTrace)
         XCTAssertEqual(engine.unfinishedPool().first?.unfinishedTraces.map(\.id), [traceID])
+    }
+
+    func testAbandoningContinuedChainTargetsItsActiveTraceAndReactivatesInPlace() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "延续后决定废弃",
+            now: now
+        )
+        let historicalTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.settleDays(
+            upTo: day2,
+            now: now.addingTimeInterval(1)
+        )
+        XCTAssertEqual(
+            engine.unfinishedPool().first?.actionPlan,
+            [
+                .continueTrace(historicalTraceID),
+                .abandonChain(historicalTraceID)
+            ]
+        )
+        let activeTraceID = try engine.continueTrace(
+            traceID: historicalTraceID,
+            targetDate: day2,
+            today: day2,
+            now: now.addingTimeInterval(2)
+        )
+        XCTAssertEqual(
+            engine.unfinishedPool().first?.actionPlan,
+            [.abandonChain(activeTraceID)]
+        )
+
+        try engine.abandonChain(
+            from: historicalTraceID,
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(engine.chains[chainID]?.state, .abandoned)
+        XCTAssertEqual(engine.traces[historicalTraceID]?.status, .continued)
+        XCTAssertEqual(engine.traces[activeTraceID]?.status, .abandoned)
+        XCTAssertNil(engine.unfinishedPool().first?.activeTrace)
+        XCTAssertEqual(
+            engine.unfinishedPool().first?.unfinishedTraces.map(\.id),
+            [historicalTraceID, activeTraceID]
+        )
+        XCTAssertEqual(
+            engine.unfinishedPool().first?.actionPlan,
+            [.reactivateChain(activeTraceID)]
+        )
+
+        let reactivatedTraceID = try engine.reactivateAbandonedChain(
+            from: activeTraceID,
+            today: day2,
+            now: now.addingTimeInterval(4)
+        )
+
+        XCTAssertEqual(reactivatedTraceID, activeTraceID)
+        XCTAssertEqual(engine.chains[chainID]?.state, .active)
+        XCTAssertEqual(engine.traces[historicalTraceID]?.status, .continued)
+        XCTAssertEqual(engine.traces[activeTraceID]?.status, .pending)
+        XCTAssertEqual(engine.traces.count, 2)
+        XCTAssertEqual(engine.unfinishedPool().first?.activeTrace?.id, activeTraceID)
+        XCTAssertEqual(
+            engine.unfinishedPool().first?.actionPlan,
+            [.abandonChain(activeTraceID)]
+        )
     }
 
     func testTraceDescriptionAndNoteAreEditableOnlyBeforeHistoryLocks() throws {
@@ -721,6 +1066,452 @@ final class NoonmarkEngineTests: XCTestCase {
         }
     }
 
+    func testSnapshotRejectsDuplicateDictionaryIdentitiesBeforeConstruction() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "拒绝重复快照身份",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        _ = try engine.addSubtask(
+            traceID: traceID,
+            title: "重复子任务身份",
+            now: now
+        )
+        let baseline = engine.snapshot()
+
+        var duplicateDayDate = baseline
+        duplicateDayDate.days.append(try XCTUnwrap(baseline.days.first))
+
+        var duplicateDayID = baseline
+        var sameIdentityOnAnotherDate = try XCTUnwrap(baseline.days.first)
+        sameIdentityOnAnotherDate.date = day2
+        duplicateDayID.days.append(sameIdentityOnAnotherDate)
+
+        var duplicateDefinitionID = baseline
+        duplicateDefinitionID.definitions.append(
+            try XCTUnwrap(baseline.definitions.first)
+        )
+
+        var duplicateSubtaskID = baseline
+        duplicateSubtaskID.subtasks.append(
+            try XCTUnwrap(baseline.subtasks.first)
+        )
+
+        let cases: [(NoonmarkSnapshot, String)] = [
+            (
+                duplicateDayDate,
+                "snapshot contains duplicate Day Todo dates"
+            ),
+            (
+                duplicateDayID,
+                "snapshot contains duplicate Day Todo identities"
+            ),
+            (
+                duplicateDefinitionID,
+                "snapshot contains duplicate task definition identities"
+            ),
+            (
+                duplicateSubtaskID,
+                "snapshot contains duplicate subtask identities"
+            )
+        ]
+        for (snapshot, expectedMessage) in cases {
+            XCTAssertThrowsError(try snapshot.validateIntegrity()) { error in
+                XCTAssertEqual(
+                    error as? NoonmarkError,
+                    .invalidInput(expectedMessage)
+                )
+            }
+            XCTAssertThrowsError(try NoonmarkEngine(snapshot: snapshot))
+        }
+    }
+
+    func testSnapshotRejectsInvalidDayTodoContentClocks() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "校验 Day clock", now: now)
+        _ = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let baseline = engine.snapshot()
+
+        var nonFinite = baseline
+        nonFinite.days[0].createdAt = Date(
+            timeIntervalSinceReferenceDate: .nan
+        )
+
+        var backwards = baseline
+        backwards.days[0].updatedAt = now.addingTimeInterval(-1)
+
+        var uncoveredLock = baseline
+        uncoveredLock.days[0].lockedAt = now.addingTimeInterval(1)
+
+        for snapshot in [nonFinite, backwards, uncoveredLock] {
+            XCTAssertThrowsError(try snapshot.validateIntegrity()) { error in
+                XCTAssertEqual(
+                    error as? NoonmarkError,
+                    .invalidInput("Day Todo contains an invalid content clock")
+                )
+            }
+        }
+    }
+
+    func testSnapshotRejectsInvalidPlannedSubtaskFactsWithinDefinition() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "校验计划子任务",
+            now: now
+        )
+        _ = try engine.addPlannedSubtask(
+            chainID: chainID,
+            title: "第一项",
+            now: now.addingTimeInterval(1)
+        )
+        _ = try engine.addPlannedSubtask(
+            chainID: chainID,
+            title: "第二项",
+            now: now.addingTimeInterval(2)
+        )
+        let baseline = engine.snapshot()
+        let definitionIndex = try XCTUnwrap(
+            baseline.definitions.firstIndex { $0.chainID == chainID }
+        )
+
+        var nonFiniteClock = baseline
+        nonFiniteClock.definitions[definitionIndex]
+            .plannedSubtasks[0].createdAt = Date(
+                timeIntervalSinceReferenceDate: .nan
+            )
+
+        var beforeChainClock = baseline
+        beforeChainClock.definitions[definitionIndex]
+            .plannedSubtasks[0].createdAt = now.addingTimeInterval(-1)
+
+        var afterDefinitionClock = baseline
+        afterDefinitionClock.definitions[definitionIndex]
+            .plannedSubtasks[0].createdAt = now.addingTimeInterval(3)
+
+        var duplicateIdentity = baseline
+        duplicateIdentity.definitions[definitionIndex]
+            .plannedSubtasks[1].id = duplicateIdentity
+            .definitions[definitionIndex].plannedSubtasks[0].id
+
+        var duplicateLineage = baseline
+        duplicateLineage.definitions[definitionIndex]
+            .plannedSubtasks[1].lineageID = duplicateLineage
+            .definitions[definitionIndex].plannedSubtasks[0].lineageID
+
+        var duplicatePosition = baseline
+        duplicatePosition.definitions[definitionIndex]
+            .plannedSubtasks[1].position = 1
+
+        var noncontiguousPosition = baseline
+        noncontiguousPosition.definitions[definitionIndex]
+            .plannedSubtasks[1].position = 3
+
+        for snapshot in [
+            nonFiniteClock,
+            beforeChainClock,
+            afterDefinitionClock,
+            duplicateIdentity,
+            duplicateLineage,
+            duplicatePosition,
+            noncontiguousPosition
+        ] {
+            XCTAssertThrowsError(try snapshot.validateIntegrity()) { error in
+                XCTAssertEqual(
+                    error as? NoonmarkError,
+                    .invalidInput(
+                        "task definition contains invalid planned subtask facts"
+                    )
+                )
+            }
+        }
+    }
+
+    func testSnapshotAcceptsPlannedSubtaskFactsCarriedIntoRenamedDefinition() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "保留计划子任务身份",
+            now: now
+        )
+        let plannedSubtaskID = try engine.addPlannedSubtask(
+            chainID: chainID,
+            title: "跨定义版本保留的计划子任务",
+            now: now.addingTimeInterval(1)
+        )
+        _ = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+        try engine.renameTaskTitle(
+            chainID: chainID,
+            title: "保留计划子任务身份（已改名）",
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+
+        let snapshot = engine.snapshot()
+        let currentDefinition = try XCTUnwrap(
+            snapshot.definitions.first {
+                $0.chainID == chainID && $0.supersededAt == nil
+            }
+        )
+        let carriedFact = try XCTUnwrap(
+            currentDefinition.plannedSubtasks.first {
+                $0.id == plannedSubtaskID
+            }
+        )
+
+        XCTAssertEqual(
+            carriedFact.createdAt.timeIntervalSinceReferenceDate.bitPattern,
+            now.addingTimeInterval(1)
+                .timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertNoThrow(try snapshot.validateIntegrity())
+    }
+
+    func testSnapshotValidatesEverySubtaskStatusAndContentClockCombination() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "校验子任务状态矩阵",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        _ = try engine.addSubtask(
+            traceID: traceID,
+            title: "状态矩阵",
+            now: now
+        )
+        let baseline = engine.snapshot()
+        let terminalAt = now.addingTimeInterval(1)
+
+        func snapshot(
+            status: SubtaskStatus,
+            completedAt: Date?,
+            settledAt: Date?
+        ) -> NoonmarkSnapshot {
+            var candidate = baseline
+            candidate.subtasks[0].status = status
+            candidate.subtasks[0].updatedAt = terminalAt
+            candidate.subtasks[0].completedAt = completedAt
+            candidate.subtasks[0].settledAt = settledAt
+            return candidate
+        }
+
+        var validCancelledDraft = snapshot(
+            status: .cancelledDraft,
+            completedAt: nil,
+            settledAt: terminalAt
+        )
+        validCancelledDraft.subtasks[0].draftCancellationID = UUID()
+
+        let validSnapshots = [
+            snapshot(
+                status: .pending,
+                completedAt: nil,
+                settledAt: nil
+            ),
+            snapshot(
+                status: .completed,
+                completedAt: terminalAt,
+                settledAt: nil
+            ),
+            snapshot(
+                status: .unfinished,
+                completedAt: nil,
+                settledAt: terminalAt
+            ),
+            snapshot(
+                status: .continued,
+                completedAt: nil,
+                settledAt: terminalAt
+            ),
+            snapshot(
+                status: .abandoned,
+                completedAt: nil,
+                settledAt: terminalAt
+            ),
+            validCancelledDraft
+        ]
+        for candidate in validSnapshots {
+            XCTAssertNoThrow(try candidate.subtasks[0].validateIntegrity())
+        }
+
+        var backwardsClock = validSnapshots[0]
+        backwardsClock.subtasks[0].updatedAt = now.addingTimeInterval(-1)
+
+        var nonFiniteClock = validSnapshots[0]
+        nonFiniteClock.subtasks[0].updatedAt = Date(
+            timeIntervalSinceReferenceDate: .nan
+        )
+
+        var uncoveredTerminal = validSnapshots[1]
+        uncoveredTerminal.subtasks[0].updatedAt = now
+
+        let invalidSnapshots = [
+            snapshot(
+                status: .pending,
+                completedAt: terminalAt,
+                settledAt: nil
+            ),
+            snapshot(
+                status: .completed,
+                completedAt: nil,
+                settledAt: nil
+            ),
+            snapshot(
+                status: .completed,
+                completedAt: terminalAt,
+                settledAt: terminalAt
+            ),
+            snapshot(
+                status: .unfinished,
+                completedAt: nil,
+                settledAt: nil
+            ),
+            snapshot(
+                status: .continued,
+                completedAt: terminalAt,
+                settledAt: terminalAt
+            ),
+            snapshot(
+                status: .abandoned,
+                completedAt: terminalAt,
+                settledAt: terminalAt
+            ),
+            snapshot(
+                status: .cancelledDraft,
+                completedAt: nil,
+                settledAt: terminalAt
+            ),
+            snapshot(
+                status: .cancelledDraft,
+                completedAt: terminalAt,
+                settledAt: terminalAt
+            ),
+            backwardsClock,
+            nonFiniteClock,
+            uncoveredTerminal
+        ]
+        for candidate in invalidSnapshots {
+            XCTAssertThrowsError(try candidate.subtasks[0].validateIntegrity()) { error in
+                XCTAssertEqual(
+                    error as? NoonmarkError,
+                    .invalidInput("subtask contains invalid status or clock facts")
+                )
+            }
+        }
+    }
+
+    func testSnapshotRejectsBrokenParentReferencesAndSubtaskTopology() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "校验关系完整性",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        _ = try engine.addSubtask(
+            traceID: traceID,
+            title: "第一项",
+            now: now
+        )
+        _ = try engine.addSubtask(
+            traceID: traceID,
+            title: "第二项",
+            now: now
+        )
+        let baseline = engine.snapshot()
+
+        var missingDefinitionChain = baseline
+        missingDefinitionChain.definitions[0].chainID = TaskChainID()
+
+        var missingSupersedingDefinition = baseline
+        missingSupersedingDefinition.definitions[0]
+            .supersededByDefinitionID = TaskDefinitionID()
+
+        var missingTraceDefinition = baseline
+        missingTraceDefinition.traces[0].definitionID = TaskDefinitionID()
+
+        var missingContinuedFromTrace = baseline
+        missingContinuedFromTrace.traces[0].continuedFromTraceID = DayTraceID()
+
+        var missingTraceDay = baseline
+        missingTraceDay.traces[0].date = day2
+
+        var missingSubtaskTrace = baseline
+        missingSubtaskTrace.subtasks[0].traceID = DayTraceID()
+
+        for candidate in [
+            missingDefinitionChain,
+            missingSupersedingDefinition,
+            missingTraceDefinition,
+            missingTraceDay,
+            missingSubtaskTrace
+        ] {
+            XCTAssertThrowsError(try candidate.validateIntegrity()) { error in
+                XCTAssertEqual(
+                    error as? NoonmarkError,
+                    .invalidInput("snapshot contains invalid parent references")
+                )
+            }
+        }
+
+        XCTAssertThrowsError(
+            try missingContinuedFromTrace.validateIntegrity()
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidInput("snapshot contains invalid day trace topology")
+            )
+        }
+
+        var duplicateLineage = baseline
+        duplicateLineage.subtasks[1].lineageID =
+            duplicateLineage.subtasks[0].lineageID
+
+        var duplicatePosition = baseline
+        duplicatePosition.subtasks[1].position =
+            duplicatePosition.subtasks[0].position
+
+        var missingContinuationSource = baseline
+        missingContinuationSource.subtasks[0].continuedFromSubtaskID =
+            SubtaskID()
+
+        for candidate in [
+            duplicateLineage,
+            duplicatePosition,
+            missingContinuationSource
+        ] {
+            XCTAssertThrowsError(try candidate.validateIntegrity()) { error in
+                XCTAssertEqual(
+                    error as? NoonmarkError,
+                    .invalidInput("snapshot contains invalid subtask topology")
+                )
+            }
+        }
+    }
+
     func testSnapshotUndoIsReclockedAsANewForwardContentMutation() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "撤销前标题", now: now)
@@ -740,6 +1531,42 @@ final class NoonmarkEngineTests: XCTestCase {
 
         XCTAssertEqual(restored.title, "撤销前标题")
         XCTAssertEqual(restored.contentUpdatedAt, now.addingTimeInterval(20))
+    }
+
+    func testSnapshotUndoReclocksRestoredSubtaskMutation() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "撤销子任务难度", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let subtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "恢复简单难度",
+            difficulty: .simple,
+            now: now
+        )
+        let undoSnapshot = engine.snapshot()
+        try engine.updateSubtaskDifficulty(
+            subtaskID,
+            difficulty: .hard,
+            today: day1,
+            now: now.addingTimeInterval(10)
+        )
+
+        let candidate = try NoonmarkEngine(snapshot: undoSnapshot)
+        try candidate.prepareSnapshotUndo(
+            replacing: engine.snapshot(),
+            now: now.addingTimeInterval(20)
+        )
+
+        XCTAssertEqual(candidate.subtasks[subtaskID]?.difficulty, .simple)
+        XCTAssertEqual(
+            candidate.subtasks[subtaskID]?.updatedAt,
+            now.addingTimeInterval(20)
+        )
     }
 
     func testContentClockIgnoresNoOpAndRejectsBackwardsMutation() throws {
@@ -1031,15 +1858,32 @@ final class NoonmarkEngineTests: XCTestCase {
         let currentChainID = try engine.createPoolTask(title: "今天调整难度", now: now)
         let currentTraceID = try engine.scheduleFromPool(chainID: currentChainID, date: day1, today: day1, now: now)
         let currentSubtaskID = try engine.addSubtask(traceID: currentTraceID, title: "今天待调整", now: now)
+        let difficultyUpdatedAt = now.addingTimeInterval(1)
 
-        try engine.updateSubtaskDifficulty(currentSubtaskID, difficulty: .hard, today: day1)
+        try engine.updateSubtaskDifficulty(
+            currentSubtaskID,
+            difficulty: .hard,
+            today: day1,
+            now: difficultyUpdatedAt
+        )
         XCTAssertEqual(engine.subtasks[currentSubtaskID]?.difficulty, .hard)
+        XCTAssertEqual(
+            engine.subtasks[currentSubtaskID]?.updatedAt,
+            difficultyUpdatedAt
+        )
 
         let historicalChainID = try engine.createPoolTask(title: "历史难度锁定", now: now)
         let historicalTraceID = try engine.scheduleFromPool(chainID: historicalChainID, date: day1, today: day1, now: now)
         let historicalSubtaskID = try engine.addSubtask(traceID: historicalTraceID, title: "历史不可调整", now: now)
 
-        XCTAssertThrowsError(try engine.updateSubtaskDifficulty(historicalSubtaskID, difficulty: .medium, today: day2))
+        XCTAssertThrowsError(
+            try engine.updateSubtaskDifficulty(
+                historicalSubtaskID,
+                difficulty: .medium,
+                today: day2,
+                now: now.addingTimeInterval(1)
+            )
+        )
         XCTAssertEqual(engine.subtasks[historicalSubtaskID]?.difficulty, .simple)
 
         let completedParentChainID = try engine.createPoolTask(title: "父任务完成后锁定", now: now)
@@ -1059,7 +1903,12 @@ final class NoonmarkEngineTests: XCTestCase {
         try engine.markCompleted(traceID: completedParentTraceID, today: day1, now: now)
 
         XCTAssertThrowsError(
-            try engine.updateSubtaskDifficulty(completedParentSubtaskID, difficulty: .medium, today: day1)
+            try engine.updateSubtaskDifficulty(
+                completedParentSubtaskID,
+                difficulty: .medium,
+                today: day1,
+                now: now.addingTimeInterval(1)
+            )
         )
         XCTAssertEqual(engine.subtasks[completedParentSubtaskID]?.difficulty, .simple)
     }
@@ -1082,9 +1931,15 @@ final class NoonmarkEngineTests: XCTestCase {
 
     func testSettingsPreferencesExposeCurrentDefaultsAndSyncOptions() throws {
         let engine = NoonmarkEngine()
+        let themeUpdatedAt = now.addingTimeInterval(1)
+        let languageUpdatedAt = now.addingTimeInterval(2)
 
         XCTAssertEqual(engine.preferences.theme, .coolGray)
         XCTAssertEqual(engine.preferences.language, .chinese)
+        XCTAssertEqual(
+            engine.preferences.themeLanguageUpdatedAt,
+            Date(timeIntervalSince1970: 0)
+        )
         XCTAssertEqual(engine.preferences.dataMode, .localFirst)
         XCTAssertEqual(engine.preferences.backupPolicy, ScheduledBackupPolicy())
         XCTAssertEqual(engine.preferences.localFirstSyncPolicy.endpoint, .iCloud)
@@ -1101,8 +1956,12 @@ final class NoonmarkEngineTests: XCTestCase {
             ]
         )
 
-        engine.updateTheme(.warmPaper)
-        engine.updateLanguage(.english)
+        try engine.updateTheme(.warmPaper, now: themeUpdatedAt)
+        XCTAssertEqual(
+            engine.preferences.themeLanguageUpdatedAt,
+            themeUpdatedAt
+        )
+        try engine.updateLanguage(.english, now: languageUpdatedAt)
         engine.updateDataMode(.onlineFirst)
         engine.updateBackupPolicy(ScheduledBackupPolicy(frequency: .daily, destination: .s3))
         engine.updateLocalFirstSyncPolicy(
@@ -1116,6 +1975,10 @@ final class NoonmarkEngineTests: XCTestCase {
 
         XCTAssertEqual(engine.preferences.theme, .warmPaper)
         XCTAssertEqual(engine.preferences.language, .english)
+        XCTAssertEqual(
+            engine.preferences.themeLanguageUpdatedAt,
+            languageUpdatedAt
+        )
         XCTAssertEqual(engine.preferences.dataMode, .onlineFirst)
         XCTAssertEqual(engine.preferences.backupPolicy.frequency, .daily)
         XCTAssertEqual(engine.preferences.backupPolicy.destination, .s3)
@@ -1127,34 +1990,198 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.preferences.backupPolicy, ScheduledBackupPolicy())
     }
 
-    func testSnapshotCodableRoundTripsForDataPackage() throws {
+    func testThemeLanguageClockRejectsInvalidOrNonAdvancingMutationsAndIgnoresLocalSettings() throws {
+        let engine = NoonmarkEngine()
+        let changedAt = now.addingTimeInterval(1)
+
+        try engine.updateTheme(
+            .coolGray,
+            now: Date(timeIntervalSinceReferenceDate: .nan)
+        )
+        XCTAssertEqual(
+            engine.preferences.themeLanguageUpdatedAt,
+            Date(timeIntervalSince1970: 0)
+        )
+
+        try engine.updateTheme(.warmPaper, now: changedAt)
+        XCTAssertThrowsError(
+            try engine.updateLanguage(.english, now: changedAt)
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidInput("theme and language mutation time must advance")
+            )
+        }
+        XCTAssertThrowsError(
+            try engine.updateLanguage(
+                .english,
+                now: Date(timeIntervalSinceReferenceDate: .infinity)
+            )
+        )
+
+        engine.updateDataMode(.onlineFirst)
+        engine.updateBackupPolicy(
+            ScheduledBackupPolicy(frequency: .weekly, destination: .s3)
+        )
+        engine.updateLocalFirstSyncPolicy(
+            LocalFirstCloudSyncPolicy(
+                enabled: true,
+                endpoint: .localFolder,
+                mode: .automatic
+            )
+        )
+        engine.updateSettingsPoemDisplayPolicy(
+            SettingsPoemDisplayPolicy(enabled: false, text: "只留在本机")
+        )
+
+        XCTAssertEqual(engine.preferences.theme, .warmPaper)
+        XCTAssertEqual(engine.preferences.language, .chinese)
+        XCTAssertEqual(engine.preferences.themeLanguageUpdatedAt, changedAt)
+    }
+
+    func testSyncedThemeLanguageApplicationPreservesDeviceLocalPreferences() throws {
+        let localClock = now.addingTimeInterval(10)
+        let remoteClock = now.addingTimeInterval(20)
+        let local = AppPreferences(
+            theme: .coolGray,
+            language: .chinese,
+            themeLanguageUpdatedAt: localClock,
+            dataMode: .onlineFirst,
+            backupPolicy: ScheduledBackupPolicy(
+                frequency: .weekly,
+                destination: .s3
+            ),
+            localFirstSyncPolicy: LocalFirstCloudSyncPolicy(
+                enabled: true,
+                endpoint: .localFolder,
+                mode: .automatic,
+                intervalSeconds: 90
+            ),
+            settingsPoemDisplayPolicy: SettingsPoemDisplayPolicy(
+                enabled: false,
+                text: "设备专属诗文"
+            )
+        )
+
+        let applied = try local.applyingSyncedThemeLanguage(
+            theme: .warmPaper,
+            language: .english,
+            updatedAt: remoteClock,
+            writerID: "remote-preferences"
+        )
+
+        XCTAssertEqual(applied.theme, .warmPaper)
+        XCTAssertEqual(applied.language, .english)
+        XCTAssertEqual(applied.themeLanguageUpdatedAt, remoteClock)
+        XCTAssertEqual(applied.dataMode, local.dataMode)
+        XCTAssertEqual(applied.backupPolicy, local.backupPolicy)
+        XCTAssertEqual(
+            applied.localFirstSyncPolicy,
+            local.localFirstSyncPolicy
+        )
+        XCTAssertEqual(
+            applied.settingsPoemDisplayPolicy,
+            local.settingsPoemDisplayPolicy
+        )
+        XCTAssertEqual(applied.syncEndpointOptions, local.syncEndpointOptions)
+
+        XCTAssertThrowsError(
+            try local.applyingSyncedThemeLanguage(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: localClock.addingTimeInterval(-1),
+                writerID: "remote-preferences"
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidInput(
+                    "synced theme and language clock cannot move backwards"
+                )
+            )
+        }
+    }
+
+    func testThemeLanguageVersionOrderUsesRawWriterIdentity() {
+        let clock = now.addingTimeInterval(30)
+
+        XCTAssertEqual(
+            AppPreferences.themeLanguageVersionOrder(
+                clock: clock,
+                writerID: "mac-a",
+                comparedToClock: clock,
+                writerID: " mac-a"
+            ),
+            .orderedDescending
+        )
+
+        let engine = NoonmarkEngine()
+        XCTAssertNoThrow(
+            try engine.updateTheme(
+                .warmPaper,
+                writerID: " mac-a",
+                now: clock
+            )
+        )
+        XCTAssertEqual(
+            engine.preferences.themeLanguageWriterID,
+            " mac-a"
+        )
+    }
+
+    func testSnapshotCodableRoundTripsWithCallerProvidedExactDateStrategy() throws {
+        let exactNow = Date(timeIntervalSinceReferenceDate: 805_912_493.447_825)
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(
             title: "导出导入数据包",
             descriptionText: "验证 JSON 数据包能恢复核心状态。",
             initialNoteBody: "第一期手动数据交换。",
-            now: now
+            now: exactNow
         )
-        let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
-        _ = try engine.addSubtask(traceID: traceID, title: "覆盖 snapshot Codable", difficulty: .medium, now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: exactNow.addingTimeInterval(1.000_173)
+        )
+        _ = try engine.addSubtask(
+            traceID: traceID,
+            title: "覆盖 snapshot Codable",
+            difficulty: .medium,
+            now: exactNow.addingTimeInterval(2.000_347)
+        )
         engine.updateDailyReview(
             date: day1,
             summary: "导出前状态完整。",
             unfinishedReason: "无。",
             tomorrowNote: "导入后继续验证。",
-            now: now
+            now: exactNow.addingTimeInterval(3.000_521)
         )
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(date.timeIntervalSinceReferenceDate.bitPattern)
+        }
         let data = try encoder.encode(engine.snapshot())
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            return Date(
+                timeIntervalSinceReferenceDate: Double(
+                    bitPattern: try container.decode(UInt64.self)
+                )
+            )
+        }
         let restored = try NoonmarkEngine(snapshot: decoder.decode(NoonmarkSnapshot.self, from: data))
 
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
+        XCTAssertEqual(
+            restored.chains[chainID]?.createdAt.timeIntervalSinceReferenceDate.bitPattern,
+            exactNow.timeIntervalSinceReferenceDate.bitPattern
+        )
     }
 
     func testTaskTitlesPreserveSoftAndMarkdownHardLineBreaks() throws {
@@ -1186,6 +2213,200 @@ final class NoonmarkEngineTests: XCTestCase {
             XCTAssertEqual(error.localizedDescription, "还有未完成子任务，完成全部子任务后才能完成父任务")
         }
         XCTAssertEqual(engine.traces[traceID]?.status, .pending)
+    }
+
+    func testCompletionCapabilityUsesCurrentTraceStateAndSubtaskProgress() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "完成能力", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+
+        XCTAssertEqual(
+            try engine.completionCapability(for: traceID, today: day1),
+            .available(.complete)
+        )
+
+        let completedSubtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "已完成子任务",
+            now: now
+        )
+        let abandonedSubtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "已废弃子任务",
+            now: now
+        )
+        try engine.completeSubtask(
+            completedSubtaskID,
+            today: day1,
+            now: now
+        )
+
+        XCTAssertEqual(
+            try engine.completionCapability(for: traceID, today: day1),
+            .unavailable(.openSubtasks)
+        )
+
+        let abandonedAt = now.addingTimeInterval(1)
+        try engine.abandonSubtask(
+            abandonedSubtaskID,
+            today: day1,
+            now: abandonedAt
+        )
+        XCTAssertEqual(
+            engine.subtasks[abandonedSubtaskID]?.updatedAt,
+            abandonedAt
+        )
+        XCTAssertEqual(
+            engine.subtasks[abandonedSubtaskID]?.settledAt,
+            abandonedAt
+        )
+        XCTAssertEqual(
+            try engine.completionCapability(for: traceID, today: day1),
+            .available(.complete)
+        )
+
+        try engine.markCompleted(
+            traceID: traceID,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+        XCTAssertEqual(
+            try engine.completionCapability(for: traceID, today: day1),
+            .available(.undo)
+        )
+
+        try engine.undoCompleted(
+            traceID: traceID,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+        XCTAssertEqual(engine.subtasks[completedSubtaskID]?.status, .completed)
+        XCTAssertEqual(engine.subtasks[abandonedSubtaskID]?.status, .abandoned)
+    }
+
+    func testCompletionCapabilityRejectsWrongDateLockedDayAndUnsupportedStatus() throws {
+        let engine = NoonmarkEngine()
+        let historicalChainID = try engine.createPoolTask(
+            title: "历史能力",
+            now: now
+        )
+        let historicalTraceID = try engine.scheduleFromPool(
+            chainID: historicalChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let futureChainID = try engine.createPoolTask(
+            title: "未来能力",
+            now: now
+        )
+        let futureTraceID = try engine.scheduleFromPool(
+            chainID: futureChainID,
+            date: day3,
+            today: day2,
+            now: now
+        )
+        let returnedChainID = try engine.createPoolTask(
+            title: "回池能力",
+            now: now
+        )
+        let returnedTraceID = try engine.scheduleFromPool(
+            chainID: returnedChainID,
+            date: day2,
+            today: day2,
+            now: now
+        )
+        try engine.returnToPool(
+            traceID: returnedTraceID,
+            today: day2,
+            now: now
+        )
+
+        XCTAssertEqual(
+            try engine.completionCapability(
+                for: historicalTraceID,
+                today: day2
+            ),
+            .unavailable(.historicalDay)
+        )
+        XCTAssertEqual(
+            try engine.completionCapability(for: futureTraceID, today: day2),
+            .unavailable(.futureDay)
+        )
+        XCTAssertEqual(
+            try engine.completionCapability(for: returnedTraceID, today: day2),
+            .unavailable(.unsupportedStatus(.returnedToPool))
+        )
+
+        try engine.settleDays(upTo: day2, now: now)
+        XCTAssertEqual(
+            try engine.completionCapability(
+                for: historicalTraceID,
+                today: day2
+            ),
+            .unavailable(.lockedDay)
+        )
+        XCTAssertThrowsError(
+            try engine.completionCapability(
+                for: DayTraceID(),
+                today: day2
+            )
+        ) { error in
+            XCTAssertEqual(error as? NoonmarkError, .notFound("day trace"))
+        }
+    }
+
+    func testCurrentTraceCanCompleteWhenOnlyHistoricalChainTraceHasSubtasks() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "跨日完成能力",
+            now: now
+        )
+        let firstTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let historicalSubtaskID = try engine.addSubtask(
+            traceID: firstTraceID,
+            title: "历史子任务",
+            now: now
+        )
+        try engine.completeSubtask(
+            historicalSubtaskID,
+            today: day1,
+            now: now
+        )
+        let currentTraceID = try engine.continueTrace(
+            traceID: firstTraceID,
+            targetDate: day2,
+            today: day1,
+            now: now
+        )
+
+        XCTAssertTrue(
+            engine.subtasks.values.contains {
+                $0.traceID == firstTraceID
+            }
+        )
+        XCTAssertTrue(
+            engine.subtasks.values.allSatisfy {
+                $0.traceID != currentTraceID
+            }
+        )
+        XCTAssertEqual(
+            try engine.completionCapability(
+                for: currentTraceID,
+                today: day2
+            ),
+            .available(.complete)
+        )
     }
 
     func testLockedDayCannotBeReopenedWhenTheObservedNaturalDayMovesBackward() throws {

@@ -1,0 +1,360 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$repo_root/scripts/evidence-common"
+source "$repo_root/scripts/runtime-evidence"
+
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-evidence-common.XXXXXX")"
+trap 'rm -rf "$fixture"' EXIT
+
+fail() {
+  echo "$1" >&2
+  exit 1
+}
+
+git_fixture="$fixture/repository"
+mkdir -p "$git_fixture"
+git -C "$git_fixture" init -q
+git -C "$git_fixture" config user.name "Evidence Fixture"
+git -C "$git_fixture" config user.email "evidence@example.invalid"
+printf 'tracked\n' >"$git_fixture/tracked.txt"
+git -C "$git_fixture" add tracked.txt
+git -C "$git_fixture" commit -qm "fixture"
+clean_fragment="$fixture/clean.fragment"
+dirty_fragment="$fixture/dirty.fragment"
+evidence_capture_source "$git_fixture" source "$clean_fragment"
+[[ "$(evidence_read "$clean_fragment" source_tree_dirty)" == "0" ]] ||
+  fail "clean source snapshot was marked dirty"
+index_before="$(shasum -a 256 "$git_fixture/.git/index" | awk '{print $1}')"
+printf 'changed\n' >>"$git_fixture/tracked.txt"
+printf 'untracked\n' >"$git_fixture/untracked.txt"
+evidence_capture_source "$git_fixture" source "$dirty_fragment"
+[[ "$(evidence_read "$dirty_fragment" source_tree_dirty)" == "1" ]] ||
+  fail "dirty source snapshot was marked clean"
+[[ "$(evidence_read "$dirty_fragment" source_worktree_tree_oid)" != \
+  "$(evidence_read "$clean_fragment" source_worktree_tree_oid)" ]] ||
+  fail "worktree tree ignored tracked or untracked changes"
+index_after="$(shasum -a 256 "$git_fixture/.git/index" | awk '{print $1}')"
+[[ "$index_before" == "$index_after" ]] ||
+  fail "source capture modified the real Git index"
+
+fresh_root="$git_fixture/artifacts/fresh"
+mkdir -p "$fresh_root"
+printf 'stale\n' >"$fresh_root/stale.txt"
+evidence_prepare_fresh_directory "$git_fixture" "$fresh_root"
+[[ ! -e "$fresh_root/stale.txt" ]] || fail "fresh evidence retained stale data"
+if evidence_prepare_fresh_directory "$git_fixture" "$git_fixture/../outside" \
+  >/dev/null 2>&1; then
+  fail "fresh evidence accepted an escaping path"
+fi
+
+mkdir -p "$fresh_root/current"
+printf 'current\n' >"$fresh_root/current/result.txt"
+ln -s result.txt "$fresh_root/current/result-link"
+printf 'stale\n' >"$fresh_root/stale.txt"
+inventory="$fresh_root/inventory.tsv"
+evidence_inventory "$git_fixture" "$inventory" "$fresh_root/current"
+grep -Fq 'artifacts/fresh/current/result.txt' "$inventory" ||
+  fail "inventory omitted a current artifact"
+if grep -Fq 'stale.txt' "$inventory"; then
+  fail "inventory included an unrequested stale artifact"
+fi
+newline_path="$fresh_root/current/line"$'\n'"break.txt"
+printf 'unsafe\n' >"$newline_path"
+if evidence_inventory "$git_fixture" "$fresh_root/unsafe.tsv" \
+  "$fresh_root/current" >/dev/null 2>&1; then
+  fail "inventory accepted a filename with a newline"
+fi
+rm -f "$newline_path"
+
+expect_inventory_verification_failure() {
+  local description="$1"
+  local candidate_inventory="$2"
+
+  if evidence_verify_inventory \
+    "$git_fixture" \
+    "$candidate_inventory" >/dev/null 2>&1; then
+    fail "inventory verification accepted $description"
+  fi
+}
+
+verification_index_before="$(
+  shasum -a 256 "$git_fixture/.git/index" | awk '{print $1}'
+)"
+evidence_verify_inventory "$git_fixture" "$inventory"
+
+printf 'altered\n' >"$fresh_root/current/result.txt"
+expect_inventory_verification_failure \
+  "changed artifact content with the same size" \
+  "$inventory"
+printf 'current\n' >"$fresh_root/current/result.txt"
+
+printf 'current with a different size\n' >"$fresh_root/current/result.txt"
+expect_inventory_verification_failure "changed artifact size" "$inventory"
+printf 'current\n' >"$fresh_root/current/result.txt"
+
+wrong_size_inventory="$fresh_root/wrong-size-inventory.tsv"
+awk -F '\t' -v OFS='\t' '
+  $3 == "artifacts/fresh/current/result.txt" { $2 += 1 }
+  { print }
+' "$inventory" >"$wrong_size_inventory"
+expect_inventory_verification_failure \
+  "an incorrect declared artifact size" \
+  "$wrong_size_inventory"
+
+rm "$fresh_root/current/result.txt"
+expect_inventory_verification_failure "a deleted artifact" "$inventory"
+printf 'current\n' >"$fresh_root/current/result.txt"
+
+rm "$fresh_root/current/result-link"
+ln -s replacement.txt "$fresh_root/current/result-link"
+expect_inventory_verification_failure \
+  "a changed symbolic-link target" \
+  "$inventory"
+rm "$fresh_root/current/result-link"
+ln -s result.txt "$fresh_root/current/result-link"
+
+duplicate_inventory="$fresh_root/duplicate-inventory.tsv"
+{
+  cat "$inventory"
+  head -n 1 "$inventory"
+} >"$duplicate_inventory"
+expect_inventory_verification_failure \
+  "a duplicate artifact path" \
+  "$duplicate_inventory"
+
+invalid_inventory="$fresh_root/invalid-inventory.tsv"
+printf 'not-an-inventory-row\n' >"$invalid_inventory"
+expect_inventory_verification_failure \
+  "an invalid inventory row" \
+  "$invalid_inventory"
+
+escaping_inventory="$fresh_root/escaping-inventory.tsv"
+printf '%s\t1\t../outside.txt\n' \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  >"$escaping_inventory"
+expect_inventory_verification_failure \
+  "an artifact path outside the repository" \
+  "$escaping_inventory"
+
+directory_inventory="$fresh_root/directory-inventory.tsv"
+printf '%s\t0\tartifacts/fresh/current\n' \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  >"$directory_inventory"
+expect_inventory_verification_failure \
+  "a directory artifact" \
+  "$directory_inventory"
+
+unsorted_inventory="$fresh_root/unsorted-inventory.tsv"
+awk '{ row[NR] = $0 } END { for (position = NR; position >= 1; position--) print row[position] }' \
+  "$inventory" >"$unsorted_inventory"
+expect_inventory_verification_failure \
+  "non-canonical artifact ordering" \
+  "$unsorted_inventory"
+
+expect_required_inventory_paths_failure() {
+  local description="$1"
+  local candidate_inventory="$2"
+  shift 2
+
+  if evidence_require_inventory_paths \
+    "$git_fixture" \
+    "$candidate_inventory" \
+    "$@" >/dev/null 2>&1; then
+    fail "required inventory paths accepted $description"
+  fi
+}
+
+result_relative='artifacts/fresh/current/result.txt'
+current_absolute="$(cd "$fresh_root/current" && pwd -P)"
+fresh_absolute="$(cd "$fresh_root" && pwd -P)"
+result_absolute="$current_absolute/result.txt"
+link_absolute="$current_absolute/result-link"
+evidence_require_inventory_paths \
+  "$git_fixture" \
+  "$inventory" \
+  "$result_relative" \
+  "$link_absolute"
+
+expect_required_inventory_paths_failure \
+  "an empty required-path declaration" \
+  "$inventory"
+expect_required_inventory_paths_failure \
+  "a path omitted from the inventory" \
+  "$inventory" \
+  "$fresh_absolute/stale.txt"
+expect_required_inventory_paths_failure \
+  "a duplicate required path" \
+  "$inventory" \
+  "$result_relative" \
+  "$result_relative"
+expect_required_inventory_paths_failure \
+  "relative and absolute aliases for the same required path" \
+  "$inventory" \
+  "$result_relative" \
+  "$result_absolute"
+printf 'outside\n' >"$fixture/outside-required.txt"
+outside_absolute="$(cd "$fixture" && pwd -P)/outside-required.txt"
+expect_required_inventory_paths_failure \
+  "a required path outside the repository" \
+  "$inventory" \
+  "$outside_absolute"
+expect_required_inventory_paths_failure \
+  "a non-canonical required path" \
+  "$inventory" \
+  'artifacts/fresh/current/../current/result.txt'
+expect_required_inventory_paths_failure \
+  "a directory instead of a file or symbolic link" \
+  "$inventory" \
+  "$current_absolute"
+expect_required_inventory_paths_failure \
+  "an inventory that has not passed verification" \
+  "$duplicate_inventory" \
+  "$result_relative"
+
+verification_index_after="$(
+  shasum -a 256 "$git_fixture/.git/index" | awk '{print $1}'
+)"
+[[ "$verification_index_before" == "$verification_index_after" ]] ||
+  fail "inventory verification modified the real Git index"
+
+manifest="$fresh_root/manifest.txt"
+evidence_begin_manifest "$manifest" fixture run-1 debug filtered
+evidence_append_snapshot "$manifest" "$dirty_fragment"
+if evidence_append "$manifest" suite duplicate >/dev/null 2>&1; then
+  fail "manifest accepted a duplicate key"
+fi
+if evidence_finish_manifest "$manifest" 0 missing_key >/dev/null 2>&1; then
+  fail "manifest accepted a missing required field"
+fi
+corrupted_manifest="$fresh_root/corrupted-manifest.txt"
+cp "$manifest" "$corrupted_manifest"
+printf 'suite=duplicate\n' >>"$corrupted_manifest"
+if evidence_finish_manifest "$corrupted_manifest" 1 >/dev/null 2>&1; then
+  fail "manifest accepted an externally duplicated key"
+fi
+evidence_append "$manifest" artifact_inventory_sha256 \
+  "$(shasum -a 256 "$inventory" | awk '{print $1}')"
+evidence_finish_manifest \
+  "$manifest" \
+  0 \
+  source_worktree_tree_oid \
+  artifact_inventory_sha256
+grep -Fqx 'suite_exit_status=0' "$manifest" ||
+  fail "manifest did not publish its final successful state"
+
+changed_manifest="$fresh_root/changed-manifest.txt"
+evidence_begin_manifest "$changed_manifest" fixture run-2 debug full
+evidence_append "$changed_manifest" app_binary_sha256 \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+evidence_append "$changed_manifest" app_end_binary_sha256 \
+  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+if evidence_finish_manifest "$changed_manifest" 0 \
+  app_binary_sha256 app_end_binary_sha256 >/dev/null 2>&1; then
+  fail "manifest accepted a binary replacement during the suite"
+fi
+
+resigned_manifest="$fresh_root/resigned-manifest.txt"
+evidence_begin_manifest "$resigned_manifest" fixture run-3 debug full
+for suffix in \
+  binary_sha256 \
+  codesign_identifier \
+  codesign_kind \
+  codesign_identity_sha1 \
+  codesign_identity_sha256 \
+  codesign_team_identifier \
+  codesign_authority \
+  designated_requirement_sha256; do
+  start_value="fixture-${suffix}"
+  end_value="$start_value"
+  if [[ "$suffix" == "codesign_identity_sha256" ]]; then
+    end_value="replacement-${suffix}"
+  fi
+  evidence_append "$resigned_manifest" "app_${suffix}" "$start_value"
+  evidence_append "$resigned_manifest" "app_end_${suffix}" "$end_value"
+done
+if evidence_finish_manifest "$resigned_manifest" 0 \
+  app_binary_sha256 app_end_binary_sha256 >/dev/null 2>&1; then
+  fail "manifest accepted a signature replacement with an unchanged binary"
+fi
+
+app="$fixture/AdHoc.app"
+mkdir -p "$app/Contents/MacOS"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$app/Contents/MacOS/AdHoc"
+chmod +x "$app/Contents/MacOS/AdHoc"
+plutil -create xml1 "$app/Contents/Info.plist"
+plutil -insert CFBundleIdentifier -string app.noonmark.evidence.fixture \
+  "$app/Contents/Info.plist"
+plutil -insert CFBundleExecutable -string AdHoc "$app/Contents/Info.plist"
+codesign --force --sign - "$app" >/dev/null 2>&1
+evidence_capture_bundle "$app" 0 adhoc "$fixture/adhoc.fragment"
+if evidence_capture_bundle "$app" 1 stable "$fixture/stable.fragment" \
+  >/dev/null 2>&1; then
+  fail "stable bundle evidence accepted ad-hoc signing"
+fi
+
+diagnostic_dir="$fixture/DiagnosticReports"
+diagnostic_baseline="$fixture/diagnostic-baseline.txt"
+mkdir -p "$diagnostic_dir"
+runtime_evidence_snapshot_diagnostics \
+  NoonmarkEvidenceFixture \
+  "$diagnostic_baseline" \
+  "$diagnostic_dir"
+runtime_evidence_assert_no_new_diagnostics \
+  NoonmarkEvidenceFixture \
+  "$diagnostic_baseline" \
+  "$fixture/diagnostic-artifacts" \
+  1 \
+  "$diagnostic_dir"
+[[ -f "${diagnostic_baseline}.current" &&
+  -f "${diagnostic_baseline}.new" &&
+  ! -s "${diagnostic_baseline}.new" ]] ||
+  fail "clean diagnostic evidence did not preserve final and empty diff"
+
+sha=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+report="$fixture/sigkill.tsv"
+{
+  printf 'phase\tpid\tparent_pid\tsignal\treason\texpected_status\tobserved_status\tbinary_path\tbinary_sha256\n'
+  printf 'sigkill-holder\t4242\t4000\tSIGKILL\tlease-reacquisition\t137\t137\t/tmp/Noonmark\t%s\n' "$sha"
+} >"$report"
+evidence_verify_sigkill_allowlist \
+  "$report" \
+  "4242:SIGKILL:sigkill-holder:137:$sha"
+if evidence_verify_sigkill_allowlist "$report" \
+  "4243:SIGKILL:sigkill-holder:137:$sha" >/dev/null 2>&1; then
+  fail "SIGKILL allowlist accepted the wrong PID"
+fi
+if evidence_verify_sigkill_allowlist "$report" \
+  "4242:SIGTERM:sigkill-holder:137:$sha" >/dev/null 2>&1; then
+  fail "SIGKILL allowlist accepted the wrong signal"
+fi
+cp "$report" "$fixture/extra.tsv"
+tail -n 1 "$report" >>"$fixture/extra.tsv"
+if evidence_verify_sigkill_allowlist "$fixture/extra.tsv" \
+  "4242:SIGKILL:sigkill-holder:137:$sha" >/dev/null 2>&1; then
+  fail "SIGKILL allowlist accepted an extra termination"
+fi
+
+for literal in \
+  'source scripts/evidence-common' \
+  'evidence_prepare_fresh_directory "$repo_root" "$check_evidence_dir"' \
+  'evidence_capture_source "$repo_root" source "$source_start_fragment"' \
+  'evidence_begin_manifest' \
+  'evidence_capture_source "$repo_root" source_end "$source_end_fragment"' \
+  'evidence_finish_manifest' \
+  'artifact_inventory_sha256'; do
+  if ! grep -F -- "$literal" "$repo_root/scripts/check" >/dev/null; then
+    fail "scripts/check is missing auditable final-check evidence: $literal"
+  fi
+done
+if ! grep -F \
+  "artifacts/audit-final/make-check" \
+  "$repo_root/.github/workflows/ci.yml" >/dev/null ||
+  ! grep -F \
+    "artifacts/audit-final" \
+    "$repo_root/.github/workflows/release.yml" >/dev/null; then
+  fail "check evidence is not retained by CI and release workflows"
+fi
+
+echo "Validation evidence common seam checks passed"

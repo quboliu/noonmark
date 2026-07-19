@@ -366,6 +366,16 @@ private struct SQLiteClassificationChangeLoadContext {
     var consumedImpactKeys: Set<SQLiteClassificationChangeKey> = []
 }
 
+struct SQLiteEngineSnapshotGeneration: Equatable {
+    let epoch: UUID
+    let revision: UInt64
+}
+
+struct SQLiteObservedEngineSnapshot: Equatable {
+    let snapshot: NoonmarkSnapshot
+    let generation: SQLiteEngineSnapshotGeneration
+}
+
 public final class SQLiteEngineRepository {
     private let databaseURL: URL
     private let journalEntryIDGenerator: () -> UUID
@@ -385,13 +395,14 @@ public final class SQLiteEngineRepository {
     }
 
     public func save(_ snapshot: NoonmarkSnapshot) throws {
-        try validateClassificationStateIntegrity(snapshot.classifications)
+        try validateSnapshotForPersistence(snapshot)
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
+            try advanceEngineSnapshotGeneration(in: database)
             try persistValidatedSnapshot(snapshot, into: database)
             try execute("COMMIT", on: database)
         } catch {
@@ -404,7 +415,7 @@ public final class SQLiteEngineRepository {
         _ snapshot: NoonmarkSnapshot,
         preserving deviceIdentity: SyncDeviceIdentity?
     ) throws {
-        try validateClassificationStateIntegrity(snapshot.classifications)
+        try validateSnapshotForPersistence(snapshot)
         let stagedURL = databaseURL.deletingLastPathComponent()
             .appendingPathComponent(".noonmark-import-\(UUID().uuidString).sqlite")
         defer { removeDatabaseFiles(at: stagedURL) }
@@ -422,9 +433,14 @@ public final class SQLiteEngineRepository {
     public func save(
         _ snapshot: NoonmarkSnapshot,
         recordingChangesFor deviceID: SyncDeviceID,
-        changedAt: Date = Date()
+        changedAt: Date
     ) throws {
-        try validateClassificationStateIntegrity(snapshot.classifications)
+        guard changedAt.timeIntervalSinceReferenceDate.isFinite else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "engine mutation changedAt must be finite"
+            )
+        }
+        try validateSnapshotForPersistence(snapshot)
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
@@ -441,6 +457,7 @@ public final class SQLiteEngineRepository {
             for index in journalEntries.indices {
                 journalEntries[index].id = journalEntryIDGenerator()
             }
+            try advanceEngineSnapshotGeneration(in: database)
             try persistValidatedSnapshot(snapshot, into: database)
             try appendJournalEntries(journalEntries, into: database)
             try execute("COMMIT", on: database)
@@ -451,7 +468,7 @@ public final class SQLiteEngineRepository {
     }
 
     func validateSnapshotForPersistence(_ snapshot: NoonmarkSnapshot) throws {
-        try validateClassificationStateIntegrity(snapshot.classifications)
+        try snapshot.validateIntegrity()
     }
 
     func persistValidatedSnapshot(
@@ -484,12 +501,54 @@ public final class SQLiteEngineRepository {
         try insertClassificationReceipts(snapshot.classifications, into: database)
     }
 
+    func compareAndAdvanceEngineSnapshotGeneration(
+        observed: SQLiteEngineSnapshotGeneration,
+        in database: OpaquePointer?
+    ) throws {
+        try run(
+            """
+            UPDATE engine_snapshot_generation
+            SET revision = revision + 1
+            WHERE id = 1 AND epoch = ? AND revision = ?
+                AND revision < 9223372036854775807
+            """,
+            on: database
+        ) { statement in
+            bind(observed.epoch.uuidString.lowercased(), to: 1, in: statement)
+            try bind(observed.revision, to: 2, in: statement)
+        }
+        guard sqlite3_changes(database) == 1 else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "engine snapshot generation changed before merge commit"
+            )
+        }
+    }
+
     public func load() throws -> NoonmarkEngine {
+        try NoonmarkEngine(snapshot: loadObservedSnapshot().snapshot)
+    }
+
+    func loadObservedSnapshot() throws -> SQLiteObservedEngineSnapshot {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
-        return try NoonmarkEngine(snapshot: loadSnapshot(from: database))
+        try execute("BEGIN DEFERRED TRANSACTION", on: database)
+        do {
+            // The first SELECT establishes SQLite's read snapshot. Generation and
+            // every entity table are therefore observed from one database state.
+            let generation = try engineSnapshotGeneration(from: database)
+            let snapshot = try loadSnapshot(from: database)
+            _ = try NoonmarkEngine(snapshot: snapshot)
+            try execute("COMMIT", on: database)
+            return SQLiteObservedEngineSnapshot(
+                snapshot: snapshot,
+                generation: generation
+            )
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
     }
 }
 
@@ -541,9 +600,9 @@ private extension SQLiteEngineRepository {
 
     func plannedSubtasksJSON(_ plannedSubtasks: [PlannedSubtask]) throws -> String? {
         guard plannedSubtasks.isEmpty == false else { return nil }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(plannedSubtasks)
+        let data = try ExactDateJSONCoding.encoder(
+            nonFiniteDateDescription: "domain JSON date must be finite"
+        ).encode(plannedSubtasks)
         guard let string = String(data: data, encoding: .utf8) else {
             throw SQLiteRepositoryError.invalidStoredValue("planned subtasks JSON encoding failed")
         }
@@ -557,13 +616,15 @@ private extension SQLiteEngineRepository {
         guard let data = json.data(using: .utf8) else {
             throw SQLiteRepositoryError.invalidStoredValue("planned subtasks JSON is not UTF-8")
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode([PlannedSubtask].self, from: data)
+        return try ExactDateJSONCoding.decoder(
+            nonFiniteDateDescription: "domain JSON date must be finite"
+        ).decode([PlannedSubtask].self, from: data)
     }
 
     func noteEntriesJSON(_ noteEntries: [TaskNoteEntry]) throws -> String {
-        let data = try JSONEncoder().encode(noteEntries)
+        let data = try ExactDateJSONCoding.encoder(
+            nonFiniteDateDescription: "domain JSON date must be finite"
+        ).encode(noteEntries)
         guard let string = String(data: data, encoding: .utf8) else {
             throw SQLiteRepositoryError.invalidStoredValue("task note entries JSON encoding failed")
         }
@@ -575,7 +636,9 @@ private extension SQLiteEngineRepository {
             throw SQLiteRepositoryError.invalidStoredValue("task note entries JSON is not UTF-8")
         }
         do {
-            return try JSONDecoder().decode([TaskNoteEntry].self, from: data)
+            return try ExactDateJSONCoding.decoder(
+                nonFiniteDateDescription: "domain JSON date must be finite"
+            ).decode([TaskNoteEntry].self, from: data)
         } catch {
             throw SQLiteRepositoryError.invalidStoredValue(
                 "invalid task note entries JSON: \(error.localizedDescription)"
@@ -643,6 +706,53 @@ private extension SQLiteEngineRepository {
 
     func applySchema(on database: Database?) throws {
         try SQLiteSchema.installOrValidate(on: database)
+    }
+
+    func engineSnapshotGeneration(
+        from database: Database?
+    ) throws -> SQLiteEngineSnapshotGeneration {
+        let rows = try query(
+            """
+            SELECT epoch, revision
+            FROM engine_snapshot_generation
+            WHERE id = 1
+            """,
+            on: database
+        ) { statement in
+            guard sqlite3_column_type(statement, 1) == SQLITE_INTEGER else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "engine snapshot revision is not an integer"
+                )
+            }
+            return SQLiteEngineSnapshotGeneration(
+                epoch: try uuid(statement, 0),
+                revision: try uint64(statement, 1)
+            )
+        }
+        guard rows.count == 1, let generation = rows.first else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "engine snapshot generation row is missing or duplicated"
+            )
+        }
+        return generation
+    }
+
+    func advanceEngineSnapshotGeneration(
+        in database: Database?
+    ) throws {
+        try run(
+            """
+            UPDATE engine_snapshot_generation
+            SET revision = revision + 1
+            WHERE id = 1 AND revision < 9223372036854775807
+            """,
+            on: database
+        ) { _ in }
+        guard sqlite3_changes(database) == 1 else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "engine snapshot generation is missing or exhausted"
+            )
+        }
     }
 
     func execute(_ sql: String, on database: Database?) throws {
@@ -936,27 +1046,37 @@ private extension SQLiteEngineRepository {
 
     func upsert(_ days: [Day], into database: Database?) throws {
         let sql = """
-        INSERT INTO days(id, date, locked_at, review_summary, review_unfinished_reason, review_tomorrow_note, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO days(
+            id, date, locked_at, locked_at_bits,
+            review_summary, review_unfinished_reason, review_tomorrow_note,
+            created_at, created_at_bits, updated_at, updated_at_bits
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(date) DO UPDATE SET
             id = excluded.id,
             locked_at = excluded.locked_at,
+            locked_at_bits = excluded.locked_at_bits,
             review_summary = excluded.review_summary,
             review_unfinished_reason = excluded.review_unfinished_reason,
             review_tomorrow_note = excluded.review_tomorrow_note,
             created_at = excluded.created_at,
-            updated_at = excluded.updated_at
+            created_at_bits = excluded.created_at_bits,
+            updated_at = excluded.updated_at,
+            updated_at_bits = excluded.updated_at_bits
         """
         for day in days {
             try run(sql, on: database) { statement in
                 bind(day.id.rawValue, to: 1, in: statement)
                 bind(day.date, to: 2, in: statement)
                 bind(day.lockedAt, to: 3, in: statement)
-                bind(day.reviewSummary, to: 4, in: statement)
-                bind(day.reviewUnfinishedReason, to: 5, in: statement)
-                bind(day.reviewTomorrowNote, to: 6, in: statement)
-                bind(day.createdAt, to: 7, in: statement)
-                bind(day.updatedAt, to: 8, in: statement)
+                try bindExactDate(day.lockedAt, to: 4, in: statement)
+                bind(day.reviewSummary, to: 5, in: statement)
+                bind(day.reviewUnfinishedReason, to: 6, in: statement)
+                bind(day.reviewTomorrowNote, to: 7, in: statement)
+                bind(day.createdAt, to: 8, in: statement)
+                try bindExactDate(day.createdAt, to: 9, in: statement)
+                bind(day.updatedAt, to: 10, in: statement)
+                try bindExactDate(day.updatedAt, to: 11, in: statement)
             }
         }
     }
@@ -993,9 +1113,11 @@ private extension SQLiteEngineRepository {
         let sql = """
         INSERT INTO task_definitions(
             id, chain_id, sequence, title, description_text, planned_subtasks_json,
-            created_at, content_updated_at, superseded_at, superseded_by_definition_id
+            created_at, created_at_bits,
+            content_updated_at, content_updated_at_bits,
+            superseded_at, superseded_at_bits, superseded_by_definition_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             chain_id = excluded.chain_id,
             sequence = excluded.sequence,
@@ -1003,8 +1125,11 @@ private extension SQLiteEngineRepository {
             description_text = excluded.description_text,
             planned_subtasks_json = excluded.planned_subtasks_json,
             created_at = excluded.created_at,
+            created_at_bits = excluded.created_at_bits,
             content_updated_at = excluded.content_updated_at,
+            content_updated_at_bits = excluded.content_updated_at_bits,
             superseded_at = excluded.superseded_at,
+            superseded_at_bits = excluded.superseded_at_bits,
             superseded_by_definition_id = excluded.superseded_by_definition_id
         """
         for definition in definitions {
@@ -1016,9 +1141,12 @@ private extension SQLiteEngineRepository {
                 bind(definition.descriptionText, to: 5, in: statement)
                 bind(try plannedSubtasksJSON(definition.plannedSubtasks), to: 6, in: statement)
                 bind(definition.createdAt, to: 7, in: statement)
-                bind(definition.contentUpdatedAt, to: 8, in: statement)
-                bind(definition.supersededAt, to: 9, in: statement)
-                bind(nil as String?, to: 10, in: statement)
+                try bindExactDate(definition.createdAt, to: 8, in: statement)
+                bind(definition.contentUpdatedAt, to: 9, in: statement)
+                try bindExactDate(definition.contentUpdatedAt, to: 10, in: statement)
+                bind(definition.supersededAt, to: 11, in: statement)
+                try bindExactDate(definition.supersededAt, to: 12, in: statement)
+                bind(nil as String?, to: 13, in: statement)
             }
         }
 
@@ -1036,14 +1164,35 @@ private extension SQLiteEngineRepository {
     }
 
     func upsert(_ traces: [DayTrace], into database: Database?) throws {
+        let storedPendingTraceIDs = Set(
+            try query(
+                "SELECT id FROM day_traces WHERE status = 'pending'",
+                on: database
+            ) { statement in
+                DayTraceID(try uuid(statement, 0))
+            }
+        )
+        // A snapshot can atomically transfer the one pending slot from one
+        // trace to another. SQLite checks the partial unique index after each
+        // row, so persist existing pending traces that leave that slot before
+        // persisting the incoming pending trace. Keep every other trace in the
+        // validated snapshot order so first-save foreign-key dependencies do
+        // not change.
+        let outgoingPendingTraces = traces.filter {
+            storedPendingTraceIDs.contains($0.id) && $0.status != .pending
+        }
+        let remainingTraces = traces.filter {
+            storedPendingTraceIDs.contains($0.id) == false || $0.status == .pending
+        }
         let sql = """
         INSERT INTO day_traces(
             id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note_entries_json,
             manual_progress_percent, continued_from_trace_id, changed_to_trace_id,
             created_at, created_at_bits, content_updated_at, content_updated_at_bits,
-            completed_at, completed_at_bits, settled_at, settled_at_bits
+            completed_at, completed_at_bits, settled_at, settled_at_bits,
+            draft_cancellation_id, draft_cancelled_on
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             chain_id = excluded.chain_id,
             definition_id = excluded.definition_id,
@@ -1063,9 +1212,11 @@ private extension SQLiteEngineRepository {
             completed_at = excluded.completed_at,
             completed_at_bits = excluded.completed_at_bits,
             settled_at = excluded.settled_at,
-            settled_at_bits = excluded.settled_at_bits
+            settled_at_bits = excluded.settled_at_bits,
+            draft_cancellation_id = excluded.draft_cancellation_id,
+            draft_cancelled_on = excluded.draft_cancelled_on
         """
-        for trace in traces {
+        for trace in outgoingPendingTraces + remainingTraces {
             try run(sql, on: database) { statement in
                 bind(trace.id.rawValue, to: 1, in: statement)
                 bind(trace.chainID.rawValue, to: 2, in: statement)
@@ -1087,6 +1238,8 @@ private extension SQLiteEngineRepository {
                 try bindExactDate(trace.completedAt, to: 18, in: statement)
                 bind(trace.settledAt, to: 19, in: statement)
                 try bindExactDate(trace.settledAt, to: 20, in: statement)
+                bind(trace.draftCancellationID?.uuidString, to: 21, in: statement)
+                bind(trace.draftCancelledOn?.description, to: 22, in: statement)
             }
         }
 
@@ -1107,9 +1260,14 @@ private extension SQLiteEngineRepository {
         let sql = """
         INSERT INTO subtasks(
             id, lineage_id, trace_id, title, status, difficulty, position,
-            continued_from_subtask_id, created_at, completed_at, settled_at
+            continued_from_subtask_id,
+            created_at, created_at_bits,
+            updated_at, updated_at_bits,
+            completed_at, completed_at_bits,
+            settled_at, settled_at_bits,
+            draft_cancellation_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             lineage_id = excluded.lineage_id,
             trace_id = excluded.trace_id,
@@ -1119,8 +1277,14 @@ private extension SQLiteEngineRepository {
             position = excluded.position,
             continued_from_subtask_id = excluded.continued_from_subtask_id,
             created_at = excluded.created_at,
+            created_at_bits = excluded.created_at_bits,
+            updated_at = excluded.updated_at,
+            updated_at_bits = excluded.updated_at_bits,
             completed_at = excluded.completed_at,
-            settled_at = excluded.settled_at
+            completed_at_bits = excluded.completed_at_bits,
+            settled_at = excluded.settled_at,
+            settled_at_bits = excluded.settled_at_bits,
+            draft_cancellation_id = excluded.draft_cancellation_id
         """
         for subtask in subtasks {
             try run(sql, on: database) { statement in
@@ -1133,8 +1297,18 @@ private extension SQLiteEngineRepository {
                 bind(subtask.position, to: 7, in: statement)
                 bind(nil as String?, to: 8, in: statement)
                 bind(subtask.createdAt, to: 9, in: statement)
-                bind(subtask.completedAt, to: 10, in: statement)
-                bind(subtask.settledAt, to: 11, in: statement)
+                try bindExactDate(subtask.createdAt, to: 10, in: statement)
+                bind(subtask.updatedAt, to: 11, in: statement)
+                try bindExactDate(subtask.updatedAt, to: 12, in: statement)
+                bind(subtask.completedAt, to: 13, in: statement)
+                try bindExactDate(subtask.completedAt, to: 14, in: statement)
+                bind(subtask.settledAt, to: 15, in: statement)
+                try bindExactDate(subtask.settledAt, to: 16, in: statement)
+                bind(
+                    subtask.draftCancellationID?.uuidString,
+                    to: 17,
+                    in: statement
+                )
             }
         }
 
@@ -2834,17 +3008,39 @@ private extension SQLiteEngineRepository {
 
     func upsert(_ preferences: AppPreferences, into database: Database?) throws {
         let sql = """
-        INSERT INTO app_preferences(id, theme, language, updated_at)
-        VALUES (1, ?, ?, ?)
+        INSERT INTO app_preferences(
+            id, theme, language,
+            theme_language_updated_at, theme_language_updated_at_bits,
+            theme_language_writer_id
+        )
+        VALUES (1, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             theme = excluded.theme,
             language = excluded.language,
-            updated_at = excluded.updated_at
+            theme_language_updated_at = excluded.theme_language_updated_at,
+            theme_language_updated_at_bits =
+                excluded.theme_language_updated_at_bits,
+            theme_language_writer_id =
+                excluded.theme_language_writer_id
         """
         try run(sql, on: database) { statement in
             bind(preferences.theme.rawValue, to: 1, in: statement)
             bind(preferences.language.rawValue, to: 2, in: statement)
-            bind(Date(timeIntervalSince1970: 0), to: 3, in: statement)
+            bind(
+                preferences.themeLanguageUpdatedAt,
+                to: 3,
+                in: statement
+            )
+            try bindExactDate(
+                preferences.themeLanguageUpdatedAt,
+                to: 4,
+                in: statement
+            )
+            bind(
+                preferences.themeLanguageWriterID,
+                to: 5,
+                in: statement
+            )
         }
         try upsertPreferenceSetting(key: "app.data_mode", value: preferences.dataMode.rawValue, into: database)
         try upsertPreferenceSetting(
@@ -2930,18 +3126,37 @@ private extension SQLiteEngineRepository {
     func loadDays(from database: Database?) throws -> [Day] {
         try query(
             """
-            SELECT id, date, locked_at, review_summary, review_unfinished_reason, review_tomorrow_note, created_at, updated_at
+            SELECT
+                id, date, locked_at, locked_at_bits,
+                review_summary, review_unfinished_reason, review_tomorrow_note,
+                created_at, created_at_bits, updated_at, updated_at_bits
             FROM days
             ORDER BY date
             """,
             on: database
         ) { statement in
-            var day = Day(id: DayID(try uuid(statement, 0)), date: LocalDate(try string(statement, 1)), now: try date(statement, 6))
-            day.lockedAt = try optionalDate(statement, 2)
-            day.reviewSummary = optionalString(statement, 3)
-            day.reviewUnfinishedReason = optionalString(statement, 4)
-            day.reviewTomorrowNote = optionalString(statement, 5)
-            day.updatedAt = try date(statement, 7)
+            var day = Day(
+                id: DayID(try uuid(statement, 0)),
+                date: LocalDate(try string(statement, 1)),
+                now: try validatedExactDate(
+                    statement,
+                    textIndex: 7,
+                    bitsIndex: 8
+                )
+            )
+            day.lockedAt = try optionalExactDate(
+                statement,
+                textIndex: 2,
+                bitsIndex: 3
+            )
+            day.reviewSummary = optionalString(statement, 4)
+            day.reviewUnfinishedReason = optionalString(statement, 5)
+            day.reviewTomorrowNote = optionalString(statement, 6)
+            day.updatedAt = try validatedExactDate(
+                statement,
+                textIndex: 9,
+                bitsIndex: 10
+            )
             return day
         }
     }
@@ -2985,7 +3200,9 @@ private extension SQLiteEngineRepository {
             """
             SELECT
                 id, chain_id, sequence, title, description_text, planned_subtasks_json,
-                created_at, content_updated_at, superseded_at, superseded_by_definition_id
+                created_at, created_at_bits,
+                content_updated_at, content_updated_at_bits,
+                superseded_at, superseded_at_bits, superseded_by_definition_id
             FROM task_definitions
             ORDER BY chain_id, sequence
             """,
@@ -2998,11 +3215,23 @@ private extension SQLiteEngineRepository {
                 title: try string(statement, 3),
                 descriptionText: optionalString(statement, 4),
                 plannedSubtasks: try plannedSubtasks(from: optionalString(statement, 5)),
-                now: try date(statement, 6),
-                contentUpdatedAt: try date(statement, 7)
+                now: try validatedExactDate(
+                    statement,
+                    textIndex: 6,
+                    bitsIndex: 7
+                ),
+                contentUpdatedAt: try validatedExactDate(
+                    statement,
+                    textIndex: 8,
+                    bitsIndex: 9
+                )
             )
-            definition.supersededAt = try optionalDate(statement, 8)
-            if let uuid = try optionalUUID(statement, 9) {
+            definition.supersededAt = try optionalExactDate(
+                statement,
+                textIndex: 10,
+                bitsIndex: 11
+            )
+            if let uuid = try optionalUUID(statement, 12) {
                 definition.supersededByDefinitionID = TaskDefinitionID(uuid)
             }
             return definition
@@ -3015,7 +3244,8 @@ private extension SQLiteEngineRepository {
             SELECT id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note_entries_json,
                    manual_progress_percent, continued_from_trace_id, changed_to_trace_id,
                    created_at, created_at_bits, content_updated_at, content_updated_at_bits,
-                   completed_at, completed_at_bits, settled_at, settled_at_bits
+                   completed_at, completed_at_bits, settled_at, settled_at_bits,
+                   draft_cancellation_id, draft_cancelled_on
             FROM day_traces
             ORDER BY date, continuation_seq, priority, created_at
             """,
@@ -3058,6 +3288,9 @@ private extension SQLiteEngineRepository {
                 textIndex: 18,
                 bitsIndex: 19
             )
+            trace.draftCancellationID = try optionalUUID(statement, 20)
+            trace.draftCancelledOn = optionalString(statement, 21)
+                .map(LocalDate.init)
             return trace
         }
     }
@@ -3066,7 +3299,12 @@ private extension SQLiteEngineRepository {
         try query(
             """
             SELECT id, lineage_id, trace_id, title, status, difficulty, position,
-                   continued_from_subtask_id, created_at, completed_at, settled_at
+                   continued_from_subtask_id,
+                   created_at, created_at_bits,
+                   updated_at, updated_at_bits,
+                   completed_at, completed_at_bits,
+                   settled_at, settled_at_bits,
+                   draft_cancellation_id
             FROM subtasks
             ORDER BY trace_id, position
             """,
@@ -3087,10 +3325,28 @@ private extension SQLiteEngineRepository {
                 difficulty: difficulty,
                 position: int(statement, 6),
                 continuedFromSubtaskID: try optionalUUID(statement, 7).map(SubtaskID.init),
-                now: try date(statement, 8)
+                now: try validatedExactDate(
+                    statement,
+                    textIndex: 8,
+                    bitsIndex: 9
+                )
             )
-            subtask.completedAt = try optionalDate(statement, 9)
-            subtask.settledAt = try optionalDate(statement, 10)
+            subtask.updatedAt = try validatedExactDate(
+                statement,
+                textIndex: 10,
+                bitsIndex: 11
+            )
+            subtask.completedAt = try optionalExactDate(
+                statement,
+                textIndex: 12,
+                bitsIndex: 13
+            )
+            subtask.settledAt = try optionalExactDate(
+                statement,
+                textIndex: 14,
+                bitsIndex: 15
+            )
+            subtask.draftCancellationID = try optionalUUID(statement, 16)
             return subtask
         }
     }
@@ -4858,10 +5114,26 @@ private extension SQLiteEngineRepository {
 
     func loadPreferences(from database: Database?) throws -> AppPreferences {
         let rows = try query(
-            "SELECT theme, language FROM app_preferences WHERE id = 1",
+            """
+            SELECT
+                theme, language,
+                theme_language_updated_at, theme_language_updated_at_bits,
+                theme_language_writer_id
+            FROM app_preferences
+            WHERE id = 1
+            """,
             on: database
         ) { statement in
-            (try string(statement, 0), try string(statement, 1))
+            (
+                try string(statement, 0),
+                try string(statement, 1),
+                try validatedExactDate(
+                    statement,
+                    textIndex: 2,
+                    bitsIndex: 3
+                ),
+                try string(statement, 4)
+            )
         }
         guard let row = rows.first else {
             return AppPreferences()
@@ -4872,6 +5144,8 @@ private extension SQLiteEngineRepository {
         return AppPreferences(
             theme: theme,
             language: language,
+            themeLanguageUpdatedAt: row.2,
+            themeLanguageWriterID: row.3,
             dataMode: try loadDataMode(from: database),
             backupPolicy: try loadBackupPolicy(from: database),
             localFirstSyncPolicy: try loadLocalFirstSyncPolicy(from: database),

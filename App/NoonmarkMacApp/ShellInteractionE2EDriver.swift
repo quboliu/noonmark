@@ -726,26 +726,60 @@ enum DetailRailLayoutUIE2EDriver {
             let detailToggleFrame = AppViewTreeE2E.frameInWindow(for: detailToggle)
             let sidebarWidth = AppViewTreeE2E.frameInWindow(for: sidebar).width
             let toolbarItemIdentifiers = Set(toolbar.items.map(\.itemIdentifier))
-            guard store.isSidebarExpanded,
-                  sidebarMenuItem.title == store.copy.collapseSidebar,
-                  sidebarMenuItem.keyEquivalent == "s",
-                  sidebarMenuItem.keyEquivalentModifierMask == [.command, .control],
-                  detailMenuItem.title == store.copy.expandDetailRail,
-                  detailMenuItem.keyEquivalent == "i",
-                  detailMenuItem.keyEquivalentModifierMask == [.command, .option],
-                  abs(sidebarWidth - NoonmarkVisualMetrics.sidebarWidth) <= 1,
-                  window.toolbarStyle == .unifiedCompact,
-                  toolbar.displayMode == .iconOnly,
-                  toolbarItemIdentifiers.contains(NoonmarkToolbarIdentifier.sidebar),
-                  toolbarItemIdentifiers.contains(NoonmarkToolbarIdentifier.detailRail),
-                  closeButton.isHidden == false,
-                  miniaturizeButton.isHidden == false,
-                  zoomButton.isHidden == false,
-                  sidebarToggleFrame.midX < window.frame.width * 0.2,
-                  detailToggleFrame.midX > window.frame.width * 0.8,
-                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.window-toolbar")
-            else {
-                finish("failed: 原生窗口工具栏、系统 traffic lights 或两端栏位入口不正确")
+            viewMenu.update()
+            let contractChecks: [(String, Bool)] = [
+                ("sidebar-expanded", store.isSidebarExpanded),
+                ("sidebar-menu-title", sidebarMenuItem.title == store.copy.collapseSidebar),
+                ("sidebar-menu-key", sidebarMenuItem.keyEquivalent == "s"),
+                (
+                    "sidebar-menu-modifiers",
+                    sidebarMenuItem.keyEquivalentModifierMask == [.command, .control]
+                ),
+                ("detail-menu-title", detailMenuItem.title == store.copy.expandDetailRail),
+                ("detail-menu-key", detailMenuItem.keyEquivalent == "i"),
+                (
+                    "detail-menu-modifiers",
+                    detailMenuItem.keyEquivalentModifierMask == [.command, .option]
+                ),
+                (
+                    "sidebar-width",
+                    abs(sidebarWidth - NoonmarkVisualMetrics.sidebarWidth) <= 1
+                ),
+                ("toolbar-style", window.toolbarStyle == .unifiedCompact),
+                ("toolbar-display", toolbar.displayMode == .iconOnly),
+                (
+                    "sidebar-toolbar-item",
+                    toolbarItemIdentifiers.contains(NoonmarkToolbarIdentifier.sidebar)
+                ),
+                (
+                    "detail-toolbar-item",
+                    toolbarItemIdentifiers.contains(NoonmarkToolbarIdentifier.detailRail)
+                ),
+                ("close-visible", closeButton.isHidden == false),
+                ("miniaturize-visible", miniaturizeButton.isHidden == false),
+                ("zoom-visible", zoomButton.isHidden == false),
+                (
+                    "sidebar-toggle-position",
+                    sidebarToggleFrame.midX
+                        <= sidebarWidth + NoonmarkVisualMetrics.toolbarButtonSize
+                ),
+                (
+                    "detail-toggle-position",
+                    detailToggleFrame.midX > window.frame.width * 0.8
+                ),
+                (
+                    "no-custom-toolbar",
+                    AppViewTreeE2E.hasNoVisibleView(identifier: "shell.window-toolbar")
+                )
+            ]
+            let failedChecks = contractChecks.compactMap { name, passed in
+                passed ? nil : name
+            }
+            guard failedChecks.isEmpty else {
+                finish(
+                    "failed: 原生窗口工具栏、系统 traffic lights 或两端栏位入口不正确 "
+                        + "[\(failedChecks.joined(separator: ","))]"
+                )
                 return
             }
             initialWindowFrame = window.frame
@@ -861,22 +895,54 @@ enum DetailRailLayoutUIE2EDriver {
                 }
                 return
             }
-            guard store.page == .calendar,
-                  mainWindow.frame == initialWindowFrame,
-                  NativeSettingsWindowE2E.isReady(
-                      excluding: mainWindow,
-                      paneIdentifier: "settings.sidebar.general",
-                      title: store.copy.navSettings
-                  ),
-                  settingsWindow.toolbar == nil,
-                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail.toggle"),
-                  mainWindow.toolbar?.items.contains(where: {
-                      $0.itemIdentifier == NoonmarkToolbarIdentifier.detailRail
-                  }) == true,
+            let settingsToolbarIdentifiers = Set(
+                settingsWindow.toolbar?.items.map(\.itemIdentifier) ?? []
+            )
+            let settingsChecks: [(String, Bool)] = [
+                ("calendar-page", store.page == .calendar),
+                ("main-window-frame", mainWindow.frame == initialWindowFrame),
+                (
+                    "settings-ready",
+                    NativeSettingsWindowE2E.isReady(
+                        excluding: mainWindow,
+                        paneIdentifier: "settings.sidebar.general",
+                        title: store.copy.navSettings
+                    )
+                ),
+                (
+                    "no-main-sidebar-toolbar-item",
+                    settingsToolbarIdentifiers.contains(
+                        NoonmarkToolbarIdentifier.sidebar
+                    ) == false
+                ),
+                (
+                    "no-main-detail-toolbar-item",
+                    settingsToolbarIdentifiers.contains(
+                        NoonmarkToolbarIdentifier.detailRail
+                    ) == false
+                ),
+                (
+                    "no-visible-main-detail-toggle",
+                    AppViewTreeE2E.hasNoVisibleView(
+                        identifier: "shell.detail-rail.toggle"
+                    )
+                ),
+                (
+                    "main-detail-toolbar-retained",
+                    mainWindow.toolbar?.items.contains(where: {
+                        $0.itemIdentifier == NoonmarkToolbarIdentifier.detailRail
+                    }) == true
+                )
+            ]
+            let failedChecks = settingsChecks.compactMap { name, passed in
+                passed ? nil : name
+            }
+            guard failedChecks.isEmpty,
                   NativeSettingsWindowE2E.close(settingsWindow)
             else {
                 retry(attemptsRemaining, action: waitForNativeSettingsWindow) {
-                    "failed: Settings window anchor、sidebar pane 或独立布局不正确"
+                    "failed: Settings window anchor、sidebar pane 或独立布局不正确 "
+                        + "[\(failedChecks.joined(separator: ","))]"
                 }
                 return
             }

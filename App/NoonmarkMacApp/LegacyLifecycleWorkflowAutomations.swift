@@ -14,6 +14,13 @@ import NoonmarkZhulongAI
 import SwiftUI
 import UniformTypeIdentifiers
 
+private func isWithinLogicalMutationEnvelope(
+    _ date: Date,
+    reference: Date
+) -> Bool {
+    date >= reference && date < reference.addingTimeInterval(1)
+}
+
 struct LifecycleE2EAutomation: LaunchAutomationRunnable {
     var resultURL: URL?
 
@@ -41,8 +48,11 @@ struct LifecycleE2EAutomation: LaunchAutomationRunnable {
     private func runChangeFlow(on store: NoonmarkStore) throws {
         let oldTitle = "E2E 变更旧任务"
         let newTitle = "E2E 变更新任务"
-        let chainID = try store.engine.createPoolTask(title: oldTitle, descriptionText: "E2E 变更路径。")
-        let traceID = try store.engine.scheduleFromPool(chainID: chainID, date: store.today, today: store.today)
+        let (_, traceID) = try createScheduledTask(
+            title: oldTitle,
+            descriptionText: "E2E 变更路径。",
+            on: store
+        )
         store.selectTrace(traceID)
         store.changeText = newTitle
         store.changeSelectedTrace()
@@ -64,15 +74,21 @@ struct LifecycleE2EAutomation: LaunchAutomationRunnable {
 
     @MainActor
     private func runReturnToPoolFlow(on store: NoonmarkStore) throws {
-        let chainID = try store.engine.createPoolTask(title: "E2E 回池任务", descriptionText: "E2E 回池路径。")
-        let traceID = try store.engine.scheduleFromPool(chainID: chainID, date: store.today, today: store.today)
+        let (_, traceID) = try createScheduledTask(
+            title: "E2E 回池任务",
+            descriptionText: "E2E 回池路径。",
+            on: store
+        )
         store.returnToPool(traceID)
     }
 
     @MainActor
     private func runAbandonFlow(on store: NoonmarkStore) throws {
-        let chainID = try store.engine.createPoolTask(title: "E2E 废弃任务", descriptionText: "E2E 废弃路径。")
-        let traceID = try store.engine.scheduleFromPool(chainID: chainID, date: store.today, today: store.today)
+        let (chainID, traceID) = try createScheduledTask(
+            title: "E2E 废弃任务",
+            descriptionText: "E2E 废弃路径。",
+            on: store
+        )
         let traceCount = store.engine.traces.count
         store.abandon(traceID)
         guard let item = store.engine.unfinishedPool().first(where: { $0.chain.id == chainID }),
@@ -82,12 +98,48 @@ struct LifecycleE2EAutomation: LaunchAutomationRunnable {
             throw LifecycleE2EAutomationError.failed("abandoned chain did not remain visible in unfinished pool")
         }
         store.reactivateAbandonedChain(from: traceID)
-        guard store.engine.chains[chainID]?.state == .active,
-              store.engine.traces[traceID]?.status == .pending,
+        let interactionMoment = try store.dayContext.moment()
+        guard let chain = store.engine.chains[chainID],
+              let trace = store.engine.traces[traceID],
+              chain.state == .active,
+              trace.status == .pending,
+              chain.updatedAt == trace.contentUpdatedAt,
+              isWithinLogicalMutationEnvelope(
+                  chain.updatedAt,
+                  reference: interactionMoment.instant
+              ),
               store.engine.traces.count == traceCount
         else {
-            throw LifecycleE2EAutomationError.failed("abandoned chain reactivation did not clear the abandoned marker in place")
+            throw LifecycleE2EAutomationError.failed(
+                "abandoned chain reactivation did not preserve the injected clock"
+            )
         }
+    }
+
+    @MainActor
+    private func createScheduledTask(
+        title: String,
+        descriptionText: String,
+        on store: NoonmarkStore
+    ) throws -> (TaskChainID, DayTraceID) {
+        var timeline = try E2EFixtureTimeline(
+            store: store,
+            eventCount: 2
+        )
+        let today = timeline.today
+        let chainID = try store.engine.createPoolTask(
+            title: title,
+            descriptionText: descriptionText,
+            now: timeline.nextInstant()
+        )
+        let traceID = try store.engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: timeline.nextInstant()
+        )
+        _ = try timeline.finish()
+        return (chainID, traceID)
     }
 
     private func writeResult(_ result: String) throws {
@@ -144,12 +196,37 @@ struct LifecycleRestartE2EAutomation: LaunchAutomationRunnable {
                 store.engine.chains[trace.chainID],
                 "reactivated chain was not loaded after restart"
             )
+            let interactionMoment = try store.dayContext.moment()
             guard chain.state == .active,
                   trace.status == .pending,
-                  trace.settledAt == nil
+                  trace.settledAt == nil,
+                  trace.contentUpdatedAt == chain.updatedAt,
+                  isWithinLogicalMutationEnvelope(
+                      chain.updatedAt,
+                      reference: interactionMoment.instant
+                  )
             else {
                 throw LifecycleE2EAutomationError.failed(
-                    "reactivated lifecycle facts changed after restart"
+                    "reactivated lifecycle facts or mutation clock changed after restart"
+                )
+            }
+            let followUpDescription = "E2E 固定时钟重启修改。"
+            store.updateTraceText(
+                traceID: trace.id,
+                descriptionText: followUpDescription
+            )
+            guard let updatedTrace = store.engine.traces[trace.id],
+                  updatedTrace.descriptionText == followUpDescription,
+                  updatedTrace.contentUpdatedAt > trace.contentUpdatedAt,
+                  isWithinLogicalMutationEnvelope(
+                      updatedTrace.contentUpdatedAt,
+                      reference: interactionMoment.instant
+                  ),
+                  store.operationFailureNotice == nil,
+                  try persistedSnapshot() == store.engine.snapshot()
+            else {
+                throw LifecycleE2EAutomationError.failed(
+                    "reactivated trace rejected a later fixed-clock mutation"
                 )
             }
             try writeResult("ok")
@@ -166,6 +243,18 @@ struct LifecycleRestartE2EAutomation: LaunchAutomationRunnable {
             throw LifecycleE2EAutomationError.failed(message)
         }
         return value
+    }
+
+    @MainActor
+    private func persistedSnapshot() throws -> NoonmarkSnapshot {
+        guard let databasePath = AppLaunchArguments.value(after: "--data-url") else {
+            throw LifecycleE2EAutomationError.failed(
+                "lifecycle restart E2E requires an explicit data URL"
+            )
+        }
+        return try SQLiteEngineRepository(
+            databaseURL: URL(fileURLWithPath: databasePath)
+        ).load().snapshot()
     }
 
     private func writeResult(_ result: String) throws {
@@ -255,21 +344,26 @@ struct ReactivationAtomicityE2EAutomation: LaunchAutomationRunnable {
             )
         }
 
-        let base = Date(timeIntervalSinceReferenceDate: 804_700_000)
+        var timeline = try E2EFixtureTimeline(
+            store: store,
+            eventCount: 3
+        )
+        let today = timeline.today
         let chainID = try store.engine.createPoolTask(
             title: "E2E 重新启用保存失败",
-            now: base
+            now: timeline.nextInstant()
         )
         let traceID = try store.engine.scheduleFromPool(
             chainID: chainID,
-            date: store.today,
-            today: store.today,
-            now: base.addingTimeInterval(1)
+            date: today,
+            today: today,
+            now: timeline.nextInstant()
         )
         try store.engine.abandonChain(
             from: traceID,
-            now: base.addingTimeInterval(2)
+            now: timeline.nextInstant()
         )
+        _ = try timeline.finish()
         store.persist()
         let baseline = store.engine.snapshot()
         try baseline.validateIntegrity()

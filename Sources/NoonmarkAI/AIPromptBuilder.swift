@@ -62,12 +62,28 @@ public struct AIPromptBuilder: Sendable {
             sections.append("任务池：\n" + scope.taskPool.map(renderPoolTask).joined(separator: "\n"))
         }
 
-        if scope.unfinishedPool.isEmpty == false {
-            sections.append("未完成池：\n" + scope.unfinishedPool.map(renderUnfinishedPoolItem).joined(separator: "\n\n"))
+        let visibleUnfinishedPool = scope.unfinishedPool.filter { item in
+            item.unfinishedTraces.contains { $0.trace.formsDayHistory }
+                || item.activeTrace?.trace.formsDayHistory == true
+        }
+        if visibleUnfinishedPool.isEmpty == false {
+            sections.append(
+                "未完成池：\n"
+                    + visibleUnfinishedPool.map(renderUnfinishedPoolItem)
+                    .joined(separator: "\n\n")
+            )
         }
 
-        if scope.completedPool.isEmpty == false {
-            sections.append("已完成池：\n" + scope.completedPool.map(renderCompletedPoolItem).joined(separator: "\n\n"))
+        let visibleCompletedPool = scope.completedPool.filter { item in
+            item.trace.formsDayHistory
+                && item.trajectory.traces.allSatisfy(\.formsDayHistory)
+        }
+        if visibleCompletedPool.isEmpty == false {
+            sections.append(
+                "已完成池：\n"
+                    + visibleCompletedPool.map(renderCompletedPoolItem)
+                    .joined(separator: "\n\n")
+            )
         }
 
         if scope.classifications.categories.isEmpty == false {
@@ -109,7 +125,10 @@ public struct AIPromptBuilder: Sendable {
         ].compactMap { $0 }
 
         let header = "\(dayTodo.date) 统计：总数 \(dayTodo.stats.total)，完成 \(dayTodo.stats.completed)，未完成 \(dayTodo.stats.unfinished)，延续 \(dayTodo.stats.continued)，变更 \(dayTodo.stats.changed)，回池 \(dayTodo.stats.returnedToPool)，废弃 \(dayTodo.stats.abandoned)。"
-        let traces = dayTodo.traces.map(renderTrace).joined(separator: "\n")
+        let traces = dayTodo.traces
+            .filter { $0.trace.formsDayHistory }
+            .map(renderTrace)
+            .joined(separator: "\n")
         return ([header] + reviewParts + [traces]).filter { $0.isEmpty == false }.joined(separator: "\n")
     }
 
@@ -134,8 +153,11 @@ public struct AIPromptBuilder: Sendable {
             parts.append("附言 \(noteBodies.joined(separator: "；"))")
         }
 
-        if snapshot.subtasks.isEmpty == false {
-            let subtasks = snapshot.subtasks.map { subtask in
+        let visibleSubtasks = snapshot.subtasks.filter(
+            \.isUserPresentable
+        )
+        if visibleSubtasks.isEmpty == false {
+            let subtasks = visibleSubtasks.map { subtask in
                 "\(guardrail.sanitizeUserText(subtask.title) ?? "")[\(subtask.status.rawValue),\(subtask.difficulty.label)]"
             }.joined(separator: "；")
             parts.append("子任务明细 \(subtasks)")
@@ -159,8 +181,13 @@ public struct AIPromptBuilder: Sendable {
 
     private func renderUnfinishedPoolItem(_ item: AIUnfinishedPoolSnapshot) -> String {
         let title = guardrail.sanitizeUserText(item.item.definition.title) ?? ""
-        let dates = item.unfinishedTraces.map(\.trace.date.description).joined(separator: "，")
-        let active = item.activeTrace.map { "；当前活跃日轨迹 \($0.trace.date)" } ?? ""
+        let dates = item.unfinishedTraces
+            .filter { $0.trace.formsDayHistory }
+            .map(\.trace.date.description)
+            .joined(separator: "，")
+        let active = item.activeTrace
+            .flatMap { $0.trace.formsDayHistory ? $0 : nil }
+            .map { "；当前活跃日轨迹 \($0.trace.date)" } ?? ""
         return "- \(title)：未完成/已延续日期 \(dates)\(active)"
     }
 

@@ -25,10 +25,17 @@ struct UnfinishedDetail: View {
         if let trace = detailTrace {
             VStack(alignment: .leading, spacing: 14) {
                 DetailHeader(store.copy.taskDetailsTitle, onClose: { store.clearSelection() }, trailing: {
-                    if item.activeTrace == nil {
+                    if item.actionPlan.isEmpty == false {
                         IconMenuButton(menuContent: {
                             UnfinishedTaskContextMenu(item: item)
                         })
+                        .accessibilityIdentifier("unfinished.detail.actions.ax")
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "unfinished.detail.actions",
+                                verificationText: "\(item.actionPlan.count)"
+                            )
+                        }
                     }
                 })
                 DetailPrimaryText {

@@ -17,7 +17,15 @@ public struct AITraceSnapshot: Equatable, Sendable {
     public let subtasks: [Subtask]
     public let subtaskProgress: SubtaskProgress
 
-    public init(trace: DayTrace, definition: TaskDefinition, subtasks: [Subtask], subtaskProgress: SubtaskProgress) {
+    public init?(
+        trace: DayTrace,
+        definition: TaskDefinition,
+        subtasks: [Subtask],
+        subtaskProgress: SubtaskProgress
+    ) {
+        guard trace.formsDayHistory else {
+            return nil
+        }
         self.trace = trace
         self.definition = definition
         self.subtasks = subtasks
@@ -174,7 +182,9 @@ public extension AIScopeSnapshot {
             return nil
         }
         let subtasks = engine.subtasks.values
-            .filter { $0.traceID == trace.id }
+            .filter {
+                $0.traceID == trace.id && $0.isUserPresentable
+            }
             .sorted {
                 if $0.position != $1.position {
                     return $0.position < $1.position

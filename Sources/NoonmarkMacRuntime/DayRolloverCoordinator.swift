@@ -1,3 +1,4 @@
+import Foundation
 import NoonmarkCore
 import NoonmarkDayContext
 
@@ -8,14 +9,20 @@ public struct DayRolloverCoordinator {
     public func reconcile(
         engine: NoonmarkEngine,
         moment: NaturalDayMoment,
-        persist: (NoonmarkEngine) throws -> Void
+        persist: (NoonmarkEngine, Date) throws -> Void
     ) throws -> NoonmarkEngine {
-        let candidate = try NoonmarkEngine(snapshot: engine.snapshot())
+        let sourceSnapshot = engine.snapshot()
+        let candidate = try NoonmarkEngine(snapshot: sourceSnapshot)
+        let mutationInstant = try candidate.nextMutationDate(
+            reference: moment.instant
+        )
         try candidate.settleDays(
             upTo: moment.today,
-            now: moment.instant
+            now: mutationInstant
         )
-        try persist(candidate)
+        if candidate.snapshot() != sourceSnapshot {
+            try persist(candidate, mutationInstant)
+        }
         return candidate
     }
 }

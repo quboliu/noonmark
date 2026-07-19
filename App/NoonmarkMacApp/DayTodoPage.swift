@@ -95,31 +95,129 @@ struct DayTodoHeader: View {
     let badgeColor: Color
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            wideHeader
+            compactHeader
+        }
+        .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+        .padding(.top, 16)
+    }
+
+    private var wideHeader: some View {
+        HStack(alignment: .center, spacing: 10) {
+            identity
+            Spacer(minLength: 8)
+            navigationActions
+        }
+    }
+
+    private var compactHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            identity
+            navigationActions
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    private var identity: some View {
         HStack(alignment: .center, spacing: 10) {
             Text(store.displayFullDate(store.selectedDate))
                 .font(.noonmarkSystem(size: 21, weight: .bold))
                 .foregroundStyle(Theme.text1)
                 .monospacedDigit()
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(3)
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "day.header.date",
+                        verificationText: store.displayFullDate(store.selectedDate)
+                    )
+                }
+                .accessibilityIdentifier("day.header.date")
             Text(store.weekday(store.selectedDate))
                 .font(.noonmarkSystem(size: 12))
                 .foregroundStyle(Theme.text3)
                 .lineLimit(1)
-            DayStateBadge(text: dayBadge, color: badgeColor, filled: store.selectedDate == store.today)
-            Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                HeaderButton("‹", accessibilityLabel: store.copy.previousDay) {
-                    store.selectedDate = NoonmarkStore.offset(store.selectedDate, by: -1)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
+            DayStateBadge(
+                text: dayBadge,
+                color: badgeColor,
+                filled: store.selectedDate == store.today
+            )
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(2)
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "day.header.state",
+                    verificationText: dayBadge
+                )
+            }
+            .accessibilityIdentifier("day.header.state")
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var navigationActions: some View {
+        HStack(spacing: 6) {
+            navigationButton(
+                "‹",
+                accessibilityLabel: store.copy.previousDay,
+                identifier: "day.header.previous-action"
+            ) {
+                store.selectedDate = NoonmarkStore.offset(
+                    store.selectedDate,
+                    by: -1
+                )
+            }
+            if store.selectedDate != store.today {
+                navigationButton(
+                    store.copy.today,
+                    identifier: "day.header.today-action"
+                ) {
+                    store.selectedDate = store.today
                 }
-                HeaderButton(store.copy.today) { store.selectedDate = store.today }
-                HeaderButton("›", accessibilityLabel: store.copy.nextDay) {
-                    store.selectedDate = NoonmarkStore.offset(store.selectedDate, by: 1)
-                }
-                HeaderButton(store.copy.chooseDate) { store.showingPicker = .gotoDay }
+            }
+            navigationButton(
+                "›",
+                accessibilityLabel: store.copy.nextDay,
+                identifier: "day.header.next-action"
+            ) {
+                store.selectedDate = NoonmarkStore.offset(
+                    store.selectedDate,
+                    by: 1
+                )
+            }
+            navigationButton(
+                store.copy.chooseDate,
+                identifier: "day.header.choose-date-action"
+            ) {
+                store.showingPicker = .gotoDay
             }
         }
-        .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
-        .padding(.top, 16)
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
+    }
+
+    private func navigationButton(
+        _ title: String,
+        accessibilityLabel: String? = nil,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        HeaderButton(
+            title,
+            accessibilityLabel: accessibilityLabel,
+            action: action
+        )
+        .background {
+            AppE2EViewAnchor(
+                identifier: identifier,
+                verificationText: accessibilityLabel ?? title
+            )
+        }
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -247,7 +345,10 @@ struct DateStrip: View {
                         withAnimation(
                             Theme.shouldReduceMotion
                                 ? nil
-                                : .spring(response: 0.24, dampingFraction: 0.74)
+                                : .spring(
+                                    response: MacUIAnimationMetrics.dateStripSpringResponse,
+                                    dampingFraction: MacUIAnimationMetrics.dateStripSpringDampingFraction
+                                )
                         ) {
                             store.selectedDate = date
                         }
@@ -334,7 +435,10 @@ struct DateStripSelectionPill: View {
                     .animation(
                         Theme.shouldReduceMotion
                             ? nil
-                            : .spring(response: 0.24, dampingFraction: 0.74),
+                            : .spring(
+                                response: MacUIAnimationMetrics.dateStripSpringResponse,
+                                dampingFraction: MacUIAnimationMetrics.dateStripSpringDampingFraction
+                            ),
                         value: selectedIndex
                     )
             }
@@ -358,28 +462,7 @@ struct TaskRow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 10) {
-                Button {
-                    store.toggleComplete(trace.id)
-                } label: {
-                    StatusGlyph(status: trace.status)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(trace.status != .pending && trace.status != .completed)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(
-                    trace.status == .completed
-                        ? store.copy.undoComplete
-                        : store.copy.markComplete
-                )
-                .help(
-                    trace.status == .completed
-                        ? store.copy.undoComplete
-                        : store.copy.markComplete
-                )
-
+            HStack(alignment: .center, spacing: NoonmarkVisualMetrics.taskRowAccessorySpacing) {
                 VStack(alignment: .leading, spacing: 0) {
                     MarkdownInlineText(definition?.title ?? store.copy.untitledTask)
                         .font(.noonmarkSystem(size: 13, weight: .medium))
@@ -437,29 +520,34 @@ struct TaskRow: View {
                 }
                 .layoutPriority(1)
 
-                Spacer()
-
-                if subtasks.isEmpty == false {
-                    Button {
-                        if expanded {
-                            store.expandedTraceIDs.remove(trace.id)
-                        } else {
-                            store.expandedTraceIDs.insert(trace.id)
+                HStack(spacing: NoonmarkVisualMetrics.taskRowAccessorySpacing) {
+                    if subtasks.isEmpty == false {
+                        Button {
+                            if expanded {
+                                store.expandedTraceIDs.remove(trace.id)
+                            } else {
+                                store.expandedTraceIDs.insert(trace.id)
+                            }
+                        } label: {
+                            SubtaskDisclosureLabel(count: subtasks.count, expanded: expanded)
                         }
-                    } label: {
-                        SubtaskDisclosureLabel(count: subtasks.count, expanded: expanded)
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                }
 
-                if canReorder, selected {
-                    PriorityStepper(
-                        canMoveUp: canMoveUp,
-                        canMoveDown: canMoveDown,
-                        moveUp: { store.movePriority(trace.id, delta: -1) },
-                        moveDown: { store.movePriority(trace.id, delta: 1) }
-                    )
+                    if canReorder, selected {
+                        PriorityStepper(
+                            canMoveUp: canMoveUp,
+                            canMoveDown: canMoveDown,
+                            moveUp: { store.movePriority(trace.id, delta: -1) },
+                            moveDown: { store.movePriority(trace.id, delta: 1) }
+                        )
+                    }
                 }
+                .fixedSize(horizontal: true, vertical: false)
+
+                Spacer(minLength: 0)
+
+                completionControl
             }
             .padding(.horizontal, 12)
             .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
@@ -491,6 +579,58 @@ struct TaskRow: View {
         }
     }
 
+    var completionCapability: DayTraceCompletionCapability {
+        (try? store.engine.completionCapability(
+            for: trace.id,
+            today: store.today
+        )) ?? .unavailable(.unsupportedStatus(trace.status))
+    }
+
+    @ViewBuilder
+    var completionControl: some View {
+        switch completionCapability {
+        case let .available(action):
+            completionButton(
+                label: action == .undo
+                    ? store.copy.undoComplete
+                    : store.copy.markComplete
+            )
+        case .unavailable(.openSubtasks):
+            completionButton(
+                label: store.copy.openSubtasksPreventCompletion
+            )
+        case .unavailable:
+            StatusGlyph(status: trace.status)
+                .frame(
+                    width: NoonmarkVisualMetrics.taskRowCompletionControlSize,
+                    height: NoonmarkVisualMetrics.taskRowCompletionControlSize
+                )
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(store.copy.traceStatusLabel(trace.status))
+        }
+    }
+
+    private func completionButton(label: String) -> some View {
+        Button {
+            store.toggleComplete(trace.id)
+        } label: {
+            StatusGlyph(status: trace.status)
+                .frame(
+                    width: NoonmarkVisualMetrics.taskRowCompletionControlSize,
+                    height: NoonmarkVisualMetrics.taskRowCompletionControlSize
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(
+            "day.trace.\(trace.id.description).completion"
+        )
+        .help(label)
+    }
+
     var metaText: String {
         var parts: [String] = []
         if trace.continuationSeq > 0 {
@@ -512,6 +652,8 @@ struct TaskRow: View {
             return true
         case .completed, .changed, .returnedToPool, .abandoned:
             return false
+        case .cancelledDraft:
+            preconditionFailure("Internal trace status cannot appear in Day Todo")
         }
     }
 
@@ -549,12 +691,23 @@ private struct DayTracePriorityReorderingModifier: ViewModifier {
                             )
                             return false
                         }
-                        let accepted = store.reorderTrace(moving.traceID, before: trace.id)
-                        WorkspaceDragE2EDiagnostics.recordDrop(
-                            targetTraceID: trace.id,
-                            items: items,
-                            accepted: accepted
-                        )
+                        let accepted = store.enqueueTraceReorder(
+                            moving.traceID,
+                            before: trace.id
+                        ) { committed in
+                            WorkspaceDragE2EDiagnostics.recordDrop(
+                                targetTraceID: trace.id,
+                                items: items,
+                                accepted: committed
+                            )
+                        }
+                        if accepted == false {
+                            WorkspaceDragE2EDiagnostics.recordDrop(
+                                targetTraceID: trace.id,
+                                items: items,
+                                accepted: false
+                            )
+                        }
                         return accepted
                     },
                     isTargeted: { isTargeted in
@@ -645,13 +798,17 @@ struct SubtaskRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(canMutate == false)
             .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isButton)
             .accessibilityLabel(
                 subtask.status == .completed
                     ? store.copy.undoComplete
                     : store.copy.markComplete
             )
+            .accessibilityIdentifier(
+                "day.subtask.\(subtask.id.description).completion"
+            )
+            .disabled(canMutate == false)
 
             MarkdownInlineText(subtask.title)
                 .font(.noonmarkSystem(size: 12))

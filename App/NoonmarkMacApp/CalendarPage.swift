@@ -157,31 +157,29 @@ struct CalendarCell: View {
                     }
                     Spacer()
                     if summary.total > 0 {
-                        Text("\(summary.completed)/\(summary.total)")
-                            .font(.noonmarkSystem(size: 9.5, weight: .semibold))
-                            .foregroundStyle(
-                                summary.completed == summary.total
-                                    ? Theme.ok
-                                    : Theme.text2
+                        CalendarCompletionHeatBlock(
+                            level: summary.heatLevel
+                        )
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "calendar.date-cell.\(date.description).heat",
+                                verificationText: "\(summary.heatLevel)"
                             )
-                            .monospacedDigit()
-                            .accessibilityLabel(
-                                store.copy.completedAccessibility(
-                                    completed: summary.completed,
-                                    total: summary.total
-                                )
-                            )
+                        }
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 1.5) {
                     ForEach(traces.prefix(6), id: \.id) { trace in
                         HStack(spacing: 3) {
-                            Text(trace.status.uiStyle.glyph.isEmpty ? "○" : trace.status.uiStyle.glyph)
-                                .font(.noonmarkSystem(size: 8, weight: .bold))
-                                .foregroundStyle(dotColor(for: trace.status))
+                            StatusDot(status: trace.status)
                                 .frame(width: 8)
-                                .accessibilityHidden(true)
+                                .background {
+                                    AppE2EViewAnchor(
+                                        identifier: "calendar.trace.\(trace.id.description).status-dot",
+                                        verificationText: trace.status.rawValue
+                                    )
+                                }
                             MarkdownInlineText(store.definition(for: trace)?.title ?? "")
                                 .font(.noonmarkSystem(size: 9.5))
                                 .foregroundStyle(titleColor(for: trace.status))
@@ -236,12 +234,34 @@ struct CalendarCell: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    func dotColor(for status: TraceStatus) -> Color {
-        status.uiStyle.dotColor
-    }
-
     func titleColor(for status: TraceStatus) -> Color {
         status.uiStyle.titleColor
+    }
+}
+
+struct CalendarCompletionHeatBlock: View {
+    let level: Int
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+            .fill(heatColor)
+            .frame(width: 10, height: 10)
+            .accessibilityHidden(true)
+    }
+
+    private var heatColor: Color {
+        switch level {
+        case 1:
+            return Theme.ok.opacity(0.28)
+        case 2:
+            return Theme.ok.opacity(0.46)
+        case 3:
+            return Theme.ok.opacity(0.68)
+        case 4...:
+            return Theme.ok
+        default:
+            return Theme.line2
+        }
     }
 }
 
@@ -320,30 +340,57 @@ struct CalendarDayInsightPanel: View {
 
             ReviewStatsCard(stats: insight.stats)
 
-            VStack(alignment: .leading, spacing: 7) {
-                CalendarInsightRow(label: store.copy.continuation, text: insight.continuationSummary)
-                CalendarInsightRow(label: store.copy.change, text: insight.changeSummary)
-                CalendarInsightRow(label: store.copy.risk, text: insight.riskSummary)
+            Grid(
+                alignment: .topLeading,
+                horizontalSpacing: 7,
+                verticalSpacing: 7
+            ) {
+                CalendarInsightRow(
+                    identifier: "continuation",
+                    label: store.copy.continuation,
+                    text: insight.continuationSummary
+                )
+                CalendarInsightRow(
+                    identifier: "change",
+                    label: store.copy.change,
+                    text: insight.changeSummary
+                )
+                CalendarInsightRow(
+                    identifier: "risk",
+                    label: store.copy.risk,
+                    text: insight.riskSummary
+                )
             }
         }
     }
 }
 
 struct CalendarInsightRow: View {
+    let identifier: String
     let label: String
     let text: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 7) {
+        GridRow(alignment: .top) {
             Text(label)
                 .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 .foregroundStyle(Theme.text3)
-                .frame(width: 28, alignment: .leading)
+                .lineLimit(MacUICalendarInsightRowLayout.labelLineLimit)
+                .fixedSize(horizontal: true, vertical: false)
+                .gridColumnAlignment(.leading)
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "calendar.insight.\(identifier).label",
+                        verificationText: label
+                    )
+                }
             Text(text)
                 .font(.noonmarkSystem(size: 11.5))
                 .foregroundStyle(Theme.text2)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .gridColumnAlignment(.leading)
         }
     }
 }
@@ -456,18 +503,28 @@ struct CalendarDetailRow: View {
     let trace: DayTrace
 
     var body: some View {
-        HStack(spacing: 9) {
-            StatusGlyph(status: trace.status, scale: .compact)
-
+        HStack(alignment: .top, spacing: 9) {
             VStack(alignment: .leading, spacing: 1) {
-                MarkdownInlineText(store.definition(for: trace)?.title ?? "")
-                    .font(.noonmarkSystem(size: 12.5, weight: .medium))
+                MarkdownInlineText(title)
+                    .font(
+                        .noonmarkSystem(
+                            size: NoonmarkVisualMetrics.calendarDetailTitlePointSize,
+                            weight: .medium
+                        )
+                    )
                     .foregroundStyle(titleColor)
                     .strikethrough(trace.status == .completed || trace.status == .abandoned)
-                    .lineLimit(1)
+                    .lineLimit(MacUICalendarDetailRowLayout.titleLineLimit)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(title)
+                    .help(title)
                 if metaText.isEmpty == false {
                     Text(metaText)
-                        .font(.noonmarkSystem(size: 10.5))
+                        .font(
+                            .noonmarkSystem(
+                                size: NoonmarkVisualMetrics.calendarDetailMetadataPointSize
+                            )
+                        )
                         .foregroundStyle(Theme.text3)
                         .lineLimit(1)
                 }
@@ -480,13 +537,22 @@ struct CalendarDetailRow: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
             StatusChip(status: trace.status, scale: .compact)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .listRowSurface(selected: false, tint: Theme.accent, cornerRadius: 7, separatorLeadingInset: 36)
+        .padding(.horizontal, NoonmarkVisualMetrics.calendarDetailHorizontalPadding)
+        .padding(.vertical, NoonmarkVisualMetrics.calendarDetailVerticalPadding)
+        .listRowSurface(
+            selected: false,
+            tint: Theme.accent,
+            cornerRadius: 7,
+            separatorLeadingInset: NoonmarkVisualMetrics.calendarDetailHorizontalPadding
+        )
+    }
+
+    var title: String {
+        store.definition(for: trace)?.title ?? ""
     }
 
     var titleColor: Color {

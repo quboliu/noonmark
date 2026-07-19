@@ -466,12 +466,6 @@ public struct ZhulongTodoDiffApplier: Sendable {
     }
 }
 
-public enum ZhulongApplicationSnapshotDigest {
-    public static func value(_ snapshot: NoonmarkSnapshot) throws -> String {
-        try ZhulongTodoDigest.snapshot(snapshot)
-    }
-}
-
 public extension ZhulongSession {
     var currentTodoDiff: ZhulongTodoDiffDraft? {
         guard let artifact = effectivePlanArtifact else { return nil }

@@ -85,6 +85,8 @@ public enum ZhulongWorkspacePersistenceFailure: Equatable, Sendable {
 public enum ZhulongWorkspaceActivity: Equatable, Sendable {
     case applicationRecoveryConflict
     case applicationRecovered
+    case applicationCommitRecoveryPending
+    case applicationCommitVerifiedComplete
     case providerRunning
     case planningProviderRunning
     case e2eInterruption
@@ -109,9 +111,102 @@ public enum ZhulongWorkspaceNotice: Equatable, Sendable {
     public static let memoryReadFailed = Self.persistenceFailure(.memoryRead)
     public static let applicationRecoveryConflict = Self.activity(.applicationRecoveryConflict)
     public static let applicationRecovered = Self.activity(.applicationRecovered)
+    public static let applicationCommitRecoveryPending = Self.activity(
+        .applicationCommitRecoveryPending
+    )
+    public static let applicationCommitVerifiedComplete = Self.activity(
+        .applicationCommitVerifiedComplete
+    )
     public static let providerRunning = Self.activity(.providerRunning)
     public static let planningProviderRunning = Self.activity(.planningProviderRunning)
     public static let e2eInterruption = Self.activity(.e2eInterruption)
+}
+
+public enum ZhulongApplicationCommitOperation: CaseIterable, Sendable {
+    case todoBatch
+    case dailyReview
+}
+
+public enum ZhulongCommitPresentationState: Equatable, Sendable {
+    case cleanSuccess
+    case failedBeforeCommit
+    case recoveryPending
+    case verifiedCompletion
+}
+
+public enum ZhulongApplicationCommitProgressEvidence: Equatable, Sendable {
+    case beforeEngine
+    case enginePersistenceUnresolved
+    case enginePersisted
+    case sessionPersisted
+    case completed
+}
+
+public enum ZhulongApplicationJournalEvidence: Equatable, Sendable {
+    case absent
+    case presentOrUnverifiable
+}
+
+public enum ZhulongApplicationCommitNoticeProjection {
+    public static func state(
+        progress: ZhulongApplicationCommitProgressEvidence,
+        recoveredCommitError: Bool,
+        journal: ZhulongApplicationJournalEvidence
+    ) -> ZhulongCommitPresentationState {
+        switch progress {
+        case .completed:
+            recoveredCommitError
+                ? .verifiedCompletion
+                : .cleanSuccess
+        case .enginePersistenceUnresolved, .enginePersisted:
+            .recoveryPending
+        case .sessionPersisted:
+            journal == .absent
+                ? .verifiedCompletion
+                : .recoveryPending
+        case .beforeEngine:
+            journal == .absent
+                ? .failedBeforeCommit
+                : .recoveryPending
+        }
+    }
+
+    public static func mutationFailureNotice(
+        fallback: ZhulongWorkspaceNotice,
+        journal: ZhulongApplicationJournalEvidence
+    ) -> ZhulongWorkspaceNotice {
+        if journal == .presentOrUnverifiable {
+            return .applicationCommitRecoveryPending
+        }
+        return fallback
+    }
+
+    public static func noticeAfterConfirmedAbsentJournal(
+        _ current: ZhulongWorkspaceNotice?
+    ) -> ZhulongWorkspaceNotice? {
+        current == .applicationCommitRecoveryPending ? nil : current
+    }
+
+    public static func notice(
+        operation: ZhulongApplicationCommitOperation,
+        state: ZhulongCommitPresentationState
+    ) -> ZhulongWorkspaceNotice? {
+        switch state {
+        case .cleanSuccess:
+            nil
+        case .failedBeforeCommit:
+            switch operation {
+            case .todoBatch:
+                .todoBatchApplyFailed
+            case .dailyReview:
+                .dailyReviewSaveFailed
+            }
+        case .recoveryPending:
+            .applicationCommitRecoveryPending
+        case .verifiedCompletion:
+            .applicationCommitVerifiedComplete
+        }
+    }
 }
 
 public enum ZhulongTodoEditorKindCopyKey: Sendable {
@@ -780,6 +875,13 @@ public struct ZhulongCopy: Sendable {
         }
     }
 
+    public var pendingApplicationMutationBlocked: String {
+        localized(
+            chinese: "烛龙写入仍待恢复；完成恢复前无法修改任务。",
+            english: "Finish recovering the interrupted Zhulong change before editing tasks."
+        )
+    }
+
     public var todoEditorTitle: String {
         localized(chinese: "审查 Todo 变更", english: "Review Todo changes")
     }
@@ -938,7 +1040,7 @@ public struct ZhulongCopy: Sendable {
         case .todoBatchApply:
             localized(chinese: "Todo 批次未能应用，未写入任何变更。", english: "The Todo batch could not be applied. No changes were written.")
         case .dailyReviewSave:
-            localized(chinese: "每日复盘未能保存，请稍后再试。", english: "The daily review could not be saved. Try again shortly.")
+            localized(chinese: "每日复盘未能保存，未写入任何变更。", english: "The daily review could not be saved. No changes were written.")
         case .providerRun:
             localized(chinese: "Provider 运行失败，请检查配置后重试。", english: "The Provider run failed. Check the configuration and try again.")
         case .planningRun:
@@ -967,6 +1069,16 @@ public struct ZhulongCopy: Sendable {
             localized(chinese: "检测到未完成的烛龙写入，但当前 Todo 已有其他变化；已停止自动恢复。", english: "An interrupted Zhulong write was found, but Todo has changed since then. Automatic recovery stopped.")
         case .applicationRecovered:
             localized(chinese: "已恢复上次中断的烛龙原子写入。", english: "The interrupted Zhulong write was recovered.")
+        case .applicationCommitRecoveryPending:
+            localized(
+                chinese: "烛龙原子写入尚未完整结束；后续写入已阻断，请先完成恢复。",
+                english: "The Zhulong atomic write has not fully completed. Further writes are blocked until recovery finishes."
+            )
+        case .applicationCommitVerifiedComplete:
+            localized(
+                chinese: "烛龙写入曾返回错误，但系统已精确核对并完成提交；本次未显示普通成功提示。",
+                english: "The Zhulong write returned an error, but its exact state was verified and the commit completed. The usual success confirmation was suppressed."
+            )
         case .providerRunning:
             localized(chinese: "Provider 正在处理已授权内容。", english: "The Provider is processing authorised content.")
         case .planningProviderRunning:

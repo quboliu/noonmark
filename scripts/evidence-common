@@ -1,0 +1,856 @@
+#!/usr/bin/env bash
+
+if [[ "${NOONMARK_EVIDENCE_COMMON_LOADED:-0}" == "1" ]]; then
+  return 0
+fi
+NOONMARK_EVIDENCE_COMMON_LOADED=1
+
+evidence_validate_key() {
+  [[ "$1" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]]
+}
+
+evidence_validate_value() {
+  local value="$1"
+  [[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]]
+}
+
+evidence_absolute_repo_root() {
+  local repo_root="$1"
+
+  if [[ ! -d "$repo_root" ]]; then
+    echo "evidence repository root is missing: $repo_root" >&2
+    return 1
+  fi
+  (cd "$repo_root" && pwd -P)
+}
+
+evidence_guard_repo_path() {
+  local repo_root="$1"
+  local requested_path="$2"
+  local repo_absolute
+  local parent_absolute
+  local requested_absolute
+
+  repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  if [[ -z "$requested_path" || "$requested_path" == *$'\n'* ||
+    "$requested_path" == *$'\r'* ]]; then
+    echo "evidence path is empty or contains a line break" >&2
+    return 1
+  fi
+  case "/$requested_path/" in
+    */../* | */./*)
+      echo "evidence path contains a traversal segment: $requested_path" >&2
+      return 1
+      ;;
+  esac
+  if [[ "$requested_path" == /* ]]; then
+    requested_absolute="$requested_path"
+  else
+    requested_absolute="$repo_absolute/$requested_path"
+  fi
+  if ! mkdir -p "$(dirname "$requested_absolute")"; then
+    echo "could not create the evidence parent directory" >&2
+    return 1
+  fi
+  parent_absolute="$(cd "$(dirname "$requested_absolute")" && pwd -P)" ||
+    return 1
+  requested_absolute="$parent_absolute/$(basename "$requested_absolute")"
+  if [[ "$requested_absolute" == "$repo_absolute" ||
+    "$requested_absolute" != "$repo_absolute/"* ]]; then
+    echo "evidence path escapes the repository: $requested_path" >&2
+    return 1
+  fi
+  printf '%s\n' "$requested_absolute"
+}
+
+evidence_prepare_fresh_directory() {
+  local repo_root="$1"
+  local directory="$2"
+  local directory_absolute
+
+  directory_absolute="$(evidence_guard_repo_path "$repo_root" "$directory")" ||
+    return 1
+  if ! rm -rf -- "$directory_absolute"; then
+    echo "could not remove stale evidence: $directory" >&2
+    return 1
+  fi
+  if ! mkdir -p "$directory_absolute"; then
+    echo "could not create fresh evidence directory: $directory" >&2
+    return 1
+  fi
+}
+
+evidence_write_fragment_atomically() {
+  local output="$1"
+  local content_file="$2"
+  local output_directory
+  local staged
+
+  output_directory="$(dirname "$output")"
+  mkdir -p "$output_directory" || return 1
+  staged="$(mktemp "${output_directory}/.$(basename "$output").XXXXXX")" ||
+    return 1
+  if ! cp "$content_file" "$staged" || ! mv -f "$staged" "$output"; then
+    rm -f "$staged"
+    return 1
+  fi
+}
+
+evidence_capture_source() {
+  local repo_root="$1"
+  local prefix="$2"
+  local output="$3"
+  local repo_absolute
+  local head_commit
+  local head_tree
+  local worktree_tree
+  local dirty
+  local temporary_index
+  local content
+
+  if ! evidence_validate_key "$prefix"; then
+    echo "invalid evidence source prefix: $prefix" >&2
+    return 1
+  fi
+  repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  head_commit="$(git -C "$repo_absolute" rev-parse --verify HEAD)" || return 1
+  head_tree="$(git -C "$repo_absolute" rev-parse --verify 'HEAD^{tree}')" ||
+    return 1
+  temporary_index="$(mktemp "${TMPDIR:-/tmp}/noonmark-evidence-index.XXXXXX")" ||
+    return 1
+  rm -f "$temporary_index"
+  if ! GIT_INDEX_FILE="$temporary_index" git -C "$repo_absolute" read-tree HEAD ||
+    ! GIT_INDEX_FILE="$temporary_index" git -C "$repo_absolute" add -A ||
+    ! worktree_tree="$(
+      GIT_INDEX_FILE="$temporary_index" git -C "$repo_absolute" write-tree
+    )"; then
+    rm -f "$temporary_index"
+    echo "could not capture the exact evidence worktree" >&2
+    return 1
+  fi
+  rm -f "$temporary_index"
+  dirty=0
+  [[ "$worktree_tree" == "$head_tree" ]] || dirty=1
+  content="$(mktemp "${TMPDIR:-/tmp}/noonmark-evidence-source.XXXXXX")" ||
+    return 1
+  {
+    printf '%s_head_commit=%s\n' "$prefix" "$head_commit"
+    printf '%s_head_tree_oid=%s\n' "$prefix" "$head_tree"
+    printf '%s_worktree_tree_oid=%s\n' "$prefix" "$worktree_tree"
+    printf '%s_tree_dirty=%s\n' "$prefix" "$dirty"
+  } >"$content"
+  if ! evidence_write_fragment_atomically "$output" "$content"; then
+    rm -f "$content"
+    return 1
+  fi
+  rm -f "$content"
+}
+
+evidence_capture_bundle() {
+  local bundle_path="$1"
+  local stable_required="$2"
+  local prefix="$3"
+  local output="$4"
+  local info_plist="$bundle_path/Contents/Info.plist"
+  local executable_name
+  local executable_path
+  local binary_sha256
+  local details
+  local identifier
+  local team_identifier
+  local authority
+  local signature
+  local requirement
+  local requirement_sha256
+  local identity_sha1=""
+  local identity_sha256=""
+  local codesign_kind="other"
+  local certificate_prefix
+  local content
+
+  if [[ "$stable_required" != "0" && "$stable_required" != "1" ]]; then
+    echo "stable bundle evidence flag must be 0 or 1" >&2
+    return 1
+  fi
+  if ! evidence_validate_key "$prefix" || [[ ! -d "$bundle_path" ]] ||
+    [[ ! -f "$info_plist" ]]; then
+    echo "signed bundle evidence is missing a valid bundle or prefix" >&2
+    return 1
+  fi
+  executable_name="$(
+    plutil -extract CFBundleExecutable raw -o - "$info_plist" 2>/dev/null
+  )" || {
+    echo "signed bundle has no main executable declaration" >&2
+    return 1
+  }
+  executable_path="$bundle_path/Contents/MacOS/$executable_name"
+  if [[ ! -f "$executable_path" || ! -x "$executable_path" ]]; then
+    echo "signed bundle main executable is missing or not executable" >&2
+    return 1
+  fi
+  if ! codesign --verify --deep --strict "$bundle_path" >/dev/null 2>&1; then
+    echo "bundle failed strict code-sign verification" >&2
+    return 1
+  fi
+  details="$(codesign --display --verbose=4 "$bundle_path" 2>&1)" || return 1
+  identifier="$(printf '%s\n' "$details" | awk -F= '$1 == "Identifier" { print substr($0, 12); exit }')"
+  team_identifier="$(printf '%s\n' "$details" | awk -F= '$1 == "TeamIdentifier" { print substr($0, 16); exit }')"
+  authority="$(printf '%s\n' "$details" | awk -F= '$1 == "Authority" { print substr($0, 11); exit }')"
+  signature="$(printf '%s\n' "$details" | awk -F= '$1 == "Signature" { print substr($0, 11); exit }')"
+  requirement="$(
+    codesign --display --requirements - "$bundle_path" 2>&1 |
+      awk '/^(# )?designated =>/ { print; exit }'
+  )"
+  if [[ -z "$identifier" || -z "$requirement" ]]; then
+    echo "signed bundle evidence lacks identifier or designated requirement" >&2
+    return 1
+  fi
+  requirement_sha256="$(
+    printf '%s' "$requirement" | shasum -a 256 | awk '{print $1}'
+  )"
+  binary_sha256="$(shasum -a 256 "$executable_path" | awk '{print $1}')" ||
+    return 1
+  certificate_prefix="$(mktemp -u "${TMPDIR:-/tmp}/noonmark-evidence-cert.XXXXXX")"
+  if codesign --display --extract-certificates="$certificate_prefix" \
+    "$bundle_path" >/dev/null 2>&1 && [[ -f "${certificate_prefix}0" ]]; then
+    identity_sha1="$(shasum "${certificate_prefix}0" | awk '{print $1}')"
+    identity_sha256="$(shasum -a 256 "${certificate_prefix}0" | awk '{print $1}')"
+  fi
+  rm -f "${certificate_prefix}"* 2>/dev/null || true
+
+  case "$authority" in
+    "Apple Development:"*) codesign_kind="development" ;;
+    "Developer ID Application:"*) codesign_kind="developer-id" ;;
+    "Apple Distribution:"*) codesign_kind="distribution" ;;
+    "")
+      if [[ "$signature" == "adhoc" ]]; then
+        codesign_kind="adhoc"
+      fi
+      ;;
+  esac
+  if [[ "$stable_required" == "1" ]] && {
+    [[ -z "$authority" || -z "$team_identifier" ||
+      "$team_identifier" == "not set" || -z "$identity_sha1" ||
+      -z "$identity_sha256" || "$requirement" == *"cdhash"* ||
+      "$codesign_kind" == "adhoc" ]];
+  }; then
+    echo "bundle evidence requires a stable Apple signing identity and Team" >&2
+    return 1
+  fi
+
+  content="$(mktemp "${TMPDIR:-/tmp}/noonmark-evidence-bundle.XXXXXX")" ||
+    return 1
+  {
+    printf '%s_bundle_path=%s\n' "$prefix" "$bundle_path"
+    printf '%s_binary_path=%s\n' "$prefix" "$executable_path"
+    printf '%s_binary_sha256=%s\n' "$prefix" "$binary_sha256"
+    printf '%s_codesign_identifier=%s\n' "$prefix" "$identifier"
+    printf '%s_codesign_kind=%s\n' "$prefix" "$codesign_kind"
+    printf '%s_codesign_identity_sha1=%s\n' "$prefix" "$identity_sha1"
+    printf '%s_codesign_identity_sha256=%s\n' "$prefix" "$identity_sha256"
+    printf '%s_codesign_team_identifier=%s\n' "$prefix" "$team_identifier"
+    printf '%s_codesign_authority=%s\n' "$prefix" "$authority"
+    printf '%s_designated_requirement_sha256=%s\n' \
+      "$prefix" "$requirement_sha256"
+    printf '%s_codesign_deep_strict=1\n' "$prefix"
+    printf '%s_stable_required=%s\n' "$prefix" "$stable_required"
+  } >"$content"
+  if ! evidence_write_fragment_atomically "$output" "$content"; then
+    rm -f "$content"
+    return 1
+  fi
+  rm -f "$content"
+}
+
+evidence_atomic_append_file() {
+  local destination="$1"
+  local addition="$2"
+  local staged
+
+  [[ -f "$destination" && -r "$destination" ]] || return 1
+  staged="$(mktemp "$(dirname "$destination")/.$(basename "$destination").XXXXXX")" ||
+    return 1
+  if ! cp "$destination" "$staged" || ! cat "$addition" >>"$staged" ||
+    ! mv -f "$staged" "$destination"; then
+    rm -f "$staged"
+    return 1
+  fi
+}
+
+evidence_manifest_has_key() {
+  local manifest="$1"
+  local key="$2"
+  awk -v key="$key" '
+    index($0, key "=") == 1 { count += 1 }
+    END { exit count == 1 ? 0 : 1 }
+  ' "$manifest"
+}
+
+evidence_read() {
+  local file="$1"
+  local key="$2"
+
+  if ! evidence_validate_key "$key" || [[ ! -f "$file" ]]; then
+    return 1
+  fi
+  awk -v key="$key" '
+    index($0, key "=") == 1 {
+      count += 1
+      value = substr($0, length(key) + 2)
+    }
+    END {
+      if (count != 1 || length(value) == 0) exit 1
+      print value
+    }
+  ' "$file"
+}
+
+evidence_begin_manifest() {
+  local manifest="$1"
+  local suite="$2"
+  local run_id="$3"
+  local configuration="$4"
+  local mode="$5"
+  local content
+
+  for value in "$suite" "$run_id" "$configuration" "$mode"; do
+    if ! evidence_validate_value "$value"; then
+      echo "evidence manifest has an empty or multiline required value" >&2
+      return 1
+    fi
+  done
+  content="$(mktemp "${TMPDIR:-/tmp}/noonmark-evidence-manifest.XXXXXX")" ||
+    return 1
+  {
+    printf 'evidence_schema_version=1\n'
+    printf 'suite=%s\n' "$suite"
+    printf 'evidence_run_id=%s\n' "$run_id"
+    printf 'configuration=%s\n' "$configuration"
+    printf 'suite_mode=%s\n' "$mode"
+    printf 'started_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  } >"$content"
+  if ! evidence_write_fragment_atomically "$manifest" "$content"; then
+    rm -f "$content"
+    return 1
+  fi
+  rm -f "$content"
+}
+
+evidence_append() {
+  local manifest="$1"
+  local key="$2"
+  local value="$3"
+  local addition
+
+  if ! evidence_validate_key "$key" || ! evidence_validate_value "$value" ||
+    evidence_manifest_has_key "$manifest" "$key"; then
+    echo "invalid or duplicate evidence manifest key: $key" >&2
+    return 1
+  fi
+  addition="$(mktemp "${TMPDIR:-/tmp}/noonmark-evidence-addition.XXXXXX")" ||
+    return 1
+  printf '%s=%s\n' "$key" "$value" >"$addition"
+  if ! evidence_atomic_append_file "$manifest" "$addition"; then
+    rm -f "$addition"
+    return 1
+  fi
+  rm -f "$addition"
+}
+
+evidence_append_snapshot() {
+  local manifest="$1"
+  local snapshot="$2"
+  local key
+  local value
+  local seen
+
+  if [[ ! -s "$snapshot" ]]; then
+    echo "evidence snapshot is missing or empty" >&2
+    return 1
+  fi
+  seen="$(mktemp "${TMPDIR:-/tmp}/noonmark-evidence-keys.XXXXXX")" ||
+    return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    key="${line%%=*}"
+    if [[ "$line" != *"="* ]]; then
+      rm -f "$seen"
+      return 1
+    fi
+    value="${line#*=}"
+    if ! evidence_validate_key "$key" || ! evidence_validate_value "$value" ||
+      evidence_manifest_has_key "$manifest" "$key" ||
+      grep -Fqx "$key" "$seen"; then
+      rm -f "$seen"
+      echo "invalid or duplicate evidence snapshot key: $key" >&2
+      return 1
+    fi
+    printf '%s\n' "$key" >>"$seen"
+  done <"$snapshot"
+  rm -f "$seen"
+  evidence_atomic_append_file "$manifest" "$snapshot"
+}
+
+evidence_require_manifest() {
+  local manifest="$1"
+  shift
+  local required
+
+  [[ -f "$manifest" ]] || return 1
+  for required in "$@"; do
+    if [[ "$required" == *$'\n'* || "$required" != *"="* ]] ||
+      [[ "$(grep -Fxc "$required" "$manifest")" != "1" ]]; then
+      echo "evidence manifest is missing an exact requirement: $required" >&2
+      return 1
+    fi
+  done
+}
+
+evidence_require_bundle_snapshots_equal() {
+  local left_path="$1"
+  local left_prefix="$2"
+  local right_path="$3"
+  local right_prefix="$4"
+  local label="$5"
+  local suffix
+  local left_value
+  local right_value
+
+  for suffix in \
+    binary_sha256 \
+    codesign_identifier \
+    codesign_kind \
+    codesign_identity_sha1 \
+    codesign_identity_sha256 \
+    codesign_team_identifier \
+    codesign_authority \
+    designated_requirement_sha256; do
+    left_value="$(evidence_read "$left_path" "${left_prefix}_${suffix}")" || {
+      echo "$label start bundle evidence is incomplete: $suffix" >&2
+      return 1
+    }
+    right_value="$(evidence_read "$right_path" "${right_prefix}_${suffix}")" || {
+      echo "$label end bundle evidence is incomplete: $suffix" >&2
+      return 1
+    }
+    if [[ "$left_value" != "$right_value" ]]; then
+      echo "$label changed during evidence collection: $suffix" >&2
+      return 1
+    fi
+  done
+}
+
+evidence_finish_manifest() {
+  local manifest="$1"
+  local exit_status="$2"
+  shift 2
+  local key
+  local addition
+  local start_value
+  local end_value
+  local start_prefix
+  local end_prefix
+
+  if [[ ! "$exit_status" =~ ^[0-9]+$ ]] || [[ ! -f "$manifest" ]] ||
+    evidence_manifest_has_key "$manifest" "suite_exit_status"; then
+    echo "evidence manifest cannot be finished" >&2
+    return 1
+  fi
+  if ! awk -F= '
+    $1 !~ /^[a-zA-Z][a-zA-Z0-9_]*$/ || seen[$1]++ { invalid = 1 }
+    END { exit invalid ? 1 : 0 }
+  ' "$manifest"; then
+    echo "evidence manifest contains invalid or duplicate keys" >&2
+    return 1
+  fi
+  for key in "$@"; do
+    if ! evidence_validate_key "$key" ||
+      ! evidence_read "$manifest" "$key" >/dev/null; then
+      echo "evidence manifest lacks required key: $key" >&2
+      return 1
+    fi
+  done
+  if [[ "$exit_status" == "0" ]]; then
+    if evidence_manifest_has_key "$manifest" "source_end_worktree_tree_oid"; then
+      start_value="$(evidence_read "$manifest" "source_worktree_tree_oid")" ||
+        return 1
+      end_value="$(evidence_read "$manifest" "source_end_worktree_tree_oid")" ||
+        return 1
+      if [[ "$start_value" != "$end_value" ]]; then
+        echo "source worktree changed during evidence collection" >&2
+        return 1
+      fi
+    fi
+    for start_prefix in app installed_app helper; do
+      end_prefix="${start_prefix}_end"
+      if evidence_manifest_has_key \
+        "$manifest" \
+        "${end_prefix}_binary_sha256"; then
+        evidence_require_bundle_snapshots_equal \
+          "$manifest" \
+          "$start_prefix" \
+          "$manifest" \
+          "$end_prefix" \
+          "signed ${start_prefix//_/ } bundle" || return 1
+      fi
+    done
+    if grep -Eq '^[a-zA-Z][a-zA-Z0-9_]*_unchanged=false$' "$manifest"; then
+      echo "evidence manifest reports a changed protected input" >&2
+      return 1
+    fi
+  fi
+  addition="$(mktemp "${TMPDIR:-/tmp}/noonmark-evidence-finish.XXXXXX")" ||
+    return 1
+  {
+    printf 'finished_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf 'suite_exit_status=%s\n' "$exit_status"
+  } >"$addition"
+  if ! evidence_atomic_append_file "$manifest" "$addition"; then
+    rm -f "$addition"
+    return 1
+  fi
+  rm -f "$addition"
+}
+
+evidence_inventory_entry() {
+  local repo_absolute="$1"
+  local path="$2"
+  local output="$3"
+  local relative
+  local digest
+  local size
+  local target
+
+  relative="${path#"$repo_absolute"/}"
+  if [[ "$relative" == "$path" || -z "$relative" ||
+    "$relative" == *$'\n'* || "$relative" == *$'\r'* ||
+    "$relative" == *$'\t'* ]]; then
+    echo "artifact path cannot be represented safely: $path" >&2
+    return 1
+  fi
+  if [[ -L "$path" ]]; then
+    target="$(readlink "$path")" || return 1
+    if [[ "$target" == *$'\n'* || "$target" == *$'\r'* ]]; then
+      return 1
+    fi
+    digest="$(printf '%s' "$target" | shasum -a 256 | awk '{print $1}')"
+    size="${#target}"
+  elif [[ -f "$path" ]]; then
+    digest="$(shasum -a 256 "$path" | awk '{print $1}')" || return 1
+    size="$(stat -f '%z' "$path")" || return 1
+  else
+    return 0
+  fi
+  printf '%s\t%s\t%s\n' "$digest" "$size" "$relative" >>"$output"
+}
+
+evidence_inventory() {
+  local repo_root="$1"
+  local output="$2"
+  shift 2
+  local repo_absolute
+  local candidate
+  local candidate_absolute
+  local parent_absolute
+  local unsorted
+  local staged
+
+  repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  unsorted="$(mktemp "${TMPDIR:-/tmp}/noonmark-evidence-inventory.XXXXXX")" ||
+    return 1
+  for candidate in "$@"; do
+    if [[ -z "$candidate" || "$candidate" == *$'\n'* ||
+      "$candidate" == *$'\r'* ]]; then
+      rm -f "$unsorted"
+      return 1
+    fi
+    if [[ "$candidate" == /* ]]; then
+      candidate_absolute="$candidate"
+    else
+      candidate_absolute="$repo_absolute/$candidate"
+    fi
+    if [[ ! -e "$candidate_absolute" && ! -L "$candidate_absolute" ]]; then
+      echo "artifact input is missing: $candidate" >&2
+      rm -f "$unsorted"
+      return 1
+    fi
+    parent_absolute="$(cd "$(dirname "$candidate_absolute")" && pwd -P)" || {
+      rm -f "$unsorted"
+      return 1
+    }
+    candidate_absolute="$parent_absolute/$(basename "$candidate_absolute")"
+    if [[ "$candidate_absolute" != "$repo_absolute/"* ]]; then
+      echo "artifact input escapes the repository: $candidate" >&2
+      rm -f "$unsorted"
+      return 1
+    fi
+    if [[ -d "$candidate_absolute" && ! -L "$candidate_absolute" ]]; then
+      while IFS= read -r -d '' path; do
+        if ! evidence_inventory_entry "$repo_absolute" "$path" "$unsorted"; then
+          rm -f "$unsorted"
+          return 1
+        fi
+      done < <(find "$candidate_absolute" -mindepth 1 \
+        \( -type f -o -type l \) -print0)
+    elif ! evidence_inventory_entry \
+      "$repo_absolute" "$candidate_absolute" "$unsorted"; then
+      rm -f "$unsorted"
+      return 1
+    fi
+  done
+  if [[ ! -s "$unsorted" ]]; then
+    echo "artifact inventory has no files" >&2
+    rm -f "$unsorted"
+    return 1
+  fi
+  mkdir -p "$(dirname "$output")" || {
+    rm -f "$unsorted"
+    return 1
+  }
+  staged="$(mktemp "$(dirname "$output")/.$(basename "$output").XXXXXX")" || {
+    rm -f "$unsorted"
+    return 1
+  }
+  if ! LC_ALL=C sort -t $'\t' -k3,3 "$unsorted" >"$staged" ||
+    ! mv -f "$staged" "$output"; then
+    rm -f "$unsorted" "$staged"
+    return 1
+  fi
+  rm -f "$unsorted"
+}
+
+evidence_verify_inventory() {
+  local repo_root="$1"
+  local inventory="$2"
+  local repo_absolute
+  local line
+  local line_without_tabs
+  local digest
+  local declared_size
+  local relative
+  local extra
+  local previous_relative=""
+  local artifact_path
+  local parent_absolute
+  local artifact_absolute
+  local actual_digest
+  local actual_size
+  local target
+  local line_number=0
+  local LC_ALL=C
+
+  repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  if [[ ! -f "$inventory" || -L "$inventory" || ! -r "$inventory" ||
+    ! -s "$inventory" ]]; then
+    echo "artifact inventory is missing, empty, or not a regular file" >&2
+    return 1
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_number=$((line_number + 1))
+    line_without_tabs="${line//$'\t'/}"
+    if [[ -z "$line" || "$line" == *$'\r'* ||
+      $((${#line} - ${#line_without_tabs})) -ne 2 ]]; then
+      echo "artifact inventory has an invalid row at line $line_number" >&2
+      return 1
+    fi
+    IFS=$'\t' read -r digest declared_size relative extra <<<"$line"
+    if [[ -n "${extra:-}" || ! "$digest" =~ ^[0-9a-f]{64}$ ||
+      ! "$declared_size" =~ ^(0|[1-9][0-9]*)$ || -z "$relative" ||
+      "$relative" == /* || "$relative" == */ || "$relative" == *//* ]]; then
+      echo "artifact inventory has an invalid row at line $line_number" >&2
+      return 1
+    fi
+    case "/$relative/" in
+      */../* | */./*)
+        echo "artifact inventory path is unsafe at line $line_number" >&2
+        return 1
+        ;;
+    esac
+    if [[ -n "$previous_relative" &&
+      ("$relative" == "$previous_relative" ||
+        "$relative" < "$previous_relative") ]]; then
+      echo "artifact inventory paths are duplicated or not sorted" >&2
+      return 1
+    fi
+
+    artifact_path="$repo_absolute/$relative"
+    if [[ ! -e "$artifact_path" && ! -L "$artifact_path" ]]; then
+      echo "artifact inventory input is missing: $relative" >&2
+      return 1
+    fi
+    parent_absolute="$(cd "$(dirname "$artifact_path")" && pwd -P)" || {
+      echo "artifact inventory parent is missing: $relative" >&2
+      return 1
+    }
+    artifact_absolute="$parent_absolute/$(basename "$artifact_path")"
+    if [[ "$artifact_absolute" != "$repo_absolute/"* ]]; then
+      echo "artifact inventory path escapes the repository: $relative" >&2
+      return 1
+    fi
+
+    if [[ -L "$artifact_absolute" ]]; then
+      target="$(readlink "$artifact_absolute")" || return 1
+      if [[ "$target" == *$'\n'* || "$target" == *$'\r'* ]]; then
+        echo "artifact symbolic-link target cannot be represented safely" >&2
+        return 1
+      fi
+      actual_digest="$(
+        printf '%s' "$target" | shasum -a 256 | awk '{print $1}'
+      )" || return 1
+      actual_size="${#target}"
+    elif [[ -f "$artifact_absolute" ]]; then
+      actual_digest="$(
+        shasum -a 256 "$artifact_absolute" | awk '{print $1}'
+      )" || return 1
+      actual_size="$(stat -f '%z' "$artifact_absolute")" || return 1
+    else
+      echo "artifact inventory input is not a file or symbolic link: $relative" >&2
+      return 1
+    fi
+    if [[ "$actual_digest" != "$digest" ||
+      "$actual_size" != "$declared_size" ]]; then
+      echo "artifact inventory input changed: $relative" >&2
+      return 1
+    fi
+    previous_relative="$relative"
+  done <"$inventory"
+
+  [[ "$line_number" -gt 0 ]]
+}
+
+evidence_require_inventory_paths() {
+  if [[ "$#" -lt 3 ]]; then
+    echo "artifact inventory requires at least one protected path" >&2
+    return 1
+  fi
+
+  local repo_root="$1"
+  local inventory="$2"
+  shift 2
+  local repo_absolute
+  local required
+  local requested_absolute
+  local parent_absolute
+  local artifact_absolute
+  local relative
+  local existing
+  local inventory_digest
+  local inventory_size
+  local inventory_relative
+  local match_count
+  local position
+  local required_count=0
+  local -a required_relatives=()
+
+  repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  evidence_verify_inventory "$repo_absolute" "$inventory" || return 1
+
+  for required in "$@"; do
+    if [[ -z "$required" || "$required" == *$'\n'* ||
+      "$required" == *$'\r'* || "$required" == *$'\t'* ||
+      "$required" == */ || "$required" == *//* ]]; then
+      echo "required artifact path is empty, unsafe, or non-canonical" >&2
+      return 1
+    fi
+    case "/$required/" in
+      */../* | */./*)
+        echo "required artifact path contains a traversal segment" >&2
+        return 1
+        ;;
+    esac
+
+    if [[ "$required" == /* ]]; then
+      requested_absolute="$required"
+    else
+      requested_absolute="$repo_absolute/$required"
+    fi
+    if [[ ! -e "$requested_absolute" && ! -L "$requested_absolute" ]]; then
+      echo "required artifact path is missing: $required" >&2
+      return 1
+    fi
+    parent_absolute="$(cd "$(dirname "$requested_absolute")" && pwd -P)" ||
+      return 1
+    artifact_absolute="$parent_absolute/$(basename "$requested_absolute")"
+    if [[ "$artifact_absolute" != "$repo_absolute/"* ]]; then
+      echo "required artifact path escapes the repository: $required" >&2
+      return 1
+    fi
+    relative="${artifact_absolute#"$repo_absolute"/}"
+    if { [[ "$required" == /* ]] &&
+      [[ "$required" != "$artifact_absolute" ]]; } ||
+      { [[ "$required" != /* ]] && [[ "$required" != "$relative" ]]; }; then
+      echo "required artifact path is not canonical: $required" >&2
+      return 1
+    fi
+    if [[ ! -L "$artifact_absolute" && ! -f "$artifact_absolute" ]]; then
+      echo "required artifact is not a regular file or symbolic link: $required" >&2
+      return 1
+    fi
+
+    position=0
+    while [[ "$position" -lt "$required_count" ]]; do
+      existing="${required_relatives[$position]}"
+      if [[ "$existing" == "$relative" ]]; then
+        echo "required artifact path is duplicated: $required" >&2
+        return 1
+      fi
+      position=$((position + 1))
+    done
+    required_relatives[$required_count]="$relative"
+    required_count=$((required_count + 1))
+
+    match_count=0
+    while IFS=$'\t' read -r \
+      inventory_digest inventory_size inventory_relative; do
+      if [[ "$inventory_relative" == "$relative" ]]; then
+        match_count=$((match_count + 1))
+      fi
+    done <"$inventory"
+    if [[ "$match_count" != "1" ]]; then
+      echo "required artifact is not present exactly once: $required" >&2
+      return 1
+    fi
+  done
+}
+
+evidence_verify_sigkill_allowlist() {
+  local report="$1"
+  local expected="$2"
+  local expected_pid
+  local expected_signal
+  local expected_phase
+  local expected_status
+  local expected_sha
+  local extra
+
+  IFS=: read -r expected_pid expected_signal expected_phase \
+    expected_status expected_sha extra <<<"$expected"
+  if [[ -n "${extra:-}" || ! "$expected_pid" =~ ^[1-9][0-9]*$ ||
+    "$expected_signal" != "SIGKILL" ||
+    ! "$expected_phase" =~ ^[a-zA-Z0-9_-]+$ ||
+    "$expected_status" != "137" ||
+    ! "$expected_sha" =~ ^[0-9a-f]{64}$ || ! -f "$report" ]]; then
+    echo "invalid exact SIGKILL allowlist input" >&2
+    return 1
+  fi
+  awk -F '\t' \
+    -v pid="$expected_pid" \
+    -v signal="$expected_signal" \
+    -v phase="$expected_phase" \
+    -v status="$expected_status" \
+    -v sha="$expected_sha" '
+      NR == 1 {
+        expected = "phase\tpid\tparent_pid\tsignal\treason\texpected_status\tobserved_status\tbinary_path\tbinary_sha256"
+        if ($0 != expected) exit 1
+        next
+      }
+      NR == 2 {
+        if (NF != 9 || $1 != phase || $2 != pid || $3 !~ /^[1-9][0-9]*$/ ||
+            $4 != signal || length($5) == 0 || $6 != status ||
+            $7 != status || $8 !~ /^\// || $9 != sha) exit 1
+        next
+      }
+      NR > 2 { exit 1 }
+      END { if (NR != 2) exit 1 }
+    ' "$report"
+}

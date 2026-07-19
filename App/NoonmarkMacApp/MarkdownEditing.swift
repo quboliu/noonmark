@@ -334,13 +334,21 @@ private final class MarkdownNSTextView: NSTextView {
         _ event: NSEvent,
         modifiers: NSEvent.ModifierFlags
     ) -> Bool {
-        guard event.keyCode == 48, modifiers.contains(.command) == false else { return false }
-        if modifiers.contains(.option) {
-            insertText("    ", replacementRange: selectedRange())
-        } else if modifiers.contains(.shift) {
-            window?.selectPreviousKeyView(self)
-        } else {
+        guard event.keyCode == 48 else { return false }
+        let semanticModifiers = modifiers.intersection([
+            .command,
+            .control,
+            .option,
+            .shift
+        ])
+        if semanticModifiers.isEmpty {
             window?.selectNextKeyView(self)
+        } else if semanticModifiers == [.shift] {
+            window?.selectPreviousKeyView(self)
+        } else if semanticModifiers == [.option] {
+            insertText("    ", replacementRange: selectedRange())
+        } else {
+            return false
         }
         return true
     }
@@ -409,6 +417,8 @@ enum MarkdownEditorKeyboardProbe {
             failures.append("Command+B event could not be created")
         }
 
+        failures.append(contentsOf: tabFailures(using: textView))
+
         let rendered = MarkdownInlineText.attributed("**bold** and [link](https://example.com)")
         if String(rendered.characters) != "bold and link" {
             failures.append("inline Markdown did not render")
@@ -416,6 +426,47 @@ enum MarkdownEditorKeyboardProbe {
         let blocks = MarkdownBlock.parse("# Heading\n- [x] item\n> quote\n```\ncode\n```")
         if blocks.count != 4 {
             failures.append("block Markdown did not render")
+        }
+        return failures
+    }
+
+    @MainActor
+    private static func tabFailures(
+        using textView: MarkdownNSTextView
+    ) -> [String] {
+        var failures: [String] = []
+        textView.string = "indent"
+        textView.setSelectedRange(
+            NSRange(location: textView.string.utf16.count, length: 0)
+        )
+        if let optionTab = keyEvent(
+            keyCode: 48,
+            characters: "\t",
+            modifiers: .option
+        ) {
+            textView.keyDown(with: optionTab)
+            if textView.string != "indent    " {
+                failures.append("Option+Tab did not insert four spaces")
+            }
+        } else {
+            failures.append("Option+Tab event could not be created")
+        }
+
+        textView.string = "guard"
+        textView.setSelectedRange(
+            NSRange(location: textView.string.utf16.count, length: 0)
+        )
+        if let modifiedBacktab = keyEvent(
+            keyCode: 48,
+            characters: "\u{19}",
+            modifiers: [.option, .shift]
+        ) {
+            textView.keyDown(with: modifiedBacktab)
+            if textView.string == "guard    " {
+                failures.append("Option+Shift+Tab incorrectly inserted four spaces")
+            }
+        } else {
+            failures.append("Option+Shift+Tab event could not be created")
         }
         return failures
     }

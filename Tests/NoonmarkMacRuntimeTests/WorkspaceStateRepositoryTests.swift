@@ -11,13 +11,34 @@ final class WorkspaceStateRepositoryTests: XCTestCase {
         XCTAssertFalse(repository.containsSavedState)
         let expected = WorkspaceState(
             sidebarExpanded: false,
-            detailExpanded: true
+            detailExpanded: true,
+            usesCustomDetailWidth: true
         )
 
         repository.save(expected)
 
         XCTAssertTrue(repository.containsSavedState)
         XCTAssertEqual(repository.load(), expected)
+    }
+
+    func testLegacyExpansionStateDefaultsToAutomaticDetailWidth() throws {
+        let legacyData = Data(
+            """
+            {
+              "sidebarExpanded": false,
+              "detailExpanded": true
+            }
+            """.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(
+            WorkspaceState.self,
+            from: legacyData
+        )
+
+        XCTAssertFalse(decoded.sidebarExpanded)
+        XCTAssertTrue(decoded.detailExpanded)
+        XCTAssertFalse(decoded.usesCustomDetailWidth)
     }
 
     func testMissingOrCorruptValueUsesDeterministicDefault() {

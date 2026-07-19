@@ -15,12 +15,128 @@ final class DataPackageTests: XCTestCase {
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
         XCTAssertEqual(Set(object.keys), ["formatVersion", "snapshot"])
-        XCTAssertEqual(object["formatVersion"] as? Int, 1)
-        XCTAssertNotNil(object["snapshot"] as? [String: Any])
+        XCTAssertEqual(object["formatVersion"] as? Int, 2)
+        let snapshotObject = try XCTUnwrap(
+            object["snapshot"] as? [String: Any]
+        )
+        let preferencesObject = try XCTUnwrap(
+            snapshotObject["preferences"] as? [String: Any]
+        )
+        XCTAssertNotNil(preferencesObject["themeLanguageUpdatedAt"])
+        XCTAssertNotNil(preferencesObject["themeLanguageWriterID"])
 
         let restored = try NoonmarkEngine(snapshot: NoonmarkDataPackage.decode(data))
 
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
+    }
+
+    func testDataPackagePreservesSnapshotUndoCancellationWitnesses() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "数据包撤销子任务",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let before = engine.snapshot()
+        let subtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "隐藏取消事实",
+            now: now.addingTimeInterval(1)
+        )
+        let undone = try NoonmarkEngine(snapshot: before)
+        try undone.prepareSnapshotUndo(
+            replacing: engine.snapshot(),
+            now: now.addingTimeInterval(2)
+        )
+
+        let restored = try NoonmarkDataPackage.decode(
+            NoonmarkDataPackage.encode(undone.snapshot())
+        )
+        let subtask = try XCTUnwrap(
+            restored.subtasks.first { $0.id == subtaskID }
+        )
+
+        XCTAssertEqual(subtask.status, .cancelledDraft)
+        XCTAssertEqual(
+            subtask.draftCancellationID,
+            undone.subtasks[subtaskID]?.draftCancellationID
+        )
+        XCTAssertEqual(restored, undone.snapshot())
+    }
+
+    func testJSONDataPackagePreservesNestedSubMillisecondDatesBitExactly() throws {
+        let createdAt = Date(timeIntervalSinceReferenceDate: 805_912_493.447_825)
+        let noteUpdatedAt = createdAt.addingTimeInterval(1.000_173)
+        let plannedAt = createdAt.addingTimeInterval(2.000_347)
+        let preferenceUpdatedAt = createdAt.addingTimeInterval(3.000_521)
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "精确数据包嵌套时间",
+            initialNoteBody: "附言精确时间",
+            now: createdAt
+        )
+        let noteID = try XCTUnwrap(
+            engine.chains[chainID]?.activeNoteEntries.first?.id
+        )
+        try engine.editPoolNote(
+            chainID: chainID,
+            noteID: noteID,
+            body: "附言精确编辑时间",
+            now: noteUpdatedAt
+        )
+        let plannedSubtaskID = try engine.addPlannedSubtask(
+            chainID: chainID,
+            title: "计划子任务精确时间",
+            now: plannedAt
+        )
+        try engine.updateLanguage(
+            .english,
+            writerID: "mac-data-package-writer",
+            now: preferenceUpdatedAt
+        )
+
+        let restored = try NoonmarkDataPackage.decode(
+            NoonmarkDataPackage.encode(engine.snapshot())
+        )
+        let restoredChain = try XCTUnwrap(
+            restored.chains.first(where: { $0.id == chainID })
+        )
+        let restoredNote = try XCTUnwrap(
+            restoredChain.noteEntries.first(where: { $0.id == noteID })
+        )
+        let restoredPlannedSubtask = try XCTUnwrap(
+            restored.definitions
+                .first(where: { $0.chainID == chainID })?
+                .plannedSubtasks
+                .first(where: { $0.id == plannedSubtaskID })
+        )
+
+        XCTAssertEqual(
+            restoredNote.createdAt.timeIntervalSinceReferenceDate.bitPattern,
+            createdAt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(
+            restoredNote.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            noteUpdatedAt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(
+            restoredPlannedSubtask.createdAt.timeIntervalSinceReferenceDate.bitPattern,
+            plannedAt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(
+            restored.preferences.themeLanguageUpdatedAt
+                .timeIntervalSinceReferenceDate.bitPattern,
+            preferenceUpdatedAt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(
+            restored.preferences.themeLanguageWriterID,
+            "mac-data-package-writer"
+        )
     }
 
     func testWriteVerifiesThePersistedPackageAndReturnsItsDigest() throws {
@@ -68,7 +184,7 @@ final class DataPackageTests: XCTestCase {
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
                 error as? DataPackageError,
-                .malformedDataPackage("数据包不符合 current v1 的 canonical 结构与编码")
+                .malformedDataPackage("数据包不符合 current v2 的 canonical 结构与编码")
             )
         }
     }
@@ -79,6 +195,17 @@ final class DataPackageTests: XCTestCase {
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(3))
             XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 3。")
+        }
+    }
+
+    func testJSONDataPackageRejectsLegacyV1BeforePayloadDecode() {
+        let data = Data(#"{"formatVersion":1,"snapshot":{}}"#.utf8)
+
+        XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
+            XCTAssertEqual(
+                error as? DataPackageError,
+                .unsupportedFormatVersion(1)
+            )
         }
     }
 
@@ -100,7 +227,7 @@ final class DataPackageTests: XCTestCase {
     }
 
     func testJSONDataPackageRejectsCurrentEnvelopeWithoutSnapshot() {
-        let data = Data(#"{"formatVersion":1}"#.utf8)
+        let data = Data(#"{"formatVersion":2}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
@@ -338,6 +465,49 @@ final class DataPackageTests: XCTestCase {
         }
     }
 
+    func testJSONDataPackageRejectsCancelledDraftWithoutRestorationWitness() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "取消草稿数据包",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: LocalDate("2026-07-06"),
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.returnToPool(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        var snapshot = engine.snapshot()
+        let traceIndex = try XCTUnwrap(
+            snapshot.traces.firstIndex { $0.id == traceID }
+        )
+        XCTAssertNil(
+            TrajectoryTopologyValidator.firstSelfContainedIssue(
+                in: snapshot.traces[traceIndex]
+            )
+        )
+        snapshot.traces[traceIndex].draftCancellationID = nil
+        XCTAssertEqual(
+            TrajectoryTopologyValidator.firstSelfContainedIssue(
+                in: snapshot.traces[traceIndex]
+            ),
+            .invalidTraceStatusFacts(traceID)
+        )
+
+        XCTAssertThrowsError(try NoonmarkDataPackage.encode(snapshot)) { error in
+            guard let dataPackageError = error as? DataPackageError,
+                  case .malformedDataPackage = dataPackageError
+            else {
+                return XCTFail("expected malformed data package, got \(error)")
+            }
+        }
+    }
+
     func testCurrentDataPackageDecodeStillValidatesWholeSnapshot() throws {
         let engine = try makeEngine()
         var snapshot = engine.snapshot()
@@ -427,7 +597,7 @@ final class DataPackageTests: XCTestCase {
             var container = encoder.singleValueContainer()
             try container.encode(date.timeIntervalSinceReferenceDate.bitPattern)
         }
-        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 1, snapshot: snapshot))
+        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 2, snapshot: snapshot))
     }
 
     private func canonicalJSON(_ data: Data) throws -> Data {

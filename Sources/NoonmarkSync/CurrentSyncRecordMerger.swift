@@ -6,6 +6,7 @@ enum CurrentSyncRecordMergeError: Error, Equatable {
     case taskDefinitionIdentityCollision
     case dayTraceIdentityCollision
     case invalidContentClock
+    case invalidReactivationWitnesses
 }
 
 enum CurrentSyncRecordBatchError: Error, Equatable {
@@ -46,6 +47,7 @@ struct CurrentSyncReactivationAuthorizations {
 struct CurrentSyncTransportBatch {
     var records: [SyncRecord]
     var mergeContext: CurrentSyncRecordMergeContext
+    var provenanceGroups: [SyncRecordProvenanceGroup]
 }
 
 private struct CurrentSyncReactivationEvidence {
@@ -103,48 +105,116 @@ struct CurrentSyncRecordMerger {
     }
 
     func validate(_ record: SyncRecord) throws {
+        guard record.entityType == .taskChain
+            || record.reactivationWitnesses.isEmpty
+        else {
+            throw CurrentSyncRecordMergeError.invalidReactivationWitnesses
+        }
         guard record.operation == .upsert else { return }
+        try validateUpsert(record)
+    }
+
+    private func validateUpsert(_ record: SyncRecord) throws {
         switch record.entityType {
         case .day:
-            let day = try mapper.decodeDay(record)
-            try validateContentClock(
-                createdAt: day.createdAt,
-                contentUpdatedAt: day.updatedAt,
-                terminalDates: [day.lockedAt]
-            )
+            try validateDayRecord(record)
         case .taskChain:
-            let chain = try mapper.decodeTaskChain(record)
-            try validateContentClock(
-                createdAt: chain.createdAt,
-                contentUpdatedAt: chain.updatedAt,
-                terminalDates: []
-            )
-            if let issue = TaskNoteEntryValidator.firstIssue(
-                in: chain.noteEntries
-            ) {
-                throw TaskNoteEntryMergeError.invalidEntries(issue)
-            }
-            _ = try reactivationWitnesses(in: record, for: chain)
+            try validateTaskChainRecord(record)
         case .taskDefinition:
-            let definition = try mapper.decodeTaskDefinition(record)
-            try validateContentClock(
-                createdAt: definition.createdAt,
-                contentUpdatedAt: definition.contentUpdatedAt,
-                terminalDates: [definition.supersededAt]
-            )
+            try validateTaskDefinitionRecord(record)
         case .dayTrace:
-            let trace = try mapper.decodeDayTrace(record)
-            try validateContentClock(
-                createdAt: trace.createdAt,
-                contentUpdatedAt: trace.contentUpdatedAt,
-                terminalDates: [trace.completedAt, trace.settledAt]
-            )
-            if let issue = TaskNoteEntryValidator.firstIssue(in: trace.noteEntries) {
-                throw TaskNoteEntryMergeError.invalidEntries(issue)
-            }
-        case .subtask, .appPreferences,
-             .classificationCommit, .traceClassificationEvent:
+            try validateDayTraceRecord(record)
+        case .subtask, .appPreferences:
+            try validateLeafCurrentRecord(record)
+        case .classificationCommit, .traceClassificationEvent:
             return
+        }
+    }
+
+    private func validateDayRecord(_ record: SyncRecord) throws {
+        let day = try mapper.decodeDay(record)
+        try validateContentClock(
+            createdAt: day.createdAt,
+            contentUpdatedAt: day.updatedAt,
+            terminalDates: [day.lockedAt]
+        )
+        try validateRecordMutationClock(
+            record,
+            canonicalMutationClock: day.updatedAt
+        )
+    }
+
+    private func validateTaskChainRecord(_ record: SyncRecord) throws {
+        let chain = try mapper.decodeTaskChain(record)
+        try validateContentClock(
+            createdAt: chain.createdAt,
+            contentUpdatedAt: chain.updatedAt,
+            terminalDates: []
+        )
+        if let issue = TaskNoteEntryValidator.firstIssue(
+            in: chain.noteEntries
+        ) {
+            throw TaskNoteEntryMergeError.invalidEntries(issue)
+        }
+        try validateRecordMutationClock(
+            record,
+            canonicalMutationClock: chain.noteEntries.reduce(
+                chain.updatedAt
+            ) { max($0, $1.updatedAt) }
+        )
+        _ = try reactivationWitnesses(in: record, for: chain)
+    }
+
+    private func validateTaskDefinitionRecord(_ record: SyncRecord) throws {
+        let definition = try mapper.decodeTaskDefinition(record)
+        guard TaskDefinitionValidator.firstSelfContainedIssue(
+            in: definition
+        ) == nil else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
+        }
+        try validateRecordMutationClock(
+            record,
+            canonicalMutationClock: definition.contentUpdatedAt
+        )
+    }
+
+    private func validateDayTraceRecord(_ record: SyncRecord) throws {
+        let trace = try mapper.decodeDayTrace(record)
+        guard TrajectoryTopologyValidator.firstSelfContainedIssue(
+            in: trace
+        ) == nil else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
+        }
+        if let issue = TaskNoteEntryValidator.firstIssue(in: trace.noteEntries) {
+            throw TaskNoteEntryMergeError.invalidEntries(issue)
+        }
+        try validateRecordMutationClock(
+            record,
+            canonicalMutationClock: trace.noteEntries.reduce(
+                trace.contentUpdatedAt
+            ) { max($0, $1.updatedAt) }
+        )
+    }
+
+    private func validateLeafCurrentRecord(_ record: SyncRecord) throws {
+        switch record.entityType {
+        case .subtask:
+            try validateSubtaskRecord(record)
+        case .appPreferences:
+            _ = try mapper.decodeAppPreferences(record)
+        case .day, .taskChain, .taskDefinition, .dayTrace,
+             .classificationCommit, .traceClassificationEvent:
+            preconditionFailure("unexpected current record validation type")
+        }
+    }
+
+    private func validateSubtaskRecord(_ record: SyncRecord) throws {
+        let subtask = try mapper.decodeSubtask(record)
+        try subtask.validateIntegrity()
+        guard record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+                == subtask.updatedAt.timeIntervalSinceReferenceDate.bitPattern
+        else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
         }
     }
 
@@ -153,19 +223,24 @@ struct CurrentSyncRecordMerger {
         incomingRecords: [SyncRecord]
     ) throws -> CurrentSyncTransportBatch {
         do {
-            let records = publishingOrder(incomingRecords)
             let mergeContext = try prepareContext(
                 existingRecords: existingRecords,
                 incomingRecords: incomingRecords
             )
+            let canonical = try canonicalIncomingRecords(
+                publishingOrder(incomingRecords),
+                existingRecords: existingRecords,
+                context: mergeContext
+            )
             try preflightCurrentMerges(
                 existingRecords: existingRecords,
-                incomingRecords: records,
+                incomingRecords: canonical.records,
                 context: mergeContext
             )
             return CurrentSyncTransportBatch(
-                records: records,
-                mergeContext: mergeContext
+                records: canonical.records,
+                mergeContext: mergeContext,
+                provenanceGroups: canonical.provenanceGroups
             )
         } catch let error as CurrentSyncRecordBatchError {
             switch error {
@@ -175,6 +250,170 @@ struct CurrentSyncRecordMerger {
                 )
             }
         }
+    }
+
+    private func canonicalIncomingRecords(
+        _ records: [SyncRecord],
+        existingRecords: [SyncRecord],
+        context: CurrentSyncRecordMergeContext
+    ) throws -> (
+        records: [SyncRecord],
+        provenanceGroups: [SyncRecordProvenanceGroup]
+    ) {
+        var canonicalRecords: [SyncRecord] = []
+        var provenanceGroups: [SyncRecordProvenanceGroup] = []
+
+        for group in SyncRecordEvidenceCanonicalizer.groups(records) {
+            let candidates = group.evidence.map(\.record)
+            guard let first = candidates.first else { continue }
+            let headersAreConsistent = candidates.allSatisfy {
+                $0.entityType == first.entityType
+                    && $0.entityID == first.entityID
+                    && $0.operation == first.operation
+            }
+            guard headersAreConsistent else {
+                throw CurrentSyncRecordBatchError.invalidCurrentRecord(
+                    recordID: group.recordID
+                )
+            }
+
+            let hasImmutable = candidates.contains {
+                $0.entityType.requiresImmutableRecordPayload
+            }
+            if hasImmutable, candidates.count > 1 {
+                throw SyncRecordTransportError.immutableRecordCollision(
+                    recordID: group.recordID
+                )
+            }
+
+            let canonical: SyncRecord
+            let contributingEvidenceIDs: Set<SyncRecordEvidenceID>
+            let supersededEvidenceIDs: Set<SyncRecordEvidenceID>
+            if candidates.count == 1 {
+                canonical = first
+                contributingEvidenceIDs = [group.evidence[0].id]
+                supersededEvidenceIDs = []
+            } else {
+                let ordered = group.evidence.sorted {
+                    let order = $0.record.currentRecordLWWOrder(
+                        comparedTo: $1.record
+                    )
+                    if order == .equivalent {
+                        return $0.id.rawValue < $1.id.rawValue
+                    }
+                    return order == .before
+                }
+                do {
+                    // Validate every source pair before folding. Otherwise a later
+                    // record can hide two contradictory facts at the same semantic
+                    // version and make acceptance depend on caller order.
+                    for leftIndex in ordered.indices {
+                        for rightIndex in ordered.indices where rightIndex > leftIndex {
+                            _ = try merge(
+                                existing: ordered[leftIndex].record,
+                                incoming: ordered[rightIndex].record,
+                                context: context
+                            )
+                        }
+                    }
+                    canonical = try foldCurrentEvidence(
+                        ordered,
+                        context: context
+                    )
+                    let provenance = try minimalLiveProvenance(
+                        ordered,
+                        canonical: canonical,
+                        allIncomingRecords: records,
+                        existingRecords: existingRecords
+                    )
+                    contributingEvidenceIDs = provenance.contributing
+                    supersededEvidenceIDs = provenance.superseded
+                } catch {
+                    throw CurrentSyncRecordBatchError.invalidCurrentRecord(
+                        recordID: group.recordID
+                    )
+                }
+            }
+
+            canonicalRecords.append(canonical)
+            provenanceGroups.append(
+                SyncRecordProvenanceGroup(
+                    canonicalRecord: canonical,
+                    contributingEvidenceIDs: Array(contributingEvidenceIDs),
+                    supersededEvidenceIDs: Array(supersededEvidenceIDs)
+                )
+            )
+        }
+
+        return (canonicalRecords, provenanceGroups)
+    }
+
+    private func foldCurrentEvidence(
+        _ evidence: [SyncRecordEvidence],
+        context: CurrentSyncRecordMergeContext
+    ) throws -> SyncRecord {
+        guard var folded = evidence.first?.record else {
+            preconditionFailure("current evidence fold requires one record")
+        }
+        for incoming in evidence.dropFirst() {
+            folded = try merge(
+                existing: folded,
+                incoming: incoming.record,
+                context: context
+            )
+        }
+        return folded
+    }
+
+    private func minimalLiveProvenance(
+        _ evidence: [SyncRecordEvidence],
+        canonical: SyncRecord,
+        allIncomingRecords: [SyncRecord],
+        existingRecords: [SyncRecord]
+    ) throws -> (
+        contributing: Set<SyncRecordEvidenceID>,
+        superseded: Set<SyncRecordEvidenceID>
+    ) {
+        var live = evidence
+        var superseded: Set<SyncRecordEvidenceID> = []
+        let groupEvidenceIDs = Set(evidence.map(\.id))
+        // Greedy removal is deterministic and performs at most n(n - 1) / 2
+        // merge operations after the pairwise preflight above. Rebuilding the
+        // context from the retained exact facts prevents a removed witness from
+        // authorizing the very fold used to declare that witness superseded.
+        for candidate in evidence.reversed() {
+            guard live.count > 1,
+                  let index = live.firstIndex(where: { $0.id == candidate.id })
+            else { continue }
+            var withoutCandidate = live
+            withoutCandidate.remove(at: index)
+            let retainedEvidenceIDs = Set(withoutCandidate.map(\.id))
+            let reducedIncomingRecords = allIncomingRecords.filter { record in
+                let evidenceID = SyncRecordEvidenceID(record: record)
+                return groupEvidenceIDs.contains(evidenceID) == false
+                    || retainedEvidenceIDs.contains(evidenceID)
+            }
+            do {
+                let reducedContext = try prepareContext(
+                    existingRecords: existingRecords,
+                    incomingRecords: reducedIncomingRecords
+                )
+                let folded = try foldCurrentEvidence(
+                    withoutCandidate,
+                    context: reducedContext
+                )
+                if folded.exactlyMatches(canonical) {
+                    live = withoutCandidate
+                    superseded.insert(candidate.id)
+                }
+            } catch {
+                // A subset which cannot reproduce a legal fold proves that the
+                // removed exact source is live provenance; the full-set batch
+                // was already validated above and must remain publishable.
+                continue
+            }
+        }
+        return (Set(live.map(\.id)), superseded)
     }
 
     private func preflightCurrentMerges(
@@ -213,6 +452,9 @@ struct CurrentSyncRecordMerger {
         existingRecords: [SyncRecord],
         incomingRecords: [SyncRecord]
     ) throws -> CurrentSyncRecordMergeContext {
+        for record in existingRecords {
+            try validateBatchRecord(record)
+        }
         for record in incomingRecords {
             try validateBatchRecord(record)
         }
@@ -260,23 +502,44 @@ struct CurrentSyncRecordMerger {
 
         var authorizations = CurrentSyncReactivationAuthorizations()
         for witness in allWitnesses {
-            guard allChains.contains(witness.abandonedChain),
-                  allTraces.contains(witness.abandonedTrace)
-            else {
+            guard allChains.contains(witness.abandonedChain) else {
                 continue
             }
             for chain in allChains {
-                for trace in allTraces where witness.authorizesRestoredSuccessor(
+                let authorizesChainOnly =
+                    witness.abandonedTrace == nil
+                        && witness.authorizesRestoredSuccessor(
+                            chain: chain,
+                            trace: nil
+                        )
+                if authorizesChainOnly {
+                    authorizations.chainIDs.insert(witness.restoredChain.id)
+                    continue
+                }
+                guard let abandonedTrace = witness.abandonedTrace,
+                      allTraces.contains(abandonedTrace)
+                else {
+                    continue
+                }
+                for trace in allTraces
+                where witness.authorizesRestoredSuccessor(
                     chain: chain,
                     trace: trace
                 ) {
-                    authorizations.chainIDs.insert(witness.restoredChain.id)
-                    let traceAuthorization = TraceReactivationAuthorization(
-                        abandoned: witness.abandonedTrace,
-                        restoredSuccessor: trace
+                    authorizations.chainIDs.insert(
+                        witness.restoredChain.id
                     )
-                    if authorizations.tracePairs.contains(traceAuthorization) == false {
-                        authorizations.tracePairs.append(traceAuthorization)
+                    let traceAuthorization =
+                        TraceReactivationAuthorization(
+                            abandoned: abandonedTrace,
+                            restoredSuccessor: trace
+                        )
+                    if authorizations.tracePairs.contains(
+                        traceAuthorization
+                    ) == false {
+                        authorizations.tracePairs.append(
+                            traceAuthorization
+                        )
                     }
                 }
             }
@@ -313,9 +576,6 @@ struct CurrentSyncRecordMerger {
     }
 
     private func validateBatchRecord(_ record: SyncRecord) throws {
-        guard record.entityType.requiresImmutableRecordPayload == false else {
-            return
-        }
         do {
             try validate(record)
         } catch {
@@ -414,10 +674,42 @@ struct CurrentSyncRecordMerger {
                 incoming: incoming,
                 context: context
             )
-        case .subtask, .appPreferences,
-             .classificationCommit, .traceClassificationEvent:
+        case .subtask:
+            return try mergeSubtask(
+                existing: existing,
+                incoming: incoming
+            )
+        case .appPreferences:
+            return try mergeAppPreferences(
+                existing: existing,
+                incoming: incoming
+            )
+        case .classificationCommit, .traceClassificationEvent:
             return lwwWinner(existing, incoming)
         }
+    }
+
+    private func mergeAppPreferences(
+        existing: SyncRecord,
+        incoming: SyncRecord
+    ) throws -> SyncRecord {
+        let existingEnvelope = try mapper.decodeAppPreferences(existing)
+        let incomingEnvelope = try mapper.decodeAppPreferences(incoming)
+        let sameVersion =
+            existingEnvelope.updatedAt.timeIntervalSinceReferenceDate
+            .bitPattern
+                == incomingEnvelope.updatedAt
+                .timeIntervalSinceReferenceDate.bitPattern
+                && existingEnvelope.writerDeviceID
+                == incomingEnvelope.writerDeviceID
+        if sameVersion {
+            guard existingEnvelope.theme == incomingEnvelope.theme,
+                  existingEnvelope.language == incomingEnvelope.language
+            else {
+                throw CurrentSyncRecordMergeError.invalidContentClock
+            }
+        }
+        return lwwWinner(existing, incoming)
     }
 
     private func mergeDay(
@@ -561,16 +853,15 @@ struct CurrentSyncRecordMerger {
         else {
             throw CurrentSyncRecordMergeError.dayTraceIdentityCollision
         }
-        try validateContentClock(
-            createdAt: existingTrace.createdAt,
-            contentUpdatedAt: existingTrace.contentUpdatedAt,
-            terminalDates: [existingTrace.completedAt, existingTrace.settledAt]
-        )
-        try validateContentClock(
-            createdAt: incomingTrace.createdAt,
-            contentUpdatedAt: incomingTrace.contentUpdatedAt,
-            terminalDates: [incomingTrace.completedAt, incomingTrace.settledAt]
-        )
+        guard TrajectoryTopologyValidator.firstSelfContainedIssue(
+            in: existingTrace
+        ) == nil,
+              TrajectoryTopologyValidator.firstSelfContainedIssue(
+                  in: incomingTrace
+              ) == nil
+        else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
+        }
         if let issue = TaskNoteEntryValidator.firstIssue(in: existingTrace.noteEntries) {
             throw TaskNoteEntryMergeError.invalidEntries(issue)
         }
@@ -605,6 +896,73 @@ struct CurrentSyncRecordMerger {
         var mergedTrace = winner.trace
         mergedTrace.noteEntries = noteEntries
         return try mergedRecord(trace: mergedTrace, baseWinner: winner.record)
+    }
+
+    private func mergeSubtask(
+        existing: SyncRecord,
+        incoming: SyncRecord
+    ) throws -> SyncRecord {
+        let existingSubtask = try mapper.decodeSubtask(existing)
+        let incomingSubtask = try mapper.decodeSubtask(incoming)
+        try existingSubtask.validateIntegrity()
+        try incomingSubtask.validateIntegrity()
+        guard existingSubtask.lineageID == incomingSubtask.lineageID,
+              existingSubtask.traceID == incomingSubtask.traceID,
+              existingSubtask.title == incomingSubtask.title,
+              existingSubtask.position == incomingSubtask.position,
+              existingSubtask.continuedFromSubtaskID
+              == incomingSubtask.continuedFromSubtaskID,
+              existingSubtask.createdAt == incomingSubtask.createdAt
+        else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
+        }
+
+        if isSanctionedCancelledSubtaskUndo(
+            from: existingSubtask,
+            to: incomingSubtask
+        ) {
+            return incoming
+        }
+        if isSanctionedCancelledSubtaskUndo(
+            from: incomingSubtask,
+            to: existingSubtask
+        ) {
+            return existing
+        }
+        let hasCancellationFact =
+            existingSubtask.status == .cancelledDraft
+                || incomingSubtask.status == .cancelledDraft
+        if hasCancellationFact {
+            return existingSubtask.status == .cancelledDraft
+                ? existing
+                : incoming
+        }
+        return lwwWinner(existing, incoming)
+    }
+
+    private func isSanctionedCancelledSubtaskUndo(
+        from cancelled: Subtask,
+        to restored: Subtask
+    ) -> Bool {
+        cancelled.status == .cancelledDraft
+            && cancelled.draftCancellationID != nil
+            && cancelled.completedAt == nil
+            && cancelled.settledAt != nil
+            && restored.status == .pending
+            && restored.draftCancellationID
+            == cancelled.draftCancellationID
+            && restored.completedAt == nil
+            && restored.settledAt == nil
+            && restored.updatedAt > cancelled.updatedAt
+            && restored.id == cancelled.id
+            && restored.lineageID == cancelled.lineageID
+            && restored.traceID == cancelled.traceID
+            && restored.title == cancelled.title
+            && restored.difficulty == cancelled.difficulty
+            && restored.position == cancelled.position
+            && restored.continuedFromSubtaskID
+            == cancelled.continuedFromSubtaskID
+            && restored.createdAt == cancelled.createdAt
     }
 
     private func terminalAwareTraceWinner(
@@ -659,9 +1017,29 @@ struct CurrentSyncRecordMerger {
             return traceFieldsMatch(
                 historical,
                 restored,
-                ignoringStatus: true,
-                ignoringCompletedAt: true,
-                ignoringSettledAt: false
+                exceptions: .completionUndo
+            )
+        }
+        let isCancelledDraftUndo = historical.status == .cancelledDraft
+            && historical.draftCancellationID != nil
+            && historical.draftCancelledOn != nil
+            && historical.completedAt == nil
+            && historical.settledAt != nil
+            && restored.status == .pending
+            && restored.draftCancellationID == historical.draftCancellationID
+            && restored.draftCancelledOn == nil
+            && restored.completedAt == nil
+            && restored.settledAt == nil
+        if isCancelledDraftUndo {
+            guard let day = context.daysByDate[historical.date],
+                  day.lockedAt == nil
+            else {
+                return false
+            }
+            return traceFieldsMatch(
+                historical,
+                restored,
+                exceptions: .cancelledDraftUndo
             )
         }
         if historical.status == .abandoned {
@@ -679,15 +1057,13 @@ struct CurrentSyncRecordMerger {
     private func traceFieldsMatch(
         _ lhs: DayTrace,
         _ rhs: DayTrace,
-        ignoringStatus: Bool,
-        ignoringCompletedAt: Bool,
-        ignoringSettledAt: Bool
+        exceptions: TraceFieldMatchExceptions
     ) -> Bool {
         lhs.id == rhs.id
             && lhs.chainID == rhs.chainID
             && lhs.definitionID == rhs.definitionID
             && lhs.date == rhs.date
-            && (ignoringStatus || lhs.status == rhs.status)
+            && (exceptions.status || lhs.status == rhs.status)
             && lhs.priority == rhs.priority
             && lhs.continuationSeq == rhs.continuationSeq
             && lhs.descriptionText == rhs.descriptionText
@@ -696,8 +1072,13 @@ struct CurrentSyncRecordMerger {
             && lhs.continuedFromTraceID == rhs.continuedFromTraceID
             && lhs.changedToTraceID == rhs.changedToTraceID
             && lhs.createdAt == rhs.createdAt
-            && (ignoringCompletedAt || lhs.completedAt == rhs.completedAt)
-            && (ignoringSettledAt || lhs.settledAt == rhs.settledAt)
+            && (exceptions.completedAt || lhs.completedAt == rhs.completedAt)
+            && (exceptions.settledAt || lhs.settledAt == rhs.settledAt)
+            && lhs.draftCancellationID == rhs.draftCancellationID
+            && (
+                exceptions.draftCancelledOn
+                    || lhs.draftCancelledOn == rhs.draftCancelledOn
+            )
     }
 
     private func taskDefinitionBaseWinner(
@@ -849,6 +1230,19 @@ struct CurrentSyncRecordMerger {
         }
     }
 
+    private func validateRecordMutationClock(
+        _ record: SyncRecord,
+        canonicalMutationClock: Date
+    ) throws {
+        guard record.modifiedAt.timeIntervalSinceReferenceDate.isFinite,
+              canonicalMutationClock.timeIntervalSinceReferenceDate.isFinite,
+              record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+              == canonicalMutationClock.timeIntervalSinceReferenceDate.bitPattern
+        else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
+        }
+    }
+
     private func reactivationWitnesses(
         in record: SyncRecord,
         for chain: TaskChain
@@ -872,6 +1266,23 @@ struct CurrentSyncRecordMerger {
     ) -> SyncRecord {
         rhs.currentRecordLWWOrder(comparedTo: lhs) == .after ? rhs : lhs
     }
+}
+
+private struct TraceFieldMatchExceptions {
+    static let completionUndo = TraceFieldMatchExceptions(
+        status: true,
+        completedAt: true
+    )
+    static let cancelledDraftUndo = TraceFieldMatchExceptions(
+        status: true,
+        settledAt: true,
+        draftCancelledOn: true
+    )
+
+    var status = false
+    var completedAt = false
+    var settledAt = false
+    var draftCancelledOn = false
 }
 
 private extension SyncRecord {

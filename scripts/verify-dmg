@@ -1,15 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+cd "$repo_root"
+
+# shellcheck source=scripts/evidence-common
+source scripts/evidence-common
+
 dmg_path="${1:-dist/Noonmark.dmg}"
 app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
 mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg.XXXXXX")"
+package_manifest_path="${dmg_path}.manifest"
+package_inventory_path="${dmg_path}.inventory.sha256"
+mounted_app_fragment="$(mktemp "${TMPDIR:-/tmp}/noonmark-mounted-app.XXXXXX")"
 
 cleanup() {
+  rm -f "$mounted_app_fragment"
   hdiutil detach "$mountpoint" -quiet >/dev/null 2>&1 || true
   rmdir "$mountpoint" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+
+require_equal_manifest_value() {
+  local package_key="$1"
+  local mounted_key="$2"
+  local label="$3"
+  local package_value
+  local mounted_value
+
+  package_value="$(evidence_read "$package_manifest_path" "$package_key")"
+  mounted_value="$(evidence_read "$mounted_app_fragment" "$mounted_key")"
+  if [[ -z "$package_value" || -z "$mounted_value" ||
+    "$package_value" != "$mounted_value" ]]; then
+    echo "mounted app does not match package manifest for $label" >&2
+    return 1
+  fi
+}
 
 if [[ ! -f "$dmg_path" ]]; then
   echo "missing DMG: $dmg_path" >&2
@@ -20,8 +47,59 @@ if [[ ! -f "${dmg_path}.sha256" ]]; then
   echo "missing checksum: ${dmg_path}.sha256" >&2
   exit 1
 fi
+if [[ ! -f "$package_manifest_path" ]]; then
+  echo "missing package manifest: $package_manifest_path" >&2
+  exit 1
+fi
+if [[ ! -f "$package_inventory_path" ]]; then
+  echo "missing package artifact inventory: $package_inventory_path" >&2
+  exit 1
+fi
 
 shasum -a 256 -c "${dmg_path}.sha256"
+evidence_require_manifest \
+  "$package_manifest_path" \
+  "evidence_schema_version=1" \
+  "suite=package-dmg" \
+  "configuration=release" \
+  "suite_mode=full" \
+  "source_tree_unchanged=true" \
+  "app_binary_unchanged=true" \
+  "app_signature_unchanged=true" \
+  "app_codesign_deep_strict=1" \
+  "app_stable_required=1" \
+  "suite_exit_status=0"
+
+actual_dmg_sha256="$(shasum -a 256 "$dmg_path" | awk '{print $1}')"
+expected_dmg_sha256="$(evidence_read "$package_manifest_path" "dmg_sha256")"
+actual_checksum_sha256="$(
+  shasum -a 256 "${dmg_path}.sha256" | awk '{print $1}'
+)"
+expected_checksum_sha256="$(
+  evidence_read "$package_manifest_path" "dmg_checksum_sha256"
+)"
+actual_inventory_sha256="$(
+  shasum -a 256 "$package_inventory_path" | awk '{print $1}'
+)"
+expected_inventory_sha256="$(
+  evidence_read "$package_manifest_path" "artifact_inventory_sha256"
+)"
+if [[ -z "$expected_dmg_sha256" ||
+  "$actual_dmg_sha256" != "$expected_dmg_sha256" ]]; then
+  echo "DMG hash does not match its package manifest" >&2
+  exit 1
+fi
+if [[ -z "$expected_checksum_sha256" ||
+  "$actual_checksum_sha256" != "$expected_checksum_sha256" ]]; then
+  echo "DMG checksum file does not match its package manifest" >&2
+  exit 1
+fi
+if [[ -z "$expected_inventory_sha256" ||
+  "$actual_inventory_sha256" != "$expected_inventory_sha256" ]]; then
+  echo "package artifact inventory does not match its manifest" >&2
+  exit 1
+fi
+
 hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$mountpoint" -quiet
 
 app_path="${mountpoint}/${app_short_name}.app"
@@ -45,6 +123,41 @@ fi
 
 scripts/test-app-icon-bundle "$app_path"
 scripts/verify-mac-app-metadata "$app_path"
+codesign --verify --deep --strict "$app_path"
+evidence_capture_bundle "$app_path" 1 "mounted_app" "$mounted_app_fragment"
+
+require_equal_manifest_value \
+  "app_binary_sha256" \
+  "mounted_app_binary_sha256" \
+  "executable SHA-256"
+require_equal_manifest_value \
+  "app_codesign_identifier" \
+  "mounted_app_codesign_identifier" \
+  "code-signing identifier"
+require_equal_manifest_value \
+  "app_codesign_kind" \
+  "mounted_app_codesign_kind" \
+  "code-signing kind"
+require_equal_manifest_value \
+  "app_codesign_identity_sha1" \
+  "mounted_app_codesign_identity_sha1" \
+  "leaf certificate SHA-1"
+require_equal_manifest_value \
+  "app_codesign_identity_sha256" \
+  "mounted_app_codesign_identity_sha256" \
+  "leaf certificate SHA-256"
+require_equal_manifest_value \
+  "app_codesign_team_identifier" \
+  "mounted_app_codesign_team_identifier" \
+  "team identifier"
+require_equal_manifest_value \
+  "app_codesign_authority" \
+  "mounted_app_codesign_authority" \
+  "signing authority"
+require_equal_manifest_value \
+  "app_designated_requirement_sha256" \
+  "mounted_app_designated_requirement_sha256" \
+  "designated requirement"
 
 if [[ ! -L "${mountpoint}/Applications" ]]; then
   echo "DMG missing Applications shortcut" >&2

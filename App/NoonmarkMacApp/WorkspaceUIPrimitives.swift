@@ -35,6 +35,7 @@ struct SegmentedPair: View {
     let leftSelected: Bool
     let leftAction: () -> Void
     let rightAction: () -> Void
+    let identifier: String
 
     var body: some View {
         Picker(
@@ -50,6 +51,7 @@ struct SegmentedPair: View {
         .labelsHidden()
         .pickerStyle(.segmented)
         .frame(maxWidth: 320)
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -142,6 +144,9 @@ struct HeaderButton: View {
             .foregroundStyle(Theme.text2)
             .padding(.horizontal, title.count == 1 ? 8 : 10)
             .frame(
+                minWidth: CGFloat(
+                    MacUIAccessibilityLayout.minimumInteractiveTargetSize
+                ),
                 minHeight: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
             )
             .fixedSize(horizontal: true, vertical: false)
@@ -364,6 +369,18 @@ struct StatusPill: View {
     }
 }
 
+struct StatusDot: View {
+    let status: TraceStatus
+    var size: CGFloat = 4
+
+    var body: some View {
+        Circle()
+            .fill(status.uiStyle.dotColor)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
 struct TraceStatusStyle {
     let glyph: String
     let foreground: Color
@@ -451,6 +468,8 @@ extension TraceStatus {
                 titleColor: Theme.text2,
                 strikethrough: false
             )
+        case .cancelledDraft:
+            preconditionFailure("Internal trace status has no UI style")
         case .abandoned:
             TraceStatusStyle(
                 glyph: "—",
@@ -504,9 +523,10 @@ struct StatusChip: View {
 
     var body: some View {
         HStack(spacing: scale == .compact ? 4 : 5) {
-            Circle()
-                .fill(style.dotColor)
-                .frame(width: scale == .compact ? 4 : 5, height: scale == .compact ? 4 : 5)
+            StatusDot(
+                status: status,
+                size: scale == .compact ? 4 : 5
+            )
             Text(store.copy.traceStatusLabel(status))
         }
         .font(.noonmarkSystem(size: scale == .compact ? 10.5 : 11, weight: .medium))

@@ -56,9 +56,9 @@ public final class SQLiteSyncDownloadCoordinator {
 
     public func downloadAndMerge(detectedAt: Date = Date()) async throws -> SQLiteSyncDownloadResult {
         let pending = try syncRepository.pendingDownloads()
-        let terminalRejections = try syncRepository.terminalRejections()
+        let terminalRejections = try syncRepository.terminalRejectionEvidence()
         let fetchedRecords = try await transport.fetchAll()
-        let records = try combinedRecords(
+        let records = combinedRecords(
             pending: pending.map(\.record),
             fetched: fetchedRecords
         )
@@ -74,29 +74,58 @@ public final class SQLiteSyncDownloadCoordinator {
             )
         }
 
-        let currentSnapshot = try engineRepository.load().snapshot()
-        let mergeResult = mergeToFixedPoint(
+        let observedEngine = try engineRepository.loadObservedSnapshot()
+        let currentSnapshot = try ValidatedSyncSnapshot(
+            observedEngine.snapshot
+        )
+        let mergeResult = try mergeToFixedPoint(
             records: records,
             into: currentSnapshot,
             knownTerminalRejections: terminalRejections,
             detectedAt: detectedAt
         )
 
-        let waitingIDs = Set(mergeResult.waitingRecords.map(\.remoteRecordID))
-        let terminalPending = pending.filter {
-            waitingIDs.contains($0.record.id) == false
+        var outcomesByEvidence: [
+            SyncRecordEvidenceID: SyncRecordMergeOutcome
+        ] = [:]
+        for outcome in mergeResult.outcomes {
+            guard outcomesByEvidence.updateValue(
+                outcome,
+                forKey: outcome.evidence.id
+            ) == nil else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "merge returned duplicate exact evidence outcomes"
+                )
+            }
+        }
+        let waitingRecordIDs = Set(
+            mergeResult.waitingRecords.map(\.remoteRecordID)
+        )
+        let terminalPending = try pending.filter { observed in
+            let evidenceID = SyncRecordEvidenceID(record: observed.record)
+            guard let outcome = outcomesByEvidence[evidenceID] else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "merge omitted an observed pending evidence outcome"
+                )
+            }
+            // A newer exact variant may replace this observed pending fact while
+            // retaining the same logical record ID. In that case the old exact
+            // outcome is terminal, but the durable row is an atomic replacement,
+            // not a delete followed by an unrelated insert.
+            return outcome.disposition != .waiting
+                && waitingRecordIDs.contains(observed.record.id) == false
         }
         let durableWaitingCount = try syncRepository.commitDownloadedMerge(
             SQLiteSyncDownloadCommit(
                 snapshot: mergeResult.snapshot,
+                observedEngineGeneration: observedEngine.generation,
                 conflicts: mergeResult.conflicts,
                 waiting: mergeResult.waitingRecords,
                 terminal: terminalPending,
+                observedPending: pending,
                 auditEntries: auditLogs(
-                    records: records,
-                    appliedRecordIDs: Set(mergeResult.appliedRecordIDs),
-                    waitingRecords: mergeResult.waitingRecords,
-                    conflicts: mergeResult.conflicts
+                    outcomes: mergeResult.outcomes,
+                    detectedAt: detectedAt
                 ),
                 metadata: try downloadMetadata(
                     fetchedCount: fetchedRecords.count,
@@ -117,25 +146,19 @@ public final class SQLiteSyncDownloadCoordinator {
     private func combinedRecords(
         pending: [SyncRecord],
         fetched: [SyncRecord]
-    ) throws -> [SyncRecord] {
-        var byID: [SyncRecordID: SyncRecord] = [:]
-        for record in pending + fetched {
-            if let existing = byID[record.id], existing != record {
-                throw SQLiteRepositoryError.invalidStoredValue(
-                    "sync record identity collision: \(record.id.rawValue)"
-                )
-            }
-            byID[record.id] = record
-        }
-        return Array(byID.values)
+    ) -> [SyncRecord] {
+        // Snapshot-aware same-ID semantics belong to SyncRecordMerger. Storage
+        // deliberately preserves every fetched and durable-pending candidate
+        // until that deep merge seam has the current snapshot context.
+        pending + fetched
     }
 
     private func mergeToFixedPoint(
         records: [SyncRecord],
-        into snapshot: NoonmarkSnapshot,
+        into snapshot: ValidatedSyncSnapshot,
         knownTerminalRejections: [SyncTerminalRejection],
         detectedAt: Date
-    ) -> SyncMergeResult {
+    ) throws -> SyncMergeResult {
         var terminalRejections = knownTerminalRejections
         var result = merger.merge(
             records: records,
@@ -143,98 +166,138 @@ public final class SQLiteSyncDownloadCoordinator {
             knownTerminalRejections: terminalRejections,
             detectedAt: detectedAt
         )
+        let initialOutcomes = result.outcomes
         var appliedRecordIDs = result.appliedRecordIDs
+        var appliedEvidenceIDs = Set(result.appliedEvidenceIDs)
         var conflicts = result.conflicts
+        var outcomesByEvidence: [SyncRecordEvidenceID: SyncRecordMergeOutcome] = [:]
+        for outcome in result.outcomes {
+            outcomesByEvidence[outcome.evidence.id] = outcome
+        }
+        var provenanceByCanonical: [
+            SyncRecordEvidenceID: SyncRecordProvenanceGroup
+        ] = [:]
+        for provenance in result.provenanceGroups {
+            try mergeProvenance(provenance, into: &provenanceByCanonical)
+        }
 
         while result.waitingRecords.isEmpty == false && result.appliedRecordIDs.isEmpty == false {
             terminalRejections.append(contentsOf: result.conflicts.compactMap {
                 SyncTerminalRejection(conflict: $0)
             })
+            let nextSnapshot = try ValidatedSyncSnapshot(result.snapshot)
             result = merger.merge(
                 records: result.waitingRecords.map(\.record),
-                into: result.snapshot,
+                into: nextSnapshot,
                 knownTerminalRejections: terminalRejections,
                 detectedAt: detectedAt
             )
             appliedRecordIDs.append(contentsOf: result.appliedRecordIDs)
+            appliedEvidenceIDs.formUnion(result.appliedEvidenceIDs)
             conflicts.append(contentsOf: result.conflicts)
+            for outcome in result.outcomes {
+                outcomesByEvidence[outcome.evidence.id] = outcome
+            }
+            for provenance in result.provenanceGroups {
+                try mergeProvenance(provenance, into: &provenanceByCanonical)
+            }
         }
 
+        let projectedOutcomes = try SQLiteSyncOutcomeProjector.project(
+            initialOutcomes: initialOutcomes,
+            latestOutcomesByEvidence: outcomesByEvidence,
+            provenanceGroups: Array(provenanceByCanonical.values)
+        )
         return SyncMergeResult(
             snapshot: result.snapshot,
             appliedRecordIDs: appliedRecordIDs,
+            appliedEvidenceIDs: appliedEvidenceIDs.sorted {
+                $0.rawValue < $1.rawValue
+            },
             waitingRecords: result.waitingRecords,
-            conflicts: conflicts
+            conflicts: conflicts,
+            outcomes: projectedOutcomes,
+            provenanceGroups: provenanceByCanonical.values.sorted {
+                $0.canonicalEvidenceID.rawValue
+                    < $1.canonicalEvidenceID.rawValue
+            }
+        )
+    }
+
+    private func mergeProvenance(
+        _ incoming: SyncRecordProvenanceGroup,
+        into index: inout [
+            SyncRecordEvidenceID: SyncRecordProvenanceGroup
+        ]
+    ) throws {
+        guard let existing = index[incoming.canonicalEvidenceID] else {
+            index[incoming.canonicalEvidenceID] = incoming
+            return
+        }
+        guard existing.canonicalRecord.exactlyMatches(incoming.canonicalRecord)
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "one canonical evidence digest names different records"
+            )
+        }
+        index[incoming.canonicalEvidenceID] = SyncRecordProvenanceGroup(
+            canonicalRecord: existing.canonicalRecord,
+            contributingEvidenceIDs: existing.contributingEvidenceIDs
+                + incoming.contributingEvidenceIDs,
+            supersededEvidenceIDs: existing.supersededEvidenceIDs
+                + incoming.supersededEvidenceIDs
         )
     }
 
     private func auditLogs(
-        records: [SyncRecord],
-        appliedRecordIDs: Set<SyncRecordID>,
-        waitingRecords: [SyncWaitingRecord],
-        conflicts: [SyncConflict]
+        outcomes: [SyncRecordMergeOutcome],
+        detectedAt: Date
     ) -> [SyncAuditLogEntry] {
-        let conflictRecordIDs = Set(conflicts.map(\.remoteRecordID))
-        let waitingByRecordID = Dictionary(
-            uniqueKeysWithValues: waitingRecords.map { ($0.remoteRecordID, $0) }
-        )
-        return records.map { record in
-            if appliedRecordIDs.contains(record.id) {
-                return auditLog(record: record, action: "merged", message: nil)
-            } else if let waiting = waitingByRecordID[record.id] {
-                return auditLog(
-                    record: record,
-                    action: "waiting",
-                    message: waiting.dependencies.map(dependencyDescription).joined(separator: ", ")
-                )
-            } else if conflictRecordIDs.contains(record.id) {
-                return auditLog(
-                    record: record,
-                    action: "conflict",
-                    message: "remote record was not merged"
-                )
-            } else {
-                return auditLog(
-                    record: record,
-                    action: "ignored",
-                    message: "remote record did not change local snapshot"
-                )
+        outcomes.sorted {
+            $0.evidence.id.rawValue < $1.evidence.id.rawValue
+        }.map { outcome in
+            let message: String? = switch outcome.disposition {
+            case .merged:
+                nil
+            case .ignored:
+                "remote exact evidence did not change the local snapshot"
+            case .waiting:
+                outcome.dependencies.map(dependencyDescription)
+                    .joined(separator: ", ")
+            case .conflict:
+                outcome.conflictID.map {
+                    "remote exact evidence conflicted (\($0.uuidString))"
+                } ?? "remote exact evidence conflicted"
             }
+            return auditLog(
+                outcome: outcome,
+                detectedAt: detectedAt,
+                message: message
+            )
         }
     }
 
     private func dependencyDescription(
-        _ dependency: ClassificationCommitDependency
+        _ dependency: SyncRecordDependency
     ) -> String {
-        switch dependency {
-        case let .taskChain(id):
-            "taskChain:\(id.description)"
-        case let .dayTrace(id):
-            "dayTrace:\(id.description)"
-        case let .category(id):
-            "category:\(id.description)"
-        case let .label(id):
-            "label:\(id.description)"
-        case let .classificationEvent(id):
-            "classificationEvent:\(id.uuidString)"
-        case let .classificationCommit(id):
-            "classificationCommit:\(id.uuidString)"
-        case let .classificationRevision(revision):
-            "classificationRevision:\(revision)"
-        }
+        dependency.sqliteFact.auditDescription
     }
 
     private func auditLog(
-        record: SyncRecord,
-        action: String,
+        outcome: SyncRecordMergeOutcome,
+        detectedAt: Date,
         message: String?
     ) -> SyncAuditLogEntry {
-        SyncAuditLogEntry(
+        let record = outcome.evidence.record
+        return SyncAuditLogEntry(
             id: auditEntryIDGenerator(),
             direction: .download,
             entityType: record.entityType,
             entityID: record.entityID,
-            action: action,
+            sourceEvidenceID: outcome.evidence.id,
+            canonicalEvidenceID: outcome.canonicalEvidenceID,
+            action: outcome.disposition.rawValue,
+            createdAt: detectedAt,
             message: message
         )
     }
@@ -257,4 +320,100 @@ public final class SQLiteSyncDownloadCoordinator {
 private struct SyncDownloadMetadata: Codable {
     var lastFetchedAt: Date
     var fetchedCount: Int
+}
+
+enum SQLiteSyncOutcomeProjector {
+    private struct Edge: Equatable {
+        let canonicalEvidenceID: SyncRecordEvidenceID
+        let contributes: Bool
+    }
+
+    static func project(
+        initialOutcomes: [SyncRecordMergeOutcome],
+        latestOutcomesByEvidence: [
+            SyncRecordEvidenceID: SyncRecordMergeOutcome
+        ],
+        provenanceGroups: [SyncRecordProvenanceGroup]
+    ) throws -> [SyncRecordMergeOutcome] {
+        let lineage = try lineageIndex(provenanceGroups)
+        return try initialOutcomes.map { initial in
+            var currentID = initial.evidence.id
+            var latest = latestOutcomesByEvidence[currentID] ?? initial
+            var contributes = true
+            var visited: Set<SyncRecordEvidenceID> = []
+
+            while let edge = lineage[currentID] {
+                guard visited.insert(currentID).inserted else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "sync evidence provenance contains a cycle"
+                    )
+                }
+                contributes = contributes && edge.contributes
+                guard edge.canonicalEvidenceID != currentID else { break }
+                currentID = edge.canonicalEvidenceID
+                if let next = latestOutcomesByEvidence[currentID] {
+                    latest = next
+                }
+            }
+
+            return SyncRecordMergeOutcome(
+                evidence: initial.evidence,
+                canonicalEvidenceID: currentID,
+                disposition: contributes ? latest.disposition : .ignored,
+                dependencies: contributes ? latest.dependencies : [],
+                conflictID: contributes ? latest.conflictID : nil
+            )
+        }.sorted {
+            $0.evidence.id.rawValue < $1.evidence.id.rawValue
+        }
+    }
+
+    private static func lineageIndex(
+        _ groups: [SyncRecordProvenanceGroup]
+    ) throws -> [SyncRecordEvidenceID: Edge] {
+        var result: [SyncRecordEvidenceID: Edge] = [:]
+        for group in groups {
+            for sourceID in group.contributingEvidenceIDs {
+                try insert(
+                    Edge(
+                        canonicalEvidenceID: group.canonicalEvidenceID,
+                        contributes: true
+                    ),
+                    for: sourceID,
+                    into: &result
+                )
+            }
+            for sourceID in group.supersededEvidenceIDs {
+                try insert(
+                    Edge(
+                        canonicalEvidenceID: group.canonicalEvidenceID,
+                        contributes: false
+                    ),
+                    for: sourceID,
+                    into: &result
+                )
+            }
+        }
+        return result
+    }
+
+    private static func insert(
+        _ incoming: Edge,
+        for sourceID: SyncRecordEvidenceID,
+        into index: inout [SyncRecordEvidenceID: Edge]
+    ) throws {
+        guard let existing = index[sourceID] else {
+            index[sourceID] = incoming
+            return
+        }
+        if existing == incoming { return }
+        if existing.canonicalEvidenceID == sourceID {
+            index[sourceID] = incoming
+            return
+        }
+        if incoming.canonicalEvidenceID == sourceID { return }
+        throw SQLiteRepositoryError.invalidStoredValue(
+            "sync evidence source has contradictory canonical provenance"
+        )
+    }
 }

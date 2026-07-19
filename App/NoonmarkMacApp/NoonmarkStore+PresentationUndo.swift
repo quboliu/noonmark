@@ -6,6 +6,14 @@ import NoonmarkMacRuntime
 import SwiftUI
 
 extension NoonmarkStore {
+    enum DetailRailRoute: Equatable {
+        case calendar
+        case selection
+        case zhulong
+        case dayReview
+        case pageSummary(Page)
+    }
+
     var isHistory: Bool {
         selectedDate < today || engine.days[selectedDate]?.lockedAt != nil
     }
@@ -15,8 +23,13 @@ extension NoonmarkStore {
     }
 
     var selectedTrace: DayTrace? {
-        guard let selectedTraceID else { return nil }
-        return engine.traces[selectedTraceID]
+        guard let selectedTraceID,
+              let trace = engine.traces[selectedTraceID],
+              trace.formsDayHistory
+        else {
+            return nil
+        }
+        return trace
     }
 
     var selectedDefinition: TaskDefinition? {
@@ -61,27 +74,28 @@ extension NoonmarkStore {
         return selectedTrace != nil && selectedDefinition != nil
     }
 
-    var usesZhulongContextRail: Bool {
-        isZhulongEnabled
-            && hasActiveDetailSelection == false
-            && [.pool, .future, .unfinished, .completed].contains(page)
+    var detailRailRoute: DetailRailRoute? {
+        guard page != .settings else { return nil }
+        if page == .calendar {
+            return .calendar
+        }
+        if page == .zhulong {
+            return zhulongWorkspace.selectedSession == nil ? nil : .zhulong
+        }
+        if hasActiveDetailSelection {
+            return .selection
+        }
+        if page == .day {
+            return .dayReview
+        }
+        if [.pool, .future, .unfinished, .completed].contains(page) {
+            return .pageSummary(page)
+        }
+        return nil
     }
 
     var hasDetailRailContent: Bool {
-        guard page != .settings else { return false }
-        if page == .calendar {
-            return true
-        }
-        if page == .zhulong {
-            return zhulongWorkspace.selectedSession != nil
-        }
-        if hasActiveDetailSelection {
-            return true
-        }
-        if page == .day {
-            return true
-        }
-        return usesZhulongContextRail
+        detailRailRoute != nil
     }
 
     var shouldShowDetailRail: Bool {
@@ -194,15 +208,21 @@ extension NoonmarkStore {
 
     func subtasks(for traceID: DayTraceID) -> [Subtask] {
         engine.subtasks.values
-            .filter { $0.traceID == traceID }
+            .filter {
+                $0.traceID == traceID && $0.isUserPresentable
+            }
             .sorted { $0.position < $1.position }
     }
 
     func contextMenuActions(for trace: DayTrace) -> [TraceContextAction] {
         let isLocked = engine.days[trace.date]?.lockedAt != nil
+        let completionCapability = try? engine.completionCapability(
+            for: trace.id,
+            today: today
+        )
         if isLocked == false, trace.date == today, trace.status == .pending {
             var actions: [TraceContextAction] = []
-            if chainHasSubtasks(trace.chainID) == false {
+            if completionCapability == .available(.complete) {
                 actions.append(.markComplete)
             }
             actions.append(contentsOf: [.continueTo, .changeToNewTask, .returnToPool, .abandonChain])
@@ -210,7 +230,7 @@ extension NoonmarkStore {
         }
 
         if isLocked == false, trace.date == today, trace.status == .completed {
-            return chainHasSubtasks(trace.chainID) ? [] : [.undoComplete]
+            return completionCapability == .available(.undo) ? [.undoComplete] : []
         }
 
         let canContinueHistoricalUnfinished = (trace.date < today || isLocked)
@@ -230,11 +250,6 @@ extension NoonmarkStore {
         }
 
         return []
-    }
-
-    private func chainHasSubtasks(_ chainID: TaskChainID) -> Bool {
-        let traceIDs = Set(engine.traces.values.filter { $0.chainID == chainID }.map(\.id))
-        return engine.subtasks.values.contains { traceIDs.contains($0.traceID) }
     }
 
     private func chainIsActive(_ chainID: TaskChainID) -> Bool {
@@ -298,7 +313,9 @@ extension NoonmarkStore {
 
     func continuationDurationDays(for trace: DayTrace) -> Int {
         let chainDates = engine.traces.values
-            .filter { $0.chainID == trace.chainID }
+            .filter {
+                $0.chainID == trace.chainID && $0.formsDayHistory
+            }
             .map(\.date)
         guard let startDate = chainDates.min() else { return 1 }
         let days = Self.dayDistance(from: startDate, to: trace.date)
@@ -327,7 +344,7 @@ extension NoonmarkStore {
     }
 
     func undo() {
-        guard let moment = prepareNaturalDayForUserMutation() else { return }
+        guard let moment = prepareStoreMutationForUser() else { return }
         guard let entry = undoStack.last else {
             showToast(copy.nothingToUndo)
             return
@@ -348,22 +365,23 @@ extension NoonmarkStore {
                 candidate = try NoonmarkEngine(snapshot: currentSnapshot)
                 _ = try candidate.removeTaskFromPool(
                     chainID: copiedChainID,
-                    now: try copiedTaskUndoDate(
-                        chainID: copiedChainID,
-                        in: candidate
-                    )
+                    now: moment.instant
                 )
             case .traceNoteAppend, .traceNoteEdit, .traceNoteDelete,
                  .poolNoteAppend, .poolNoteEdit, .poolNoteDelete:
                 candidate = try NoonmarkEngine(snapshot: currentSnapshot)
-                noteIdentityRemap = try applyNoteUndo(entry, to: candidate)
+                noteIdentityRemap = try applyNoteUndo(
+                    entry,
+                    to: candidate,
+                    moment: moment
+                )
             }
             redoEntry = try makeRedoEntry(
                 for: entry,
                 snapshotBeforeUndo: currentSnapshot,
                 noteIdentityRemap: noteIdentityRemap
             )
-            try save(candidate)
+            try save(candidate, mutationAt: moment.instant)
         } catch {
             NSLog("Noonmark undo failed: %@", String(describing: error))
             showOperationFailure(.undo, error: error)
@@ -383,7 +401,7 @@ extension NoonmarkStore {
     }
 
     func redo() {
-        guard let moment = prepareNaturalDayForUserMutation() else { return }
+        guard let moment = prepareStoreMutationForUser() else { return }
         guard let entry = redoStack.last else {
             showToast(copy.nothingToRedo)
             return
@@ -394,9 +412,9 @@ extension NoonmarkStore {
             replay = try replayRedoEntry(
                 entry,
                 snapshotBeforeRedo: currentSnapshot,
-                now: moment.instant
+                moment: moment
             )
-            try save(replay.engine)
+            try save(replay.engine, mutationAt: moment.instant)
         } catch {
             NSLog("Noonmark redo failed: %@", String(describing: error))
             showOperationFailure(.redo, error: error)
@@ -416,7 +434,7 @@ extension NoonmarkStore {
     private func replayRedoEntry(
         _ entry: RedoEntry,
         snapshotBeforeRedo: NoonmarkSnapshot,
-        now: Date
+        moment: StoreMutationMoment
     ) throws -> RedoReplay {
         let candidate: NoonmarkEngine
         let undoEntry: UndoEntry
@@ -425,19 +443,16 @@ extension NoonmarkStore {
             candidate = try NoonmarkEngine(snapshot: snapshot)
             try candidate.prepareSnapshotUndo(
                 replacing: snapshotBeforeRedo,
-                now: now
+                now: moment.instant
             )
             undoEntry = previousUndoEntry
         case let .traceNoteAppend(traceID, body):
             candidate = try NoonmarkEngine(snapshot: snapshotBeforeRedo)
-            let trace = try noteUndoTrace(traceID, in: candidate)
             let noteID = try candidate.appendTraceNote(
                 traceID: traceID,
                 body: body,
-                today: today,
-                now: try forwardNoteUndoDate(
-                    after: [trace.createdAt] + trace.noteEntries.map(\.updatedAt)
-                )
+                today: moment.today,
+                now: moment.instant
             )
             undoEntry = .traceNoteAppend(
                 traceID: traceID,
@@ -451,8 +466,8 @@ extension NoonmarkStore {
                 traceID: traceID,
                 noteID: noteID,
                 body: body,
-                today: today,
-                now: try forwardNoteUndoDate(after: [note.updatedAt])
+                today: moment.today,
+                now: moment.instant
             )
             undoEntry = .traceNoteEdit(
                 traceID: traceID,
@@ -466,8 +481,8 @@ extension NoonmarkStore {
             try candidate.deleteTraceNote(
                 traceID: traceID,
                 noteID: noteID,
-                today: today,
-                now: try forwardNoteUndoDate(after: [note.updatedAt])
+                today: moment.today,
+                now: moment.instant
             )
             undoEntry = .traceNoteDelete(
                 traceID: traceID,
@@ -476,13 +491,10 @@ extension NoonmarkStore {
             )
         case let .poolNoteAppend(chainID, body):
             candidate = try NoonmarkEngine(snapshot: snapshotBeforeRedo)
-            let chain = try noteUndoChain(chainID, in: candidate)
             let noteID = try candidate.appendPoolNote(
                 chainID: chainID,
                 body: body,
-                now: try forwardNoteUndoDate(
-                    after: [chain.createdAt] + chain.noteEntries.map(\.updatedAt)
-                )
+                now: moment.instant
             )
             undoEntry = .poolNoteAppend(
                 chainID: chainID,
@@ -496,9 +508,7 @@ extension NoonmarkStore {
                 chainID: chainID,
                 noteID: noteID,
                 body: body,
-                now: try forwardNoteUndoDate(
-                    after: [note.updatedAt, chain.updatedAt]
-                )
+                now: moment.instant
             )
             undoEntry = .poolNoteEdit(
                 chainID: chainID,
@@ -512,9 +522,7 @@ extension NoonmarkStore {
             try candidate.deletePoolNote(
                 chainID: chainID,
                 noteID: noteID,
-                now: try forwardNoteUndoDate(
-                    after: [note.updatedAt, chain.updatedAt]
-                )
+                now: moment.instant
             )
             undoEntry = .poolNoteDelete(
                 chainID: chainID,
@@ -525,63 +533,41 @@ extension NoonmarkStore {
         return RedoReplay(engine: candidate, undoEntry: undoEntry)
     }
 
-    private func copiedTaskUndoDate(
-        chainID: TaskChainID,
-        in candidate: NoonmarkEngine
-    ) throws -> Date {
-        guard let chain = candidate.chains[chainID] else {
-            throw NoonmarkError.notFound("copied task chain")
-        }
-        let chainFrontier = chain.updatedAt.timeIntervalSinceReferenceDate
-        guard chainFrontier.isFinite, chainFrontier.nextUp.isFinite else {
-            throw NoonmarkError.invalidInput("copied task undo time is invalid")
-        }
-        let afterChain = Date(
-            timeIntervalSinceReferenceDate: chainFrontier.nextUp
-        )
-        return max(
-            afterChain,
-            candidate.nextClassificationMutationDate()
-        )
-    }
-
     private func applyNoteUndo(
         _ entry: UndoEntry,
-        to candidate: NoonmarkEngine
+        to candidate: NoonmarkEngine,
+        moment: StoreMutationMoment
     ) throws -> NoteIdentityRemap? {
         switch entry {
         case .snapshot, .copiedTask:
             throw NoonmarkError.invalidTransition("snapshot is not a note undo action")
         case let .traceNoteAppend(traceID, noteID):
             let trace = try noteUndoTrace(traceID, in: candidate)
-            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            _ = try noteUndoEntry(noteID, in: trace.noteEntries)
             try candidate.deleteTraceNote(
                 traceID: traceID,
                 noteID: noteID,
-                today: today,
-                now: try forwardNoteUndoDate(after: [note.updatedAt])
+                today: moment.today,
+                now: moment.instant
             )
             return nil
         case let .traceNoteEdit(traceID, noteID, previousBody):
             let trace = try noteUndoTrace(traceID, in: candidate)
-            let note = try noteUndoEntry(noteID, in: trace.noteEntries)
+            _ = try noteUndoEntry(noteID, in: trace.noteEntries)
             try candidate.editTraceNote(
                 traceID: traceID,
                 noteID: noteID,
                 body: previousBody,
-                today: today,
-                now: try forwardNoteUndoDate(after: [note.updatedAt])
+                today: moment.today,
+                now: moment.instant
             )
             return nil
         case let .traceNoteDelete(traceID, noteID, deletedBody):
-            let trace = try noteUndoTrace(traceID, in: candidate)
             let newID = try candidate.appendTraceNote(
                 traceID: traceID,
                 body: deletedBody,
-                today: today,
-                now: try forwardNoteUndoDate(
-                    after: [trace.createdAt] + trace.noteEntries.map(\.updatedAt)
-                )
+                today: moment.today,
+                now: moment.instant
             )
             return NoteIdentityRemap(
                 owner: .trace(traceID),
@@ -590,35 +576,28 @@ extension NoonmarkStore {
             )
         case let .poolNoteAppend(chainID, noteID):
             let chain = try noteUndoChain(chainID, in: candidate)
-            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            _ = try noteUndoEntry(noteID, in: chain.noteEntries)
             try candidate.deletePoolNote(
                 chainID: chainID,
                 noteID: noteID,
-                now: try forwardNoteUndoDate(
-                    after: [note.updatedAt, chain.updatedAt]
-                )
+                now: moment.instant
             )
             return nil
         case let .poolNoteEdit(chainID, noteID, previousBody):
             let chain = try noteUndoChain(chainID, in: candidate)
-            let note = try noteUndoEntry(noteID, in: chain.noteEntries)
+            _ = try noteUndoEntry(noteID, in: chain.noteEntries)
             try candidate.editPoolNote(
                 chainID: chainID,
                 noteID: noteID,
                 body: previousBody,
-                now: try forwardNoteUndoDate(
-                    after: [note.updatedAt, chain.updatedAt]
-                )
+                now: moment.instant
             )
             return nil
         case let .poolNoteDelete(chainID, noteID, deletedBody):
-            let chain = try noteUndoChain(chainID, in: candidate)
             let newID = try candidate.appendPoolNote(
                 chainID: chainID,
                 body: deletedBody,
-                now: try forwardNoteUndoDate(
-                    after: [chain.createdAt] + chain.noteEntries.map(\.updatedAt)
-                )
+                now: moment.instant
             )
             return NoteIdentityRemap(
                 owner: .pool(chainID),
@@ -739,18 +718,6 @@ extension NoonmarkStore {
         return note
     }
 
-    private func forwardNoteUndoDate(after frontiers: [Date]) throws -> Date {
-        let frontier = frontiers.map(\.timeIntervalSinceReferenceDate).max()
-            ?? Date().timeIntervalSinceReferenceDate
-        let current = Date().timeIntervalSinceReferenceDate
-        guard frontier.isFinite, current.isFinite, frontier.nextUp.isFinite else {
-            throw NoonmarkError.invalidInput("task note undo time is invalid")
-        }
-        return Date(
-            timeIntervalSinceReferenceDate: max(frontier.nextUp, current)
-        )
-    }
-
     func clearUndoHistory() {
         undoStack.removeAll()
         redoStack.removeAll()
@@ -767,6 +734,19 @@ extension NoonmarkStore {
         _ context: AppOperationFailureContext,
         error: Error
     ) {
+        let pendingApplicationIsBlocking = (error as? StoreMutationGateError)?
+            .isPendingZhulongApplication == true
+        if pendingApplicationIsBlocking {
+            NSLog(
+                "Noonmark mutation blocked pending Zhulong application"
+            )
+            showToast(
+                AppPresentation(
+                    language: engine.preferences.language
+                ).zhulong.pendingApplicationMutationBlocked
+            )
+            return
+        }
         NSLog(
             "Noonmark operation failed context=%@ error=%@",
             String(describing: context),

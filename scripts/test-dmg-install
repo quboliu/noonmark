@@ -10,11 +10,16 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 cd "$repo_root"
 
 source scripts/runtime-evidence
+source scripts/dmg-install-observer-common
+# shellcheck source=scripts/evidence-common
+source scripts/evidence-common
 
 dmg_path="${1:-dist/Noonmark.dmg}"
+package_manifest_path="${dmg_path}.manifest"
 app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
 work_dir="${repo_root}/artifacts/dmg-install"
 install_dir="${work_dir}/Applications"
+helper_evidence_root="${repo_root}/artifacts/dmg-install-harness"
 helper_app="${repo_root}/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app"
 helper_executable_name="NoonmarkDMGInstallHarness"
 helper_executable="${helper_app}/Contents/MacOS/${helper_executable_name}"
@@ -49,8 +54,21 @@ task_snapshot_before_path="${work_dir}/task-row-before-restart.txt"
 task_snapshot_after_path="${work_dir}/task-row-after-restart.txt"
 app_diagnostic_baseline="${work_dir}/diagnostics/noonmark-baseline.txt"
 helper_diagnostic_baseline="${work_dir}/diagnostics/harness-baseline.txt"
+app_diagnostic_final="${work_dir}/diagnostics/noonmark-final.txt"
+helper_diagnostic_final="${work_dir}/diagnostics/harness-final.txt"
+app_diagnostic_diff="${work_dir}/diagnostics/noonmark-diff.txt"
+helper_diagnostic_diff="${work_dir}/diagnostics/harness-diff.txt"
 diagnostic_artifact_dir="${work_dir}/diagnostic-reports"
 runtime_manifest_path="${work_dir}/runtime-manifest.txt"
+artifact_inventory_path="${repo_root}/artifacts/dmg-install-artifact-inventory.sha256"
+source_fragment="${work_dir}/source.fragment"
+source_end_fragment="${work_dir}/source-end.fragment"
+mounted_app_fragment="${work_dir}/mounted-app.fragment"
+installed_app_fragment="${work_dir}/installed-app.fragment"
+installed_app_end_fragment="${work_dir}/installed-app-end.fragment"
+helper_fragment="${work_dir}/helper.fragment"
+helper_end_fragment="${work_dir}/helper-end.fragment"
+evidence_run_id=""
 mountpoint=""
 executable_name="NoonmarkMacApp"
 installed_app=""
@@ -69,6 +87,10 @@ last_helper_exit_result=""
 diagnostic_baselines_ready=0
 runtime_manifest_started=0
 mount_cleanup_armed=0
+
+evidence_prepare_fresh_directory "$repo_root" "$work_dir"
+evidence_prepare_fresh_directory "$repo_root" "$helper_evidence_root"
+rm -f "$artifact_inventory_path"
 
 required_tools=(
   awk
@@ -97,6 +119,24 @@ if [[ ! -x /usr/libexec/PlistBuddy ]]; then
   echo "missing required tool: /usr/libexec/PlistBuddy" >&2
   exit 1
 fi
+
+require_equal_evidence_value() {
+  local left_path="$1"
+  local left_key="$2"
+  local right_path="$3"
+  local right_key="$4"
+  local label="$5"
+  local left_value
+  local right_value
+
+  left_value="$(evidence_read "$left_path" "$left_key")"
+  right_value="$(evidence_read "$right_path" "$right_key")"
+  if [[ -z "$left_value" || -z "$right_value" ||
+    "$left_value" != "$right_value" ]]; then
+    echo "DMG install evidence disagreed for $label" >&2
+    return 1
+  fi
+}
 
 process_uses_installed_executable() {
   local pid="$1"
@@ -474,10 +514,34 @@ terminate_verified_app() {
   return 1
 }
 
+capture_diagnostic_final_and_diff() {
+  local process_name="$1"
+  local baseline_path="$2"
+  local final_path="$3"
+  local diff_path="$4"
+
+  if ! runtime_evidence_snapshot_diagnostics "$process_name" "$final_path"; then
+    return 1
+  fi
+  if ! comm -13 "$baseline_path" "$final_path" >"$diff_path"; then
+    echo "failed to preserve DiagnosticReports diff for $process_name" >&2
+    return 1
+  fi
+  if [[ -s "$diff_path" ]]; then
+    echo "new DiagnosticReports remained for $process_name" >&2
+    cat "$diff_path" >&2
+    return 1
+  fi
+}
+
 cleanup() {
   local original_status=$?
   local final_status="$original_status"
   local diagnostic_wait_attempts=30
+  local diagnostic_status=missing
+  local helper_unchanged=true
+  local installed_app_unchanged=true
+  local source_tree_unchanged=true
   local exact_pids=""
   local remaining_pids=""
   local verified_pid
@@ -552,11 +616,208 @@ cleanup() {
       "$diagnostic_wait_attempts"; then
       final_status=1
     fi
+    if ! capture_diagnostic_final_and_diff \
+      "$executable_name" \
+      "$app_diagnostic_baseline" \
+      "$app_diagnostic_final" \
+      "$app_diagnostic_diff"; then
+      final_status=1
+    fi
+    if ! capture_diagnostic_final_and_diff \
+      "$helper_executable_name" \
+      "$helper_diagnostic_baseline" \
+      "$helper_diagnostic_final" \
+      "$helper_diagnostic_diff"; then
+      final_status=1
+    fi
   fi
   if [[ "$runtime_manifest_started" -eq 1 ]]; then
-    if ! runtime_evidence_write_manifest_finish \
+    if ! evidence_capture_source \
+      "$repo_root" \
+      "source_end" \
+      "$source_end_fragment"; then
+      source_tree_unchanged=false
+      final_status=1
+    else
+      evidence_append_snapshot "$runtime_manifest_path" "$source_end_fragment"
+      if ! require_equal_evidence_value \
+        "$source_fragment" \
+        "source_worktree_tree_oid" \
+        "$source_end_fragment" \
+        "source_end_worktree_tree_oid" \
+        "install source tree stability"; then
+        source_tree_unchanged=false
+        final_status=1
+      fi
+    fi
+    if ! evidence_capture_bundle \
+      "$installed_app" \
+      1 \
+      "installed_app_end" \
+      "$installed_app_end_fragment"; then
+      installed_app_unchanged=false
+      final_status=1
+    else
+      evidence_append_snapshot \
+        "$runtime_manifest_path" \
+        "$installed_app_end_fragment"
+      if ! evidence_require_bundle_snapshots_equal \
+        "$installed_app_fragment" \
+        "installed_app" \
+        "$installed_app_end_fragment" \
+        "installed_app_end" \
+        "installed App"; then
+        installed_app_unchanged=false
+        final_status=1
+      fi
+    fi
+    if ! evidence_capture_bundle \
+      "$helper_app" \
+      1 \
+      "helper_end" \
+      "$helper_end_fragment"; then
+      helper_unchanged=false
+      final_status=1
+    else
+      evidence_append_snapshot "$runtime_manifest_path" "$helper_end_fragment"
+      if ! evidence_require_bundle_snapshots_equal \
+        "$helper_fragment" \
+        "helper" \
+        "$helper_end_fragment" \
+        "helper_end" \
+        "DMG install helper"; then
+        helper_unchanged=false
+        final_status=1
+      fi
+    fi
+    evidence_append \
       "$runtime_manifest_path" \
-      "$final_status"; then
+      "source_tree_unchanged" \
+      "$source_tree_unchanged"
+    evidence_append \
+      "$runtime_manifest_path" \
+      "installed_app_binary_unchanged" \
+      "$installed_app_unchanged"
+    evidence_append \
+      "$runtime_manifest_path" \
+      "installed_app_signature_unchanged" \
+      "$installed_app_unchanged"
+    evidence_append \
+      "$runtime_manifest_path" \
+      "helper_binary_unchanged" \
+      "$helper_unchanged"
+    evidence_append \
+      "$runtime_manifest_path" \
+      "helper_signature_unchanged" \
+      "$helper_unchanged"
+    if [[ -f "$app_diagnostic_baseline" &&
+      -f "$app_diagnostic_final" &&
+      -f "$app_diagnostic_diff" &&
+      -f "$helper_diagnostic_baseline" &&
+      -f "$helper_diagnostic_final" &&
+      -f "$helper_diagnostic_diff" ]]; then
+      evidence_append \
+        "$runtime_manifest_path" \
+        "app_diagnostic_baseline_sha256" \
+        "$(shasum -a 256 "$app_diagnostic_baseline" | awk '{print $1}')"
+      evidence_append \
+        "$runtime_manifest_path" \
+        "app_diagnostic_final_sha256" \
+        "$(shasum -a 256 "$app_diagnostic_final" | awk '{print $1}')"
+      evidence_append \
+        "$runtime_manifest_path" \
+        "app_diagnostic_diff_sha256" \
+        "$(shasum -a 256 "$app_diagnostic_diff" | awk '{print $1}')"
+      evidence_append \
+        "$runtime_manifest_path" \
+        "helper_diagnostic_baseline_sha256" \
+        "$(shasum -a 256 "$helper_diagnostic_baseline" | awk '{print $1}')"
+      evidence_append \
+        "$runtime_manifest_path" \
+        "helper_diagnostic_final_sha256" \
+        "$(shasum -a 256 "$helper_diagnostic_final" | awk '{print $1}')"
+      evidence_append \
+        "$runtime_manifest_path" \
+        "helper_diagnostic_diff_sha256" \
+        "$(shasum -a 256 "$helper_diagnostic_diff" | awk '{print $1}')"
+      if cmp -s "$app_diagnostic_baseline" "$app_diagnostic_final" &&
+        cmp -s "$helper_diagnostic_baseline" "$helper_diagnostic_final" &&
+        [[ ! -s "$app_diagnostic_diff" ]] &&
+        [[ ! -s "$helper_diagnostic_diff" ]]; then
+        diagnostic_status=clean
+      else
+        diagnostic_status=changed
+        final_status=1
+      fi
+    else
+      final_status=1
+    fi
+    evidence_append \
+      "$runtime_manifest_path" \
+      "diagnostic_diff_status" \
+      "$diagnostic_status"
+    if [[ "$final_status" -eq 0 ]]; then
+      if evidence_inventory \
+        "$repo_root" \
+        "$artifact_inventory_path" \
+        "$dmg_path" \
+        "${dmg_path}.sha256" \
+        "$package_manifest_path" \
+        "$helper_app" \
+        "$install_dir" \
+        "$screenshot_path" \
+        "$window_metadata_path" \
+        "$initial_launch_log" \
+        "$initial_console_log" \
+        "$permission_ledger" \
+        "$permission_log" \
+        "$permission_console_log" \
+        "$exercise_ledger" \
+        "$exercise_launch_log" \
+        "$exercise_helper_log" \
+        "$exercise_console_log" \
+        "$exercise_screenshot_path" \
+        "$exercise_window_metadata_path" \
+        "$restart_ledger" \
+        "$restart_launch_log" \
+        "$restart_helper_log" \
+        "$restart_console_log" \
+        "$restart_screenshot_path" \
+        "$restart_window_metadata_path" \
+        "$task_identity_path" \
+        "$task_snapshot_before_path" \
+        "$task_snapshot_after_path" \
+        "$app_diagnostic_baseline" \
+        "$app_diagnostic_final" \
+        "$app_diagnostic_diff" \
+        "$helper_diagnostic_baseline" \
+        "$helper_diagnostic_final" \
+        "$helper_diagnostic_diff"; then
+        evidence_append \
+          "$runtime_manifest_path" \
+          "artifact_inventory_sha256" \
+          "$(shasum -a 256 "$artifact_inventory_path" | awk '{print $1}')"
+      else
+        final_status=1
+      fi
+    fi
+    if ! evidence_finish_manifest \
+      "$runtime_manifest_path" \
+      "$final_status" \
+      "source_worktree_tree_oid" \
+      "source_end_worktree_tree_oid" \
+      "mounted_app_binary_sha256" \
+      "installed_app_binary_sha256" \
+      "installed_app_end_binary_sha256" \
+      "helper_binary_sha256" \
+      "helper_end_binary_sha256" \
+      "dmg_sha256" \
+      "package_manifest_sha256" \
+      "artifact_inventory_sha256" \
+      "source_tree_unchanged" \
+      "installed_app_binary_unchanged" \
+      "helper_binary_unchanged" \
+      "diagnostic_diff_status"; then
       final_status=1
     fi
   fi
@@ -851,234 +1112,16 @@ start_helper_exit_observer() {
   local gate_path="$4"
   local result_path="$5"
   local observer_log_path="$6"
-  local observer_module="NoonmarkExitObserver_${token//-/}"
 
-  : >"$observer_log_path"
-  NOONMARK_HELPER_MODE="$mode" \
-    NOONMARK_HELPER_PID="$helper_pid" \
-    NOONMARK_HELPER_TOKEN="$token" \
-    NOONMARK_HELPER_GATE_PATH="$gate_path" \
-    NOONMARK_HELPER_EXIT_RESULT_PATH="$result_path" \
-    swift -module-name "$observer_module" -e '
-import Darwin
-import Foundation
-
-enum ObserverFailure: LocalizedError {
-    case invalidConfiguration
-    case queueUnavailable(Int32)
-    case registrationFailed(Int32)
-    case waitFailed(Int32, Int32)
-    case unexpectedEvent(UInt32)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidConfiguration:
-            "invalid helper exit observer configuration"
-        case let .queueUnavailable(code):
-            "kqueue creation failed with errno=\(code)"
-        case let .registrationFailed(code):
-            "EVFILT_PROC registration failed with errno=\(code)"
-        case let .waitFailed(count, code):
-            "EVFILT_PROC wait returned count=\(count) errno=\(code)"
-        case let .unexpectedEvent(flags):
-            "EVFILT_PROC omitted NOTE_EXIT or NOTE_EXITSTATUS: fflags=\(flags)"
-        }
-    }
-}
-
-func writeAtomically(_ value: String, to path: String) throws {
-    try Data(value.utf8).write(
-        to: URL(fileURLWithPath: path),
-        options: .atomic
-    )
-}
-
-let environment = ProcessInfo.processInfo.environment
-let resultPath = environment["NOONMARK_HELPER_EXIT_RESULT_PATH"] ?? ""
-do {
-    guard let mode = environment["NOONMARK_HELPER_MODE"],
-          ["preflight", "exercise", "restart"].contains(mode),
-          let rawPID = environment["NOONMARK_HELPER_PID"],
-          let pid = UInt64(rawPID), pid > 0,
-          let token = environment["NOONMARK_HELPER_TOKEN"],
-          UUID(uuidString: token)?.uuidString == token,
-          let gatePath = environment["NOONMARK_HELPER_GATE_PATH"],
-          gatePath.hasPrefix("/"),
-          resultPath.hasPrefix("/")
-    else {
-        throw ObserverFailure.invalidConfiguration
-    }
-
-    let queue = kqueue()
-    guard queue >= 0 else {
-        throw ObserverFailure.queueUnavailable(errno)
-    }
-    defer { close(queue) }
-
-    var change = kevent64_s(
-        ident: pid,
-        filter: Int16(EVFILT_PROC),
-        flags: UInt16(EV_ADD | EV_ENABLE | EV_ONESHOT),
-        fflags: UInt32(NOTE_EXIT) | UInt32(NOTE_EXITSTATUS),
-        data: 0,
-        udata: 0,
-        ext: (0, 0)
-    )
-    let registrationCount = withUnsafePointer(to: &change) { pointer in
-        kevent64(queue, pointer, 1, nil, 0, 0, nil)
-    }
-    guard registrationCount == 0 else {
-        throw ObserverFailure.registrationFailed(errno)
-    }
-
-    let gate = "mode=\(mode)\n"
-        + "helper_pid=\(pid)\n"
-        + "launch_token=\(token)\n"
-        + "observer=EVFILT_PROC+NOTE_EXITSTATUS\n"
-    try writeAtomically(gate, to: gatePath)
-
-    var event = kevent64_s()
-    let eventCount = withUnsafeMutablePointer(to: &event) { pointer in
-        kevent64(queue, nil, 0, pointer, 1, 0, nil)
-    }
-    guard eventCount == 1 else {
-        throw ObserverFailure.waitFailed(eventCount, errno)
-    }
-    let requiredFlags = UInt32(NOTE_EXIT) | UInt32(NOTE_EXITSTATUS)
-    guard event.fflags & requiredFlags == requiredFlags else {
-        throw ObserverFailure.unexpectedEvent(event.fflags)
-    }
-
-    let rawStatus = Int32(truncatingIfNeeded: event.data)
-    let statusBits = rawStatus & 0x7F
-    let normalExit = statusBits == 0
-    let exitCode = normalExit ? Int((rawStatus >> 8) & 0xFF) : -1
-    let signal = normalExit ? 0 : Int(statusBits)
-    let result = "status=PASS\n"
-        + "mode=\(mode)\n"
-        + "helper_pid=\(pid)\n"
-        + "launch_token=\(token)\n"
-        + "fflags=0x\(String(event.fflags, radix: 16, uppercase: true))\n"
-        + "raw_status=\(rawStatus)\n"
-        + "normal_exit=\(normalExit)\n"
-        + "exit_code=\(exitCode)\n"
-        + "signal=\(signal)\n"
-    try writeAtomically(result, to: resultPath)
-} catch {
-    let message = error.localizedDescription
-        .replacingOccurrences(of: "\r", with: " ")
-        .replacingOccurrences(of: "\n", with: " ")
-    if resultPath.hasPrefix("/") {
-        try? writeAtomically("status=FAIL\nmessage=\(message)\n", to: resultPath)
-    }
-    FileHandle.standardError.write(Data("exit observer failed: \(message)\n".utf8))
-    exit(EXIT_FAILURE)
-}
-' >"$observer_log_path" 2>&1 &
-  active_helper_observer_pid=$!
-  active_helper_observer_parent_pid=$$
-  active_helper_observer_token="$token"
-}
-
-helper_observer_is_running() {
-  local pid="$active_helper_observer_pid"
-  local expected_parent="$active_helper_observer_parent_pid"
-  local expected_token="$active_helper_observer_token"
-  local state
-
-  [[ -n "$pid" ]] || return 1
-  if ! helper_observer_is_owned_child "$pid" "$expected_parent" "$expected_token"; then
-    return 1
-  fi
-  if ! state="$(ps -p "$pid" -o state= 2>/dev/null)"; then
-    return 1
-  fi
-  state="${state//[[:space:]]/}"
-  [[ -n "$state" && "$state" != Z* ]]
-}
-
-wait_for_helper_observer_gate() {
-  local mode="$1"
-  local helper_pid="$2"
-  local token="$3"
-  local gate_path="$4"
-  local result_path="$5"
-  local actual_gate expected_gate
-
-  expected_gate="mode=$mode
-helper_pid=$helper_pid
-launch_token=$token
-observer=EVFILT_PROC+NOTE_EXITSTATUS"
-  for _ in {1..400}; do
-    if [[ -s "$gate_path" ]]; then
-      actual_gate="$(<"$gate_path")"
-      if [[ "$actual_gate" != "$expected_gate" ]]; then
-        echo "helper exit observer gate did not match this launch" >&2
-        return 1
-      fi
-      return 0
-    fi
-    if [[ -s "$result_path" ]]; then
-      echo "helper exit observer failed before arming" >&2
-      return 1
-    fi
-    if ! helper_observer_is_running; then
-      echo "helper exit observer exited before arming" >&2
-      return 1
-    fi
-    sleep 0.025
-  done
-  echo "timed out waiting for the helper exit observer to arm" >&2
-  return 1
-}
-
-wait_for_helper_exit_result() {
-  local helper_pid="$1"
-  local mode="$2"
-  local token="$3"
-  local result_path="$4"
-  local observer_status
-
-  for _ in {1..2400}; do
-    if [[ -s "$result_path" ]]; then
-      break
-    fi
-    if ! helper_observer_is_running; then
-      echo "helper exit observer exited without a result" >&2
-      return 1
-    fi
-    if kill -0 "$helper_pid" >/dev/null 2>&1 &&
-      ! process_has_helper_command_identity "$helper_pid" "$mode" "$token"; then
-      echo "helper pid identity changed before its exit was observed: $helper_pid" >&2
-      return 1
-    fi
-    sleep 0.05
-  done
-  if [[ ! -s "$result_path" ]]; then
-    echo "timed out waiting for the helper kernel exit status" >&2
-    return 1
-  fi
-
-  set +e
-  wait "$active_helper_observer_pid"
-  observer_status=$?
-  set -e
-  active_helper_observer_pid=""
-  active_helper_observer_parent_pid=""
-  active_helper_observer_token=""
-  if [[ "$observer_status" -ne 0 ]]; then
-    echo "helper exit observer exited with status $observer_status" >&2
-    return 1
-  fi
-
-  for _ in {1..20}; do
-    if ! kill -0 "$helper_pid" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.05
-  done
-  echo "helper kernel exit event arrived while pid remained live: $helper_pid" >&2
-  return 1
+  start_helper_exit_observer_process \
+    "$mode" \
+    "$helper_pid" \
+    "$token" \
+    "$gate_path" \
+    "$result_path" \
+    "$observer_log_path" \
+    120 \
+    "${repo_root}/scripts/dmg-install-exit-observer.swift"
 }
 
 assert_helper_completed() {
@@ -1904,6 +1947,35 @@ if [[ ! -f "$dmg_path" ]]; then
   echo "missing DMG: $dmg_path" >&2
   exit 1
 fi
+if [[ ! -f "$package_manifest_path" ]]; then
+  echo "missing package manifest: $package_manifest_path" >&2
+  exit 1
+fi
+
+evidence_require_manifest \
+  "$package_manifest_path" \
+  "evidence_schema_version=1" \
+  "suite=package-dmg" \
+  "configuration=release" \
+  "suite_mode=full" \
+  "suite_exit_status=0"
+package_run_id="$(evidence_read "$package_manifest_path" "evidence_run_id")"
+if [[ -z "$package_run_id" ]]; then
+  echo "package manifest has no evidence run ID" >&2
+  exit 1
+fi
+if [[ -n "${NOONMARK_EVIDENCE_RUN_ID:-}" &&
+  "$NOONMARK_EVIDENCE_RUN_ID" != "$package_run_id" ]]; then
+  echo "DMG install run ID does not match the package manifest" >&2
+  exit 1
+fi
+evidence_run_id="$package_run_id"
+
+rm -rf "$work_dir" "$helper_evidence_root"
+rm -f "$artifact_inventory_path"
+mkdir -p "$install_dir"
+
+scripts/verify-dmg "$dmg_path" >/dev/null
 
 scripts/build-dmg-install-harness release
 if [[ ! -d "$helper_app" || ! -x "$helper_executable" ]]; then
@@ -1918,9 +1990,14 @@ if [[ "$actual_helper_identifier" != "$helper_bundle_identifier" ]]; then
   echo "DMG install harness has an unexpected bundle identifier: $actual_helper_identifier" >&2
   exit 1
 fi
-
-rm -rf "$work_dir"
-mkdir -p "$install_dir"
+evidence_capture_source "$repo_root" "source" "$source_fragment"
+evidence_capture_bundle "$helper_app" 1 "helper" "$helper_fragment"
+require_equal_evidence_value \
+  "$package_manifest_path" \
+  "source_worktree_tree_oid" \
+  "$source_fragment" \
+  "source_worktree_tree_oid" \
+  "package and install source tree"
 
 mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-install.XXXXXX")"
 mount_cleanup_armed=1
@@ -1932,6 +2009,13 @@ if [[ ! -d "$source_app" ]]; then
   echo "DMG missing app bundle: $source_app" >&2
   exit 1
 fi
+evidence_capture_bundle "$source_app" 1 "mounted_app" "$mounted_app_fragment"
+evidence_require_bundle_snapshots_equal \
+  "$package_manifest_path" \
+  "app" \
+  "$mounted_app_fragment" \
+  "mounted_app" \
+  "packaged and mounted App"
 
 ditto "$source_app" "$installed_app"
 info_plist="${installed_app}/Contents/Info.plist"
@@ -1952,6 +2036,19 @@ if [[ ! -x "$installed_executable" ]]; then
   exit 1
 fi
 scripts/verify-mac-app-metadata "$installed_app"
+evidence_capture_bundle "$installed_app" 1 "installed_app" "$installed_app_fragment"
+evidence_require_bundle_snapshots_equal \
+  "$package_manifest_path" \
+  "app" \
+  "$installed_app_fragment" \
+  "installed_app" \
+  "packaged and installed App"
+evidence_require_bundle_snapshots_equal \
+  "$mounted_app_fragment" \
+  "mounted_app" \
+  "$installed_app_fragment" \
+  "installed_app" \
+  "mounted and installed App"
 
 runtime_evidence_snapshot_diagnostics \
   "$executable_name" \
@@ -1960,17 +2057,47 @@ runtime_evidence_snapshot_diagnostics \
   "$helper_executable_name" \
   "$helper_diagnostic_baseline"
 diagnostic_baselines_ready=1
-runtime_evidence_write_manifest_start \
+evidence_begin_manifest \
   "$runtime_manifest_path" \
-  "$executable_name" \
-  "$installed_app"
-{
-  printf 'production_bundle_identifier=%s\n' "$production_bundle_identifier"
-  printf 'production_executable=%s\n' "$installed_executable"
-  printf 'helper_process=%s\n' "$helper_executable_name"
-  printf 'helper_bundle_identifier=%s\n' "$helper_bundle_identifier"
-  printf 'helper_bundle=%s\n' "$helper_app"
-} >>"$runtime_manifest_path"
+  "dmg-install" \
+  "$evidence_run_id" \
+  "release" \
+  "full"
+evidence_append_snapshot "$runtime_manifest_path" "$source_fragment"
+evidence_append_snapshot "$runtime_manifest_path" "$mounted_app_fragment"
+evidence_append_snapshot "$runtime_manifest_path" "$installed_app_fragment"
+evidence_append_snapshot "$runtime_manifest_path" "$helper_fragment"
+evidence_append \
+  "$runtime_manifest_path" \
+  "package_manifest_sha256" \
+  "$(shasum -a 256 "$package_manifest_path" | awk '{print $1}')"
+dmg_sha256="$(shasum -a 256 "$dmg_path" | awk '{print $1}')"
+evidence_append "$runtime_manifest_path" "dmg_sha256" "$dmg_sha256"
+evidence_append \
+  "$runtime_manifest_path" \
+  "dmg_checksum_sha256" \
+  "$(shasum -a 256 "${dmg_path}.sha256" | awk '{print $1}')"
+evidence_append \
+  "$runtime_manifest_path" \
+  "package_app_binary_sha256" \
+  "$(evidence_read "$package_manifest_path" "app_binary_sha256")"
+evidence_append \
+  "$runtime_manifest_path" \
+  "production_bundle_identifier" \
+  "$production_bundle_identifier"
+evidence_append \
+  "$runtime_manifest_path" \
+  "production_executable" \
+  "$installed_executable"
+evidence_append \
+  "$runtime_manifest_path" \
+  "helper_process" \
+  "$helper_executable_name"
+evidence_append \
+  "$runtime_manifest_path" \
+  "helper_bundle_identifier" \
+  "$helper_bundle_identifier"
+evidence_append "$runtime_manifest_path" "helper_bundle" "$helper_app"
 runtime_manifest_started=1
 
 run_permission_preflight

@@ -226,6 +226,267 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         )
     }
 
+    func testConsecutivePreferenceMutationsSurviveRestartAndLimitedUploads() async throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let transport = InMemorySyncTransport()
+        let deviceID = SyncDeviceID("mac-preferences")
+        let firstClock = now.addingTimeInterval(10)
+        let secondClock = now.addingTimeInterval(20)
+        let engine = NoonmarkEngine()
+        try engineRepository.save(engine.snapshot())
+
+        try engine.updateTheme(
+            .warmPaper,
+            writerID: deviceID.rawValue,
+            now: firstClock
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: firstClock
+        )
+        try engine.updateLanguage(
+            .english,
+            writerID: deviceID.rawValue,
+            now: secondClock
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: secondClock
+        )
+
+        let pending = try syncRepository.journalEntries(
+            state: .pendingUpload
+        )
+        XCTAssertEqual(pending.map(\.entityType), [
+            .appPreferences,
+            .appPreferences
+        ])
+        XCTAssertTrue(pending.allSatisfy { $0.recordPayload?.isEmpty == false })
+
+        let firstCoordinator = SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        let firstResult = try await firstCoordinator.uploadPending(limit: 1)
+        let firstRemoteRecords = try await transport.fetchAll()
+        let firstRemote = try XCTUnwrap(
+            firstRemoteRecords.first
+        )
+        let firstEnvelope = try SyncRecordMapper()
+            .decodeAppPreferences(firstRemote)
+
+        XCTAssertEqual(
+            firstResult,
+            SQLiteSyncUploadResult(
+                pendingCount: 1,
+                uploadedCount: 1,
+                failedCount: 0
+            )
+        )
+        XCTAssertEqual(firstEnvelope.theme, .warmPaper)
+        XCTAssertEqual(firstEnvelope.language, .chinese)
+        XCTAssertEqual(
+            firstEnvelope.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            firstClock.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .pendingUpload).count,
+            1
+        )
+
+        let restartedCoordinator = SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        let secondResult = try await restartedCoordinator.uploadPending(
+            limit: 1
+        )
+        let finalRemoteRecords = try await transport.fetchAll()
+        let finalRemote = try XCTUnwrap(
+            finalRemoteRecords.first
+        )
+        let finalEnvelope = try SyncRecordMapper()
+            .decodeAppPreferences(finalRemote)
+
+        XCTAssertEqual(
+            secondResult,
+            SQLiteSyncUploadResult(
+                pendingCount: 1,
+                uploadedCount: 1,
+                failedCount: 0
+            )
+        )
+        XCTAssertEqual(finalEnvelope.theme, .warmPaper)
+        XCTAssertEqual(finalEnvelope.language, .english)
+        XCTAssertEqual(
+            finalEnvelope.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            secondClock.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .pendingUpload).isEmpty
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .failed).isEmpty
+        )
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .uploaded).count,
+            2
+        )
+        XCTAssertEqual(
+            try syncRepository.auditLog().filter { $0.action == "uploaded" }
+                .count,
+            2
+        )
+    }
+
+    func testConsecutivePreferenceMutationsUploadTogetherToLatestCurrentRecord() async throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let transport = InMemorySyncTransport()
+        let deviceID = SyncDeviceID("mac-preferences-batch")
+        let firstClock = now.addingTimeInterval(30)
+        let secondClock = now.addingTimeInterval(40)
+        let engine = NoonmarkEngine()
+        try engineRepository.save(engine.snapshot())
+
+        try engine.updateTheme(
+            .warmPaper,
+            writerID: deviceID.rawValue,
+            now: firstClock
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: firstClock
+        )
+        try engine.updateLanguage(
+            .english,
+            writerID: deviceID.rawValue,
+            now: secondClock
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: secondClock
+        )
+
+        let result = try await SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        ).uploadPending()
+        let remoteRecords = try await transport.fetchAll()
+        let remote = try XCTUnwrap(remoteRecords.first)
+        let envelope = try SyncRecordMapper().decodeAppPreferences(remote)
+
+        XCTAssertEqual(
+            result,
+            SQLiteSyncUploadResult(
+                pendingCount: 2,
+                uploadedCount: 2,
+                failedCount: 0
+            )
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .pendingUpload).isEmpty
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .failed).isEmpty
+        )
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .uploaded).count,
+            2
+        )
+        XCTAssertEqual(remoteRecords.count, 1)
+        XCTAssertEqual(envelope.theme, .warmPaper)
+        XCTAssertEqual(envelope.language, .english)
+        XCTAssertEqual(
+            envelope.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            secondClock.timeIntervalSinceReferenceDate.bitPattern
+        )
+    }
+
+    func testCommittedPreferenceBatchRetryRemainsCanonicalAndUploadsBothJournals() async throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let transport = CommitThenThrowOnceSyncTransport()
+        let deviceID = SyncDeviceID("mac-preferences-retry")
+        let firstClock = now.addingTimeInterval(30)
+        let secondClock = now.addingTimeInterval(40)
+        let engine = NoonmarkEngine()
+        try engineRepository.save(engine.snapshot())
+
+        try engine.updateTheme(
+            .warmPaper,
+            writerID: deviceID.rawValue,
+            now: firstClock
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: firstClock
+        )
+        try engine.updateLanguage(
+            .english,
+            writerID: deviceID.rawValue,
+            now: secondClock
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: secondClock
+        )
+        let coordinator = SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+
+        do {
+            _ = try await coordinator.uploadPending()
+            XCTFail("committed transport failure must remain visible")
+        } catch {
+            XCTAssertEqual(error as? TestSyncTransportError, .unavailable)
+        }
+        let committedRecords = try await transport.fetchAll()
+        XCTAssertEqual(committedRecords.count, 1)
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .failed).count,
+            2
+        )
+
+        let result = try await coordinator.uploadPending()
+        let retriedRecords = try await transport.fetchAll()
+        let remote = try XCTUnwrap(retriedRecords.first)
+        let envelope = try SyncRecordMapper().decodeAppPreferences(remote)
+
+        XCTAssertEqual(
+            result,
+            SQLiteSyncUploadResult(
+                pendingCount: 2,
+                uploadedCount: 2,
+                failedCount: 0
+            )
+        )
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .uploaded).count,
+            2
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .failed).isEmpty
+        )
+        XCTAssertEqual(envelope.language, .english)
+        XCTAssertEqual(envelope.writerDeviceID, deviceID)
+        XCTAssertEqual(
+            envelope.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            secondClock.timeIntervalSinceReferenceDate.bitPattern
+        )
+    }
+
     private func makeDatabaseURL() -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("noonmark-sync-upload-\(UUID().uuidString)")
@@ -261,6 +522,23 @@ private actor RecoveringSyncTransport: SyncRecordTransport {
 
     func pushAttemptCount() -> Int {
         attempts
+    }
+}
+
+private actor CommitThenThrowOnceSyncTransport: SyncRecordTransport {
+    private let transport = InMemorySyncTransport()
+    private var didThrow = false
+
+    func push(_ records: [SyncRecord]) async throws {
+        try await transport.push(records)
+        guard didThrow else {
+            didThrow = true
+            throw TestSyncTransportError.unavailable
+        }
+    }
+
+    func fetchAll() async throws -> [SyncRecord] {
+        try await transport.fetchAll()
     }
 }
 

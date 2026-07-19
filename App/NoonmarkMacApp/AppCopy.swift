@@ -90,7 +90,7 @@ struct AppCopy {
             : "Future day: schedule and reorder only. Completion and review are not available yet."
     }
 
-    var emptyDay: String { language == .chinese ? "这一天没有留下任务。" : "No tasks were left on this day." }
+    var emptyDay: String { language == .chinese ? "这一天没有留下任务。" : "No tasks on this day." }
     var scheduleFromPool: String { language == .chinese ? "从任务池排期…" : "Schedule from pool…" }
     var poolSubtitle: String {
         language == .chinese ? "尚未安排日期的任务。排期后会出现在对应的 Day Todo。" : "Unscheduled tasks. Schedule one and it appears on the matching Day Todo."
@@ -103,10 +103,12 @@ struct AppCopy {
 
     var emptyFuture: String { language == .chinese ? "还没有未来计划。" : "No upcoming plans yet." }
     var unfinishedSubtitle: String {
-        language == .chinese ? "按任务链去重的未完成轨迹。延续它，或明确废弃。" : "Unfinished trails deduped by task chain. Continue them or drop them explicitly."
+        language == .chinese
+            ? "按任务链去重的未完成轨迹。延续它，或明确废弃。"
+            : "Each unfinished task appears once, grouped by task chain. Continue it or mark it abandoned."
     }
 
-    var emptyUnfinished: String { language == .chinese ? "没有待处理的未完成任务。" : "Nothing unfinished to handle." }
+    var emptyUnfinished: String { language == .chinese ? "没有待处理的未完成任务。" : "No unfinished tasks." }
     func unfinishedMissedCount(_ count: Int) -> String {
         switch language {
         case .chinese: "\(count) 次未完成"
@@ -152,8 +154,11 @@ struct AppCopy {
     var coolGray: String { language == .chinese ? "冷灰" : "Cool gray" }
     var warmPaper: String { language == .chinese ? "微暖纸感" : "Warm paper" }
     var languageTitle: String { language == .chinese ? "语言" : "Language" }
-    var settingsPoemTitle: String { language == .chinese ? "设置页诗文" : "Settings poem" }
-    var settingsPoemDisplay: String { language == .chinese ? "右侧展示诗文" : "Show poem on the right" }
+    var settingsPoemTitle: String { language == .chinese ? "关于页诗文" : "Poem" }
+    var settingsPoemDisplay: String {
+        language == .chinese ? "在“关于晷迹”中展示诗文" : "Show poem in About Noonmark"
+    }
+
     var settingsPoemEditorTitle: String { language == .chinese ? "诗文内容" : "Poem text" }
     var resetSettingsPoem: String { language == .chinese ? "恢复默认《苦昼短》" : "Restore default" }
     var settingsPoemResetToast: String { language == .chinese ? "已恢复默认诗文" : "Default poem restored" }

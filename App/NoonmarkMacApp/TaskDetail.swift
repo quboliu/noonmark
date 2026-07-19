@@ -627,7 +627,11 @@ struct TraceContextCard: View {
 
     var durationDays: Int {
         let traces = store.engine.traces.values
-            .filter { $0.chainID == trace.chainID && $0.date <= trace.date }
+            .filter {
+                $0.chainID == trace.chainID
+                    && $0.date <= trace.date
+                    && $0.formsDayHistory
+            }
             .sorted { $0.date < $1.date }
         guard let first = traces.first else { return 1 }
         return max(
@@ -643,17 +647,18 @@ struct Timeline: View {
 
     var body: some View {
         let chainTraces = store.engine.traces.values
-            .filter { $0.chainID == trace.chainID }
+            .filter {
+                $0.chainID == trace.chainID && $0.formsDayHistory
+            }
             .sorted { $0.date < $1.date }
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(chainTraces.enumerated()), id: \.element.id) { index, item in
                 let isCurrent = item.id == trace.id
                 let isLast = index == chainTraces.count - 1
-                let presentedStatus: TraceStatus = item.status == .continued ? .unfinished : item.status
                 let nodeStyle = TimelineNodeStyle(
                     status: item.status,
                     isCurrent: isCurrent,
-                    label: store.copy.traceStatusLabel(presentedStatus)
+                    label: store.copy.traceStatusLabel(item.status)
                 )
                 HStack(alignment: .top, spacing: 8) {
                     VStack(spacing: 0) {
@@ -705,6 +710,12 @@ struct Timeline: View {
                     )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "timeline.trace.\(item.id.description)",
+                        verificationText: "\(item.status.rawValue)|\(nodeStyle.glyph)|\(nodeStyle.label)"
+                    )
+                }
             }
         }
     }
@@ -720,38 +731,14 @@ struct TimelineNodeStyle {
 
     init(status: TraceStatus, isCurrent: Bool, label: String) {
         self.label = label
-        switch status {
-        case .pending:
-            glyph = ""
-            labelColor = Theme.accent
-            glyphForeground = Theme.accent
-            glyphBackground = Theme.panel
-            glyphBorder = isCurrent ? Theme.accent : Theme.line2
-        case .completed:
-            glyph = status.uiStyle.glyph
-            labelColor = Theme.ok
-            glyphForeground = .white
-            glyphBackground = Theme.ok
-            glyphBorder = .clear
-        case .unfinished:
-            glyph = status.uiStyle.glyph
-            labelColor = Theme.warn
-            glyphForeground = Theme.warn
-            glyphBackground = Theme.warnSoft
-            glyphBorder = .clear
-        case .continued:
-            glyph = TraceStatus.unfinished.uiStyle.glyph
-            labelColor = Theme.warn
-            glyphForeground = Theme.warn
-            glyphBackground = Theme.warnSoft
-            glyphBorder = .clear
-        case .changed, .returnedToPool, .abandoned:
-            glyph = status.uiStyle.glyph
-            labelColor = status.uiStyle.foreground
-            glyphForeground = status.uiStyle.glyphForeground
-            glyphBackground = status.uiStyle.glyphBackground
-            glyphBorder = status.uiStyle.glyphBorder
-        }
+        let style = status.uiStyle
+        glyph = style.glyph
+        labelColor = style.foreground
+        glyphForeground = style.glyphForeground
+        glyphBackground = style.glyphBackground
+        glyphBorder = status == .pending && isCurrent
+            ? Theme.accent
+            : style.glyphBorder
     }
 }
 

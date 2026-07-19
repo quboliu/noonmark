@@ -132,13 +132,13 @@ struct NaturalDayRolloverE2EAutomation {
             date: sourceDate
         )
 
-        store.movePriority(trace.id, delta: 1)
+        store.toggleComplete(trace.id)
         guard case let .blocked(applied, candidate, _) = store.dayBoundaryState,
               applied == sourceDate,
               candidate == targetDate,
               store.today == sourceDate,
               store.engine.snapshot() == baseline,
-              store.engine.traces[trace.id]?.priority == trace.priority
+              store.engine.traces[trace.id]?.status == .pending
         else {
             throw Failure.failed(
                 "blocked mutation changed state or lost the candidate day"

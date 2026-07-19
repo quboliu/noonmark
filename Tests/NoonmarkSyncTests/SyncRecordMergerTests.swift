@@ -22,13 +22,379 @@ final class SyncRecordMergerTests: XCTestCase {
         try await transport.push(try mapper.records(from: source.snapshot(), modifiedBy: SyncDeviceID("mac-a")))
 
         let target = NoonmarkEngine()
-        let result = await SyncRecordMerger(mapper: mapper).merge(records: try transport.fetchAll(), into: target.snapshot(), detectedAt: now)
+        let result = try await SyncRecordMerger(mapper: mapper).merge(records: try transport.fetchAll(), into: target.snapshot(), detectedAt: now)
         let restored = try NoonmarkEngine(snapshot: result.snapshot)
 
         XCTAssertTrue(result.conflicts.isEmpty)
         XCTAssertFalse(result.appliedRecordIDs.isEmpty)
         XCTAssertEqual(restored.snapshot(), source.snapshot())
         XCTAssertEqual(restored.getDayTodo(date: today).traces.first?.id, traceID)
+    }
+
+    func testCurrentRecordBatchWaitsAndRollsBackWhenItWouldBreakSnapshotIntegrity() throws {
+        let source = NoonmarkEngine()
+        _ = try source.createPoolTask(
+            title: "缺少定义的同步链",
+            now: now
+        )
+        let mapper = SyncRecordMapper()
+        let chainRecord = try mapper.record(
+            for: try XCTUnwrap(source.snapshot().chains.first),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let original = NoonmarkEngine().snapshot()
+
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: [chainRecord],
+            into: original,
+            detectedAt: now
+        )
+
+        XCTAssertEqual(result.snapshot, original)
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertEqual(
+            result.waitingRecords,
+            [
+                SyncWaitingRecord(
+                    record: chainRecord,
+                    dependencies: [.currentSnapshotIntegrity]
+                )
+            ]
+        )
+        XCTAssertNoThrow(try result.snapshot.validateIntegrity())
+    }
+
+    func testCurrentRecordsRetryAfterTheirStructuralParentsArrive() throws {
+        let source = NoonmarkEngine()
+        let chainID = try source.createPoolTask(
+            title: "乱序父子记录",
+            now: now
+        )
+        let traceID = try source.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let snapshot = source.snapshot()
+        let mapper = SyncRecordMapper()
+        let chainRecord = try mapper.record(
+            for: try XCTUnwrap(snapshot.chains.first),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let definitionRecord = try mapper.record(
+            for: try XCTUnwrap(snapshot.definitions.first),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let traceRecord = try mapper.record(
+            for: try XCTUnwrap(snapshot.traces.first),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let dayRecord = try mapper.record(
+            for: try XCTUnwrap(snapshot.days.first),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let original = NoonmarkEngine().snapshot()
+
+        let definitionOnly = try SyncRecordMerger(mapper: mapper).merge(
+            records: [definitionRecord],
+            into: original,
+            detectedAt: now
+        )
+        XCTAssertEqual(
+            definitionOnly.waitingRecords.first?.dependencies,
+            [.taskChain(chainID)]
+        )
+        XCTAssertTrue(definitionOnly.conflicts.isEmpty)
+        XCTAssertNoThrow(try definitionOnly.snapshot.validateIntegrity())
+
+        let traceOnly = try SyncRecordMerger(mapper: mapper).merge(
+            records: [traceRecord],
+            into: original,
+            detectedAt: now
+        )
+        XCTAssertEqual(
+            Set(traceOnly.waitingRecords.first?.dependencies ?? []),
+            [
+                .day(today),
+                .taskChain(chainID),
+                .taskDefinition(try XCTUnwrap(snapshot.definitions.first?.id))
+            ]
+        )
+        XCTAssertTrue(traceOnly.conflicts.isEmpty)
+        XCTAssertNoThrow(try traceOnly.snapshot.validateIntegrity())
+
+        let complete = try SyncRecordMerger(mapper: mapper).merge(
+            records: [traceRecord, definitionRecord, chainRecord, dayRecord],
+            into: original,
+            detectedAt: now
+        )
+        XCTAssertTrue(complete.waitingRecords.isEmpty)
+        XCTAssertTrue(complete.conflicts.isEmpty)
+        XCTAssertEqual(
+            complete.snapshot.traces.first(where: { $0.id == traceID })?.id,
+            traceID
+        )
+        XCTAssertNoThrow(try complete.snapshot.validateIntegrity())
+    }
+
+    func testConcurrentSiblingPositionCollisionConflictsWithoutEscapingInvalidTopology() throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "并发子任务",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let baseSnapshot = base.snapshot()
+        let firstBranch = try NoonmarkEngine(snapshot: baseSnapshot)
+        let secondBranch = try NoonmarkEngine(snapshot: baseSnapshot)
+        let firstID = try firstBranch.addSubtask(
+            traceID: traceID,
+            title: "分支一",
+            now: now.addingTimeInterval(1)
+        )
+        let secondID = try secondBranch.addSubtask(
+            traceID: traceID,
+            title: "分支二",
+            now: now.addingTimeInterval(1)
+        )
+        let mapper = SyncRecordMapper()
+        let records = [
+            try mapper.record(
+                for: try XCTUnwrap(firstBranch.subtasks[firstID]),
+                modifiedBy: SyncDeviceID("mac-a")
+            ),
+            try mapper.record(
+                for: try XCTUnwrap(secondBranch.subtasks[secondID]),
+                modifiedBy: SyncDeviceID("phone-b")
+            )
+        ]
+
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: records,
+            into: baseSnapshot,
+            detectedAt: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(result.snapshot, baseSnapshot)
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        XCTAssertTrue(result.waitingRecords.isEmpty)
+        XCTAssertEqual(
+            Set(result.conflicts.map(\.remoteRecordID)),
+            Set(records.map(\.id))
+        )
+        XCTAssertEqual(Set(result.conflicts.map(\.type)), [.invalidRecordPayload])
+        XCTAssertNoThrow(try result.snapshot.validateIntegrity())
+    }
+
+    func testCrossDateDayIdentityCollisionConflictsWithoutEscapingInvalidSnapshot() throws {
+        let originalDay = Day(date: today, now: now)
+        var original = NoonmarkEngine().snapshot()
+        original.days = [originalDay]
+        try original.validateIntegrity()
+        let collidingDay = Day(
+            id: originalDay.id,
+            date: tomorrow,
+            now: now.addingTimeInterval(1)
+        )
+        let record = try SyncRecordMapper().record(
+            for: collidingDay,
+            modifiedBy: SyncDeviceID("phone-b")
+        )
+
+        let result = try SyncRecordMerger().merge(
+            records: [record],
+            into: original,
+            detectedAt: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(result.snapshot, original)
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        XCTAssertTrue(result.waitingRecords.isEmpty)
+        XCTAssertEqual(result.conflicts.count, 1)
+        XCTAssertEqual(result.conflicts.first?.type, .invalidRecordPayload)
+        XCTAssertTrue(
+            result.conflicts.first?.remoteRecord.exactlyMatches(record) == true
+        )
+        XCTAssertNoThrow(try result.snapshot.validateIntegrity())
+    }
+
+    func testSubtaskCompletionUndoConvergesByUpdatedAtInBothOrders() throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "子任务完成撤回收敛",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let subtaskID = try base.addSubtask(
+            traceID: traceID,
+            title: "先完成再撤回",
+            now: now
+        )
+        let baseSnapshot = base.snapshot()
+
+        let completed = try NoonmarkEngine(snapshot: baseSnapshot)
+        try completed.completeSubtask(
+            subtaskID,
+            today: today,
+            now: now.addingTimeInterval(10)
+        )
+        let undone = try NoonmarkEngine(snapshot: completed.snapshot())
+        try undone.undoCompletedSubtask(
+            subtaskID,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+
+        let mapper = SyncRecordMapper()
+        let completedRecord = try mapper.record(
+            for: try XCTUnwrap(completed.subtasks[subtaskID]),
+            modifiedBy: SyncDeviceID("mac-complete")
+        )
+        let undoneRecord = try mapper.record(
+            for: try XCTUnwrap(undone.subtasks[subtaskID]),
+            modifiedBy: SyncDeviceID("mac-undo")
+        )
+
+        for records in [
+            [completedRecord, undoneRecord],
+            [undoneRecord, completedRecord]
+        ] {
+            let result = try SyncRecordMerger(mapper: mapper).merge(
+                records: records,
+                into: baseSnapshot,
+                detectedAt: now.addingTimeInterval(30)
+            )
+            let merged = try XCTUnwrap(
+                result.snapshot.subtasks.first { $0.id == subtaskID }
+            )
+
+            XCTAssertTrue(result.conflicts.isEmpty)
+            XCTAssertEqual(merged.status, .pending)
+            XCTAssertNil(merged.completedAt)
+            XCTAssertEqual(merged.updatedAt, now.addingTimeInterval(20))
+            XCTAssertNoThrow(try result.snapshot.validateIntegrity())
+        }
+    }
+
+    func testSubtaskDifficultyConvergesByUpdatedAtInBothOrders() throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "子任务难度收敛",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let subtaskID = try base.addSubtask(
+            traceID: traceID,
+            title: "难度变化",
+            now: now
+        )
+        let baseSnapshot = base.snapshot()
+
+        let hard = try NoonmarkEngine(snapshot: baseSnapshot)
+        try hard.updateSubtaskDifficulty(
+            subtaskID,
+            difficulty: .hard,
+            today: today,
+            now: now.addingTimeInterval(10)
+        )
+        let medium = try NoonmarkEngine(snapshot: hard.snapshot())
+        try medium.updateSubtaskDifficulty(
+            subtaskID,
+            difficulty: .medium,
+            today: today,
+            now: now.addingTimeInterval(20)
+        )
+
+        let mapper = SyncRecordMapper()
+        let hardRecord = try mapper.record(
+            for: try XCTUnwrap(hard.subtasks[subtaskID]),
+            modifiedBy: SyncDeviceID("mac-hard")
+        )
+        let mediumRecord = try mapper.record(
+            for: try XCTUnwrap(medium.subtasks[subtaskID]),
+            modifiedBy: SyncDeviceID("mac-medium")
+        )
+
+        for records in [
+            [hardRecord, mediumRecord],
+            [mediumRecord, hardRecord]
+        ] {
+            let result = try SyncRecordMerger(mapper: mapper).merge(
+                records: records,
+                into: baseSnapshot,
+                detectedAt: now.addingTimeInterval(30)
+            )
+            let merged = try XCTUnwrap(
+                result.snapshot.subtasks.first { $0.id == subtaskID }
+            )
+
+            XCTAssertTrue(result.conflicts.isEmpty)
+            XCTAssertEqual(merged.difficulty, .medium)
+            XCTAssertEqual(merged.updatedAt, now.addingTimeInterval(20))
+        }
+    }
+
+    func testSubtaskRecordRejectsInvalidStatusClockAndHeaderClock() throws {
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "拒绝损坏子任务记录",
+            now: now
+        )
+        let traceID = try base.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let subtaskID = try base.addSubtask(
+            traceID: traceID,
+            title: "损坏记录",
+            now: now
+        )
+        let mapper = SyncRecordMapper()
+
+        var invalidStatus = try XCTUnwrap(base.subtasks[subtaskID])
+        invalidStatus.status = .completed
+        invalidStatus.updatedAt = now.addingTimeInterval(10)
+        let invalidStatusRecord = try mapper.record(
+            for: invalidStatus,
+            modifiedBy: SyncDeviceID("mac-invalid-status")
+        )
+
+        var invalidHeaderRecord = try mapper.record(
+            for: try XCTUnwrap(base.subtasks[subtaskID]),
+            modifiedBy: SyncDeviceID("mac-invalid-header")
+        )
+        invalidHeaderRecord.modifiedAt = now.addingTimeInterval(10)
+
+        for record in [invalidStatusRecord, invalidHeaderRecord] {
+            let result = try SyncRecordMerger(mapper: mapper).merge(
+                records: [record],
+                into: base.snapshot(),
+                detectedAt: now.addingTimeInterval(20)
+            )
+
+            XCTAssertEqual(result.conflicts.map(\.type), [.invalidRecordPayload])
+            XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+            XCTAssertEqual(result.snapshot, base.snapshot())
+        }
     }
 
     func testPreferenceRecordPreservesDeviceLocalConfiguration() throws {
@@ -52,6 +418,8 @@ final class SyncRecordMergerTests: XCTestCase {
         let remotePreferences = AppPreferences(
             theme: .warmPaper,
             language: .english,
+            themeLanguageUpdatedAt: now,
+            themeLanguageWriterID: "remote-preferences",
             dataMode: .localFirst,
             localFirstSyncPolicy: LocalFirstCloudSyncPolicy(
                 enabled: false,
@@ -61,24 +429,238 @@ final class SyncRecordMergerTests: XCTestCase {
         )
         let mapper = SyncRecordMapper()
         let record = try mapper.record(
-            for: AppPreferencesEnvelope(
-                preferences: remotePreferences,
-                updatedAt: now
-            ),
+            for: AppPreferencesEnvelope(preferences: remotePreferences),
             modifiedBy: SyncDeviceID("remote-preferences")
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [record],
             into: local.snapshot(),
             detectedAt: now
         )
-        var expectedPreferences = localPreferences
-        expectedPreferences.theme = .warmPaper
-        expectedPreferences.language = .english
+        let expectedPreferences = try localPreferences
+            .applyingSyncedThemeLanguage(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: now,
+                writerID: "remote-preferences"
+            )
 
         XCTAssertTrue(result.conflicts.isEmpty)
         XCTAssertEqual(result.snapshot.preferences, expectedPreferences)
+    }
+
+    func testPreferenceMergeAdvancesClockForSameValuesAndIgnoresRollback() throws {
+        let local = NoonmarkEngine()
+        let mapper = SyncRecordMapper()
+        let newerRecord = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: local.preferences.theme,
+                language: local.preferences.language,
+                updatedAt: now
+            ),
+            modifiedBy: SyncDeviceID("remote-newer")
+        )
+        let advanced = try SyncRecordMerger(mapper: mapper).merge(
+            records: [newerRecord],
+            into: local.snapshot(),
+            detectedAt: now
+        )
+        let staleRecord = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: now.addingTimeInterval(-1)
+            ),
+            modifiedBy: SyncDeviceID("remote-stale")
+        )
+        let rolledBack = try SyncRecordMerger(mapper: mapper).merge(
+            records: [staleRecord],
+            into: advanced.snapshot,
+            detectedAt: now
+        )
+
+        XCTAssertEqual(advanced.appliedRecordIDs, [newerRecord.id])
+        XCTAssertEqual(
+            advanced.snapshot.preferences.themeLanguageUpdatedAt
+                .timeIntervalSinceReferenceDate.bitPattern,
+            now.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertTrue(rolledBack.appliedRecordIDs.isEmpty)
+        XCTAssertEqual(rolledBack.snapshot, advanced.snapshot)
+    }
+
+    func testEqualTimeDivergentPreferencesConvergeByCurrentRecordTotalOrder() throws {
+        let mapper = SyncRecordMapper()
+        let lower = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .coolGray,
+                language: .english,
+                updatedAt: now
+            ),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let higher = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .chinese,
+                updatedAt: now
+            ),
+            modifiedBy: SyncDeviceID("mac-z")
+        )
+        let expectedRecord = higher.currentRecordLWWOrder(comparedTo: lower)
+            == .after ? higher : lower
+        let expected = try mapper.decodeAppPreferences(expectedRecord)
+
+        for records in [[lower, higher], [higher, lower]] {
+            let result = try SyncRecordMerger(mapper: mapper).merge(
+                records: records,
+                into: NoonmarkEngine().snapshot(),
+                detectedAt: now
+            )
+
+            XCTAssertTrue(result.conflicts.isEmpty)
+            XCTAssertEqual(result.snapshot.preferences.theme, expected.theme)
+            XCTAssertEqual(
+                result.snapshot.preferences.language,
+                expected.language
+            )
+            XCTAssertEqual(
+                result.snapshot.preferences.themeLanguageUpdatedAt
+                    .timeIntervalSinceReferenceDate.bitPattern,
+                now.timeIntervalSinceReferenceDate.bitPattern
+            )
+        }
+    }
+
+    func testEqualClockIncomingPreferenceWinsOverLocalSnapshot() throws {
+        var base = NoonmarkEngine().snapshot()
+        base.preferences = AppPreferences(
+            theme: .coolGray,
+            language: .chinese,
+            themeLanguageUpdatedAt: now
+        )
+        let mapper = SyncRecordMapper()
+        let incoming = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: now
+            ),
+            modifiedBy: SyncDeviceID("remote-equal-clock")
+        )
+
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: [incoming],
+            into: base,
+            detectedAt: now
+        )
+
+        XCTAssertEqual(result.snapshot.preferences.theme, .warmPaper)
+        XCTAssertEqual(result.snapshot.preferences.language, .english)
+        XCTAssertEqual(result.appliedRecordIDs, [incoming.id])
+    }
+
+    func testEqualClockLowerPreferenceDoesNotReplaceCanonicalWinner() throws {
+        let mapper = SyncRecordMapper()
+        let clock = now.addingTimeInterval(1)
+        let higher = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .chinese,
+                updatedAt: clock
+            ),
+            modifiedBy: SyncDeviceID("mac-z")
+        )
+        let lower = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .coolGray,
+                language: .english,
+                updatedAt: clock
+            ),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let merger = SyncRecordMerger(mapper: mapper)
+        let canonical = try merger.merge(
+            records: [higher],
+            into: NoonmarkEngine().snapshot(),
+            detectedAt: clock
+        )
+
+        let replay = try merger.merge(
+            records: [lower],
+            into: canonical.snapshot,
+            detectedAt: clock.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(replay.conflicts.isEmpty)
+        XCTAssertTrue(replay.appliedRecordIDs.isEmpty)
+        XCTAssertEqual(replay.snapshot, canonical.snapshot)
+    }
+
+    func testEqualClockSameWriterDivergentPreferenceFailsClosed() throws {
+        let mapper = SyncRecordMapper()
+        let clock = now.addingTimeInterval(1)
+        let first = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .chinese,
+                updatedAt: clock
+            ),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let divergent = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .coolGray,
+                language: .english,
+                updatedAt: clock
+            ),
+            modifiedBy: SyncDeviceID("mac-a")
+        )
+        let merger = SyncRecordMerger(mapper: mapper)
+        let canonical = try merger.merge(
+            records: [first],
+            into: NoonmarkEngine().snapshot(),
+            detectedAt: clock
+        )
+
+        let replay = try merger.merge(
+            records: [divergent],
+            into: canonical.snapshot,
+            detectedAt: clock.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(replay.conflicts.map(\.type), [.invalidRecordPayload])
+        XCTAssertTrue(replay.appliedRecordIDs.isEmpty)
+        XCTAssertEqual(replay.snapshot, canonical.snapshot)
+    }
+
+    func testExactPreferenceReplayIsIgnored() throws {
+        var base = NoonmarkEngine().snapshot()
+        base.preferences = AppPreferences(
+            theme: .warmPaper,
+            language: .english,
+            themeLanguageUpdatedAt: now,
+            themeLanguageWriterID: "remote-replay",
+            settingsPoemDisplayPolicy: SettingsPoemDisplayPolicy(
+                enabled: false,
+                text: "本机保留"
+            )
+        )
+        let record = try SyncRecordMapper().record(
+            for: AppPreferencesEnvelope(preferences: base.preferences),
+            modifiedBy: SyncDeviceID("remote-replay")
+        )
+
+        let result = try SyncRecordMerger().merge(
+            records: [record],
+            into: base,
+            detectedAt: now.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        XCTAssertEqual(result.snapshot, base)
     }
 
     func testTaskChainNotesMergeByStableIdentityAndTombstone() throws {
@@ -116,7 +698,7 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("iphone-b")
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [record],
             into: local.snapshot(),
             detectedAt: now.addingTimeInterval(40)
@@ -184,7 +766,7 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("iphone-b")
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [record],
             into: local.snapshot(),
             detectedAt: now.addingTimeInterval(40)
@@ -260,7 +842,7 @@ final class SyncRecordMergerTests: XCTestCase {
             (snapshot: completed.snapshot(), record: pendingRecord),
             (snapshot: pending.snapshot(), record: completedRecord)
         ] {
-            let result = SyncRecordMerger(mapper: mapper).merge(
+            let result = try SyncRecordMerger(mapper: mapper).merge(
                 records: [direction.record],
                 into: direction.snapshot,
                 detectedAt: now.addingTimeInterval(50)
@@ -319,7 +901,7 @@ final class SyncRecordMergerTests: XCTestCase {
             for: Day(date: tomorrow, now: now.addingTimeInterval(60)),
             modifiedBy: SyncDeviceID("iphone-b")
         )
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [record],
             into: beforeMerge,
             detectedAt: now
@@ -347,7 +929,7 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: deviceID
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [classificationRecord, definitionRecord, chainRecord],
             into: NoonmarkEngine().snapshot(),
             detectedAt: now
@@ -388,12 +970,11 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("mac-a")
         )
 
-        let first = SyncRecordMerger(mapper: mapper).merge(
+        let first = try SyncRecordMerger(mapper: mapper).merge(
             records: [record],
             into: NoonmarkEngine().snapshot(),
             detectedAt: now
         )
-
         XCTAssertTrue(first.appliedRecordIDs.isEmpty)
         XCTAssertTrue(first.conflicts.isEmpty)
         XCTAssertEqual(
@@ -411,14 +992,42 @@ final class SyncRecordMergerTests: XCTestCase {
             for: chain,
             modifiedBy: SyncDeviceID("mac-a")
         )
-        let retried = SyncRecordMerger(mapper: mapper).merge(
+        let incomplete = try SyncRecordMerger(mapper: mapper).merge(
             records: [record, chainRecord],
+            into: NoonmarkEngine().snapshot(),
+            detectedAt: now
+        )
+        XCTAssertTrue(incomplete.appliedRecordIDs.isEmpty)
+        XCTAssertTrue(incomplete.conflicts.isEmpty)
+        XCTAssertEqual(
+            incomplete.waitingRecords.first {
+                $0.remoteRecordID == record.id
+            }?.dependencies,
+            [.taskChain(fixture.chainID)]
+        )
+        XCTAssertEqual(
+            incomplete.waitingRecords.first {
+                $0.remoteRecordID == chainRecord.id
+            }?.dependencies,
+            [.currentSnapshotIntegrity]
+        )
+        XCTAssertNoThrow(try incomplete.snapshot.validateIntegrity())
+
+        let definitionRecords = try fixture.source.snapshot().definitions.map {
+            try mapper.record(
+                for: $0,
+                modifiedBy: SyncDeviceID("mac-a")
+            )
+        }
+        let retried = try SyncRecordMerger(mapper: mapper).merge(
+            records: [record, chainRecord] + definitionRecords,
             into: NoonmarkEngine().snapshot(),
             detectedAt: now
         )
 
         XCTAssertTrue(retried.waitingRecords.isEmpty)
         XCTAssertTrue(retried.conflicts.isEmpty)
+        XCTAssertNoThrow(try retried.snapshot.validateIntegrity())
         XCTAssertEqual(
             retried.snapshot.classifications.currentByChainID[fixture.chainID]?.labelIDs,
             fixture.labelIDs
@@ -506,7 +1115,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let recordA = try mapper.record(for: envelopeA, modifiedBy: SyncDeviceID("mac-a"))
         let recordB = try mapper.record(for: envelopeB, modifiedBy: SyncDeviceID("mac-a"))
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [recordB, recordA],
             into: base,
             detectedAt: now.addingTimeInterval(10)
@@ -591,7 +1200,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let recordA = try mapper.record(for: envelopeA, modifiedBy: SyncDeviceID("mac-a"))
         let recordB = try mapper.record(for: envelopeB, modifiedBy: SyncDeviceID("mac-b"))
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [recordA, recordB],
             into: base,
             detectedAt: now.addingTimeInterval(10)
@@ -687,7 +1296,7 @@ final class SyncRecordMergerTests: XCTestCase {
             for: archiveEnvelope,
             modifiedBy: SyncDeviceID("mac-a")
         )
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [archiveSyncRecord, renameSyncRecord, createSyncRecord],
             into: base,
             detectedAt: now.addingTimeInterval(4)
@@ -711,7 +1320,7 @@ final class SyncRecordMergerTests: XCTestCase {
         ]
 
         for records in permutations {
-            let result = SyncRecordMerger().merge(
+            let result = try SyncRecordMerger().merge(
                 records: records,
                 into: fixture.base,
                 detectedAt: now.addingTimeInterval(10)
@@ -725,7 +1334,7 @@ final class SyncRecordMergerTests: XCTestCase {
 
     func testManagementCommitWithMissingMiddlePredecessorWaitsWithoutRejectingAncestor() throws {
         let fixture = try makeManagementCausalFixture()
-        let result = SyncRecordMerger().merge(
+        let result = try SyncRecordMerger().merge(
             records: [fixture.thirdRecord, fixture.firstRecord],
             into: fixture.base,
             detectedAt: now.addingTimeInterval(10)
@@ -789,12 +1398,12 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("mac-b")
         )
         let merger = SyncRecordMerger(mapper: mapper)
-        let forward = merger.merge(
+        let forward = try merger.merge(
             records: [categoryRecord, labelRecord],
             into: base,
             detectedAt: now.addingTimeInterval(3)
         )
-        let reverse = merger.merge(
+        let reverse = try merger.merge(
             records: [labelRecord, categoryRecord],
             into: base,
             detectedAt: now.addingTimeInterval(3)
@@ -871,8 +1480,8 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("mac-b")
         )
         let merger = SyncRecordMerger(mapper: mapper)
-        let forward = merger.merge(records: [recordA, recordB], into: base)
-        let reverse = merger.merge(records: [recordB, recordA], into: base)
+        let forward = try merger.merge(records: [recordA, recordB], into: base)
+        let reverse = try merger.merge(records: [recordB, recordA], into: base)
 
         XCTAssertTrue(forward.conflicts.isEmpty, "conflicts=\(forward.conflicts)")
         XCTAssertTrue(forward.waitingRecords.isEmpty)
@@ -901,7 +1510,7 @@ final class SyncRecordMergerTests: XCTestCase {
         ]
         let merger = SyncRecordMerger()
         for records in permutations {
-            let result = merger.merge(records: records, into: fixture.base)
+            let result = try merger.merge(records: records, into: fixture.base)
             XCTAssertTrue(result.conflicts.isEmpty, "input=\(records.map(\.id))")
             XCTAssertTrue(result.waitingRecords.isEmpty, "input=\(records.map(\.id))")
             XCTAssertEqual(result.appliedRecordIDs.count, 3)
@@ -913,7 +1522,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let fixture = try makeConcurrentSelectionFrontierFixture()
         let merger = SyncRecordMerger()
 
-        let partial = merger.merge(
+        let partial = try merger.merge(
             records: [fixture.recordB, fixture.successorRecord],
             into: fixture.base
         )
@@ -928,7 +1537,7 @@ final class SyncRecordMergerTests: XCTestCase {
             [.classificationCommit(fixture.changeRecordIDA)]
         )
 
-        let resumed = merger.merge(
+        let resumed = try merger.merge(
             records: [fixture.successorRecord, fixture.recordA],
             into: partial.snapshot
         )
@@ -1050,11 +1659,11 @@ final class SyncRecordMergerTests: XCTestCase {
                 modifiedBy: SyncDeviceID("mac-b")
             )
             let merger = SyncRecordMerger(mapper: mapper)
-            let forward = merger.merge(
+            let forward = try merger.merge(
                 records: [renameRecord, relationRecord],
                 into: fixture.base
             )
-            let reverse = merger.merge(
+            let reverse = try merger.merge(
                 records: [relationRecord, renameRecord],
                 into: fixture.base
             )
@@ -1092,7 +1701,7 @@ final class SyncRecordMergerTests: XCTestCase {
                     [fixture.renameRecord, fixture.mergeRecord],
                     [fixture.mergeRecord, fixture.renameRecord]
                 ] {
-                    let result = SyncRecordMerger().merge(
+                    let result = try SyncRecordMerger().merge(
                         records: records,
                         into: fixture.base
                     )
@@ -1160,7 +1769,7 @@ final class SyncRecordMergerTests: XCTestCase {
                 modifiedBy: SyncDeviceID("mac-rename")
             )
             for records in [[renameRecord, mergeRecord], [mergeRecord, renameRecord]] {
-                let result = SyncRecordMerger().merge(
+                let result = try SyncRecordMerger().merge(
                     records: records,
                     into: scenario.base
                 )
@@ -1232,7 +1841,7 @@ final class SyncRecordMergerTests: XCTestCase {
         )
         let merger = SyncRecordMerger(mapper: mapper)
         for records in [[noOpRecord, renameRecord], [renameRecord, noOpRecord]] {
-            let result = merger.merge(records: records, into: base)
+            let result = try merger.merge(records: records, into: base)
             XCTAssertTrue(result.conflicts.isEmpty, "conflicts=\(result.conflicts)")
             XCTAssertTrue(result.waitingRecords.isEmpty)
             XCTAssertEqual(result.appliedRecordIDs.count, 2)
@@ -1331,7 +1940,7 @@ final class SyncRecordMergerTests: XCTestCase {
                 for: recreateEnvelope,
                 modifiedBy: SyncDeviceID("mac-a")
             )
-            let result = SyncRecordMerger(mapper: mapper).merge(
+            let result = try SyncRecordMerger(mapper: mapper).merge(
                 records: [recreateRecord, deleteRecord],
                 into: base
             )
@@ -1398,7 +2007,7 @@ final class SyncRecordMergerTests: XCTestCase {
             ),
             modifiedBy: SyncDeviceID("mac-b")
         )
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [recordB, recordA],
             into: base,
             detectedAt: now.addingTimeInterval(4)
@@ -1478,7 +2087,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let records = try [setCurrentEnvelope, competingEnvelope, createEnvelope].map {
             try mapper.record(for: $0, modifiedBy: SyncDeviceID("mac-a"))
         }
-        let result = SyncRecordMerger(mapper: mapper).merge(records: records, into: base)
+        let result = try SyncRecordMerger(mapper: mapper).merge(records: records, into: base)
 
         XCTAssertTrue(result.appliedRecordIDs.isEmpty)
         XCTAssertTrue(result.waitingRecords.isEmpty)
@@ -1557,7 +2166,7 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("mac-sender")
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [secondRecord, firstRecord],
             into: receiverSnapshot,
             detectedAt: now.addingTimeInterval(5)
@@ -1648,7 +2257,7 @@ final class SyncRecordMergerTests: XCTestCase {
             for: renameC.envelope,
             modifiedBy: SyncDeviceID("mac-c")
         )
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [recordC, recordB, recordA],
             into: base
         )
@@ -1662,40 +2271,50 @@ final class SyncRecordMergerTests: XCTestCase {
     func testDayTraceDependencyGraphIsStableAcrossEveryInputPermutation() throws {
         let baseEngine = NoonmarkEngine()
         let chainID = try baseEngine.createPoolTask(title: "轨迹 DAG", now: now)
-        let definitionID = try XCTUnwrap(baseEngine.snapshot().definitions.first?.id)
+        let replacementChainID = try baseEngine.createPoolTask(
+            title: "轨迹 DAG 替换项",
+            now: now
+        )
+        let base = baseEngine.snapshot()
+        let definitionID = try XCTUnwrap(
+            base.definitions.first { $0.chainID == chainID }?.id
+        )
+        let replacementDefinitionID = try XCTUnwrap(
+            base.definitions.first { $0.chainID == replacementChainID }?.id
+        )
         let targetID = DayTraceID(uuid("73000000-0000-0000-0000-000000000003"))
         var old = DayTrace(
             id: DayTraceID(uuid("73000000-0000-0000-0000-000000000001")),
             chainID: chainID,
             definitionID: definitionID,
             date: today,
-            status: .changed,
+            status: .continued,
             priority: 0,
             continuationSeq: 0,
             now: now,
             contentUpdatedAt: now.addingTimeInterval(1)
         )
-        old.changedToTraceID = targetID
         old.settledAt = now.addingTimeInterval(1)
         var unrelated = DayTrace(
             id: DayTraceID(uuid("73000000-0000-0000-0000-000000000002")),
             chainID: chainID,
             definitionID: definitionID,
             date: today,
-            status: .unfinished,
+            status: .changed,
             priority: 1,
             continuationSeq: 1,
-            now: now,
-            contentUpdatedAt: now.addingTimeInterval(2)
+            continuedFromTraceID: old.id,
+            now: now.addingTimeInterval(2)
         )
+        unrelated.changedToTraceID = targetID
         unrelated.settledAt = now.addingTimeInterval(2)
         let target = DayTrace(
             id: targetID,
-            chainID: chainID,
-            definitionID: definitionID,
+            chainID: replacementChainID,
+            definitionID: replacementDefinitionID,
             date: today,
             priority: 2,
-            continuationSeq: 2,
+            continuationSeq: 0,
             now: now.addingTimeInterval(3)
         )
         let mapper = SyncRecordMapper()
@@ -1713,11 +2332,13 @@ final class SyncRecordMergerTests: XCTestCase {
             [records[2], records[0], records[1]],
             [records[2], records[1], records[0]]
         ]
+        var baseSnapshot = baseEngine.snapshot()
+        baseSnapshot.days.append(Day(date: today, now: now))
 
         for permutation in permutations {
-            let result = SyncRecordMerger(mapper: mapper).merge(
+            let result = try SyncRecordMerger(mapper: mapper).merge(
                 records: permutation,
-                into: baseEngine.snapshot(),
+                into: baseSnapshot,
                 detectedAt: now.addingTimeInterval(10)
             )
             XCTAssertTrue(result.conflicts.isEmpty, "input=\(permutation.map(\.id))")
@@ -1758,7 +2379,7 @@ final class SyncRecordMergerTests: XCTestCase {
             )
         }
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: records,
             into: baseEngine.snapshot(),
             detectedAt: now.addingTimeInterval(10)
@@ -1804,7 +2425,7 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("mac-a")
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [secondRecord, firstRecord],
             into: engine.snapshot(),
             detectedAt: now.addingTimeInterval(10)
@@ -1841,7 +2462,7 @@ final class SyncRecordMergerTests: XCTestCase {
             for: first,
             modifiedBy: SyncDeviceID("mac-a")
         )
-        let missingTrace = SyncRecordMerger(mapper: mapper).merge(
+        let missingTrace = try SyncRecordMerger(mapper: mapper).merge(
             records: [firstRecord],
             into: NoonmarkEngine().snapshot(),
             detectedAt: now
@@ -1873,7 +2494,7 @@ final class SyncRecordMergerTests: XCTestCase {
             for: successor,
             modifiedBy: SyncDeviceID("mac-a")
         )
-        let missingPredecessor = SyncRecordMerger(mapper: mapper).merge(
+        let missingPredecessor = try SyncRecordMerger(mapper: mapper).merge(
             records: [successorRecord],
             into: engine.snapshot(),
             detectedAt: now
@@ -1907,7 +2528,7 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("mac-a")
         )
 
-        let result = SyncRecordMerger().merge(
+        let result = try SyncRecordMerger().merge(
             records: [record],
             into: engine.snapshot(),
             detectedAt: now
@@ -1948,7 +2569,7 @@ final class SyncRecordMergerTests: XCTestCase {
             try mapper.record(for: $0, modifiedBy: SyncDeviceID("mac-a"))
         }
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: records,
             into: engine.snapshot(),
             detectedAt: now
@@ -1998,7 +2619,7 @@ final class SyncRecordMergerTests: XCTestCase {
             try mapper.record(for: $0, modifiedBy: SyncDeviceID("mac-a"))
         }
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: records,
             into: engine.snapshot(),
             detectedAt: now
@@ -2042,7 +2663,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let collisionRecords = try [collisionA, collisionB].map {
             try mapper.record(for: $0, modifiedBy: SyncDeviceID("mac-a"))
         }
-        let collisionResult = SyncRecordMerger(mapper: mapper).merge(
+        let collisionResult = try SyncRecordMerger(mapper: mapper).merge(
             records: collisionRecords,
             into: engine.snapshot(),
             detectedAt: now
@@ -2072,7 +2693,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let cycleRecords = try [first, second].map {
             try mapper.record(for: $0, modifiedBy: SyncDeviceID("mac-a"))
         }
-        let cycleResult = SyncRecordMerger(mapper: mapper).merge(
+        let cycleResult = try SyncRecordMerger(mapper: mapper).merge(
             records: cycleRecords,
             into: engine.snapshot(),
             detectedAt: now
@@ -2135,7 +2756,7 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("mac-a")
         )
 
-        let result = SyncRecordMerger().merge(
+        let result = try SyncRecordMerger().merge(
             records: [record],
             into: engine.snapshot(),
             detectedAt: now
@@ -2199,7 +2820,7 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("mac-a")
         )
 
-        let result = SyncRecordMerger().merge(
+        let result = try SyncRecordMerger().merge(
             records: [record],
             into: engine.snapshot(),
             detectedAt: now
@@ -2232,7 +2853,7 @@ final class SyncRecordMergerTests: XCTestCase {
             for: remoteTrace,
             modifiedBy: SyncDeviceID("iphone-b")
         )
-        let result = SyncRecordMerger(mapper: mapper).merge(records: [remoteRecord], into: local.snapshot(), detectedAt: now)
+        let result = try SyncRecordMerger(mapper: mapper).merge(records: [remoteRecord], into: local.snapshot(), detectedAt: now)
 
         XCTAssertTrue(result.conflicts.isEmpty)
         XCTAssertEqual(result.appliedRecordIDs, [remoteRecord.id])
@@ -2245,7 +2866,118 @@ final class SyncRecordMergerTests: XCTestCase {
         )
     }
 
-    func testMissingDayRejectsCompletedTraceUndo() throws {
+    func testUnlockedFutureDayAllowsCancelledDraftUndoInPlace() throws {
+        let local = NoonmarkEngine()
+        let chainID = try local.createPoolTask(
+            title: "撤销未来计划回池",
+            now: now
+        )
+        let traceID = try local.scheduleFromPool(
+            chainID: chainID,
+            date: tomorrow,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let pendingSnapshot = local.snapshot()
+        try local.returnToPool(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+
+        let remote = try NoonmarkEngine(snapshot: pendingSnapshot)
+        try remote.prepareSnapshotUndo(
+            replacing: local.snapshot(),
+            now: now.addingTimeInterval(3)
+        )
+        let mapper = SyncRecordMapper()
+        let remoteRecord = try mapper.record(
+            for: try XCTUnwrap(remote.traces[traceID]),
+            modifiedBy: SyncDeviceID("iphone-b")
+        )
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: [remoteRecord],
+            into: local.snapshot(),
+            detectedAt: now.addingTimeInterval(4)
+        )
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertEqual(result.appliedRecordIDs, [remoteRecord.id])
+        XCTAssertEqual(
+            result.snapshot.traces.first(where: { $0.id == traceID })?.status,
+            .pending
+        )
+        XCTAssertEqual(
+            result.snapshot.traces.first(where: { $0.id == traceID })?
+                .draftCancellationID,
+            local.traces[traceID]?.draftCancellationID
+        )
+        XCTAssertNil(
+            result.snapshot.traces.first(where: { $0.id == traceID })?
+                .draftCancelledOn
+        )
+        XCTAssertNil(
+            result.snapshot.traces.first(where: { $0.id == traceID })?.settledAt
+        )
+    }
+
+    func testCancelledDraftRejectsNewerPendingWithoutMatchingUndoWitness() throws {
+        let local = NoonmarkEngine()
+        let chainID = try local.createPoolTask(
+            title: "拒绝伪造的未来草稿撤销",
+            now: now
+        )
+        let traceID = try local.scheduleFromPool(
+            chainID: chainID,
+            date: tomorrow,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let stalePendingSnapshot = local.snapshot()
+        try local.returnToPool(
+            traceID: traceID,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+
+        let remote = try NoonmarkEngine(snapshot: stalePendingSnapshot)
+        try remote.updateTraceText(
+            traceID: traceID,
+            descriptionText: "离线往返编辑",
+            today: today,
+            now: now.addingTimeInterval(3)
+        )
+        try remote.updateTraceText(
+            traceID: traceID,
+            descriptionText: nil,
+            today: today,
+            now: now.addingTimeInterval(4)
+        )
+        let mapper = SyncRecordMapper()
+        let forgedRecord = try mapper.record(
+            for: try XCTUnwrap(remote.traces[traceID]),
+            modifiedBy: SyncDeviceID("offline-device")
+        )
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: [forgedRecord],
+            into: local.snapshot(),
+            detectedAt: now.addingTimeInterval(5)
+        )
+
+        XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        XCTAssertEqual(
+            result.snapshot.traces.first(where: { $0.id == traceID })?.status,
+            .cancelledDraft
+        )
+        XCTAssertEqual(
+            result.snapshot.traces.first(where: { $0.id == traceID })?
+                .draftCancellationID,
+            local.traces[traceID]?.draftCancellationID
+        )
+    }
+
+    func testMissingDayBaseIsRejectedBeforeCompletedTraceUndoMerge() throws {
         let local = NoonmarkEngine()
         let chainID = try local.createPoolTask(title: "缺少日上下文不可撤销", now: now)
         let traceID = try local.scheduleFromPool(
@@ -2271,15 +3003,18 @@ final class SyncRecordMergerTests: XCTestCase {
         var missingDaySnapshot = completedSnapshot
         missingDaySnapshot.days = []
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
-            records: [remoteRecord],
-            into: missingDaySnapshot,
-            detectedAt: now
-        )
-
-        XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])
-        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
-        XCTAssertEqual(result.snapshot, missingDaySnapshot)
+        XCTAssertThrowsError(
+            try SyncRecordMerger(mapper: mapper).merge(
+                records: [remoteRecord],
+                into: missingDaySnapshot,
+                detectedAt: now
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidInput("snapshot contains invalid parent references")
+            )
+        }
     }
 
     func testLockedDayRejectsCompletedTraceUndo() throws {
@@ -2310,7 +3045,7 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("iphone-b")
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [remoteRecord],
             into: localSnapshot,
             detectedAt: now
@@ -2321,7 +3056,7 @@ final class SyncRecordMergerTests: XCTestCase {
         XCTAssertEqual(result.snapshot, localSnapshot)
     }
 
-    func testLockedDayMaterializationKeepsLaterOfflineReviewAndRejectsCompletionUndo() throws {
+    func testLockedDayComponentRollsBackOfflineReviewWhenCompletionUndoConflicts() throws {
         let completed = NoonmarkEngine()
         let chainID = try completed.createPoolTask(
             title: "锁定日下载离线复盘",
@@ -2358,6 +3093,7 @@ final class SyncRecordMergerTests: XCTestCase {
             upTo: tomorrow,
             now: now.addingTimeInterval(60)
         )
+        let lockedSnapshot = locked.snapshot()
 
         let mapper = SyncRecordMapper()
         let dayRecord = try mapper.record(
@@ -2368,9 +3104,9 @@ final class SyncRecordMergerTests: XCTestCase {
             for: try XCTUnwrap(offline.traces[traceID]),
             modifiedBy: SyncDeviceID("offline-undo-device")
         )
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [undoRecord, dayRecord],
-            into: locked.snapshot(),
+            into: lockedSnapshot,
             detectedAt: now.addingTimeInterval(120)
         )
 
@@ -2381,12 +3117,26 @@ final class SyncRecordMergerTests: XCTestCase {
             result.snapshot.traces.first { $0.id == traceID }
         )
         XCTAssertEqual(mergedDay.lockedAt, now.addingTimeInterval(60))
-        XCTAssertEqual(mergedDay.reviewSummary, "下载后的离线复盘")
-        XCTAssertEqual(mergedDay.reviewUnfinishedReason, "下载后的原因")
-        XCTAssertEqual(mergedDay.reviewTomorrowNote, "下载后的明日提醒")
+        XCTAssertNil(mergedDay.reviewSummary)
+        XCTAssertNil(mergedDay.reviewUnfinishedReason)
+        XCTAssertNil(mergedDay.reviewTomorrowNote)
         XCTAssertEqual(mergedTrace.status, .completed)
         XCTAssertEqual(mergedTrace.completedAt, now.addingTimeInterval(20))
-        XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])
+        XCTAssertEqual(result.snapshot, lockedSnapshot)
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        let conflictTypeByEvidence = Dictionary(
+            uniqueKeysWithValues: result.conflicts.map {
+                (SyncRecordEvidenceID(record: $0.remoteRecord), $0.type)
+            }
+        )
+        XCTAssertEqual(
+            conflictTypeByEvidence[SyncRecordEvidenceID(record: dayRecord)],
+            .invalidReference
+        )
+        XCTAssertEqual(
+            conflictTypeByEvidence[SyncRecordEvidenceID(record: undoRecord)],
+            .historicalTraceMutation
+        )
     }
 
     func testAbandonedTraceCanReactivateInPlaceAfterParentChainBecomesActive() throws {
@@ -2424,7 +3174,7 @@ final class SyncRecordMergerTests: XCTestCase {
             records.first { $0.entityType == .dayTrace }
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [traceRecord, chainRecord],
             into: abandoned,
             detectedAt: now.addingTimeInterval(3)
@@ -2492,7 +3242,7 @@ final class SyncRecordMergerTests: XCTestCase {
             [noteID]
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [traceRecord, chainRecord],
             into: abandoned,
             detectedAt: now.addingTimeInterval(50)
@@ -2557,7 +3307,7 @@ final class SyncRecordMergerTests: XCTestCase {
         var canonicalResults: [[SyncRecord]] = []
 
         for records in [staleRecords, staleRecords.reversed()] {
-            let result = SyncRecordMerger(mapper: mapper).merge(
+            let result = try SyncRecordMerger(mapper: mapper).merge(
                 records: Array(records),
                 into: abandoned.snapshot(),
                 detectedAt: now.addingTimeInterval(50)
@@ -2587,7 +3337,7 @@ final class SyncRecordMergerTests: XCTestCase {
         XCTAssertEqual(canonicalResults[0], canonicalResults[1])
     }
 
-    func testAbandonedChainMaterializationRejectsLaterStaleActiveRenameButMergesNotes() throws {
+    func testAbandonedComponentRollsBackStaleRenameNotesWithConflictingTrace() throws {
         let base = NoonmarkEngine()
         let chainID = try base.createPoolTask(
             title: "下载时拒绝旧分支复活",
@@ -2630,7 +3380,7 @@ final class SyncRecordMergerTests: XCTestCase {
             for: try XCTUnwrap(staleActive.traces[traceID]),
             modifiedBy: SyncDeviceID("stale-active-trace-device")
         )
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [traceRecord, chainRecord],
             into: abandoned.snapshot(),
             detectedAt: now.addingTimeInterval(50)
@@ -2643,12 +3393,24 @@ final class SyncRecordMergerTests: XCTestCase {
             result.snapshot.traces.first { $0.id == traceID }
         )
         XCTAssertEqual(mergedChain.state, .abandoned)
-        XCTAssertEqual(
-            mergedChain.activeNoteEntries.map(\.body),
-            ["下载到的旧 active 分支附言"]
-        )
+        XCTAssertTrue(mergedChain.activeNoteEntries.isEmpty)
         XCTAssertEqual(mergedTrace.status, .abandoned)
         XCTAssertEqual(mergedTrace.settledAt, now.addingTimeInterval(20))
+        XCTAssertEqual(result.snapshot, abandoned.snapshot())
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        let conflictTypeByEvidence = Dictionary(
+            uniqueKeysWithValues: result.conflicts.map {
+                (SyncRecordEvidenceID(record: $0.remoteRecord), $0.type)
+            }
+        )
+        XCTAssertEqual(
+            conflictTypeByEvidence[SyncRecordEvidenceID(record: chainRecord)],
+            .invalidReference
+        )
+        XCTAssertEqual(
+            conflictTypeByEvidence[SyncRecordEvidenceID(record: traceRecord)],
+            .historicalTraceMutation
+        )
     }
 
     func testAbandonedTraceReactivationRejectsImmutableFactTampering() throws {
@@ -2686,14 +3448,28 @@ final class SyncRecordMergerTests: XCTestCase {
             modifiedBy: SyncDeviceID("iphone-b")
         )
 
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [traceRecord, chainRecord],
             into: abandoned,
             detectedAt: now.addingTimeInterval(3)
         )
 
-        XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])
+        let conflictTypeByEvidence = Dictionary(
+            uniqueKeysWithValues: result.conflicts.map {
+                (SyncRecordEvidenceID(record: $0.remoteRecord), $0.type)
+            }
+        )
+        XCTAssertEqual(
+            conflictTypeByEvidence[SyncRecordEvidenceID(record: chainRecord)],
+            .invalidReference
+        )
+        XCTAssertEqual(
+            conflictTypeByEvidence[SyncRecordEvidenceID(record: traceRecord)],
+            .historicalTraceMutation
+        )
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
         XCTAssertFalse(result.appliedRecordIDs.contains(traceRecord.id))
+        XCTAssertEqual(result.snapshot, abandoned)
         XCTAssertEqual(
             result.snapshot.traces.first(where: { $0.id == traceID }),
             abandoned.traces.first(where: { $0.id == traceID })
@@ -2742,34 +3518,58 @@ final class SyncRecordMergerTests: XCTestCase {
             for: omitted,
             modifiedBy: SyncDeviceID("iphone-b")
         )
-        let result = SyncRecordMerger(mapper: mapper).merge(
+        let result = try SyncRecordMerger(mapper: mapper).merge(
             records: [traceRecord, chainRecord],
             into: abandoned,
             detectedAt: now.addingTimeInterval(4)
         )
 
-        XCTAssertEqual(result.conflicts.map(\.type), [.historicalTraceMutation])
+        let conflictTypeByEvidence = Dictionary(
+            uniqueKeysWithValues: result.conflicts.map {
+                (SyncRecordEvidenceID(record: $0.remoteRecord), $0.type)
+            }
+        )
+        XCTAssertEqual(
+            conflictTypeByEvidence[SyncRecordEvidenceID(record: chainRecord)],
+            .invalidReference
+        )
+        XCTAssertEqual(
+            conflictTypeByEvidence[SyncRecordEvidenceID(record: traceRecord)],
+            .historicalTraceMutation
+        )
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
         XCTAssertFalse(result.appliedRecordIDs.contains(traceRecord.id))
+        XCTAssertEqual(result.snapshot, abandoned)
         XCTAssertEqual(
             result.snapshot.traces.first(where: { $0.id == traceID }),
             abandoned.traces.first(where: { $0.id == traceID })
         )
     }
 
-    func testMissingParentTraceFailsClosedForSubtask() throws {
+    func testMissingParentTraceLeavesSubtaskWaiting() throws {
         let orphan = Subtask(
             traceID: DayTraceID(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!),
             title: "孤儿子任务",
-            position: 0,
+            position: 1,
             now: now
         )
 
         let mapper = SyncRecordMapper()
         let record = try mapper.record(for: orphan, modifiedBy: SyncDeviceID("iphone-b"))
-        let result = SyncRecordMerger(mapper: mapper).merge(records: [record], into: NoonmarkEngine().snapshot(), detectedAt: now)
+        let result = try SyncRecordMerger(mapper: mapper).merge(records: [record], into: NoonmarkEngine().snapshot(), detectedAt: now)
 
-        XCTAssertEqual(result.conflicts.map(\.type), [.missingParent])
+        XCTAssertTrue(result.conflicts.isEmpty)
         XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        XCTAssertEqual(
+            result.waitingRecords,
+            [
+                SyncWaitingRecord(
+                    record: record,
+                    dependencies: [.dayTrace(orphan.traceID)]
+                )
+            ]
+        )
+        XCTAssertNoThrow(try result.snapshot.validateIntegrity())
     }
 
     func testDuplicateActiveTraceFailsClosed() throws {
@@ -2790,7 +3590,13 @@ final class SyncRecordMergerTests: XCTestCase {
             for: secondTrace,
             modifiedBy: SyncDeviceID("iphone-b")
         )
-        let result = SyncRecordMerger(mapper: mapper).merge(records: [record], into: local.snapshot(), detectedAt: now)
+        var snapshot = local.snapshot()
+        snapshot.days.append(Day(date: tomorrow, now: now))
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: [record],
+            into: snapshot,
+            detectedAt: now
+        )
 
         XCTAssertEqual(result.conflicts.map(\.type), [.duplicateActiveTrace])
         XCTAssertTrue(result.appliedRecordIDs.isEmpty)
@@ -2903,7 +3709,7 @@ final class SyncRecordMergerTests: XCTestCase {
             for: branchB.envelope,
             modifiedBy: SyncDeviceID("mac-b")
         )
-        let joined = SyncRecordMerger(mapper: mapper).merge(
+        let joined = try SyncRecordMerger(mapper: mapper).merge(
             records: [recordA, recordB],
             into: base
         )

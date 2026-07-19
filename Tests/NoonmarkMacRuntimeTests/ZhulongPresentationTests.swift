@@ -64,6 +64,8 @@ final class ZhulongPresentationTests: XCTestCase {
             .applicationRecoveryConflict,
             .applicationRecovered,
             .applicationRecoveryFailed,
+            .applicationCommitRecoveryPending,
+            .applicationCommitVerifiedComplete,
             .providerRunning,
             .providerRunFailed,
             .planningProviderRunning,
@@ -87,6 +89,186 @@ final class ZhulongPresentationTests: XCTestCase {
         }
         XCTAssertEqual(english.notice(.unverifiableSessions(1)), "1 encrypted session could not be verified and was not loaded.")
         XCTAssertEqual(english.notice(.unverifiableSessions(2)), "2 encrypted sessions could not be verified and were not loaded.")
+    }
+
+    func testPendingApplicationMutationBlockedCopyIsBilingual() {
+        let chinese = AppPresentation(language: .chinese).zhulong
+        let english = AppPresentation(language: .english).zhulong
+
+        XCTAssertEqual(
+            chinese.pendingApplicationMutationBlocked,
+            "烛龙写入仍待恢复；完成恢复前无法修改任务。"
+        )
+        XCTAssertEqual(
+            english.pendingApplicationMutationBlocked,
+            "Finish recovering the interrupted Zhulong change before editing tasks."
+        )
+        XCTAssertFalse(containsHan(english.pendingApplicationMutationBlocked))
+    }
+
+    func testApplicationCommitNoticeProjectionPreservesDurableFacts() {
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.state(
+                progress: .beforeEngine,
+                recoveredCommitError: false,
+                journal: .absent
+            ),
+            .failedBeforeCommit
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.state(
+                progress: .beforeEngine,
+                recoveredCommitError: false,
+                journal: .presentOrUnverifiable
+            ),
+            .recoveryPending
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.state(
+                progress: .enginePersistenceUnresolved,
+                recoveredCommitError: false,
+                journal: .presentOrUnverifiable
+            ),
+            .recoveryPending
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.state(
+                progress: .enginePersisted,
+                recoveredCommitError: false,
+                journal: .presentOrUnverifiable
+            ),
+            .recoveryPending
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.state(
+                progress: .sessionPersisted,
+                recoveredCommitError: true,
+                journal: .absent
+            ),
+            .verifiedCompletion
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.state(
+                progress: .sessionPersisted,
+                recoveredCommitError: true,
+                journal: .presentOrUnverifiable
+            ),
+            .recoveryPending
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.state(
+                progress: .completed,
+                recoveredCommitError: true,
+                journal: .absent
+            ),
+            .verifiedCompletion
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.mutationFailureNotice(
+                fallback: .todoBatchApplyFailed,
+                journal: .absent
+            ),
+            .todoBatchApplyFailed
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.mutationFailureNotice(
+                fallback: .sessionOperationFailed,
+                journal: .presentOrUnverifiable
+            ),
+            .applicationCommitRecoveryPending
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.mutationFailureNotice(
+                fallback: .providerRunFailed,
+                journal: .absent
+            ),
+            .providerRunFailed
+        )
+        XCTAssertNil(
+            ZhulongApplicationCommitNoticeProjection
+                .noticeAfterConfirmedAbsentJournal(
+                    .applicationCommitRecoveryPending
+                )
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection
+                .noticeAfterConfirmedAbsentJournal(.providerRunFailed),
+            .providerRunFailed
+        )
+        XCTAssertNil(
+            ZhulongApplicationCommitNoticeProjection.notice(
+                operation: .todoBatch,
+                state: .cleanSuccess
+            )
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.notice(
+                operation: .todoBatch,
+                state: .failedBeforeCommit
+            ),
+            .todoBatchApplyFailed
+        )
+        XCTAssertEqual(
+            ZhulongApplicationCommitNoticeProjection.notice(
+                operation: .dailyReview,
+                state: .failedBeforeCommit
+            ),
+            .dailyReviewSaveFailed
+        )
+        for operation in ZhulongApplicationCommitOperation.allCases {
+            XCTAssertEqual(
+                ZhulongApplicationCommitNoticeProjection.notice(
+                    operation: operation,
+                    state: .recoveryPending
+                ),
+                .applicationCommitRecoveryPending
+            )
+            XCTAssertEqual(
+                ZhulongApplicationCommitNoticeProjection.notice(
+                    operation: operation,
+                    state: .verifiedCompletion
+                ),
+                .applicationCommitVerifiedComplete
+            )
+        }
+    }
+
+    func testApplicationCommitNoticesStateNoChangePendingAndVerifiedCompletionExactly() {
+        let chinese = AppPresentation(language: .chinese).zhulong
+        let english = AppPresentation(language: .english).zhulong
+
+        XCTAssertEqual(
+            chinese.notice(.todoBatchApplyFailed),
+            "Todo 批次未能应用，未写入任何变更。"
+        )
+        XCTAssertEqual(
+            english.notice(.todoBatchApplyFailed),
+            "The Todo batch could not be applied. No changes were written."
+        )
+        XCTAssertEqual(
+            chinese.notice(.dailyReviewSaveFailed),
+            "每日复盘未能保存，未写入任何变更。"
+        )
+        XCTAssertEqual(
+            english.notice(.dailyReviewSaveFailed),
+            "The daily review could not be saved. No changes were written."
+        )
+        XCTAssertEqual(
+            chinese.notice(.applicationCommitRecoveryPending),
+            "烛龙原子写入尚未完整结束；后续写入已阻断，请先完成恢复。"
+        )
+        XCTAssertEqual(
+            english.notice(.applicationCommitRecoveryPending),
+            "The Zhulong atomic write has not fully completed. Further writes are blocked until recovery finishes."
+        )
+        XCTAssertEqual(
+            chinese.notice(.applicationCommitVerifiedComplete),
+            "烛龙写入曾返回错误，但系统已精确核对并完成提交；本次未显示普通成功提示。"
+        )
+        XCTAssertEqual(
+            english.notice(.applicationCommitVerifiedComplete),
+            "The Zhulong write returned an error, but its exact state was verified and the commit completed. The usual success confirmation was suppressed."
+        )
     }
 
     func testTodoEditorAndProviderStatusCopyIsBilingual() {

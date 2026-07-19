@@ -5,18 +5,38 @@ import Foundation
 public struct WorkspaceState: Codable, Equatable, Sendable {
     public static let defaultValue = WorkspaceState(
         sidebarExpanded: true,
-        detailExpanded: false
+        detailExpanded: false,
+        usesCustomDetailWidth: false
     )
 
     public var sidebarExpanded: Bool
     public var detailExpanded: Bool
+    public var usesCustomDetailWidth: Bool
 
     public init(
         sidebarExpanded: Bool,
-        detailExpanded: Bool
+        detailExpanded: Bool,
+        usesCustomDetailWidth: Bool = false
     ) {
         self.sidebarExpanded = sidebarExpanded
         self.detailExpanded = detailExpanded
+        self.usesCustomDetailWidth = usesCustomDetailWidth
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sidebarExpanded
+        case detailExpanded
+        case usesCustomDetailWidth
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sidebarExpanded = try container.decode(Bool.self, forKey: .sidebarExpanded)
+        detailExpanded = try container.decode(Bool.self, forKey: .detailExpanded)
+        usesCustomDetailWidth = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .usesCustomDetailWidth
+        ) ?? false
     }
 }
 

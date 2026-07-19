@@ -4,9 +4,36 @@ public actor InMemorySyncTransport: SyncRecordTransport {
     private var records: [SyncRecordID: SyncRecord]
     private let currentRecordMerger: CurrentSyncRecordMerger
 
-    public init(records: [SyncRecord] = []) {
-        self.records = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+    public init() {
+        records = [:]
         currentRecordMerger = CurrentSyncRecordMerger()
+    }
+
+    public init(records: [SyncRecord]) throws {
+        let merger = CurrentSyncRecordMerger()
+        try ImmutableSyncRecordCASPreflight.validate(
+            existing: [],
+            incoming: records.map {
+                ImmutableSyncRecordCASCandidate(
+                    record: $0,
+                    exactData: nil
+                )
+            }
+        )
+        let batch = try merger.prepareTransportBatch(
+            existingRecords: [],
+            incomingRecords: records
+        )
+        var staged: [SyncRecordID: SyncRecord] = [:]
+        for record in batch.records {
+            guard staged.updateValue(record, forKey: record.id) == nil else {
+                throw SyncRecordTransportError.invalidCurrentRecordMerge(
+                    recordID: record.id
+                )
+            }
+        }
+        self.records = staged
+        currentRecordMerger = merger
     }
 
     public func push(_ records: [SyncRecord]) async throws {
@@ -30,9 +57,10 @@ public actor InMemorySyncTransport: SyncRecordTransport {
             existingRecords: existingRecords,
             incomingRecords: records
         )
+        var staged = self.records
 
         for record in batch.records {
-            if let existing = self.records[record.id] {
+            if let existing = staged[record.id] {
                 let requiresImmutableCAS = existing.entityType.requiresImmutableRecordPayload
                     || record.entityType.requiresImmutableRecordPayload
                 if requiresImmutableCAS {
@@ -44,7 +72,7 @@ public actor InMemorySyncTransport: SyncRecordTransport {
                     continue
                 }
                 do {
-                    self.records[record.id] = try currentRecordMerger.merge(
+                    staged[record.id] = try currentRecordMerger.merge(
                         existing: existing,
                         incoming: record,
                         context: batch.mergeContext
@@ -56,8 +84,9 @@ public actor InMemorySyncTransport: SyncRecordTransport {
                 }
                 continue
             }
-            self.records[record.id] = record
+            staged[record.id] = record
         }
+        self.records = staged
     }
 
     public func fetchAll() async throws -> [SyncRecord] {

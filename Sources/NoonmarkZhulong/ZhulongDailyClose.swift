@@ -109,7 +109,9 @@ public struct ZhulongDailyCloseSnapshot: Codable, Equatable, Sendable {
         dayLockedAt = engine.days[date]?.lockedAt
         let stats = engine.dailyReviewStats(date: date)
         let dayTraces = engine.traces.values
-            .filter { $0.date == date }
+            .filter {
+                $0.date == date && $0.formsDayHistory
+            }
             .sorted { $0.id.description < $1.id.description }
         counts = ZhulongDailyCloseCounts(
             total: stats.total,
@@ -122,7 +124,9 @@ public struct ZhulongDailyCloseSnapshot: Codable, Equatable, Sendable {
             pending: dayTraces.filter { $0.status == .pending }.count
         )
         traces = dayTraces.map { trace in
-            let subtasks = engine.subtasks.values.filter { $0.traceID == trace.id }
+            let subtasks = engine.subtasks.values.filter {
+                $0.traceID == trace.id && $0.isUserPresentable
+            }
             return ZhulongDailyTraceEvidence(
                 traceID: trace.id,
                 chainID: trace.chainID,
@@ -431,11 +435,38 @@ public struct ZhulongDailyReviewApplier: Sendable {
 
 extension ZhulongDailyCloseSnapshot {
     func validateForPersistence(expectedSessionID: ZhulongSessionID) throws {
+        let allowedTraceStatuses: Set<TraceStatus> = [
+            .pending,
+            .completed,
+            .unfinished,
+            .continued,
+            .changed,
+            .returnedToPool,
+            .abandoned
+        ]
+        let statusCountSum = [
+            counts.completed,
+            counts.unfinished,
+            counts.continued,
+            counts.changed,
+            counts.returnedToPool,
+            counts.abandoned,
+            counts.pending
+        ].reduce((value: 0, overflowed: false)) { partial, count in
+            let addition = partial.value.addingReportingOverflow(count)
+            return (
+                value: addition.partialValue,
+                overflowed: partial.overflowed || addition.overflow
+            )
+        }
         guard sessionID == expectedSessionID,
               capturedAt.timeIntervalSinceReferenceDate.isFinite,
               dayLockedAt?.timeIntervalSinceReferenceDate.isFinite ?? true,
               Set(traces.map(\.traceID)).count == traces.count,
+              traces.allSatisfy({ allowedTraceStatuses.contains($0.status) }),
               counts.total == traces.count,
+              statusCountSum.overflowed == false,
+              counts.total == statusCountSum.value,
               counts.completed == traces.filter({ $0.status == .completed }).count,
               counts.unfinished == traces.filter({ $0.status == .unfinished }).count,
               counts.continued == traces.filter({ $0.status == .continued }).count,

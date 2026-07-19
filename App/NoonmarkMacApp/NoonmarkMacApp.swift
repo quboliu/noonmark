@@ -68,6 +68,12 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             exit(EX_USAGE)
         }
         let app = NSApplication.shared
+        if let inputCleanup = WindowServerInputCleanupE2EAutomation.fromCommandLine() {
+            app.setActivationPolicy(.prohibited)
+            inputCleanup.run()
+            app.run()
+            return
+        }
         let delegate: NoonmarkMacApp
         do {
             let windowStatePersistenceEnabled = NoonmarkMainWindowState
@@ -98,6 +104,9 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             delegate.store.isSidebarExpanded = workspaceState.sidebarExpanded
             delegate.store.isDetailRailExpanded = workspaceState.detailExpanded
         } catch {
+            if let status = DataRootLeaseConflictE2EObserver.record(error) {
+                exit(status)
+            }
             presentStartupFailure(error)
         }
         if AppLaunchArguments.contains("--e2e-enable-zhulong") {
@@ -209,6 +218,9 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e" {
+            NSLog("Noonmark E2E applicationWillTerminate reached")
+        }
         store.prepareForTermination()
     }
 
@@ -250,6 +262,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         window.hasShadow = true
         window.isMovableByWindowBackground = false
         window.isReleasedWhenClosed = false
+        window.enableNoonmarkDynamicKeyViewLoop()
         window.identifier = NoonmarkMainWindowState.identifier
         window.isRestorable = windowStatePersistenceEnabled
         window.restorationClass = windowStatePersistenceEnabled ? Self.self : nil
@@ -508,14 +521,14 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                 return true
             }
             menuItem.title = store.domainUndoMenuTitle
-            return store.canUndoDomainAction
+            return mainWindowIsKey && store.canUndoDomainAction
         case #selector(redoAction(_:)):
             if let undoManager = activeTextResponder?.undoManager, undoManager.canRedo {
                 menuItem.title = store.copy.redoNamed(undoManager.redoActionName)
                 return true
             }
             menuItem.title = store.domainRedoMenuTitle
-            return store.canRedoDomainAction
+            return mainWindowIsKey && store.canRedoDomainAction
         case #selector(selectAllAction(_:)):
             return activeTextResponder != nil
                 || (window?.isKeyWindow == true && store.canSelectAllWorkspaceItems)
@@ -610,7 +623,9 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             }
             return
         }
-        guard store.showingClassificationManager == false else { return }
+        guard mainWindowIsKey,
+              store.showingClassificationManager == false
+        else { return }
         store.undo()
     }
 
@@ -621,7 +636,9 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             }
             return
         }
-        guard store.showingClassificationManager == false else { return }
+        guard mainWindowIsKey,
+              store.showingClassificationManager == false
+        else { return }
         store.redo()
     }
 
@@ -655,10 +672,11 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     }
 
     private var activeTextResponder: NSTextView? {
-        if let responder = NSApp.keyWindow?.firstResponder as? NSTextView {
-            return responder
-        }
-        return window?.firstResponder as? NSTextView
+        NSApp.keyWindow?.firstResponder as? NSTextView
+    }
+
+    private var mainWindowIsKey: Bool {
+        window?.isKeyWindow == true
     }
 
     private func runLaunchAutomationIfNeeded() {

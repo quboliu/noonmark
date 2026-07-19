@@ -124,7 +124,10 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
                 entityID: "entity-\(index)",
                 changedAt: now,
                 deviceID: SyncDeviceID("mac-a"),
-                recordPayload: type.requiresImmutableRecordPayload ? Data([0x01]) : nil
+                recordPayload: type.requiresImmutableRecordPayload
+                    || type == .appPreferences
+                    ? Data([0x01])
+                    : nil
             )
         }
 
@@ -133,6 +136,51 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         }
 
         XCTAssertEqual(try repository.journalEntries().map(\.entityType), dependencyOrder)
+    }
+
+    func testJournalEntriesUseExactClockOrderBeforeApplyingLimit() throws {
+        let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
+        let firstDate = Date(timeIntervalSinceReferenceDate: 812_345_678.123)
+        let secondDate = Date(
+            timeIntervalSinceReferenceDate:
+            firstDate.timeIntervalSinceReferenceDate.nextUp
+        )
+        let thirdDate = Date(
+            timeIntervalSinceReferenceDate:
+            secondDate.timeIntervalSinceReferenceDate.nextUp
+        )
+        let entries = [
+            SyncJournalEntry(
+                id: UUID(uuidString: "F1000000-0000-0000-0000-000000000001")!,
+                entityType: .subtask,
+                entityID: "same-subtask",
+                changedAt: firstDate,
+                deviceID: SyncDeviceID("mac-a")
+            ),
+            SyncJournalEntry(
+                id: UUID(uuidString: "A1000000-0000-0000-0000-000000000002")!,
+                entityType: .subtask,
+                entityID: "same-subtask",
+                changedAt: secondDate,
+                deviceID: SyncDeviceID("mac-a")
+            ),
+            SyncJournalEntry(
+                id: UUID(uuidString: "B1000000-0000-0000-0000-000000000003")!,
+                entityType: .subtask,
+                entityID: "same-subtask",
+                changedAt: thirdDate,
+                deviceID: SyncDeviceID("mac-a")
+            )
+        ]
+        for entry in entries.reversed() {
+            try repository.appendJournalEntry(entry)
+        }
+
+        XCTAssertEqual(try repository.journalEntries(), entries)
+        XCTAssertEqual(
+            try repository.journalEntries(limit: 1),
+            [entries[0]]
+        )
     }
 
     func testJournalAppendIsIdempotentForTheSameIDAndExactContent() throws {
@@ -365,9 +413,16 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
         let modifiedAt = Date(timeIntervalSinceReferenceDate: 812_345_678.123_456_7)
         let attemptedAt = Date(timeIntervalSinceReferenceDate: 812_345_679.987_654_3)
-        let dependencies: [ClassificationCommitDependency] = [
+        let dependencies: [SyncRecordDependency] = [
+            .day(today),
             .taskChain(TaskChainID(UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!)),
+            .taskDefinition(
+                TaskDefinitionID(UUID(uuidString: "A1000000-0000-0000-0000-000000000007")!)
+            ),
             .dayTrace(DayTraceID(UUID(uuidString: "A1000000-0000-0000-0000-000000000004")!)),
+            .subtask(
+                SubtaskID(UUID(uuidString: "A1000000-0000-0000-0000-000000000008")!)
+            ),
             .category(TaskCategoryID(UUID(uuidString: "A1000000-0000-0000-0000-000000000002")!)),
             .label(TaskLabelID(UUID(uuidString: "A1000000-0000-0000-0000-000000000003")!)),
             .classificationEvent(
@@ -376,7 +431,8 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
             .classificationCommit(
                 UUID(uuidString: "A1000000-0000-0000-0000-000000000006")!
             ),
-            .classificationRevision(42)
+            .classificationRevision(42),
+            .currentSnapshotIntegrity
         ]
         let waiting = try makeWaitingRecord(
             modifiedAt: modifiedAt,
@@ -409,15 +465,90 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertEqual(restored.attemptCount, 1)
     }
 
+    func testPendingCurrentDownloadRoundTripsCanonicalReactivationWitnessesExactly() throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let deviceID = SyncDeviceID("mac-pending-reactivation")
+        let createdAt = Date(timeIntervalSinceReferenceDate: 812_345_700.123_456_7)
+        let abandonedAt = Date(timeIntervalSinceReferenceDate: 812_345_710.234_567_8)
+        let reactivatedAt = Date(timeIntervalSinceReferenceDate: 812_345_720.345_678_9)
+        let attemptedAt = Date(timeIntervalSinceReferenceDate: 812_345_730.456_789)
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "等待完整 snapshot 后恢复",
+            now: createdAt
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: createdAt
+        )
+        try engine.abandonChain(from: traceID, now: abandonedAt)
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: abandonedAt
+        )
+
+        _ = try engine.reactivateAbandonedChain(
+            from: traceID,
+            today: today,
+            now: reactivatedAt
+        )
+        let reactivatedSnapshot = engine.snapshot()
+        try engineRepository.save(
+            reactivatedSnapshot,
+            recordingChangesFor: deviceID,
+            changedAt: reactivatedAt
+        )
+        let witnessEntry = try XCTUnwrap(
+            repository.journalEntries(state: .pendingUpload).first {
+                $0.entityType == .taskChain
+                    && $0.entityID == chainID.description
+                    && $0.recordPayload != nil
+            }
+        )
+        let record = try SyncRecordMaterializer().record(
+            for: witnessEntry,
+            in: reactivatedSnapshot
+        )
+        XCTAssertFalse(record.reactivationWitnesses.isEmpty)
+
+        try repository.reconcilePendingDownloads(
+            waiting: [
+                SyncWaitingRecord(
+                    record: record,
+                    dependencies: [.currentSnapshotIntegrity]
+                )
+            ],
+            terminal: [],
+            attemptedAt: attemptedAt
+        )
+
+        let restored = try XCTUnwrap(repository.pendingDownloads().first)
+        XCTAssertEqual(restored.record, record)
+        XCTAssertEqual(
+            restored.record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern,
+            record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(
+            restored.record.reactivationWitnesses,
+            record.reactivationWitnesses
+        )
+        XCTAssertEqual(restored.dependencies, [.currentSnapshotIntegrity])
+    }
+
     func testRepeatedPendingDownloadPreservesFirstSeenAndReplacesDependencies() throws {
         let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
         let firstAttempt = Date(timeIntervalSinceReferenceDate: 812_345_680.111_111_1)
         let secondAttempt = Date(timeIntervalSinceReferenceDate: 812_345_690.222_222_2)
-        let initialDependencies: [ClassificationCommitDependency] = [
+        let initialDependencies: [SyncRecordDependency] = [
             .taskChain(TaskChainID(UUID(uuidString: "A2000000-0000-0000-0000-000000000001")!)),
             .category(TaskCategoryID(UUID(uuidString: "A2000000-0000-0000-0000-000000000002")!))
         ]
-        let replacementDependencies: [ClassificationCommitDependency] = [
+        let replacementDependencies: [SyncRecordDependency] = [
             .label(TaskLabelID(UUID(uuidString: "A2000000-0000-0000-0000-000000000003")!))
         ]
         let initial = try makeWaitingRecord(
@@ -453,6 +584,72 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
             secondAttempt.timeIntervalSinceReferenceDate.bitPattern
         )
         XCTAssertEqual(restored.attemptCount, 2)
+    }
+
+    func testNewerCurrentPendingVersionReplacesRecordAndPreservesGenerationAndFirstSeen() throws {
+        let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
+        let mapper = SyncRecordMapper()
+        let firstAttempt = Date(timeIntervalSinceReferenceDate: 812_345_740.111_111_1)
+        let secondAttempt = Date(timeIntervalSinceReferenceDate: 812_345_750.222_222_2)
+        let initialRecord = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .coolGray,
+                language: .chinese,
+                updatedAt: now,
+                writerDeviceID: SyncDeviceID("mac-pending-initial")
+            ),
+            modifiedBy: SyncDeviceID("mac-pending-initial")
+        )
+        let newerRecord = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: now.addingTimeInterval(1),
+                writerDeviceID: SyncDeviceID("mac-pending-newer")
+            ),
+            modifiedBy: SyncDeviceID("mac-pending-newer")
+        )
+        XCTAssertEqual(initialRecord.id, newerRecord.id)
+
+        try repository.reconcilePendingDownloads(
+            waiting: [
+                SyncWaitingRecord(
+                    record: initialRecord,
+                    dependencies: [.currentSnapshotIntegrity]
+                )
+            ],
+            terminal: [],
+            attemptedAt: firstAttempt
+        )
+        let initialPending = try XCTUnwrap(repository.pendingDownloads().first)
+
+        let replacementDependency = SyncRecordDependency.taskChain(
+            TaskChainID(UUID(uuidString: "A2100000-0000-0000-0000-000000000001")!)
+        )
+        try repository.reconcilePendingDownloads(
+            waiting: [
+                SyncWaitingRecord(
+                    record: newerRecord,
+                    dependencies: [replacementDependency]
+                )
+            ],
+            terminal: [],
+            attemptedAt: secondAttempt
+        )
+
+        let restored = try XCTUnwrap(repository.pendingDownloads().first)
+        XCTAssertEqual(restored.record, newerRecord)
+        XCTAssertEqual(restored.generationID, initialPending.generationID)
+        XCTAssertEqual(
+            restored.firstSeenAt.timeIntervalSinceReferenceDate.bitPattern,
+            firstAttempt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(
+            restored.lastAttemptedAt.timeIntervalSinceReferenceDate.bitPattern,
+            secondAttempt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(restored.attemptCount, 2)
+        XCTAssertEqual(restored.dependencies, [replacementDependency])
     }
 
     func testTerminalPendingDownloadDeletesItsDependenciesAndKeepsOtherRecords() throws {
@@ -923,10 +1120,39 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertTrue(try syncRepository.journalEntries(state: .pendingUpload).isEmpty)
 
         engine.updateDailyReview(date: today, summary: "同步保存复盘", unfinishedReason: nil, tomorrowNote: nil, now: now.addingTimeInterval(30))
-        try engine.updateSubtaskDifficulty(subtaskID, difficulty: .hard, today: today)
+        try engine.updateSubtaskDifficulty(
+            subtaskID,
+            difficulty: .hard,
+            today: today,
+            now: now.addingTimeInterval(30)
+        )
         try engineRepository.save(engine.snapshot(), recordingChangesFor: deviceID, changedAt: now.addingTimeInterval(30))
 
         XCTAssertEqual(try syncRepository.journalEntries(state: .pendingUpload).map(\.entityType), [.day, .subtask])
+    }
+
+    func testEngineSaveRejectsNonFiniteMutationTimestampWithoutWriting() throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let snapshot = NoonmarkEngine().snapshot()
+        try engineRepository.save(snapshot)
+
+        XCTAssertThrowsError(
+            try engineRepository.save(
+                snapshot,
+                recordingChangesFor: SyncDeviceID("mac-nonfinite"),
+                changedAt: Date(timeIntervalSinceReferenceDate: .infinity)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SQLiteRepositoryError,
+                .invalidStoredValue("engine mutation changedAt must be finite")
+            )
+        }
+
+        XCTAssertEqual(try engineRepository.load().snapshot(), snapshot)
+        XCTAssertTrue(try syncRepository.journalEntries().isEmpty)
     }
 
     func testReactivationRoundTripsExactBoundaryAndPersistsWitness() throws {
@@ -1261,9 +1487,12 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
             try syncRepository.commitDownloadedMerge(
                 SQLiteSyncDownloadCommit(
                     snapshot: merged.snapshot(),
+                    observedEngineGeneration: try engineRepository
+                        .loadObservedSnapshot().generation,
                     conflicts: [conflict],
                     waiting: [newWaiting],
                     terminal: baselinePending,
+                    observedPending: baselinePending,
                     auditEntries: auditEntries,
                     metadata: replacementMetadata,
                     attemptedAt: now.addingTimeInterval(2)
@@ -1293,7 +1522,7 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
 
     private func makeWaitingRecord(
         modifiedAt: Date,
-        dependencies: [ClassificationCommitDependency]
+        dependencies: [SyncRecordDependency]
     ) throws -> SyncWaitingRecord {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "待重试分类提交", now: modifiedAt)

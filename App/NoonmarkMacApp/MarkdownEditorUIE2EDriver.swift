@@ -141,23 +141,43 @@ enum MarkdownEditorUIE2EDriver {
             textView.setSelectedRange(
                 NSRange(location: initialText.utf16.count, length: 0)
             )
-            guard let window = textView.window,
-                  sendWindowTab(modifiers: modifiers)
-            else {
+            guard let window = textView.window else {
+                finish("failed: 描述编辑器没有真实窗口")
+                return false
+            }
+            guard window.autorecalculatesKeyViewLoop else {
+                finish("failed: \(direction) 窗口没有启用动态 key-view loop")
+                return false
+            }
+            guard sendWindowTab(modifiers: modifiers) else {
                 finish("failed: 无法向真实窗口投递 \(direction)")
                 return false
             }
             let nextResponder = window.firstResponder
-            guard nextResponder !== textView,
-                  let responderView = nextResponder as? NSView,
-                  responderView.window === window,
+            let expectedResponder = modifiers.contains(.shift)
+                ? textView.previousValidKeyView
+                : textView.nextValidKeyView
+            guard let expectedResponder,
+                  expectedResponder !== textView,
+                  nextResponder === expectedResponder,
+                  expectedResponder.window === window,
                   textView.string == initialText,
                   readback() == initialText
             else {
                 finish(
-                    "failed: \(direction) 没有移动同窗焦点或错误修改描述 "
+                    "failed: \(direction) 没有沿正确方向移动同窗焦点或错误修改描述 "
                         + "text=\(textView.string) binding=\(readback()) "
+                        + "expected=\(String(describing: expectedResponder)) "
                         + "responder=\(String(describing: nextResponder))"
+                )
+                return false
+            }
+            let shiftTargetIsTitle =
+                expectedResponder.identifier?.rawValue == "detail.title.input"
+            if modifiers.contains(.shift), shiftTargetIsTitle == false {
+                finish(
+                    "failed: Shift-Tab 的上一焦点不是任务标题 "
+                        + "target=\(expectedResponder.identifier?.rawValue ?? "nil")"
                 )
                 return false
             }
@@ -215,13 +235,18 @@ enum MarkdownEditorUIE2EDriver {
             }
 
             replacePasteboard(with: "SENTINEL")
-            guard performMenuKey(
+            let copyHandled = performMenuKey(
                 "c",
                 modifiers: .command
-            ),
-                  NSPasteboard.general.string(forType: .string) == initialText
-            else {
-                finish("failed: ⌘C 没有通过 responder chain 复制")
+            )
+            let copiedText = NSPasteboard.general.string(forType: .string)
+            guard copyHandled, copiedText == initialText else {
+                finish(
+                    "failed: ⌘C 没有通过 responder chain 复制 "
+                        + "handled=\(copyHandled) copied=\(copiedText ?? "nil") "
+                        + "selection=\(textView.selectedRange()) responder="
+                        + "\(String(describing: textView.window?.firstResponder))"
+                )
                 return
             }
 

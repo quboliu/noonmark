@@ -155,6 +155,8 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - `manualProgressPercent`
 - `continuedFromTraceId`
 - `changedToTraceId`
+- `draftCancellationId`
+- `draftCancelledOn`
 - `createdAt`
 - `completedAt`
 - `settledAt`
@@ -168,6 +170,10 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - `changed`：已变更
 - `returnedToPool`：已回池
 - `abandoned`：已废弃
+
+内部关系状态：
+
+- `cancelledDraft`：计划草稿回池后的取消事实，只用于持久化、同步和有限撤销；不是用户可见 DayTrace 状态。
 
 规则：
 
@@ -190,6 +196,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 - 日期晚于当前本地日期时，它是计划草稿。
 - 计划草稿可以在未来日期之间无痕调整。
 - 计划草稿可以无痕回到任务池。
+- 计划草稿回池可以保留内部 `cancelledDraft` 关系事实及原子取消身份，但不得进入 Day Todo、未来计划、搜索、统计、复盘、完成轨迹、烛龙或 AI prompt。
 - 计划草稿不能标记完成，不能生成复盘结算。
 - 到达其日期后，自动进入当天 Day Todo，状态为待完成。
 
@@ -362,7 +369,7 @@ UI 具体设计由 Claude Design 负责；本规格只定义行为和接口。
 未来计划：
 
 - `planned -> planned`，可换未来日期。
-- `planned -> taskPool`，可无痕回池。
+- `planned -> taskPool`，可无痕回池；关系实现写入隐藏 `cancelledDraft` 取消事实，不物理删除。
 - `planned -> pending`，到达日期后自动进入当天 Day Todo。
 
 禁止转换：
@@ -432,7 +439,7 @@ func getTraceProgress(traceId: TraceID) -> TraceProgress
 约束：
 
 - `undoCompleted` 只允许当前日期。
-- `returnToPool` 只允许当前日期的活跃日轨迹。
+- `returnToPool` 允许当前日期的活跃日轨迹，或尚未到期且未由延续产生的 `pending` 计划草稿；前者保留用户可见 `returnedToPool` 日轨迹，后者只保留隐藏取消事实。
 - `continueTrace` 只允许历史未完成或当前待完成，且任务链没有其他活跃日轨迹。
 - `changeTrace` 会生成新任务链、新定义和同日新日轨迹，旧日轨迹保留并指向新日轨迹。
 - `copyAsNewTask` 创建新任务链，不继承延续次数。

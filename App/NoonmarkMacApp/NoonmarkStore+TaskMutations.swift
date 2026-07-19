@@ -60,7 +60,8 @@ extension NoonmarkStore {
                 _ = try applyTaskDraftLabels(
                     to: candidate,
                     chainID: chainID,
-                    labelNames: draft.labelNames
+                    labelNames: draft.labelNames,
+                    now: moment.instant
                 )
             }
             showToast(copy.taskAdded(draft.title))
@@ -90,7 +91,8 @@ extension NoonmarkStore {
                 _ = try applyTaskDraftLabels(
                     to: candidate,
                     chainID: chainID,
-                    labelNames: draft.labelNames
+                    labelNames: draft.labelNames,
+                    now: moment.instant
                 )
                 return chainID
             }
@@ -162,35 +164,38 @@ extension NoonmarkStore {
 
     func toggleComplete(_ traceID: DayTraceID) {
         guard let trace = engine.traces[traceID] else { return }
-        let hasOpenSubtasks = engine.subtaskProgress(for: traceID).canCompleteParent == false
-        if trace.status == .pending && hasOpenSubtasks {
-            showToast(copy.openSubtasksPreventCompletion)
-            return
-        }
         do {
+            let capability = try engine.completionCapability(
+                for: traceID,
+                today: today
+            )
+            if capability == .unavailable(.openSubtasks) {
+                showToast(copy.openSubtasksPreventCompletion)
+                return
+            }
+            guard case let .available(action) = capability else { return }
             let didComplete = try commitEngineMutation(
                 undoPolicy: .snapshotIfAllowed(
                     on: trace.date,
                     action: .completeTask
                 )
             ) { candidate, moment in
-                guard let currentTrace = candidate.traces[traceID] else {
-                    throw NoonmarkError.notFound("day trace")
-                }
-                if currentTrace.status == .completed {
+                switch action {
+                case .undo:
                     try candidate.undoCompleted(
                         traceID: traceID,
                         today: moment.today,
                         now: moment.instant
                     )
                     return false
+                case .complete:
+                    try candidate.markCompleted(
+                        traceID: traceID,
+                        today: moment.today,
+                        now: moment.instant
+                    )
+                    return true
                 }
-                try candidate.markCompleted(
-                    traceID: traceID,
-                    today: moment.today,
-                    now: moment.instant
-                )
-                return true
             }
             showToast(copy.taskCompletionChanged(completed: didComplete))
         } catch {
@@ -226,7 +231,8 @@ extension NoonmarkStore {
                 if currentSubtask.status == .completed {
                     try candidate.undoCompletedSubtask(
                         subtaskID,
-                        today: moment.today
+                        today: moment.today,
+                        now: moment.instant
                     )
                     return false
                 }
@@ -242,7 +248,8 @@ extension NoonmarkStore {
 
     func canMutateSubtask(_ subtask: Subtask) -> Bool {
         guard let trace = engine.traces[subtask.traceID] else { return false }
-        return trace.date == today
+        return subtask.isUserPresentable
+            && trace.date == today
             && trace.status == .pending
             && engine.days[trace.date]?.lockedAt == nil
     }
@@ -284,7 +291,8 @@ extension NoonmarkStore {
                 try candidate.updateSubtaskDifficulty(
                     subtaskID,
                     difficulty: difficulty,
-                    today: moment.today
+                    today: moment.today,
+                    now: moment.instant
                 )
             }
             showToast(copy.subtaskDifficultyUpdated)
@@ -364,7 +372,8 @@ extension NoonmarkStore {
             ) { candidate, moment in
                 try candidate.reactivateAbandonedChain(
                     from: traceID,
-                    today: moment.today
+                    today: moment.today,
+                    now: moment.instant
                 )
             }
             showToast(copy.taskChainReactivated)
@@ -510,19 +519,16 @@ extension NoonmarkStore {
         _ movingTraceID: DayTraceID,
         before targetTraceID: DayTraceID
     ) -> Bool {
-        guard movingTraceID != targetTraceID,
-              let movingTrace = engine.traces[movingTraceID],
-              let targetTrace = engine.traces[targetTraceID],
-              movingTrace.date == targetTrace.date,
-              movingTrace.status == .pending,
-              targetTrace.status == .pending
-        else {
+        guard let date = reorderableTraceDate(
+            movingTraceID,
+            before: targetTraceID
+        ) else {
             return false
         }
         do {
             try commitEngineMutation(
                 undoPolicy: .snapshotIfAllowed(
-                    on: movingTrace.date,
+                    on: date,
                     action: .reorderTask
                 )
             ) { candidate, moment in
@@ -538,6 +544,53 @@ extension NoonmarkStore {
             showOperationFailure(.taskMutation, error: error)
             return false
         }
+    }
+
+    /// SwiftUI invokes drop actions inside its own view-update transaction.
+    /// Accept the drop synchronously, then publish the persisted reorder from
+    /// the next main-queue transaction.
+    @discardableResult
+    func enqueueTraceReorder(
+        _ movingTraceID: DayTraceID,
+        before targetTraceID: DayTraceID,
+        completion: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) -> Bool {
+        guard reorderableTraceDate(
+            movingTraceID,
+            before: targetTraceID
+        ) != nil else {
+            return false
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                completion(false)
+                return
+            }
+            completion(
+                self.reorderTrace(
+                    movingTraceID,
+                    before: targetTraceID
+                )
+            )
+        }
+        return true
+    }
+
+    private func reorderableTraceDate(
+        _ movingTraceID: DayTraceID,
+        before targetTraceID: DayTraceID
+    ) -> LocalDate? {
+        guard movingTraceID != targetTraceID,
+              let movingTrace = engine.traces[movingTraceID],
+              let targetTrace = engine.traces[targetTraceID],
+              movingTrace.date == targetTrace.date,
+              movingTrace.status == .pending,
+              targetTrace.status == .pending
+        else {
+            return nil
+        }
+        return movingTrace.date
     }
 
     func updateTraceText(traceID: DayTraceID, descriptionText: String) {
@@ -610,11 +663,12 @@ extension NoonmarkStore {
         do {
             try commitEngineMutation(
                 undoPolicy: .snapshot(.editTaskText)
-            ) { candidate in
+            ) { candidate, moment in
                 try candidate.updatePoolTask(
                     chainID: chainID,
                     title: definition.title,
-                    descriptionText: descriptionText
+                    descriptionText: descriptionText,
+                    now: moment.instant
                 )
             }
         } catch {
@@ -626,8 +680,11 @@ extension NoonmarkStore {
         do {
             let outcome = try commitEngineMutation(
                 undoPolicy: .invalidate
-            ) { candidate in
-                try candidate.removeTaskFromPool(chainID: chainID)
+            ) { candidate, moment in
+                try candidate.removeTaskFromPool(
+                    chainID: chainID,
+                    now: moment.instant
+                )
             }
             if selectedPoolChainID == chainID {
                 clearSelection()
@@ -652,11 +709,12 @@ extension NoonmarkStore {
             return rejectNoteMutation(.unavailable)
         }
         do {
-            let noteID = try commitEngineMutation { candidate in
+            let noteID = try commitEngineMutation { candidate, moment in
                 try candidate.appendTraceNote(
                     traceID: traceID,
                     body: body,
-                    today: today
+                    today: moment.today,
+                    now: moment.instant
                 )
             }
             pushUndoEntry(
@@ -676,8 +734,12 @@ extension NoonmarkStore {
         let body = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard body.isEmpty == false else { return false }
         do {
-            let noteID = try commitEngineMutation { candidate in
-                try candidate.appendPoolNote(chainID: chainID, body: body)
+            let noteID = try commitEngineMutation { candidate, moment in
+                try candidate.appendPoolNote(
+                    chainID: chainID,
+                    body: body,
+                    now: moment.instant
+                )
             }
             pushUndoEntry(
                 with: .poolNoteAppend(chainID: chainID, noteID: noteID)
@@ -709,12 +771,13 @@ extension NoonmarkStore {
             return rejectNoteMutation(.changedSinceEditing)
         }
         do {
-            try commitEngineMutation { candidate in
+            try commitEngineMutation { candidate, moment in
                 try candidate.editTraceNote(
                     traceID: traceID,
                     noteID: noteID,
                     body: body,
-                    today: today
+                    today: moment.today,
+                    now: moment.instant
                 )
             }
             pushUndoEntry(
@@ -742,11 +805,12 @@ extension NoonmarkStore {
             return rejectNoteMutation(.unavailable)
         }
         do {
-            try commitEngineMutation { candidate in
+            try commitEngineMutation { candidate, moment in
                 try candidate.deleteTraceNote(
                     traceID: traceID,
                     noteID: noteID,
-                    today: today
+                    today: moment.today,
+                    now: moment.instant
                 )
             }
             pushUndoEntry(
@@ -783,11 +847,12 @@ extension NoonmarkStore {
             return rejectNoteMutation(.changedSinceEditing)
         }
         do {
-            try commitEngineMutation { candidate in
+            try commitEngineMutation { candidate, moment in
                 try candidate.editPoolNote(
                     chainID: chainID,
                     noteID: noteID,
-                    body: body
+                    body: body,
+                    now: moment.instant
                 )
             }
             pushUndoEntry(
@@ -815,8 +880,12 @@ extension NoonmarkStore {
             return rejectNoteMutation(.unavailable)
         }
         do {
-            try commitEngineMutation { candidate in
-                try candidate.deletePoolNote(chainID: chainID, noteID: noteID)
+            try commitEngineMutation { candidate, moment in
+                try candidate.deletePoolNote(
+                    chainID: chainID,
+                    noteID: noteID,
+                    now: moment.instant
+                )
             }
             pushUndoEntry(
                 with: .poolNoteDelete(

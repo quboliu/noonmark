@@ -82,12 +82,12 @@ extension NoonmarkStore {
     func applyTaskDraftLabels(
         to candidate: NoonmarkEngine,
         chainID: TaskChainID,
-        labelNames: [String]
+        labelNames: [String],
+        now: Date
     ) throws -> Bool {
         let choices = taskLabelChoices(for: labelNames, in: candidate)
         guard choices.isEmpty == false else { return false }
         let interactionID = UUID()
-        let mutationDate = candidate.nextClassificationMutationDate()
         let plan = try candidate.prepareClassification(
             .setCurrent(
                 TaskClassificationDraft(
@@ -98,7 +98,7 @@ extension NoonmarkStore {
             ),
             source: .userDirect,
             interactionID: interactionID,
-            now: mutationDate
+            now: now
         )
         _ = try candidate.commitClassification(
             plan,
@@ -106,7 +106,7 @@ extension NoonmarkStore {
                 confirming: plan,
                 decisionID: interactionID
             ),
-            now: mutationDate
+            now: now
         )
         return true
     }
@@ -114,12 +114,13 @@ extension NoonmarkStore {
     func updateReview(summary: String? = nil, reason: String? = nil, tomorrow: String? = nil) {
         let existing = engine.days[selectedDate]
         do {
-            try commitEngineMutation(undoPolicy: .invalidate) { candidate in
+            try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
                 candidate.updateDailyReview(
                     date: selectedDate,
                     summary: summary ?? existing?.reviewSummary,
                     unfinishedReason: reason ?? existing?.reviewUnfinishedReason,
-                    tomorrowNote: tomorrow ?? existing?.reviewTomorrowNote
+                    tomorrowNote: tomorrow ?? existing?.reviewTomorrowNote,
+                    now: moment.instant
                 )
             }
             reviewAutosaveMessage = copy.reviewAutoSaved
@@ -170,8 +171,7 @@ extension NoonmarkStore {
         labels: [TaskLabelChoice],
         interactionID: UUID = UUID()
     ) throws -> ClassificationReceipt {
-        try commitEngineMutation(undoPolicy: .invalidate) { candidate in
-            let mutationDate = candidate.nextClassificationMutationDate()
+        try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
             let plan = try candidate.prepareClassification(
                 .setCurrent(
                     TaskClassificationDraft(
@@ -182,7 +182,7 @@ extension NoonmarkStore {
                 ),
                 source: .userDirect,
                 interactionID: interactionID,
-                now: mutationDate
+                now: moment.instant
             )
             return try candidate.commitClassification(
                 plan,
@@ -190,7 +190,7 @@ extension NoonmarkStore {
                     confirming: plan,
                     decisionID: interactionID
                 ),
-                now: mutationDate
+                now: moment.instant
             )
         }
     }
@@ -200,13 +200,12 @@ extension NoonmarkStore {
         _ intent: ClassificationIntent,
         interactionID: UUID = UUID()
     ) throws -> ClassificationReceipt {
-        try commitEngineMutation(undoPolicy: .invalidate) { candidate in
-            let mutationDate = candidate.nextClassificationMutationDate()
+        try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
             let plan = try candidate.prepareClassification(
                 intent,
                 source: .userDirect,
                 interactionID: interactionID,
-                now: mutationDate
+                now: moment.instant
             )
             guard plan.blockers.isEmpty else {
                 throw NoonmarkError.invalidTransition(
@@ -219,7 +218,7 @@ extension NoonmarkStore {
                     confirming: plan,
                     decisionID: interactionID
                 ),
-                now: mutationDate
+                now: moment.instant
             )
         }
     }

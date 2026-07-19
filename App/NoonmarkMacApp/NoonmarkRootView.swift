@@ -20,6 +20,12 @@ final class NoonmarkWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
+extension NSWindow {
+    func enableNoonmarkDynamicKeyViewLoop() {
+        autorecalculatesKeyViewLoop = true
+    }
+}
+
 enum TaskClassificationDisplay: Equatable {
     case current(TaskClassificationProjection)
     case historical(TraceClassificationProjection)
@@ -169,6 +175,12 @@ struct NoonmarkRootView: View {
                 }
             }
         }
+        .animation(
+            Theme.shouldReduceMotion
+                ? nil
+                : .easeOut(duration: MacUIAnimationMetrics.toastRiseDuration),
+            value: store.toast
+        )
         .font(.noonmarkSystem(size: 13))
         .sheet(isPresented: $store.showingClassificationManager) {
             ClassificationManagementDialog {

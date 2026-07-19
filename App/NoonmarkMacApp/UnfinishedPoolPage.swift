@@ -62,17 +62,19 @@ struct UnfinishedTaskContextMenu: View {
     let item: UnfinishedPoolItem
 
     var body: some View {
-        if item.activeTrace == nil, let source = item.unfinishedTraces.last {
-            if item.isAbandoned {
-                Button(store.copy.reactivateChain) {
-                    store.reactivateAbandonedChain(from: source.id)
-                }
-            } else {
+        ForEach(item.actionPlan, id: \.self) { action in
+            switch action {
+            case let .continueTrace(traceID):
                 Button(store.copy.continueTo) {
-                    store.showingPicker = .continueTrace(source.id)
+                    store.showingPicker = .continueTrace(traceID)
                 }
+            case let .abandonChain(traceID):
                 Button(store.copy.abandonChain, role: .destructive) {
-                    store.abandon(source.id)
+                    store.abandon(traceID)
+                }
+            case let .reactivateChain(traceID):
+                Button(store.copy.reactivateChain) {
+                    store.reactivateAbandonedChain(from: traceID)
                 }
             }
         }

@@ -20,6 +20,22 @@ enum AppViewTreeE2E {
         return matches[0]
     }
 
+    static func view(identifier: String, in window: NSWindow) -> NSView? {
+        guard window.isVisible,
+              window.isMiniaturized == false,
+              window.alphaValue > 0,
+              let rootView = window.contentView?.superview ?? window.contentView
+        else {
+            return nil
+        }
+        let matches = allViews(from: rootView).filter {
+            $0.identifier?.rawValue == identifier
+                && isVisible($0, in: [window])
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
     static func hasNoVisibleView(identifier: String) -> Bool {
         guard currentWindowTree().isEmpty == false else { return false }
         return visibleViews(identifier: identifier).isEmpty
@@ -77,6 +93,28 @@ enum AppViewTreeE2E {
             mainWindowNumber: mainWindow.windowNumber,
             presentationWindowNumber: presentationWindow.windowNumber
         )
+    }
+
+    static func isPresentationWindowOpen(
+        _ identity: PresentationWindowIdentity
+    ) -> Bool {
+        guard let mainWindow = currentMainWindow(),
+              mainWindow.windowNumber == identity.mainWindowNumber,
+              let presentationWindow = NSApp.windows.first(where: {
+                  $0.windowNumber == identity.presentationWindowNumber
+              }),
+              presentationWindow.isVisible,
+              presentationWindow.isMiniaturized == false,
+              presentationWindow.alphaValue > 0,
+              presentationWindow.parent === mainWindow
+                  || presentationWindow.sheetParent === mainWindow
+                  || (mainWindow.childWindows ?? []).contains(where: {
+                      $0 === presentationWindow
+                  })
+        else {
+            return false
+        }
+        return isWindowServerMapped(presentationWindow)
     }
 
     static func identifiers(withPrefix prefix: String) -> Set<String>? {

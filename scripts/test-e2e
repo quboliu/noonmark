@@ -5,9 +5,14 @@ set -euo pipefail
 # App's designated requirement and the user's one-time TCC authorization.
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
 source scripts/runtime-evidence
+source scripts/evidence-common
 
 configuration="${1:-debug}"
+evidence_prepare_fresh_directory "$repo_root" "artifacts/e2e-runtime"
 if ! command -v sqlite3 >/dev/null 2>&1; then
   echo "missing required tool: sqlite3" >&2
   exit 1
@@ -39,8 +44,81 @@ app_executable_path="${app_path}/Contents/MacOS/${app_executable_name}"
 runtime_evidence_dir="artifacts/e2e-runtime"
 runtime_console_log="${runtime_evidence_dir}/unified.log"
 runtime_diagnostic_baseline="${runtime_evidence_dir}/diagnostic-baseline.txt"
-runtime_manifest="${runtime_evidence_dir}/manifest.txt"
+runtime_diagnostic_result="${runtime_evidence_dir}/diagnostic-result.txt"
+runtime_manifest="${runtime_evidence_dir}/runtime-manifest.txt"
 runtime_evidence_started=0
+evidence_manifest="${runtime_evidence_dir}/manifest.txt"
+evidence_inventory_path="${runtime_evidence_dir}/artifact-inventory.sha256"
+evidence_source_start="${runtime_evidence_dir}/source-start.fragment"
+evidence_source_end="${runtime_evidence_dir}/source-end.fragment"
+evidence_app_start="${runtime_evidence_dir}/app-start.fragment"
+evidence_app_end="${runtime_evidence_dir}/app-end.fragment"
+evidence_app_snapshot="${runtime_evidence_dir}/app-snapshot/NoonmarkMacAppE2E.app"
+english_scenario_ledger="${runtime_evidence_dir}/english-scenario-ledger.tsv"
+helper_process_name="NoonmarkDMGInstallHarness"
+helper_bundle="artifacts/dmg-install-harness/${helper_process_name}.app"
+helper_diagnostic_baseline="${runtime_evidence_dir}/helper-diagnostic-baseline.txt"
+helper_diagnostic_result="${runtime_evidence_dir}/helper-diagnostic-result.txt"
+evidence_helper_start="${runtime_evidence_dir}/helper-start.fragment"
+evidence_helper_end="${runtime_evidence_dir}/helper-end.fragment"
+evidence_helper_snapshot="${runtime_evidence_dir}/helper-snapshot/NoonmarkDMGInstallHarness.app"
+windowserver_input_cleanup_result="${runtime_evidence_dir}/windowserver-input-cleanup-result.txt"
+windowserver_input_cleanup_log="${runtime_evidence_dir}/windowserver-input-cleanup.log"
+evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
+suite_mode="full"
+only_mode=""
+app_binary_sha256_before=""
+helper_binary_sha256_before=""
+english_helper_requested=0
+e2e_owned_artifact_roots=(
+  artifacts/e2e
+  artifacts/e2e-blank
+  artifacts/e2e-classification
+  artifacts/e2e-completion-control
+  artifacts/e2e-context-menu-actions
+  artifacts/e2e-copy-undo-persistence
+  artifacts/e2e-data-import-integrity
+  artifacts/e2e-data-import-ui
+  artifacts/e2e-data-package
+  artifacts/e2e-data-package-import-failure
+  artifacts/e2e-date-strip
+  artifacts/e2e-detail-rail
+  artifacts/e2e-english
+  artifacts/e2e-keyboard-date
+  artifacts/e2e-lifecycle
+  artifacts/e2e-markdown-editor
+  artifacts/e2e-mutation-clock
+  artifacts/e2e-native-command-surface
+  artifacts/e2e-natural-day
+  artifacts/e2e-persistence
+  artifacts/e2e-pool-context-menu-action
+  artifacts/e2e-pool-list-layout
+  artifacts/e2e-preferences-clock
+  artifacts/e2e-provider
+  artifacts/e2e-quick-add-ui
+  artifacts/e2e-reactivation-atomicity
+  artifacts/e2e-review-zhulong-entry
+  artifacts/e2e-runtime
+  artifacts/e2e-seed-clock
+  artifacts/e2e-subtask-clock
+  artifacts/e2e-summary-sidebar
+  artifacts/e2e-task-note-atomicity
+  artifacts/e2e-task-notes
+  artifacts/e2e-ui-entry
+  artifacts/e2e-undo
+  artifacts/e2e-unfinished-actions
+  artifacts/e2e-window-close
+  artifacts/e2e-window-resize
+  artifacts/e2e-workflow
+  artifacts/e2e-workspace-productivity
+  artifacts/e2e-workspace-restoration
+  artifacts/e2e-zhulong
+  artifacts/e2e-zhulong-exact-recovery
+  artifacts/e2e-zhulong-navigation
+  artifacts/e2e-zhulong-pending-gate
+  artifacts/e2e-zhulong-recovery
+  artifacts/e2e-zhulong-todo-diff
+)
 export NOONMARK_E2E_APP_EXECUTABLE_NAME="$app_executable_name"
 export NOONMARK_E2E_APP_DISPLAY_NAME="$app_display_name"
 export NOONMARK_E2E_EXPECTED_WINDOW_WIDTH="$expected_window_width"
@@ -78,25 +156,111 @@ scenarios=(
   "settings-sync|settings|--e2e-settings-sync"
   "day-minimum-window|day|--e2e-window-size 960x720"
   "day-wide-window|day|--e2e-window-size 1440x900"
-  "english-day|day||english"
-  "english-pool|pool||english"
-  "english-future|future||english"
-  "english-unfinished|unfinished||english"
-  "english-completed|completed||english"
-  "english-calendar|calendar||english"
+  "english-day|day|--select first --e2e-window-size 960x720 --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/day-ui.txt|english"
+  "english-day-wide|day|--select first --e2e-window-size 1440x900 --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/day-wide-ui.txt|english"
+  "english-day-history-header|day|--e2e-window-size 960x720 --e2e-expand-detail-rail --e2e-verify-english-populated-screenshot --e2e-english-history-header --e2e-english-ui-result-url $PWD/artifacts/e2e-english/day-history-header-ui.txt|english"
+  "english-pool|pool|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/pool-ui.txt|english"
+  "english-future|future|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/future-ui.txt|english"
+  "english-unfinished|unfinished|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/unfinished-ui.txt|english"
+  "english-completed|completed|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/completed-ui.txt|english"
+  "english-calendar|calendar|--e2e-expand-detail-rail --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/calendar-ui.txt|english"
   "english-settings|settings||english"
   "english-zhulong|zhulong|--e2e-enable-zhulong|english"
 )
 
+english_full_scenario_set="english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
+only_mode_specs=(
+  "NOONMARK_E2E_UI_ENTRY_ONLY:ui-entry"
+  "NOONMARK_E2E_SEED_CLOCK_ONLY:seed-clock"
+  "NOONMARK_E2E_TASK_NOTE_ONLY:task-note"
+  "NOONMARK_E2E_TASK_NOTE_ATOMICITY_ONLY:task-note-atomicity"
+  "NOONMARK_E2E_COPY_UNDO_ONLY:copy-undo"
+  "NOONMARK_E2E_LIFECYCLE_ONLY:lifecycle"
+  "NOONMARK_E2E_NATURAL_DAY_ONLY:natural-day"
+  "NOONMARK_E2E_MUTATION_CLOCK_ONLY:mutation-clock"
+  "NOONMARK_E2E_PREFERENCES_CLOCK_ONLY:preferences-clock"
+  "NOONMARK_E2E_SUBTASK_CLOCK_ONLY:subtask-clock"
+  "NOONMARK_E2E_WINDOW_RESIZE_ONLY:window-resize"
+  "NOONMARK_E2E_COMPLETION_SEQUENCE_ONLY:completion-sequence"
+  "NOONMARK_E2E_WINDOW_STATE_ONLY:window-state"
+  "NOONMARK_E2E_NATIVE_COMMANDS_ONLY:native-commands"
+  "NOONMARK_E2E_COMPLETION_CONTROL_ONLY:completion-control"
+  "NOONMARK_E2E_WORKSPACE_PRODUCTIVITY_ONLY:workspace-productivity"
+  "NOONMARK_E2E_DATA_IMPORT_UI_ONLY:data-import-ui"
+  "NOONMARK_E2E_DATA_IMPORT_INTEGRITY_ONLY:data-import-integrity"
+  "NOONMARK_E2E_POOL_LIST_LAYOUT_ONLY:pool-list-layout"
+  "NOONMARK_E2E_POOL_CONTEXT_ACTION_ONLY:pool-context-action"
+  "NOONMARK_E2E_UNFINISHED_ACTION_ONLY:unfinished-action"
+  "NOONMARK_E2E_SUMMARY_SIDEBAR_ONLY:summary-sidebar"
+  "NOONMARK_E2E_MARKDOWN_ONLY:markdown"
+  "NOONMARK_E2E_QUICK_ADD_UI_ONLY:quick-add-ui"
+  "NOONMARK_E2E_ZHULONG_NAVIGATION_ONLY:zhulong-navigation"
+  "NOONMARK_E2E_ZHULONG_PENDING_GATE_ONLY:zhulong-pending-gate"
+  "NOONMARK_E2E_ZHULONG_APPLICATION_CLOCK_ONLY:zhulong-application-clock"
+)
+only_mode_count=0
+for only_spec in "${only_mode_specs[@]}"; do
+  IFS=":" read -r only_variable only_name <<< "$only_spec"
+  only_value="${!only_variable:-0}"
+  if [[ "$only_value" != "0" && "$only_value" != "1" ]]; then
+    echo "$only_variable must be exactly 0 or 1" >&2
+    exit 1
+  fi
+  if [[ "$only_value" == "1" ]]; then
+    only_mode_count=$((only_mode_count + 1))
+    only_mode="$only_name"
+  fi
+done
+if (( only_mode_count > 1 )); then
+  echo "exactly zero or one NOONMARK_E2E_*_ONLY mode may be enabled" >&2
+  exit 1
+fi
+
+screenshots_only="${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}"
+if [[ "$screenshots_only" != "0" && "$screenshots_only" != "1" ]]; then
+  echo "NOONMARK_E2E_SCREENSHOTS_ONLY must be exactly 0 or 1" >&2
+  exit 1
+fi
 requested_scenarios="${NOONMARK_E2E_SCENARIOS:-}"
+if (( only_mode_count == 1 )) &&
+  { [[ -n "$requested_scenarios" ]] || [[ "$screenshots_only" == "1" ]]; }; then
+  echo "an E2E ONLY mode cannot be combined with screenshot filters" >&2
+  exit 1
+fi
+if (( only_mode_count == 1 )); then
+  suite_mode="only:${only_mode}"
+elif [[ "$screenshots_only" == "1" ]]; then
+  suite_mode="screenshots-only"
+elif [[ -n "$requested_scenarios" ]]; then
+  suite_mode="filtered-screenshots-plus-full-probes"
+fi
+
+require_full_suite="${NOONMARK_EVIDENCE_REQUIRE_FULL_SUITE:-0}"
+if [[ "$require_full_suite" != "0" && "$require_full_suite" != "1" ]]; then
+  echo "NOONMARK_EVIDENCE_REQUIRE_FULL_SUITE must be exactly 0 or 1" >&2
+  exit 1
+fi
+if [[ "$require_full_suite" == "1" && "$suite_mode" != "full" ]]; then
+  echo "the final evidence gate requires the unfiltered full E2E suite" >&2
+  exit 1
+fi
+
 if [[ -n "$requested_scenarios" ]]; then
   filtered_scenarios=()
+  filtered_scenario_names=()
   for requested in $requested_scenarios; do
+    for filtered_name in "${filtered_scenario_names[@]:-}"; do
+      if [[ "$filtered_name" == "$requested" ]]; then
+        echo "duplicate E2E screenshot scenario: $requested" >&2
+        exit 1
+      fi
+    done
     found=0
     for scenario in "${scenarios[@]}"; do
       IFS="|" read -r screenshot_name _ <<< "$scenario"
       if [[ "$screenshot_name" == "$requested" ]]; then
         filtered_scenarios+=("$scenario")
+        filtered_scenario_names+=("$requested")
         found=1
       fi
     done
@@ -105,10 +269,107 @@ if [[ -n "$requested_scenarios" ]]; then
       exit 1
     fi
   done
+  if (( ${#filtered_scenarios[@]} == 0 )); then
+    echo "NOONMARK_E2E_SCENARIOS must select at least one exact scenario" >&2
+    exit 1
+  fi
   scenarios=("${filtered_scenarios[@]}")
 fi
 
+scenario_names=()
+english_scenario_names=()
+if (( only_mode_count == 0 )); then
+  for scenario in "${scenarios[@]}"; do
+    IFS="|" read -r screenshot_name _ _ scenario_language <<< "$scenario"
+    scenario_names+=("$screenshot_name")
+    if [[ "$scenario_language" == "english" ]]; then
+      english_scenario_names+=("$screenshot_name")
+    fi
+  done
+fi
+scenario_set="none"
+if (( ${#scenario_names[@]} > 0 )); then
+  scenario_set="$(IFS=,; echo "${scenario_names[*]}")"
+fi
+english_scenario_set="none"
+if (( ${#english_scenario_names[@]} > 0 )); then
+  english_scenario_set="$(IFS=,; echo "${english_scenario_names[*]}")"
+fi
+for english_scenario_name in "${english_scenario_names[@]:-}"; do
+  if [[ "$english_scenario_name" == "english-day" ]]; then
+    english_helper_requested=1
+    break
+  fi
+done
+
+mkdir -p artifacts
+for artifact_root in "${e2e_owned_artifact_roots[@]}"; do
+  evidence_prepare_fresh_directory "$repo_root" "$artifact_root"
+done
+evidence_capture_source "$repo_root" "source" "$evidence_source_start"
+evidence_begin_manifest \
+  "$evidence_manifest" \
+  "mac-app-e2e" \
+  "$evidence_run_id" \
+  "$configuration" \
+  "$suite_mode"
+evidence_append_snapshot "$evidence_manifest" "$evidence_source_start"
+evidence_append "$evidence_manifest" "scenario_count" "${#scenario_names[@]}"
+evidence_append "$evidence_manifest" "scenario_set" "$scenario_set"
+evidence_append \
+  "$evidence_manifest" \
+  "english_scenario_expected_count" \
+  "${#english_scenario_names[@]}"
+evidence_append \
+  "$evidence_manifest" \
+  "english_scenario_expected_set" \
+  "$english_scenario_set"
+evidence_append "$evidence_manifest" "only_mode" "${only_mode:-none}"
+evidence_append \
+  "$evidence_manifest" \
+  "english_full_scenario_set" \
+  "$english_full_scenario_set"
+evidence_append \
+  "$evidence_manifest" \
+  "english_oracle_policy" \
+  "screenshot+in_app_contract;external_ax=english-day-only"
+printf 'scenario\tapp_binary_sha256\tscreenshot_sha256\toracles\texternal_ax\n' \
+  >"$english_scenario_ledger"
+
 scripts/build-mac-app "$configuration" e2e
+evidence_capture_bundle "$app_path" 1 "app" "$evidence_app_start"
+evidence_append_snapshot "$evidence_manifest" "$evidence_app_start"
+app_binary_sha256_before="$(evidence_read "$evidence_app_start" "app_binary_sha256")"
+evidence_append \
+  "$evidence_manifest" \
+  "app_binary_sha256_before" \
+  "$app_binary_sha256_before"
+english_scenarios_requested=0
+if (( only_mode_count == 0 )); then
+  for scenario in "${scenarios[@]}"; do
+    IFS="|" read -r _ _ _ scenario_language <<< "$scenario"
+    if [[ "$scenario_language" == "english" ]]; then
+      english_scenarios_requested=1
+      break
+    fi
+  done
+fi
+if [[ "$english_helper_requested" == "1" ]]; then
+  scripts/build-dmg-install-harness "$configuration"
+  evidence_capture_bundle \
+    "$helper_bundle" \
+    1 \
+    "helper" \
+    "$evidence_helper_start"
+  evidence_append_snapshot "$evidence_manifest" "$evidence_helper_start"
+  helper_binary_sha256_before="$(
+    evidence_read "$evidence_helper_start" "helper_binary_sha256"
+  )"
+  evidence_append \
+    "$evidence_manifest" \
+    "helper_binary_sha256_before" \
+    "$helper_binary_sha256_before"
+fi
 
 mkdir -p artifacts/e2e
 
@@ -143,12 +404,401 @@ terminate_e2e_app() {
   return 1
 }
 
+run_windowserver_input_cleanup() {
+  local cleanup_pid=""
+  local cleanup_process_status=0
+  local cleanup_result="missing"
+  local cleanup_status=0
+
+  rm -f "$windowserver_input_cleanup_result"
+  : >"$windowserver_input_cleanup_log"
+  if pgrep -x "$app_executable_name" >/dev/null 2>&1; then
+    echo "signed-App input cleanup refused to overlap a live E2E App" \
+      >>"$windowserver_input_cleanup_log"
+    cleanup_status=1
+  else
+    /usr/bin/open -W -n \
+      -o "$windowserver_input_cleanup_log" \
+      --stderr "$windowserver_input_cleanup_log" \
+      "$app_path" \
+      --args \
+      --e2e-windowserver-input-cleanup-result-url \
+      "$PWD/$windowserver_input_cleanup_result" \
+      >>"$windowserver_input_cleanup_log" 2>&1 &
+    cleanup_pid=$!
+
+    for _ in {1..100}; do
+      if [[ -f "$windowserver_input_cleanup_result" ]] ||
+        ! kill -0 "$cleanup_pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    for _ in {1..40}; do
+      if ! kill -0 "$cleanup_pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if kill -0 "$cleanup_pid" 2>/dev/null; then
+      echo "signed-App input cleanup did not terminate" \
+        >>"$windowserver_input_cleanup_log"
+      kill "$cleanup_pid" 2>/dev/null || true
+      cleanup_status=1
+    fi
+    if wait "$cleanup_pid" 2>/dev/null; then
+      cleanup_process_status=0
+    else
+      cleanup_process_status=$?
+      echo "signed-App input cleanup exited ${cleanup_process_status}" \
+        >>"$windowserver_input_cleanup_log"
+      cleanup_status=1
+    fi
+  fi
+
+  if [[ -f "$windowserver_input_cleanup_result" ]]; then
+    cleanup_result="$(<"$windowserver_input_cleanup_result")"
+  fi
+  if [[ "$cleanup_result" != "ok" ]]; then
+    echo "signed-App input cleanup result: $cleanup_result" \
+      >>"$windowserver_input_cleanup_log"
+    cleanup_status=1
+  fi
+  if pgrep -x "$app_executable_name" >/dev/null 2>&1; then
+    terminate_e2e_app >/dev/null 2>&1 || true
+    cleanup_status=1
+  fi
+
+  evidence_append \
+    "$evidence_manifest" \
+    "windowserver_input_cleanup_result" \
+    "$cleanup_result" || cleanup_status=1
+  evidence_append \
+    "$evidence_manifest" \
+    "windowserver_input_cleanup_result_path" \
+    "$windowserver_input_cleanup_result" || cleanup_status=1
+  evidence_append \
+    "$evidence_manifest" \
+    "windowserver_input_cleanup_result_sha256" \
+    "$([[ -f "$windowserver_input_cleanup_result" ]] && \
+      shasum -a 256 "$windowserver_input_cleanup_result" | awk '{print $1}' || \
+      printf 'missing')" || cleanup_status=1
+  evidence_append \
+    "$evidence_manifest" \
+    "windowserver_input_cleanup_log_path" \
+    "$windowserver_input_cleanup_log" || cleanup_status=1
+
+  return "$cleanup_status"
+}
+
+validate_english_scenario_ledger() {
+  local actual_count
+  local actual_set="none"
+  local expected_external_ax_count=0
+
+  if [[ ! -f "$english_scenario_ledger" ]] ||
+    [[ "$(head -n 1 "$english_scenario_ledger")" != \
+      $'scenario\tapp_binary_sha256\tscreenshot_sha256\toracles\texternal_ax' ]]; then
+    echo "English scenario evidence ledger is missing its exact header" >&2
+    return 1
+  fi
+  actual_count="$(awk 'NR > 1 { count += 1 } END { print count + 0 }' \
+    "$english_scenario_ledger")"
+  if (( actual_count > 0 )); then
+    actual_set="$(awk -F $'\t' 'NR > 1 { print $1 }' \
+      "$english_scenario_ledger" | paste -sd, -)"
+  fi
+  if [[ "$actual_count" != "${#english_scenario_names[@]}" ||
+    "$actual_set" != "$english_scenario_set" ]]; then
+    echo "English scenario evidence is incomplete: expected=$english_scenario_set actual=$actual_set" >&2
+    return 1
+  fi
+  if ! awk -F $'\t' -v expected="$app_binary_sha256_before" '
+    NR == 1 { next }
+    NF != 5 || $2 != expected || length($3) != 64 || $3 !~ /^[0-9a-f]+$/ { exit 1 }
+  ' "$english_scenario_ledger"; then
+    echo "English scenario evidence is not bound to one App binary and screenshot set" >&2
+    return 1
+  fi
+  if [[ ",$english_scenario_set," == *",english-day,"* ]]; then
+    expected_external_ax_count=1
+  fi
+  if [[ "$(awk -F $'\t' 'NR > 1 && $5 == "true" { count += 1 } END { print count + 0 }' \
+    "$english_scenario_ledger")" != "$expected_external_ax_count" ]] ||
+    ! awk -F $'\t' '
+      NR == 1 { next }
+      $5 == "true" && $1 != "english-day" { exit 1 }
+      ($1 == "english-settings" || $1 == "english-zhulong") && $5 != "false" { exit 1 }
+    ' "$english_scenario_ledger"; then
+    echo "English external AX evidence was attributed to an unobserved scenario" >&2
+    return 1
+  fi
+  if [[ "$suite_mode" == "full" ]] && {
+    [[ "$english_scenario_set" != "$english_full_scenario_set" ]] ||
+      [[ "$actual_count" != "10" ]];
+  }; then
+    echo "full E2E did not verify the exact ten-scenario English ledger" >&2
+    return 1
+  fi
+
+  evidence_append \
+    "$evidence_manifest" \
+    "english_scenario_verified_count" \
+    "$actual_count"
+  evidence_append \
+    "$evidence_manifest" \
+    "english_scenario_verified_set" \
+    "$actual_set"
+  evidence_append \
+    "$evidence_manifest" \
+    "english_scenario_ledger_sha256" \
+    "$(shasum -a 256 "$english_scenario_ledger" | awk '{print $1}')"
+}
+
+finish_e2e_evidence() {
+  local suite_status="$1"
+  local app_binary_sha256_after=""
+  local helper_binary_sha256_after=""
+  local inventory_sha256
+  local -a artifact_paths=()
+  local -a required_keys=(
+    scenario_count
+    scenario_set
+    english_scenario_expected_count
+    english_scenario_expected_set
+    english_scenario_verified_count
+    english_scenario_verified_set
+    english_scenario_ledger_sha256
+    app_binary_sha256_before
+    app_binary_sha256_after
+    app_binary_unchanged
+    artifact_inventory_sha256
+    diagnostic_baseline_path
+    diagnostic_final_path
+    diagnostic_diff_path
+    diagnostic_result_path
+    windowserver_input_cleanup_result
+    windowserver_input_cleanup_result_path
+    windowserver_input_cleanup_result_sha256
+    windowserver_input_cleanup_log_path
+  )
+
+  if ! validate_english_scenario_ledger; then
+    suite_status=1
+  fi
+  if evidence_capture_source \
+    "$repo_root" \
+    "source_end" \
+    "$evidence_source_end"; then
+    if ! evidence_append_snapshot "$evidence_manifest" "$evidence_source_end"; then
+      suite_status=1
+    fi
+  else
+    suite_status=1
+  fi
+  if evidence_capture_bundle \
+    "$app_path" \
+    1 \
+    "app_end" \
+    "$evidence_app_end"; then
+    if ! evidence_append_snapshot "$evidence_manifest" "$evidence_app_end"; then
+      suite_status=1
+    fi
+    app_binary_sha256_after="$(
+      evidence_read "$evidence_app_end" "app_end_binary_sha256"
+    )"
+  else
+    suite_status=1
+  fi
+  rm -rf "$evidence_app_snapshot"
+  mkdir -p "$(dirname "$evidence_app_snapshot")"
+  if ! ditto "$app_path" "$evidence_app_snapshot"; then
+    echo "could not preserve the exact E2E App bundle snapshot" >&2
+    suite_status=1
+  fi
+  if [[ "$english_helper_requested" == "1" ]]; then
+    required_keys+=(
+      helper_binary_sha256_before
+      helper_binary_sha256_after
+      helper_binary_unchanged
+      helper_diagnostic_baseline_path
+      helper_diagnostic_final_path
+      helper_diagnostic_diff_path
+      helper_diagnostic_result_path
+    )
+    if evidence_capture_bundle \
+      "$helper_bundle" \
+      1 \
+      "helper_end" \
+      "$evidence_helper_end"; then
+      if ! evidence_append_snapshot \
+        "$evidence_manifest" \
+        "$evidence_helper_end"; then
+        suite_status=1
+      fi
+      helper_binary_sha256_after="$(
+        evidence_read "$evidence_helper_end" "helper_end_binary_sha256"
+      )"
+    else
+      suite_status=1
+    fi
+    rm -rf "$evidence_helper_snapshot"
+    mkdir -p "$(dirname "$evidence_helper_snapshot")"
+    if ! ditto "$helper_bundle" "$evidence_helper_snapshot"; then
+      echo "could not preserve the exact E2E helper bundle snapshot" >&2
+      suite_status=1
+    fi
+    evidence_append \
+      "$evidence_manifest" \
+      "helper_binary_sha256_after" \
+      "${helper_binary_sha256_after:-missing}" || suite_status=1
+    if [[ -n "$helper_binary_sha256_after" ]] &&
+      evidence_require_bundle_snapshots_equal \
+        "$evidence_helper_start" \
+        helper \
+        "$evidence_helper_end" \
+        helper_end \
+        "E2E helper"; then
+      evidence_append \
+        "$evidence_manifest" \
+        "helper_binary_unchanged" \
+        "true" || suite_status=1
+    else
+      evidence_append \
+        "$evidence_manifest" \
+        "helper_binary_unchanged" \
+        "false" || true
+      suite_status=1
+    fi
+    evidence_append \
+      "$evidence_manifest" \
+      "helper_diagnostic_baseline_path" \
+      "$helper_diagnostic_baseline" || suite_status=1
+    evidence_append \
+      "$evidence_manifest" \
+      "helper_diagnostic_final_path" \
+      "${helper_diagnostic_baseline}.current" || suite_status=1
+    evidence_append \
+      "$evidence_manifest" \
+      "helper_diagnostic_diff_path" \
+      "${helper_diagnostic_baseline}.new" || suite_status=1
+    evidence_append \
+      "$evidence_manifest" \
+      "helper_diagnostic_result_path" \
+      "$helper_diagnostic_result" || suite_status=1
+  fi
+  if ! evidence_append \
+    "$evidence_manifest" \
+    "app_binary_sha256_after" \
+    "${app_binary_sha256_after:-missing}"; then
+    suite_status=1
+  fi
+  if [[ -n "$app_binary_sha256_after" ]] &&
+    evidence_require_bundle_snapshots_equal \
+      "$evidence_app_start" \
+      app \
+      "$evidence_app_end" \
+      app_end \
+      "E2E App"; then
+    if ! evidence_append "$evidence_manifest" "app_binary_unchanged" "true"; then
+      suite_status=1
+    fi
+  else
+    evidence_append "$evidence_manifest" "app_binary_unchanged" "false" || true
+    echo "E2E App binary changed during the suite" >&2
+    suite_status=1
+  fi
+  evidence_append \
+    "$evidence_manifest" \
+    "diagnostic_baseline_path" \
+    "$runtime_diagnostic_baseline" || suite_status=1
+  evidence_append \
+    "$evidence_manifest" \
+    "diagnostic_final_path" \
+    "${runtime_diagnostic_baseline}.current" || suite_status=1
+  evidence_append \
+    "$evidence_manifest" \
+    "diagnostic_diff_path" \
+    "${runtime_diagnostic_baseline}.new" || suite_status=1
+  evidence_append \
+    "$evidence_manifest" \
+    "diagnostic_result_path" \
+    "$runtime_diagnostic_result" || suite_status=1
+
+  for artifact_path in "${e2e_owned_artifact_roots[@]}"; do
+    if [[ "$artifact_path" != "$runtime_evidence_dir" ]]; then
+      artifact_paths+=("$artifact_path")
+    fi
+  done
+  artifact_paths+=(
+    "$runtime_console_log"
+    "$runtime_manifest"
+    "$runtime_diagnostic_baseline"
+    "${runtime_diagnostic_baseline}.current"
+    "${runtime_diagnostic_baseline}.new"
+    "$runtime_diagnostic_result"
+    "$windowserver_input_cleanup_result"
+    "$windowserver_input_cleanup_log"
+    "$english_scenario_ledger"
+    "$evidence_source_start"
+    "$evidence_source_end"
+    "$evidence_app_start"
+    "$evidence_app_end"
+    "$evidence_app_snapshot"
+  )
+  if [[ -d "${runtime_evidence_dir}/DiagnosticReports" ]]; then
+    artifact_paths+=("${runtime_evidence_dir}/DiagnosticReports")
+  fi
+  if [[ "$english_helper_requested" == "1" ]]; then
+    artifact_paths+=(
+      "$evidence_helper_snapshot"
+      "$helper_diagnostic_baseline"
+      "${helper_diagnostic_baseline}.current"
+      "${helper_diagnostic_baseline}.new"
+      "$helper_diagnostic_result"
+      "${runtime_evidence_dir}/HelperDiagnosticReports"
+      "$evidence_helper_start"
+      "$evidence_helper_end"
+    )
+  fi
+  if evidence_inventory \
+    "$repo_root" \
+    "$evidence_inventory_path" \
+    "${artifact_paths[@]}"; then
+    inventory_sha256="$(
+      shasum -a 256 "$evidence_inventory_path" | awk '{print $1}'
+    )"
+    if ! evidence_append \
+      "$evidence_manifest" \
+      "artifact_inventory_sha256" \
+      "$inventory_sha256"; then
+      suite_status=1
+    fi
+  else
+    suite_status=1
+  fi
+
+  if ! evidence_finish_manifest \
+    "$evidence_manifest" \
+    "$suite_status" \
+    "${required_keys[@]}"; then
+    suite_status=1
+  fi
+  return "$suite_status"
+}
+
 finish_e2e_session() {
   local suite_status="${1:-0}"
   local diagnostic_wait_attempts=30
 
   trap - EXIT
-  terminate_e2e_app >/dev/null 2>&1 || true
+  if ! terminate_e2e_app >/dev/null 2>&1; then
+    suite_status=1
+  fi
+  if ! run_windowserver_input_cleanup; then
+    suite_status=1
+  fi
+  rm -rf "/tmp/noonmark-e2e-preferences-clock-sync-$$"
   if kill -0 "$display_assertion_pid" >/dev/null 2>&1; then
     kill "$display_assertion_pid" >/dev/null 2>&1 || true
     wait "$display_assertion_pid" 2>/dev/null || true
@@ -165,18 +815,42 @@ finish_e2e_session() {
     if [[ "$suite_status" -ne 0 ]]; then
       diagnostic_wait_attempts=150
     fi
-    if ! runtime_evidence_assert_no_new_diagnostics \
+    if runtime_evidence_assert_no_new_diagnostics \
       "$app_executable_name" \
       "$runtime_diagnostic_baseline" \
       "${runtime_evidence_dir}/DiagnosticReports" \
       "$diagnostic_wait_attempts"; then
+      printf 'new_diagnostic_count=0\n' >"$runtime_diagnostic_result"
+      mkdir -p "${runtime_evidence_dir}/DiagnosticReports"
+      printf 'new_diagnostic_count=0\n' \
+        >"${runtime_evidence_dir}/DiagnosticReports/result.txt"
+    else
+      printf 'new_diagnostic_count=nonzero\n' >"$runtime_diagnostic_result"
       suite_status=1
+    fi
+    if [[ "$english_helper_requested" == "1" ]]; then
+      if runtime_evidence_assert_no_new_diagnostics \
+        "$helper_process_name" \
+        "$helper_diagnostic_baseline" \
+        "${runtime_evidence_dir}/HelperDiagnosticReports" \
+        "$diagnostic_wait_attempts"; then
+        printf 'new_diagnostic_count=0\n' >"$helper_diagnostic_result"
+        mkdir -p "${runtime_evidence_dir}/HelperDiagnosticReports"
+        printf 'new_diagnostic_count=0\n' \
+          >"${runtime_evidence_dir}/HelperDiagnosticReports/result.txt"
+      else
+        printf 'new_diagnostic_count=nonzero\n' >"$helper_diagnostic_result"
+        suite_status=1
+      fi
     fi
     if ! runtime_evidence_write_manifest_finish \
       "$runtime_manifest" \
       "$suite_status"; then
       suite_status=1
     fi
+  fi
+  if ! finish_e2e_evidence "$suite_status"; then
+    suite_status=1
   fi
   exit "$suite_status"
 }
@@ -207,18 +881,29 @@ has_e2e_windows() {
 
 terminate_e2e_app
 trap 'finish_e2e_session "$?"' EXIT
-rm -rf "$runtime_evidence_dir"
 mkdir -p "$runtime_evidence_dir"
 runtime_evidence_snapshot_diagnostics \
   "$app_executable_name" \
   "$runtime_diagnostic_baseline"
+if [[ "$english_helper_requested" == "1" ]]; then
+  runtime_evidence_snapshot_diagnostics \
+    "$helper_process_name" \
+    "$helper_diagnostic_baseline"
+fi
 runtime_evidence_write_manifest_start \
   "$runtime_manifest" \
   "$app_executable_name" \
   "$app_path"
-runtime_evidence_start_console_capture \
-  "$app_executable_name" \
-  "$runtime_console_log"
+if [[ "$english_helper_requested" == "1" ]]; then
+  runtime_evidence_start_console_capture \
+    "$app_executable_name" \
+    "$runtime_console_log" \
+    "$helper_process_name"
+else
+  runtime_evidence_start_console_capture \
+    "$app_executable_name" \
+    "$runtime_console_log"
+fi
 runtime_evidence_started=1
 
 find_window_id() {
@@ -431,12 +1116,15 @@ capture_app_screenshot() {
   local out_dir="$1"
   local screenshot_name="$2"
   local page="$3"
+  local app_pid
   local launch_log
+  local launcher_pid
   local expected_window_title
   local expected_frame_width="$expected_window_width"
   local expected_frame_height="$expected_window_height"
   local expected_language="${NOONMARK_E2E_EXPECTED_LANGUAGE:-chinese}"
   local ui_entry_result=""
+  local english_ui_result=""
   local expected_overflow_recovery_count=0
   shift 3
 
@@ -456,12 +1144,18 @@ capture_app_screenshot() {
       "${arguments[$index]}" == "--e2e-classification-overflow-ui-result-url" ]]; then
       ui_entry_result="${arguments[$((index + 1))]:-}"
     fi
+    if [[ "${arguments[$index]}" == "--e2e-english-ui-result-url" ]]; then
+      english_ui_result="${arguments[$((index + 1))]:-}"
+    fi
     if [[ "${arguments[$index]}" == "--e2e-classification-overflow-invalidate-first-ready" ]]; then
       expected_overflow_recovery_count=1
     fi
   done
   if [[ -n "$ui_entry_result" ]]; then
     rm -f "$ui_entry_result" "${ui_entry_result}.ack"
+  fi
+  if [[ -n "$english_ui_result" ]]; then
+    rm -f "$english_ui_result"
   fi
   if [[ "$page" == "settings" ]]; then
     expected_frame_width=0
@@ -472,7 +1166,13 @@ capture_app_screenshot() {
 
   if [[ "$expected_language" == "english" ]]; then
     case "$page" in
-      day) expected_window_title="Noonmark · Day Todo — 5 Jul" ;;
+      day)
+        if [[ "$screenshot_name" == "english-day-history-header" ]]; then
+          expected_window_title="Noonmark · Day Todo — 30 Sep"
+        else
+          expected_window_title="Noonmark · Day Todo — 5 Jul"
+        fi
+        ;;
       pool) expected_window_title="Noonmark · Task Pool" ;;
       future) expected_window_title="Noonmark · Upcoming" ;;
       unfinished) expected_window_title="Noonmark · Unfinished" ;;
@@ -508,8 +1208,33 @@ capture_app_screenshot() {
     terminate_e2e_app
     mkdir -p "$out_dir"
     echo "launch attempt=$launch_attempt page=$page expected_title=$expected_window_title" >>"$launch_log"
-    "$app_executable_path" "$@" --page "$page" >>"$launch_log" 2>&1 &
-    app_pid=$!
+    if [[ -n "$ui_entry_result" ]]; then
+      /usr/bin/open -W -n \
+        -o "$launch_log" \
+        --stderr "$launch_log" \
+        "$app_path" \
+        --args "$@" --page "$page" \
+        >"${launch_log}.open" 2>&1 &
+      launcher_pid=$!
+      app_pid=""
+      for _ in {1..50}; do
+        app_pid="$(pgrep -x "$app_executable_name" | head -1 || true)"
+        if [[ -n "$app_pid" ]] || ! kill -0 "$launcher_pid" 2>/dev/null; then
+          break
+        fi
+        sleep 0.1
+      done
+    else
+      "$app_executable_path" "$@" --page "$page" >>"$launch_log" 2>&1 &
+      launcher_pid=$!
+      app_pid=$launcher_pid
+    fi
+    if [[ -z "$app_pid" ]]; then
+      echo "launch attempt=$launch_attempt app_process=missing" >>"$launch_log"
+      wait "$launcher_pid" 2>/dev/null || true
+      cat "${launch_log}.open" >>"$launch_log" 2>/dev/null || true
+      continue
+    fi
     if [[ -z "$ui_entry_result" ]]; then
       sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
     fi
@@ -527,14 +1252,14 @@ capture_app_screenshot() {
     done
 
     if [[ -n "$window_id" ]]; then
-      disown "$app_pid" 2>/dev/null || true
+      disown "$launcher_pid" 2>/dev/null || true
       break
     fi
     if kill -0 "$app_pid" >/dev/null 2>&1; then
       echo "launch attempt=$launch_attempt pid=$app_pid state=running window_match=missing" >>"$launch_log"
     else
       app_exit_code=0
-      wait "$app_pid" || app_exit_code=$?
+      wait "$launcher_pid" || app_exit_code=$?
       echo "launch attempt=$launch_attempt pid=$app_pid state=exited exit_code=$app_exit_code window_match=missing" >>"$launch_log"
     fi
     dump_visible_windows >>"$launch_log"
@@ -562,6 +1287,31 @@ capture_app_screenshot() {
     if [[ "$(<"$ui_entry_result")" != "ok" ]]; then
       echo "UI entry failed: $(<"$ui_entry_result")" >&2
       exit 1
+    fi
+  fi
+  if [[ -n "$english_ui_result" ]]; then
+    for _ in {1..80}; do
+      if [[ -f "$english_ui_result" ]]; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ ! -f "$english_ui_result" ]]; then
+      echo "English populated UI result was not created: $english_ui_result" >&2
+      exit 1
+    fi
+    if [[ "$(head -n 1 "$english_ui_result")" != "ok" ]]; then
+      echo "English populated UI verification failed: $(<"$english_ui_result")" >&2
+      exit 1
+    fi
+    if [[ "$screenshot_name" == "english-day" ]]; then
+      scripts/run-e2e-ax-inspect \
+        "$app_pid" \
+        "$PWD/$app_path" \
+        "$window_id" \
+        "$expected_window_title" \
+        "$english_ui_result" \
+        "$PWD/artifacts/e2e-english/day-ax"
     fi
   fi
 
@@ -615,10 +1365,18 @@ assert_clean_app_log() {
 prepare_english_screenshot_database() {
   local database_path="$1"
   local bootstrap_log="$2"
+  local manifest_path
   local bootstrap_pid
-  local ready=0
+  local app_exit_code=0
+  local projection_counts
+  local journal_transaction_count
 
-  rm -f "$database_path" "${database_path}-wal" "${database_path}-shm"
+  manifest_path="$(dirname "$database_path")/fixture-manifest.txt"
+  rm -f \
+    "$database_path" \
+    "${database_path}-wal" \
+    "${database_path}-shm" \
+    "$manifest_path"
   : > "$bootstrap_log"
   "$app_executable_path" \
     --data-url "$database_path" \
@@ -626,41 +1384,116 @@ prepare_english_screenshot_database() {
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale en_SG \
+    --e2e-bootstrap-english-screenshot-fixture \
+    --e2e-english-fixture-result-url "$manifest_path" \
+    --e2e-quit-after-automation \
     > "$bootstrap_log" 2>&1 &
   bootstrap_pid=$!
 
-  for _ in {1..120}; do
-    if [[ -f "$database_path" ]] &&
-      [[ "$(sqlite3 -noheader "$database_path" "SELECT count(*) FROM app_preferences WHERE id = 1;" 2>/dev/null || true)" == "1" ]]; then
-      ready=1
+  for _ in {1..400}; do
+    if [[ -f "$manifest_path" ]] || ! kill -0 "$bootstrap_pid" 2>/dev/null; then
       break
     fi
+    sleep 0.1
+  done
+  if [[ ! -f "$manifest_path" ]]; then
+    terminate_e2e_app
+    wait "$bootstrap_pid" 2>/dev/null || true
+    echo "English fixture manifest was not created by the real app" >&2
+    cat "$bootstrap_log" >&2
+    exit 1
+  fi
+  if [[ "$(head -n 1 "$manifest_path")" != "ok" ]]; then
+    terminate_e2e_app
+    wait "$bootstrap_pid" 2>/dev/null || true
+    echo "English fixture bootstrap failed: $(<"$manifest_path")" >&2
+    cat "$bootstrap_log" >&2
+    exit 1
+  fi
+
+  for _ in {1..40}; do
     if ! kill -0 "$bootstrap_pid" 2>/dev/null; then
       break
     fi
     sleep 0.1
   done
-
-  terminate_e2e_app
-  wait "$bootstrap_pid" 2>/dev/null || true
-  if [[ "$ready" != "1" ]]; then
-    echo "English screenshot database was not initialized by the real app" >&2
+  if kill -0 "$bootstrap_pid" 2>/dev/null; then
+    terminate_e2e_app
+    wait "$bootstrap_pid" 2>/dev/null || true
+    echo "English fixture app wrote its manifest but did not terminate" >&2
+    cat "$bootstrap_log" >&2
+    exit 1
+  fi
+  wait "$bootstrap_pid" || app_exit_code=$?
+  if [[ "$app_exit_code" != "0" ]]; then
+    echo "English fixture app exited with status $app_exit_code" >&2
     cat "$bootstrap_log" >&2
     exit 1
   fi
   assert_clean_app_log "English database bootstrap" "$bootstrap_log"
 
-  sqlite3 "$database_path" "UPDATE app_preferences SET language = 'english' WHERE id = 1;"
-  if [[ "$(sqlite3 -noheader "$database_path" "SELECT language FROM app_preferences WHERE id = 1;")" != "english" ]]; then
-    echo "English screenshot database did not retain the English preference" >&2
+  projection_counts="$(sqlite3 -noheader -separator '|' "$database_path" "
+    SELECT
+      (SELECT language FROM app_preferences WHERE id = 1),
+      (SELECT count(*) FROM day_traces WHERE date = '2026-07-05' AND status != 'cancelledDraft'),
+      (SELECT count(*) FROM task_pool_view),
+      (SELECT count(*) FROM future_plan_view WHERE date > '2026-07-05'),
+      (SELECT count(*) FROM unfinished_pool_view),
+      (SELECT count(*) FROM day_traces WHERE status = 'completed'),
+      (SELECT count(*) FROM task_chain_categories),
+      (SELECT count(*) FROM task_chain_label_relations);
+  ")"
+  if [[ "$projection_counts" != "english|2|1|1|1|2|6|12" ]]; then
+    echo "English fixture persisted projections are incomplete: ${projection_counts:-missing}" >&2
+    cat "$manifest_path" >&2
     exit 1
   fi
+  for key in \
+    day_selected_id \
+    pool_selected_id \
+    future_selected_id \
+    unfinished_selected_id \
+    completed_selected_id \
+    calendar_selected_id; do
+    if [[ -z "$(awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2) }' "$manifest_path")" ]]; then
+      echo "English fixture manifest is missing $key" >&2
+      cat "$manifest_path" >&2
+      exit 1
+    fi
+  done
+  if ! grep -Fqx \
+    "day_selected_title=Coordinate the launch readiness review with accessibility owners" \
+    "$manifest_path"; then
+    echo "English fixture manifest lost the complete long title" >&2
+    cat "$manifest_path" >&2
+    exit 1
+  fi
+  if ! grep -Fqx "classification_journal_count=6" "$manifest_path" ||
+    ! grep -Fqx "classification_journal_exact=true" "$manifest_path" ||
+    ! grep -Fqx "preferences_journal_exact=true" "$manifest_path" ||
+    ! grep -Fqx "domain_journal_clock_exact=true" "$manifest_path"; then
+    echo "English fixture manifest lost exact Store transaction/journal evidence" >&2
+    cat "$manifest_path" >&2
+    exit 1
+  fi
+  journal_transaction_count="$(
+    awk -F= '$1 == "journal_transaction_count" { print $2 }' "$manifest_path"
+  )"
+  if [[ ! "$journal_transaction_count" =~ ^[0-9]+$ ]] ||
+    (( journal_transaction_count < 24 )); then
+    echo "English fixture did not preserve independent Store transaction frontiers" >&2
+    cat "$manifest_path" >&2
+    exit 1
+  fi
+  echo "E2E English populated fixture manifest: $manifest_path ($projection_counts)"
 }
 
 assert_english_screenshot() {
   local screenshot="$1"
   local page="$2"
+  local screenshot_name="${3:-}"
   local expected_text
+  local expected_header_date="5 July 2026"
   local ocr="${screenshot%.png}-ocr.txt"
   local ocr_log="${screenshot%.png}-ocr.log"
 
@@ -714,7 +1547,190 @@ guard text.range(of: "\\p{Han}", options: .regularExpression) == nil else {
     cat "$ocr_log" >&2
     exit 1
   fi
+  if [[ "$page" == "day" ]]; then
+    if [[ "$screenshot_name" == "english-day-history-header" ]]; then
+      expected_header_date="30 September 2025"
+    fi
+    if ! bash scripts/assert-english-day-header-screenshot \
+      "$screenshot" \
+      "$expected_header_date" \
+      1 >>"$ocr" 2>>"$ocr_log"; then
+      echo "English Day header pixel assertion failed:" >&2
+      cat "$ocr" >&2
+      cat "$ocr_log" >&2
+      exit 1
+    fi
+  fi
   echo "E2E English ${page} screenshot has no recognized Han text: $screenshot"
+}
+
+record_english_scenario_evidence() {
+  local scenario_name="$1"
+  local screenshot="$2"
+  local current_binary_sha256
+  local external_ax="false"
+  local oracles="screenshot_vision_ocr_no_han"
+  local screenshot_sha256
+
+  if [[ ! -s "$screenshot" ]]; then
+    echo "English scenario screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+  current_binary_sha256="$(shasum -a 256 "$app_executable_path" | awk '{print $1}')"
+  if [[ "$current_binary_sha256" != "$app_binary_sha256_before" ]]; then
+    echo "English scenarios did not use one immutable App binary" >&2
+    exit 1
+  fi
+  screenshot_sha256="$(shasum -a 256 "$screenshot" | awk '{print $1}')"
+
+  case "$scenario_name" in
+    english-day)
+      oracles+="+day_header_pixel+in_app_view_tree_ax+external_ax"
+      external_ax="true"
+      ;;
+    english-day-wide)
+      oracles+="+day_header_pixel+in_app_view_tree_ax"
+      ;;
+    english-day-history-header)
+      oracles+="+day_header_pixel+in_app_responsive_contract"
+      ;;
+    english-pool|english-future|english-unfinished|english-completed|english-calendar)
+      oracles+="+in_app_view_tree_ax"
+      ;;
+    english-settings)
+      oracles+="+settings_sidebar_vision_ocr"
+      ;;
+    english-zhulong) ;;
+    *)
+      echo "unknown English evidence scenario: $scenario_name" >&2
+      exit 1
+      ;;
+  esac
+
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$scenario_name" \
+    "$current_binary_sha256" \
+    "$screenshot_sha256" \
+    "$oracles" \
+    "$external_ax" >>"$english_scenario_ledger"
+}
+
+assert_english_history_header_ui_result() {
+  local result="artifacts/e2e-english/day-history-header-ui.txt"
+  local actual_width
+  local required_date_width
+
+  if [[ ! -f "$result" || "$(head -n 1 "$result")" != "ok" ]]; then
+    echo "English history header UI manifest is missing or failed" >&2
+    [[ -f "$result" ]] && cat "$result" >&2
+    exit 1
+  fi
+  actual_width="$(awk -F= '$1 == "detail_width" { print $2 }' "$result")"
+  required_date_width="$(awk -F= '$1 == "header_date_required_width" { print $2 }' "$result")"
+  if ! grep -Fqx "page=day" "$result" ||
+    ! awk -v actual="$actual_width" 'BEGIN { exit !(actual >= 278 && actual <= 282) }' ||
+    ! grep -Fqx "header_full_date=30 September 2025" "$result" ||
+    ! grep -Fqx "header_state=History locked" "$result" ||
+    ! grep -Fqx "header_today_state_visible=false" "$result" ||
+    ! grep -Fqx "header_today_action_visible=true" "$result" ||
+    ! grep -Fqx "header_today_surface_count=1" "$result" ||
+    ! grep -Fqx "header_navigation_target_count=4" "$result" ||
+    ! grep -Fqx "header_navigation_minimum_target=28.0" "$result" ||
+    ! grep -Fqx "header_compact_row_count=2" "$result" ||
+    ! awk -v required="$required_date_width" 'BEGIN { exit !(required >= 190) }'; then
+    echo "English history header lost its complete responsive contract" >&2
+    cat "$result" >&2
+    exit 1
+  fi
+  echo "E2E English history header responsive manifest: $result"
+}
+
+assert_english_populated_ui_result() {
+  local page="$1"
+  local result_key="${2:-$page}"
+  local result="artifacts/e2e-english/${result_key}-ui.txt"
+  local fixture_manifest="artifacts/e2e-english/fixture-manifest.txt"
+  local fixture_key
+  local expected_width="280.0"
+  local actual_width
+  local width_record_count
+  local actual_count
+  local selected_id
+  local fixture_id
+
+  case "$page" in
+    day) fixture_key="day_selected_id" ;;
+    pool) fixture_key="pool_selected_id" ;;
+    future) fixture_key="future_selected_id" ;;
+    unfinished) fixture_key="unfinished_selected_id" ;;
+    completed) fixture_key="completed_selected_id" ;;
+    calendar)
+      fixture_key="calendar_selected_id"
+      expected_width="248.0"
+      ;;
+    *) return 0 ;;
+  esac
+
+  if [[ ! -f "$result" || "$(head -n 1 "$result")" != "ok" ]]; then
+    echo "English populated ${page} UI manifest is missing or failed" >&2
+    [[ -f "$result" ]] && cat "$result" >&2
+    exit 1
+  fi
+  actual_width="$(awk -F= '$1 == "detail_width" { print $2 }' "$result")"
+  width_record_count="$(awk -F= '$1 == "detail_width" { count += 1 } END { print count + 0 }' "$result")"
+  if ! grep -Fqx "page=$page" "$result" ||
+    [[ "$width_record_count" != "1" ]] ||
+    [[ ! "$actual_width" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+    ! awk -v actual="$actual_width" -v expected="$expected_width" '
+      BEGIN {
+        difference = actual - expected
+        if (difference < 0) difference = -difference
+        exit !(difference <= 2)
+      }
+    '; then
+    echo "English populated ${page} UI manifest has the wrong page or rail width" >&2
+    cat "$result" >&2
+    exit 1
+  fi
+
+  actual_count="$(awk -F= '$1 == "count" { print $2 }' "$result")"
+  selected_id="$(awk -F= '$1 == "selected_id" { print $2 }' "$result")"
+  fixture_id="$(awk -F= -v key="$fixture_key" '$1 == key { print $2 }' "$fixture_manifest")"
+  if [[ ! "$actual_count" =~ ^[1-9][0-9]*$ || -z "$selected_id" ||
+    "$selected_id" != "$fixture_id" ]]; then
+    echo "English populated ${page} UI did not expose its fixture count/identity" >&2
+    cat "$result" >&2
+    exit 1
+  fi
+
+  if [[ "$page" == "day" ]]; then
+    if ! grep -Fqx "selected_title=Coordinate the launch readiness review with accessibility owners" "$result" ||
+      ! grep -Fqx "long_title_view_tree=complete" "$result" ||
+      ! grep -Fqx "long_title_ax=complete" "$result" ||
+      ! grep -Fqx "long_title_line_count=2" "$result" ||
+      ! grep -Fqx "classification_remove_button_count=2" "$result" ||
+      [[ "$(grep -Fc "classification_remove_button=" "$result")" != "2" ]]; then
+      echo "English minimum-window Day detail lost or overflowed the complete long title" >&2
+      cat "$result" >&2
+      exit 1
+    fi
+    if [[ "$result_key" == "day" &&
+      ! -s "artifacts/e2e-english/day-ax/ledger.tsv" ]]; then
+      echo "English minimum-window Day external AX evidence is missing" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ "$page" != "calendar" ]] && {
+    ! grep -Fqx "classification_category_visible=Product Design" "$result" ||
+      ! grep -Fqx "classification_label_visible=Accessibility" "$result" ||
+      ! grep -Fqx "classification_secondary_label_visible=Launch Readiness" "$result";
+  }; then
+    echo "English populated ${page} screenshot did not expose its group and tags" >&2
+    cat "$result" >&2
+    exit 1
+  fi
+  echo "E2E English populated ${page} view-tree/AX manifest: $result (count=$actual_count selected=$selected_id)"
 }
 
 assert_settings_sidebar_screenshot() {
@@ -782,6 +1798,8 @@ run_english_menu_probe() {
   local database_path="$1"
   local menu_dir="artifacts/e2e-english/menu"
   local state_file="$menu_dir/state.json"
+  local help_shortcut_result="$menu_dir/help-shortcut-result.txt"
+  local help_shortcut_log="$menu_dir/help-shortcut.log"
   local exercise_result="$menu_dir/exercise-result.txt"
   local exercise_log="$menu_dir/exercise.log"
   local verify_result="$menu_dir/verify-result.txt"
@@ -793,6 +1811,20 @@ run_english_menu_probe() {
   rm -rf "$menu_dir"
   mkdir -p "$menu_dir"
   terminate_e2e_app
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "English native Help shortcut" \
+    "$help_shortcut_result" \
+    "$help_shortcut_log" \
+    --data-url "$database_path" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale en_SG \
+    --e2e-reset-selection \
+    --e2e-native-command-help-shortcut \
+    --e2e-native-command-state-url "$PWD/$state_file" \
+    --e2e-native-command-result-url "$PWD/$help_shortcut_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "English native menu exercise" \
@@ -1436,6 +2468,8 @@ run_reactivation_atomicity_probe() {
     "$exercise_log" \
     --data-url "$PWD/$reactivation_db" \
     --page unfinished \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
     --e2e-persistence-failure-automation \
     --e2e-reactivation-atomicity-exercise \
     --e2e-reactivation-atomicity-state-url "$PWD/$reactivation_state" \
@@ -1455,6 +2489,8 @@ run_reactivation_atomicity_probe() {
     "$restart_log" \
     --data-url "$PWD/$reactivation_db" \
     --page unfinished \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
     --e2e-reactivation-atomicity-verify \
     --e2e-reactivation-atomicity-state-url "$PWD/$reactivation_state" \
     --e2e-reactivation-atomicity-result-url "$PWD/$restart_result" \
@@ -1553,15 +2589,17 @@ run_seed_clock_probe() {
   mkdir -p "$seed_dir"
 
   run_terminating_ui_probe \
-    "seed event clock" \
+    "relative seed event clock" \
     "$seed_result" \
     "$seed_log" \
     --ephemeral \
     --page day \
+    --e2e-fixed-instant 2030-07-01T20:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
     --e2e-seed-clock-result-url "$PWD/$seed_result" \
     --e2e-quit-after-automation
 
-  echo "E2E seed event clock: $seed_result"
+  echo "E2E relative seed event clock: $seed_result"
 }
 
 run_window_resize_probe() {
@@ -1588,6 +2626,10 @@ run_window_resize_probe() {
 run_workspace_restoration_probe() {
   local state_dir="artifacts/e2e-workspace-restoration"
   local state_file="$state_dir/state.json"
+  local automatic_prepare_result="$state_dir/automatic-prepare-result.txt"
+  local automatic_prepare_log="$state_dir/automatic-prepare.log"
+  local automatic_verify_result="$state_dir/automatic-verify-result.txt"
+  local automatic_verify_log="$state_dir/automatic-verify.log"
   local exercise_result="$state_dir/exercise-result.txt"
   local exercise_log="$state_dir/exercise.log"
   local verify_result="$state_dir/verify-result.txt"
@@ -1596,7 +2638,30 @@ run_workspace_restoration_probe() {
   rm -rf "$state_dir"
   mkdir -p "$state_dir"
 
-  run_terminating_ui_probe \
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "automatic workspace width preparation" \
+    "$automatic_prepare_result" \
+    "$automatic_prepare_log" \
+    --ephemeral \
+    --page calendar \
+    --e2e-workspace-restoration \
+    --e2e-reset-workspace-state \
+    --e2e-workspace-restoration-automatic-prepare \
+    --e2e-workspace-restoration-state-url "$PWD/$state_file" \
+    --e2e-workspace-restoration-result-url "$PWD/$automatic_prepare_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "automatic workspace width restart" \
+    "$automatic_verify_result" \
+    "$automatic_verify_log" \
+    --ephemeral \
+    --page day \
+    --e2e-workspace-restoration \
+    --e2e-workspace-restoration-automatic-verify \
+    --e2e-workspace-restoration-state-url "$PWD/$state_file" \
+    --e2e-workspace-restoration-result-url "$PWD/$automatic_verify_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "workspace restoration exercise" \
     "$exercise_result" \
     "$exercise_log" \
@@ -1608,7 +2673,7 @@ run_workspace_restoration_probe() {
     --e2e-workspace-restoration-state-url "$PWD/$state_file" \
     --e2e-workspace-restoration-result-url "$PWD/$exercise_result"
 
-  run_terminating_ui_probe \
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "workspace restoration restart" \
     "$verify_result" \
     "$verify_log" \
@@ -1646,6 +2711,8 @@ run_native_command_surface_probe() {
   local command_dir="artifacts/e2e-native-command-surface"
   local command_db="$command_dir/Noonmark.sqlite"
   local state_file="$command_dir/state.json"
+  local help_shortcut_result="$command_dir/help-shortcut-result.txt"
+  local help_shortcut_log="$command_dir/help-shortcut.log"
   local exercise_result="$command_dir/exercise-result.txt"
   local exercise_log="$command_dir/exercise.log"
   local verify_result="$command_dir/verify-result.txt"
@@ -1654,6 +2721,17 @@ run_native_command_surface_probe() {
 
   rm -rf "$command_dir"
   mkdir -p "$command_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "native Help shortcut" \
+    "$help_shortcut_result" \
+    "$help_shortcut_log" \
+    --data-url "$PWD/$command_db" \
+    --page day \
+    --e2e-reset-selection \
+    --e2e-native-command-help-shortcut \
+    --e2e-native-command-state-url "$PWD/$state_file" \
+    --e2e-native-command-result-url "$PWD/$help_shortcut_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "native command surface exercise" \
@@ -1699,6 +2777,71 @@ run_native_command_surface_probe() {
   echo "E2E native menus, Settings, Quick Entry, Search, Undo/Redo restart: $command_db (probe=$sqlite_probe)"
 }
 
+run_completion_control_probe() {
+  local completion_dir="artifacts/e2e-completion-control"
+  local completion_db="$completion_dir/Noonmark.sqlite"
+  local state_file="$completion_dir/state.json"
+  local exercise_result="$completion_dir/exercise-result.txt"
+  local exercise_log="$completion_dir/exercise.log"
+  local verify_result="$completion_dir/verify-result.txt"
+  local verify_log="$completion_dir/verify.log"
+  local sqlite_probe
+
+  rm -rf "$completion_dir"
+  mkdir -p "$completion_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "parent completion control exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$completion_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-reset-selection \
+    --e2e-completion-control-exercise \
+    --e2e-completion-control-state-url "$PWD/$state_file" \
+    --e2e-completion-control-result-url "$PWD/$exercise_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "parent completion control restart" \
+    "$verify_result" \
+    "$verify_log" \
+    --data-url "$PWD/$completion_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-reset-selection \
+    --e2e-completion-control-verify \
+    --e2e-completion-control-state-url "$PWD/$state_file" \
+    --e2e-completion-control-result-url "$PWD/$verify_result"
+
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$completion_db" "
+    SELECT
+      count(DISTINCT trace.id),
+      count(DISTINCT subtask.id),
+      count(*)
+    FROM day_traces AS trace
+    JOIN task_definitions AS definition ON definition.id = trace.definition_id
+    JOIN subtasks AS subtask ON subtask.trace_id = trace.id
+    WHERE definition.title = 'E2E parent completion control'
+      AND trace.date = '2026-07-05'
+      AND trace.status = 'pending'
+      AND trace.completed_at IS NULL
+      AND subtask.title = 'E2E final open subtask'
+      AND subtask.status = 'completed'
+      AND subtask.completed_at IS NOT NULL;
+  ")"
+  if [[ "$sqlite_probe" != "1 1 1" ]]; then
+    echo "parent completion control SQLite restart probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E parent completion gate, AX labels, undo, and restart: $completion_db (probe=$sqlite_probe)"
+}
+
 run_workspace_productivity_probe() {
   local productivity_dir="artifacts/e2e-workspace-productivity"
   local productivity_db="$productivity_dir/Noonmark.sqlite"
@@ -1709,6 +2852,7 @@ run_workspace_productivity_probe() {
   local verify_log="$productivity_dir/verify.log"
   local persisted_order
   local sqlite_probe
+  local completion_capability_probe
 
   rm -rf "$productivity_dir"
   mkdir -p "$productivity_dir"
@@ -1775,8 +2919,14 @@ run_workspace_productivity_probe() {
       (SELECT count(*)
        FROM day_traces AS trace
        JOIN task_definitions AS definition ON definition.id = trace.definition_id
-       WHERE trace.status = 'returnedToPool'
+       WHERE trace.status = 'cancelledDraft'
          AND definition.title LIKE 'E2E workspace future %'),
+      (SELECT count(*)
+       FROM future_plan_view
+       WHERE title LIKE 'E2E workspace future %'),
+      (SELECT count(*)
+       FROM task_pool_view
+       WHERE title LIKE 'E2E workspace future %'),
       (SELECT count(DISTINCT trace.priority)
        FROM day_traces AS trace
        JOIN task_definitions AS definition ON definition.id = trace.definition_id
@@ -1784,12 +2934,42 @@ run_workspace_productivity_probe() {
          AND definition.title LIKE 'E2E workspace drag %'
          AND trace.priority BETWEEN 1 AND 4);
   ")"
-  if [[ "$sqlite_probe" != "4 3 3 4" ]]; then
+  if [[ "$sqlite_probe" != "4 3 3 0 3 4" ]]; then
     echo "workspace bulk-action SQLite probe failed: ${sqlite_probe:-missing}" >&2
     exit 1
   fi
 
-  echo "E2E workspace selection, bulk actions, drag order, atomic save failure, and restart: $productivity_db (probe=$sqlite_probe)"
+  completion_capability_probe="$(sqlite3 -noheader -separator ' ' "$productivity_db" "
+    SELECT
+      (SELECT count(*)
+       FROM day_traces AS trace
+       JOIN task_definitions AS definition ON definition.id = trace.definition_id
+       JOIN subtasks AS subtask ON subtask.trace_id = trace.id
+       WHERE definition.title = 'E2E workspace drag A'
+         AND trace.status = 'completed'
+         AND trace.completed_at IS NOT NULL
+         AND subtask.title = 'E2E workspace processed subtask'
+         AND subtask.status = 'completed'
+         AND subtask.completed_at IS NOT NULL),
+      (SELECT count(*)
+       FROM day_traces AS trace
+       JOIN task_definitions AS definition ON definition.id = trace.definition_id
+       JOIN subtasks AS subtask ON subtask.trace_id = trace.id
+       WHERE definition.title = 'E2E workspace blocked parent'
+         AND trace.status = 'pending'
+         AND trace.completed_at IS NULL
+         AND trace.settled_at IS NULL
+         AND subtask.title = 'E2E workspace open subtask'
+         AND subtask.status = 'pending'
+         AND subtask.completed_at IS NULL
+         AND subtask.settled_at IS NULL);
+  ")"
+  if [[ "$completion_capability_probe" != "1 1" ]]; then
+    echo "workspace completion capability SQLite probe failed: ${completion_capability_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E workspace selection, bulk actions, drag order, atomic save failure, and restart: $productivity_db (probe=$sqlite_probe capability=$completion_capability_probe)"
 }
 
 run_data_import_ui_probe() {
@@ -1867,6 +3047,30 @@ run_data_import_ui_probe() {
        WHERE title = 'E2E UI import scheduled 7319'),
       (SELECT count(*) FROM task_definitions
        WHERE title = 'E2E UI import pool 7319'),
+      (SELECT count(*) FROM task_definitions
+       WHERE title = 'E2E UI import returned 7319'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E UI import returned 7319'
+         AND day_traces.status = 'cancelledDraft'),
+      (SELECT count(*) FROM task_pool_view
+       WHERE title = 'E2E UI import returned 7319'),
+      (SELECT count(*) FROM future_plan_view
+       WHERE title = 'E2E UI import returned 7319'),
+      (SELECT count(*) FROM task_definitions
+       WHERE title = 'E2E UI import retired 7319'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E UI import retired 7319'
+         AND day_traces.status = 'cancelledDraft'),
+      (SELECT count(*) FROM task_pool_view
+       WHERE title = 'E2E UI import retired 7319'),
+      (SELECT count(*) FROM future_plan_view
+       WHERE title = 'E2E UI import retired 7319'),
+      (SELECT count(*) FROM task_definitions
+       WHERE title = 'E2E UI import decoy 7319'),
       (SELECT count(*)
        FROM day_traces
        JOIN task_definitions ON task_definitions.id = day_traces.definition_id
@@ -1875,12 +3079,272 @@ run_data_import_ui_probe() {
       (SELECT count(*) FROM task_definitions),
       (SELECT count(*) FROM day_traces);
   ")"
-  if [[ "$sqlite_probe" != "0 1 1 1 2 1" ]]; then
+  if [[ "$sqlite_probe" != "0 1 1 1 1 1 0 1 1 0 0 0 1 4 3" ]]; then
     echo "data-import UI SQLite/restart probe failed: ${sqlite_probe:-missing}" >&2
     exit 1
   fi
   rm -rf "$fixture_dir"
   echo "E2E File > Import, real NSOpenPanel, cancel, destructive confirm, SQLite/restart: $import_db (probe=$sqlite_probe)"
+}
+
+data_import_integrity_journal_digest() {
+  local database_path="$1"
+
+  sqlite3 -noheader "$database_path" "
+    SELECT
+      hex(id) || '|' ||
+      hex(entity_type) || '|' ||
+      hex(entity_id) || '|' ||
+      hex(operation) || '|' ||
+      hex(changed_at) || '|' ||
+      printf('%lld', changed_at_bits) || '|' ||
+      hex(device_id) || '|' ||
+      hex(sync_state) || '|' ||
+      printf('%lld', retry_count) || '|' ||
+      CASE
+        WHEN last_error IS NULL THEN '-'
+        ELSE '+' || hex(last_error)
+      END || '|' ||
+      CASE
+        WHEN record_payload IS NULL THEN '-'
+        ELSE '+' || hex(record_payload)
+      END
+    FROM change_journal
+    ORDER BY changed_at,
+      CASE entity_type
+        WHEN 'taskChain' THEN 0
+        WHEN 'taskDefinition' THEN 1
+        WHEN 'day' THEN 2
+        WHEN 'classificationCommit' THEN 3
+        WHEN 'dayTrace' THEN 4
+        WHEN 'traceClassificationEvent' THEN 5
+        WHEN 'subtask' THEN 6
+        WHEN 'appPreferences' THEN 7
+        ELSE 8
+      END,
+      entity_id,
+      id;
+  " | shasum -a 256 | awk '{print $1}'
+}
+
+run_data_import_integrity_probe() {
+  local import_dir="artifacts/e2e-data-import-integrity"
+  local import_db="${import_dir}/Noonmark.sqlite"
+  local fixture_dir="/tmp/noonmark-e2e-import-integrity"
+  local fixture_json="${fixture_dir}/duplicate-subtask-identity.json"
+  local state_file="${import_dir}/state.json"
+  local panel_trace="${import_dir}/panel-events.txt"
+  local probe_file="${import_dir}/integrity-probe.txt"
+  local setup_result="${import_dir}/setup-result.txt"
+  local exercise_result="${import_dir}/exercise-result.txt"
+  local restart_result="${import_dir}/restart-result.txt"
+  local setup_log="${import_dir}/setup.log"
+  local exercise_log="${import_dir}/exercise.log"
+  local restart_log="${import_dir}/restart.log"
+  local baseline_database_sha256
+  local exercise_database_sha256
+  local restart_database_sha256
+  local baseline_journal_digest
+  local exercise_journal_digest
+  local restart_journal_digest
+  local baseline_journal_count
+  local exercise_journal_count
+  local restart_journal_count
+  local state_format_version
+  local state_journal_count
+  local state_journal_sha256
+  local scenario_xml
+  local completed_xml
+  local scenario_count
+  local completed_count
+  local sqlite_probe
+  local scenario
+  local fixture_sha256
+  local state_fixture_sha256
+  local scenarios=(
+    "duplicate-subtask-identity"
+    "dangling-subtask-parent"
+    "invalid-subtask-terminal-facts"
+    "invalid-planned-subtask-position"
+  )
+
+  rm -rf "$import_dir"
+  rm -rf "$fixture_dir"
+  mkdir -p "$fixture_dir"
+  mkdir -p "$import_dir"
+
+  run_terminating_ui_probe \
+    "data-import integrity fixture setup" \
+    "$setup_result" \
+    "$setup_log" \
+    --data-url "$PWD/$import_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-data-import-integrity-setup \
+    --e2e-data-import-ui-fixture-url "$fixture_json" \
+    --e2e-data-import-ui-state-url "$PWD/$state_file" \
+    --e2e-data-import-ui-result-url "$PWD/$setup_result"
+
+  baseline_database_sha256="$(shasum -a 256 "$import_db" | awk '{print $1}')"
+  baseline_journal_digest="$(data_import_integrity_journal_digest "$import_db")"
+  baseline_journal_count="$(sqlite3 -noheader "$import_db" \
+    "SELECT count(*) FROM change_journal;")"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "data-import malformed Snapshot fail-closed UI" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$import_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-data-import-integrity-exercise \
+    --e2e-data-import-ui-fixture-url "$fixture_json" \
+    --e2e-data-import-ui-state-url "$PWD/$state_file" \
+    --e2e-data-import-ui-result-url "$PWD/$exercise_result"
+
+  exercise_database_sha256="$(shasum -a 256 "$import_db" | awk '{print $1}')"
+  exercise_journal_digest="$(data_import_integrity_journal_digest "$import_db")"
+  exercise_journal_count="$(sqlite3 -noheader "$import_db" \
+    "SELECT count(*) FROM change_journal;")"
+  if [[ "$exercise_database_sha256" != "$baseline_database_sha256" \
+    || "$exercise_journal_digest" != "$baseline_journal_digest" \
+    || "$exercise_journal_count" != "$baseline_journal_count" ]]; then
+    echo "malformed data-import changed SQLite or its journal" >&2
+    exit 1
+  fi
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "data-import malformed Snapshot restart" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$import_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-data-import-integrity-verify \
+    --e2e-data-import-ui-fixture-url "$fixture_json" \
+    --e2e-data-import-ui-state-url "$PWD/$state_file" \
+    --e2e-data-import-ui-result-url "$PWD/$restart_result"
+
+  restart_database_sha256="$(shasum -a 256 "$import_db" | awk '{print $1}')"
+  restart_journal_digest="$(data_import_integrity_journal_digest "$import_db")"
+  restart_journal_count="$(sqlite3 -noheader "$import_db" \
+    "SELECT count(*) FROM change_journal;")"
+  if [[ "$restart_database_sha256" != "$baseline_database_sha256" \
+    || "$restart_journal_digest" != "$baseline_journal_digest" \
+    || "$restart_journal_count" != "$baseline_journal_count" ]]; then
+    echo "malformed data-import baseline changed after restart" >&2
+    exit 1
+  fi
+
+  state_format_version="$(/usr/bin/plutil -extract formatVersion raw -o - \
+    "$state_file")"
+  state_journal_count="$(/usr/bin/plutil -extract baselineJournalCount raw -o - \
+    "$state_file")"
+  state_journal_sha256="$(/usr/bin/plutil -extract baselineJournalSHA256 raw -o - \
+    "$state_file")"
+  scenario_xml="$(/usr/bin/plutil -extract scenarioIDs xml1 -o - "$state_file")"
+  completed_xml="$(/usr/bin/plutil -extract completedScenarioIDs xml1 -o - \
+    "$state_file")"
+  scenario_count="$(grep -c '<string>' <<<"$scenario_xml")"
+  completed_count="$(grep -c '<string>' <<<"$completed_xml")"
+  if [[ "$state_format_version" != "2" \
+    || "$state_journal_count" != "$baseline_journal_count" \
+    || "${#state_journal_sha256}" -ne 64 \
+    || "$scenario_count" -ne "${#scenarios[@]}" \
+    || "$completed_count" -ne "${#scenarios[@]}" ]]; then
+    echo "data-import integrity state is incomplete or inconsistent" >&2
+    exit 1
+  fi
+
+  for scenario in "${scenarios[@]}"; do
+    if [[ "$(grep -Fc "<string>${scenario}</string>" <<<"$scenario_xml")" -ne 1 \
+      || "$(grep -Fc "<string>${scenario}</string>" <<<"$completed_xml")" -ne 1 ]]; then
+      echo "data-import integrity scenario was not completed: $scenario" >&2
+      exit 1
+    fi
+    if ! awk -v scenario="$scenario" '
+      $1 == scenario && index($0, "typed-fixture-path ") { typed = 1 }
+      $1 == scenario &&
+        index($0, "exact-file-selected-and-sent-open-return") { selected = 1 }
+      END { exit !(typed && selected) }
+    ' "$panel_trace"; then
+      echo "data-import integrity scenario lacked real NSOpenPanel input: $scenario" >&2
+      exit 1
+    fi
+    fixture_sha256="$(shasum -a 256 "${fixture_dir}/${scenario}.json" \
+      | awk '{print $1}')"
+    state_fixture_sha256="$(/usr/bin/plutil \
+      -extract "fixtureSHA256ByScenarioID.${scenario}" raw -o - "$state_file")"
+    if [[ "$fixture_sha256" != "$state_fixture_sha256" ]]; then
+      echo "data-import integrity fixture changed after setup: $scenario" >&2
+      exit 1
+    fi
+  done
+
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$import_db" "
+    SELECT
+      (SELECT count(*) FROM task_definitions
+       WHERE title = 'E2E import integrity baseline 9340'),
+      (SELECT count(*) FROM task_definitions
+       WHERE title = 'E2E malformed import payload 9340'),
+      (SELECT count(*) FROM task_definitions),
+      (SELECT count(*) FROM task_chains),
+      (SELECT count(*) FROM day_traces),
+      (SELECT count(*) FROM subtasks),
+      (SELECT count(*) FROM task_pool_view
+       WHERE title = 'E2E import integrity baseline 9340'),
+      (SELECT count(*)
+       FROM task_chains AS chain
+       JOIN task_definitions AS definition
+         ON definition.chain_id = chain.id
+       WHERE definition.title = 'E2E import integrity baseline 9340'
+         AND chain.created_at_bits = chain.updated_at_bits
+         AND chain.created_at_bits = definition.created_at_bits
+         AND chain.created_at_bits = definition.content_updated_at_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN task_chains AS chain
+         ON journal.entity_type = 'taskChain'
+        AND journal.entity_id = chain.id
+       JOIN task_definitions AS definition
+         ON definition.chain_id = chain.id
+       WHERE definition.title = 'E2E import integrity baseline 9340'
+         AND journal.changed_at_bits = chain.created_at_bits)
+        +
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN task_definitions AS definition
+         ON journal.entity_type = 'taskDefinition'
+        AND journal.entity_id = definition.id
+       WHERE definition.title = 'E2E import integrity baseline 9340'
+         AND journal.changed_at_bits = definition.created_at_bits),
+      (SELECT count(*) FROM change_journal);
+  ")"
+  if [[ "$sqlite_probe" != "1 0 1 1 0 0 1 1 2 $baseline_journal_count" ]]; then
+    echo "data-import integrity SQLite probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  {
+    echo "format_version=$state_format_version"
+    echo "scenario_count=$scenario_count"
+    echo "completed_scenario_count=$completed_count"
+    echo "baseline_database_sha256=$baseline_database_sha256"
+    echo "exercise_database_sha256=$exercise_database_sha256"
+    echo "restart_database_sha256=$restart_database_sha256"
+    echo "baseline_journal_digest=$baseline_journal_digest"
+    echo "exercise_journal_digest=$exercise_journal_digest"
+    echo "restart_journal_digest=$restart_journal_digest"
+    echo "baseline_journal_count=$baseline_journal_count"
+    echo "state_journal_sha256=$state_journal_sha256"
+    echo "sqlite_probe=$sqlite_probe"
+  } >"$probe_file"
+
+  rm -rf "$fixture_dir"
+  echo "E2E malformed DataPackage v2 fail-closed, real NSOpenPanel, SQLite/journal/restart: $import_db (probe=$probe_file)"
 }
 
 run_pool_list_layout_probe() {
@@ -1948,6 +3412,102 @@ run_pool_context_menu_action_probe() {
     exit 1
   fi
   echo "E2E pool context-menu schedule and persistence: $action_db"
+}
+
+run_unfinished_action_probe() {
+  local action_dir="artifacts/e2e-unfinished-actions"
+  local action_db="$action_dir/Noonmark.sqlite"
+  local exercise_result="$action_dir/exercise-result.txt"
+  local exercise_log="$action_dir/exercise.log"
+  local restart_result="$action_dir/restart-result.txt"
+  local restart_log="$action_dir/restart.log"
+  local persisted
+
+  rm -rf "$action_dir"
+  mkdir -p "$action_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "unfinished row/detail abandon actions" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$action_db" \
+    --page unfinished \
+    --e2e-reset-selection \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-unfinished-action-exercise \
+    --e2e-unfinished-action-result-url "$PWD/$exercise_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "unfinished action restart" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$action_db" \
+    --page unfinished \
+    --e2e-reset-selection \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-unfinished-action-restart \
+    --e2e-unfinished-action-result-url "$PWD/$restart_result"
+
+  persisted="$(sqlite3 -noheader -separator ' ' "$action_db" "
+    WITH targets AS (
+      SELECT chain.id AS chain_id
+      FROM task_chains AS chain
+      JOIN task_definitions AS definition
+        ON definition.chain_id = chain.id
+       AND definition.superseded_at IS NULL
+      WHERE definition.title IN (
+        'E2E 已延续列表废弃',
+        'E2E 已延续详情废弃'
+      )
+    )
+    SELECT
+      (SELECT count(*)
+       FROM task_chains
+       WHERE id IN (SELECT chain_id FROM targets)
+         AND state = 'abandoned'),
+      (SELECT count(*)
+       FROM day_traces
+       WHERE chain_id IN (SELECT chain_id FROM targets)
+         AND status = 'continued'),
+      (SELECT count(*)
+       FROM day_traces
+       WHERE chain_id IN (SELECT chain_id FROM targets)
+         AND status = 'abandoned'),
+      (SELECT count(*)
+       FROM day_traces
+       WHERE chain_id IN (SELECT chain_id FROM targets)
+         AND status = 'pending');
+  ")"
+  if [[ "$persisted" != "2 2 2 0" ]]; then
+    echo "unfinished action SQLite/restart probe failed: ${persisted:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E unfinished row/detail actions and restart: $action_db (probe=$persisted)"
+}
+
+run_summary_sidebar_probe() {
+  local summary_dir="artifacts/e2e-summary-sidebar"
+  local summary_result="${summary_dir}/summary-sidebar-result.txt"
+  local summary_log="${summary_dir}/summary-sidebar.log"
+
+  rm -rf "$summary_dir"
+  mkdir -p "$summary_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "summary sidebar, calendar heat, and timeline style" \
+    "$summary_result" \
+    "$summary_log" \
+    --ephemeral \
+    --page pool \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-summary-sidebar-probe \
+    --e2e-summary-sidebar-result-url "$PWD/$summary_result"
+
+  echo "E2E local summary sidebar, calendar heat/status dots, and timeline style: $summary_result"
 }
 
 run_quick_add_ui_probe() {
@@ -2062,57 +3622,549 @@ run_copy_undo_persistence_probe() {
   mkdir -p "$copy_undo_dir"
 
   run_terminating_ui_probe \
-    "classified copy undo persistence setup" \
+    "snapshot undo evidence-matrix setup" \
     "$setup_result" \
     "$setup_log" \
     --data-url "$PWD/$copy_undo_db" \
     --page day \
+    --e2e-fixed-instant 2026-07-16T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
     --e2e-copy-undo-persistence-setup \
     --e2e-copy-undo-persistence-state-url "$PWD/$copy_undo_state" \
     --e2e-copy-undo-persistence-result-url "$PWD/$setup_result" \
     --e2e-quit-after-automation
 
   run_terminating_ui_probe \
-    "classified copy undo persistence restart" \
+    "snapshot undo evidence-matrix restart" \
     "$verify_result" \
     "$verify_log" \
     --data-url "$PWD/$copy_undo_db" \
     --page pool \
+    --e2e-fixed-instant 2026-07-16T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
     --e2e-copy-undo-persistence-verify \
     --e2e-copy-undo-persistence-state-url "$PWD/$copy_undo_state" \
     --e2e-copy-undo-persistence-result-url "$PWD/$verify_result" \
     --e2e-quit-after-automation
 
   sql_probe="$(sqlite3 -noheader -separator ' ' "$copy_undo_db" "
-    WITH copied AS (
-      SELECT chain.id
-      FROM task_chains AS chain
-      JOIN task_definitions AS definition ON definition.chain_id = chain.id
-      WHERE definition.title = 'E2E 持久化已分类复制来源'
-        AND chain.state = 'abandoned'
-        AND NOT EXISTS (
-          SELECT 1 FROM day_traces AS trace WHERE trace.chain_id = chain.id
-        )
+    WITH state(payload) AS (
+      SELECT CAST(readfile('$PWD/$copy_undo_state') AS TEXT)
+    ), source AS (
+      SELECT json_extract(payload, '$.sourceChainID') AS chain_id
+      FROM state
+    ), new_today AS (
+      SELECT
+        json_extract(payload, '$.newTodayTask.title') AS title,
+        json_extract(payload, '$.newTodayTask.dateISO8601') AS date,
+        json_extract(payload, '$.newTodayTask.chainID') AS chain_id,
+        json_extract(payload, '$.newTodayTask.definitionID') AS definition_id,
+        json_extract(payload, '$.newTodayTask.traceID') AS trace_id,
+        json_extract(payload, '$.newTodayTask.cancellationID') AS cancellation_id,
+        CAST(json_extract(payload, '$.newTodayTask.creationBits') AS INTEGER)
+          AS creation_bits,
+        CAST(json_extract(payload, '$.newTodayTask.undoBits') AS INTEGER)
+          AS undo_bits
+      FROM state
+    ), scheduled_pool AS (
+      SELECT
+        json_extract(payload, '$.scheduledPoolTask.title') AS title,
+        json_extract(payload, '$.scheduledPoolTask.dateISO8601') AS date,
+        json_extract(payload, '$.scheduledPoolTask.chainID') AS chain_id,
+        json_extract(payload, '$.scheduledPoolTask.definitionID') AS definition_id,
+        json_extract(payload, '$.scheduledPoolTask.traceID') AS trace_id,
+        json_extract(payload, '$.scheduledPoolTask.cancellationID') AS cancellation_id,
+        CAST(json_extract(payload, '$.scheduledPoolTask.poolCreationBits') AS INTEGER)
+          AS pool_creation_bits,
+        CAST(json_extract(payload, '$.scheduledPoolTask.scheduleBits') AS INTEGER)
+          AS schedule_bits,
+        CAST(json_extract(payload, '$.scheduledPoolTask.undoBits') AS INTEGER)
+          AS undo_bits
+      FROM state
+    ), added_subtask AS (
+      SELECT
+        json_extract(payload, '$.addedSubtask.parentTitle') AS parent_title,
+        json_extract(payload, '$.addedSubtask.subtaskTitle') AS subtask_title,
+        json_extract(payload, '$.addedSubtask.dateISO8601') AS date,
+        json_extract(payload, '$.addedSubtask.chainID') AS chain_id,
+        json_extract(payload, '$.addedSubtask.definitionID') AS definition_id,
+        json_extract(payload, '$.addedSubtask.traceID') AS trace_id,
+        json_extract(payload, '$.addedSubtask.subtaskID') AS subtask_id,
+        json_extract(payload, '$.addedSubtask.cancellationID') AS cancellation_id,
+        CAST(json_extract(payload, '$.addedSubtask.parentCreationBits') AS INTEGER)
+          AS parent_creation_bits,
+        CAST(json_extract(payload, '$.addedSubtask.subtaskCreationBits') AS INTEGER)
+          AS subtask_creation_bits,
+        CAST(json_extract(payload, '$.addedSubtask.firstUndoBits') AS INTEGER)
+          AS first_undo_bits,
+        CAST(json_extract(payload, '$.addedSubtask.redoBits') AS INTEGER)
+          AS redo_bits,
+        CAST(json_extract(payload, '$.addedSubtask.finalUndoBits') AS INTEGER)
+          AS final_undo_bits
+      FROM state
+    ), copied AS (
+      SELECT
+        json_extract(payload, '$.copiedTask.title') AS title,
+        json_extract(payload, '$.copiedTask.chainID') AS chain_id,
+        json_extract(payload, '$.copiedTask.definitionID') AS definition_id,
+        CAST(json_extract(payload, '$.copiedTask.creationBits') AS INTEGER)
+          AS creation_bits,
+        CAST(json_extract(payload, '$.copiedTask.undoBits') AS INTEGER)
+          AS undo_bits
+      FROM state
+    ), continuation AS (
+      SELECT
+        json_extract(payload, '$.continuation.title') AS title,
+        json_extract(payload, '$.continuation.sourceDateISO8601') AS source_date,
+        json_extract(payload, '$.continuation.targetDateISO8601') AS target_date,
+        json_extract(payload, '$.continuation.chainID') AS chain_id,
+        json_extract(payload, '$.continuation.definitionID') AS definition_id,
+        json_extract(payload, '$.continuation.sourceTraceID') AS source_trace_id,
+        json_extract(payload, '$.continuation.targetTraceID') AS target_trace_id,
+        json_extract(payload, '$.continuation.cancellationID') AS cancellation_id,
+        CAST(json_extract(payload, '$.continuation.sourceCreationBits') AS INTEGER)
+          AS source_creation_bits,
+        CAST(json_extract(payload, '$.continuation.continuationBits') AS INTEGER)
+          AS continuation_bits,
+        CAST(json_extract(payload, '$.continuation.undoBits') AS INTEGER)
+          AS undo_bits
+      FROM state
+    ), copied_classification AS (
+      SELECT DISTINCT
+        record.record_id,
+        record.source_kind,
+        record.source_from_chain_id,
+        record.source_reason
+      FROM classification_change_records AS record
+      JOIN classification_change_record_changes AS delta
+        ON delta.record_id = record.record_id
+      JOIN copied ON copied.chain_id = delta.chain_id
     )
     SELECT
-      (SELECT count(*) FROM copied),
-      (SELECT count(*) FROM task_chain_categories WHERE chain_id IN copied),
-      (SELECT count(*) FROM task_chain_label_relations WHERE chain_id IN copied),
-      (SELECT count(*) FROM classification_relation_history WHERE chain_id IN copied),
-      (SELECT count(*) FROM classification_change_records
-       WHERE source_kind = 'inherited' AND source_from_chain_id IS NOT NULL),
-      (SELECT count(*) FROM classification_change_records
+      (SELECT count(*)
+       FROM new_today
+       JOIN task_chains AS chain ON chain.id = new_today.chain_id
+       JOIN task_definitions AS definition
+         ON definition.id = new_today.definition_id
+        AND definition.chain_id = chain.id
+       JOIN day_traces AS trace
+         ON trace.id = new_today.trace_id
+        AND trace.chain_id = chain.id
+        AND trace.definition_id = definition.id
+       JOIN days AS day ON day.date = new_today.date
+       WHERE chain.state = 'abandoned'
+         AND chain.created_at_bits = new_today.creation_bits
+         AND chain.updated_at_bits = new_today.undo_bits
+         AND definition.title = new_today.title
+         AND definition.created_at_bits = new_today.creation_bits
+         AND definition.content_updated_at_bits = new_today.creation_bits
+         AND definition.superseded_at IS NULL
+         AND trace.date = new_today.date
+         AND trace.status = 'cancelledDraft'
+         AND trace.draft_cancellation_id = new_today.cancellation_id
+         AND trace.draft_cancelled_on = new_today.date
+         AND trace.created_at_bits = new_today.creation_bits
+         AND trace.content_updated_at_bits = new_today.undo_bits
+         AND trace.settled_at_bits = new_today.undo_bits
+         AND day.created_at_bits = new_today.creation_bits
+         AND day.updated_at_bits = new_today.creation_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN new_today
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = new_today.creation_bits
+         AND (
+           (journal.entity_type = 'taskChain'
+             AND journal.entity_id = new_today.chain_id)
+           OR (journal.entity_type = 'taskDefinition'
+             AND journal.entity_id = new_today.definition_id)
+           OR (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = new_today.trace_id)
+           OR (journal.entity_type = 'day'
+             AND journal.entity_id = new_today.date)
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN new_today
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = new_today.undo_bits
+         AND (
+           (journal.entity_type = 'taskChain'
+             AND journal.entity_id = new_today.chain_id)
+           OR (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = new_today.trace_id)
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN new_today
+       WHERE (
+         (journal.entity_type = 'taskChain'
+           AND journal.entity_id = new_today.chain_id)
+         OR (journal.entity_type = 'taskDefinition'
+           AND journal.entity_id = new_today.definition_id)
+         OR (journal.entity_type = 'dayTrace'
+           AND journal.entity_id = new_today.trace_id)
+         OR (journal.entity_type = 'day'
+           AND journal.entity_id = new_today.date)
+       )),
+      (SELECT count(*)
+       FROM scheduled_pool
+       JOIN task_chains AS chain ON chain.id = scheduled_pool.chain_id
+       JOIN task_definitions AS definition
+         ON definition.id = scheduled_pool.definition_id
+        AND definition.chain_id = chain.id
+       JOIN day_traces AS trace
+         ON trace.id = scheduled_pool.trace_id
+        AND trace.chain_id = chain.id
+        AND trace.definition_id = definition.id
+       JOIN days AS day ON day.date = scheduled_pool.date
+       WHERE chain.state = 'active'
+         AND chain.created_at_bits = scheduled_pool.pool_creation_bits
+         AND chain.updated_at_bits = scheduled_pool.pool_creation_bits
+         AND definition.title = scheduled_pool.title
+         AND definition.superseded_at IS NULL
+         AND definition.created_at_bits = scheduled_pool.pool_creation_bits
+         AND definition.content_updated_at_bits =
+             scheduled_pool.pool_creation_bits
+         AND trace.date = scheduled_pool.date
+         AND trace.status = 'cancelledDraft'
+         AND trace.draft_cancellation_id = scheduled_pool.cancellation_id
+         AND trace.draft_cancelled_on = scheduled_pool.date
+         AND trace.created_at_bits = scheduled_pool.schedule_bits
+         AND trace.content_updated_at_bits = scheduled_pool.undo_bits
+         AND trace.settled_at_bits = scheduled_pool.undo_bits
+         AND day.created_at_bits = scheduled_pool.schedule_bits
+         AND day.updated_at_bits = scheduled_pool.schedule_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN scheduled_pool
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = scheduled_pool.pool_creation_bits
+         AND (
+           (journal.entity_type = 'taskChain'
+             AND journal.entity_id = scheduled_pool.chain_id)
+           OR (journal.entity_type = 'taskDefinition'
+             AND journal.entity_id = scheduled_pool.definition_id)
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN scheduled_pool
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = scheduled_pool.schedule_bits
+         AND (
+           (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = scheduled_pool.trace_id)
+           OR (journal.entity_type = 'day'
+             AND journal.entity_id = scheduled_pool.date)
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN scheduled_pool
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = scheduled_pool.undo_bits
+         AND journal.entity_type = 'dayTrace'
+         AND journal.entity_id = scheduled_pool.trace_id),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN scheduled_pool
+       WHERE (
+         (journal.entity_type = 'taskChain'
+           AND journal.entity_id = scheduled_pool.chain_id)
+         OR (journal.entity_type = 'taskDefinition'
+           AND journal.entity_id = scheduled_pool.definition_id)
+         OR (journal.entity_type = 'dayTrace'
+           AND journal.entity_id = scheduled_pool.trace_id)
+         OR (journal.entity_type = 'day'
+           AND journal.entity_id = scheduled_pool.date)
+       )),
+      (SELECT count(*)
+       FROM added_subtask
+       JOIN task_chains AS chain ON chain.id = added_subtask.chain_id
+       JOIN task_definitions AS definition
+         ON definition.id = added_subtask.definition_id
+        AND definition.chain_id = chain.id
+       JOIN day_traces AS trace
+         ON trace.id = added_subtask.trace_id
+        AND trace.chain_id = chain.id
+        AND trace.definition_id = definition.id
+       JOIN subtasks AS subtask
+         ON subtask.id = added_subtask.subtask_id
+        AND subtask.trace_id = trace.id
+       WHERE chain.state = 'active'
+         AND chain.created_at_bits = added_subtask.parent_creation_bits
+         AND chain.updated_at_bits = added_subtask.parent_creation_bits
+         AND definition.title = added_subtask.parent_title
+         AND definition.superseded_at IS NULL
+         AND definition.created_at_bits = added_subtask.parent_creation_bits
+         AND definition.content_updated_at_bits =
+             added_subtask.parent_creation_bits
+         AND trace.date = added_subtask.date
+         AND trace.status = 'pending'
+         AND trace.created_at_bits = added_subtask.parent_creation_bits
+         AND trace.content_updated_at_bits =
+             added_subtask.parent_creation_bits
+         AND subtask.title = added_subtask.subtask_title
+         AND subtask.status = 'cancelledDraft'
+         AND subtask.draft_cancellation_id =
+             added_subtask.cancellation_id
+         AND subtask.created_at_bits = added_subtask.subtask_creation_bits
+         AND subtask.updated_at_bits = added_subtask.final_undo_bits
+         AND subtask.settled_at_bits = added_subtask.final_undo_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN added_subtask
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = added_subtask.parent_creation_bits
+         AND (
+           (journal.entity_type = 'taskChain'
+             AND journal.entity_id = added_subtask.chain_id)
+           OR (journal.entity_type = 'taskDefinition'
+             AND journal.entity_id = added_subtask.definition_id)
+           OR (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = added_subtask.trace_id)
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN added_subtask
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.entity_type = 'subtask'
+         AND journal.entity_id = added_subtask.subtask_id
+         AND journal.changed_at_bits =
+             added_subtask.subtask_creation_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN added_subtask
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.entity_type = 'subtask'
+         AND journal.entity_id = added_subtask.subtask_id
+         AND journal.changed_at_bits = added_subtask.first_undo_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN added_subtask
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.entity_type = 'subtask'
+         AND journal.entity_id = added_subtask.subtask_id
+         AND journal.changed_at_bits = added_subtask.redo_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN added_subtask
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.entity_type = 'subtask'
+         AND journal.entity_id = added_subtask.subtask_id
+         AND journal.changed_at_bits = added_subtask.final_undo_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN added_subtask
+       WHERE (
+         (journal.entity_type = 'taskChain'
+           AND journal.entity_id = added_subtask.chain_id)
+         OR (journal.entity_type = 'taskDefinition'
+           AND journal.entity_id = added_subtask.definition_id)
+         OR (journal.entity_type = 'dayTrace'
+           AND journal.entity_id = added_subtask.trace_id)
+         OR (journal.entity_type = 'subtask'
+           AND journal.entity_id = added_subtask.subtask_id)
+       )),
+      (SELECT count(*)
+       FROM continuation
+       JOIN task_chains AS chain ON chain.id = continuation.chain_id
+       JOIN task_definitions AS definition
+         ON definition.id = continuation.definition_id
+        AND definition.chain_id = chain.id
+       JOIN day_traces AS source
+         ON source.id = continuation.source_trace_id
+        AND source.chain_id = chain.id
+        AND source.definition_id = definition.id
+       JOIN day_traces AS target
+         ON target.id = continuation.target_trace_id
+        AND target.chain_id = chain.id
+        AND target.definition_id = definition.id
+       JOIN days AS target_day ON target_day.date = continuation.target_date
+       WHERE chain.state = 'active'
+         AND chain.created_at_bits = continuation.source_creation_bits
+         AND chain.updated_at_bits = continuation.continuation_bits
+         AND definition.title = continuation.title
+         AND definition.superseded_at IS NULL
+         AND definition.created_at_bits =
+             continuation.source_creation_bits
+         AND definition.content_updated_at_bits =
+             continuation.source_creation_bits
+         AND source.date = continuation.source_date
+         AND source.status = 'pending'
+         AND source.created_at_bits = continuation.source_creation_bits
+         AND source.content_updated_at_bits = continuation.undo_bits
+         AND target.date = continuation.target_date
+         AND target.status = 'cancelledDraft'
+         AND target.continued_from_trace_id =
+             continuation.source_trace_id
+         AND target.draft_cancellation_id =
+             continuation.cancellation_id
+         AND target.draft_cancelled_on = continuation.target_date
+         AND target.created_at_bits = continuation.continuation_bits
+         AND target.content_updated_at_bits = continuation.undo_bits
+         AND target.settled_at_bits = continuation.undo_bits
+         AND target_day.created_at_bits = continuation.continuation_bits
+         AND target_day.updated_at_bits = continuation.continuation_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN continuation
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits =
+             continuation.source_creation_bits
+         AND (
+           (journal.entity_type = 'taskChain'
+             AND journal.entity_id = continuation.chain_id)
+           OR (journal.entity_type = 'taskDefinition'
+             AND journal.entity_id = continuation.definition_id)
+           OR (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = continuation.source_trace_id)
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN continuation
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = continuation.continuation_bits
+         AND (
+           (journal.entity_type = 'taskChain'
+             AND journal.entity_id = continuation.chain_id)
+           OR (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = continuation.source_trace_id)
+           OR (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = continuation.target_trace_id)
+           OR (journal.entity_type = 'day'
+             AND journal.entity_id = continuation.target_date)
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN continuation
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = continuation.undo_bits
+         AND journal.entity_type = 'dayTrace'
+         AND journal.entity_id IN (
+           continuation.source_trace_id,
+           continuation.target_trace_id
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN continuation
+       WHERE (
+         (journal.entity_type = 'taskChain'
+           AND journal.entity_id = continuation.chain_id)
+         OR (journal.entity_type = 'taskDefinition'
+           AND journal.entity_id = continuation.definition_id)
+         OR (journal.entity_type = 'dayTrace'
+           AND journal.entity_id IN (
+             continuation.source_trace_id,
+             continuation.target_trace_id
+           ))
+         OR (journal.entity_type = 'day'
+           AND journal.entity_id = continuation.target_date)
+       )),
+      (SELECT count(*)
+       FROM copied
+       JOIN task_chains AS chain ON chain.id = copied.chain_id
+       JOIN task_definitions AS definition
+         ON definition.id = copied.definition_id
+        AND definition.chain_id = chain.id
+       WHERE chain.state = 'abandoned'
+         AND chain.created_at_bits = copied.creation_bits
+         AND chain.updated_at_bits = copied.undo_bits
+         AND definition.title = copied.title
+         AND definition.created_at_bits = copied.creation_bits
+         AND definition.content_updated_at_bits = copied.creation_bits
+         AND definition.superseded_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1
+           FROM day_traces AS trace
+           WHERE trace.chain_id = chain.id
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN copied
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = copied.creation_bits
+         AND (
+           (journal.entity_type = 'taskChain'
+             AND journal.entity_id = copied.chain_id)
+           OR (journal.entity_type = 'taskDefinition'
+             AND journal.entity_id = copied.definition_id)
+         )),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN copied
+       WHERE journal.operation = 'upsert'
+         AND journal.record_payload IS NULL
+         AND journal.changed_at_bits = copied.undo_bits
+         AND journal.entity_type = 'taskChain'
+         AND journal.entity_id = copied.chain_id),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN copied
+       WHERE (
+         (journal.entity_type = 'taskChain'
+           AND journal.entity_id = copied.chain_id)
+         OR (journal.entity_type = 'taskDefinition'
+           AND journal.entity_id = copied.definition_id)
+       )),
+      (SELECT count(*) FROM copied_classification),
+      (SELECT count(*)
+       FROM copied_classification
+       JOIN copied
+       JOIN change_journal AS journal
+         ON journal.entity_type = 'classificationCommit'
+        AND journal.entity_id = copied_classification.record_id
+        AND journal.changed_at_bits = copied.creation_bits
+       WHERE copied_classification.source_kind = 'inherited'),
+      (SELECT count(*)
+       FROM copied_classification
+       JOIN copied
+       JOIN change_journal AS journal
+         ON journal.entity_type = 'classificationCommit'
+        AND journal.entity_id = copied_classification.record_id
+        AND journal.changed_at_bits = copied.undo_bits
+       WHERE copied_classification.source_kind =
+           'deterministicDomainAction'
+         AND copied_classification.source_reason =
+           'task removed from task pool while preserving classification history'),
+      (SELECT count(*)
+       FROM classification_relation_history
+       JOIN copied ON copied.chain_id =
+           classification_relation_history.chain_id),
+      (SELECT count(*)
+       FROM copied_classification
+       JOIN source
+       WHERE copied_classification.source_kind = 'inherited'
+         AND copied_classification.source_from_chain_id = source.chain_id),
+      (SELECT count(*)
+       FROM classification_change_records
        WHERE source_kind = 'deterministicDomainAction'
-         AND source_reason = 'task removed from task pool while preserving classification history'
+         AND source_reason =
+           'task removed from task pool while preserving classification history'
          AND decision_id IS NULL),
-      (SELECT count(*) FROM change_journal WHERE entity_type = 'classificationCommit');
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'classificationCommit');
   ")"
-  if [[ "$sql_probe" != "1 0 0 2 1 1 3" ]]; then
-    echo "classified copy undo SQLite/sync probe failed: ${sql_probe:-missing}" >&2
+  if [[ "$sql_probe" != "1 4 2 6 1 2 2 1 5 1 3 1 1 1 1 7 1 3 4 2 9 1 2 1 3 2 1 1 2 1 1 3" ]]; then
+    echo "snapshot undo evidence-matrix SQLite/journal probe failed: ${sql_probe:-missing}" >&2
     exit 1
   fi
 
-  echo "E2E classified copy undo SQLite restart: $copy_undo_db (probe=$sql_probe)"
+  echo "E2E snapshot undo raw facts, HLC journal, projections, and restart: $copy_undo_db (probe=$sql_probe)"
 }
 
 run_lifecycle_persistence_probe() {
@@ -2133,6 +4185,8 @@ run_lifecycle_persistence_probe() {
     "$setup_log" \
     --data-url "$PWD/$lifecycle_db" \
     --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
     --e2e-lifecycle-workflow \
     --e2e-lifecycle-result-url "$PWD/$setup_result" \
     --e2e-quit-after-automation
@@ -2143,6 +4197,8 @@ run_lifecycle_persistence_probe() {
     "$restart_log" \
     --data-url "$PWD/$lifecycle_db" \
     --page unfinished \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
     --e2e-lifecycle-restart-verify \
     --e2e-lifecycle-result-url "$PWD/$restart_result" \
     --e2e-quit-after-automation
@@ -2176,6 +4232,15 @@ run_lifecycle_persistence_probe() {
          AND day_traces.date = '2026-07-05'
          AND day_traces.status = 'pending'
          AND day_traces.settled_at IS NULL
+         AND day_traces.description_text = 'E2E 固定时钟重启修改。'
+         AND julianday(day_traces.content_updated_at) >=
+             julianday('2026-07-05T16:00:00Z')
+         AND julianday(day_traces.content_updated_at) <
+             julianday('2026-07-05T16:00:01Z')
+         AND julianday(task_chains.updated_at) >=
+             julianday('2026-07-05T16:00:00Z')
+         AND julianday(task_chains.updated_at) <
+             julianday('2026-07-05T16:00:01Z')
          AND task_chains.state = 'active'),
       (SELECT count(*)
        FROM day_traces
@@ -2286,6 +4351,1332 @@ run_natural_day_rollover_probe() {
   echo "E2E natural-day wake/retry/time-zone/restart: $rollover_db (probe=$sqlite_probe)"
 }
 
+run_preferences_clock_probe() {
+  local preferences_dir="artifacts/e2e-preferences-clock"
+  local preferences_db="${preferences_dir}/Noonmark.sqlite"
+  local state_file="${preferences_dir}/state.json"
+  local setup_result="${preferences_dir}/setup-result.txt"
+  local setup_log="${preferences_dir}/setup.log"
+  local exercise_result="${preferences_dir}/exercise-result.txt"
+  local exercise_log="${preferences_dir}/exercise.log"
+  local restart_result="${preferences_dir}/restart-result.txt"
+  local restart_log="${preferences_dir}/restart.log"
+  local sync_root="/tmp/noonmark-e2e-preferences-clock-sync-$$"
+  local remote_bits
+  local theme_bits
+  local language_bits
+  local final_header_bits
+  local final_payload_bits
+  local remote_sha256
+  local final_sha256
+  local final_snapshot_id
+  local final_snapshot_digest
+  local final_snapshot_sha256
+  local sqlite_probe
+  local trace_probe
+
+  rm -rf "$preferences_dir"
+  rm -rf "$sync_root"
+  mkdir -p "$preferences_dir"
+
+  run_terminating_ui_probe \
+    "preference logical-clock remote setup" \
+    "$setup_result" \
+    "$setup_log" \
+    --data-url "$PWD/$preferences_db" \
+    --sync-folder-url "$sync_root" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-preferences-clock-setup \
+    --e2e-preferences-clock-state-url "$PWD/$state_file" \
+    --e2e-preferences-clock-result-url "$PWD/$setup_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "preference logical-clock native Settings exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$preferences_db" \
+    --sync-folder-url "$sync_root" \
+    --page settings \
+    --e2e-expand-settings-poem \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-preferences-clock-exercise \
+    --e2e-preferences-clock-state-url "$PWD/$state_file" \
+    --e2e-preferences-clock-result-url "$PWD/$exercise_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "preference logical-clock stale-remote restart" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$preferences_db" \
+    --sync-folder-url "$sync_root" \
+    --page settings \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-preferences-clock-verify \
+    --e2e-preferences-clock-state-url "$PWD/$state_file" \
+    --e2e-preferences-clock-result-url "$PWD/$restart_result"
+
+  remote_bits="$(/usr/bin/plutil -extract remoteClockBits raw -o - \
+    "$state_file")"
+  theme_bits="$(/usr/bin/plutil -extract themeClockBits raw -o - \
+    "$state_file")"
+  language_bits="$(/usr/bin/plutil -extract languageClockBits raw -o - \
+    "$state_file")"
+  final_header_bits="$(/usr/bin/plutil -extract finalHeaderClockBits raw -o - \
+    "$state_file")"
+  final_payload_bits="$(/usr/bin/plutil -extract finalPayloadClockBits raw -o - \
+    "$state_file")"
+  remote_sha256="$(/usr/bin/plutil -extract remoteRecordSHA256 raw -o - \
+    "$state_file")"
+  final_sha256="$(/usr/bin/plutil -extract finalRecordSHA256 raw -o - \
+    "$state_file")"
+  final_snapshot_id="$(/usr/bin/plutil -extract finalSnapshotID raw -o - \
+    "$state_file")"
+  final_snapshot_digest="$(/usr/bin/plutil \
+    -extract finalSnapshotPayloadDigest raw -o - "$state_file")"
+  final_snapshot_sha256="$(/usr/bin/plutil \
+    -extract finalSnapshotSHA256 raw -o - "$state_file")"
+
+  if (( remote_bits >= theme_bits || theme_bits >= language_bits )); then
+    echo "preference logical-clock state did not advance exactly in order" >&2
+    exit 1
+  fi
+  if [[ "$final_header_bits" != "$language_bits" \
+    || "$final_payload_bits" != "$language_bits" ]]; then
+    echo "preference remote header/payload exact clock probe failed" >&2
+    exit 1
+  fi
+
+  if [[ "$(shasum -a 256 \
+    "${preferences_dir}/remote-future-preferences.json" \
+    | awk '{print $1}')" != "$remote_sha256" \
+    || "$(shasum -a 256 \
+      "${preferences_dir}/remote-before-local-settings.json" \
+      | awk '{print $1}')" != "$remote_sha256" \
+    || "$(shasum -a 256 \
+      "${preferences_dir}/stale-remote-reintroduced.json" \
+      | awk '{print $1}')" != "$remote_sha256" \
+    || "$(shasum -a 256 \
+      "${preferences_dir}/stale-remote-before-restart-sync.json" \
+      | awk '{print $1}')" != "$remote_sha256" \
+    || "$(shasum -a 256 \
+      "${preferences_dir}/final-local-winner-preferences.json" \
+      | awk '{print $1}')" != "$final_sha256" \
+    || "$(shasum -a 256 \
+      "${preferences_dir}/final-local-winner-snapshot.json" \
+      | awk '{print $1}')" != "$final_snapshot_sha256" ]]; then
+    echo "preference local-folder record SHA-256 evidence failed" >&2
+    exit 1
+  fi
+
+  if [[ "$(/usr/bin/plutil -extract id raw -o - \
+      "${preferences_dir}/final-local-winner-snapshot.json")" \
+      != "$final_snapshot_id" \
+    || "$(/usr/bin/plutil -extract recordCount raw -o - \
+      "${preferences_dir}/final-local-winner-snapshot.json")" != "1" \
+    || "$(/usr/bin/plutil -extract recordIDs.0.rawValue raw -o - \
+      "${preferences_dir}/final-local-winner-snapshot.json")" \
+      != "preferences:default" \
+    || "$(/usr/bin/plutil -extract payloadDigest raw -o - \
+      "${preferences_dir}/final-local-winner-snapshot.json")" \
+      != "$final_snapshot_digest" ]]; then
+    echo "preference local-folder snapshot winner evidence failed" >&2
+    exit 1
+  fi
+
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$preferences_db" "
+    WITH settings AS (
+      SELECT
+        max(CASE WHEN key = 'app.data_mode' THEN value END) AS data_mode,
+        max(CASE WHEN key = 'app.local_first_sync.enabled'
+          THEN value END) AS sync_enabled,
+        max(CASE WHEN key = 'app.local_first_sync.endpoint'
+          THEN value END) AS sync_endpoint,
+        max(CASE WHEN key = 'app.local_first_sync.mode'
+          THEN value END) AS sync_mode,
+        max(CASE WHEN key = 'app.settings_poem.enabled'
+          THEN value END) AS poem_enabled,
+        max(CASE WHEN key = 'app.settings_poem.text'
+          THEN value END) AS poem_text
+      FROM sync_settings
+    ), preference_journal AS (
+      SELECT *
+      FROM change_journal
+      WHERE entity_type = 'appPreferences'
+        AND entity_id = 'default'
+        AND operation = 'upsert'
+    ), preference_audit AS (
+      SELECT *
+      FROM sync_audit_log
+      WHERE entity_type = 'appPreferences'
+        AND entity_id = 'default'
+    )
+    SELECT
+      (SELECT count(*)
+       FROM app_preferences
+       WHERE theme = 'coolGray'
+         AND language = 'chinese'
+         AND theme_language_updated_at_bits = $language_bits
+         AND theme_language_writer_id = (
+           SELECT device_id FROM sync_device_identity WHERE id = 1
+         )),
+      (SELECT count(*)
+       FROM settings
+       WHERE data_mode = 'localFirst'
+         AND sync_enabled = 'true'
+         AND sync_endpoint = 'localFolder'
+         AND sync_mode = 'manual'
+         AND poem_enabled = 'false'
+         AND poem_text = 'E2E local-only preference sentinel 6049'),
+      (SELECT count(*) FROM preference_journal),
+      (SELECT count(*)
+       FROM preference_journal
+       WHERE sync_state = 'uploaded'
+         AND retry_count = 0
+         AND last_error IS NULL
+         AND record_payload IS NOT NULL
+         AND length(record_payload) > 0),
+      (SELECT count(*)
+       FROM preference_journal
+       WHERE sync_state IN ('pendingUpload', 'failed')),
+      (SELECT count(*)
+       FROM preference_journal
+       WHERE changed_at_bits = $theme_bits
+         AND json_extract(
+           CAST(record_payload AS TEXT),
+           '$.payload.theme'
+         ) = 'coolGray'
+         AND json_extract(
+           CAST(record_payload AS TEXT),
+           '$.payload.language'
+         ) = 'english'
+         AND json_extract(
+           CAST(record_payload AS TEXT),
+           '$.payload.writerDeviceID.rawValue'
+         ) = (
+           SELECT device_id FROM sync_device_identity WHERE id = 1
+         )
+         AND CAST(json_extract(
+           CAST(record_payload AS TEXT),
+           '$.payload.updatedAt'
+         ) AS INTEGER) = changed_at_bits),
+      (SELECT count(*)
+       FROM preference_journal
+       WHERE changed_at_bits = $language_bits
+         AND json_extract(
+           CAST(record_payload AS TEXT),
+           '$.payload.theme'
+         ) = 'coolGray'
+         AND json_extract(
+           CAST(record_payload AS TEXT),
+           '$.payload.language'
+         ) = 'chinese'
+         AND json_extract(
+           CAST(record_payload AS TEXT),
+           '$.payload.writerDeviceID.rawValue'
+         ) = (
+           SELECT device_id FROM sync_device_identity WHERE id = 1
+         )
+         AND CAST(json_extract(
+           CAST(record_payload AS TEXT),
+           '$.payload.updatedAt'
+         ) AS INTEGER) = changed_at_bits),
+      (SELECT count(*) FROM preference_audit),
+      (SELECT count(*)
+       FROM preference_audit
+       WHERE direction = 'upload' AND action = 'uploaded'),
+      (SELECT count(*)
+       FROM preference_audit
+       WHERE direction = 'download' AND action = 'merged'),
+      (SELECT count(*)
+       FROM preference_audit
+       WHERE direction = 'download' AND action = 'ignored');
+  ")"
+  if [[ "$sqlite_probe" != "1 1 2 2 0 1 1 5 2 1 2" ]]; then
+    echo "preference SQLite/journal/audit exact-bit probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  trace_probe="$(awk '
+    /click identifier=settings.preferences.theme/ { theme = 1 }
+    /click identifier=settings.preferences.language/ { language = 1 }
+    /click identifier=settings.preferences.poem.enabled/ { poem = 1 }
+    /sync uploaded=2 pending=0 failed=0/ { synced = 1 }
+    /restart stale=/ { restarted = 1 }
+    END { print theme, language, poem, synced, restarted }
+  ' "${preferences_dir}/input-trace.txt")"
+  if [[ "$trace_probe" != "1 1 1 1 1" ]]; then
+    echo "preference WindowServer input trace probe failed: ${trace_probe:-missing}" >&2
+    exit 1
+  fi
+
+  printf '%s\n' \
+    "remoteClockBits=$remote_bits" \
+    "themeClockBits=$theme_bits" \
+    "languageClockBits=$language_bits" \
+    "finalHeaderClockBits=$final_header_bits" \
+    "finalPayloadClockBits=$final_payload_bits" \
+    "finalSnapshotID=$final_snapshot_id" \
+    "finalSnapshotPayloadDigest=$final_snapshot_digest" \
+    "sqliteProbe=$sqlite_probe" \
+    "inputTraceProbe=$trace_probe" \
+    >"${preferences_dir}/probe.txt"
+
+  rm -rf "$sync_root"
+  echo "E2E native Settings preference HLC, local-only boundary, sync, and restart: $preferences_db (probe=$sqlite_probe)"
+}
+
+run_mutation_clock_probe() {
+  local clock_dir="artifacts/e2e-mutation-clock"
+  local clock_db="${clock_dir}/Noonmark.sqlite"
+  local clock_state="${clock_dir}/state.json"
+  local exercise_result="${clock_dir}/exercise-result.txt"
+  local restart_result="${clock_dir}/restart-result.txt"
+  local exercise_log="${clock_dir}/exercise.log"
+  local restart_log="${clock_dir}/restart.log"
+  local sqlite_probe
+
+  rm -rf "$clock_dir"
+  mkdir -p "$clock_dir"
+
+  run_terminating_ui_probe \
+    "mutation-clock future-frontier exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$clock_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-mutation-clock-exercise \
+    --e2e-mutation-clock-state-url "$PWD/$clock_state" \
+    --e2e-mutation-clock-result-url "$PWD/$exercise_result" \
+    --e2e-quit-after-automation
+
+  run_terminating_ui_probe \
+    "mutation-clock restart follow-up" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$clock_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-06T04:30:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-mutation-clock-restart-verify \
+    --e2e-mutation-clock-state-url "$PWD/$clock_state" \
+    --e2e-mutation-clock-result-url "$PWD/$restart_result" \
+    --e2e-quit-after-automation
+
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$clock_db" "
+    WITH source AS (
+      SELECT
+        chain.id AS chain_id,
+        definition.id AS definition_id,
+        trace.id AS trace_id,
+        chain.created_at_bits AS chain_created_bits,
+        chain.updated_at_bits AS chain_updated_bits,
+        definition.created_at_bits AS definition_created_bits,
+        definition.content_updated_at_bits AS definition_updated_bits,
+        trace.created_at_bits AS trace_created_bits,
+        trace.content_updated_at_bits AS trace_updated_bits,
+        trace.settled_at_bits AS trace_settled_bits,
+        day.created_at_bits AS day_created_bits,
+        day.updated_at_bits AS day_updated_bits,
+        day.locked_at_bits AS day_locked_bits
+      FROM task_chains AS chain
+      JOIN task_definitions AS definition
+        ON definition.chain_id = chain.id
+      JOIN day_traces AS trace
+        ON trace.definition_id = definition.id
+      JOIN days AS day
+        ON day.date = trace.date
+      WHERE definition.title = 'E2E mutation clock source'
+        AND trace.date = '2026-07-05'
+        AND trace.status = 'unfinished'
+        AND trace.description_text = 'E2E mutation clock trace edit'
+    ), follow_up AS (
+      SELECT
+        chain.id AS chain_id,
+        definition.id AS definition_id,
+        trace.id AS trace_id,
+        chain.created_at_bits AS chain_created_bits,
+        chain.updated_at_bits AS chain_updated_bits,
+        definition.created_at_bits AS definition_created_bits,
+        definition.content_updated_at_bits AS definition_updated_bits,
+        trace.created_at_bits AS trace_created_bits,
+        trace.content_updated_at_bits AS trace_updated_bits,
+        day.created_at_bits AS day_created_bits,
+        day.updated_at_bits AS day_updated_bits
+      FROM task_chains AS chain
+      JOIN task_definitions AS definition
+        ON definition.chain_id = chain.id
+      JOIN day_traces AS trace
+        ON trace.definition_id = definition.id
+      JOIN days AS day
+        ON day.date = trace.date
+      WHERE definition.title = 'E2E mutation clock restart follow-up'
+        AND trace.date = '2026-07-06'
+        AND trace.status = 'pending'
+    ), classification AS (
+      SELECT record.record_id
+      FROM classification_change_records AS record
+      JOIN classification_change_record_changes AS delta
+        ON delta.record_id = record.record_id
+      JOIN source
+        ON source.chain_id = delta.chain_id
+      WHERE delta.kind = 'setCurrent'
+    ), classification_journal AS (
+      SELECT journal.changed_at_bits
+      FROM change_journal AS journal
+      JOIN classification
+        ON classification.record_id = journal.entity_id
+      WHERE journal.entity_type = 'classificationCommit'
+    ), rollover_events AS (
+      SELECT event.event_id
+      FROM trace_classification_snapshot_events AS event
+      JOIN source
+        ON source.trace_id = event.trace_id
+      WHERE event.status = 'unfinished'
+    ), trace_edit AS (
+      SELECT journal.changed_at_bits
+      FROM change_journal AS journal
+      JOIN source
+        ON source.trace_id = journal.entity_id
+      JOIN classification_journal
+      WHERE journal.entity_type = 'dayTrace'
+        AND journal.changed_at_bits > source.trace_created_bits
+        AND journal.changed_at_bits < classification_journal.changed_at_bits
+    )
+    SELECT
+      (SELECT count(*) FROM source),
+      (SELECT count(*) FROM follow_up),
+      (SELECT count(*) FROM classification),
+      (SELECT count(*) FROM rollover_events),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN source ON source.trace_id = journal.entity_id
+       WHERE journal.entity_type = 'dayTrace'),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       WHERE journal.entity_type = 'day'
+         AND journal.entity_id = '2026-07-05'),
+      (SELECT count(*) FROM change_journal),
+      (SELECT count(*)
+       FROM source
+       WHERE chain_created_bits = chain_updated_bits
+         AND chain_created_bits = definition_created_bits
+         AND chain_created_bits = definition_updated_bits
+         AND chain_created_bits = trace_created_bits
+         AND chain_created_bits = day_created_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN source
+         ON (
+           (journal.entity_type = 'taskChain'
+             AND journal.entity_id = source.chain_id)
+           OR (journal.entity_type = 'taskDefinition'
+             AND journal.entity_id = source.definition_id)
+           OR (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = source.trace_id)
+           OR (journal.entity_type = 'day'
+             AND journal.entity_id = '2026-07-05')
+         )
+       WHERE journal.changed_at_bits = source.chain_created_bits),
+      (SELECT count(*) FROM trace_edit),
+      (SELECT count(*) FROM classification_journal),
+      (SELECT count(*)
+       FROM source
+       WHERE trace_updated_bits = trace_settled_bits
+         AND trace_updated_bits = day_updated_bits
+         AND trace_updated_bits = day_locked_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN source
+         ON (
+           (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = source.trace_id)
+           OR (journal.entity_type = 'day'
+             AND journal.entity_id = '2026-07-05')
+         )
+       WHERE journal.changed_at_bits = source.trace_settled_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN rollover_events
+         ON rollover_events.event_id = journal.entity_id
+       JOIN source
+       WHERE journal.entity_type = 'traceClassificationEvent'
+         AND journal.changed_at_bits = source.trace_settled_bits),
+      (SELECT count(*)
+       FROM follow_up
+       WHERE chain_created_bits = chain_updated_bits
+         AND chain_created_bits = definition_created_bits
+         AND chain_created_bits = definition_updated_bits
+         AND chain_created_bits = trace_created_bits
+         AND chain_created_bits = trace_updated_bits
+         AND chain_created_bits = day_created_bits
+         AND chain_created_bits = day_updated_bits),
+      (SELECT count(*)
+       FROM change_journal AS journal
+       JOIN follow_up
+         ON (
+           (journal.entity_type = 'taskChain'
+             AND journal.entity_id = follow_up.chain_id)
+           OR (journal.entity_type = 'taskDefinition'
+             AND journal.entity_id = follow_up.definition_id)
+           OR (journal.entity_type = 'dayTrace'
+             AND journal.entity_id = follow_up.trace_id)
+           OR (journal.entity_type = 'day'
+             AND journal.entity_id = '2026-07-06')
+         )
+       WHERE journal.changed_at_bits = follow_up.chain_created_bits),
+      (SELECT count(*)
+       FROM source
+       JOIN trace_edit
+       JOIN classification_journal
+       JOIN follow_up
+       WHERE source.trace_created_bits < trace_edit.changed_at_bits
+         AND trace_edit.changed_at_bits < classification_journal.changed_at_bits
+         AND classification_journal.changed_at_bits < source.trace_settled_bits
+         AND source.trace_settled_bits < follow_up.chain_created_bits);
+  ")"
+  if [[ "$sqlite_probe" != "1 1 1 1 3 2 13 1 4 1 1 1 2 1 1 4 1" ]]; then
+    echo "mutation-clock SQLite/journal exact-bit probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E future-frontier mutation clock, rollover, and restart: $clock_db (probe=$sqlite_probe)"
+}
+
+run_subtask_clock_probe() {
+  local subtask_dir="artifacts/e2e-subtask-clock"
+  local subtask_db="${subtask_dir}/Noonmark.sqlite"
+  local subtask_state="${subtask_dir}/state.json"
+  local exercise_result="${subtask_dir}/exercise-result.txt"
+  local restart_result="${subtask_dir}/restart-result.txt"
+  local exercise_log="${subtask_dir}/exercise.log"
+  local restart_log="${subtask_dir}/restart.log"
+  local sqlite_probe
+
+  rm -rf "$subtask_dir"
+  mkdir -p "$subtask_dir"
+
+  run_terminating_ui_probe \
+    "subtask updatedAt exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$subtask_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-subtask-clock-exercise \
+    --e2e-subtask-clock-state-url "$PWD/$subtask_state" \
+    --e2e-subtask-clock-result-url "$PWD/$exercise_result" \
+    --e2e-quit-after-automation
+
+  run_terminating_ui_probe \
+    "subtask updatedAt restart" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$subtask_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-subtask-clock-restart-verify \
+    --e2e-subtask-clock-state-url "$PWD/$subtask_state" \
+    --e2e-subtask-clock-result-url "$PWD/$restart_result" \
+    --e2e-quit-after-automation
+
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$subtask_db" "
+    WITH state(payload) AS (
+      SELECT CAST(readfile('$PWD/$subtask_state') AS TEXT)
+    ), target AS (
+      SELECT
+        subtask.id,
+        subtask.created_at_bits,
+        subtask.updated_at_bits
+      FROM subtasks AS subtask
+      JOIN day_traces AS trace
+        ON trace.id = subtask.trace_id
+      JOIN task_definitions AS definition
+        ON definition.id = trace.definition_id
+      JOIN state
+      WHERE subtask.id = json_extract(state.payload, '$.subtaskID')
+        AND trace.id = json_extract(state.payload, '$.traceID')
+        AND definition.title = 'E2E subtask updatedAt clock parent'
+        AND subtask.title = 'E2E subtask updatedAt clock'
+        AND subtask.status = 'pending'
+        AND subtask.completed_at IS NULL
+        AND subtask.settled_at IS NULL
+        AND subtask.difficulty = 3
+    ), mutation_clocks AS (
+      SELECT
+        CAST(clock.key AS INTEGER) AS position,
+        CAST(clock.value AS INTEGER) AS bits
+      FROM state, json_each(state.payload, '$.mutationBits') AS clock
+    ), target_journal AS (
+      SELECT journal.changed_at_bits
+      FROM change_journal AS journal
+      JOIN target
+        ON target.id = journal.entity_id
+      WHERE journal.entity_type = 'subtask'
+        AND journal.operation = 'upsert'
+        AND journal.record_payload IS NULL
+    )
+    SELECT
+      (SELECT count(*) FROM target),
+      (SELECT count(*)
+       FROM target
+       WHERE updated_at_bits != created_at_bits),
+      (SELECT count(*) FROM mutation_clocks),
+      (SELECT count(DISTINCT bits) FROM mutation_clocks),
+      (SELECT count(*)
+       FROM target_journal),
+      (SELECT count(DISTINCT changed_at_bits)
+       FROM target_journal),
+      (SELECT count(*)
+       FROM target
+       WHERE (
+         SELECT max(changed_at_bits) FROM target_journal
+       ) = target.updated_at_bits),
+      (SELECT count(*)
+       FROM target
+       WHERE (
+         SELECT min(changed_at_bits) FROM target_journal
+       ) = target.created_at_bits),
+      (SELECT count(*)
+       FROM mutation_clocks
+       JOIN target_journal
+         ON target_journal.changed_at_bits = mutation_clocks.bits),
+      (SELECT count(*)
+       FROM target, state
+       WHERE target.created_at_bits =
+           CAST(json_extract(state.payload, '$.createdBits') AS INTEGER)
+         AND target.updated_at_bits =
+           CAST(json_extract(state.payload, '$.mapperModifiedBits') AS INTEGER)),
+      (SELECT count(*)
+       FROM target
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM mutation_clocks AS later
+         JOIN mutation_clocks AS earlier
+           ON later.position = earlier.position + 1
+         WHERE later.bits <= earlier.bits
+       )
+         AND (
+           SELECT min(bits) FROM mutation_clocks
+         ) > target.created_at_bits);
+  ")"
+  if [[ "$sqlite_probe" != "1 1 5 5 6 6 1 1 5 1 1" ]]; then
+    echo "subtask updatedAt SQLite/journal/mapper probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E subtask updatedAt, Store undo/redo, mapper, and restart: $subtask_db (probe=$sqlite_probe)"
+}
+
+run_zhulong_navigation_probe() {
+  local navigation_dir="artifacts/e2e-zhulong-navigation"
+  local navigation_result="${navigation_dir}/zhulong-navigation-result.txt"
+  local navigation_log="${navigation_dir}/zhulong-navigation.log"
+
+  rm -rf "$navigation_dir"
+  mkdir -p "$navigation_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "zhulong navigation visibility" \
+    "$navigation_result" \
+    "$navigation_log" \
+    --ephemeral \
+    --page zhulong \
+    --e2e-zhulong-sidecar-key \
+    --e2e-zhulong-navigation \
+    --e2e-zhulong-navigation-result-url "$PWD/$navigation_result"
+
+  echo "E2E zhulong navigation visibility: $navigation_result"
+}
+
+run_zhulong_daily_recovery_clock_probe() {
+  local recovery_dir="artifacts/e2e-zhulong-recovery"
+  local recovery_db="${recovery_dir}/Noonmark.sqlite"
+  local recovery_result="${recovery_dir}/recovery-result.txt"
+  local interruption_result="${recovery_dir}/interruption-result.txt"
+  local recovery_log="${recovery_dir}/recovery.log"
+  local recovery_journal="${recovery_dir}/ZhulongSidecar/pending-application.zhj"
+  local before_recovery_hash
+  local after_recovery_hash
+  local clock_probe
+
+  rm -rf "$recovery_dir"
+  mkdir -p "$recovery_dir"
+
+  /usr/bin/open -W -n "$app_path" --args \
+    --data-url "$PWD/$recovery_db" \
+    --page zhulong \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-enable-zhulong \
+    --e2e-zhulong-sidecar-key \
+    --e2e-start-zhulong-workflow dailyReview \
+    --e2e-rich-zhulong-session \
+    --e2e-interrupt-zhulong-daily-review \
+    --e2e-zhulong-interruption-result-url "$PWD/$interruption_result" \
+    --e2e-quit-after-automation
+
+  if [[ "$(cat "$interruption_result" 2>/dev/null || true)" != \
+    "ok: mutation blocked pending Zhulong application" ]]; then
+    echo "zhulong interrupted durable-after/pending-gate evidence failed: $(cat "$interruption_result" 2>/dev/null || echo missing)" >&2
+    exit 1
+  fi
+  if [[ ! -f "$recovery_journal" ]]; then
+    echo "zhulong interrupted application journal was not persisted" >&2
+    exit 1
+  fi
+  before_recovery_hash="$(shasum -a 256 "$recovery_db" | awk '{print $1}')"
+
+  run_terminating_ui_probe \
+    "zhulong interrupted application recovery" \
+    "$recovery_result" \
+    "$recovery_log" \
+    --data-url "$PWD/$recovery_db" \
+    --page zhulong \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-enable-zhulong \
+    --e2e-zhulong-sidecar-key \
+    --e2e-expect-zhulong-recovery \
+    --e2e-verify-zhulong-persistence-result-url "$PWD/$recovery_result"
+
+  after_recovery_hash="$(shasum -a 256 "$recovery_db" | awk '{print $1}')"
+  if [[ "$after_recovery_hash" != "$before_recovery_hash" ]]; then
+    echo "zhulong current==after recovery rewrote the engine database" >&2
+    exit 1
+  fi
+  if [[ -f "$recovery_journal" ]]; then
+    echo "zhulong recovery journal was not cleared after successful recovery" >&2
+    exit 1
+  fi
+
+  clock_probe="$(sqlite3 -noheader -separator ' ' "$recovery_db" "
+    SELECT
+      (SELECT count(*)
+       FROM days
+       WHERE date = '2026-07-05'
+         AND review_summary = 'E2E 已确认的每日复盘'),
+      (SELECT count(*)
+       FROM days
+       JOIN change_journal
+         ON change_journal.entity_type = 'day'
+        AND change_journal.entity_id = days.date
+        AND change_journal.changed_at_bits = days.updated_at_bits
+       WHERE days.date = '2026-07-05'),
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'day'
+         AND entity_id = '2026-07-05');
+  ")"
+  if [[ "$clock_probe" != "1 1 1" ]]; then
+    echo "zhulong daily-review joint clock probe failed: ${clock_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E fixed-clock Zhulong daily review and no-rewrite recovery: $recovery_db (probe=$clock_probe)"
+}
+
+run_zhulong_exact_recovery_identity_probe() {
+  local evidence_dir="artifacts/e2e-zhulong-exact-recovery"
+  local exact_dir="${evidence_dir}/exact-after"
+  local exact_db="${exact_dir}/Noonmark.sqlite"
+  local exact_state="${exact_dir}/state.json"
+  local exact_setup_result="${exact_dir}/setup-result.txt"
+  local exact_setup_log="${exact_dir}/setup.log"
+  local exact_verify_result="${exact_dir}/verify-result.txt"
+  local exact_verify_log="${exact_dir}/verify.log"
+  local exact_journal="${exact_dir}/ZhulongSidecar/pending-application.zhj"
+  local exact_before_database_sha256
+  local exact_after_database_sha256
+  local exact_before_bits
+  local exact_after_bits
+  local exact_before_digest
+  local exact_after_digest
+  local exact_current_digest
+  local exact_chain_id
+  local exact_definition_sequence
+  local exact_sqlite_probe
+  local conflict_dir="${evidence_dir}/preference-conflict"
+  local conflict_db="${conflict_dir}/Noonmark.sqlite"
+  local conflict_state="${conflict_dir}/state.json"
+  local conflict_setup_result="${conflict_dir}/setup-result.txt"
+  local conflict_setup_log="${conflict_dir}/setup.log"
+  local conflict_verify_result="${conflict_dir}/verify-result.txt"
+  local conflict_verify_log="${conflict_dir}/verify.log"
+  local conflict_journal="${conflict_dir}/ZhulongSidecar/pending-application.zhj"
+  local conflict_before_database_sha256
+  local conflict_after_database_sha256
+  local conflict_before_journal_sha256
+  local conflict_after_journal_sha256
+  local conflict_before_data_mode
+  local conflict_current_data_mode
+  local conflict_before_digest
+  local conflict_after_digest
+  local conflict_current_digest
+  local conflict_sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$exact_dir" "$conflict_dir"
+
+  run_terminating_ui_probe \
+    "zhulong exact-after recovery setup" \
+    "$exact_setup_result" \
+    "$exact_setup_log" \
+    --data-url "$PWD/$exact_db" \
+    --page zhulong \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-zhulong-sidecar-key \
+    --e2e-setup-zhulong-exact-recovery exact-after \
+    --e2e-zhulong-exact-recovery-state-url "$PWD/$exact_state" \
+    --e2e-zhulong-exact-recovery-result-url "$PWD/$exact_setup_result"
+
+  if [[ ! -f "$exact_journal" ]]; then
+    echo "zhulong exact-after setup did not persist its encrypted journal" >&2
+    exit 1
+  fi
+  exact_before_database_sha256="$(
+    shasum -a 256 "$exact_db" | awk '{print $1}'
+  )"
+  exact_before_bits="$(
+    /usr/bin/plutil -extract beforeUpdatedAtBits raw -o - "$exact_state"
+  )"
+  exact_after_bits="$(
+    /usr/bin/plutil -extract afterUpdatedAtBits raw -o - "$exact_state"
+  )"
+  exact_before_digest="$(
+    /usr/bin/plutil -extract beforeDigest raw -o - "$exact_state"
+  )"
+  exact_after_digest="$(
+    /usr/bin/plutil -extract afterDigest raw -o - "$exact_state"
+  )"
+  exact_current_digest="$(
+    /usr/bin/plutil -extract currentDigest raw -o - "$exact_state"
+  )"
+  exact_chain_id="$(
+    /usr/bin/plutil -extract chainID raw -o - "$exact_state"
+  )"
+  exact_definition_sequence="$(
+    /usr/bin/plutil -extract definitionSequence raw -o - "$exact_state"
+  )"
+  if [[ ! "$exact_before_digest" =~ ^[0-9a-f]{64}$ \
+    || ! "$exact_after_digest" =~ ^[0-9a-f]{64}$ \
+    || "$exact_before_digest" == "$exact_after_digest" \
+    || "$exact_current_digest" != "$exact_after_digest" ]]; then
+    echo "zhulong exact-after state did not distinguish its snapshot identities" >&2
+    exit 1
+  fi
+  if [[ "$(sqlite3 -noheader :memory: "
+    SELECT
+      CAST('$exact_after_bits' AS INTEGER) =
+      CAST('$exact_before_bits' AS INTEGER) + 1;
+  ")" != "1" ]]; then
+    echo "zhulong exact-after state clocks are not adjacent Date bits" >&2
+    exit 1
+  fi
+  exact_sqlite_probe="$(sqlite3 -noheader -separator ' ' "$exact_db" "
+    SELECT
+      (SELECT count(*)
+       FROM task_chains
+       WHERE id = '$exact_chain_id'
+         AND state = 'active'
+         AND created_at_bits = CAST('$exact_before_bits' AS INTEGER)
+         AND updated_at_bits = CAST('$exact_after_bits' AS INTEGER)),
+      (SELECT count(*)
+       FROM task_definitions
+       WHERE chain_id = '$exact_chain_id'
+         AND sequence = CAST('$exact_definition_sequence' AS INTEGER)
+         AND title = 'E2E 烛龙精确 after 时钟'
+         AND created_at_bits = CAST('$exact_before_bits' AS INTEGER)
+         AND content_updated_at_bits = CAST('$exact_before_bits' AS INTEGER)
+         AND superseded_at IS NULL),
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'taskChain'
+         AND entity_id = '$exact_chain_id'
+         AND changed_at_bits = CAST('$exact_before_bits' AS INTEGER)),
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'taskChain'
+         AND entity_id = '$exact_chain_id'
+         AND changed_at_bits = CAST('$exact_after_bits' AS INTEGER)),
+      (SELECT count(*)
+       FROM change_journal
+       JOIN task_definitions
+         ON task_definitions.id = change_journal.entity_id
+       WHERE change_journal.entity_type = 'taskDefinition'
+         AND task_definitions.chain_id = '$exact_chain_id'
+         AND change_journal.changed_at_bits =
+             CAST('$exact_before_bits' AS INTEGER)),
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'taskChain'
+         AND entity_id = '$exact_chain_id'),
+      (SELECT count(*)
+       FROM change_journal
+       JOIN task_definitions
+         ON task_definitions.id = change_journal.entity_id
+       WHERE change_journal.entity_type = 'taskDefinition'
+         AND task_definitions.chain_id = '$exact_chain_id');
+  ")"
+  if [[ "$exact_sqlite_probe" != "1 1 1 1 1 2 1" ]]; then
+    echo "zhulong exact-after SQLite bit probe failed: ${exact_sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "zhulong exact-after no-rewrite recovery" \
+    "$exact_verify_result" \
+    "$exact_verify_log" \
+    --data-url "$PWD/$exact_db" \
+    --page zhulong \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-zhulong-sidecar-key \
+    --e2e-verify-zhulong-exact-recovery exact-after \
+    --e2e-zhulong-exact-recovery-state-url "$PWD/$exact_state" \
+    --e2e-zhulong-exact-recovery-result-url "$PWD/$exact_verify_result"
+
+  exact_after_database_sha256="$(
+    shasum -a 256 "$exact_db" | awk '{print $1}'
+  )"
+  if [[ "$exact_after_database_sha256" != "$exact_before_database_sha256" ]]; then
+    echo "zhulong exact-after recovery rewrote the engine database" >&2
+    exit 1
+  fi
+  if [[ -f "$exact_journal" ]]; then
+    echo "zhulong exact-after recovery did not clear its journal" >&2
+    exit 1
+  fi
+  exact_sqlite_probe="$(sqlite3 -noheader -separator ' ' "$exact_db" "
+    SELECT
+      (SELECT count(*)
+       FROM task_chains
+       WHERE id = '$exact_chain_id'
+         AND state = 'active'
+         AND created_at_bits = CAST('$exact_before_bits' AS INTEGER)
+         AND updated_at_bits = CAST('$exact_after_bits' AS INTEGER)),
+      (SELECT count(*)
+       FROM task_definitions
+       WHERE chain_id = '$exact_chain_id'
+         AND sequence = CAST('$exact_definition_sequence' AS INTEGER)
+         AND title = 'E2E 烛龙精确 after 时钟'
+         AND created_at_bits = CAST('$exact_before_bits' AS INTEGER)
+         AND content_updated_at_bits = CAST('$exact_before_bits' AS INTEGER)
+         AND superseded_at IS NULL),
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'taskChain'
+         AND entity_id = '$exact_chain_id'
+         AND changed_at_bits = CAST('$exact_before_bits' AS INTEGER)),
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'taskChain'
+         AND entity_id = '$exact_chain_id'
+         AND changed_at_bits = CAST('$exact_after_bits' AS INTEGER)),
+      (SELECT count(*)
+       FROM change_journal
+       JOIN task_definitions
+         ON task_definitions.id = change_journal.entity_id
+       WHERE change_journal.entity_type = 'taskDefinition'
+         AND task_definitions.chain_id = '$exact_chain_id'
+         AND change_journal.changed_at_bits =
+             CAST('$exact_before_bits' AS INTEGER)),
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'taskChain'
+         AND entity_id = '$exact_chain_id'),
+      (SELECT count(*)
+       FROM change_journal
+       JOIN task_definitions
+         ON task_definitions.id = change_journal.entity_id
+       WHERE change_journal.entity_type = 'taskDefinition'
+         AND task_definitions.chain_id = '$exact_chain_id');
+  ")"
+  if [[ "$exact_sqlite_probe" != "1 1 1 1 1 2 1" ]]; then
+    echo "zhulong exact-after restart lost its bit reconciliation" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "zhulong local-only preference conflict setup" \
+    "$conflict_setup_result" \
+    "$conflict_setup_log" \
+    --data-url "$PWD/$conflict_db" \
+    --page zhulong \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-zhulong-sidecar-key \
+    --e2e-setup-zhulong-exact-recovery preference-conflict \
+    --e2e-zhulong-exact-recovery-state-url "$PWD/$conflict_state" \
+    --e2e-zhulong-exact-recovery-result-url "$PWD/$conflict_setup_result"
+
+  if [[ ! -f "$conflict_journal" ]]; then
+    echo "zhulong preference-conflict setup did not persist its encrypted journal" >&2
+    exit 1
+  fi
+  conflict_before_database_sha256="$(
+    shasum -a 256 "$conflict_db" | awk '{print $1}'
+  )"
+  conflict_before_journal_sha256="$(
+    shasum -a 256 "$conflict_journal" | awk '{print $1}'
+  )"
+  conflict_before_data_mode="$(
+    /usr/bin/plutil -extract beforeDataMode raw -o - "$conflict_state"
+  )"
+  conflict_current_data_mode="$(
+    /usr/bin/plutil -extract currentDataMode raw -o - "$conflict_state"
+  )"
+  conflict_before_digest="$(
+    /usr/bin/plutil -extract beforeDigest raw -o - "$conflict_state"
+  )"
+  conflict_after_digest="$(
+    /usr/bin/plutil -extract afterDigest raw -o - "$conflict_state"
+  )"
+  conflict_current_digest="$(
+    /usr/bin/plutil -extract currentDigest raw -o - "$conflict_state"
+  )"
+  if [[ "$conflict_before_data_mode" != "localFirst" \
+    || "$conflict_current_data_mode" != "onlineFirst" \
+    || ! "$conflict_before_digest" =~ ^[0-9a-f]{64}$ \
+    || ! "$conflict_after_digest" =~ ^[0-9a-f]{64}$ \
+    || ! "$conflict_current_digest" =~ ^[0-9a-f]{64}$ \
+    || "$conflict_before_digest" == "$conflict_after_digest" \
+    || "$conflict_before_digest" == "$conflict_current_digest" \
+    || "$conflict_after_digest" == "$conflict_current_digest" ]]; then
+    echo "zhulong preference-conflict state did not isolate local-only data mode" >&2
+    exit 1
+  fi
+  conflict_sqlite_probe="$(sqlite3 -noheader -separator ' ' "$conflict_db" "
+    SELECT
+      (SELECT value
+       FROM sync_settings
+       WHERE key = 'app.data_mode'),
+      (SELECT count(*)
+       FROM task_chains),
+      (SELECT count(*)
+       FROM task_definitions),
+      (SELECT count(*)
+       FROM day_traces),
+      (SELECT count(*)
+       FROM subtasks),
+      (SELECT count(*)
+       FROM change_journal),
+      (SELECT count(*)
+       FROM app_preferences
+       WHERE id = 1
+         AND theme = 'coolGray'
+         AND language = 'chinese'
+         AND theme_language_writer_id = 'noonmark.bootstrap'),
+      (SELECT count(*)
+       FROM sync_settings
+       WHERE
+         (key = 'app.backup.frequency' AND value = 'off')
+         OR (key = 'app.backup.destination' AND value = 'iCloudDrive')
+         OR (key = 'app.local_first_sync.enabled' AND value = 'false')
+         OR (key = 'app.local_first_sync.endpoint' AND value = 'iCloud')
+         OR (key = 'app.local_first_sync.mode' AND value = 'manual')
+         OR (key = 'app.local_first_sync.interval_seconds' AND value = '300')
+         OR (key = 'app.local_first_sync.generate_conflict_copy' AND value = 'true')
+         OR (key = 'app.local_first_sync.retention_days' AND value = '180')
+         OR (key = 'app.local_first_sync.retention_daily' AND value = '2')
+         OR (key = 'app.settings_poem.enabled' AND value = 'true')
+         OR (key = 'app.settings_poem.text' AND length(value) > 0)),
+      (SELECT count(*) FROM sync_settings);
+  ")"
+  if [[ "$conflict_sqlite_probe" != "onlineFirst 0 0 0 0 0 1 11 12" ]]; then
+    echo "zhulong preference-conflict third-snapshot probe failed: ${conflict_sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "zhulong local-only preference recovery conflict" \
+    "$conflict_verify_result" \
+    "$conflict_verify_log" \
+    --data-url "$PWD/$conflict_db" \
+    --page zhulong \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-zhulong-sidecar-key \
+    --e2e-verify-zhulong-exact-recovery preference-conflict \
+    --e2e-zhulong-exact-recovery-state-url "$PWD/$conflict_state" \
+    --e2e-zhulong-exact-recovery-result-url "$PWD/$conflict_verify_result"
+
+  conflict_after_database_sha256="$(
+    shasum -a 256 "$conflict_db" | awk '{print $1}'
+  )"
+  if [[ "$conflict_after_database_sha256" != "$conflict_before_database_sha256" ]]; then
+    echo "zhulong preference conflict changed the engine database" >&2
+    exit 1
+  fi
+  if [[ ! -f "$conflict_journal" ]]; then
+    echo "zhulong preference conflict incorrectly cleared its journal" >&2
+    exit 1
+  fi
+  conflict_after_journal_sha256="$(
+    shasum -a 256 "$conflict_journal" | awk '{print $1}'
+  )"
+  if [[ "$conflict_after_journal_sha256" != "$conflict_before_journal_sha256" ]]; then
+    echo "zhulong preference conflict rewrote its retained journal" >&2
+    exit 1
+  fi
+  conflict_sqlite_probe="$(sqlite3 -noheader -separator ' ' "$conflict_db" "
+    SELECT
+      (SELECT value
+       FROM sync_settings
+       WHERE key = 'app.data_mode'),
+      (SELECT count(*)
+       FROM task_chains),
+      (SELECT count(*)
+       FROM task_definitions),
+      (SELECT count(*)
+       FROM day_traces),
+      (SELECT count(*)
+       FROM subtasks),
+      (SELECT count(*)
+       FROM change_journal),
+      (SELECT count(*)
+       FROM app_preferences
+       WHERE id = 1
+         AND theme = 'coolGray'
+         AND language = 'chinese'
+         AND theme_language_writer_id = 'noonmark.bootstrap'),
+      (SELECT count(*)
+       FROM sync_settings
+       WHERE
+         (key = 'app.backup.frequency' AND value = 'off')
+         OR (key = 'app.backup.destination' AND value = 'iCloudDrive')
+         OR (key = 'app.local_first_sync.enabled' AND value = 'false')
+         OR (key = 'app.local_first_sync.endpoint' AND value = 'iCloud')
+         OR (key = 'app.local_first_sync.mode' AND value = 'manual')
+         OR (key = 'app.local_first_sync.interval_seconds' AND value = '300')
+         OR (key = 'app.local_first_sync.generate_conflict_copy' AND value = 'true')
+         OR (key = 'app.local_first_sync.retention_days' AND value = '180')
+         OR (key = 'app.local_first_sync.retention_daily' AND value = '2')
+         OR (key = 'app.settings_poem.enabled' AND value = 'true')
+         OR (key = 'app.settings_poem.text' AND length(value) > 0)),
+      (SELECT count(*) FROM sync_settings);
+  ")"
+  if [[ "$conflict_sqlite_probe" != "onlineFirst 0 0 0 0 0 1 11 12" ]]; then
+    echo "zhulong preference conflict applied the pending after snapshot" >&2
+    exit 1
+  fi
+
+  echo "E2E Zhulong exact identity recovery and local-only preference conflict: $evidence_dir"
+}
+
+run_zhulong_pending_gate_probe() {
+  local evidence_dir="artifacts/e2e-zhulong-pending-gate"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local sidecar_dir="${evidence_dir}/ZhulongSidecar"
+  local journal="${sidecar_dir}/pending-application.zhj"
+  local setup_result="${evidence_dir}/setup-result.txt"
+  local setup_log="${evidence_dir}/setup.log"
+  local verify_result="${evidence_dir}/verify-result.txt"
+  local verify_log="${evidence_dir}/verify.log"
+  local sqlite_lock_fifo="${evidence_dir}/sqlite-lock.fifo"
+  local sqlite_lock_log="${evidence_dir}/sqlite-lock.log"
+  local sqlite_lock_pid
+  local sqlite_lock_acquired=0
+  local session_file
+  local session_count
+  local before_database_sha256
+  local before_journal_sha256
+  local before_session_sha256
+  local after_database_sha256
+  local after_journal_sha256
+  local after_session_sha256
+  local sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir"
+
+  run_terminating_ui_probe \
+    "zhulong pending-gate bootstrap setup" \
+    "$setup_result" \
+    "$setup_log" \
+    --data-url "$PWD/$database" \
+    --page zhulong \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-zhulong-sidecar-key \
+    --e2e-setup-zhulong-pending-gate \
+    --e2e-zhulong-pending-gate-result-url "$PWD/$setup_result"
+
+  if [[ ! -f "$journal" ]]; then
+    echo "zhulong pending-gate setup did not retain its journal" >&2
+    exit 1
+  fi
+  session_count="$(find "$sidecar_dir" -type f -name '*.zhs' | wc -l | tr -d ' ')"
+  if [[ "$session_count" -ne 1 ]]; then
+    echo "zhulong pending-gate setup expected one Session: $session_count" >&2
+    exit 1
+  fi
+  session_file="$(find "$sidecar_dir" -type f -name '*.zhs' -print -quit)"
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    SELECT
+      (SELECT value
+       FROM sync_settings
+       WHERE key = 'app.data_mode'),
+      (SELECT count(*) FROM days),
+      (SELECT count(*) FROM task_chains),
+      (SELECT count(*) FROM task_definitions),
+      (SELECT count(*) FROM day_traces),
+      (SELECT count(*) FROM subtasks),
+      (SELECT count(*) FROM change_journal);
+  ")"
+  if [[ "$sqlite_probe" != "onlineFirst 0 0 0 0 0 0" ]]; then
+    echo "zhulong pending-gate setup was not the empty third Engine: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+
+  before_database_sha256="$(shasum -a 256 "$database" | awk '{print $1}')"
+  before_journal_sha256="$(shasum -a 256 "$journal" | awk '{print $1}')"
+  before_session_sha256="$(shasum -a 256 "$session_file" | awk '{print $1}')"
+
+  rm -f "$sqlite_lock_fifo" "$sqlite_lock_log"
+  mkfifo "$sqlite_lock_fifo"
+  sqlite3 "$database" <"$sqlite_lock_fifo" >"$sqlite_lock_log" 2>&1 &
+  sqlite_lock_pid=$!
+  exec 9>"$sqlite_lock_fifo"
+  printf 'PRAGMA busy_timeout = 0;\nBEGIN IMMEDIATE;\n' >&9
+  for _ in {1..50}; do
+    if ! sqlite3 "$database" \
+      'PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK;' \
+      >/dev/null 2>&1; then
+      sqlite_lock_acquired=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$sqlite_lock_acquired" != "1" ]] ||
+    ! kill -0 "$sqlite_lock_pid" 2>/dev/null; then
+    exec 9>&-
+    wait "$sqlite_lock_pid" 2>/dev/null || true
+    echo "failed to hold the pending-gate SQLite write lock" >&2
+    cat "$sqlite_lock_log" >&2
+    exit 1
+  fi
+
+  # A RESERVED lock permits Store bootstrap reads but turns any attempted
+  # bootstrap save into a real startup failure. The pending journal must make
+  # loadOrSeed skip that ordinary write and proceed to exact recovery instead.
+  run_terminating_ui_probe \
+    "zhulong bootstrap and Engine writer pending gate" \
+    "$verify_result" \
+    "$verify_log" \
+    --data-url "$PWD/$database" \
+    --page zhulong \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-zhulong-sidecar-key \
+    --e2e-verify-zhulong-pending-gate \
+    --e2e-zhulong-pending-gate-result-url "$PWD/$verify_result"
+
+  printf 'ROLLBACK;\n.quit\n' >&9
+  exec 9>&-
+  if ! wait "$sqlite_lock_pid"; then
+    echo "pending-gate SQLite lock holder failed" >&2
+    cat "$sqlite_lock_log" >&2
+    exit 1
+  fi
+  rm -f "$sqlite_lock_fifo"
+
+  after_database_sha256="$(shasum -a 256 "$database" | awk '{print $1}')"
+  after_journal_sha256="$(shasum -a 256 "$journal" | awk '{print $1}')"
+  after_session_sha256="$(shasum -a 256 "$session_file" | awk '{print $1}')"
+  if [[ "$after_database_sha256" != "$before_database_sha256" \
+    || "$after_journal_sha256" != "$before_journal_sha256" \
+    || "$after_session_sha256" != "$before_session_sha256" ]]; then
+    echo "zhulong pending gate changed Engine, journal, or Session bytes" >&2
+    exit 1
+  fi
+
+  echo "E2E Zhulong bootstrap/direct-save/rollover/import/sync pending gate: $evidence_dir"
+}
+
+run_zhulong_todo_diff_clock_probe() {
+  local todo_dir="artifacts/e2e-zhulong-todo-diff"
+  local todo_db="${todo_dir}/Noonmark.sqlite"
+  local todo_result="${todo_dir}/result.txt"
+  local todo_log="${todo_dir}/app.log"
+  local clock_probe
+
+  rm -rf "$todo_dir"
+  mkdir -p "$todo_dir"
+
+  run_terminating_ui_probe \
+    "zhulong preauthorized Todo diff joint clock" \
+    "$todo_result" \
+    "$todo_log" \
+    --data-url "$PWD/$todo_db" \
+    --page zhulong \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-enable-zhulong \
+    --e2e-zhulong-sidecar-key \
+    --e2e-prepare-zhulong-todo-diff \
+    --e2e-zhulong-todo-diff-result-url "$PWD/$todo_result"
+
+  clock_probe="$(sqlite3 -noheader -separator ' ' "$todo_db" "
+    WITH ai_definitions AS (
+      SELECT id, created_at_bits
+      FROM task_definitions
+      WHERE superseded_at IS NULL
+        AND title IN ('E2E 编辑后的测量', 'E2E 拆分后的验证')
+    ), post_apply AS (
+      SELECT id, created_at_bits
+      FROM task_definitions
+      WHERE superseded_at IS NULL
+        AND title = 'E2E 烛龙应用后普通写入'
+    )
+    SELECT
+      (SELECT count(*) FROM ai_definitions),
+      (SELECT count(*) FROM post_apply),
+      (SELECT count(*)
+       FROM ai_definitions
+       WHERE EXISTS (
+         SELECT 1
+         FROM change_journal
+         WHERE entity_type = 'taskDefinition'
+           AND entity_id = ai_definitions.id
+           AND changed_at_bits = ai_definitions.created_at_bits
+       )),
+      (SELECT count(*)
+       FROM post_apply
+       WHERE EXISTS (
+         SELECT 1
+         FROM change_journal
+         WHERE entity_type = 'taskDefinition'
+           AND entity_id = post_apply.id
+           AND changed_at_bits = post_apply.created_at_bits
+       )),
+      (SELECT min(post_apply.created_at_bits) > max(ai_definitions.created_at_bits)
+       FROM post_apply, ai_definitions);
+  ")"
+  if [[ "$clock_probe" != "2 1 2 1 1" \
+    || -f "${todo_dir}/ZhulongSidecar/pending-application.zhj" ]]; then
+    echo "zhulong Todo diff joint clock probe failed: ${clock_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E fixed-clock Zhulong Todo apply and following Store mutation: $todo_db (probe=$clock_probe)"
+}
+
 run_terminating_ui_probe() {
   local label="$1"
   local result="$2"
@@ -2380,8 +5771,31 @@ if [[ "${NOONMARK_E2E_NATURAL_DAY_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_MUTATION_CLOCK_ONLY:-0}" == "1" ]]; then
+  run_mutation_clock_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_PREFERENCES_CLOCK_ONLY:-0}" == "1" ]]; then
+  run_preferences_clock_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_SUBTASK_CLOCK_ONLY:-0}" == "1" ]]; then
+  run_subtask_clock_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_WINDOW_RESIZE_ONLY:-0}" == "1" ]]; then
   run_window_resize_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_COMPLETION_SEQUENCE_ONLY:-0}" == "1" ]]; then
+  run_workspace_restoration_probe
+  run_window_close_behavior_probe
+  run_native_command_surface_probe
+  run_completion_control_probe
   exit 0
 fi
 
@@ -2397,6 +5811,11 @@ if [[ "${NOONMARK_E2E_NATIVE_COMMANDS_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_COMPLETION_CONTROL_ONLY:-0}" == "1" ]]; then
+  run_completion_control_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_WORKSPACE_PRODUCTIVITY_ONLY:-0}" == "1" ]]; then
   run_workspace_productivity_probe
   exit 0
@@ -2404,6 +5823,11 @@ fi
 
 if [[ "${NOONMARK_E2E_DATA_IMPORT_UI_ONLY:-0}" == "1" ]]; then
   run_data_import_ui_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_DATA_IMPORT_INTEGRITY_ONLY:-0}" == "1" ]]; then
+  run_data_import_integrity_probe
   exit 0
 fi
 
@@ -2417,6 +5841,16 @@ if [[ "${NOONMARK_E2E_POOL_CONTEXT_ACTION_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_UNFINISHED_ACTION_ONLY:-0}" == "1" ]]; then
+  run_unfinished_action_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_SUMMARY_SIDEBAR_ONLY:-0}" == "1" ]]; then
+  run_summary_sidebar_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_MARKDOWN_ONLY:-0}" == "1" ]]; then
   run_markdown_editor_ui_probe
   exit 0
@@ -2427,16 +5861,27 @@ if [[ "${NOONMARK_E2E_QUICK_ADD_UI_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_ZHULONG_NAVIGATION_ONLY:-0}" == "1" ]]; then
+  run_zhulong_navigation_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_ZHULONG_PENDING_GATE_ONLY:-0}" == "1" ]]; then
+  run_zhulong_pending_gate_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_ZHULONG_APPLICATION_CLOCK_ONLY:-0}" == "1" ]]; then
+  run_zhulong_daily_recovery_clock_probe
+  run_zhulong_exact_recovery_identity_probe
+  run_zhulong_pending_gate_probe
+  run_zhulong_todo_diff_clock_probe
+  exit 0
+fi
+
 english_screenshot_dir="artifacts/e2e-english"
 english_screenshot_db="$english_screenshot_dir/Noonmark.sqlite"
-english_scenarios_enabled=0
-for scenario in "${scenarios[@]}"; do
-  IFS="|" read -r _ _ _ scenario_language <<< "$scenario"
-  if [[ "$scenario_language" == "english" ]]; then
-    english_scenarios_enabled=1
-    break
-  fi
-done
+english_scenarios_enabled="$english_scenarios_requested"
 if [[ "$english_scenarios_enabled" == "1" ]]; then
   rm -rf "$english_screenshot_dir"
   mkdir -p "$english_screenshot_dir"
@@ -2471,7 +5916,15 @@ for scenario in "${scenarios[@]}"; do
         --e2e-fixed-locale en_SG \
         --e2e-reset-selection
     fi
-    assert_english_screenshot "artifacts/e2e/${screenshot_name}.png" "$page"
+    assert_english_screenshot \
+      "artifacts/e2e/${screenshot_name}.png" \
+      "$page" \
+      "$screenshot_name"
+    if [[ "$screenshot_name" == "english-day-history-header" ]]; then
+      assert_english_history_header_ui_result
+    else
+      assert_english_populated_ui_result "$page" "${screenshot_name#english-}"
+    fi
   elif [[ -n "$extra_args" ]]; then
     # shellcheck disable=SC2086
     capture_app_screenshot artifacts/e2e "$screenshot_name" "$page" --ephemeral --e2e-reset-selection $extra_args
@@ -2486,6 +5939,11 @@ for scenario in "${scenarios[@]}"; do
     assert_settings_sidebar_screenshot \
       "artifacts/e2e/${screenshot_name}.png" \
       english
+  fi
+  if [[ "$scenario_language" == "english" ]]; then
+    record_english_scenario_evidence \
+      "$screenshot_name" \
+      "artifacts/e2e/${screenshot_name}.png"
   fi
 done
 
@@ -2524,6 +5982,8 @@ run_pool_list_layout_probe
 
 run_pool_context_menu_action_probe
 
+run_unfinished_action_probe
+
 run_markdown_editor_ui_probe
 
 run_window_resize_probe
@@ -2534,33 +5994,15 @@ run_window_close_behavior_probe
 
 run_native_command_surface_probe
 
+run_completion_control_probe
+
 run_workspace_productivity_probe
 
 run_data_import_ui_probe
 
-summary_sidebar_dir="artifacts/e2e-summary-sidebar"
-summary_sidebar_result="${summary_sidebar_dir}/summary-sidebar-result.txt"
-rm -rf "$summary_sidebar_dir"
-mkdir -p "$summary_sidebar_dir"
+run_data_import_integrity_probe
 
-"$app_executable_path" \
-  --ephemeral \
-  --page pool \
-  --e2e-summary-sidebar-probe \
-  --e2e-summary-sidebar-result-url "$PWD/$summary_sidebar_result" \
-  --e2e-quit-after-automation
-
-if [[ ! -f "$summary_sidebar_result" ]]; then
-  echo "summary sidebar result was not created: $summary_sidebar_result" >&2
-  exit 1
-fi
-
-if [[ "$(cat "$summary_sidebar_result")" != "ok" ]]; then
-  echo "summary sidebar probe failed: $(cat "$summary_sidebar_result")" >&2
-  exit 1
-fi
-
-echo "E2E summary sidebar and calendar insight: $summary_sidebar_result"
+run_summary_sidebar_probe
 
 blank_dir="artifacts/e2e-blank"
 blank_db="${blank_dir}/Noonmark.sqlite"
@@ -2886,84 +6328,10 @@ fi
 
 echo "E2E zhulong encrypted persistence and corruption detection: $zhulong_sidecar_dir (sessions=$zhulong_session_count)"
 
-zhulong_recovery_dir="artifacts/e2e-zhulong-recovery"
-zhulong_recovery_db="${zhulong_recovery_dir}/Noonmark.sqlite"
-zhulong_recovery_result="${zhulong_recovery_dir}/recovery-result.txt"
-rm -rf "$zhulong_recovery_dir"
-mkdir -p "$zhulong_recovery_dir"
-
-open -W -n "$app_path" --args \
-  --data-url "$PWD/$zhulong_recovery_db" \
-  --page zhulong \
-  --e2e-enable-zhulong \
-  --e2e-zhulong-sidecar-key \
-  --e2e-start-zhulong-workflow dailyReview \
-  --e2e-rich-zhulong-session \
-  --e2e-interrupt-zhulong-daily-review \
-  --e2e-quit-after-automation
-
-zhulong_recovery_journal="${zhulong_recovery_dir}/ZhulongSidecar/pending-application.zhj"
-if [[ ! -f "$zhulong_recovery_journal" ]]; then
-  echo "zhulong interrupted application journal was not persisted" >&2
-  exit 1
-fi
-
-open -W -n "$app_path" --args \
-  --data-url "$PWD/$zhulong_recovery_db" \
-  --page zhulong \
-  --e2e-enable-zhulong \
-  --e2e-zhulong-sidecar-key \
-  --e2e-expect-zhulong-recovery \
-  --e2e-verify-zhulong-persistence-result-url "$PWD/$zhulong_recovery_result" \
-  --e2e-quit-after-automation
-
-if [[ ! -f "$zhulong_recovery_result" || "$(cat "$zhulong_recovery_result")" != "ok" ]]; then
-  echo "zhulong interrupted cross-store application did not recover" >&2
-  exit 1
-fi
-if [[ -f "$zhulong_recovery_journal" ]]; then
-  echo "zhulong recovery journal was not cleared after successful recovery" >&2
-  exit 1
-fi
-zhulong_recovery_review_count="$(sqlite3 "$zhulong_recovery_db" "SELECT count(*) FROM days WHERE review_summary = 'E2E 已确认的每日复盘';")"
-if [[ "$zhulong_recovery_review_count" -ne 1 ]]; then
-  echo "zhulong recovered daily review was not applied exactly once: count=$zhulong_recovery_review_count" >&2
-  exit 1
-fi
-
-echo "E2E zhulong interrupted cross-store recovery: $zhulong_recovery_result (review_count=$zhulong_recovery_review_count)"
-
-zhulong_todo_diff_dir="artifacts/e2e-zhulong-todo-diff"
-zhulong_todo_diff_db="${zhulong_todo_diff_dir}/Noonmark.sqlite"
-zhulong_todo_diff_result="${zhulong_todo_diff_dir}/result.txt"
-rm -rf "$zhulong_todo_diff_dir"
-mkdir -p "$zhulong_todo_diff_dir"
-
-open -W -n "$app_path" --args \
-  --data-url "$PWD/$zhulong_todo_diff_db" \
-  --page zhulong \
-  --e2e-enable-zhulong \
-  --e2e-zhulong-sidecar-key \
-  --e2e-prepare-zhulong-todo-diff \
-  --e2e-zhulong-todo-diff-result-url "$PWD/$zhulong_todo_diff_result"
-
-if [[ ! -f "$zhulong_todo_diff_result" || "$(cat "$zhulong_todo_diff_result")" != "ok" ]]; then
-  echo "zhulong Todo diff edit/remove/split probe failed: $(cat "$zhulong_todo_diff_result" 2>/dev/null || echo missing)" >&2
-  exit 1
-fi
-zhulong_todo_diff_task_count="$(sqlite3 "$zhulong_todo_diff_db" "
-  SELECT count(*)
-  FROM task_definitions
-  WHERE superseded_at IS NULL
-    AND title IN ('E2E 编辑后的测量', 'E2E 拆分后的验证');
-")"
-if [[ "$zhulong_todo_diff_task_count" -ne 2 \
-  || -f "${zhulong_todo_diff_dir}/ZhulongSidecar/pending-application.zhj" ]]; then
-  echo "zhulong Todo diff SQLite/journal crosscheck failed: tasks=$zhulong_todo_diff_task_count" >&2
-  exit 1
-fi
-
-echo "E2E zhulong Todo diff edit/remove/split and atomic apply: $zhulong_todo_diff_result (tasks=$zhulong_todo_diff_task_count)"
+run_zhulong_daily_recovery_clock_probe
+run_zhulong_exact_recovery_identity_probe
+run_zhulong_pending_gate_probe
+run_zhulong_todo_diff_clock_probe
 
 review_zhulong_dir="artifacts/e2e-review-zhulong-entry"
 review_zhulong_result="${review_zhulong_dir}/review-zhulong-result.txt"
@@ -3108,53 +6476,9 @@ fi
 
 echo "E2E collapsible navigation and detail rails: $detail_rail_result"
 
-subtask_mutation_dir="artifacts/e2e-subtask-mutation"
-subtask_mutation_result="${subtask_mutation_dir}/subtask-mutation-result.txt"
-rm -rf "$subtask_mutation_dir"
-mkdir -p "$subtask_mutation_dir"
+run_subtask_clock_probe
 
-open -W -n "$app_path" --args \
-  --ephemeral \
-  --page day \
-  --e2e-subtask-mutation \
-  --e2e-subtask-mutation-result-url "$PWD/$subtask_mutation_result" \
-  --e2e-quit-after-automation
-
-if [[ ! -f "$subtask_mutation_result" ]]; then
-  echo "subtask mutation result was not created: $subtask_mutation_result" >&2
-  exit 1
-fi
-
-if [[ "$(cat "$subtask_mutation_result")" != "ok" ]]; then
-  echo "subtask mutation failed: $(cat "$subtask_mutation_result")" >&2
-  exit 1
-fi
-
-echo "E2E subtask completion undo and difficulty: $subtask_mutation_result"
-
-zhulong_navigation_dir="artifacts/e2e-zhulong-navigation"
-zhulong_navigation_result="${zhulong_navigation_dir}/zhulong-navigation-result.txt"
-rm -rf "$zhulong_navigation_dir"
-mkdir -p "$zhulong_navigation_dir"
-
-open -W -n "$app_path" --args \
-  --ephemeral \
-  --page zhulong \
-  --e2e-zhulong-sidecar-key \
-  --e2e-zhulong-navigation \
-  --e2e-zhulong-navigation-result-url "$PWD/$zhulong_navigation_result"
-
-if [[ ! -f "$zhulong_navigation_result" ]]; then
-  echo "zhulong navigation result was not created: $zhulong_navigation_result" >&2
-  exit 1
-fi
-
-if [[ "$(cat "$zhulong_navigation_result")" != "ok" ]]; then
-  echo "zhulong navigation visibility failed: $(cat "$zhulong_navigation_result")" >&2
-  exit 1
-fi
-
-echo "E2E zhulong navigation visibility: $zhulong_navigation_result"
+run_zhulong_navigation_probe
 
 provider_dir="artifacts/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"
@@ -3258,6 +6582,8 @@ fi
 echo "E2E domain workflow: $workflow_db (continued=$workflow_continued pending=$workflow_pending review=$workflow_review)"
 
 run_lifecycle_persistence_probe
+run_mutation_clock_probe
+run_preferences_clock_probe
 run_natural_day_rollover_probe
 
 data_package_dir="artifacts/e2e-data-package"
@@ -3324,26 +6650,20 @@ data_package_failure_dir="artifacts/e2e-data-package-import-failure"
 data_package_failure_db="${data_package_failure_dir}/Noonmark.sqlite"
 data_package_failure_json="${data_package_failure_dir}/rejected-import.json"
 data_package_failure_result="${data_package_failure_dir}/result.txt"
+data_package_failure_log="${data_package_failure_dir}/app.log"
 rm -rf "$data_package_failure_dir"
 mkdir -p "$data_package_failure_dir"
 
-open -W -n "$app_path" --args \
+NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+  "data package import-failure rollback" \
+  "$data_package_failure_result" \
+  "$data_package_failure_log" \
   --data-url "$PWD/$data_package_failure_db" \
   --page settings \
   --e2e-persistence-failure-automation \
   --e2e-data-package-import-failure \
   --e2e-data-package-url "$PWD/$data_package_failure_json" \
   --e2e-data-package-result-url "$PWD/$data_package_failure_result"
-
-if [[ ! -f "$data_package_failure_result" ]]; then
-  echo "data package import-failure result was not created: $data_package_failure_result" >&2
-  exit 1
-fi
-
-if [[ "$(cat "$data_package_failure_result")" != "ok" ]]; then
-  echo "data package import-failure e2e failed: $(cat "$data_package_failure_result")" >&2
-  exit 1
-fi
 
 read -r retained_task rejected_task < <(
   sqlite3 -separator " " "$data_package_failure_db" "

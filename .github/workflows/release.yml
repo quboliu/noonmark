@@ -1,39 +1,33 @@
-name: Release
+name: Development-signed Distribution Validation
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag, e.g. v0.1.0-test.1"
-        required: true
-      title:
-        description: "Release title override"
-        required: false
-      prerelease:
-        description: "Mark this GitHub Release as prerelease"
-        required: false
-        default: true
-        type: boolean
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: development-distribution-validation-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  validate:
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, macOS, noonmark-ui-e2e]
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
-      GH_TOKEN: ${{ github.token }}
       NOONMARK_CODESIGN_IDENTITY: ${{ vars.NOONMARK_UI_CODESIGN_IDENTITY }}
+      NOONMARK_EVIDENCE_RUN_ID: github-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
       NOONMARK_REQUIRE_STABLE_UI_SIGNING: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Verify protected signing identity
+        run: |
+          if [[ -z "${NOONMARK_CODESIGN_IDENTITY:-}" ||
+                "${NOONMARK_CODESIGN_IDENTITY}" == "-" ]]; then
+            echo "NOONMARK_UI_CODESIGN_IDENTITY must explicitly name the runner signing identity" >&2
+            exit 1
+          fi
       - name: Toolchain
         run: |
           xcodebuild -version
@@ -41,72 +35,35 @@ jobs:
           brew install swiftlint swiftformat
       - name: Verify
         run: scripts/check
-      - name: App E2E
+      - name: Data-root writer lease E2E
+        run: scripts/test-data-root-process-lease-e2e
+      - name: Full App E2E
         run: scripts/test-e2e
+      - name: Verify complete E2E evidence
+        run: scripts/verify-development-validation-evidence --scope runtime
       - name: Package artifact
         run: |
           scripts/package-dmg release
           scripts/verify-dmg dist/Noonmark.dmg
           scripts/test-dmg-install dist/Noonmark.dmg
+          scripts/verify-development-validation-evidence --scope full
           ditto -c -k --keepParent dist/Noonmark.app dist/Noonmark.app.zip
           shasum -a 256 dist/Noonmark.app.zip > dist/Noonmark.app.zip.sha256
           shasum -a 256 -c dist/Noonmark.app.zip.sha256
-      - name: Upload release validation artifacts
+          cat > dist/NOT-FOR-DISTRIBUTION.txt <<'NOTICE'
+          These artifacts use an Apple Development identity for automated
+          installation validation. They are not notarized and must not be
+          distributed as a public Noonmark release.
+          NOTICE
+      - name: Upload development validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-validation
+          name: development-signed-not-for-distribution
           path: |
             dist
-            artifacts/e2e
-            artifacts/e2e-runtime
-            artifacts/dmg-install
-            artifacts/dmg-install-harness
-          if-no-files-found: ignore
+            artifacts/audit-final
+            artifacts/e2e*
+            artifacts/dmg-install*
+          if-no-files-found: error
           retention-days: 14
-      - name: Resolve release metadata
-        id: meta
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag="${{ github.event.inputs.tag }}"
-          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            tag="${GITHUB_REF#refs/tags/}"
-          else
-            echo "release tag is required" >&2
-            exit 1
-          fi
-          if [[ -n "${{ github.event.inputs.title || '' }}" ]]; then
-            title="${{ github.event.inputs.title }}"
-          else
-            title="晷迹 ${tag}"
-          fi
-          prerelease="false"
-          if [[ "${{ github.event.inputs.prerelease || 'false' }}" == "true" || "$tag" == *-* ]]; then
-            prerelease="true"
-          fi
-          notes="自动化发布产物。优先下载 Noonmark.dmg，其次可用 Noonmark.app.zip。"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "title=${title}" >> "$GITHUB_OUTPUT"
-          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
-          echo "notes=${notes}" >> "$GITHUB_OUTPUT"
-      - name: Create or update GitHub Release
-        run: |
-          tag="${{ steps.meta.outputs.tag }}"
-          title="${{ steps.meta.outputs.title }}"
-          notes="${{ steps.meta.outputs.notes }}"
-          prerelease="${{ steps.meta.outputs.prerelease }}"
-          prerelease_args=()
-          if [[ "$prerelease" == "true" ]]; then
-            prerelease_args+=(--prerelease)
-          fi
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --title "$title" --notes "$notes" "${prerelease_args[@]}"
-          else
-            gh release create "$tag" --title "$title" --notes "$notes" --target "$GITHUB_SHA" "${prerelease_args[@]}"
-          fi
-          gh release upload "$tag" \
-            dist/Noonmark.dmg \
-            dist/Noonmark.dmg.sha256 \
-            dist/Noonmark.app.zip \
-            dist/Noonmark.app.zip.sha256 \
-            --clobber

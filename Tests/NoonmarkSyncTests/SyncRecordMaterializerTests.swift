@@ -6,6 +6,24 @@ final class SyncRecordMaterializerTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let today = LocalDate("2026-07-05")
 
+    func testPreferenceJournalPayloadDoesNotChangeTransportCASPolicy() {
+        XCTAssertFalse(
+            SyncEntityType.appPreferences.requiresImmutableRecordPayload
+        )
+        XCTAssertFalse(
+            SyncJournalEntry.hasValidJournalPayloadShape(
+                entityType: .appPreferences,
+                recordPayload: nil
+            )
+        )
+        XCTAssertTrue(
+            SyncJournalEntry.hasValidJournalPayloadShape(
+                entityType: .appPreferences,
+                recordPayload: Data([0x01])
+            )
+        )
+    }
+
     func testMaterializesJournalEntryFromCurrentSnapshot() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "生成上传记录", now: now)
@@ -132,6 +150,88 @@ final class SyncRecordMaterializerTests: XCTestCase {
             try SyncRecordMapper().decodeTraceClassificationEvent(record),
             envelope
         )
+    }
+
+    func testPreferenceJournalMaterializesItsHistoricalMutationInsteadOfCurrentSnapshot() throws {
+        let deviceID = SyncDeviceID("mac-preferences")
+        let firstClock = now.addingTimeInterval(10)
+        let secondClock = now.addingTimeInterval(20)
+        let engine = NoonmarkEngine()
+        let base = engine.snapshot()
+        try engine.updateTheme(
+            .warmPaper,
+            writerID: deviceID.rawValue,
+            now: firstClock
+        )
+        let firstSnapshot = engine.snapshot()
+        let firstEntry = try XCTUnwrap(
+            try SyncSnapshotDiffer().journalEntries(
+                from: base,
+                to: firstSnapshot,
+                changedAt: firstClock,
+                deviceID: deviceID
+            ).first
+        )
+        try engine.updateLanguage(
+            .english,
+            writerID: deviceID.rawValue,
+            now: secondClock
+        )
+
+        let record = try SyncRecordMaterializer().record(
+            for: firstEntry,
+            in: engine.snapshot()
+        )
+        let envelope = try SyncRecordMapper().decodeAppPreferences(record)
+
+        XCTAssertEqual(record.modifiedByDeviceID, deviceID)
+        XCTAssertEqual(record.payload, firstEntry.recordPayload)
+        XCTAssertEqual(envelope.theme, .warmPaper)
+        XCTAssertEqual(envelope.language, .chinese)
+        XCTAssertEqual(
+            envelope.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            firstClock.timeIntervalSinceReferenceDate.bitPattern
+        )
+    }
+
+    func testPreferenceJournalRejectsMalformedOrClockMismatchedPayload() throws {
+        let mapper = SyncRecordMapper()
+        let validRecord = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: now
+            ),
+            modifiedBy: SyncDeviceID("mac-preferences")
+        )
+        let malformed = SyncJournalEntry(
+            entityType: .appPreferences,
+            entityID: "default",
+            changedAt: now,
+            deviceID: SyncDeviceID("mac-preferences"),
+            recordPayload: Data("not-canonical-json".utf8)
+        )
+        let mismatched = SyncJournalEntry(
+            entityType: .appPreferences,
+            entityID: "default",
+            changedAt: now.addingTimeInterval(1),
+            deviceID: SyncDeviceID("mac-preferences"),
+            recordPayload: validRecord.payload
+        )
+
+        for entry in [malformed, mismatched] {
+            XCTAssertThrowsError(
+                try SyncRecordMaterializer().record(
+                    for: entry,
+                    in: NoonmarkEngine().snapshot()
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? SyncRecordMaterializerError,
+                    .invalidJournalPayload(.appPreferences, "default")
+                )
+            }
+        }
     }
 
     private func makeClassificationEnvelope() throws -> ClassificationCommitEnvelope {

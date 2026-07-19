@@ -28,7 +28,7 @@ let package = Package(
             name: "NoonmarkMacApp",
             dependencies: [
                 "NoonmarkCore", "NoonmarkDayContext", "NoonmarkMacRuntime", "NoonmarkAI", "NoonmarkZhulong", "NoonmarkZhulongAI", "NoonmarkMacUIContract",
-                "NoonmarkStorage", "NoonmarkSync"
+                "NoonmarkMacE2ESupport", "NoonmarkStorage", "NoonmarkSync"
             ],
             path: "App/NoonmarkMacApp",
             exclude: ["Resources"]
@@ -62,6 +62,7 @@ let package = Package(
             dependencies: ["NoonmarkAI", "NoonmarkZhulong"]
         ),
         .target(name: "NoonmarkMacUIContract"),
+        .target(name: "NoonmarkMacE2ESupport"),
         .target(
             name: "NoonmarkStorage",
             dependencies: ["NoonmarkCore", "NoonmarkSync"],
@@ -87,7 +88,13 @@ let package = Package(
         ),
         .testTarget(
             name: "NoonmarkMacRuntimeTests",
-            dependencies: ["NoonmarkMacRuntime", "NoonmarkCore", "NoonmarkDayContext"]
+            dependencies: [
+                "NoonmarkMacRuntime",
+                "NoonmarkCore",
+                "NoonmarkDayContext",
+                "NoonmarkStorage",
+                "NoonmarkSync"
+            ]
         ),
         .testTarget(
             name: "NoonmarkAITests",
@@ -104,6 +111,10 @@ let package = Package(
         .testTarget(
             name: "NoonmarkMacUIContractTests",
             dependencies: ["NoonmarkMacUIContract"]
+        ),
+        .testTarget(
+            name: "NoonmarkMacE2ESupportTests",
+            dependencies: ["NoonmarkMacE2ESupport"]
         ),
         .testTarget(
             name: "NoonmarkStorageTests",

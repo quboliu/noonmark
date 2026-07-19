@@ -37,13 +37,13 @@ final class LocalFolderSyncTransportTests: XCTestCase {
                 bitPattern: 0x41C8_3456_789A_BCDE
             )
         )
-        let record = SyncRecord(
-            id: SyncRecordID("exact-date"),
-            entityType: .appPreferences,
-            entityID: "default",
-            modifiedAt: exactDate,
-            modifiedByDeviceID: SyncDeviceID("mac-exact"),
-            payload: Data([0x01])
+        let record = try SyncRecordMapper().record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: exactDate
+            ),
+            modifiedBy: SyncDeviceID("mac-exact")
         )
 
         let transport = LocalFolderSyncTransport(rootURL: folderURL)
@@ -55,6 +55,96 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             restored.modifiedAt.timeIntervalSinceReferenceDate.bitPattern,
             exactDate.timeIntervalSinceReferenceDate.bitPattern
         )
+    }
+
+    func testPreferenceBatchPublishesOneWinnerAndCanonicalSnapshot() async throws {
+        let mapper = SyncRecordMapper()
+        let first = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .chinese,
+                updatedAt: Date(timeIntervalSinceReferenceDate: 10)
+            ),
+            modifiedBy: SyncDeviceID("mac-first")
+        )
+        let final = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: Date(timeIntervalSinceReferenceDate: 20)
+            ),
+            modifiedBy: SyncDeviceID("mac-final")
+        )
+        let folderURL = makeFolderURL()
+        let transport = LocalFolderSyncTransport(rootURL: folderURL)
+
+        try await transport.push([first, final])
+
+        let currentRecords = try await transport.fetchAll()
+        let snapshots = try await transport.fetchSnapshots()
+        let snapshot = try XCTUnwrap(snapshots.last)
+        let reconstructed = try SyncRepositorySnapshotBuilder().snapshot(
+            records: currentRecords,
+            memo: snapshot.memo,
+            createdAt: snapshot.createdAt,
+            deviceID: snapshot.deviceID
+        )
+
+        XCTAssertEqual(currentRecords, [final])
+        XCTAssertEqual(snapshot.recordIDs, [final.id])
+        XCTAssertEqual(snapshot.recordCount, 1)
+        XCTAssertEqual(snapshot.payloadDigest, reconstructed.payloadDigest)
+        XCTAssertEqual(snapshot.id, reconstructed.id)
+
+        let latestRefURL = folderURL
+            .appendingPathComponent("refs", isDirectory: true)
+            .appendingPathComponent("latest")
+        let latestRefBeforeReplay = try Data(
+            contentsOf: latestRefURL
+        )
+        let recordBytesBeforeReplay = try storedRecordData(in: folderURL)
+        let snapshotsBeforeReplay = snapshots
+        try await transport.push([final, first])
+
+        let replayedRecords = try await transport.fetchAll()
+        XCTAssertEqual(replayedRecords, currentRecords)
+        XCTAssertEqual(
+            try storedRecordData(in: folderURL),
+            recordBytesBeforeReplay
+        )
+        let replayedSnapshots = try await transport.fetchSnapshots()
+        XCTAssertEqual(replayedSnapshots, snapshotsBeforeReplay)
+        XCTAssertEqual(
+            try Data(contentsOf: latestRefURL),
+            latestRefBeforeReplay
+        )
+    }
+
+    func testTransportsRejectPreferenceHeaderPayloadClockMismatch() async throws {
+        let mapper = SyncRecordMapper()
+        var malformed = try mapper.record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: now
+            ),
+            modifiedBy: SyncDeviceID("mac-invalid-preferences")
+        )
+        malformed.modifiedAt = Date(
+            timeIntervalSinceReferenceDate: now
+                .timeIntervalSinceReferenceDate.nextUp
+        )
+
+        let transports: [any SyncRecordTransport] = [
+            LocalFolderSyncTransport(rootURL: makeFolderURL()),
+            InMemorySyncTransport()
+        ]
+        for transport in transports {
+            await assertInvalidCurrentRecord(
+                malformed,
+                through: transport
+            )
+        }
     }
 
     func testSyncRecordEncodingRejectsNonfiniteModifiedAt() {
@@ -241,8 +331,8 @@ final class LocalFolderSyncTransportTests: XCTestCase {
 
     func testOrdinaryCurrentRecordStillOverwritesSameRecordID() async throws {
         let folderURL = makeFolderURL()
-        let first = ordinaryRecord(variant: "first")
-        let replacement = ordinaryRecord(variant: "replacement")
+        let first = try ordinaryRecord(variant: "first")
+        let replacement = try ordinaryRecord(variant: "replacement")
         let transport = LocalFolderSyncTransport(rootURL: folderURL)
 
         try await transport.push([first])
@@ -254,8 +344,8 @@ final class LocalFolderSyncTransportTests: XCTestCase {
 
     func testFetchAllConvergesAnICloudConflictCopyForCurrentRecords() async throws {
         let folderURL = makeFolderURL()
-        let first = ordinaryRecord(variant: "first")
-        let replacement = ordinaryRecord(variant: "replacement")
+        let first = try ordinaryRecord(variant: "first")
+        let replacement = try ordinaryRecord(variant: "replacement")
         let transport = LocalFolderSyncTransport(rootURL: folderURL)
         try await transport.push([first])
         try writeConflictCopy(replacement, to: folderURL)
@@ -293,12 +383,12 @@ final class LocalFolderSyncTransportTests: XCTestCase {
     }
 
     func testOrdinaryCurrentRecordIgnoresLateStaleWriteAcrossTransports() async throws {
-        let newer = ordinaryRecord(
+        let newer = try ordinaryRecord(
             modifiedAt: now.addingTimeInterval(10),
             deviceID: "mac-newer",
             payload: Data("newer".utf8)
         )
-        let stale = ordinaryRecord(
+        let stale = try ordinaryRecord(
             modifiedAt: now,
             deviceID: "mac-stale",
             payload: Data("stale".utf8)
@@ -318,37 +408,37 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         XCTAssertEqual(memoryRecords, [newer])
     }
 
-    func testEqualTimeLWWTieBreakConvergesForEveryWritePermutationAcrossTransports() async throws {
-        let lowerDevice = ordinaryRecord(
+    func testEqualTimeWriterTieBreakConvergesForEveryWritePermutationAcrossTransports() async throws {
+        let lowerDevice = try ordinaryRecord(
             modifiedAt: now,
             deviceID: "mac-a",
             payload: Data([0xFF])
         )
-        let higherDevice = ordinaryRecord(
+        let middleDevice = try ordinaryRecord(
             modifiedAt: now,
-            deviceID: "mac-z",
+            deviceID: "mac-m",
             payload: Data([0x00])
         )
-        let payloadWinner = ordinaryRecord(
+        let higherDevice = try ordinaryRecord(
             modifiedAt: now,
             deviceID: "mac-z",
             payload: Data([0xFF])
         )
 
         XCTAssertEqual(
-            higherDevice.currentRecordLWWOrder(comparedTo: lowerDevice),
+            middleDevice.currentRecordLWWOrder(comparedTo: lowerDevice),
             .after
         )
         XCTAssertEqual(
-            payloadWinner.currentRecordLWWOrder(comparedTo: higherDevice),
+            higherDevice.currentRecordLWWOrder(comparedTo: middleDevice),
             .after
         )
         XCTAssertEqual(
-            lowerDevice.currentRecordLWWOrder(comparedTo: payloadWinner),
+            lowerDevice.currentRecordLWWOrder(comparedTo: higherDevice),
             .before
         )
 
-        for writes in permutations(of: [lowerDevice, higherDevice, payloadWinner]) {
+        for writes in permutations(of: [lowerDevice, middleDevice, higherDevice]) {
             let folderURL = makeFolderURL()
             let local = LocalFolderSyncTransport(rootURL: folderURL)
             let memory = InMemorySyncTransport()
@@ -359,23 +449,46 @@ final class LocalFolderSyncTransportTests: XCTestCase {
 
             let localRecords = try await local.fetchAll()
             let memoryRecords = try await memory.fetchAll()
-            XCTAssertEqual(localRecords, [payloadWinner])
-            XCTAssertEqual(memoryRecords, [payloadWinner])
+            XCTAssertEqual(localRecords, [higherDevice])
+            XCTAssertEqual(memoryRecords, [higherDevice])
         }
     }
 
+    func testCurrentRecordTotalOrderUsesPayloadBytesAfterHeaderTies() {
+        let lowerPayload = SyncRecord(
+            id: SyncRecordID("generic:default"),
+            entityType: .day,
+            entityID: "default",
+            operation: .upsert,
+            modifiedAt: now,
+            modifiedByDeviceID: SyncDeviceID("mac-a"),
+            payload: Data([0x00])
+        )
+        var higherPayload = lowerPayload
+        higherPayload.payload = Data([0xFF])
+
+        XCTAssertEqual(
+            higherPayload.currentRecordLWWOrder(comparedTo: lowerPayload),
+            .after
+        )
+        XCTAssertEqual(
+            lowerPayload.currentRecordLWWOrder(comparedTo: higherPayload),
+            .before
+        )
+    }
+
     func testConcurrentEqualTimeWritersConvergeAcrossLocalFolderActorsAndInMemory() async throws {
-        let baseline = ordinaryRecord(
+        let baseline = try ordinaryRecord(
             modifiedAt: now.addingTimeInterval(-1),
             deviceID: "mac-baseline",
             payload: Data("baseline".utf8)
         )
-        let lower = ordinaryRecord(
+        let lower = try ordinaryRecord(
             modifiedAt: now,
             deviceID: "mac-a",
             payload: Data("lower".utf8)
         )
-        let winner = ordinaryRecord(
+        let winner = try ordinaryRecord(
             modifiedAt: now,
             deviceID: "mac-z",
             payload: Data("winner".utf8)
@@ -394,7 +507,7 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             let localRecords = try await local.fetchAll()
             XCTAssertEqual(localRecords, [winner])
 
-            let memory = InMemorySyncTransport(records: [baseline])
+            let memory = try InMemorySyncTransport(records: [baseline])
             async let lowerMemoryPush: Void = memory.push([lower])
             async let winnerMemoryPush: Void = memory.push([winner])
             _ = try await (lowerMemoryPush, winnerMemoryPush)
@@ -1741,13 +1854,16 @@ final class LocalFolderSyncTransportTests: XCTestCase {
     func testLocalFolderRejectsCrossTypeReuseOfImmutableRecordIDInBothDirections() async throws {
         for entityType in immutableEntityTypes {
             let immutableFirstFolder = makeFolderURL()
-            let recordID = "cross-type-\(entityType.rawValue)"
+            let recordID = "preferences:default"
             let immutable = immutableRecord(
                 entityType: entityType,
                 id: recordID,
                 variant: "first"
             )
-            let ordinary = ordinaryRecord(id: recordID, variant: "replacement")
+            let ordinary = try ordinaryRecord(
+                id: recordID,
+                variant: "replacement"
+            )
             let immutableFirstTransport = LocalFolderSyncTransport(rootURL: immutableFirstFolder)
             try await immutableFirstTransport.push([immutable])
 
@@ -1772,15 +1888,18 @@ final class LocalFolderSyncTransportTests: XCTestCase {
     }
 
     func testInMemoryTransportUsesTheSameImmutableCollisionBoundary() async throws {
-        let recordID = "in-memory-cross-type"
+        let recordID = "preferences:default"
         let immutable = immutableRecord(
             entityType: .classificationCommit,
             id: recordID,
             variant: "first"
         )
-        let ordinary = ordinaryRecord(id: recordID, variant: "replacement")
-        let immutableFirst = InMemorySyncTransport(records: [immutable])
-        let ordinaryFirst = InMemorySyncTransport(records: [ordinary])
+        let ordinary = try ordinaryRecord(
+            id: recordID,
+            variant: "replacement"
+        )
+        let immutableFirst = try InMemorySyncTransport(records: [immutable])
+        let ordinaryFirst = try InMemorySyncTransport(records: [ordinary])
 
         await assertCollision(pushing: ordinary, through: immutableFirst)
         await assertCollision(pushing: immutable, through: ordinaryFirst)
@@ -1947,35 +2066,38 @@ final class LocalFolderSyncTransportTests: XCTestCase {
     }
 
     private func ordinaryRecord(
-        id: String = "ordinary-current-record",
+        id: String = "preferences:default",
         variant: String
-    ) -> SyncRecord {
-        SyncRecord(
-            id: SyncRecordID(id),
-            entityType: .appPreferences,
-            entityID: "default",
+    ) throws -> SyncRecord {
+        try ordinaryRecord(
+            id: id,
             modifiedAt: Date(
-                timeIntervalSinceReferenceDate: variant == "first" ? 333.5 : 444.75
+                timeIntervalSinceReferenceDate: variant == "first"
+                    ? 333.5
+                    : 444.75
             ),
-            modifiedByDeviceID: SyncDeviceID("device-\(variant)"),
+            deviceID: "device-\(variant)",
             payload: Data("payload-\(variant)".utf8)
         )
     }
 
     private func ordinaryRecord(
-        id: String = "ordinary-current-record",
+        id: String = "preferences:default",
         modifiedAt: Date,
         deviceID: String,
         payload: Data
-    ) -> SyncRecord {
-        SyncRecord(
-            id: SyncRecordID(id),
-            entityType: .appPreferences,
-            entityID: "default",
-            modifiedAt: modifiedAt,
-            modifiedByDeviceID: SyncDeviceID(deviceID),
-            payload: payload
+    ) throws -> SyncRecord {
+        let selector = payload.first ?? 0
+        var record = try SyncRecordMapper().record(
+            for: AppPreferencesEnvelope(
+                theme: selector >= 0x80 ? .warmPaper : .coolGray,
+                language: selector.isMultiple(of: 2) ? .chinese : .english,
+                updatedAt: modifiedAt
+            ),
+            modifiedBy: SyncDeviceID(deviceID)
         )
+        record.id = SyncRecordID(id)
+        return record
     }
 
     private func permutations<T>(of values: [T]) -> [[T]] {

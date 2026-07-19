@@ -12,7 +12,36 @@ public enum TraceStatus: String, Codable, Hashable, Sendable {
     case continued
     case changed
     case returnedToPool
+    case cancelledDraft
     case abandoned
+
+    /// `cancelledDraft` is an internal append-only persistence/sync fact.
+    /// Every other status is part of the user-visible Day history.
+    public var formsDayHistory: Bool {
+        self != .cancelledDraft
+    }
+
+    public var isUserPresentable: Bool {
+        formsDayHistory
+    }
+}
+
+public enum DayTraceCompletionAction: Equatable, Sendable {
+    case complete
+    case undo
+}
+
+public enum DayTraceCompletionBlocker: Equatable, Sendable {
+    case lockedDay
+    case historicalDay
+    case futureDay
+    case unsupportedStatus(TraceStatus)
+    case openSubtasks
+}
+
+public enum DayTraceCompletionCapability: Equatable, Sendable {
+    case available(DayTraceCompletionAction)
+    case unavailable(DayTraceCompletionBlocker)
 }
 
 public enum SubtaskStatus: String, Codable, Hashable, Sendable {
@@ -21,6 +50,13 @@ public enum SubtaskStatus: String, Codable, Hashable, Sendable {
     case unfinished
     case continued
     case abandoned
+    case cancelledDraft
+
+    /// `cancelledDraft` is an internal append-only undo fact and must never
+    /// cross a user-facing projection boundary.
+    public var isUserPresentable: Bool {
+        self != .cancelledDraft
+    }
 }
 
 public enum SubtaskDifficulty: Int, Codable, Hashable, Sendable, CaseIterable {
@@ -205,8 +241,15 @@ public struct SyncEndpointOption: Codable, Equatable, Sendable {
 }
 
 public struct AppPreferences: Codable, Equatable, Sendable {
+    public static let bootstrapThemeLanguageWriterID =
+        "noonmark.bootstrap"
+    public static let defaultLocalThemeLanguageWriterID =
+        "noonmark.local"
+
     public var theme: AppTheme
     public var language: AppLanguage
+    public private(set) var themeLanguageUpdatedAt: Date
+    public private(set) var themeLanguageWriterID: String
     public var dataMode: AppDataMode
     public var backupPolicy: ScheduledBackupPolicy
     public var localFirstSyncPolicy: LocalFirstCloudSyncPolicy
@@ -216,6 +259,9 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     public init(
         theme: AppTheme = .coolGray,
         language: AppLanguage = .chinese,
+        themeLanguageUpdatedAt: Date = Date(timeIntervalSince1970: 0),
+        themeLanguageWriterID: String =
+            AppPreferences.bootstrapThemeLanguageWriterID,
         dataMode: AppDataMode = .localFirst,
         backupPolicy: ScheduledBackupPolicy = ScheduledBackupPolicy(),
         localFirstSyncPolicy: LocalFirstCloudSyncPolicy = LocalFirstCloudSyncPolicy(),
@@ -224,6 +270,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     ) {
         self.theme = theme
         self.language = language
+        self.themeLanguageUpdatedAt = themeLanguageUpdatedAt
+        self.themeLanguageWriterID = themeLanguageWriterID
         self.dataMode = dataMode
         self.backupPolicy = backupPolicy
         self.localFirstSyncPolicy = localFirstSyncPolicy
@@ -263,6 +311,78 @@ public struct AppPreferences: Codable, Equatable, Sendable {
             availability: .available
         )
     ]
+
+    public func applyingSyncedThemeLanguage(
+        theme: AppTheme,
+        language: AppLanguage,
+        updatedAt: Date,
+        writerID: String
+    ) throws -> AppPreferences {
+        guard let order = Self.themeLanguageVersionOrder(
+            clock: updatedAt,
+            writerID: writerID,
+            comparedToClock: themeLanguageUpdatedAt,
+            writerID: themeLanguageWriterID
+        ), order != .orderedAscending else {
+            throw NoonmarkError.invalidInput(
+                "synced theme and language clock cannot move backwards"
+            )
+        }
+        if order == .orderedSame {
+            guard theme == self.theme, language == self.language else {
+                throw NoonmarkError.invalidInput(
+                    "synced theme and language version diverged"
+                )
+            }
+            return self
+        }
+        return AppPreferences(
+            theme: theme,
+            language: language,
+            themeLanguageUpdatedAt: updatedAt,
+            themeLanguageWriterID: writerID,
+            dataMode: dataMode,
+            backupPolicy: backupPolicy,
+            localFirstSyncPolicy: localFirstSyncPolicy,
+            settingsPoemDisplayPolicy: settingsPoemDisplayPolicy,
+            syncEndpointOptions: syncEndpointOptions
+        )
+    }
+
+    public static func themeLanguageVersionOrder(
+        clock lhsClock: Date,
+        writerID lhsWriterID: String,
+        comparedToClock rhsClock: Date,
+        writerID rhsWriterID: String
+    ) -> ComparisonResult? {
+        let lhsSeconds = lhsClock.timeIntervalSinceReferenceDate
+        let rhsSeconds = rhsClock.timeIntervalSinceReferenceDate
+        let lhsTrimmedWriter = lhsWriterID.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let rhsTrimmedWriter = rhsWriterID.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard lhsSeconds.isFinite,
+              rhsSeconds.isFinite,
+              lhsTrimmedWriter.isEmpty == false,
+              rhsTrimmedWriter.isEmpty == false
+        else {
+            return nil
+        }
+        if lhsSeconds < rhsSeconds { return .orderedAscending }
+        if lhsSeconds > rhsSeconds { return .orderedDescending }
+        let lhsBits = lhsSeconds.bitPattern
+        let rhsBits = rhsSeconds.bitPattern
+        if lhsBits < rhsBits { return .orderedAscending }
+        if lhsBits > rhsBits { return .orderedDescending }
+        let lhsBytes = Data(lhsWriterID.utf8)
+        let rhsBytes = Data(rhsWriterID.utf8)
+        if lhsBytes == rhsBytes { return .orderedSame }
+        return lhsBytes.lexicographicallyPrecedes(rhsBytes)
+            ? .orderedAscending
+            : .orderedDescending
+    }
 }
 
 public struct Day: Codable, Equatable, Sendable {
@@ -579,9 +699,17 @@ public struct DayTrace: Codable, Equatable, Sendable {
     public private(set) var contentUpdatedAt: Date
     public var completedAt: Date?
     public var settledAt: Date?
+    public var draftCancellationID: UUID?
+    public var draftCancelledOn: LocalDate?
 
     public var activeNoteEntries: [TaskNoteEntry] {
         noteEntries.filter { !$0.isDeleted }
+    }
+
+    /// A cancelled draft is an append-only persistence/sync fact, not a
+    /// user-visible Day Todo or historical trajectory fact.
+    public var formsDayHistory: Bool {
+        status.formsDayHistory
     }
 
     public init(
@@ -596,6 +724,8 @@ public struct DayTrace: Codable, Equatable, Sendable {
         noteEntries: [TaskNoteEntry] = [],
         manualProgressPercent: Int? = nil,
         continuedFromTraceID: DayTraceID? = nil,
+        draftCancellationID: UUID? = nil,
+        draftCancelledOn: LocalDate? = nil,
         now: Date,
         contentUpdatedAt: Date? = nil
     ) {
@@ -615,6 +745,8 @@ public struct DayTrace: Codable, Equatable, Sendable {
         self.contentUpdatedAt = contentUpdatedAt ?? now
         self.completedAt = nil
         self.settledAt = nil
+        self.draftCancellationID = draftCancellationID
+        self.draftCancelledOn = draftCancelledOn
     }
 
     mutating func markContentModified(at now: Date) throws {
@@ -646,11 +778,17 @@ public struct Subtask: Codable, Equatable, Sendable {
     public var position: Int
     public var continuedFromSubtaskID: SubtaskID?
     public var createdAt: Date
+    public var updatedAt: Date
     public var completedAt: Date?
     public var settledAt: Date?
+    public var draftCancellationID: UUID?
 
     public var isDone: Bool {
         status == .completed
+    }
+
+    public var isUserPresentable: Bool {
+        status.isUserPresentable
     }
 
     public init(
@@ -662,6 +800,7 @@ public struct Subtask: Codable, Equatable, Sendable {
         difficulty: SubtaskDifficulty = .simple,
         position: Int,
         continuedFromSubtaskID: SubtaskID? = nil,
+        draftCancellationID: UUID? = nil,
         now: Date
     ) {
         self.id = id
@@ -673,8 +812,14 @@ public struct Subtask: Codable, Equatable, Sendable {
         self.position = position
         self.continuedFromSubtaskID = continuedFromSubtaskID
         self.createdAt = now
+        self.updatedAt = now
         self.completedAt = nil
         self.settledAt = nil
+        self.draftCancellationID = draftCancellationID
+    }
+
+    mutating func markContentModified(at now: Date) throws {
+        try ContentMutationClock.advance(&updatedAt, to: now)
     }
 }
 
@@ -777,6 +922,35 @@ public struct UnfinishedPoolItem: Equatable, Sendable {
     public var isContinuedPending: Bool {
         activeTrace?.status == .pending
     }
+
+    public var actionPlan: [UnfinishedPoolAction] {
+        if chain.state == .abandoned {
+            guard let source = unfinishedTraces.last(where: {
+                $0.status == .abandoned
+            }) else {
+                return []
+            }
+            return [.reactivateChain(source.id)]
+        }
+        if let activeTrace {
+            return [.abandonChain(activeTrace.id)]
+        }
+        guard let source = unfinishedTraces.last(where: {
+            $0.status == .unfinished
+        }) else {
+            return []
+        }
+        return [
+            .continueTrace(source.id),
+            .abandonChain(source.id)
+        ]
+    }
+}
+
+public enum UnfinishedPoolAction: Equatable, Hashable, Sendable {
+    case continueTrace(DayTraceID)
+    case abandonChain(DayTraceID)
+    case reactivateChain(DayTraceID)
 }
 
 public struct CompletedTaskTrajectory: Equatable, Sendable {

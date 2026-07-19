@@ -208,6 +208,9 @@ extension AppCopy {
     }
 
     func traceStatusLabel(_ status: TraceStatus) -> String {
+        guard status.isUserPresentable else {
+            preconditionFailure("Internal trace status cannot be presented")
+        }
         guard let copy = Self.traceStatusCopyByStatus[status] else {
             preconditionFailure("Missing trace status copy for \(status)")
         }
@@ -215,7 +218,10 @@ extension AppCopy {
     }
 
     func traceEndLabel(_ status: TraceStatus) -> String {
-        switch (language, status) {
+        guard status.isUserPresentable else {
+            preconditionFailure("Internal trace status cannot be presented")
+        }
+        return switch (language, status) {
         case (.chinese, .completed): "完成"
         case (.chinese, .abandoned): "已废弃"
         case (.chinese, .returnedToPool): "已回池"

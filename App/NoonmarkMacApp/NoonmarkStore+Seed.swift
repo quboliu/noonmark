@@ -2,14 +2,14 @@ import Foundation
 @_spi(ClassificationUserDecision) import NoonmarkCore
 
 extension NoonmarkStore {
-    func seed() {
-        let day0 = LocalDate("2026-07-01")
-        let dayMinus3 = LocalDate("2026-07-02")
-        let day1 = LocalDate("2026-07-03")
-        let day2 = LocalDate("2026-07-04")
+    func seed() throws {
         let day3 = today
-        let day4 = LocalDate("2026-07-06")
-        let day5 = LocalDate("2026-07-07")
+        let day0 = Self.offset(day3, by: -4)
+        let dayMinus3 = Self.offset(day3, by: -3)
+        let day1 = Self.offset(day3, by: -2)
+        let day2 = Self.offset(day3, by: -1)
+        let day4 = Self.offset(day3, by: 1)
+        let day5 = Self.offset(day3, by: 2)
         // Deterministic fixture timezone: every seeded Date uses this fixed UTC-04 offset
         // so snapshot and Audit bytes never depend on the host's current time zone.
         guard let seedTimeZone = TimeZone(secondsFromGMT: -4 * 60 * 60) else {
@@ -478,7 +478,15 @@ extension NoonmarkStore {
                 now: seedNow(at: eventTime(day3, hour: 15, minute: 0))
             )
         } catch {
-            assertionFailure("Seed data failed: \(error)")
+            throw NoonmarkSeedError(underlying: error)
         }
+    }
+}
+
+private struct NoonmarkSeedError: LocalizedError {
+    let underlying: Error
+
+    var errorDescription: String? {
+        "Seed data failed: \(underlying.localizedDescription)"
     }
 }

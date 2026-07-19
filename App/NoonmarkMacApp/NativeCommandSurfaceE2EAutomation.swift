@@ -5,12 +5,12 @@ import NoonmarkMacRuntime
 
 /// Exercises Noonmark's native command surface inside the real application.
 ///
-/// Commands are dispatched through `NSMenu.performKeyEquivalent(with:)`; text
-/// is entered as window keyboard events. The driver never invokes a controller
-/// action or mutates the store directly.
+/// Commands and text entry are posted through WindowServer. The driver never
+/// invokes a controller action or mutates the store directly.
 @MainActor
 struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     private enum Mode {
+        case helpShortcut
         case exercise
         case verifyRestart
     }
@@ -49,6 +49,103 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         let charactersIgnoringModifiers: String
         let keyCode: UInt16
         let modifiers: NSEvent.ModifierFlags
+
+        var report: String {
+            "keyCode=\(keyCode),characters=\(characters.debugDescription),"
+                + "charactersIgnoringModifiers="
+                + "\(charactersIgnoringModifiers.debugDescription),"
+                + "modifiers=\(modifiers.rawValue)"
+        }
+    }
+
+    @MainActor
+    private final class KeyboardEventProbe {
+        private(set) var stroke: Keystroke?
+        private var monitor: Any?
+
+        init(keyCode: UInt16) {
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: .keyDown
+            ) { [weak self] event in
+                guard event.keyCode == keyCode else { return event }
+                MainActor.assumeIsolated {
+                    self?.stroke = Keystroke(
+                        characters: event.characters ?? "",
+                        charactersIgnoringModifiers:
+                        event.charactersIgnoringModifiers ?? "",
+                        keyCode: event.keyCode,
+                        modifiers: event.modifierFlags.intersection(
+                            .deviceIndependentFlagsMask
+                        )
+                    )
+                }
+                return event
+            }
+        }
+
+        func stop() {
+            guard let monitor else { return }
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+
+    @MainActor
+    private final class MenuTrackingProbe: NSObject, NSMenuDelegate, @unchecked Sendable {
+        private(set) var openCount = 0
+        private(set) var closeCount = 0
+        private(set) var beginTrackingCount = 0
+        private(set) var sentActionCount = 0
+        private var observers: [NSObjectProtocol] = []
+
+        init(menu: NSMenu, trackingRootMenu: NSMenu) {
+            super.init()
+            let notificationCenter = NotificationCenter.default
+            observers.append(
+                notificationCenter.addObserver(
+                    forName: NSMenu.didBeginTrackingNotification,
+                    object: trackingRootMenu,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.beginTrackingCount += 1
+                    }
+                }
+            )
+            let actionMenus = menu === trackingRootMenu
+                ? [menu]
+                : [menu, trackingRootMenu]
+            for actionMenu in actionMenus {
+                observers.append(
+                    notificationCenter.addObserver(
+                        forName: NSMenu.didSendActionNotification,
+                        object: actionMenu,
+                        queue: .main
+                    ) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            self?.sentActionCount += 1
+                        }
+                    }
+                )
+            }
+        }
+
+        func menuWillOpen(_ menu: NSMenu) {
+            openCount += 1
+        }
+
+        func menuDidClose(_ menu: NSMenu) {
+            closeCount += 1
+        }
+
+        func stop() {
+            let notificationCenter = NotificationCenter.default
+            for observer in observers {
+                notificationCenter.removeObserver(observer)
+            }
+            observers.removeAll()
+        }
     }
 
     fileprivate enum Failure: LocalizedError {
@@ -70,7 +167,11 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
 
     static func fromCommandLine() -> Self? {
         let mode: Mode
-        if AppLaunchArguments.contains("--e2e-native-command-surface-exercise") {
+        if AppLaunchArguments.contains(
+            "--e2e-native-command-help-shortcut"
+        ) {
+            mode = .helpShortcut
+        } else if AppLaunchArguments.contains("--e2e-native-command-surface-exercise") {
             mode = .exercise
         } else if AppLaunchArguments.contains(
             "--e2e-native-command-surface-verify"
@@ -98,6 +199,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         Task { @MainActor in
             do {
                 switch mode {
+                case .helpShortcut:
+                    try await verifyHelpShortcut(on: store)
                 case .exercise:
                     try await exercise(on: store)
                 case .verifyRestart:
@@ -124,7 +227,16 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("isolated command database already contained the fixture")
         }
 
-        try await exerciseSettingsShortcut(mainWindow: mainWindow, copy: store.copy)
+        try await exerciseSettingsShortcut(
+            mainWindow: mainWindow,
+            copy: store.copy,
+            input: input
+        )
+        try await exerciseHelpWindow(
+            mainWindow: mainWindow,
+            copy: store.copy,
+            input: input
+        )
         try await exerciseQuickEntry(
             mainWindow: mainWindow,
             store: store,
@@ -140,7 +252,17 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("Quick Entry did not create one undoable task for today")
         }
 
-        try await exerciseMenuUndoRedo(mainWindow: mainWindow, store: store)
+        try await exerciseAuxiliaryWindowCommandIsolation(
+            mainWindow: mainWindow,
+            store: store,
+            input: input
+        )
+
+        try await exerciseMenuUndoRedo(
+            mainWindow: mainWindow,
+            store: store,
+            input: input
+        )
         let restored = try requireTaskRecord(titled: Self.fixtureTitle, in: store)
         guard restored.trace.id == created.trace.id,
               restored.trace.chainID == created.trace.chainID
@@ -195,7 +317,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
 
     private func exerciseSettingsShortcut(
         mainWindow: NSWindow,
-        copy: AppCopy
+        copy: AppCopy,
+        input: WindowServerInputDriver
     ) async throws {
         try await activate(mainWindow)
         try performMenuShortcut(
@@ -203,7 +326,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                 action: NoonmarkMenuAction.showSettings,
                 key: ",",
                 modifiers: .command
-            )
+            ),
+            input: input
         )
 
         let settingsWindow = try await visibleWindow(
@@ -218,9 +342,7 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
               settingsWindow.title == copy.navSettings,
               settingsWindow.frameAutosaveName
               == NoonmarkSettingsWindowController.frameAutosaveName,
-              settingsWindow.styleMask.contains([.titled, .closable, .resizable]),
-              settingsWindow.contentMinSize.width >= 680,
-              settingsWindow.contentMinSize.height >= 500
+              settingsWindow.styleMask.contains([.titled, .closable, .resizable])
         else {
             throw Failure.failed(
                 "Settings was not presented as a standalone native window: "
@@ -229,10 +351,14 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                     + "key=\(settingsWindow.isKeyWindow), "
                     + "title=\(settingsWindow.title), "
                     + "autosave=\(settingsWindow.frameAutosaveName), "
-                    + "style=\(settingsWindow.styleMask.rawValue), "
-                    + "min=\(settingsWindow.contentMinSize)"
+                    + "style=\(settingsWindow.styleMask.rawValue)"
             )
         }
+        try await assertMinimumContentSize(
+            of: settingsWindow,
+            equals: NoonmarkSettingsWindowController.minimumContentSize,
+            label: "Settings"
+        )
         try await assertAnchor(
             "settings.window",
             verificationText: copy.navSettings,
@@ -244,10 +370,191 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                 action: #selector(NSWindow.performClose(_:)),
                 key: "w",
                 modifiers: .command
-            )
+            ),
+            input: input
         )
         try await waitUntil("Close Window did not close Settings") {
             settingsWindow.isVisible == false && mainWindow.isVisible
+        }
+    }
+
+    private func verifyHelpShortcut(on store: NoonmarkStore) async throws {
+        let mainWindow = try await visibleMainWindow()
+        let input = try WindowServerInputDriver()
+        try assertMenuContract(copy: store.copy)
+        try await activate(mainWindow)
+        let helpMenu = try NSApp.helpMenu.unwrapped(
+            "native Help menu was missing before its standard shortcut"
+        )
+        let originalHelpMenuDelegate = helpMenu.delegate
+        let trackingProbe = MenuTrackingProbe(
+            menu: helpMenu,
+            trackingRootMenu: try NSApp.mainMenu.unwrapped(
+                "application main menu was missing before its Help shortcut"
+            )
+        )
+        helpMenu.delegate = trackingProbe
+        let keyboardProbe = KeyboardEventProbe(keyCode: 44)
+        defer {
+            keyboardProbe.stop()
+            trackingProbe.stop()
+            helpMenu.delegate = originalHelpMenuDelegate
+        }
+
+        try input.postKey(keyCode: 44, modifiers: [.command, .shift])
+        try await waitUntil("physical Command-Question mark did not reach the App") {
+            keyboardProbe.stroke != nil
+        }
+        do {
+            try await waitUntil(
+                "Command-Question mark did not open the native Help menu"
+            ) {
+                trackingProbe.openCount >= 1
+            }
+        } catch {
+            throw Failure.failed(
+                "Command-Question mark reached the App but did not open its "
+                    + "native Help menu: "
+                    + (keyboardProbe.stroke?.report ?? "missing event")
+            )
+        }
+        if trackingProbe.openCount > trackingProbe.closeCount {
+            try input.postKey(keyCode: 53)
+        }
+        try await waitUntil("standard Help shortcut menu did not finish tracking") {
+            trackingProbe.openCount == trackingProbe.closeCount
+        }
+    }
+
+    private func exerciseHelpWindow(
+        mainWindow: NSWindow,
+        copy: AppCopy,
+        input: WindowServerInputDriver
+    ) async throws {
+        try await activate(mainWindow)
+        let helpMenu = try NSApp.helpMenu.unwrapped(
+            "native Help menu was missing before its standard shortcut"
+        )
+        let originalHelpMenuDelegate = helpMenu.delegate
+        let trackingProbe = MenuTrackingProbe(
+            menu: helpMenu,
+            trackingRootMenu: try NSApp.mainMenu.unwrapped(
+                "application main menu was missing before Help menu selection"
+            )
+        )
+        helpMenu.delegate = trackingProbe
+        defer {
+            trackingProbe.stop()
+            helpMenu.delegate = originalHelpMenuDelegate
+        }
+
+        var helpMenuBarTarget = ReadOnlyAccessibilityTarget.uniqueMenuBarItem(
+            title: copy.helpMenu
+        )
+        try await waitUntil("Help menu bar item lacked stable accessibility geometry") {
+            helpMenuBarTarget = ReadOnlyAccessibilityTarget.uniqueMenuBarItem(
+                title: copy.helpMenu
+            )
+            return helpMenuBarTarget?.frame != nil
+        }
+        guard let helpMenuBarFrame = helpMenuBarTarget?.frame else {
+            throw Failure.failed("Help menu bar accessibility geometry disappeared")
+        }
+        let helpMenuBarPoint = CGPoint(
+            x: helpMenuBarFrame.midX,
+            y: helpMenuBarFrame.midY
+        )
+        let helpItem = try menuItem(action: NoonmarkMenuAction.showHelp)
+        guard helpMenu.items.first(where: {
+            $0.isSeparatorItem == false && $0.isEnabled
+        }) === helpItem else {
+            throw Failure.failed(
+                "native Help command was not the first keyboard-selectable item"
+            )
+        }
+        let keyboardSelection = try input.prepareMenuKeyboardSelection()
+        let menuBarGesture = try await input.prepareMenuBarGesture(
+            at: helpMenuBarPoint,
+            resolveSource: {
+                guard let frame = ReadOnlyAccessibilityTarget.uniqueMenuBarItem(
+                    title: copy.helpMenu
+                )?.frame else {
+                    return nil
+                }
+                return CGPoint(x: frame.midX, y: frame.midY)
+            }
+        )
+        let openCountBeforeSelection = trackingProbe.openCount
+        do {
+            input.postMenuBarKeyboardSelection(
+                menuBarGesture,
+                selection: keyboardSelection
+            )
+            try await waitUntil("physical Help menu selection did not finish tracking") {
+                trackingProbe.openCount > openCountBeforeSelection
+                    && trackingProbe.beginTrackingCount == 1
+                    && trackingProbe.sentActionCount == 1
+                    && trackingProbe.openCount == trackingProbe.closeCount
+            }
+            try await input.waitForMenuBarMouseUp()
+        } catch {
+            if input.isLeftButtonDown {
+                input.postMenuBarMouseUp(menuBarGesture)
+                try? await input.waitForMenuBarMouseUp()
+            }
+            throw Failure.failed(
+                "physical Help menu keyboard selection did not select its item: "
+                    + "before=\(openCountBeforeSelection),"
+                    + "opens=\(trackingProbe.openCount),"
+                    + "closes=\(trackingProbe.closeCount),"
+                    + "trackingBegins=\(trackingProbe.beginTrackingCount),"
+                    + "sentActions=\(trackingProbe.sentActionCount),"
+                    + "point=\(helpMenuBarPoint),"
+                    + "pointer=\(String(describing: input.currentPointerLocation)),"
+                    + "underlying=\(error.localizedDescription)"
+            )
+        }
+
+        let helpWindow = try await visibleWindow(
+            identifier: NoonmarkHelpWindowController.windowIdentifier,
+            failure: "physical Help menu selection did not open its native window: "
+                + "opens=\(trackingProbe.openCount),"
+                + "closes=\(trackingProbe.closeCount),"
+                + "trackingBegins=\(trackingProbe.beginTrackingCount),"
+                + "sentActions=\(trackingProbe.sentActionCount)"
+        )
+        guard helpWindow !== mainWindow,
+              helpWindow is NSPanel == false,
+              helpWindow.parent == nil,
+              helpWindow.isKeyWindow,
+              helpWindow.title == copy.noonmarkHelp,
+              helpWindow.frameAutosaveName
+              == NoonmarkHelpWindowController.frameAutosaveName,
+              helpWindow.styleMask.contains([.titled, .closable, .resizable])
+        else {
+            throw Failure.failed("Help was not presented as a standalone native window")
+        }
+        try await assertMinimumContentSize(
+            of: helpWindow,
+            equals: NoonmarkHelpWindowController.minimumContentSize,
+            label: "Help"
+        )
+        try await assertAnchor(
+            "help.window",
+            verificationText: copy.noonmarkHelp,
+            in: helpWindow
+        )
+
+        try performMenuShortcut(
+            MenuShortcut(
+                action: #selector(NSWindow.performClose(_:)),
+                key: "w",
+                modifiers: .command
+            ),
+            input: input
+        )
+        try await waitUntil("Close Window did not close Help") {
+            helpWindow.isVisible == false && mainWindow.isVisible
         }
     }
 
@@ -262,7 +569,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                 action: NoonmarkMenuAction.showQuickEntry,
                 key: "n",
                 modifiers: .command
-            )
+            ),
+            input: input
         )
 
         let quickEntryWindow = try await visibleWindow(
@@ -327,7 +635,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
 
     private func exerciseMenuUndoRedo(
         mainWindow: NSWindow,
-        store: NoonmarkStore
+        store: NoonmarkStore,
+        input: WindowServerInputDriver
     ) async throws {
         try await activate(mainWindow)
         mainWindow.makeFirstResponder(nil)
@@ -343,7 +652,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                 action: NoonmarkMenuAction.undo,
                 key: "z",
                 modifiers: .command
-            )
+            ),
+            input: input
         )
         try await waitUntil("Command-Z did not undo the Quick Entry task") {
             taskRecord(titled: Self.fixtureTitle, in: store) == nil
@@ -363,13 +673,98 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                 modifiers: [.command, .shift],
                 menuKeyEquivalent: "Z",
                 menuModifiers: .command
-            )
+            ),
+            input: input
         )
         try await waitUntil("Shift-Command-Z did not redo the Quick Entry task") {
             taskRecord(titled: Self.fixtureTitle, in: store) != nil
                 && store.canUndoDomainAction
                 && store.canRedoDomainAction == false
         }
+    }
+
+    private func exerciseAuxiliaryWindowCommandIsolation(
+        mainWindow: NSWindow,
+        store: NoonmarkStore,
+        input: WindowServerInputDriver
+    ) async throws {
+        try await activate(mainWindow)
+        let backgroundEditor = try await focusedTextEditor(
+            identifier: "quick-add.day.input",
+            in: mainWindow,
+            input: input
+        )
+        if backgroundEditor.string.isEmpty == false {
+            try replaceEditorContents(with: "", in: backgroundEditor)
+        }
+        let expectedDraft = "backgrounddraft"
+        try await typeASCII(expectedDraft, into: backgroundEditor)
+        let expectedSelection = NSRange(location: 0, length: 0)
+        backgroundEditor.setSelectedRange(expectedSelection)
+        let expectedTraceID = try requireTaskRecord(
+            titled: Self.fixtureTitle,
+            in: store
+        ).trace.id
+
+        try performMenuShortcut(
+            MenuShortcut(
+                action: NoonmarkMenuAction.showSettings,
+                key: ",",
+                modifiers: .command
+            ),
+            input: input
+        )
+        let settingsWindow = try await visibleWindow(
+            identifier: NoonmarkSettingsWindowController.windowIdentifier,
+            failure: "Settings did not open for command-isolation verification"
+        )
+        guard settingsWindow.firstResponder is NSTextView == false else {
+            throw Failure.failed(
+                "Settings unexpectedly focused text during command-isolation verification"
+            )
+        }
+
+        let isolatedItems = try [
+            menuItem(action: NoonmarkMenuAction.undo),
+            menuItem(action: NoonmarkMenuAction.redo),
+            menuItem(action: NoonmarkMenuAction.selectAll)
+        ]
+        guard isolatedItems.allSatisfy({ validate($0) == false }) else {
+            throw Failure.failed(
+                "Edit commands remained enabled through a background main-window text responder"
+            )
+        }
+
+        try input.postKey(keyCode: 0, modifiers: .command)
+        try input.postKey(keyCode: 6, modifiers: .command)
+        try performMenuShortcut(
+            MenuShortcut(
+                action: #selector(NSWindow.performClose(_:)),
+                key: "w",
+                modifiers: .command
+            ),
+            input: input
+        )
+        try await waitUntil("Close Window did not close command-isolation Settings") {
+            settingsWindow.isVisible == false && mainWindow.isVisible
+        }
+        guard backgroundEditor.string == expectedDraft,
+              backgroundEditor.selectedRange() == expectedSelection,
+              taskRecord(titled: Self.fixtureTitle, in: store)?.trace.id == expectedTraceID,
+              store.canUndoDomainAction,
+              store.canRedoDomainAction == false
+        else {
+            throw Failure.failed(
+                "auxiliary Edit commands mutated background text or domain history"
+            )
+        }
+
+        try await activate(mainWindow)
+        guard mainWindow.makeFirstResponder(backgroundEditor) else {
+            throw Failure.failed("main quick-add editor could not regain focus after Settings")
+        }
+        try replaceEditorContents(with: "", in: backgroundEditor)
+        mainWindow.makeFirstResponder(nil)
     }
 
     private func exerciseSearch(
@@ -384,8 +779,9 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             MenuShortcut(
                 action: NoonmarkMenuAction.showSearch,
                 key: "f",
-                modifiers: .command
-            )
+                modifiers: [.command, .shift]
+            ),
+            input: input
         )
 
         let searchWindow = try await visibleWindow(
@@ -402,6 +798,11 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         else {
             throw Failure.failed("Search was not presented as a standalone native window")
         }
+        try await assertMinimumContentSize(
+            of: searchWindow,
+            equals: NoonmarkSearchWindowController.minimumContentSize,
+            label: "Search"
+        )
         try await assertAnchor(
             "search.window",
             verificationText: store.copy.searchCommand,
@@ -446,7 +847,50 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
+    private func assertMinimumContentSize(
+        of window: NSWindow,
+        equals expected: NSSize,
+        label: String
+    ) async throws {
+        let expectedFrameMinimum = window.frameRect(
+            forContentRect: NSRect(origin: .zero, size: expected)
+        ).size
+        do {
+            try await waitUntil(
+                "\(label) did not publish its declared minimum after layout"
+            ) {
+                window.contentView?.layoutSubtreeIfNeeded()
+                return window.contentMinSize == expected
+                    && window.minSize == expectedFrameMinimum
+            }
+        } catch {
+            throw Failure.failed(
+                "\(label) minimum size contract was not preserved after layout: "
+                    + "content=\(window.contentMinSize), expectedContent=\(expected), "
+                    + "frame=\(window.minSize), expectedFrame=\(expectedFrameMinimum)"
+            )
+        }
+
+        let originalFrame = window.frame
+        window.setContentSize(NSSize(width: 100, height: 100))
+        try await waitUntil(
+            "\(label) could be resized below its declared content minimum"
+        ) {
+            window.contentView?.layoutSubtreeIfNeeded()
+            let actualContentSize = window.contentRect(
+                forFrameRect: window.frame
+            ).size
+            return actualContentSize.width >= expected.width
+                && actualContentSize.height >= expected.height
+                && window.contentMinSize == expected
+                && window.minSize == expectedFrameMinimum
+        }
+        window.setFrame(originalFrame, display: false)
+    }
+
     private func assertMenuContract(copy: AppCopy) throws {
+        try assertCommercialCopyContract()
+
         guard let mainMenu = NSApp.mainMenu else {
             throw Failure.failed("application main menu was missing")
         }
@@ -505,6 +949,7 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             [
                 #selector(NSWindow.performMiniaturize(_:)),
                 #selector(NSWindow.performZoom(_:)),
+                #selector(NSWindow.toggleFullScreen(_:)),
                 NoonmarkMenuAction.showMainWindow,
                 #selector(NSApplication.arrangeInFront(_:))
             ],
@@ -549,11 +994,22 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("AppKit services/windows/help menu registration was incomplete")
         }
 
+        try assertTextServiceSubmenus(copy: copy)
+
+        let fullScreenShortcut = MenuShortcut(
+            action: #selector(NSWindow.toggleFullScreen(_:)),
+            key: "f",
+            modifiers: [.command, .control]
+        )
         let shortcuts = [
             MenuShortcut(action: NoonmarkMenuAction.showSettings, key: ",", modifiers: .command),
             MenuShortcut(action: NoonmarkMenuAction.showQuickEntry, key: "n", modifiers: .command),
             MenuShortcut(action: NoonmarkMenuAction.importData, key: "i", modifiers: [.command, .shift]),
-            MenuShortcut(action: NoonmarkMenuAction.showSearch, key: "f", modifiers: .command),
+            MenuShortcut(
+                action: NoonmarkMenuAction.showSearch,
+                key: "f",
+                modifiers: [.command, .shift]
+            ),
             MenuShortcut(action: NoonmarkMenuAction.selectAll, key: "a", modifiers: .command),
             MenuShortcut(action: NoonmarkMenuAction.undo, key: "z", modifiers: .command),
             MenuShortcut(
@@ -564,14 +1020,14 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                 menuModifiers: .command
             ),
             MenuShortcut(action: #selector(NSWindow.performClose(_:)), key: "w", modifiers: .command),
+            fullScreenShortcut,
             MenuShortcut(action: NoonmarkMenuAction.toggleSidebar, key: "s", modifiers: [.command, .control]),
             MenuShortcut(action: NoonmarkMenuAction.toggleDetailRail, key: "i", modifiers: [.command, .option]),
             MenuShortcut(action: #selector(NSApplication.terminate(_:)), key: "q", modifiers: .command),
-            MenuShortcut(action: #selector(NSWindow.performMiniaturize(_:)), key: "m", modifiers: .command),
-            MenuShortcut(action: NoonmarkMenuAction.showHelp, key: "?", modifiers: [.command, .shift])
+            MenuShortcut(action: #selector(NSWindow.performMiniaturize(_:)), key: "m", modifiers: .command)
         ]
         for shortcut in shortcuts {
-            let item = try menuItem(action: shortcut.action)
+            let item = try menuItem(shortcut: shortcut)
             guard item.keyEquivalent == shortcut.menuKeyEquivalent,
                   normalizedModifiers(item.keyEquivalentModifierMask)
                   == normalizedModifiers(shortcut.menuModifiers)
@@ -582,6 +1038,118 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                         + "expected=\(shortcut.menuKeyEquivalent)/\(normalizedModifiers(shortcut.menuModifiers).rawValue)"
                 )
             }
+        }
+        try assertFullScreenMenuItems(
+            copy: copy,
+            standardShortcut: fullScreenShortcut
+        )
+
+        let helpItem = try menuItem(action: NoonmarkMenuAction.showHelp)
+        guard helpItem.keyEquivalent.isEmpty,
+              normalizedModifiers(helpItem.keyEquivalentModifierMask).isEmpty
+        else {
+            throw Failure.failed(
+                "Help item duplicated AppKit's standard Command-Question mark "
+                    + "Help-menu shortcut"
+            )
+        }
+    }
+
+    private func assertCommercialCopyContract() throws {
+        let english = AppCopy(language: .english)
+        let chinese = AppCopy(language: .chinese)
+        let englishContract: [(String, String)] = [
+            (english.emptyDay, "No tasks on this day."),
+            (
+                english.unfinishedSubtitle,
+                "Each unfinished task appears once, grouped by task chain. "
+                    + "Continue it or mark it abandoned."
+            ),
+            (english.emptyUnfinished, "No unfinished tasks."),
+            (english.settingsPoemTitle, "Poem"),
+            (english.settingsPoemDisplay, "Show poem in About Noonmark"),
+            (english.organizationTitle, "Organisation")
+        ]
+        let chineseContract: [(String, String)] = [
+            (chinese.settingsPoemTitle, "关于页诗文"),
+            (chinese.settingsPoemDisplay, "在“关于晷迹”中展示诗文")
+        ]
+        guard (englishContract + chineseContract).allSatisfy({ $0.0 == $0.1 })
+        else {
+            throw Failure.failed("commercial bilingual copy contract diverged")
+        }
+    }
+
+    private func assertTextServiceSubmenus(copy: AppCopy) throws {
+        let editMenu = try submenu(titled: copy.editMenu)
+        let findItem = try editMenu.items.first(where: { $0.title == copy.findMenu })
+            .unwrapped("Find menu item was missing")
+        let findMenu = try findItem.submenu.unwrapped("Find submenu was missing")
+        let findItems = findMenu.items.filter { $0.isSeparatorItem == false }
+        let expectedFindItems: [(String, NSTextFinder.Action, String, NSEvent.ModifierFlags)] = [
+            (copy.find, .showFindInterface, "f", .command),
+            (copy.findNext, .nextMatch, "g", .command),
+            (copy.findPrevious, .previousMatch, "g", [.command, .shift])
+        ]
+        guard findItems.count == expectedFindItems.count else {
+            throw Failure.failed("Find submenu item count was nonstandard")
+        }
+        for (item, expected) in zip(findItems, expectedFindItems) {
+            guard item.title == expected.0,
+                  item.action == #selector(NSTextView.performTextFinderAction(_:)),
+                  item.target == nil,
+                  item.tag == expected.1.rawValue,
+                  item.keyEquivalent == expected.2,
+                  normalizedModifiers(item.keyEquivalentModifierMask)
+                  == normalizedModifiers(expected.3)
+            else {
+                throw Failure.failed("Find submenu did not use the responder-chain text finder")
+            }
+        }
+
+        let spellingItem = try editMenu.items.first {
+            $0.title == copy.spellingAndGrammar
+        }.unwrapped("Spelling and Grammar menu item was missing")
+        let spellingMenu = try spellingItem.submenu.unwrapped(
+            "Spelling and Grammar submenu was missing"
+        )
+        let spellingItems = spellingMenu.items.filter { $0.isSeparatorItem == false }
+        let expectedSpellingItems: [(String, Selector)] = [
+            (copy.showSpellingAndGrammar, #selector(NSTextView.showGuessPanel(_:))),
+            (copy.checkSpelling, #selector(NSTextView.checkSpelling(_:))),
+            (
+                copy.checkSpellingWhileTyping,
+                #selector(NSTextView.toggleContinuousSpellChecking(_:))
+            ),
+            (copy.checkGrammarWithSpelling, #selector(NSTextView.toggleGrammarChecking(_:))),
+            (
+                copy.correctSpellingAutomatically,
+                #selector(NSTextView.toggleAutomaticSpellingCorrection(_:))
+            )
+        ]
+        guard spellingItems.count == expectedSpellingItems.count else {
+            throw Failure.failed("Spelling and Grammar submenu item count was nonstandard")
+        }
+        for (item, expected) in zip(spellingItems, expectedSpellingItems) {
+            guard item.title == expected.0,
+                  item.action == expected.1,
+                  item.target == nil
+            else {
+                throw Failure.failed(
+                    "Spelling and Grammar submenu bypassed the responder chain"
+                )
+            }
+        }
+
+        let fullScreenItem = try menuItem(
+            shortcut: MenuShortcut(
+                action: #selector(NSWindow.toggleFullScreen(_:)),
+                key: "f",
+                modifiers: [.command, .control]
+            )
+        )
+        guard fullScreenItem.target == nil else {
+            throw Failure.failed("Full Screen command bypassed the responder chain")
         }
     }
 
@@ -602,8 +1170,11 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
-    private func performMenuShortcut(_ shortcut: MenuShortcut) throws {
-        let item = try menuItem(action: shortcut.action)
+    private func performMenuShortcut(
+        _ shortcut: MenuShortcut,
+        input: WindowServerInputDriver
+    ) throws {
+        let item = try menuItem(shortcut: shortcut)
         let keyMatches = item.keyEquivalent == shortcut.menuKeyEquivalent
         let modifiersMatch = normalizedModifiers(item.keyEquivalentModifierMask)
             == normalizedModifiers(shortcut.menuModifiers)
@@ -617,22 +1188,19 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                     + "modifiersMatch=\(modifiersMatch) valid=\(isValid) title=\(item.title)"
             )
         }
-        guard let mainMenu = NSApp.mainMenu,
-              let window = NSApp.keyWindow ?? NSApp.mainWindow,
-              let event = menuKeyEvent(shortcut, window: window),
-              mainMenu.performKeyEquivalent(with: event)
+        guard let keyCode = Self.keyCodes[Character(shortcut.key.lowercased())]
         else {
             throw Failure.failed(
-                "menu shortcut was not handled: \(NSStringFromSelector(shortcut.action))"
+                "menu shortcut has no physical key mapping: "
+                    + NSStringFromSelector(shortcut.action)
             )
         }
+        try input.postKey(keyCode: keyCode, modifiers: shortcut.modifiers)
     }
 
     private func menuItem(action: Selector) throws -> NSMenuItem {
-        guard let matches = NSApp.mainMenu?.items
-            .compactMap(\.submenu)
-            .flatMap(\.items)
-            .filter({ $0.action == action }),
+        let matches = menuItems(action: action)
+        guard
             matches.count == 1,
             let item = matches.first
         else {
@@ -641,6 +1209,55 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             )
         }
         return item
+    }
+
+    private func menuItem(shortcut: MenuShortcut) throws -> NSMenuItem {
+        let matches = menuItems(action: shortcut.action).filter { item in
+            item.keyEquivalent == shortcut.menuKeyEquivalent
+                && normalizedModifiers(item.keyEquivalentModifierMask)
+                == normalizedModifiers(shortcut.menuModifiers)
+        }
+        guard matches.count == 1, let item = matches.first else {
+            throw Failure.failed(
+                "menu shortcut was missing or duplicated: "
+                    + "\(NSStringFromSelector(shortcut.action)) "
+                    + "key=\(shortcut.menuKeyEquivalent) "
+                    + "modifiers=\(normalizedModifiers(shortcut.menuModifiers).rawValue)"
+            )
+        }
+        return item
+    }
+
+    private func menuItems(action: Selector) -> [NSMenuItem] {
+        NSApp.mainMenu?.items
+            .compactMap(\.submenu)
+            .flatMap(\.items)
+            .filter { $0.action == action } ?? []
+    }
+
+    private func assertFullScreenMenuItems(
+        copy: AppCopy,
+        standardShortcut: MenuShortcut
+    ) throws {
+        let items = menuItems(action: standardShortcut.action)
+        let shortcutIdentities = Set(items.map { item in
+            "\(item.keyEquivalent)|"
+                + "\(normalizedModifiers(item.keyEquivalentModifierMask).rawValue)"
+        })
+        guard items.isEmpty == false,
+              items.allSatisfy({ item in
+                  item.title == copy.enterFullScreen && item.target == nil
+              }),
+              shortcutIdentities.count == items.count
+        else {
+            throw Failure.failed(
+                "Full Screen responder-chain commands contained a duplicate shortcut"
+            )
+        }
+        let standardItem = try menuItem(shortcut: standardShortcut)
+        guard standardItem.title == copy.enterFullScreen else {
+            throw Failure.failed("Full Screen command title was not localized")
+        }
     }
 
     private func submenu(titled title: String) throws -> NSMenu {
@@ -659,31 +1276,6 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         return enabled
     }
 
-    private func menuKeyEvent(
-        _ shortcut: MenuShortcut,
-        window: NSWindow
-    ) -> NSEvent? {
-        guard let keyCode = Self.keyCodes[Character(shortcut.key.lowercased())]
-        else {
-            return nil
-        }
-        let characters = shortcut.modifiers.contains(.shift)
-            ? shortcut.key.uppercased()
-            : shortcut.key
-        return NSEvent.keyEvent(
-            with: .keyDown,
-            location: .zero,
-            modifierFlags: shortcut.modifiers,
-            timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: window.windowNumber,
-            context: nil,
-            characters: characters,
-            charactersIgnoringModifiers: characters,
-            isARepeat: false,
-            keyCode: keyCode
-        )
-    }
-
     private func focusedTextEditor(
         identifier: String,
         in window: NSWindow,
@@ -697,9 +1289,13 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         guard let identifiedView else {
             throw Failure.failed("text field disappeared: \(identifier)")
         }
-        let clickTarget = ([identifiedView] + allViews(from: identifiedView)).first {
-            $0 is NSTextField
-        } ?? editableTextField(overlapping: identifiedView, in: window)
+        let clickTarget: NSView? = if identifiedView is NSTextView {
+            identifiedView
+        } else {
+            ([identifiedView] + allViews(from: identifiedView)).first {
+                $0 is NSTextField
+            } ?? editableTextField(overlapping: identifiedView, in: window)
+        }
         guard let clickTarget else {
             throw Failure.failed("editable text field was missing: \(identifier)")
         }
@@ -855,16 +1451,41 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                 "text field was not available for WindowServer click: \(identifier)"
             )
         }
-        let windowPoint = view.convert(
-            NSPoint(x: view.bounds.midX, y: view.bounds.midY),
-            to: nil
-        )
         do {
-            let coordinate = try input.pointerCoordinate(
-                windowPoint: windowPoint,
-                in: window
+            let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
+                guard let currentView = AppViewTreeE2E.view(
+                    identifier: identifier,
+                    in: window
+                ),
+                      let currentWindow = currentView.window,
+                currentWindow === window,
+                currentWindow.isKeyWindow,
+                currentView.isHiddenOrHasHiddenAncestor == false,
+                currentView.bounds.width > 0,
+                currentView.bounds.height > 0
+                else {
+                    throw Failure.failed(
+                        "text field changed before WindowServer mouseDown: \(identifier)"
+                    )
+                }
+                let currentPoint = currentView.convert(
+                    NSPoint(
+                        x: currentView.bounds.midX,
+                        y: currentView.bounds.midY
+                    ),
+                    to: nil
+                )
+                return try input.pointerCoordinate(
+                    windowPoint: currentPoint,
+                    in: currentWindow
+                )
+            }
+            let coordinate = try resolveTarget()
+            try await input.postClick(
+                at: coordinate,
+                modifiers: [],
+                resolveTarget: resolveTarget
             )
-            try await input.postClick(at: coordinate, modifiers: [])
         } catch {
             throw Failure.failed(
                 "WindowServer click failed for \(identifier): "
@@ -991,7 +1612,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     ) -> (trace: DayTrace, definition: TaskDefinition)? {
         let matches: [(trace: DayTrace, definition: TaskDefinition)] = store
             .engine.traces.values.compactMap { trace in
-            guard let definition = store.engine.definitions[trace.definitionID],
+            guard trace.formsDayHistory,
+                  let definition = store.engine.definitions[trace.definitionID],
                   definition.title == title
             else {
                 return nil

@@ -62,7 +62,7 @@ struct DataPackageE2EAutomation: LaunchAutomationRunnable {
                 store.disarmPersistenceFailureForE2E()
                 try? writeResult("failed: \(error.localizedDescription)")
             }
-            NSApp.terminate(nil)
+            E2EApplicationTermination.schedule()
         }
     }
 
@@ -222,8 +222,16 @@ struct DataPackageE2EAutomation: LaunchAutomationRunnable {
             databaseURL: URL(fileURLWithPath: databasePath)
         ).load().snapshot()
         guard persistedAfterRejectedMutation == baseline else {
+            writeSnapshotDiagnostics(
+                expected: baseline,
+                actual: persistedAfterRejectedMutation
+            )
             throw DataPackageE2EAutomationError.failed(
-                "普通 Store 写入失败后 SQLite 与提交前基线分叉"
+                "普通 Store 写入失败后 SQLite 与提交前基线分叉："
+                    + snapshotDifferenceReport(
+                        expected: baseline,
+                        actual: persistedAfterRejectedMutation
+                    )
             )
         }
 
@@ -234,9 +242,9 @@ struct DataPackageE2EAutomation: LaunchAutomationRunnable {
         )
         try NoonmarkDataPackage.write(imported.snapshot(), to: exportURL)
 
+        let preview = try await store.prepareDataImport(from: exportURL)
         try store.armPersistenceFailureForE2E()
         do {
-            let preview = try await store.prepareDataImport(from: exportURL)
             try await store.commitDataImport(
                 preview,
                 confirmation: .confirmed(previewID: preview.id)
@@ -248,11 +256,64 @@ struct DataPackageE2EAutomation: LaunchAutomationRunnable {
             store.disarmPersistenceFailureForE2E()
         }
 
-        guard store.engine.snapshot() == baseline else {
+        guard store.engine.snapshot() == baseline,
+              store.preparedDataImport?.id == preview.id
+        else {
             throw DataPackageE2EAutomationError.failed(
-                "导入写库失败后内存 snapshot 被替换"
+                "导入写库失败后内存 snapshot 被替换或可重试预览丢失"
             )
         }
+        store.cancelPreparedDataImport()
+        try await waitForImportSheetDismissal()
+    }
+
+    @MainActor
+    private func waitForImportSheetDismissal() async throws {
+        for _ in 0 ..< 100 {
+            if AppViewTreeE2E.hasNoAttachedSheets() {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw DataPackageE2EAutomationError.failed(
+            "导入失败验证完成后确认 sheet 未正常撤下"
+        )
+    }
+
+    private func snapshotDifferenceReport(
+        expected: NoonmarkSnapshot,
+        actual: NoonmarkSnapshot
+    ) -> String {
+        [
+            ("days", expected.days == actual.days),
+            ("chains", expected.chains == actual.chains),
+            ("definitions", expected.definitions == actual.definitions),
+            ("traces", expected.traces == actual.traces),
+            ("subtasks", expected.subtasks == actual.subtasks),
+            ("preferences", expected.preferences == actual.preferences),
+            (
+                "classifications",
+                expected.classifications == actual.classifications
+            )
+        ].filter { $0.1 == false }
+            .map(\.0)
+            .joined(separator: ",")
+    }
+
+    private func writeSnapshotDiagnostics(
+        expected: NoonmarkSnapshot,
+        actual: NoonmarkSnapshot
+    ) {
+        guard let resultURL else { return }
+        let directory = resultURL.deletingLastPathComponent()
+        _ = try? NoonmarkDataPackage.write(
+            expected,
+            to: directory.appendingPathComponent("expected-baseline.json")
+        )
+        _ = try? NoonmarkDataPackage.write(
+            actual,
+            to: directory.appendingPathComponent("actual-persisted.json")
+        )
     }
 
     private func writeResult(_ result: String) throws {

@@ -262,16 +262,16 @@ final class CloudKitSyncSessionTests: XCTestCase {
             persistence: persistence,
             codec: CloudKitSyncRecordCodec(zoneID: zoneID)
         )
-        let firstRecord = opaqueSubtaskRecord(id: "subtask:first")
-        let secondRecord = opaqueSubtaskRecord(id: "subtask:second")
+        let firstRecord = try taskChainRecord()
+        let secondRecord = try taskChainRecord()
 
         let firstMutation = Task {
-            try await session.stageLocal([firstRecord])
+            _ = try await session.stageLocal([firstRecord])
         }
-        await persistence.waitUntilFirstSaveStarts()
+        try await persistence.waitUntilFirstSaveStarts()
 
         let secondMutation = Task {
-            try await session.stageLocal([secondRecord])
+            _ = try await session.stageLocal([secondRecord])
         }
         try await Task.sleep(for: .milliseconds(20))
 
@@ -313,14 +313,12 @@ final class CloudKitSyncSessionTests: XCTestCase {
         )
     }
 
-    private func opaqueSubtaskRecord(id: String) -> SyncRecord {
-        SyncRecord(
-            id: SyncRecordID(id),
-            entityType: .subtask,
-            entityID: id,
-            modifiedAt: Date(timeIntervalSinceReferenceDate: 10),
-            modifiedByDeviceID: SyncDeviceID("mac-a"),
-            payload: Data(id.utf8)
+    private func taskChainRecord() throws -> SyncRecord {
+        try SyncRecordMapper().record(
+            for: TaskChain(
+                now: Date(timeIntervalSinceReferenceDate: 10)
+            ),
+            modifiedBy: SyncDeviceID("mac-a")
         )
     }
 }
@@ -357,10 +355,13 @@ private actor SessionPersistence: CloudKitSyncPersistence {
 }
 
 private actor SuspendingSessionPersistence: CloudKitSyncPersistence {
+    enum Failure: Error {
+        case firstSaveDidNotStart
+    }
+
     private(set) var current: CloudKitSyncPersistenceSnapshot = .empty
     private(set) var saveInvocationCount = 0
     private var firstSaveContinuation: CheckedContinuation<Void, Never>?
-    private var firstSaveStartWaiters: [CheckedContinuation<Void, Never>] = []
 
     func load() async throws -> CloudKitSyncPersistenceSnapshot {
         current
@@ -369,9 +370,6 @@ private actor SuspendingSessionPersistence: CloudKitSyncPersistence {
     func save(_ snapshot: CloudKitSyncPersistenceSnapshot) async throws {
         saveInvocationCount += 1
         if saveInvocationCount == 1 {
-            let waiters = firstSaveStartWaiters
-            firstSaveStartWaiters.removeAll()
-            waiters.forEach { $0.resume() }
             await withCheckedContinuation { continuation in
                 firstSaveContinuation = continuation
             }
@@ -379,10 +377,14 @@ private actor SuspendingSessionPersistence: CloudKitSyncPersistence {
         current = snapshot
     }
 
-    func waitUntilFirstSaveStarts() async {
-        guard saveInvocationCount == 0 else { return }
-        await withCheckedContinuation { continuation in
-            firstSaveStartWaiters.append(continuation)
+    func waitUntilFirstSaveStarts() async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while saveInvocationCount == 0 {
+            guard clock.now < deadline else {
+                throw Failure.firstSaveDidNotStart
+            }
+            try await Task.sleep(for: .milliseconds(10))
         }
     }
 

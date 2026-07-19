@@ -42,6 +42,54 @@ final class ZhulongDailyCloseTests: XCTestCase {
         XCTAssertNotEqual(before.evidenceDigest, after.evidenceDigest)
     }
 
+    func testCaptureExcludesCancelledFutureDraftAndItsSubtasks() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "未来计划草稿", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: nextDate,
+            today: date,
+            now: now
+        )
+        _ = try engine.addSubtask(
+            traceID: traceID,
+            title: "不应进入每日收尾证据",
+            now: now.addingTimeInterval(1)
+        )
+        try engine.returnToPool(
+            traceID: traceID,
+            today: date,
+            now: now.addingTimeInterval(2)
+        )
+
+        let cancelledDraft = try XCTUnwrap(engine.traces[traceID])
+        XCTAssertEqual(cancelledDraft.status, .cancelledDraft)
+        XCTAssertFalse(cancelledDraft.formsDayHistory)
+        XCTAssertEqual(engine.subtasks.values.filter { $0.traceID == traceID }.count, 1)
+
+        let snapshot = try ZhulongDailyCloseSnapshot(
+            sessionID: sessionID,
+            date: nextDate,
+            engine: engine,
+            capturedAt: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(snapshot.counts.total, 0)
+        XCTAssertEqual(snapshot.counts.completed, 0)
+        XCTAssertEqual(snapshot.counts.unfinished, 0)
+        XCTAssertEqual(snapshot.counts.continued, 0)
+        XCTAssertEqual(snapshot.counts.changed, 0)
+        XCTAssertEqual(snapshot.counts.returnedToPool, 0)
+        XCTAssertEqual(snapshot.counts.abandoned, 0)
+        XCTAssertEqual(snapshot.counts.pending, 0)
+        XCTAssertTrue(snapshot.traces.isEmpty)
+        XCTAssertFalse(snapshot.evidenceDigest.isEmpty)
+        XCTAssertTrue(snapshot.matches(engine))
+        XCTAssertNoThrow(
+            try snapshot.validateForPersistence(expectedSessionID: sessionID)
+        )
+    }
+
     func testOnlyConfirmedCauseCanEnterReviewAndSaveDoesNotSettleDay() throws {
         var engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "仍在进行", now: now)
@@ -239,4 +287,150 @@ final class ZhulongDailyCloseTests: XCTestCase {
             .dailyReviewApplied
         ])
     }
+
+    func testPersistenceValidationRejectsCancelledDraftEvidenceWithValidDigest() throws {
+        let snapshot = try makePendingSnapshot()
+        let trace = try XCTUnwrap(snapshot.traces.first)
+        let cancelledDraft = ZhulongDailyTraceEvidence(
+            traceID: trace.traceID,
+            chainID: trace.chainID,
+            title: trace.title,
+            status: .cancelledDraft,
+            continuationSequence: trace.continuationSequence,
+            progressPercent: trace.progressPercent,
+            subtaskCount: trace.subtaskCount,
+            completedSubtaskCount: trace.completedSubtaskCount
+        )
+        let counts = ZhulongDailyCloseCounts(
+            total: 1,
+            completed: 0,
+            unfinished: 0,
+            continued: 0,
+            changed: 0,
+            returnedToPool: 0,
+            abandoned: 0,
+            pending: 0
+        )
+        let forged = try rebuilding(
+            snapshot,
+            counts: counts,
+            traces: [cancelledDraft]
+        )
+
+        XCTAssertThrowsError(
+            try forged.validateForPersistence(expectedSessionID: sessionID)
+        ) { error in
+            XCTAssertEqual(error as? ZhulongDailyCloseError, .staleEvidence)
+        }
+    }
+
+    func testPersistenceValidationRejectsCountsThatDoNotCoverEveryTraceStatus() throws {
+        let snapshot = try makePendingSnapshot()
+        let pending = try XCTUnwrap(snapshot.traces.first)
+        let cancelledDraft = ZhulongDailyTraceEvidence(
+            traceID: DayTraceID(),
+            chainID: pending.chainID,
+            title: "已取消计划草稿",
+            status: .cancelledDraft,
+            continuationSequence: 0,
+            progressPercent: 0,
+            subtaskCount: 0,
+            completedSubtaskCount: 0
+        )
+        let counts = ZhulongDailyCloseCounts(
+            total: 2,
+            completed: 0,
+            unfinished: 0,
+            continued: 0,
+            changed: 0,
+            returnedToPool: 0,
+            abandoned: 0,
+            pending: 1
+        )
+        let forged = try rebuilding(
+            snapshot,
+            counts: counts,
+            traces: [pending, cancelledDraft]
+        )
+
+        XCTAssertEqual(counts.total, 2)
+        XCTAssertEqual(statusCountSum(counts), 1)
+        XCTAssertThrowsError(
+            try forged.validateForPersistence(expectedSessionID: sessionID)
+        ) { error in
+            XCTAssertEqual(error as? ZhulongDailyCloseError, .staleEvidence)
+        }
+    }
+
+    private func makePendingSnapshot() throws -> ZhulongDailyCloseSnapshot {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "待收尾任务", now: now)
+        _ = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: date,
+            today: date,
+            now: now
+        )
+        return try ZhulongDailyCloseSnapshot(
+            sessionID: sessionID,
+            date: date,
+            engine: engine,
+            capturedAt: now.addingTimeInterval(1)
+        )
+    }
+
+    private func rebuilding(
+        _ snapshot: ZhulongDailyCloseSnapshot,
+        counts: ZhulongDailyCloseCounts,
+        traces: [ZhulongDailyTraceEvidence]
+    ) throws -> ZhulongDailyCloseSnapshot {
+        let evidenceDigest = try ZhulongTodoDigest.value(DailyCloseEvidenceFixture(
+            date: snapshot.date,
+            dayLockedAt: snapshot.dayLockedAt,
+            counts: counts,
+            traces: traces
+        ))
+        let fixture = DailyCloseSnapshotFixture(
+            id: snapshot.id,
+            sessionID: snapshot.sessionID,
+            date: snapshot.date,
+            capturedAt: snapshot.capturedAt,
+            dayLockedAt: snapshot.dayLockedAt,
+            counts: counts,
+            traces: traces,
+            evidenceDigest: evidenceDigest
+        )
+        return try JSONDecoder().decode(
+            ZhulongDailyCloseSnapshot.self,
+            from: JSONEncoder().encode(fixture)
+        )
+    }
+
+    private func statusCountSum(_ counts: ZhulongDailyCloseCounts) -> Int {
+        counts.completed +
+            counts.unfinished +
+            counts.continued +
+            counts.changed +
+            counts.returnedToPool +
+            counts.abandoned +
+            counts.pending
+    }
+}
+
+private struct DailyCloseEvidenceFixture: Encodable {
+    let date: LocalDate
+    let dayLockedAt: Date?
+    let counts: ZhulongDailyCloseCounts
+    let traces: [ZhulongDailyTraceEvidence]
+}
+
+private struct DailyCloseSnapshotFixture: Encodable {
+    let id: ZhulongDailyCloseID
+    let sessionID: ZhulongSessionID
+    let date: LocalDate
+    let capturedAt: Date
+    let dayLockedAt: Date?
+    let counts: ZhulongDailyCloseCounts
+    let traces: [ZhulongDailyTraceEvidence]
+    let evidenceDigest: String
 }

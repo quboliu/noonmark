@@ -6,10 +6,18 @@ public enum SyncSnapshotDifferError: Error, Equatable, Sendable {
     case classificationCommitsMustBePersistedIndividually(count: Int)
     case unsupportedClassificationTransition(changeRecordID: UUID?, reason: String)
     case invalidChainReactivationBoundary(chainID: TaskChainID)
+    case invalidThemeLanguageClock
+    case themeLanguageClockDidNotAdvance
+    case themeLanguageClockChangedWithoutValues
+    case themeLanguageClockDoesNotMatchJournal
 }
 
 public struct SyncSnapshotDiffer: Sendable {
-    public init() {}
+    private let mapper: SyncRecordMapper
+
+    public init(mapper: SyncRecordMapper = SyncRecordMapper()) {
+        self.mapper = mapper
+    }
 
     public func journalEntries(
         from oldSnapshot: NoonmarkSnapshot,
@@ -17,6 +25,11 @@ public struct SyncSnapshotDiffer: Sendable {
         changedAt: Date,
         deviceID: SyncDeviceID
     ) throws -> [SyncJournalEntry] {
+        try validateThemeLanguageClock(
+            from: oldSnapshot.preferences,
+            to: newSnapshot.preferences,
+            changedAt: changedAt
+        )
         let classificationDelta = try classificationDelta(
             from: oldSnapshot.classifications,
             to: newSnapshot.classifications
@@ -24,6 +37,11 @@ public struct SyncSnapshotDiffer: Sendable {
         let reactivationPayloads = try chainReactivationPayloads(
             from: oldSnapshot,
             to: newSnapshot
+        )
+        let preferencesPayload = try appPreferencesPayload(
+            from: oldSnapshot.preferences,
+            to: newSnapshot.preferences,
+            deviceID: deviceID
         )
         var entries = changedEntities(
             from: oldSnapshot,
@@ -35,9 +53,11 @@ public struct SyncSnapshotDiffer: Sendable {
                 operation: .upsert,
                 changedAt: changedAt,
                 deviceID: deviceID,
-                recordPayload: entity.type == .taskChain
-                    ? reactivationPayloads[entity.id]
-                    : nil
+                recordPayload: journalPayload(
+                    for: entity,
+                    reactivationPayloads: reactivationPayloads,
+                    preferencesPayload: preferencesPayload
+                )
             )
         }
         if let classificationEntry = try classificationCommitEntry(
@@ -56,6 +76,74 @@ public struct SyncSnapshotDiffer: Sendable {
             }
             return $0.entityID < $1.entityID
         }
+    }
+
+    private func appPreferencesPayload(
+        from oldPreferences: AppPreferences,
+        to newPreferences: AppPreferences,
+        deviceID: SyncDeviceID
+    ) throws -> Data? {
+        guard oldPreferences.theme != newPreferences.theme
+                || oldPreferences.language != newPreferences.language
+        else {
+            return nil
+        }
+        return try mapper.record(
+            for: AppPreferencesEnvelope(preferences: newPreferences),
+            modifiedBy: deviceID
+        ).payload
+    }
+
+    private func journalPayload(
+        for entity: ChangedEntity,
+        reactivationPayloads: [String: Data],
+        preferencesPayload: Data?
+    ) -> Data? {
+        switch entity.type {
+        case .taskChain:
+            reactivationPayloads[entity.id]
+        case .appPreferences:
+            preferencesPayload
+        case .day, .taskDefinition, .dayTrace, .subtask,
+             .classificationCommit, .traceClassificationEvent:
+            nil
+        }
+    }
+
+    private func validateThemeLanguageClock(
+        from oldPreferences: AppPreferences,
+        to newPreferences: AppPreferences,
+        changedAt: Date
+    ) throws {
+        let oldClock = oldPreferences.themeLanguageUpdatedAt
+        let newClock = newPreferences.themeLanguageUpdatedAt
+        guard oldClock.timeIntervalSinceReferenceDate.isFinite,
+              newClock.timeIntervalSinceReferenceDate.isFinite
+        else {
+            throw SyncSnapshotDifferError.invalidThemeLanguageClock
+        }
+
+        let valuesChanged = oldPreferences.theme != newPreferences.theme
+            || oldPreferences.language != newPreferences.language
+        if valuesChanged {
+            guard newClock > oldClock else {
+                throw SyncSnapshotDifferError
+                    .themeLanguageClockDidNotAdvance
+            }
+            guard changedAt.timeIntervalSinceReferenceDate.isFinite,
+                  exactDateBits(newClock) == exactDateBits(changedAt)
+            else {
+                throw SyncSnapshotDifferError
+                    .themeLanguageClockDoesNotMatchJournal
+            }
+        } else if exactDateBits(newClock) != exactDateBits(oldClock) {
+            throw SyncSnapshotDifferError
+                .themeLanguageClockChangedWithoutValues
+        }
+    }
+
+    private func exactDateBits(_ value: Date) -> UInt64 {
+        value.timeIntervalSinceReferenceDate.bitPattern
     }
 
     private func chainReactivationPayloads(
@@ -82,44 +170,60 @@ public struct SyncSnapshotDiffer: Sendable {
             else {
                 return nil
             }
-            let candidates = oldTraces.values.compactMap { abandonedTrace -> (
-                DayTrace,
-                DayTrace
-            )? in
-                guard abandonedTrace.chainID == restoredChain.id,
-                      abandonedTrace.status == .abandoned,
-                      let restoredTrace = newTraces[abandonedTrace.id]
-                else {
-                    return nil
-                }
-                return (abandonedTrace, restoredTrace)
-            }
-            guard candidates.count == 1,
-                  let candidate = candidates.first
-            else {
-                throw SyncSnapshotDifferError.invalidChainReactivationBoundary(
-                    chainID: restoredChain.id
-                )
-            }
-            let envelope: ChainReactivationEnvelope
-            do {
-                envelope = try ChainReactivationEnvelope(
-                    abandonedChain: abandonedChain,
-                    restoredChain: restoredChain,
-                    abandonedTrace: candidate.0,
-                    restoredTrace: candidate.1
-                )
-            } catch {
-                throw SyncSnapshotDifferError.invalidChainReactivationBoundary(
-                    chainID: restoredChain.id
-                )
-            }
+            let envelope = try chainReactivationEnvelope(
+                abandonedChain: abandonedChain,
+                restoredChain: restoredChain,
+                oldTraces: oldTraces,
+                newTraces: newTraces
+            )
             return (
                 restoredChain.id.rawValue.uuidString,
                 try envelope.canonicalData()
             )
         }
         return Dictionary(uniqueKeysWithValues: witnesses)
+    }
+
+    private func chainReactivationEnvelope(
+        abandonedChain: TaskChain,
+        restoredChain: TaskChain,
+        oldTraces: [DayTraceID: DayTrace],
+        newTraces: [DayTraceID: DayTrace]
+    ) throws -> ChainReactivationEnvelope {
+        let boundaryTraces = oldTraces.values.filter {
+            $0.chainID == restoredChain.id
+                && [.abandoned, .cancelledDraft].contains($0.status)
+        }
+        var changedBoundary: (DayTrace, DayTrace)?
+        for abandonedTrace in boundaryTraces {
+            guard let restoredTrace = newTraces[abandonedTrace.id] else {
+                throw SyncSnapshotDifferError
+                    .invalidChainReactivationBoundary(
+                        chainID: restoredChain.id
+                    )
+            }
+            guard abandonedTrace != restoredTrace else { continue }
+            guard changedBoundary == nil else {
+                throw SyncSnapshotDifferError
+                    .invalidChainReactivationBoundary(
+                        chainID: restoredChain.id
+                    )
+            }
+            changedBoundary = (abandonedTrace, restoredTrace)
+        }
+
+        do {
+            return try ChainReactivationEnvelope(
+                abandonedChain: abandonedChain,
+                restoredChain: restoredChain,
+                abandonedTrace: changedBoundary?.0,
+                restoredTrace: changedBoundary?.1
+            )
+        } catch {
+            throw SyncSnapshotDifferError.invalidChainReactivationBoundary(
+                chainID: restoredChain.id
+            )
+        }
     }
 
     private func traceClassificationEventEntries(

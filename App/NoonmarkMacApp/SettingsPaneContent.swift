@@ -72,6 +72,9 @@ struct SettingsPaneContent: View {
 
 struct SettingsPreferenceCard: View {
     @EnvironmentObject private var store: NoonmarkStore
+    @State private var poemIsExpanded = AppLaunchArguments.contains(
+        "--e2e-expand-settings-poem"
+    )
 
     private var poemTextBinding: Binding<String> {
         Binding(
@@ -96,7 +99,8 @@ struct SettingsPreferenceCard: View {
                         right: store.copy.warmPaper,
                         leftSelected: store.engine.preferences.theme == .coolGray,
                         leftAction: { store.setTheme(.coolGray) },
-                        rightAction: { store.setTheme(.warmPaper) }
+                        rightAction: { store.setTheme(.warmPaper) },
+                        identifier: "settings.preferences.theme"
                     )
                 }
                 SettingSection(title: store.copy.languageTitle) {
@@ -105,13 +109,20 @@ struct SettingsPreferenceCard: View {
                         right: store.copy.englishLanguage,
                         leftSelected: store.engine.preferences.language == .chinese,
                         leftAction: { store.setLanguage(.chinese) },
-                        rightAction: { store.setLanguage(.english) }
+                        rightAction: { store.setLanguage(.english) },
+                        identifier: "settings.preferences.language"
                     )
                 }
-                DisclosureGroup(store.copy.settingsPoemTitle) {
+                DisclosureGroup(
+                    store.copy.settingsPoemTitle,
+                    isExpanded: $poemIsExpanded
+                ) {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle(store.copy.settingsPoemDisplay, isOn: poemEnabledBinding)
                             .toggleStyle(.checkbox)
+                            .accessibilityIdentifier(
+                                "settings.preferences.poem.enabled"
+                            )
                         HStack(spacing: 8) {
                             Text(store.copy.settingsPoemEditorTitle)
                                 .font(.noonmarkSystem(size: 11, weight: .semibold))
@@ -163,7 +174,8 @@ struct SettingsSyncCard: View {
                         right: store.copy.onlineFirstMode,
                         leftSelected: store.engine.preferences.dataMode == .localFirst,
                         leftAction: { store.setDataMode(.localFirst) },
-                        rightAction: { store.setDataMode(.onlineFirst) }
+                        rightAction: { store.setDataMode(.onlineFirst) },
+                        identifier: "settings.sync.data-mode"
                     )
                     Text(store.copy.dataModeBoundary)
                         .font(.noonmarkSystem(size: 11.5))
@@ -235,7 +247,8 @@ struct LocalFirstCloudSyncCard: View {
                         right: store.copy.syncAutomaticMode,
                         leftSelected: policy.mode == .manual,
                         leftAction: { store.setLocalFirstSyncMode(.manual) },
-                        rightAction: { store.setLocalFirstSyncMode(.automatic) }
+                        rightAction: { store.setLocalFirstSyncMode(.automatic) },
+                        identifier: "settings.sync.mode"
                     )
                 }
                 if policy.mode == .automatic {

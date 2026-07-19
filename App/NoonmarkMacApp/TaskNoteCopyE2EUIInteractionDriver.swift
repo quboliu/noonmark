@@ -13,6 +13,7 @@ enum TaskNoteCopyE2EUIInteractionDriver {
     private final class Session {
         private let state: TaskNoteE2EState
         private let resultURL: URL
+        private var actionMenuIdentity: AppViewTreeE2E.PresentationWindowIdentity?
 
         init(state: TaskNoteE2EState, resultURL: URL) {
             self.state = state
@@ -51,17 +52,23 @@ enum TaskNoteCopyE2EUIInteractionDriver {
             } onSuccess: { [self] in
                 guard let editButton = AppViewTreeE2E.view(
                     identifier: editMenuIdentifier
+                ), let identity = AppViewTreeE2E.mappedPresentationWindow(
+                    identifier: editMenuIdentifier
                 ), AppViewTreeE2E.click(editButton) else {
                     fail("无法通过真实 UI 打开 English 附言编辑器")
                     return
                 }
+                actionMenuIdentity = identity
                 verifyEditor()
             }
         }
 
         private func verifyEditor() {
             waitFor("English 附言编辑器") { [self] in
-                elementHasText(
+                guard let actionMenuIdentity,
+                      AppViewTreeE2E.isPresentationWindowOpen(actionMenuIdentity) == false
+                else { return false }
+                return elementHasText(
                     identifier: editorStateIdentifier,
                     expected: "Edit note…"
                 )
@@ -92,10 +99,13 @@ enum TaskNoteCopyE2EUIInteractionDriver {
                 } onSuccess: { [self] in
                     guard let deleteButton = AppViewTreeE2E.view(
                         identifier: deleteMenuIdentifier
+                    ), let identity = AppViewTreeE2E.mappedPresentationWindow(
+                        identifier: deleteMenuIdentifier
                     ), AppViewTreeE2E.click(deleteButton) else {
                         fail("无法通过真实 UI 删除 English 附言")
                         return
                     }
+                    actionMenuIdentity = identity
                     verifyDeleteToast()
                 }
             }
@@ -103,8 +113,9 @@ enum TaskNoteCopyE2EUIInteractionDriver {
 
         private func verifyDeleteToast() {
             waitFor("English 删除附言反馈") { [self] in
-                elementHasText(identifier: "app.toast", expected: "Note deleted")
-                    && AppViewTreeE2E.hasNoAttachedPresentationWindows()
+                guard let actionMenuIdentity else { return false }
+                return elementHasText(identifier: "app.toast", expected: "Note deleted")
+                    && AppViewTreeE2E.isPresentationWindowOpen(actionMenuIdentity) == false
             } onSuccess: { [self] in
                 finish(with: "ok")
             }

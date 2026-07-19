@@ -753,7 +753,22 @@ struct TaskTitleDeleteE2EAutomation: LaunchAutomationRunnable {
 
             let deleteChainID = try store.engine.createPoolTask(title: "E2E 任务池删除")
             store.deletePoolTask(deleteChainID)
-            try expect(store.engine.chains[deleteChainID] == nil, "unscheduled pool task was not deleted")
+            try expect(
+                store.engine.chains[deleteChainID]?.state == .abandoned,
+                "unscheduled pool task did not retain its hidden chain fact"
+            )
+            try expect(
+                store.engine.definitions.values.contains {
+                    $0.chainID == deleteChainID
+                },
+                "unscheduled pool task did not retain its definition fact"
+            )
+            try expect(
+                store.engine.taskPool().contains {
+                    $0.chain.id == deleteChainID
+                } == false,
+                "unscheduled pool task remained user-visible"
+            )
 
             let currentChainID = try store.engine.createPoolTask(title: "E2E 今日旧标题")
             let currentTraceID = try store.engine.scheduleFromPool(chainID: currentChainID, date: today, today: today)

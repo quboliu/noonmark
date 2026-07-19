@@ -661,11 +661,11 @@ final class SQLiteTaskClassificationTests: XCTestCase {
 
         let otherVersionURL = makeDatabaseURL("classification-other-version")
         defer { try? FileManager.default.removeItem(at: otherVersionURL) }
-        try executeProbeSQL("PRAGMA user_version = 2", at: otherVersionURL)
+        try executeProbeSQL("PRAGMA user_version = 1", at: otherVersionURL)
         XCTAssertThrowsError(try SQLiteEngineRepository(databaseURL: otherVersionURL).load()) { error in
             assertInvalidStoredValue(error)
         }
-        XCTAssertEqual(try integerScalar("PRAGMA user_version", at: otherVersionURL), 2)
+        XCTAssertEqual(try integerScalar("PRAGMA user_version", at: otherVersionURL), 1)
         XCTAssertEqual(
             try integerScalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
@@ -885,7 +885,7 @@ final class SQLiteTaskClassificationTests: XCTestCase {
             for: earlierEntry,
             in: earlierSnapshot
         )
-        let merge = SyncRecordMerger().merge(
+        let merge = try SyncRecordMerger().merge(
             records: [earlierRecord],
             into: laterSnapshot,
             detectedAt: fixtureNow.addingTimeInterval(30)

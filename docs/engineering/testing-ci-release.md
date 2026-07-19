@@ -45,7 +45,7 @@ Neon 的可借鉴点：
 
 本机只有一个开发身份时，用户只需在 `Xcode > Settings... > Accounts > Team > Manage Certificates...` 创建一次 `Apple Development` 证书，不需要在每次命令前设置环境变量。测试 App 固定使用 `app.noonmark.mac.e2e`，DMG helper 固定使用 `app.noonmark.test.dmg-install-harness`；稳定签名门禁同时拒绝含 `cdhash` 的 designated requirement。首次改用稳定签名后，需要把 `dist/NoonmarkMacAppE2E.app` 和 `artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app` 最后加入一次 `System Settings > Privacy & Security > Accessibility`。后续只要 Team、签名类别和 bundle identifier 不变，正常重编译不得再依赖重复授权。
 
-CI／release runner 继续通过受保护的 GitHub variable 显式指定身份；拥有多个开发 Team 的本机也应使用显式选择。证书或私钥不得提交、不得以明文导出到仓库，也不得为了绕过 TCC 改为给 Terminal 注入真实 App 行为。
+CI／开发签名发行验收 runner 继续通过受保护的 GitHub variable 显式指定身份；拥有多个开发 Team 的本机也应使用显式选择。证书或私钥不得提交、不得以明文导出到仓库，也不得为了绕过 TCC 改为给 Terminal 注入真实 App 行为。该身份只服务真实 UI 与安装路径验收，不构成公开分发签名。
 
 ## 命令
 
@@ -119,17 +119,21 @@ Nightly：
 - 提高 `ST_SIM_RUNS`，运行更深的 DST。
 - 保留测试输出，方便复现 seed。
 
-Release：
+开发签名发行验收：
 
-- 通过 `v*` tag 或 `workflow_dispatch` 显式提供 tag 触发。
+- 只允许在 `main` ref 手动触发 `.github/workflows/release.yml`；它没有 GitHub Release 写权限，也不接受 tag 自动触发。
 - 重新跑 `scripts/check`。
-- 在稳定签名、预授权 TCC 的交互式 release runner 重新跑 `scripts/test-e2e`，确认真实 Mac app 启动路径仍可用。
-- 用 release 配置打包 `.app`。
-- 生成可直接下载安装的 `Noonmark.dmg`、`Noonmark.app.zip` 与 SHA256。
-- 校验 DMG checksum、挂载内容、`.app` bundle、可执行文件、`Info.plist` 和 Applications shortcut。
-- 挂载 DMG 后复制 `.app` 到临时 Applications 目录，由不进入发行包的独立 `NoonmarkDMGInstallHarness.app` 通过真实 WindowServer 输入打开 Settings、Quick Entry、建立任务、退出并重启；同时以 AX 可见性、截图、ledger、unified log、DiagnosticReports 与完整 SQLite joined-row 对账验证持久化。
-- 校验 zip checksum。
-- 上传 `dist/`、E2E 截图和 DMG 安装烟测产物，随后创建或更新 GitHub Release 并上传正式产物。
+- 在稳定 `Apple Development` 签名、预授权 TCC 的交互式 runner 重新跑 `scripts/test-e2e`，确认真实 Mac app 启动路径仍可用。
+- 用 release 优化配置打包 `.app`，但产物只代表开发签名安装验收，不代表可公开分发。
+- 校验 DMG／zip checksum、挂载内容、严格 code signature、canonical icon、`.app` bundle、可执行文件、`Info.plist` 和 Applications shortcut。
+- 挂载 DMG 后复制 `.app` 到临时 Applications 目录，由不进入产物的独立 `NoonmarkDMGInstallHarness.app` 通过真实 WindowServer 输入打开 Settings、Quick Entry、建立任务、退出并重启；同时以 AX 可见性、截图、ledger、unified log、DiagnosticReports 与完整 SQLite joined-row 对账验证持久化。
+- Actions artifact 固定命名为 `development-signed-not-for-distribution`，并包含 `NOT-FOR-DISTRIBUTION.txt`；workflow 不得创建、修改或上传 GitHub Release。
+
+公开发行：
+
+- 当前 fail-closed 阻断。Apple 官方要求站外分发使用 `Developer ID Application`，并在公证前启用 Hardened Runtime、secure timestamp；Apple Development、ad-hoc 或本地开发证书不能替代。
+- 后续必须建立独立 distribution identity／notary keychain profile，完成 `notarytool submit --wait`、`stapler staple`／`validate` 和 Gatekeeper `spctl` 验收，再通过受保护 environment 与人工批准开放 GitHub Release 写权限。
+- 正式发行 workflow 不得回退到 `NOONMARK_UI_CODESIGN_IDENTITY`，也不得把开发签名 artifact 改名后上传。
 
 ## 当前本地取证
 
@@ -149,19 +153,22 @@ Release：
 - 2026-07-14：数据包 E2E 升级为完整 snapshot 对账，先在非空库加入替换任务，再验证导入会移除旧事实、关闭同步并精确恢复导出 snapshot；另注入导入写库失败，验证内存状态与重启后的 SQLite 都保留导入前数据。导出文件写后回读并生成 SHA-256 回执，Storage 测试另覆盖 staging 失败回滚、旧同步运行态清除与目标设备身份保留。
 - 2026-07-14：`scripts/test-icloud-sync-live` 已通过，证据覆盖双 SQLite 合并、真实 E2E App 显式启用与同步、`localFirst.sync.lastStatus` 落盘、仓库 `refs/latest` 和 CloudDocs 上传完成。它仍不是两台物理设备或 CloudKit production 验收。
 - 2026-07-14：CloudKit `CKSyncEngine` adapter、SQLite durable mirror、非重入 session 持久化、account／zone／record 删除阻断、entitlement 与 account preflight、签名输入门禁及独立 test zone live 脚本已落地；CloudKit 专项测试和真实 ad-hoc App 缺 entitlement 失败路径通过。当时本机没有有效 code-signing identity，因此 `scripts/test-cloudkit-sync-live` 尚未运行成功，不得描述为真实 CloudKit 到达证据。
-- 2026-07-16：交互验收入口已强制稳定签名，并新增唯一 `Apple Development` 身份自动发现、显式身份优先、零／多候选 fail-closed 和错误脱敏测试；本轮 `make check` 通过 590 项测试，1 项 live iCloud 明确跳过，0 失败。
-- 2026-07-16：Xcode 已生成有效期与 Code Signing 用途均正确的 `Apple Development` 叶子证书和匹配私钥，但本机 Keychain 只有旧 WWDR intermediate，`security find-identity -v -p codesigning` 因缺少证书要求的 G3 issuer 而报告零个有效身份。依据叶子 AIA、issuer OU 与 Authority Key Identifier，从 Apple PKI 下载并校验 `Worldwide Developer Relations - G3` 后导入登录 Keychain；当前已报告一个有效身份，真实临时 `codesign`、严格验证、无 `cdhash` designated requirement 与项目自动解析器均通过。稳定签名 App 的 TCC 与真实 WindowServer 正向证据仍须在最终 bundle 构建后取得。
+- 2026-07-18：交互验收入口强制稳定签名，并具有唯一 `Apple Development` 身份自动发现、显式身份优先、零／多候选 fail-closed 和错误脱敏测试；最终 `make check` exit 0，覆盖 build、UT／IT／ST、896 项测试、确定性仿真、localization guard、Natural Day boundary、runtime evidence、三套 validation evidence contract、code-signing policy、DMG observer lifecycle、SwiftLint 与 SwiftFormat；1 项明确 opt-in 的 live iCloud 测试按设计跳过，0 失败、0 lint violation、0 format drift。该门禁保存 source start／end tree、日志 SHA 与 fresh inventory，最终真实 App／DMG 运行链另以同一 evidence run ID 闭环。
+- 2026-07-16：Xcode 已生成有效期与 Code Signing 用途均正确的 `Apple Development` 叶子证书和匹配私钥，但本机 Keychain 只有旧 WWDR intermediate，`security find-identity -v -p codesigning` 因缺少证书要求的 G3 issuer 而报告零个有效身份。依据叶子 AIA、issuer OU 与 Authority Key Identifier，从 Apple PKI 下载并校验 `Worldwide Developer Relations - G3` 后导入登录 Keychain；当前已报告一个有效身份，真实临时 `codesign`、严格验证、无 `cdhash` designated requirement 与项目自动解析器均通过。两个固定 bundle 的 TCC 与 LaunchServices WindowServer 正向证据也已取得；后续重编译在 Team、签名类别与 bundle identifier 不变时不得要求重复授权。
+- 2026-07-16：最新稳定签名完整 `scripts/test-e2e debug` exit 0。新增覆盖父任务 completion control 的 AX label／button trait 与真实点击、开放子任务阻塞、最后一个子任务处理后的父任务完成／撤销、原生 `⌘?` Help menu、Settings／Search／Help 最小尺寸、divider 恢复、严格 WindowServer down／up 状态、Natural Day completion mutation、失败导入 sheet 撤下与进程终止；各路径均完成 SQLite／restart 对账。
+- 2026-07-16：SQLite 的人类可读时间不再承担 canonical 精度。days、task definitions、day traces 和 subtasks 保存 exact bit pattern 并校验文字投影一致；planned subtask、note 与数据包 nested JSON 复用同一 UInt64 codec，非有限日期 fail-closed。Storage 测试覆盖亚毫秒／极值 bit round-trip、projection mismatch 和 nonfinite 拒绝；数据包成功与失败导入 E2E 均通过。
 - 2026-07-06：`scripts/test-e2e` 已包含真实 App Provider 配置 round-trip 探针，验证非密配置经 UserDefaults 回读、dummy API Key 经 Keychain 回读，并在验证后清理。
 - 2026-07-06：`make package-dmg` 通过，生成 `dist/Noonmark.dmg` 与 `dist/Noonmark.dmg.sha256`，`shasum -a 256 -c dist/Noonmark.dmg.sha256` 通过。
 - 2026-07-06：`scripts/test-dmg-install dist/Noonmark.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
-- 2026-07-08：release workflow 已对齐当前产物命名和手动发版入口：发布产物统一为 `Noonmark.dmg` 与 `Noonmark.app.zip`，`workflow_dispatch` 必须显式提供 tag，可选覆盖 title / prerelease；release 过程上传 `dist/`、E2E 和 DMG 安装验证 artifact 供 GitHub 排障。
+- 2026-07-16：最新 release `dist/Noonmark.dmg` 重新打包成功；checksum、挂载内容、canonical icon、optical variant、exported drag UTI 和 strict `codesign` 均通过，签名 TeamIdentifier 为 `7436PPJ79X`。最新 `scripts/test-dmg-install dist/Noonmark.dmg` exit 0：生产 App 忽略内部 E2E 参数，通过真实 WindowServer 输入打开 Settings／Quick Entry、建立任务、退出并重启；AX、截图、ledger、unified log、Diagnostic Reports 与 SQLite joined row 对账全部通过。`spctl` 因 Apple Development／未公证而拒绝是公开发行门禁的正确结果，不是安装 E2E 失败。
+- 2026-07-16：原 release workflow 会把 Apple Development 签名、未公证产物直接发布到 GitHub Release，已改为仅限 `main` 手动触发的开发签名发行验收：权限降为只读、移除 tag 与 `gh release` 路径、artifact 明确标记 `not-for-distribution`。正式发行在 Developer ID、Hardened Runtime、secure timestamp、公证、staple 和 Gatekeeper 验收齐备前保持 fail-closed。
 - 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，新用户空库只初始化并写入 1 条 preferences，不自动灌入演示任务；演示数据只在 `--ephemeral` 测试 / 截图路径使用。
 - 2026-07-06：设置页导出 / 导入已接入 `NoonmarkDataPackage` JSON 数据包；`swift test --filter NoonmarkStorageTests` 通过 5 个 Storage 测试。
 - 2026-07-06：`NoonmarkAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 provider 验证入口为 `scripts/test-ai-provider-live`，缺少 `NOONMARK_AI_API_KEY` 时 fail-closed。
 
 ## 后续缺口
 
-- E2E 已覆盖主要页面、关键详情栏选中态、默认汇总侧栏、日历本地分析、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、Day Todo 复盘区烛龙分析入口、右键菜单动作矩阵、有限撤销、当天子任务完成撤回和难度修改、日期 strip 选中映射、方向键日期导航、变更、回池、废弃、事务性导入 / 导出、烛龙导航 gating、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
-- iCloud 发布前仍需取得 Apple 签名资产，运行 CloudKit Development／Production live，并完成两台物理设备的到达、离线并发与恢复验收；当前已通过的 live 证据只覆盖本机 App 到 Apple CloudDocs 服务的上传与同仓库合并。
+- E2E 已覆盖主要页面、关键详情栏选中态、默认汇总侧栏、日历本地分析、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、Day Todo 复盘区烛龙分析入口、右键菜单动作矩阵、有限撤销、父／子任务 completion control、当天子任务完成撤回和难度修改、日期 strip 选中映射、方向键日期导航、变更、回池、废弃、事务性导入／导出、失败导入退出、原生 Help、辅助窗口最小尺寸、divider 恢复、严格 WindowServer 输入、烛龙导航 gating、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
+- iCloud 发布前仍需取得 CloudKit entitlement／provisioning profile、Production environment 与两台物理设备 live 所需资产，并完成到达、离线并发与恢复验收；本机已有 Apple Development 身份，当前已通过的 live 证据只覆盖本机 App 到 Apple CloudDocs 服务的上传与同仓库合并。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
-- Release 后续需要补 Apple Developer ID 签名、notarization；当前本地 DMG 使用 ad-hoc 签名，只能证明可生成、校验和从本机复制安装后启动。
+- 公开发行仍需 Apple Developer Program 下的 Developer ID Application 证书与公证凭证；当前本地／CI DMG 使用稳定 Apple Development 签名，只能证明代码签名、可生成、校验和、真实复制安装、交互和持久化路径，不能作为对外下载产物。

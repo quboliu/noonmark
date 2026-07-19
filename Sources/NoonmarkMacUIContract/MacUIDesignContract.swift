@@ -83,6 +83,42 @@ public enum MacUIShellLayout {
     public static let detailRailCollapsedByDefault = true
 }
 
+public enum MacUITaskRowLayout {
+    public static let completionControlSize = 28.0
+    public static let accessorySpacing = 12.0
+    public static let identityPrecedesAccessories = true
+    public static let completionFollowsAccessories = true
+    public static let flexibleSpaceFollowsAccessories = true
+}
+
+public enum MacUICalendarDetailRowLayout {
+    public static let titlePointSize = 12.5
+    public static let titleLineLimit = 2
+    public static let metadataPointSize = 10.5
+    public static let horizontalPadding = 10.0
+    public static let verticalPadding = 8.0
+    public static let statusRepresentationCount = 1
+    public static let exposesFullTitleToAccessibility = true
+}
+
+public enum MacUICalendarInsightRowLayout {
+    public static let labelLineLimit = 1
+    public static let usesSharedIntrinsicLabelColumn = true
+}
+
+public enum MacUITaskLabelPatchLayout {
+    public static let semanticFillOpacity = 0.10
+    public static let borderLineWidth = 1.0
+    public static let usesDashedBorder = false
+    public static let overflowUsesDashedBorder = false
+}
+
+public enum MacUIFuturePlanDetailLayout {
+    public static let metadataSpacing = 8.0
+    public static let summaryCardCount = 0
+    public static let noticeCount = 1
+}
+
 public enum MacUIIconMetrics {
     public static let toolbarSize = 13.0
     public static let navigationSize = 14.0
@@ -90,6 +126,12 @@ public enum MacUIIconMetrics {
 
 public enum MacUIAccessibilityLayout {
     public static let minimumInteractiveTargetSize = 28.0
+}
+
+public enum MacUIAnimationMetrics {
+    public static let toastRiseDuration = 0.20
+    public static let dateStripSpringResponse = 0.24
+    public static let dateStripSpringDampingFraction = 0.74
 }
 
 public struct MacUISRGBColor: Equatable, Sendable {

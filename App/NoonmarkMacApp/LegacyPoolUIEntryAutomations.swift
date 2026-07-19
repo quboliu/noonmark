@@ -489,6 +489,53 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
                 "current pending with subtasks"
             )
 
+            let currentWithResolvedSubtasksID = try makeTrace(
+                title: "E2E 当前子任务均已处理",
+                date: today,
+                today: today,
+                store: store
+            )
+            let completedSubtaskID = try store.engine.addSubtask(
+                traceID: currentWithResolvedSubtasksID,
+                title: "已完成子任务"
+            )
+            let abandonedSubtaskID = try store.engine.addSubtask(
+                traceID: currentWithResolvedSubtasksID,
+                title: "已废弃子任务"
+            )
+            try store.engine.completeSubtask(
+                completedSubtaskID,
+                today: today
+            )
+            try store.engine.abandonSubtask(
+                abandonedSubtaskID,
+                today: today
+            )
+            try assertActions(
+                store.contextMenuActions(
+                    for: try trace(
+                        currentWithResolvedSubtasksID,
+                        in: store
+                    )
+                ),
+                [.markComplete, .continueTo, .changeToNewTask, .returnToPool, .abandonChain],
+                "current pending with resolved subtasks"
+            )
+            try store.engine.markCompleted(
+                traceID: currentWithResolvedSubtasksID,
+                today: today
+            )
+            try assertActions(
+                store.contextMenuActions(
+                    for: try trace(
+                        currentWithResolvedSubtasksID,
+                        in: store
+                    )
+                ),
+                [.undoComplete],
+                "current completed with subtasks"
+            )
+
             let completedID = try makeTrace(title: "E2E 当前已完成", date: today, today: today, store: store)
             try store.engine.markCompleted(traceID: completedID, today: today)
             try assertActions(
@@ -498,15 +545,14 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
             )
 
             let historicalUnfinishedID = try makeTrace(title: "E2E 历史未完成", date: past, today: past, store: store)
+            let historicalCompletedID = try makeTrace(title: "E2E 历史已完成", date: past, today: past, store: store)
+            try store.engine.markCompleted(traceID: historicalCompletedID, today: past)
             try store.engine.settleDays(upTo: today)
             try assertActions(
                 store.contextMenuActions(for: try trace(historicalUnfinishedID, in: store)),
                 [.continueTo, .abandonChain],
                 "historical unfinished"
             )
-
-            let historicalCompletedID = try makeTrace(title: "E2E 历史已完成", date: past, today: past, store: store)
-            try store.engine.markCompleted(traceID: historicalCompletedID, today: past)
             try assertActions(
                 store.contextMenuActions(for: try trace(historicalCompletedID, in: store)),
                 [.copyAsNewTask],
@@ -685,7 +731,7 @@ struct ReportedBugsE2EAutomation: LaunchAutomationRunnable {
         if store.engine.traces[trace.id]?.status != .pending {
             failures.append("parent with open subtasks completed")
         }
-        if store.toast != "还有未完成子任务，完成全部子任务后才能完成父任务" {
+        if store.toast != store.copy.openSubtasksPreventCompletion {
             failures.append("parent completion leaked raw error: \(store.toast ?? "nil")")
         }
     }

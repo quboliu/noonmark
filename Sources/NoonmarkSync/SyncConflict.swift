@@ -92,7 +92,7 @@ public struct SyncConflict: Codable, Equatable, Sendable {
             append(Data(value.utf8))
         }
 
-        append("noonmark.sync-conflict.canonical-evidence.v1")
+        append("noonmark.sync-conflict.canonical-evidence.v2")
         append(type.rawValue)
         append(entityType.rawValue)
         append(entityID)
@@ -111,6 +111,15 @@ public struct SyncConflict: Codable, Equatable, Sendable {
         withUnsafeBytes(of: &modifiedAtBits) { append(Data($0)) }
         append(remoteRecord.modifiedByDeviceID.rawValue)
         append(remoteRecord.payload)
+        var witnessCount = UInt64(
+            remoteRecord.reactivationWitnesses.count
+        ).bigEndian
+        withUnsafeBytes(of: &witnessCount) {
+            evidence.append(contentsOf: $0)
+        }
+        for witness in remoteRecord.reactivationWitnesses {
+            append(witness)
+        }
 
         var bytes = Array(SHA256.hash(data: evidence).prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x50
@@ -179,19 +188,61 @@ public struct SyncTerminalRejection: Equatable, Sendable {
 public struct SyncMergeResult: Equatable, Sendable {
     public var snapshot: NoonmarkSnapshot
     public var appliedRecordIDs: [SyncRecordID]
+    public var appliedEvidenceIDs: [SyncRecordEvidenceID]
     public var waitingRecords: [SyncWaitingRecord]
     public var conflicts: [SyncConflict]
+    public var outcomes: [SyncRecordMergeOutcome]
+    public var provenanceGroups: [SyncRecordProvenanceGroup]
 
     public init(
         snapshot: NoonmarkSnapshot,
         appliedRecordIDs: [SyncRecordID],
+        appliedEvidenceIDs: [SyncRecordEvidenceID] = [],
         waitingRecords: [SyncWaitingRecord] = [],
-        conflicts: [SyncConflict]
+        conflicts: [SyncConflict],
+        outcomes: [SyncRecordMergeOutcome] = [],
+        provenanceGroups: [SyncRecordProvenanceGroup] = []
     ) {
         self.snapshot = snapshot
         self.appliedRecordIDs = appliedRecordIDs
+        self.appliedEvidenceIDs = appliedEvidenceIDs
         self.waitingRecords = waitingRecords
         self.conflicts = conflicts
+        self.outcomes = outcomes
+        self.provenanceGroups = provenanceGroups
+    }
+}
+
+public enum SyncRecordDependency: Codable, Equatable, Hashable, Sendable {
+    case day(LocalDate)
+    case taskChain(TaskChainID)
+    case taskDefinition(TaskDefinitionID)
+    case dayTrace(DayTraceID)
+    case subtask(SubtaskID)
+    case category(TaskCategoryID)
+    case label(TaskLabelID)
+    case classificationEvent(UUID)
+    case classificationCommit(UUID)
+    case classificationRevision(UInt64)
+    case currentSnapshotIntegrity
+
+    init(_ dependency: ClassificationCommitDependency) {
+        switch dependency {
+        case let .taskChain(id):
+            self = .taskChain(id)
+        case let .dayTrace(id):
+            self = .dayTrace(id)
+        case let .category(id):
+            self = .category(id)
+        case let .label(id):
+            self = .label(id)
+        case let .classificationEvent(id):
+            self = .classificationEvent(id)
+        case let .classificationCommit(id):
+            self = .classificationCommit(id)
+        case let .classificationRevision(revision):
+            self = .classificationRevision(revision)
+        }
     }
 }
 
@@ -199,11 +250,11 @@ public struct SyncMergeResult: Equatable, Sendable {
 /// 并在依赖事实到达后重新验证。
 public struct SyncWaitingRecord: Equatable, Sendable {
     public let record: SyncRecord
-    public let dependencies: [ClassificationCommitDependency]
+    public let dependencies: [SyncRecordDependency]
 
     public init(
         record: SyncRecord,
-        dependencies: [ClassificationCommitDependency]
+        dependencies: [SyncRecordDependency]
     ) {
         self.record = record
         self.dependencies = dependencies

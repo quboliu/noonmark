@@ -1,0 +1,481 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+cd "$repo_root"
+
+source scripts/dmg-install-observer-common
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-observer.XXXXXX")"
+active_helper_observer_pid=""
+active_helper_observer_parent_pid=""
+active_helper_observer_token=""
+active_test_helper_pid=""
+active_test_watchdog_pid=""
+wait_trigger_fd=""
+wait_trigger_pid=""
+started_observer_pid=""
+test_mode="exercise"
+test_helper_pid="999999"
+test_token="00000000-0000-0000-0000-000000000001"
+
+cleanup() {
+  local original_status=$?
+  local final_status="$original_status"
+
+  trap - EXIT DEBUG
+  set +e
+  if ! stop_test_child "$active_test_watchdog_pid"; then
+    final_status=1
+  fi
+  if ! stop_test_child "$active_helper_observer_pid"; then
+    final_status=1
+  fi
+  if ! stop_test_child "$active_test_helper_pid"; then
+    final_status=1
+  fi
+  exec 7>&- 8>&-
+  rm -rf "$work_dir"
+  exit "$final_status"
+}
+
+trap cleanup EXIT
+
+test_process_is_direct_child() {
+  local pid="$1"
+  local expected_parent="$2"
+  local observed_parent
+
+  if [[ ! "$pid" =~ ^[0-9]+$ || "$pid" -le 0 ]]; then
+    return 1
+  fi
+  if ! observed_parent="$(ps -p "$pid" -o ppid= 2>/dev/null)"; then
+    return 1
+  fi
+  observed_parent="${observed_parent//[[:space:]]/}"
+  [[ "$observed_parent" == "$expected_parent" ]]
+}
+
+stop_test_child() {
+  local pid="${1:-}"
+
+  if [[ -z "$pid" ]]; then
+    return 0
+  fi
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    builtin wait "$pid" >/dev/null 2>&1 || true
+    return 0
+  fi
+  if ! test_process_is_direct_child "$pid" "$$"; then
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      builtin wait "$pid" >/dev/null 2>&1 || true
+      return 0
+    fi
+    echo "refusing to terminate an unverified test child: $pid" >&2
+    return 1
+  fi
+  kill -TERM "$pid" >/dev/null 2>&1 || true
+  builtin wait "$pid" >/dev/null 2>&1 || true
+}
+
+arm_deadline() {
+  local seconds="$1"
+  local observer_pid="$2"
+  local marker_path="$3"
+  local observer_parent="$$"
+
+  (
+    timer_pid=""
+    stop_deadline_timer() {
+      trap - TERM INT
+      if [[ -n "$timer_pid" ]]; then
+        kill -TERM "$timer_pid" >/dev/null 2>&1 || true
+        builtin wait "$timer_pid" >/dev/null 2>&1 || true
+      fi
+      exit 0
+    }
+    trap stop_deadline_timer TERM INT
+
+    # This is a fail-closed watchdog, not an ordering fixture.
+    /bin/sleep "$seconds" &
+    timer_pid=$!
+    builtin wait "$timer_pid"
+    timer_pid=""
+    publish_artifact "$marker_path" $'deadline=expired\n'
+    if test_process_is_direct_child "$observer_pid" "$observer_parent"; then
+      kill -TERM "$observer_pid" >/dev/null 2>&1 || true
+    fi
+  ) &
+  active_test_watchdog_pid=$!
+}
+
+disarm_deadline() {
+  if [[ -z "$active_test_watchdog_pid" ]]; then
+    return 0
+  fi
+  if ! stop_test_child "$active_test_watchdog_pid"; then
+    return 1
+  fi
+  active_test_watchdog_pid=""
+}
+
+publish_artifact() {
+  local path="$1"
+  local content="$2"
+  local temporary_path
+
+  temporary_path="$(mktemp "${path}.tmp.XXXXXX")"
+  printf '%s' "$content" >"$temporary_path"
+  mv "$temporary_path" "$path"
+}
+
+set_active_observer() {
+  local pid="$1"
+  local token="$2"
+
+  active_helper_observer_pid="$pid"
+  active_helper_observer_parent_pid="$$"
+  active_helper_observer_token="$token"
+}
+
+assert_observer_state_cleared() {
+  if [[ -n "$active_helper_observer_pid" ||
+    -n "$active_helper_observer_parent_pid" ||
+    -n "$active_helper_observer_token" ]]; then
+    echo "observer lifecycle state was not cleared after direct-child wait" >&2
+    exit 1
+  fi
+}
+
+# Shadow only the public Bash wait boundary used by the common protocol.
+# The FIFO release makes result-before/after-wait ordering deterministic.
+wait() {
+  local requested_pid="${1:-}"
+
+  if [[ -n "$wait_trigger_fd" && "$requested_pid" == "$wait_trigger_pid" ]]; then
+    printf 'release\n' >&"$wait_trigger_fd"
+    wait_trigger_fd=""
+    wait_trigger_pid=""
+  fi
+  builtin wait "$@"
+}
+
+launch_swift_observer() {
+  local mode="$1"
+  local helper_pid="$2"
+  local token="$3"
+  local gate_path="$4"
+  local result_path="$5"
+  local observer_log_path="$6"
+  local timeout_seconds="$7"
+
+  start_helper_exit_observer_process \
+    "$mode" \
+    "$helper_pid" \
+    "$token" \
+    "$gate_path" \
+    "$result_path" \
+    "$observer_log_path" \
+    "$timeout_seconds" \
+    "${repo_root}/scripts/dmg-install-exit-observer.swift"
+  started_observer_pid="$active_helper_observer_pid"
+}
+
+assert_pass_result() {
+  local mode="$1"
+  local helper_pid="$2"
+  local token="$3"
+  local result_path="$4"
+
+  if ! awk -v mode="$mode" -v pid="$helper_pid" -v token="$token" '
+    NR == 1 { valid += ($0 == "status=PASS") }
+    NR == 2 { valid += ($0 == "mode=" mode) }
+    NR == 3 { valid += ($0 == "helper_pid=" pid) }
+    NR == 4 { valid += ($0 == "launch_token=" token) }
+    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]+$/) }
+    NR == 6 { valid += ($0 == "raw_status=0") }
+    NR == 7 { valid += ($0 == "normal_exit=true") }
+    NR == 8 { valid += ($0 == "exit_code=0") }
+    NR == 9 { valid += ($0 == "signal=0") }
+    END { exit !(NR == 9 && valid == 9) }
+  ' "$result_path"; then
+    echo "real observer did not publish the expected PASS result" >&2
+    exit 1
+  fi
+}
+
+gate_path="${work_dir}/gate-interleaving.txt"
+result_path="${work_dir}/gate-interleaving-result.txt"
+gate_content="mode=$test_mode
+helper_pid=$test_helper_pid
+launch_token=$test_token
+observer=EVFILT_PROC+NOTE_EXITSTATUS
+"
+gate_result_injected=0
+
+inject_gate_result_interleaving() {
+  if [[ "$gate_result_injected" -eq 0 &&
+    "$BASH_COMMAND" == '[[ -s "$result_path" ]]' ]]; then
+    gate_result_injected=1
+    publish_artifact "$gate_path" "$gate_content"
+    publish_artifact "$result_path" $'status=PASS\n'
+  fi
+}
+
+set -T
+trap inject_gate_result_interleaving DEBUG
+set +e
+wait_for_helper_observer_gate \
+  "$test_mode" \
+  "$test_helper_pid" \
+  "$test_token" \
+  "$gate_path" \
+  "$result_path"
+gate_interleaving_status=$?
+set -e
+trap - DEBUG
+set +T
+if [[ "$gate_result_injected" -ne 1 ]]; then
+  echo "failed to trigger the gate/result publication interleaving" >&2
+  exit 1
+fi
+if [[ "$gate_interleaving_status" -ne 0 ]]; then
+  echo "valid gate was rejected when result appeared between gate checks" >&2
+  exit 1
+fi
+
+publish_artifact "$gate_path" $'wrong gate\n'
+rm -f "$result_path"
+if wait_for_helper_observer_gate \
+  "$test_mode" \
+  "$test_helper_pid" \
+  "$test_token" \
+  "$gate_path" \
+  "$result_path" 2>/dev/null; then
+  echo "mismatched observer gate was accepted" >&2
+  exit 1
+fi
+
+rm -f "$gate_path"
+publish_artifact "$result_path" $'status=FAIL\n'
+if wait_for_helper_observer_gate \
+  "$test_mode" \
+  "$test_helper_pid" \
+  "$test_token" \
+  "$gate_path" \
+  "$result_path" 2>/dev/null; then
+  echo "observer failure before arming was accepted" >&2
+  exit 1
+fi
+
+join_after_dir="${work_dir}/join-after-wait"
+mkdir -p "$join_after_dir"
+join_after_release="${join_after_dir}/release.fifo"
+join_after_result="${join_after_dir}/result.txt"
+mkfifo "$join_after_release"
+exec 7<>"$join_after_release"
+(
+  IFS= read -r _ <&7
+  publish_artifact "$join_after_result" $'status=PASS\n'
+) &
+observer_pid=$!
+set_active_observer "$observer_pid" "$test_token"
+wait_trigger_fd=7
+wait_trigger_pid="$observer_pid"
+if [[ -e "$join_after_result" ]]; then
+  echo "result-after-wait fixture published before the join boundary" >&2
+  exit 1
+fi
+wait_for_helper_exit_result \
+  "$test_helper_pid" \
+  "$test_mode" \
+  "$test_token" \
+  "$join_after_result"
+exec 7>&-
+assert_observer_state_cleared
+
+join_before_dir="${work_dir}/join-before-exit"
+mkdir -p "$join_before_dir"
+join_before_ready="${join_before_dir}/ready.fifo"
+join_before_release="${join_before_dir}/release.fifo"
+join_before_result="${join_before_dir}/result.txt"
+mkfifo "$join_before_ready" "$join_before_release"
+exec 7<>"$join_before_ready"
+exec 8<>"$join_before_release"
+(
+  publish_artifact "$join_before_result" $'status=PASS\n'
+  printf 'ready\n' >&7
+  IFS= read -r _ <&8
+) &
+observer_pid=$!
+set_active_observer "$observer_pid" "$test_token"
+if ! IFS= read -r -t 8 ready_state <&7; then
+  echo "timed out waiting for the result-before-exit barrier" >&2
+  exit 1
+fi
+if [[ "$ready_state" != "ready" || ! -s "$join_before_result" ]]; then
+  echo "failed to establish result-before-exit barrier state" >&2
+  exit 1
+fi
+wait_trigger_fd=8
+wait_trigger_pid="$observer_pid"
+wait_for_helper_exit_result \
+  "$test_helper_pid" \
+  "$test_mode" \
+  "$test_token" \
+  "$join_before_result"
+exec 7>&- 8>&-
+assert_observer_state_cleared
+
+nonzero_result="${work_dir}/nonzero-result.txt"
+(
+  publish_artifact "$nonzero_result" $'status=FAIL\n'
+  exit 7
+) &
+observer_pid=$!
+set_active_observer "$observer_pid" "$test_token"
+if wait_for_helper_exit_result \
+  "$test_helper_pid" \
+  "$test_mode" \
+  "$test_token" \
+  "$nonzero_result" 2>/dev/null; then
+  echo "nonzero observer exit was accepted" >&2
+  exit 1
+fi
+assert_observer_state_cleared
+
+missing_result="${work_dir}/missing-result.txt"
+(exit 0) &
+observer_pid=$!
+set_active_observer "$observer_pid" "$test_token"
+if wait_for_helper_exit_result \
+  "$test_helper_pid" \
+  "$test_mode" \
+  "$test_token" \
+  "$missing_result" 2>/dev/null; then
+  echo "zero-exit observer without an artifact was accepted" >&2
+  exit 1
+fi
+assert_observer_state_cleared
+
+real_success_dir="${work_dir}/real-success"
+mkdir -p "$real_success_dir"
+real_success_release="${real_success_dir}/release.fifo"
+real_success_gate="${real_success_dir}/gate.txt"
+real_success_result="${real_success_dir}/result.txt"
+real_success_log="${real_success_dir}/observer.log"
+real_success_token="$(uuidgen)"
+mkfifo "$real_success_release"
+exec 7<>"$real_success_release"
+(IFS= read -r _ <&7) &
+active_test_helper_pid=$!
+real_success_helper_pid="$active_test_helper_pid"
+launch_swift_observer \
+  preflight \
+  "$real_success_helper_pid" \
+  "$real_success_token" \
+  "$real_success_gate" \
+  "$real_success_result" \
+  "$real_success_log" \
+  1
+wait_for_helper_observer_gate \
+  preflight \
+  "$real_success_helper_pid" \
+  "$real_success_token" \
+  "$real_success_gate" \
+  "$real_success_result"
+printf 'release\n' >&7
+wait_for_helper_exit_result \
+  "$real_success_helper_pid" \
+  preflight \
+  "$real_success_token" \
+  "$real_success_result"
+builtin wait "$real_success_helper_pid"
+active_test_helper_pid=""
+exec 7>&-
+assert_observer_state_cleared
+assert_pass_result \
+  preflight \
+  "$real_success_helper_pid" \
+  "$real_success_token" \
+  "$real_success_result"
+if [[ -s "$real_success_log" ]]; then
+  echo "real successful observer emitted unexpected output" >&2
+  exit 1
+fi
+
+real_timeout_dir="${work_dir}/real-timeout"
+mkdir -p "$real_timeout_dir"
+real_timeout_release="${real_timeout_dir}/release.fifo"
+real_timeout_gate="${real_timeout_dir}/gate.txt"
+real_timeout_result="${real_timeout_dir}/result.txt"
+real_timeout_log="${real_timeout_dir}/observer.log"
+real_timeout_join_log="${real_timeout_dir}/join.log"
+real_timeout_deadline="${real_timeout_dir}/deadline.txt"
+real_timeout_token="$(uuidgen)"
+mkfifo "$real_timeout_release"
+exec 7<>"$real_timeout_release"
+(IFS= read -r _ <&7) &
+active_test_helper_pid=$!
+real_timeout_helper_pid="$active_test_helper_pid"
+launch_swift_observer \
+  preflight \
+  "$real_timeout_helper_pid" \
+  "$real_timeout_token" \
+  "$real_timeout_gate" \
+  "$real_timeout_result" \
+  "$real_timeout_log" \
+  1
+wait_for_helper_observer_gate \
+  preflight \
+  "$real_timeout_helper_pid" \
+  "$real_timeout_token" \
+  "$real_timeout_gate" \
+  "$real_timeout_result"
+arm_deadline 8 "$started_observer_pid" "$real_timeout_deadline"
+timeout_started_at="$SECONDS"
+if wait_for_helper_exit_result \
+  "$real_timeout_helper_pid" \
+  preflight \
+  "$real_timeout_token" \
+  "$real_timeout_result" 2>"$real_timeout_join_log"; then
+  echo "real timeout observer exited successfully" >&2
+  exit 1
+fi
+timeout_elapsed=$((SECONDS - timeout_started_at))
+disarm_deadline
+assert_observer_state_cleared
+if [[ -s "$real_timeout_deadline" ]]; then
+  echo "timed out waiting for the 1s observer regression case" >&2
+  exit 1
+fi
+if [[ "$timeout_elapsed" -gt 6 ]]; then
+  echo "direct-child wait exceeded the bounded timeout: ${timeout_elapsed}s" >&2
+  exit 1
+fi
+if ! grep -Fx 'status=FAIL' "$real_timeout_result" >/dev/null ||
+  ! grep -Fx \
+    'message=EVFILT_PROC timed out after 1s waiting for helper exit' \
+    "$real_timeout_result" >/dev/null; then
+  echo "real timeout observer did not publish the expected FAIL artifact" >&2
+  exit 1
+fi
+if ! grep -Fx \
+  'exit observer failed: EVFILT_PROC timed out after 1s waiting for helper exit' \
+  "$real_timeout_log" >/dev/null; then
+  echo "real timeout observer did not expose its failure on stderr" >&2
+  exit 1
+fi
+if ! grep -Fx \
+  'helper exit observer exited with status 1' \
+  "$real_timeout_join_log" >/dev/null; then
+  echo "direct-child wait did not propagate the observer nonzero exit" >&2
+  exit 1
+fi
+printf 'release\n' >&7
+builtin wait "$real_timeout_helper_pid"
+active_test_helper_pid=""
+exec 7>&-
+
+echo "DMG install observer lifecycle checks passed"

@@ -12,12 +12,65 @@ extension AppCopy {
     var poolSchedulingTitle: String { language == .chinese ? "任务池排期" : "Task Pool scheduling" }
     var poolSchedulingSubtitle: String {
         language == .chinese
-            ? "任务池不再单独给本地汇总解释；只把当前队列交给烛龙统一生成排期草稿。"
-            : "Send the current queue to Zhulong for one scheduling draft instead of adding another local summary."
+            ? "先用本地统计检查任务池完整度与组织状态，再决定下一步排期。"
+            : "Use local signals to review Task Pool readiness and organization before scheduling."
     }
 
     var poolSchedulingIntent: String {
         language == .chinese ? "给任务池重新排期" : "Reschedule the Task Pool"
+    }
+
+    func poolOldestSignal(_ date: String?) -> String {
+        guard let date else {
+            return language == .chinese ? "任务池目前为空。" : "The Task Pool is currently empty."
+        }
+        return language == .chinese
+            ? "最早进入任务池：\(date)。"
+            : "Oldest Task Pool entry: \(date)."
+    }
+
+    func poolOrganizationSignal(unclassifiedCount: Int) -> String {
+        guard unclassifiedCount > 0 else {
+            return language == .chinese
+                ? "所有任务都已有主要分组。"
+                : "Every task has a primary group."
+        }
+        return language == .chinese
+            ? "\(unclassifiedCount) 项任务尚未分组。"
+            : "\(unclassifiedCount) task\(unclassifiedCount == 1 ? " is" : "s are") not grouped."
+    }
+
+    func poolDetailsRecommendation(needsDetailCount: Int) -> String {
+        guard needsDetailCount > 0 else {
+            return language == .chinese
+                ? "现有任务已具备说明、附言或子任务，可直接评估排期。"
+                : "Existing tasks have enough detail, notes, or subtasks to assess for scheduling."
+        }
+        return language == .chinese
+            ? "先为 \(needsDetailCount) 项缺少上下文的任务补充目标或范围。"
+            : "Add a goal or scope to \(needsDetailCount) task\(needsDetailCount == 1 ? "" : "s") that lack context."
+    }
+
+    func poolPlanningRecommendation(plannedCount: Int, totalCount: Int) -> String {
+        guard totalCount > 0 else {
+            return language == .chinese
+                ? "有新承诺时先加入任务池，再选择合适日期。"
+                : "Add new commitments to the Task Pool before choosing a date."
+        }
+        guard plannedCount > 0 else {
+            return language == .chinese
+                ? "复杂任务可先拆成可验证子任务，再进入 Day Todo。"
+                : "Split complex work into verifiable subtasks before moving it into Day Todo."
+        }
+        return language == .chinese
+            ? "\(plannedCount) 项任务已有子任务计划，优先检查最早进入池中的项目。"
+            : "\(plannedCount) task\(plannedCount == 1 ? " has" : "s have") a subtask plan; review the oldest entries first."
+    }
+
+    var poolZhulongNote: String {
+        language == .chinese
+            ? "开启烛龙后，可结合历史节奏生成范围明确的排期草稿。"
+            : "Enable Zhulong to draft a scoped schedule using past working rhythm."
     }
 
     var futureReschedulingTitle: String { language == .chinese ? "未来改期" : "Upcoming rescheduling" }

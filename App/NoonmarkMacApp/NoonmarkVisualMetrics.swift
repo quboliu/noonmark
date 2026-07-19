@@ -20,6 +20,25 @@ enum NoonmarkVisualMetrics {
     static let taskRowVerticalPadding = CGFloat(MacUIShellLayout.taskRowVerticalPadding)
     static let detailPadding = CGFloat(MacUIShellLayout.detailPadding)
     static let navigationRowHeight = CGFloat(MacUIShellLayout.navigationRowHeight)
+    static let taskRowCompletionControlSize = CGFloat(
+        MacUITaskRowLayout.completionControlSize
+    )
+    static let taskRowAccessorySpacing = CGFloat(MacUITaskRowLayout.accessorySpacing)
+    static let calendarDetailTitlePointSize = CGFloat(
+        MacUICalendarDetailRowLayout.titlePointSize
+    )
+    static let calendarDetailMetadataPointSize = CGFloat(
+        MacUICalendarDetailRowLayout.metadataPointSize
+    )
+    static let calendarDetailHorizontalPadding = CGFloat(
+        MacUICalendarDetailRowLayout.horizontalPadding
+    )
+    static let calendarDetailVerticalPadding = CGFloat(
+        MacUICalendarDetailRowLayout.verticalPadding
+    )
+    static let futurePlanMetadataSpacing = CGFloat(
+        MacUIFuturePlanDetailLayout.metadataSpacing
+    )
 
     static let detailTitleDescriptionSpacing = CGFloat(
         MacUIDetailEditorLayout.titleDescriptionSpacing

@@ -7,12 +7,18 @@ public enum ZhulongPendingApplicationKind: Codable, Equatable, Sendable {
     case dailyReview(ZhulongDailyReviewDraftID)
 }
 
+public enum ZhulongJournalClearRequirement: Equatable, Sendable {
+    case beforeSession
+    case afterSession
+}
+
 public struct ZhulongPendingApplication: Equatable, Sendable {
     public let id: UUID
     public let kind: ZhulongPendingApplicationKind
     public let sessionID: ZhulongSessionID
     public let beforeSnapshot: NoonmarkSnapshot
     public let afterSnapshot: NoonmarkSnapshot
+    public let beforeSession: ZhulongSession
     public let afterSession: ZhulongSession
     public let createdAt: Date
 
@@ -22,11 +28,15 @@ public struct ZhulongPendingApplication: Equatable, Sendable {
         sessionID: ZhulongSessionID,
         beforeSnapshot: NoonmarkSnapshot,
         afterSnapshot: NoonmarkSnapshot,
+        beforeSession: ZhulongSession,
         afterSession: ZhulongSession,
-        createdAt: Date = Date()
+        createdAt: Date
     ) throws {
-        guard afterSession.id == sessionID,
-              createdAt.timeIntervalSinceReferenceDate.isFinite
+        guard beforeSession.id == sessionID,
+              afterSession.id == sessionID,
+              createdAt.timeIntervalSinceReferenceDate.isFinite,
+              beforeSession.latestActivityAt < createdAt,
+              afterSession.latestActivityAt == createdAt
         else {
             throw ZhulongSidecarRepositoryError.invalidCiphertext
         }
@@ -37,6 +47,7 @@ public struct ZhulongPendingApplication: Equatable, Sendable {
         self.sessionID = sessionID
         self.beforeSnapshot = beforeSnapshot
         self.afterSnapshot = afterSnapshot
+        self.beforeSession = beforeSession
         self.afterSession = afterSession
         self.createdAt = createdAt
     }
@@ -44,10 +55,11 @@ public struct ZhulongPendingApplication: Equatable, Sendable {
 
 public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
     private static let magic = Data("NOONMARK-ZHULONG-APPLICATION".utf8)
-    private static let formatVersion: UInt8 = 1
+    private static let formatVersion: UInt8 = 3
     private static let currentPlaintextKeys: Set<String> = [
         "afterSession",
         "afterSnapshot",
+        "beforeSession",
         "beforeSnapshot",
         "createdAt",
         "id",
@@ -58,6 +70,7 @@ public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
     public let directoryURL: URL
     private let keySource: any ZhulongSidecarKeySource
     private let fileManager: FileManager
+    private let fileCommitter: ZhulongApplicationJournalFileCommitter
 
     public init(
         directoryURL: URL,
@@ -67,13 +80,33 @@ public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
         self.directoryURL = directoryURL
         self.keySource = keySource
         self.fileManager = fileManager
+        fileCommitter = ZhulongApplicationJournalFileCommitter()
+    }
+
+    init(
+        directoryURL: URL,
+        keySource: any ZhulongSidecarKeySource,
+        fileManager: FileManager = .default,
+        fileOperations: ZhulongJournalDarwinOperations,
+        monitor: @escaping ZhulongApplicationJournalMonitor = { _ in }
+    ) {
+        self.directoryURL = directoryURL
+        self.keySource = keySource
+        self.fileManager = fileManager
+        fileCommitter = ZhulongApplicationJournalFileCommitter(
+            operations: fileOperations,
+            monitor: monitor
+        )
     }
 
     public var fileURL: URL {
-        directoryURL.appendingPathComponent("pending-application.zhj", isDirectory: false)
+        transactionLock.pendingApplicationURL
     }
 
-    public func save(_ application: ZhulongPendingApplication) throws {
+    @discardableResult
+    public func save(
+        _ application: ZhulongPendingApplication
+    ) throws -> ZhulongApplicationJournalCommitOutcome {
         let record = ZhulongPendingApplicationRecord(application)
         _ = try record.restore()
         let plaintext = try encoder.encode(record)
@@ -88,21 +121,68 @@ public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
         var envelope = Self.magic
         envelope.append(Self.formatVersion)
         envelope.append(combined)
-        try fileManager.createDirectory(
-            at: directoryURL,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try envelope.write(to: fileURL, options: .atomic)
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: fileURL.path
-        )
+        return try transactionLock.withExclusiveLock {
+            try transactionLock.assertNoPendingApplicationUnlocked()
+            let persistedSession = try sessionRepository.loadUnlocked(
+                application.sessionID
+            )
+            guard persistedSession == application.beforeSession else {
+                throw ZhulongSidecarRepositoryError.sessionConflict
+            }
+            do {
+                return try fileCommitter.install(
+                    exactBytes: envelope,
+                    at: fileURL,
+                    authenticate: { candidate in
+                        try decodeApplication(from: candidate) == application
+                    }
+                )
+            } catch let failure as ZhulongApplicationJournalMutationFailure {
+                if failure.disposition == .unresolved {
+                    transactionLock.markApplicationCommitUnresolved(
+                        operation: failure.operation,
+                        exactBytes: envelope
+                    )
+                }
+                throw failure
+            }
+        }
     }
 
     public func load() throws -> ZhulongPendingApplication? {
-        guard fileManager.fileExists(atPath: fileURL.path) else { return nil }
-        let envelope = try Data(contentsOf: fileURL)
+        try transactionLock.withExclusiveLock {
+            try loadUnlocked()
+        }
+    }
+
+    func loadUnlocked() throws -> ZhulongPendingApplication? {
+        try fileCommitter.cleanupOrphanedTemporaryFiles(for: fileURL)
+        if let fence = try transactionLock.unresolvedApplicationCommit() {
+            let expectedApplication = try decodeApplication(
+                from: fence.exactBytes
+            )
+            let isPresent = try fileCommitter.resolveUncertainMutation(
+                operation: fence.operation,
+                exactBytes: fence.exactBytes,
+                at: fileURL,
+                authenticate: { candidate in
+                    try decodeApplication(from: candidate)
+                        == expectedApplication
+                }
+            )
+            try transactionLock.clearApplicationCommitFence()
+            guard isPresent else { return nil }
+            return expectedApplication
+        }
+        guard let envelope = try fileCommitter.read(at: fileURL) else {
+            return nil
+        }
+        return try decodeApplication(from: envelope)
+    }
+
+    private func decodeApplication(
+        from envelope: Data
+    ) throws -> ZhulongPendingApplication {
         let headerSize = Self.magic.count + 1
         guard envelope.count > headerSize,
               envelope.prefix(Self.magic.count) == Self.magic,
@@ -128,7 +208,12 @@ public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
         }
         do {
             try validateCurrentPlaintextSchema(plaintext)
-            return try decoder.decode(ZhulongPendingApplicationRecord.self, from: plaintext).restore()
+            return try decoder
+                .decode(
+                    ZhulongPendingApplicationRecord.self,
+                    from: plaintext
+                )
+                .restore()
         } catch let error as ZhulongSidecarRepositoryError {
             throw error
         } catch {
@@ -145,9 +230,67 @@ public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
         }
     }
 
-    public func clear() throws {
-        guard fileManager.fileExists(atPath: fileURL.path) else { return }
-        try fileManager.removeItem(at: fileURL)
+    @discardableResult
+    public func clear(
+        _ expectedApplication: ZhulongPendingApplication,
+        requiring requirement: ZhulongJournalClearRequirement
+    ) throws -> ZhulongApplicationJournalCommitOutcome {
+        try transactionLock.withExclusiveLock {
+            guard let exactEnvelope = try fileCommitter.read(at: fileURL),
+                  try decodeApplication(from: exactEnvelope)
+                  == expectedApplication
+            else {
+                throw ZhulongSidecarRepositoryError
+                    .pendingApplicationConflict
+            }
+            let requiredSession = switch requirement {
+            case .beforeSession:
+                expectedApplication.beforeSession
+            case .afterSession:
+                expectedApplication.afterSession
+            }
+            let persistedSession = try sessionRepository.loadUnlocked(
+                expectedApplication.sessionID
+            )
+            guard persistedSession == requiredSession else {
+                throw ZhulongSidecarRepositoryError.sessionConflict
+            }
+            do {
+                let outcome = try fileCommitter.remove(
+                    exactBytes: exactEnvelope,
+                    at: fileURL,
+                    authenticate: { candidate in
+                        try decodeApplication(from: candidate)
+                            == expectedApplication
+                    }
+                )
+                try transactionLock.clearApplicationCommitFence()
+                return outcome
+            } catch let failure as ZhulongApplicationJournalMutationFailure {
+                if failure.disposition == .unresolved {
+                    transactionLock.markApplicationCommitUnresolved(
+                        operation: failure.operation,
+                        exactBytes: exactEnvelope
+                    )
+                }
+                throw failure
+            }
+        }
+    }
+
+    private var transactionLock: ZhulongSidecarTransactionLock {
+        ZhulongSidecarTransactionLock(
+            directoryURL: directoryURL,
+            fileManager: fileManager
+        )
+    }
+
+    private var sessionRepository: EncryptedFileZhulongSessionRepository {
+        EncryptedFileZhulongSessionRepository(
+            directoryURL: directoryURL,
+            keySource: keySource,
+            fileManager: fileManager
+        )
     }
 
     private var authenticatedData: Data {
@@ -166,14 +309,29 @@ public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
 
     private var encoder: JSONEncoder {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .millisecondsSince1970
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            let seconds = date.timeIntervalSinceReferenceDate
+            guard seconds.isFinite else {
+                throw ZhulongSidecarRepositoryError.invalidCiphertext
+            }
+            var container = encoder.singleValueContainer()
+            try container.encode(seconds.bitPattern)
+        }
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return encoder
     }
 
     private var decoder: JSONDecoder {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .millisecondsSince1970
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let bitPattern = try container.decode(UInt64.self)
+            let seconds = Double(bitPattern: bitPattern)
+            guard seconds.isFinite else {
+                throw ZhulongSidecarRepositoryError.invalidCiphertext
+            }
+            return Date(timeIntervalSinceReferenceDate: seconds)
+        }
         return decoder
     }
 }
@@ -184,6 +342,7 @@ private struct ZhulongPendingApplicationRecord: Codable {
     let sessionID: ZhulongSessionID
     let beforeSnapshot: NoonmarkSnapshot
     let afterSnapshot: NoonmarkSnapshot
+    let beforeSession: ZhulongSessionRecord
     let afterSession: ZhulongSessionRecord
     let createdAt: Date
 
@@ -193,19 +352,22 @@ private struct ZhulongPendingApplicationRecord: Codable {
         sessionID = application.sessionID
         beforeSnapshot = application.beforeSnapshot
         afterSnapshot = application.afterSnapshot
+        beforeSession = ZhulongSessionRecord(application.beforeSession)
         afterSession = ZhulongSessionRecord(application.afterSession)
         createdAt = application.createdAt
     }
 
     func restore() throws -> ZhulongPendingApplication {
-        let session = try afterSession.restore(expectedID: sessionID)
+        let before = try beforeSession.restore(expectedID: sessionID)
+        let after = try afterSession.restore(expectedID: sessionID)
         return try ZhulongPendingApplication(
             id: id,
             kind: kind,
             sessionID: sessionID,
             beforeSnapshot: beforeSnapshot,
             afterSnapshot: afterSnapshot,
-            afterSession: session,
+            beforeSession: before,
+            afterSession: after,
             createdAt: createdAt
         )
     }

@@ -1,0 +1,615 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+source scripts/runtime-evidence
+source scripts/evidence-common
+
+configuration="${1:-debug}"
+evidence_dir="artifacts/e2e-data-root-process-lease"
+same_root="${evidence_dir}/same-root"
+other_root="${evidence_dir}/other-root"
+unsafe_root="${evidence_dir}/unsafe-root"
+database="${same_root}/Noonmark.sqlite"
+sidecar_dir="${same_root}/ZhulongSidecar"
+journal="${sidecar_dir}/pending-application.zhj"
+setup_result="${same_root}/setup-result.txt"
+holder_result="${same_root}/holder-result.txt"
+holder_release="${same_root}/holder-release"
+conflict_result="${same_root}/conflict-result.txt"
+reacquire_result="${same_root}/reacquire-result.txt"
+sigkill_holder_result="${same_root}/sigkill-holder-result.txt"
+sigkill_holder_release="${same_root}/sigkill-holder-release"
+after_sigkill_result="${same_root}/after-sigkill-result.txt"
+process_exit_result="${same_root}/process-exit-result.txt"
+after_process_exit_result="${same_root}/after-process-exit-result.txt"
+other_result="${other_root}/probe-result.txt"
+ephemeral_result="${evidence_dir}/ephemeral-result.txt"
+unexpected_result="${unsafe_root}/unexpected-result.txt"
+manifest="${evidence_dir}/manifest.txt"
+summary="${evidence_dir}/summary.txt"
+inventory="${evidence_dir}/artifact-inventory.sha256"
+console_log="${evidence_dir}/unified.log"
+diagnostic_baseline="${evidence_dir}/diagnostic-baseline.txt"
+diagnostic_result="${evidence_dir}/diagnostic-result.txt"
+source_start_fragment="${evidence_dir}/source-start.fragment"
+source_end_fragment="${evidence_dir}/source-end.fragment"
+app_start_fragment="${evidence_dir}/app-start.fragment"
+app_end_fragment="${evidence_dir}/app-end.fragment"
+app_snapshot="${evidence_dir}/app-snapshot/NoonmarkMacAppE2E.app"
+intentional_termination_ledger="${evidence_dir}/intentional-termination-ledger.tsv"
+sigkill_report="${evidence_dir}/sigkill-report.txt"
+evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
+holder_pid=""
+conflict_pid=""
+runtime_evidence_started=0
+app_binary_sha256=""
+sigkill_target_pid=""
+sigkill_status=""
+
+cleanup() {
+  local suite_status="${1:-0}"
+
+  trap - EXIT
+  touch "$holder_release" 2>/dev/null || true
+  for pid in "$conflict_pid" "$holder_pid"; do
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  if [[ "$runtime_evidence_started" == "1" ]]; then
+    if ! runtime_evidence_stop_console_capture; then
+      suite_status=1
+    fi
+    if ! runtime_evidence_assert_clean_logs \
+      "data-root process lease E2E" \
+      "$console_log"; then
+      suite_status=1
+    fi
+    if runtime_evidence_assert_no_new_diagnostics \
+      "NoonmarkMacAppE2E" \
+      "$diagnostic_baseline" \
+      "${evidence_dir}/DiagnosticReports" \
+      30; then
+      printf 'new_diagnostic_count=0\n' >"$diagnostic_result"
+      mkdir -p "${evidence_dir}/DiagnosticReports"
+      printf 'new_diagnostic_count=0\n' \
+        >"${evidence_dir}/DiagnosticReports/result.txt"
+    else
+      printf 'new_diagnostic_count=nonzero\n' >"$diagnostic_result"
+      suite_status=1
+    fi
+  fi
+  if [[ -f "$manifest" ]]; then
+    if ! finish_lease_evidence "$suite_status"; then
+      suite_status=1
+    fi
+  fi
+  exit "$suite_status"
+}
+
+wait_for_value() {
+  local path="$1"
+  local expected="$2"
+  local owner_pid="$3"
+  for _ in {1..200}; do
+    if [[ -f "$path" ]] && [[ "$(<"$path")" == "$expected" ]]; then
+      return 0
+    fi
+    if ! kill -0 "$owner_pid" 2>/dev/null; then
+      return 1
+    fi
+    sleep 0.05
+  done
+  return 1
+}
+
+finish_lease_evidence() {
+  local suite_status="$1"
+  local app_binary_sha256_end=""
+  local inventory_sha256
+  local -a required_keys=(
+    phase
+    intentional_signal
+    intentional_sigkill_phase
+    intentional_signal_expected_status
+    app_binary_sha256
+    app_binary_sha256_end
+    app_binary_unchanged
+    artifact_inventory_sha256
+    diagnostic_baseline_path
+    diagnostic_final_path
+    diagnostic_diff_path
+    diagnostic_result_path
+    intentional_sigkill_report_path
+    intentional_sigkill_report_sha256
+    intentional_termination_ledger_sha256
+  )
+
+  if [[ ! -f "$summary" ]]; then
+    printf 'suite_result=failed_before_summary\n' >"$summary"
+  fi
+  if evidence_capture_source \
+    "$repo_root" \
+    "source_end" \
+    "$source_end_fragment"; then
+    if ! evidence_append_snapshot "$manifest" "$source_end_fragment"; then
+      suite_status=1
+    fi
+  else
+    suite_status=1
+  fi
+  if [[ -n "${app_bundle:-}" && -d "$app_bundle" ]] &&
+    evidence_capture_bundle \
+      "$app_bundle" \
+      1 \
+      "app_end" \
+      "$app_end_fragment"; then
+    if ! evidence_append_snapshot "$manifest" "$app_end_fragment"; then
+      suite_status=1
+    fi
+    app_binary_sha256_end="$(
+      evidence_read "$app_end_fragment" "app_end_binary_sha256"
+    )"
+  else
+    suite_status=1
+  fi
+  rm -rf "$app_snapshot"
+  mkdir -p "$(dirname "$app_snapshot")"
+  if ! ditto "$app_bundle" "$app_snapshot"; then
+    echo "could not preserve the exact lease App bundle snapshot" >&2
+    suite_status=1
+  fi
+  evidence_append \
+    "$manifest" \
+    "app_binary_sha256_end" \
+    "${app_binary_sha256_end:-missing}" || suite_status=1
+  if [[ -n "$app_binary_sha256" &&
+    "$app_binary_sha256_end" == "$app_binary_sha256" ]]; then
+    evidence_append "$manifest" "app_binary_unchanged" "true" || suite_status=1
+  else
+    evidence_append "$manifest" "app_binary_unchanged" "false" || true
+    suite_status=1
+  fi
+
+  if [[ "$suite_status" == "0" ]]; then
+    if [[ -z "$sigkill_target_pid" || "$sigkill_status" != "137" ]]; then
+      echo "successful lease suite lacks the exact intentional SIGKILL observation" >&2
+      suite_status=1
+    elif ! evidence_verify_sigkill_allowlist \
+      "$sigkill_report" \
+      "${sigkill_target_pid}:SIGKILL:sigkill-holder:137:${app_binary_sha256}"; then
+      suite_status=1
+    fi
+  fi
+  evidence_append \
+    "$manifest" \
+    "intentional_sigkill_pid" \
+    "${sigkill_target_pid:-none}" || suite_status=1
+  evidence_append \
+    "$manifest" \
+    "intentional_sigkill_observed_status" \
+    "${sigkill_status:-none}" || suite_status=1
+  required_keys+=(
+    intentional_sigkill_pid
+    intentional_sigkill_observed_status
+  )
+  evidence_append \
+    "$manifest" \
+    "intentional_sigkill_report_path" \
+    "$sigkill_report" || suite_status=1
+  if [[ -s "$sigkill_report" ]]; then
+    evidence_append \
+      "$manifest" \
+      "intentional_sigkill_report_sha256" \
+      "$(shasum -a 256 "$sigkill_report" | awk '{print $1}')" || suite_status=1
+  else
+    evidence_append \
+      "$manifest" \
+      "intentional_sigkill_report_sha256" \
+      "missing" || true
+    suite_status=1
+  fi
+  if [[ -s "$intentional_termination_ledger" ]]; then
+    evidence_append \
+      "$manifest" \
+      "intentional_termination_ledger_sha256" \
+      "$(shasum -a 256 "$intentional_termination_ledger" | awk '{print $1}')" || suite_status=1
+  else
+    evidence_append \
+      "$manifest" \
+      "intentional_termination_ledger_sha256" \
+      "missing" || true
+    suite_status=1
+  fi
+  evidence_append \
+    "$manifest" \
+    "diagnostic_baseline_path" \
+    "$diagnostic_baseline" || suite_status=1
+  evidence_append \
+    "$manifest" \
+    "diagnostic_final_path" \
+    "${diagnostic_baseline}.current" || suite_status=1
+  evidence_append \
+    "$manifest" \
+    "diagnostic_diff_path" \
+    "${diagnostic_baseline}.new" || suite_status=1
+  evidence_append \
+    "$manifest" \
+    "diagnostic_result_path" \
+    "$diagnostic_result" || suite_status=1
+
+  if evidence_inventory \
+    "$repo_root" \
+    "$inventory" \
+    "$same_root" \
+    "$other_root" \
+    "$unsafe_root" \
+    "${evidence_dir}/ephemeral.log" \
+    "$summary" \
+    "$console_log" \
+    "$diagnostic_baseline" \
+    "${diagnostic_baseline}.current" \
+    "${diagnostic_baseline}.new" \
+    "$diagnostic_result" \
+    "${evidence_dir}/DiagnosticReports" \
+    "$intentional_termination_ledger" \
+    "$sigkill_report" \
+    "$source_start_fragment" \
+    "$source_end_fragment" \
+    "$app_start_fragment" \
+    "$app_end_fragment" \
+    "$app_snapshot"; then
+    inventory_sha256="$(shasum -a 256 "$inventory" | awk '{print $1}')"
+    evidence_append \
+      "$manifest" \
+      "artifact_inventory_sha256" \
+      "$inventory_sha256" || suite_status=1
+  else
+    suite_status=1
+  fi
+  if ! evidence_finish_manifest \
+    "$manifest" \
+    "$suite_status" \
+    "${required_keys[@]}"; then
+    suite_status=1
+  fi
+  return "$suite_status"
+}
+
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+evidence_prepare_fresh_directory "$repo_root" "$evidence_dir"
+mkdir -p "$same_root" "$other_root" "$unsafe_root"
+evidence_capture_source "$repo_root" "source" "$source_start_fragment"
+evidence_begin_manifest \
+  "$manifest" \
+  "data-root-process-lease-e2e" \
+  "$evidence_run_id" \
+  "$configuration" \
+  "full"
+evidence_append_snapshot "$manifest" "$source_start_fragment"
+evidence_append "$manifest" "phase" "data-root-process-lease"
+evidence_append "$manifest" "intentional_signal" "SIGKILL"
+evidence_append "$manifest" "intentional_sigkill_phase" "sigkill-holder"
+evidence_append "$manifest" "intentional_signal_expected_status" "137"
+trap 'cleanup "$?"' EXIT
+
+scripts/build-mac-app "$configuration" e2e
+app_bundle="$repo_root/dist/NoonmarkMacAppE2E.app"
+app_executable="$app_bundle/Contents/MacOS/NoonmarkMacAppE2E"
+evidence_capture_bundle "$app_bundle" 1 "app" "$app_start_fragment"
+evidence_append_snapshot "$manifest" "$app_start_fragment"
+app_binary_sha256="$(evidence_read "$app_start_fragment" "app_binary_sha256")"
+
+runtime_evidence_snapshot_diagnostics \
+  "NoonmarkMacAppE2E" \
+  "$diagnostic_baseline"
+runtime_evidence_start_console_capture \
+  "NoonmarkMacAppE2E" \
+  "$console_log"
+runtime_evidence_started=1
+printf 'phase\tpid\tparent_pid\tsignal\treason\texpected_status\tobserved_status\tbinary_path\tbinary_sha256\n' \
+  >"$intentional_termination_ledger"
+
+"$app_executable" \
+  --ephemeral \
+  --page day \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-probe-data-root-process-lease \
+  --e2e-data-root-process-lease-result-url "$PWD/$ephemeral_result" \
+  >"${evidence_dir}/ephemeral.log" 2>&1
+if [[ ! -f "$ephemeral_result" ]] \
+  || [[ "$(<"$ephemeral_result")" != "ok" ]]; then
+  echo "ephemeral App unexpectedly required a data-root lease" >&2
+  cat "${evidence_dir}/ephemeral.log" >&2
+  exit 1
+fi
+
+chmod 0777 "$unsafe_root"
+set +e
+"$app_executable" \
+  --data-url "$PWD/${unsafe_root}/Noonmark.sqlite" \
+  --page day \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-data-root-process-lease-conflict-result-url "$PWD/$unexpected_result" \
+  >"${unsafe_root}/unexpected.log" 2>&1
+unexpected_status=$?
+set -e
+chmod 0700 "$unsafe_root"
+if [[ "$unexpected_status" -ne 70 ]] \
+  || [[ ! -f "$unexpected_result" ]] \
+  || [[ "$(<"$unexpected_result")" != "unexpected startup failure:"* ]]; then
+  echo "non-conflict startup failure was misreported as a lease conflict" >&2
+  cat "${unsafe_root}/unexpected.log" >&2
+  [[ ! -f "$unexpected_result" ]] || cat "$unexpected_result" >&2
+  exit 1
+fi
+
+"$app_executable" \
+  --data-url "$PWD/$database" \
+  --page zhulong \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-zhulong-sidecar-key \
+  --e2e-setup-zhulong-pending-gate \
+  --e2e-zhulong-pending-gate-result-url "$PWD/$setup_result" \
+  >"${same_root}/setup.log" 2>&1
+if [[ ! -f "$setup_result" ]] || [[ "$(<"$setup_result")" != "ok" ]]; then
+  echo "data-root lease fixture setup failed" >&2
+  cat "${same_root}/setup.log" >&2
+  exit 1
+fi
+if [[ ! -f "$journal" ]]; then
+  echo "data-root lease fixture did not create a pending journal" >&2
+  exit 1
+fi
+session_file="$(find "$sidecar_dir" -type f -name '*.zhs' -print -quit)"
+if [[ -z "$session_file" ]]; then
+  echo "data-root lease fixture did not create a Session" >&2
+  exit 1
+fi
+
+"$app_executable" \
+  --data-url "$PWD/$database" \
+  --page zhulong \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-zhulong-sidecar-key \
+  --e2e-hold-data-root-process-lease \
+  --e2e-data-root-process-lease-result-url "$PWD/$holder_result" \
+  --e2e-data-root-process-lease-release-url "$PWD/$holder_release" \
+  >"${same_root}/holder.log" 2>&1 &
+holder_pid=$!
+if ! wait_for_value "$holder_result" "ready" "$holder_pid"; then
+  echo "first same-root App did not become a healthy lease holder" >&2
+  cat "${same_root}/holder.log" >&2
+  exit 1
+fi
+if [[ ! -f "$journal" ]]; then
+  echo "first App did not retain the intentional third-state journal" >&2
+  exit 1
+fi
+before_database_sha256="$(shasum -a 256 "$database" | awk '{print $1}')"
+before_journal_sha256="$(shasum -a 256 "$journal" | awk '{print $1}')"
+before_session_sha256="$(shasum -a 256 "$session_file" | awk '{print $1}')"
+
+"$app_executable" \
+  --data-url "$PWD/${other_root}/Noonmark.sqlite" \
+  --page day \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-probe-data-root-process-lease \
+  --e2e-data-root-process-lease-result-url "$PWD/$other_result" \
+  >"${other_root}/probe.log" 2>&1
+if [[ ! -f "$other_result" ]] || [[ "$(<"$other_result")" != "ok" ]]; then
+  echo "different data roots did not run concurrently" >&2
+  cat "${other_root}/probe.log" >&2
+  exit 1
+fi
+
+"$app_executable" \
+  --data-url "$PWD/$database" \
+  --page zhulong \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-zhulong-sidecar-key \
+  --e2e-data-root-process-lease-conflict-result-url "$PWD/$conflict_result" \
+  >"${same_root}/conflict.log" 2>&1 &
+conflict_pid=$!
+for _ in {1..60}; do
+  if [[ -f "$conflict_result" ]] || ! kill -0 "$conflict_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+if kill -0 "$conflict_pid" 2>/dev/null; then
+  echo "same-root second App remained alive instead of failing closed" >&2
+  cat "${same_root}/conflict.log" >&2
+  exit 1
+fi
+set +e
+wait "$conflict_pid"
+conflict_status=$?
+set -e
+conflict_pid=""
+if [[ "$conflict_status" -ne 75 ]] \
+  || [[ ! -f "$conflict_result" ]] \
+  || [[ "$(<"$conflict_result")" != \
+    "ok: data-root process lease already held" ]]; then
+  echo "same-root second App did not report the exact lease conflict" >&2
+  cat "${same_root}/conflict.log" >&2
+  [[ ! -f "$conflict_result" ]] || cat "$conflict_result" >&2
+  exit 1
+fi
+
+after_conflict_database_sha256="$(shasum -a 256 "$database" | awk '{print $1}')"
+after_conflict_journal_sha256="$(shasum -a 256 "$journal" | awk '{print $1}')"
+after_conflict_session_sha256="$(shasum -a 256 "$session_file" | awk '{print $1}')"
+if [[ "$after_conflict_database_sha256" != "$before_database_sha256" \
+  || "$after_conflict_journal_sha256" != "$before_journal_sha256" \
+  || "$after_conflict_session_sha256" != "$before_session_sha256" ]]; then
+  echo "rejected same-root App changed Engine, Session, or journal" >&2
+  exit 1
+fi
+
+touch "$holder_release"
+if ! wait_for_value "$holder_result" "ok" "$holder_pid"; then
+  echo "first App became unhealthy after rejecting its peer" >&2
+  cat "${same_root}/holder.log" >&2
+  exit 1
+fi
+wait "$holder_pid"
+holder_pid=""
+
+"$app_executable" \
+  --data-url "$PWD/$database" \
+  --page zhulong \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-zhulong-sidecar-key \
+  --e2e-probe-data-root-process-lease \
+  --e2e-data-root-process-lease-result-url "$PWD/$reacquire_result" \
+  >"${same_root}/reacquire.log" 2>&1
+if [[ ! -f "$reacquire_result" ]] || [[ "$(<"$reacquire_result")" != "ok" ]]; then
+  echo "same root could not reacquire after the first App exited" >&2
+  cat "${same_root}/reacquire.log" >&2
+  exit 1
+fi
+
+"$app_executable" \
+  --data-url "$PWD/$database" \
+  --page zhulong \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-zhulong-sidecar-key \
+  --e2e-hold-data-root-process-lease \
+  --e2e-data-root-process-lease-result-url "$PWD/$sigkill_holder_result" \
+  --e2e-data-root-process-lease-release-url "$PWD/$sigkill_holder_release" \
+  >"${same_root}/sigkill-holder.log" 2>&1 &
+holder_pid=$!
+if ! wait_for_value "$sigkill_holder_result" "ready" "$holder_pid"; then
+  echo "SIGKILL holder did not acquire the same-root lease" >&2
+  cat "${same_root}/sigkill-holder.log" >&2
+  exit 1
+fi
+sigkill_target_pid="$holder_pid"
+sigkill_parent_pid="$(ps -p "$sigkill_target_pid" -o ppid= 2>/dev/null || true)"
+sigkill_parent_pid="${sigkill_parent_pid//[[:space:]]/}"
+sigkill_command="$(ps -ww -p "$sigkill_target_pid" -o command= 2>/dev/null || true)"
+sigkill_binary_sha256="$(shasum -a 256 "$app_executable" | awk '{print $1}')"
+if [[ "$sigkill_parent_pid" != "$$" ]] ||
+  [[ "$sigkill_command" != "$app_executable "* ]] ||
+  [[ "$sigkill_binary_sha256" != "$app_binary_sha256" ]]; then
+  echo "refusing to SIGKILL an unverified lease-holder process" >&2
+  printf 'pid=%s parent_pid=%s command=%s binary_sha256=%s\n' \
+    "$sigkill_target_pid" \
+    "$sigkill_parent_pid" \
+    "$sigkill_command" \
+    "$sigkill_binary_sha256" >&2
+  exit 1
+fi
+kill -KILL "$sigkill_target_pid"
+set +e
+wait "$sigkill_target_pid"
+sigkill_status=$?
+set -e
+holder_pid=""
+if [[ "$sigkill_status" -ne 137 ]]; then
+  echo "SIGKILL holder did not terminate with status 137" >&2
+  exit 1
+fi
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "sigkill-holder" \
+  "$sigkill_target_pid" \
+  "$sigkill_parent_pid" \
+  "SIGKILL" \
+  "data-root-process-lease-reacquisition" \
+  "137" \
+  "$sigkill_status" \
+  "$app_executable" \
+  "$sigkill_binary_sha256" >>"$intentional_termination_ledger"
+cp "$intentional_termination_ledger" "$sigkill_report"
+
+"$app_executable" \
+  --data-url "$PWD/$database" \
+  --page zhulong \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-zhulong-sidecar-key \
+  --e2e-probe-data-root-process-lease \
+  --e2e-data-root-process-lease-result-url "$PWD/$after_sigkill_result" \
+  >"${same_root}/after-sigkill.log" 2>&1
+if [[ ! -f "$after_sigkill_result" ]] \
+  || [[ "$(<"$after_sigkill_result")" != "ok" ]]; then
+  echo "same root could not reacquire after SIGKILL" >&2
+  cat "${same_root}/after-sigkill.log" >&2
+  exit 1
+fi
+
+set +e
+"$app_executable" \
+  --data-url "$PWD/$database" \
+  --page zhulong \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-zhulong-sidecar-key \
+  --e2e-_exit-data-root-process-lease \
+  --e2e-data-root-process-lease-result-url "$PWD/$process_exit_result" \
+  >"${same_root}/process-exit.log" 2>&1
+process_exit_status=$?
+set -e
+if [[ "$process_exit_status" -ne 0 ]] \
+  || [[ ! -f "$process_exit_result" ]] \
+  || [[ "$(<"$process_exit_result")" != "ready" ]]; then
+  echo "_exit holder did not acquire and exit cleanly" >&2
+  cat "${same_root}/process-exit.log" >&2
+  exit 1
+fi
+
+"$app_executable" \
+  --data-url "$PWD/$database" \
+  --page zhulong \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-zhulong-sidecar-key \
+  --e2e-probe-data-root-process-lease \
+  --e2e-data-root-process-lease-result-url "$PWD/$after_process_exit_result" \
+  >"${same_root}/after-process-exit.log" 2>&1
+if [[ ! -f "$after_process_exit_result" ]] \
+  || [[ "$(<"$after_process_exit_result")" != "ok" ]]; then
+  echo "same root could not reacquire after _exit" >&2
+  cat "${same_root}/after-process-exit.log" >&2
+  exit 1
+fi
+
+printf '%s\n' \
+  "suite_result=passed" \
+  "configuration=$configuration" \
+  "phase=sigkill-holder" \
+  "signal=SIGKILL" \
+  "expected_status=137" \
+  "sigkill_pid=$sigkill_target_pid" \
+  "app_binary_sha256=$app_binary_sha256" \
+  "conflict_exit_status=$conflict_status" \
+  "non_conflict_exit_status=$unexpected_status" \
+  "ephemeral=$(<"$ephemeral_result")" \
+  "holder_health=$(<"$holder_result")" \
+  "different_root=$(<"$other_result")" \
+  "engine_sha256_before=$before_database_sha256" \
+  "engine_sha256_after_conflict=$after_conflict_database_sha256" \
+  "session_sha256_before=$before_session_sha256" \
+  "session_sha256_after_conflict=$after_conflict_session_sha256" \
+  "journal_sha256_before=$before_journal_sha256" \
+  "journal_sha256_after_conflict=$after_conflict_journal_sha256" \
+  "sigkill_exit_status=$sigkill_status" \
+  "after_sigkill=$(<"$after_sigkill_result")" \
+  "process_exit_status=$process_exit_status" \
+  "after_process_exit=$(<"$after_process_exit_result")" \
+  >"$summary"
+cat "$summary"
+echo "E2E data-root process lease: conflict rejected without data changes; different root parallel; graceful, SIGKILL, and _exit releases reacquired"

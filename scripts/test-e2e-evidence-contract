@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+if [[ ! -r scripts/evidence-common ]]; then
+  echo "missing public evidence module: scripts/evidence-common" >&2
+  exit 1
+fi
+
+# shellcheck source=scripts/evidence-common
+source scripts/evidence-common
+
+fixture_root="$repo_root/artifacts/evidence-contract-fixture-$$"
+trap 'rm -rf "$fixture_root"' EXIT
+
+evidence_root="$fixture_root/e2e-runtime"
+manifest="$evidence_root/manifest.txt"
+source_fragment="$fixture_root/source.fragment"
+mkdir -p "$evidence_root"
+printf 'stale\n' >"$evidence_root/stale.txt"
+
+# Public seam: every run must replace its evidence root and expose an
+# independently inspectable manifest/inventory. This fixture never builds or
+# launches Noonmark.
+evidence_prepare_fresh_directory "$repo_root" "$evidence_root"
+
+if [[ -e "$evidence_root/stale.txt" ]]; then
+  echo "evidence_begin_run retained an artifact from an older run" >&2
+  exit 1
+fi
+
+mkdir -p "$evidence_root/actual"
+printf 'current-run\n' >"$evidence_root/actual/result.txt"
+evidence_capture_source "$repo_root" "source" "$source_fragment"
+evidence_begin_manifest \
+  "$manifest" \
+  "e2e-contract" \
+  "fixture-run" \
+  "fixture" \
+  "filtered"
+evidence_append_snapshot "$manifest" "$source_fragment"
+evidence_append "$manifest" "scenario_set" "english-day"
+evidence_inventory \
+  "$repo_root" \
+  "$evidence_root/artifact-inventory.sha256" \
+  "$evidence_root/actual"
+inventory_sha256="$(
+  shasum -a 256 "$evidence_root/artifact-inventory.sha256" | awk '{print $1}'
+)"
+evidence_append \
+  "$manifest" \
+  "artifact_inventory_sha256" \
+  "$inventory_sha256"
+evidence_finish_manifest \
+  "$manifest" \
+  0 \
+  "source_head_commit" \
+  "source_head_tree_oid" \
+  "source_worktree_tree_oid" \
+  "source_tree_dirty" \
+  "scenario_set" \
+  "artifact_inventory_sha256"
+
+for required in \
+  "evidence_schema_version=1" \
+  "suite=e2e-contract" \
+  "evidence_run_id=fixture-run" \
+  "source_head_commit=" \
+  "source_head_tree_oid=" \
+  "source_worktree_tree_oid=" \
+  "source_tree_dirty=" \
+  "suite_mode=filtered" \
+  "configuration=fixture" \
+  "suite_exit_status=0" \
+  "artifact_inventory_sha256="; do
+  if ! grep -F "$required" "$manifest" >/dev/null; then
+    echo "evidence manifest is missing $required" >&2
+    cat "$manifest" >&2
+    exit 1
+  fi
+done
+
+inventory="$evidence_root/artifact-inventory.sha256"
+if [[ ! -s "$inventory" ]] ||
+  ! grep -F "actual/result.txt" "$inventory" >/dev/null; then
+  echo "evidence inventory did not bind the observable fixture artifact" >&2
+  [[ ! -f "$inventory" ]] || cat "$inventory" >&2
+  exit 1
+fi
+
+require_literal() {
+  local path="$1"
+  local literal="$2"
+  if ! grep -F -- "$literal" "$path" >/dev/null; then
+    echo "$path is missing evidence contract: $literal" >&2
+    exit 1
+  fi
+}
+
+require_order() {
+  local path="$1"
+  local earlier="$2"
+  local later="$3"
+  local earlier_line
+  local later_line
+
+  earlier_line="$(grep -nF -- "$earlier" "$path" | head -1 | cut -d: -f1 || true)"
+  later_line="$(grep -nF -- "$later" "$path" | head -1 | cut -d: -f1 || true)"
+  if [[ -z "$earlier_line" || -z "$later_line" ]] ||
+    (( earlier_line >= later_line )); then
+    echo "$path does not run '$earlier' before '$later'" >&2
+    exit 1
+  fi
+}
+
+# Integration checks supplement the public seam above: these guard the exact
+# suites/workflows without coupling the fixture to real App launch internals.
+require_literal scripts/test-e2e "source scripts/evidence-common"
+require_order \
+  scripts/test-e2e \
+  'evidence_prepare_fresh_directory "$repo_root" "artifacts/e2e-runtime"' \
+  'if ! command -v sqlite3'
+require_literal scripts/test-e2e "e2e_owned_artifact_roots=("
+if grep -F "e2e-data-root-process-lease" scripts/test-e2e >/dev/null; then
+  echo "scripts/test-e2e claims ownership of the independent writer-lease evidence root" >&2
+  exit 1
+fi
+require_literal scripts/test-e2e "suite_mode="
+require_literal scripts/test-e2e "scenario_set="
+require_literal scripts/test-e2e "NOONMARK_EVIDENCE_RUN_ID"
+require_literal scripts/test-e2e "NOONMARK_EVIDENCE_REQUIRE_FULL_SUITE"
+require_literal scripts/test-e2e 'if [[ "$require_full_suite" == "1" && "$suite_mode" != "full" ]]'
+require_literal scripts/test-e2e "--e2e-native-command-help-shortcut"
+require_order \
+  scripts/test-e2e \
+  '"native Help shortcut"' \
+  '"native command surface exercise"'
+require_order \
+  scripts/test-e2e \
+  '"English native Help shortcut"' \
+  '"English native menu exercise"'
+require_literal \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  "func prepareMenuKeyboardSelection()"
+require_literal \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  "let inheritedModifierFlags = Self.cgFlags("
+require_literal \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  "event.flags.subtract(inheritedModifierFlags)"
+require_literal \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  "func prepareMenuBarGesture("
+require_literal \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  "func postMenuBarKeyboardSelection("
+require_literal \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  "func postMenuBarMouseUp("
+require_order \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  "let events = [gesture.mouseDown, gesture.mouseUp]" \
+  "+ selection.highlightEvents"
+require_order \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  "+ selection.highlightEvents" \
+  "+ selection.confirmationEvents"
+require_order \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  "let baseTimestamp = DispatchTime.now().uptimeNanoseconds" \
+  "event.timestamp = baseTimestamp + UInt64(offset)"
+menu_keyboard_post_function="$fixture_root/post-menu-keyboard-selection.swift"
+sed -n \
+  '/^    func postMenuBarKeyboardSelection($/,/^    }$/p' \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift \
+  >"$menu_keyboard_post_function"
+require_order \
+  "$menu_keyboard_post_function" \
+  "event.timestamp = baseTimestamp + UInt64(offset)" \
+  "event.post(tap: .cghidEventTap)"
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "NSMenu.didBeginTrackingNotification"
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "NSMenu.didSendActionNotification"
+require_order \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "let helpItem = try menuItem(action: NoonmarkMenuAction.showHelp)" \
+  "input.postMenuBarKeyboardSelection("
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "trackingProbe.sentActionCount == 1"
+if grep -F \
+  "func postMenuBarClick(" \
+  App/NoonmarkMacApp/WindowServerInputDriver.swift >/dev/null; then
+  echo "legacy menu-bar click does not prequeue the exact selection start" >&2
+  exit 1
+fi
+require_literal scripts/test-e2e "english-scenario-ledger.tsv"
+require_literal scripts/test-e2e "english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
+require_literal scripts/test-e2e "app_binary_sha256_before="
+require_literal scripts/test-e2e "app_binary_sha256_after="
+require_literal scripts/test-e2e "run_windowserver_input_cleanup"
+require_literal \
+  scripts/test-e2e \
+  "--e2e-windowserver-input-cleanup-result-url"
+cleanup_function="$(
+  sed -n \
+    '/^run_windowserver_input_cleanup() {$/,/^}$/p' \
+    scripts/test-e2e
+)"
+if ! grep -F '/usr/bin/open -W -n' <<<"$cleanup_function" >/dev/null; then
+  echo "WindowServer cleanup does not launch through LaunchServices" >&2
+  exit 1
+fi
+if grep -F '"$app_executable_path"' <<<"$cleanup_function" >/dev/null; then
+  echo "WindowServer cleanup is still attributed to its shell parent" >&2
+  exit 1
+fi
+require_literal \
+  scripts/test-e2e \
+  'windowserver_input_cleanup_result="${runtime_evidence_dir}/windowserver-input-cleanup-result.txt"'
+require_order \
+  scripts/test-e2e \
+  "if ! terminate_e2e_app >/dev/null 2>&1; then" \
+  "if ! run_windowserver_input_cleanup; then"
+require_literal \
+  scripts/test-e2e \
+  '"windowserver_input_cleanup_result"'
+require_literal \
+  scripts/test-e2e \
+  '"$windowserver_input_cleanup_result"'
+require_order \
+  App/NoonmarkMacApp/NoonmarkMacApp.swift \
+  "let app = NSApplication.shared" \
+  "if let inputCleanup = WindowServerInputCleanupE2EAutomation.fromCommandLine()"
+require_order \
+  App/NoonmarkMacApp/NoonmarkMacApp.swift \
+  "if let inputCleanup = WindowServerInputCleanupE2EAutomation.fromCommandLine()" \
+  "store: try NoonmarkStore(dayContext: dayContext)"
+if grep -F \
+  "WindowServerInputCleanupE2EAutomation.fromCommandLine()" \
+  App/NoonmarkMacApp/LegacyLaunchAutomations.swift >/dev/null; then
+  echo "WindowServer cleanup still depends on NoonmarkStore launch automation" >&2
+  exit 1
+fi
+require_literal scripts/test-e2e "english-day"
+require_literal scripts/test-e2e 'external_ax="true"'
+require_literal scripts/test-e2e "english-settings"
+require_literal scripts/test-e2e "english-zhulong"
+require_literal scripts/test-e2e "helper_binary_unchanged"
+require_literal scripts/test-e2e 'evidence_app_snapshot="${runtime_evidence_dir}/app-snapshot/NoonmarkMacAppE2E.app"'
+require_literal scripts/test-e2e 'ditto "$app_path" "$evidence_app_snapshot"'
+require_literal scripts/test-e2e 'evidence_helper_snapshot="${runtime_evidence_dir}/helper-snapshot/NoonmarkDMGInstallHarness.app"'
+require_literal scripts/test-e2e 'ditto "$helper_bundle" "$evidence_helper_snapshot"'
+require_literal scripts/test-e2e '"${helper_diagnostic_baseline}.current"'
+require_literal scripts/test-e2e '"${helper_diagnostic_baseline}.new"'
+require_order \
+  scripts/test-dmg-install \
+  'evidence_prepare_fresh_directory "$repo_root" "$work_dir"' \
+  'required_tools=('
+
+require_literal scripts/test-data-root-process-lease-e2e "source scripts/evidence-common"
+require_literal scripts/test-data-root-process-lease-e2e "source scripts/runtime-evidence"
+require_literal scripts/test-data-root-process-lease-e2e 'evidence_dir="artifacts/e2e-data-root-process-lease"'
+require_literal scripts/test-data-root-process-lease-e2e "NOONMARK_EVIDENCE_RUN_ID"
+require_literal scripts/test-data-root-process-lease-e2e "intentional-termination-ledger.tsv"
+require_literal scripts/test-data-root-process-lease-e2e "phase=sigkill-holder"
+require_literal scripts/test-data-root-process-lease-e2e "signal=SIGKILL"
+require_literal scripts/test-data-root-process-lease-e2e "expected_status=137"
+require_literal scripts/test-data-root-process-lease-e2e "app_binary_sha256="
+require_literal scripts/test-data-root-process-lease-e2e 'app_snapshot="${evidence_dir}/app-snapshot/NoonmarkMacAppE2E.app"'
+require_literal scripts/test-data-root-process-lease-e2e 'ditto "$app_bundle" "$app_snapshot"'
+require_literal scripts/test-data-root-process-lease-e2e "summary.txt"
+require_literal scripts/test-data-root-process-lease-e2e "unified.log"
+require_literal scripts/test-data-root-process-lease-e2e "DiagnosticReports"
+require_literal scripts/test-data-root-process-lease-e2e '"${diagnostic_baseline}.current"'
+require_literal scripts/test-data-root-process-lease-e2e '"${diagnostic_baseline}.new"'
+require_literal scripts/test-data-root-process-lease-e2e 'ps -ww -p "$sigkill_target_pid" -o command='
+require_literal scripts/test-data-root-process-lease-e2e "evidence_verify_sigkill_allowlist"
+
+for workflow in .github/workflows/ci.yml .github/workflows/release.yml; do
+  require_order \
+    "$workflow" \
+    "scripts/test-data-root-process-lease-e2e" \
+    "scripts/test-e2e"
+  require_literal "$workflow" "artifacts/e2e*"
+  require_literal "$workflow" "if-no-files-found: error"
+  require_literal "$workflow" "NOONMARK_EVIDENCE_RUN_ID"
+  require_literal \
+    "$workflow" \
+    "scripts/verify-development-validation-evidence --scope runtime"
+  if grep -F "source scripts/evidence-common" "$workflow" >/dev/null ||
+    grep -F "evidence_require_manifest" "$workflow" >/dev/null ||
+    grep -F "evidence_read" "$workflow" >/dev/null; then
+    echo "$workflow duplicates evidence validation outside the shared validator" >&2
+    exit 1
+  fi
+done
+require_literal \
+  .github/workflows/release.yml \
+  "scripts/verify-development-validation-evidence --scope full"
+
+echo "E2E and data-root process lease evidence contract passed"

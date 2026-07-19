@@ -20,17 +20,42 @@ struct PreparedDataImport: Identifiable {
         id = UUID()
         self.sourceURL = sourceURL
         self.snapshot = snapshot
-        let completedTraceCount = snapshot.traces.reduce(into: 0) {
+        let visibleTraces = snapshot.traces.filter(\.formsDayHistory)
+        let visibleTraceIDs = Set(visibleTraces.map(\.id))
+        let visibleTraceChainIDs = Set(visibleTraces.map(\.chainID))
+        let taskPoolChainIDs = Set(
+            snapshot.chains.compactMap { chain -> TaskChainID? in
+                guard chain.state == .active else { return nil }
+                let chainTraces = snapshot.traces.filter {
+                    $0.chainID == chain.id
+                }
+                return chainTraces.isEmpty || chainTraces.allSatisfy {
+                    $0.status == .returnedToPool || $0.status == .cancelledDraft
+                } ? chain.id : nil
+            }
+        )
+        let visibleTraceDates = Set(visibleTraces.map(\.date))
+        let meaningfulDayCount = snapshot.days.filter {
+            visibleTraceDates.contains($0.date)
+                || $0.lockedAt != nil
+                || $0.reviewSummary != nil
+                || $0.reviewUnfinishedReason != nil
+                || $0.reviewTomorrowNote != nil
+        }.count
+        let completedTraceCount = visibleTraces.reduce(into: 0) {
             if $1.status == .completed { $0 += 1 }
         }
-        let unfinishedTraceCount = snapshot.traces.reduce(into: 0) {
+        let unfinishedTraceCount = visibleTraces.reduce(into: 0) {
             if $1.status == .unfinished || $1.status == .continued { $0 += 1 }
         }
         summary = Summary(
-            dayCount: snapshot.days.count,
-            taskCount: snapshot.definitions.count,
-            traceCount: snapshot.traces.count,
-            subtaskCount: snapshot.subtasks.count,
+            dayCount: meaningfulDayCount,
+            taskCount: visibleTraceChainIDs.union(taskPoolChainIDs).count,
+            traceCount: visibleTraces.count,
+            subtaskCount: snapshot.subtasks.filter {
+                visibleTraceIDs.contains($0.traceID)
+                    && $0.isUserPresentable
+            }.count,
             completedTraceCount: completedTraceCount,
             unfinishedTraceCount: unfinishedTraceCount
         )

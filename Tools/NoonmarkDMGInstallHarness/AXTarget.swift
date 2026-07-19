@@ -8,18 +8,24 @@ final class AXTarget {
         let element: AXUIElement
         let role: String
         let title: String?
+        let description: String?
         let identifier: String?
+        let enabled: Bool?
+        let hidden: Bool?
         let frame: CGRect?
     }
 
     enum Failure: LocalizedError {
         case invalidFrame(String)
+        case invalidTraversal(String)
         case waitTimedOut(String)
 
         var errorDescription: String? {
             switch self {
             case let .invalidFrame(description):
                 "AX element has no usable frame: \(description)"
+            case let .invalidTraversal(description):
+                "AX traversal was incomplete: \(description)"
             case let .waitTimedOut(description):
                 "Timed out waiting for \(description)"
             }
@@ -69,7 +75,13 @@ final class AXTarget {
                     element: current,
                     role: role,
                     title: string(current, kAXTitleAttribute as String),
+                    description: string(
+                        current,
+                        kAXDescriptionAttribute as String
+                    ),
                     identifier: string(current, kAXIdentifierAttribute as String),
+                    enabled: boolean(current, kAXEnabledAttribute as String),
+                    hidden: boolean(current, kAXHiddenAttribute as String),
                     frame: frame(current)
                 )
             )
@@ -77,6 +89,63 @@ final class AXTarget {
             for child in elements(current, kAXChildrenAttribute as String) {
                 queue.append((child, depth + 1))
             }
+        }
+        return result
+    }
+
+    func strictDescendants(
+        of root: AXUIElement,
+        maximumDepth: Int = 40,
+        maximumCount: Int = 20000
+    ) throws -> [Match] {
+        var result: [Match] = []
+        var queue: [(AXUIElement, Int)] = [(root, 0)]
+        var visited: [CFHashCode: [AXUIElement]] = [:]
+        var index = 0
+
+        while index < queue.count {
+            guard result.count < maximumCount else {
+                throw Failure.invalidTraversal(
+                    "element count reached \(maximumCount)"
+                )
+            }
+            let (current, depth) = queue[index]
+            index += 1
+            let hash = CFHash(current)
+            if visited[hash, default: []].contains(where: {
+                CFEqual($0, current)
+            }) {
+                continue
+            }
+            visited[hash, default: []].append(current)
+
+            let children = elements(current, kAXChildrenAttribute as String)
+            guard depth < maximumDepth || children.isEmpty else {
+                throw Failure.invalidTraversal(
+                    "depth reached \(maximumDepth) with \(children.count) children"
+                )
+            }
+            guard queue.count + children.count <= maximumCount else {
+                throw Failure.invalidTraversal(
+                    "pending element count exceeded \(maximumCount)"
+                )
+            }
+            result.append(
+                Match(
+                    element: current,
+                    role: string(current, kAXRoleAttribute as String) ?? "",
+                    title: string(current, kAXTitleAttribute as String),
+                    description: string(
+                        current,
+                        kAXDescriptionAttribute as String
+                    ),
+                    identifier: string(current, kAXIdentifierAttribute as String),
+                    enabled: boolean(current, kAXEnabledAttribute as String),
+                    hidden: boolean(current, kAXHiddenAttribute as String),
+                    frame: frame(current)
+                )
+            )
+            queue.append(contentsOf: children.map { ($0, depth + 1) })
         }
         return result
     }

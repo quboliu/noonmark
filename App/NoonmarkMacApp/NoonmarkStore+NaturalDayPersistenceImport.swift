@@ -5,7 +5,16 @@ import NoonmarkDayContext
 import NoonmarkMacRuntime
 import NoonmarkStorage
 import NoonmarkSync
+import NoonmarkZhulong
 import UniformTypeIdentifiers
+
+struct StoreMutationMoment {
+    let instant: Date
+    let naturalDay: NaturalDayMoment
+
+    var today: LocalDate { naturalDay.today }
+    var state: NaturalDayState { naturalDay.state }
+}
 
 extension NoonmarkStore {
     func prepareForTermination() {
@@ -69,6 +78,7 @@ extension NoonmarkStore {
             naturalDayState = moment.state
             return
         }
+        try assertEngineWriteAllowed()
 
         let previousToday = today
         let followsToday = selectedDate == previousToday
@@ -78,9 +88,10 @@ extension NoonmarkStore {
         do {
             let candidate = try dayRolloverCoordinator.reconcile(
                 engine: engine,
-                moment: moment,
-                persist: save
-            )
+                moment: moment
+            ) { candidate, mutationInstant in
+                try save(candidate, mutationAt: mutationInstant)
+            }
             engine = candidate
             if previousToday != moment.today {
                 clearUndoHistory()
@@ -120,6 +131,22 @@ extension NoonmarkStore {
         }
     }
 
+    func reconcileNaturalDayAtLaunch(
+        _ moment: NaturalDayMoment
+    ) throws {
+        do {
+            try reconcileNaturalDay(moment, signal: .subscription)
+        } catch StoreMutationGateError.pendingZhulongApplication {
+            blockNaturalDay(
+                candidate: moment.today,
+                message: AppPresentation(
+                    language: engine.preferences.language
+                ).zhulong.pendingApplicationMutationBlocked,
+                signal: .subscription
+            )
+        }
+    }
+
     private func blockNaturalDay(
         candidate: LocalDate,
         message: String,
@@ -144,6 +171,7 @@ extension NoonmarkStore {
         guard exclusiveEngineOperation == nil else {
             throw StoreMutationGateError.exclusiveOperationInProgress
         }
+        try assertEngineWriteAllowed()
         let moment: NaturalDayMoment
         do {
             moment = try dayContext.moment()
@@ -177,6 +205,17 @@ extension NoonmarkStore {
     func prepareNaturalDayForUserMutation() -> NaturalDayMoment? {
         do {
             return try prepareNaturalDayForMutation()
+        } catch {
+            if error is StoreMutationGateError {
+                showOperationFailure(.taskMutation, error: error)
+            }
+            return nil
+        }
+    }
+
+    func prepareStoreMutationForUser() -> StoreMutationMoment? {
+        do {
+            return try prepareStoreMutation()
         } catch {
             if error is StoreMutationGateError {
                 showOperationFailure(.taskMutation, error: error)
@@ -231,6 +270,7 @@ extension NoonmarkStore {
     }
 
     func prepareDataImport(from url: URL) async throws -> PreparedDataImport {
+        try assertEngineWriteAllowed()
         guard exclusiveEngineOperation == nil else {
             throw DataImportTransactionError.anotherEngineOperationIsInProgress
         }
@@ -304,7 +344,9 @@ extension NoonmarkStore {
         let importedEngine = try NoonmarkEngine(snapshot: preview.snapshot)
         try importedEngine.settleDays(
             upTo: moment.today,
-            now: moment.instant
+            now: try importedEngine.nextMutationDate(
+                reference: moment.instant
+            )
         )
         try replacePersistedData(with: importedEngine)
         clearUndoHistory()
@@ -322,6 +364,7 @@ extension NoonmarkStore {
     }
 
     private func beginDataImportCommit(previewID: UUID) throws -> UInt64 {
+        try assertEngineWriteAllowed()
         guard exclusiveEngineOperation == nil else {
             throw DataImportTransactionError.anotherEngineOperationIsInProgress
         }
@@ -415,7 +458,7 @@ extension NoonmarkStore {
 
     func loadOrSeed() throws {
         guard let repository else {
-            seed()
+            try seed()
             return
         }
 
@@ -424,7 +467,15 @@ extension NoonmarkStore {
         engine = loaded
         Theme.apply(engine.preferences.theme)
         if snapshot.days.isEmpty && snapshot.chains.isEmpty && snapshot.traces.isEmpty {
-            try save(engine)
+            do {
+                try assertEngineWriteAllowed()
+            } catch StoreMutationGateError.pendingZhulongApplication {
+                // An empty snapshot is already a valid bootstrap state. When
+                // recovery owns the cross-store timeline, leave it untouched
+                // and let recoverPendingZhulongApplication reconcile it next.
+                return
+            }
+            try repository.save(engine)
         }
     }
 
@@ -434,14 +485,28 @@ extension NoonmarkStore {
             return
         }
         do {
-            try save(engine)
+            let naturalDay = try dayContext.moment()
+            try save(
+                engine,
+                mutationAt: engine.nextMutationDate(
+                    reference: naturalDay.instant
+                )
+            )
         } catch {
+            if error is StoreMutationGateError {
+                showOperationFailure(.persistence, error: error)
+                return
+            }
             NSLog("Noonmark persistence save failed: %@", String(describing: error))
             showOperationFailure(.persistence, error: error)
         }
     }
 
-    func save(_ candidate: NoonmarkEngine) throws {
+    func save(
+        _ candidate: NoonmarkEngine,
+        mutationAt mutationInstant: Date
+    ) throws {
+        try assertEngineWriteAllowed()
         guard let repository else { return }
         if persistenceFailuresRemainingForE2E > 0 {
             persistenceFailuresRemainingForE2E -= 1
@@ -450,7 +515,8 @@ extension NoonmarkStore {
         if let syncDeviceIdentity {
             try repository.save(
                 candidate.snapshot(),
-                recordingChangesFor: syncDeviceIdentity.deviceID
+                recordingChangesFor: syncDeviceIdentity.deviceID,
+                changedAt: mutationInstant
             )
         } else {
             try repository.save(candidate)
@@ -458,6 +524,7 @@ extension NoonmarkStore {
     }
 
     private func replacePersistedData(with candidate: NoonmarkEngine) throws {
+        try assertEngineWriteAllowed()
         guard let repository else { return }
         if persistenceFailuresRemainingForE2E > 0 {
             persistenceFailuresRemainingForE2E -= 1
@@ -469,14 +536,81 @@ extension NoonmarkStore {
         )
     }
 
+    func savePendingZhulongApplication(
+        _ candidate: NoonmarkEngine,
+        mutationAt mutationInstant: Date
+    ) throws {
+        guard pendingZhulongEngineWriteAuthorized == false else {
+            throw StoreMutationGateError.exclusiveOperationInProgress
+        }
+        try zhulongWorkspace.assertMatchesPendingApplicationAfterSnapshot(
+            candidate
+        )
+        pendingZhulongEngineWriteAuthorized = true
+        defer { pendingZhulongEngineWriteAuthorized = false }
+        try save(candidate, mutationAt: mutationInstant)
+    }
+
+    func reconcileZhulongEnginePersistenceFailure(
+        for pendingApplication: ZhulongPendingApplication
+    ) throws -> ZhulongEnginePersistenceResolution {
+        guard let repository else {
+            throw ZhulongCommitReconciliationError
+                .durableEngineStateUnavailable
+        }
+        return try ZhulongEnginePersistenceInspector.resolve(
+            persistedEngine: repository.load(),
+            pendingApplication: pendingApplication
+        )
+    }
+
+    func assertEngineWriteAllowed() throws {
+        guard pendingZhulongEngineWriteAuthorized == false else { return }
+        do {
+            try zhulongWorkspace.assertNoPendingApplication()
+        } catch {
+            throw StoreMutationGateError.pendingZhulongApplication
+        }
+    }
+
     @discardableResult
     func commitEngineMutation<Result>(
         undoPolicy: EngineMutationUndoPolicy = .preserve,
-        _ mutation: (NoonmarkEngine, NaturalDayMoment) throws -> Result
+        _ mutation: (NoonmarkEngine, StoreMutationMoment) throws -> Result
     ) throws -> Result {
-        let moment = try prepareNaturalDayForMutation()
+        let moment = try prepareStoreMutation()
         let originalSnapshot = engine.snapshot()
-        let undoEntry: UndoEntry? = switch undoPolicy {
+        let undoEntry = makeUndoEntry(
+            for: undoPolicy,
+            originalSnapshot: originalSnapshot,
+            moment: moment
+        )
+        let candidate = try NoonmarkEngine(snapshot: originalSnapshot)
+        let result = try mutation(candidate, moment)
+        do {
+            try save(candidate, mutationAt: moment.instant)
+        } catch let gateError as StoreMutationGateError {
+            throw gateError
+        } catch {
+            if error is PersistenceFailureE2EError {
+                NSLog("Noonmark E2E injected persistence save failure")
+            } else {
+                NSLog("Noonmark persistence save failed: %@", String(describing: error))
+            }
+            throw EnginePersistenceCommitError(underlying: error)
+        }
+        engine = candidate
+        redoStack.removeAll()
+        applyCommittedUndoPolicy(undoPolicy, undoEntry: undoEntry)
+        return result
+    }
+
+    private func makeUndoEntry(
+        for undoPolicy: EngineMutationUndoPolicy,
+        originalSnapshot: NoonmarkSnapshot,
+        moment: StoreMutationMoment
+    ) -> UndoEntry? {
+        switch undoPolicy {
         case .preserve, .invalidate:
             nil
         case let .snapshot(action):
@@ -488,41 +622,30 @@ extension NoonmarkStore {
                 nil
             }
         }
-        let candidate = try NoonmarkEngine(snapshot: originalSnapshot)
-        let result = try mutation(candidate, moment)
-        do {
-            try save(candidate)
-        } catch {
-            if error is PersistenceFailureE2EError {
-                NSLog("Noonmark E2E injected persistence save failure")
-            } else {
-                NSLog("Noonmark persistence save failed: %@", String(describing: error))
-            }
-            throw EnginePersistenceCommitError(underlying: error)
-        }
-        engine = candidate
-        redoStack.removeAll()
+    }
+
+    private func applyCommittedUndoPolicy(
+        _ undoPolicy: EngineMutationUndoPolicy,
+        undoEntry: UndoEntry?
+    ) {
         switch undoPolicy {
         case .preserve:
             break
         case .snapshot, .snapshotIfAllowed:
-            if let undoEntry {
-                pushUndoEntry(with: undoEntry)
-            }
+            if let undoEntry { pushUndoEntry(with: undoEntry) }
         case .invalidate:
             clearUndoHistory()
         }
-        return result
     }
 
-    @discardableResult
-    func commitEngineMutation<Result>(
-        undoPolicy: EngineMutationUndoPolicy = .preserve,
-        _ mutation: (NoonmarkEngine) throws -> Result
-    ) throws -> Result {
-        try commitEngineMutation(undoPolicy: undoPolicy) { candidate, _ in
-            try mutation(candidate)
-        }
+    private func prepareStoreMutation() throws -> StoreMutationMoment {
+        let naturalDay = try prepareNaturalDayForMutation()
+        return StoreMutationMoment(
+            instant: try engine.nextMutationDate(
+                reference: naturalDay.instant
+            ),
+            naturalDay: naturalDay
+        )
     }
 
     func armPersistenceFailureForE2E(count: Int = 1) throws {

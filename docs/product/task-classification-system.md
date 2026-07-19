@@ -181,7 +181,7 @@ SQLite 采用本代首个 schema，`PRAGMA user_version = 1`。初始化只允�
 
 保存顺序必须由一个 SQLite `BEGIN IMMEDIATE` 事务覆盖：分类身份与名称版本 → 任务链 → 当前关系 → 历史快照／更正 → 变更记录 → commit／outbox。不得先全量删除分类库和关系再重建。
 
-`NoonmarkSnapshot` 必须显式携带独立 classification state。数据包只有一个当前 envelope，`formatVersion = 1` 为必需整数；日期按 `Date.timeIntervalSinceReferenceDate.bitPattern` 精确编码。缺版本、非当前版本、原始 snapshot、缺字段、非当前日期编码或完整性不成立一律拒绝。
+`NoonmarkSnapshot` 必须显式携带独立 classification state。数据包只有一个当前 envelope，`formatVersion = 2` 为必需整数；日期按 `Date.timeIntervalSinceReferenceDate.bitPattern` 精确编码。缺版本、非当前版本、原始 snapshot、缺字段、非当前日期编码或完整性不成立一律拒绝。
 
 ## 唯一当前契约
 
@@ -191,12 +191,12 @@ SQLite 采用本代首个 schema，`PRAGMA user_version = 1`。初始化只允�
 - 不存在 adapter、双写、fallback、converter 或另一份兼容读路。
 - 开发机遇到不符合当前契约的数据库时，由开发者删除测试数库后重启；App 必须清楚报告拒绝原因，不能静默清空。
 - 数据导入只接受当前数据包。测试需要的状态全部由当前公开领域行为重新建立。
-- 普通同步 payload 只接受 canonical current envelope：顶层必须精确为 `formatVersion = 1` 与 `payload`，原始模型 JSON、未知字段、非当前版本及非 canonical bytes 一律拒绝。
+- 普通同步 payload 只接受 canonical current envelope：顶层必须精确为 `formatVersion = 2` 与 `payload`，原始模型 JSON、未知字段、非当前版本及非 canonical bytes 一律拒绝。
 - 代码回滚只使用 Git，产品内不保留反向投影或其他 schema 恢复能力。
 
 ## 同步
 
-分类同步把 classification state 作为独立领域事实，不塞入 `AppPreferences` 或 `TaskChain`。普通实体统一使用 byte-canonical、必需 `formatVersion = 1` 的 current envelope；每个分类提交生成 transport-only `ClassificationCommitEnvelope`，携带 typed base/post delta、来源、审计记录、可选用户 receipt 与完整性 digest。`DayTrace` payload 只表达轨迹事实；每条历史分类快照使用唯一 UUID 的 immutable `traceClassificationEvent`，携带自身 revision 与 predecessor。关系表仍是本地事实源。
+分类同步把 classification state 作为独立领域事实，不塞入 `AppPreferences` 或 `TaskChain`。普通实体统一使用 byte-canonical、必需 `formatVersion = 2` 的 current envelope；每个分类提交生成 transport-only `ClassificationCommitEnvelope`，携带 typed base/post delta、来源、审计记录、可选用户 receipt 与完整性 digest。`DayTrace` payload 只表达轨迹事实；每条历史分类快照使用唯一 UUID 的 immutable `traceClassificationEvent`，携带自身 revision 与 predecessor。关系表仍是本地事实源。
 
 同步规则：
 

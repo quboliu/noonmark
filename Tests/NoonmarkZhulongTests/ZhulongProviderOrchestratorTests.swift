@@ -1,4 +1,5 @@
 import Foundation
+@testable import NoonmarkCore
 @testable import NoonmarkZhulong
 import XCTest
 
@@ -449,10 +450,248 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         XCTAssertEqual(try repository.load(session.id), recovered)
     }
 
+    func testSuspendedProviderSameSessionJournalWinsAndBlocksLateResponse() async throws {
+        let repository = makeRepository()
+        let initial = try makeAuthorizedSession()
+        try repository.save(initial)
+        let journal = makeJournal()
+        let gate = ProviderGate(result: .success(makeResponse()))
+        let provider = GatedZhulongProvider(
+            identity: try makeProviderIdentity(),
+            gate: gate
+        )
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let payload = try makePayload()
+        let sessionID = initial.id
+        let startedAt = baseDate.addingTimeInterval(2)
+        let completedAt = baseDate.addingTimeInterval(5)
+
+        let running = Task {
+            try await orchestrator.run(
+                sessionID: sessionID,
+                payload: payload,
+                provider: provider,
+                startedAt: startedAt,
+                completedAt: { completedAt }
+            )
+        }
+        await gate.waitUntilCalled()
+        let providerRunning = try repository.load(sessionID)
+        let pending = try makePendingApplication(
+            beforeSession: providerRunning,
+            createdAt: baseDate.addingTimeInterval(4)
+        )
+        do {
+            try journal.save(pending)
+        } catch {
+            await gate.release()
+            _ = try? await running.value
+            throw error
+        }
+
+        await gate.release()
+        do {
+            _ = try await running.value
+            XCTFail("pending journal 必须阻断 Provider 的迟到 response CAS")
+        } catch {
+            XCTAssertEqual(
+                error as? ZhulongPendingApplicationRecoveryError,
+                .applicationAlreadyPending
+            )
+        }
+        XCTAssertEqual(try repository.load(sessionID), providerRunning)
+        XCTAssertEqual(try journal.load(), pending)
+    }
+
+    func testSuspendedProviderSameSessionProviderWinsAndStaleJournalLoses() async throws {
+        let repository = makeRepository()
+        let initial = try makeAuthorizedSession()
+        try repository.save(initial)
+        let journal = makeJournal()
+        let gate = ProviderGate(result: .success(makeResponse()))
+        let provider = GatedZhulongProvider(
+            identity: try makeProviderIdentity(),
+            gate: gate
+        )
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let payload = try makePayload()
+        let sessionID = initial.id
+        let startedAt = baseDate.addingTimeInterval(2)
+        let completedAt = baseDate.addingTimeInterval(5)
+
+        let running = Task {
+            try await orchestrator.run(
+                sessionID: sessionID,
+                payload: payload,
+                provider: provider,
+                startedAt: startedAt,
+                completedAt: { completedAt }
+            )
+        }
+        await gate.waitUntilCalled()
+        let staleProviderRunning = try repository.load(sessionID)
+        await gate.release()
+        let completed = try await running.value
+        let pending = try makePendingApplication(
+            beforeSession: staleProviderRunning,
+            createdAt: baseDate.addingTimeInterval(4)
+        )
+
+        XCTAssertThrowsError(try journal.save(pending)) { error in
+            XCTAssertEqual(
+                error as? ZhulongSidecarRepositoryError,
+                .sessionConflict
+            )
+        }
+        XCTAssertEqual(try repository.load(sessionID), completed)
+        XCTAssertNil(try journal.load())
+    }
+
+    func testSuspendedProviderDifferentSessionJournalWinsGlobalFence() async throws {
+        let repository = makeRepository()
+        let providerSession = try makeAuthorizedSession()
+        let journalSession = try ZhulongSession(
+            primaryIntent: "另一会话建立 pending journal",
+            proposedScopes: [.taskPool],
+            now: baseDate
+        )
+        try repository.save(providerSession)
+        try repository.save(journalSession)
+        let journal = makeJournal()
+        let gate = ProviderGate(result: .success(makeResponse()))
+        let provider = GatedZhulongProvider(
+            identity: try makeProviderIdentity(),
+            gate: gate
+        )
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let payload = try makePayload()
+        let providerSessionID = providerSession.id
+        let startedAt = baseDate.addingTimeInterval(2)
+        let completedAt = baseDate.addingTimeInterval(5)
+
+        let running = Task {
+            try await orchestrator.run(
+                sessionID: providerSessionID,
+                payload: payload,
+                provider: provider,
+                startedAt: startedAt,
+                completedAt: { completedAt }
+            )
+        }
+        await gate.waitUntilCalled()
+        let providerRunning = try repository.load(providerSessionID)
+        let pending = try makePendingApplication(
+            beforeSession: journalSession,
+            createdAt: baseDate.addingTimeInterval(4)
+        )
+        do {
+            try journal.save(pending)
+        } catch {
+            await gate.release()
+            _ = try? await running.value
+            throw error
+        }
+
+        await gate.release()
+        do {
+            _ = try await running.value
+            XCTFail("任一会话的 pending journal 必须阻断其他 Session write")
+        } catch {
+            XCTAssertEqual(
+                error as? ZhulongPendingApplicationRecoveryError,
+                .applicationAlreadyPending
+            )
+        }
+        XCTAssertEqual(
+            try repository.load(providerSessionID),
+            providerRunning
+        )
+        XCTAssertEqual(try journal.load(), pending)
+    }
+
+    func testSuspendedProviderDifferentSessionProviderWinsBeforeCompatibleJournal() async throws {
+        let repository = makeRepository()
+        let providerSession = try makeAuthorizedSession()
+        let journalSession = try ZhulongSession(
+            primaryIntent: "Provider 后建立 pending journal",
+            proposedScopes: [.taskPool],
+            now: baseDate
+        )
+        try repository.save(providerSession)
+        try repository.save(journalSession)
+        let journal = makeJournal()
+        let gate = ProviderGate(result: .success(makeResponse()))
+        let provider = GatedZhulongProvider(
+            identity: try makeProviderIdentity(),
+            gate: gate
+        )
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let payload = try makePayload()
+        let providerSessionID = providerSession.id
+        let startedAt = baseDate.addingTimeInterval(2)
+        let completedAt = baseDate.addingTimeInterval(5)
+
+        let running = Task {
+            try await orchestrator.run(
+                sessionID: providerSessionID,
+                payload: payload,
+                provider: provider,
+                startedAt: startedAt,
+                completedAt: { completedAt }
+            )
+        }
+        await gate.waitUntilCalled()
+        await gate.release()
+        let completed = try await running.value
+        let pending = try makePendingApplication(
+            beforeSession: journalSession,
+            createdAt: baseDate.addingTimeInterval(6)
+        )
+
+        try journal.save(pending)
+
+        XCTAssertEqual(try repository.load(providerSessionID), completed)
+        XCTAssertEqual(try journal.load(), pending)
+    }
+
     private func makeRepository() -> EncryptedFileZhulongSessionRepository {
         EncryptedFileZhulongSessionRepository(
             directoryURL: directoryURL,
             keySource: FixedProviderTestKeySource(key: key)
+        )
+    }
+
+    private func makeJournal() -> EncryptedFileZhulongApplicationJournal {
+        EncryptedFileZhulongApplicationJournal(
+            directoryURL: directoryURL,
+            keySource: FixedProviderTestKeySource(key: key)
+        )
+    }
+
+    private func makePendingApplication(
+        beforeSession: ZhulongSession,
+        createdAt: Date
+    ) throws -> ZhulongPendingApplication {
+        var afterSession = beforeSession
+        if beforeSession.phase == .providerRunning {
+            try afterSession.recoverInterruptedProviderRun(now: createdAt)
+        } else {
+            try afterSession.pause(now: createdAt)
+        }
+        let beforeEngine = NoonmarkEngine()
+        let afterEngine = NoonmarkEngine()
+        _ = try afterEngine.createPoolTask(
+            title: "Provider transaction fence",
+            now: createdAt
+        )
+        return try ZhulongPendingApplication(
+            kind: .todoDiff(ZhulongTodoDiffID()),
+            sessionID: beforeSession.id,
+            beforeSnapshot: beforeEngine.snapshot(),
+            afterSnapshot: afterEngine.snapshot(),
+            beforeSession: beforeSession,
+            afterSession: afterSession,
+            createdAt: createdAt
         )
     }
 

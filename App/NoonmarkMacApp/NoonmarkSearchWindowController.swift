@@ -8,6 +8,7 @@ import SwiftUI
 final class NoonmarkSearchWindowController: NSWindowController {
     static let windowIdentifier = NSUserInterfaceItemIdentifier("Noonmark.SearchWindow")
     static let frameAutosaveName = "Noonmark.SearchWindow.Frame"
+    static let minimumContentSize = NSSize(width: 520, height: 360)
 
     private let store: NoonmarkStore
     private let model = NoonmarkSearchWindowModel()
@@ -17,8 +18,6 @@ final class NoonmarkSearchWindowController: NSWindowController {
         let root = NoonmarkSearchView(model: model)
             .environmentObject(store)
             .preferredColorScheme(.light)
-        let hostingView = NSHostingView(rootView: root)
-        hostingView.sizingOptions = []
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 680, height: 540),
@@ -28,10 +27,13 @@ final class NoonmarkSearchWindowController: NSWindowController {
         )
         window.identifier = Self.windowIdentifier
         window.title = store.copy.searchCommand
-        window.contentMinSize = NSSize(width: 520, height: 360)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-        window.contentView = hostingView
+        window.enableNoonmarkDynamicKeyViewLoop()
+        window.installNoonmarkResizableHostingContent(
+            root,
+            minimumContentSize: Self.minimumContentSize
+        )
 
         super.init(window: window)
         windowFrameAutosaveName = Self.frameAutosaveName
@@ -177,7 +179,11 @@ private struct NoonmarkSearchView: View {
     }
 
     private var emptyResults: some View {
-        ContentUnavailableView.search(text: query)
+        ContentUnavailableView(
+            store.copy.searchNoResults,
+            systemImage: "magnifyingglass",
+            description: Text(store.copy.searchNoResultsHint)
+        )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityLabel(store.copy.searchNoResults)
     }
@@ -282,37 +288,54 @@ extension NoonmarkStore {
     func revealSearchResult(_ result: WorkspaceSearchResult) {
         switch result.destination {
         case let .pool(chainID):
+            guard engine.taskPool().contains(where: { $0.chain.id == chainID }) else {
+                clearSelection()
+                return
+            }
             selectPage(.pool)
             selectPool(chainID)
-        case let .trace(traceID, date, status):
-            revealTraceSearchResult(traceID: traceID, date: date, status: status)
-        case let .subtask(subtaskID, parentTraceID, date, parentStatus):
-            if parentStatus == .completed {
+        case let .trace(traceID, _, _):
+            guard let trace = currentSearchTrace(traceID) else {
+                clearSelection()
+                return
+            }
+            revealTraceSearchResult(trace)
+        case let .subtask(subtaskID, _, _, _):
+            guard let subtask = engine.subtasks[subtaskID],
+                  let parentTrace = currentSearchTrace(subtask.traceID)
+            else {
+                clearSelection()
+                return
+            }
+            let isVisibleCompletedSubtask = parentTrace.status == .completed
+                && engine.completedSubtaskRecords().contains {
+                    $0.subtask.id == subtaskID
+                }
+            if isVisibleCompletedSubtask {
                 selectPage(.completed)
                 selectCompletedSubtask(subtaskID)
             } else {
-                revealTraceSearchResult(
-                    traceID: parentTraceID,
-                    date: date,
-                    status: parentStatus
-                )
+                revealTraceSearchResult(parentTrace)
             }
         }
     }
 
-    private func revealTraceSearchResult(
-        traceID: DayTraceID,
-        date: LocalDate,
-        status: TraceStatus
-    ) {
-        if status == .completed {
+    private func currentSearchTrace(_ traceID: DayTraceID) -> DayTrace? {
+        guard let trace = engine.traces[traceID], trace.formsDayHistory else {
+            return nil
+        }
+        return trace
+    }
+
+    private func revealTraceSearchResult(_ trace: DayTrace) {
+        if trace.status == .completed {
             selectPage(.completed)
-            selectCompleted(traceID)
+            selectCompleted(trace.id)
         } else {
             selectPage(.day)
-            selectedDate = date
-            selectedCalendarDate = date
-            selectTrace(traceID)
+            selectedDate = trace.date
+            selectedCalendarDate = trace.date
+            selectTrace(trace.id)
         }
     }
 }

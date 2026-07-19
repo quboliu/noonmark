@@ -3,29 +3,6 @@
 import XCTest
 
 final class ZhulongTodoDiffTests: XCTestCase {
-    func testApplicationDigestNormalizesDatesToSQLiteMillisecondPrecision() throws {
-        for (preciseInterval, persistedInterval) in [
-            (1_783_865_569.073_456, 1_783_865_569.073),
-            (1_783_865_569.073_789, 1_783_865_569.074),
-            (1_783_865_569.999_9, 1_783_865_570.000)
-        ] {
-            let precise = Date(timeIntervalSince1970: preciseInterval)
-            let persisted = Date(timeIntervalSince1970: persistedInterval)
-            let preciseEngine = NoonmarkEngine()
-            _ = try preciseEngine.createPoolTask(title: "毫秒精度", now: precise)
-            let preciseSnapshot = preciseEngine.snapshot()
-            var persistedSnapshot = preciseSnapshot
-            persistedSnapshot.chains[0].createdAt = persisted
-            persistedSnapshot.chains[0].updatedAt = persisted
-            persistedSnapshot.definitions[0].createdAt = persisted
-
-            XCTAssertEqual(
-                try ZhulongApplicationSnapshotDigest.value(preciseSnapshot),
-                try ZhulongApplicationSnapshotDigest.value(persistedSnapshot)
-            )
-        }
-    }
-
     private let today = LocalDate("2026-07-12")
     private let tomorrow = LocalDate("2026-07-13")
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -433,7 +410,10 @@ final class ZhulongTodoDiffTests: XCTestCase {
             XCTAssertEqual(error as? ZhulongTodoDiffError, .invalidTime)
         }
 
-        engine.updateTheme(.warmPaper)
+        try engine.updateTheme(
+            .warmPaper,
+            now: now.addingTimeInterval(1)
+        )
         var authorization = try ZhulongTodoDiffApplier().authorize(
             draft,
             against: engine,

@@ -3,6 +3,14 @@ import NoonmarkCore
 import NoonmarkMacRuntime
 import NoonmarkZhulong
 
+private struct ZhulongApplicationE2EInterruption: Error {}
+
+struct ZhulongWorkspaceApplicationResult {
+    let engine: NoonmarkEngine
+    let commitProgress: ZhulongApplicationCommitProgress
+    let commitCompleted: Bool
+}
+
 enum ZhulongStreamActor: Equatable {
     case user
     case zhulong
@@ -148,6 +156,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
         now: Date = Date()
     ) {
         do {
+            try assertNoPendingApplication()
             let session = try ZhulongSession(
                 primaryIntent: intent,
                 purpose: purpose,
@@ -159,7 +168,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
             selectedSessionID = session.id
             status = nil
         } catch {
-            status = .sessionCreationFailed
+            projectSidecarMutationFailure(
+                fallback: .sessionCreationFailed
+            )
         }
     }
 
@@ -377,10 +388,6 @@ final class ZhulongWorkspaceStore: ObservableObject {
         }
     }
 
-    var hasActiveDailyReviewAuthorization: Bool {
-        selectedSession?.dailyReviewAuthorizations.contains { $0.status == .active } == true
-    }
-
     var hasActiveTodoAuthorization: Bool {
         selectedSession?.todoWriteAuthorizations.contains { $0.status == .active } == true
     }
@@ -388,118 +395,277 @@ final class ZhulongWorkspaceStore: ObservableObject {
     func applyCurrentTodoDiff(
         to currentEngine: NoonmarkEngine,
         today: LocalDate,
-        persistEngine: (NoonmarkEngine) throws -> Void,
-        now: Date = Date()
-    ) -> NoonmarkEngine? {
+        reference: Date,
+        persistEngine: (NoonmarkEngine, Date) throws -> Void,
+        reconcileEnginePersistenceFailure: (
+            ZhulongPendingApplication
+        ) throws -> ZhulongEnginePersistenceResolution
+    ) -> ZhulongWorkspaceApplicationResult? {
         guard let session = selectedSession else { return nil }
         do {
+            guard try applicationJournal.load() == nil else {
+                throw ZhulongPendingApplicationRecoveryError
+                    .applicationAlreadyPending
+            }
+            let currentDraftID = session.currentTodoDiff?.id
+            let requiresAuthorization =
+                session.todoWriteAuthorizations.contains {
+                    $0.draftID == currentDraftID && $0.status == .active
+                } == false
+            let timeline = try ZhulongApplicationMutationTimeline(
+                reference: reference,
+                engine: currentEngine,
+                selectedSession: session,
+                pendingApplication: nil,
+                requiresAuthorization: requiresAuthorization
+            )
             var afterSession = session
             var afterEngine = try NoonmarkEngine(snapshot: currentEngine.snapshot())
+            if let authorizationAt = timeline.authorizationAt {
+                _ = try afterSession.authorizeTodoWrite(
+                    against: afterEngine,
+                    today: today,
+                    now: authorizationAt
+                )
+            }
             let receipt = try afterSession.applyAuthorizedTodoDiff(
                 to: &afterEngine,
                 today: today,
-                now: now
+                now: timeline.applyAt
             )
             let pending = try ZhulongPendingApplication(
                 kind: .todoDiff(receipt.draftID),
                 sessionID: session.id,
                 beforeSnapshot: currentEngine.snapshot(),
                 afterSnapshot: afterEngine.snapshot(),
+                beforeSession: session,
                 afterSession: afterSession,
-                createdAt: now
+                createdAt: timeline.applyAt
             )
-            try applicationJournal.save(pending)
-            do {
-                try persistEngine(afterEngine)
-            } catch {
-                try? applicationJournal.clear()
-                throw error
+            let prepareJournal = try applicationJournal.save(pending)
+            let outcome = finishApplicationCommit(
+                pending: pending,
+                prepareJournal: prepareJournal,
+                persistEngine: {
+                    try persistEngine(afterEngine, timeline.applyAt)
+                },
+                reconcileEnginePersistenceFailure: {
+                    try reconcileEnginePersistenceFailure(pending)
+                }
+            )
+            guard outcome.durableEngineIsAfter else {
+                projectApplicationCommit(
+                    outcome,
+                    operation: .todoBatch
+                )
+                return nil
             }
-            try sessionRepository.save(afterSession)
-            try applicationJournal.clear()
-            replaceLoadedSession(afterSession)
-            status = nil
-            return afterEngine
+            projectApplicationCommit(
+                outcome,
+                operation: .todoBatch
+            )
+            return ZhulongWorkspaceApplicationResult(
+                engine: afterEngine,
+                commitProgress: outcome.progress,
+                commitCompleted: outcome.commitCompleted
+            )
         } catch {
-            status = .todoBatchApplyFailed
+            projectApplicationPreparationFailure(
+                operation: .todoBatch
+            )
             return nil
         }
     }
 
     func applyCurrentDailyReview(
         to currentEngine: NoonmarkEngine,
-        persistEngine: (NoonmarkEngine) throws -> Void,
-        interruptAfterEnginePersisted: Bool = false,
-        now: Date = Date()
-    ) -> NoonmarkEngine? {
+        reference: Date,
+        persistEngine: (NoonmarkEngine, Date) throws -> Void,
+        reconcileEnginePersistenceFailure: (
+            ZhulongPendingApplication
+        ) throws -> ZhulongEnginePersistenceResolution,
+        interruptAfterEnginePersisted: Bool = false
+    ) -> ZhulongWorkspaceApplicationResult? {
         guard let session = selectedSession,
               let draft = session.dailyReviewDrafts.last
         else { return nil }
         do {
+            guard try applicationJournal.load() == nil else {
+                throw ZhulongPendingApplicationRecoveryError
+                    .applicationAlreadyPending
+            }
+            let requiresAuthorization =
+                session.dailyReviewAuthorizations.contains {
+                    $0.draftID == draft.id && $0.status == .active
+                } == false
+            let timeline = try ZhulongApplicationMutationTimeline(
+                reference: reference,
+                engine: currentEngine,
+                selectedSession: session,
+                pendingApplication: nil,
+                requiresAuthorization: requiresAuthorization
+            )
             var afterSession = session
             var afterEngine = try NoonmarkEngine(snapshot: currentEngine.snapshot())
+            if let authorizationAt = timeline.authorizationAt {
+                _ = try afterSession.authorizeDailyReview(
+                    draft.id,
+                    against: afterEngine,
+                    now: authorizationAt
+                )
+            }
             _ = try afterSession.applyAuthorizedDailyReview(
                 draft.id,
                 to: &afterEngine,
-                now: now
+                now: timeline.applyAt
             )
             let pending = try ZhulongPendingApplication(
                 kind: .dailyReview(draft.id),
                 sessionID: session.id,
                 beforeSnapshot: currentEngine.snapshot(),
                 afterSnapshot: afterEngine.snapshot(),
+                beforeSession: session,
                 afterSession: afterSession,
-                createdAt: now
+                createdAt: timeline.applyAt
             )
-            try applicationJournal.save(pending)
-            do {
-                try persistEngine(afterEngine)
-            } catch {
-                try? applicationJournal.clear()
-                throw error
-            }
+            let prepareJournal = try applicationJournal.save(pending)
             if interruptAfterEnginePersisted {
+                let outcome = ZhulongApplicationCommitCoordinator.finish(
+                    prepareJournal: prepareJournal,
+                    engineAlreadyPersisted: false,
+                    persistEngine: {
+                        try persistEngine(afterEngine, timeline.applyAt)
+                    },
+                    reconcileEnginePersistenceFailure: {
+                        try reconcileEnginePersistenceFailure(pending)
+                    },
+                    persistSession: {
+                        throw ZhulongApplicationE2EInterruption()
+                    },
+                    clearJournal: { requirement in
+                        try applicationJournal.clear(
+                            pending,
+                            requiring: requirement
+                        )
+                    }
+                )
+                guard outcome.durableEngineIsAfter else {
+                    projectApplicationCommit(
+                        outcome,
+                        operation: .dailyReview
+                    )
+                    return nil
+                }
                 status = .e2eInterruption
-                return afterEngine
+                return ZhulongWorkspaceApplicationResult(
+                    engine: afterEngine,
+                    commitProgress: outcome.progress,
+                    commitCompleted: outcome.commitCompleted
+                )
             }
-            try sessionRepository.save(afterSession)
-            try applicationJournal.clear()
-            replaceLoadedSession(afterSession)
-            status = nil
-            return afterEngine
+            let outcome = finishApplicationCommit(
+                pending: pending,
+                prepareJournal: prepareJournal,
+                persistEngine: {
+                    try persistEngine(afterEngine, timeline.applyAt)
+                },
+                reconcileEnginePersistenceFailure: {
+                    try reconcileEnginePersistenceFailure(pending)
+                }
+            )
+            guard outcome.durableEngineIsAfter else {
+                projectApplicationCommit(
+                    outcome,
+                    operation: .dailyReview
+                )
+                return nil
+            }
+            projectApplicationCommit(
+                outcome,
+                operation: .dailyReview
+            )
+            return ZhulongWorkspaceApplicationResult(
+                engine: afterEngine,
+                commitProgress: outcome.progress,
+                commitCompleted: outcome.commitCompleted
+            )
         } catch {
-            status = .dailyReviewSaveFailed
+            projectApplicationPreparationFailure(
+                operation: .dailyReview
+            )
             return nil
         }
     }
 
     func recoverPendingApplication(
         currentEngine: NoonmarkEngine,
-        persistEngine: (NoonmarkEngine) throws -> Void
+        persistEngine: (NoonmarkEngine, Date) throws -> Void,
+        reconcileEnginePersistenceFailure: (
+            ZhulongPendingApplication
+        ) throws -> ZhulongEnginePersistenceResolution
     ) -> NoonmarkEngine {
         do {
-            guard let pending = try applicationJournal.load() else { return currentEngine }
-            let currentSnapshot = currentEngine.snapshot()
-            let currentDigest = try ZhulongApplicationSnapshotDigest.value(currentSnapshot)
-            let beforeDigest = try ZhulongApplicationSnapshotDigest.value(pending.beforeSnapshot)
-            let afterDigest = try ZhulongApplicationSnapshotDigest.value(pending.afterSnapshot)
-            let recoveredEngine: NoonmarkEngine
-            if currentDigest == beforeDigest {
-                recoveredEngine = try NoonmarkEngine(snapshot: pending.afterSnapshot)
-                try persistEngine(recoveredEngine)
-            } else if currentDigest == afterDigest {
-                recoveredEngine = currentEngine
-            } else {
-                status = .applicationRecoveryConflict
+            guard let pending = try applicationJournal.load() else {
+                status = ZhulongApplicationCommitNoticeProjection
+                    .noticeAfterConfirmedAbsentJournal(status)
                 return currentEngine
             }
-            try sessionRepository.save(pending.afterSession)
-            try applicationJournal.clear()
-            replaceLoadedSession(pending.afterSession)
+            let operation = applicationCommitOperation(for: pending.kind)
+            let plan = try ZhulongPendingApplicationRecoveryPlan(
+                currentEngine: currentEngine,
+                pendingApplication: pending
+            )
+            let recoveredEngine = try NoonmarkEngine(
+                snapshot: plan.recoveredSnapshot
+            )
+            let outcome = finishApplicationCommit(
+                pending: pending,
+                engineAlreadyPersisted: plan.persistenceChangedAt == nil,
+                persistEngine: {
+                    guard let changedAt = plan.persistenceChangedAt else {
+                        return
+                    }
+                    try persistEngine(recoveredEngine, changedAt)
+                },
+                reconcileEnginePersistenceFailure: {
+                    try reconcileEnginePersistenceFailure(pending)
+                }
+            )
+            guard outcome.durableEngineIsAfter else {
+                if outcome.enginePersistenceFailureResolution == .conflict {
+                    status = .applicationRecoveryConflict
+                } else {
+                    projectApplicationCommit(
+                        outcome,
+                        operation: operation
+                    )
+                }
+                return currentEngine
+            }
+            if outcome.commitCompleted == false {
+                let sidecarError = outcome.underlyingError
+                    as? ZhulongSidecarRepositoryError
+                status = if sidecarError == .sessionConflict {
+                    .applicationRecoveryConflict
+                } else {
+                    ZhulongApplicationCommitNoticeProjection.notice(
+                        operation: operation,
+                        state: outcome.progress == .completed
+                            ? .verifiedCompletion
+                            : .recoveryPending
+                    ) ?? .applicationCommitRecoveryPending
+                }
+                return recoveredEngine
+            }
             status = .applicationRecovered
             return recoveredEngine
+        } catch ZhulongPendingApplicationRecoveryError.snapshotConflict {
+            status = .applicationRecoveryConflict
+            return currentEngine
         } catch {
-            status = .applicationRecoveryFailed
+            status = applicationJournalIsDefinitelyAbsent()
+                ? .applicationRecoveryFailed
+                : .applicationCommitRecoveryPending
             return currentEngine
         }
     }
@@ -519,8 +685,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
         provider: any ZhulongProvider
     ) async {
         guard let selectedSessionID else { return }
-        status = .providerRunning
         do {
+            try assertNoPendingApplication()
+            status = .providerRunning
             let session = try await providerOrchestrator.run(
                 sessionID: selectedSessionID,
                 payload: payload,
@@ -530,7 +697,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
             status = nil
         } catch {
             reload()
-            status = .providerRunFailed
+            projectSidecarMutationFailure(
+                fallback: .providerRunFailed
+            )
         }
     }
 
@@ -541,8 +710,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
         guard let selectedSessionID,
               let delegationID = selectedSession?.activePlanningDelegation?.id
         else { return }
-        status = .planningProviderRunning
         do {
+            try assertNoPendingApplication()
+            status = .planningProviderRunning
             let session = try await providerOrchestrator.runPlanning(
                 sessionID: selectedSessionID,
                 delegationID: delegationID,
@@ -553,7 +723,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
             status = nil
         } catch {
             reload()
-            status = .planningRunFailed
+            projectSidecarMutationFailure(
+                fallback: .planningRunFailed
+            )
         }
     }
 
@@ -606,15 +778,22 @@ final class ZhulongWorkspaceStore: ObservableObject {
               let index = sessions.firstIndex(where: { $0.id == selectedSessionID })
         else { return false }
         do {
+            try assertNoPendingApplication()
             var session = sessions[index]
+            let expectedSession = session
             try operation(&session)
-            try sessionRepository.save(session)
+            try sessionRepository.save(
+                session,
+                replacing: expectedSession
+            )
             sessions[index] = session
             sessions.sort { $0.events.last?.occurredAt ?? .distantPast > $1.events.last?.occurredAt ?? .distantPast }
             status = nil
             return true
         } catch {
-            status = .sessionOperationFailed
+            projectSidecarMutationFailure(
+                fallback: .sessionOperationFailed
+            )
             return false
         }
     }
@@ -626,6 +805,188 @@ final class ZhulongWorkspaceStore: ObservableObject {
             sessions.append(session)
         }
         sessions.sort { $0.events.last?.occurredAt ?? .distantPast > $1.events.last?.occurredAt ?? .distantPast }
+    }
+
+    func assertNoPendingApplication() throws {
+        try ZhulongPendingApplicationMutationGate.validate(
+            applicationJournal.load()
+        )
+    }
+
+    func assertMatchesPendingApplicationAfterSnapshot(
+        _ candidate: NoonmarkEngine
+    ) throws {
+        guard let pending = try applicationJournal.load() else {
+            throw ZhulongPendingApplicationRecoveryError.snapshotConflict
+        }
+        let candidateIdentity = try ZhulongApplicationSnapshotDigest.value(
+            candidate.snapshot()
+        )
+        let afterIdentity = try ZhulongApplicationSnapshotDigest.value(
+            pending.afterSnapshot
+        )
+        guard candidateIdentity == afterIdentity else {
+            throw ZhulongPendingApplicationRecoveryError.snapshotConflict
+        }
+    }
+
+    private func projectApplicationCommit(
+        _ outcome: ZhulongApplicationCommitOutcome,
+        operation: ZhulongApplicationCommitOperation
+    ) {
+        let progress = applicationCommitProgressEvidence(
+            for: outcome.progress
+        )
+        let presentationState = ZhulongApplicationCommitNoticeProjection.state(
+            progress: progress,
+            recoveredCommitError:
+            outcome.recoveredEnginePersistenceError != nil
+                || outcome.recoveredJournalMutation,
+            journal: applicationJournalEvidence()
+        )
+        status = ZhulongApplicationCommitNoticeProjection.notice(
+            operation: operation,
+            state: presentationState
+        )
+    }
+
+    private func applicationCommitProgressEvidence(
+        for progress: ZhulongApplicationCommitProgress
+    ) -> ZhulongApplicationCommitProgressEvidence {
+        switch progress {
+        case .beforeEngine:
+            return .beforeEngine
+        case .enginePersistenceUnresolved:
+            return .enginePersistenceUnresolved
+        case .enginePersisted:
+            return .enginePersisted
+        case .sessionPersisted:
+            return .sessionPersisted
+        case .completed:
+            return .completed
+        }
+    }
+
+    private func projectApplicationPreparationFailure(
+        operation: ZhulongApplicationCommitOperation
+    ) {
+        let fallback = switch operation {
+        case .todoBatch:
+            ZhulongWorkspaceNotice.todoBatchApplyFailed
+        case .dailyReview:
+            ZhulongWorkspaceNotice.dailyReviewSaveFailed
+        }
+        status = ZhulongApplicationCommitNoticeProjection
+            .mutationFailureNotice(
+                fallback: fallback,
+                journal: applicationJournalEvidence()
+            )
+    }
+
+    private func projectSidecarMutationFailure(
+        fallback: ZhulongWorkspaceNotice
+    ) {
+        status = ZhulongApplicationCommitNoticeProjection
+            .mutationFailureNotice(
+                fallback: fallback,
+                journal: applicationJournalEvidence()
+            )
+    }
+
+    private func applicationJournalIsDefinitelyAbsent() -> Bool {
+        do {
+            return try applicationJournal.load() == nil
+        } catch {
+            return false
+        }
+    }
+
+    private func applicationJournalEvidence() -> ZhulongApplicationJournalEvidence {
+        applicationJournalIsDefinitelyAbsent()
+            ? .absent
+            : .presentOrUnverifiable
+    }
+
+    private func applicationCommitOperation(
+        for kind: ZhulongPendingApplicationKind
+    ) -> ZhulongApplicationCommitOperation {
+        switch kind {
+        case .todoDiff:
+            .todoBatch
+        case .dailyReview:
+            .dailyReview
+        }
+    }
+
+    private func finishApplicationCommit(
+        pending: ZhulongPendingApplication,
+        prepareJournal: ZhulongApplicationJournalCommitOutcome = .committed,
+        engineAlreadyPersisted: Bool = false,
+        persistEngine: () throws -> Void,
+        reconcileEnginePersistenceFailure: () throws ->
+            ZhulongEnginePersistenceResolution
+    ) -> ZhulongApplicationCommitOutcome {
+        let outcome = ZhulongApplicationCommitCoordinator.finish(
+            prepareJournal: prepareJournal,
+            engineAlreadyPersisted: engineAlreadyPersisted,
+            persistEngine: persistEngine,
+            reconcileEnginePersistenceFailure:
+            reconcileEnginePersistenceFailure,
+            persistSession: {
+                try ZhulongPendingSessionReconciler.reconcile(
+                    pendingApplication: pending,
+                    loadPersistedSession: {
+                        try sessionRepository.load(pending.sessionID)
+                    },
+                    replaceExpectedSession: { replacement, expected in
+                        try sessionRepository.save(
+                            replacement,
+                            replacing: expected,
+                            authorizedBy: pending
+                        )
+                    }
+                )
+                replaceLoadedSession(pending.afterSession)
+            },
+            clearJournal: { requirement in
+                try applicationJournal.clear(
+                    pending,
+                    requiring: requirement
+                )
+            }
+        )
+        if let cleanupError = outcome.cleanupError {
+            recordApplicationCommitError(
+                cleanupError,
+                event: "journal_cleanup_failure"
+            )
+        }
+        if let reconciliationError = outcome.reconciliationError {
+            recordApplicationCommitError(
+                reconciliationError,
+                event: "engine_reconciliation_failure"
+            )
+        }
+        if let recoveredError = outcome.recoveredEnginePersistenceError {
+            recordApplicationCommitError(
+                recoveredError,
+                event: "engine_recovered_after_error"
+            )
+        }
+        return outcome
+    }
+
+    private func recordApplicationCommitError(
+        _ error: any Error,
+        event: String
+    ) {
+        let telemetry = ZhulongErrorTelemetry(error)
+        NSLog(
+            "NoonmarkZhulongApplicationCommit event=%@ error_kind=%@ error_code=%@",
+            event,
+            telemetry.kind.rawValue,
+            telemetry.code.map(String.init) ?? "none"
+        )
     }
 
     private func loadSessions() -> (sessions: [ZhulongSession], failureCount: Int) {

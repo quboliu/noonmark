@@ -11,6 +11,8 @@ public enum ZhulongSidecarRepositoryError: Error, Equatable {
     case invalidCiphertext
     case missingSession
     case missingMemoryLedger
+    case sessionConflict
+    case pendingApplicationConflict
 }
 
 public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @unchecked Sendable {
@@ -41,7 +43,70 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         try saveRecord(record)
     }
 
+    public func save(
+        _ replacement: ZhulongSession,
+        replacing expected: ZhulongSession
+    ) throws {
+        guard replacement.id == expected.id else {
+            throw ZhulongSidecarRepositoryError.sessionConflict
+        }
+        let replacementRecord = ZhulongSessionRecord(replacement)
+        _ = try replacementRecord.restore(expectedID: replacement.id)
+        _ = try ZhulongSessionRecord(expected).restore(expectedID: expected.id)
+        let plaintext = try encoder.encode(replacementRecord)
+
+        try transactionLock.withExclusiveLock {
+            try transactionLock.assertNoPendingApplicationUnlocked()
+            let persisted = try loadUnlocked(expected.id)
+            guard persisted == expected else {
+                throw ZhulongSidecarRepositoryError.sessionConflict
+            }
+            try savePlaintextUnlocked(plaintext, id: replacement.id)
+        }
+    }
+
+    public func save(
+        _ replacement: ZhulongSession,
+        replacing expected: ZhulongSession,
+        authorizedBy pendingApplication: ZhulongPendingApplication
+    ) throws {
+        guard replacement.id == expected.id,
+              expected == pendingApplication.beforeSession,
+              replacement == pendingApplication.afterSession,
+              replacement.id == pendingApplication.sessionID
+        else {
+            throw ZhulongSidecarRepositoryError.pendingApplicationConflict
+        }
+        let replacementRecord = ZhulongSessionRecord(replacement)
+        _ = try replacementRecord.restore(expectedID: replacement.id)
+        _ = try ZhulongSessionRecord(expected).restore(expectedID: expected.id)
+        let plaintext = try encoder.encode(replacementRecord)
+
+        try transactionLock.withExclusiveLock {
+            let journal = EncryptedFileZhulongApplicationJournal(
+                directoryURL: directoryURL,
+                keySource: keySource,
+                fileManager: fileManager
+            )
+            guard let persistedApplication = try journal.loadUnlocked(),
+                  persistedApplication == pendingApplication
+            else {
+                throw ZhulongSidecarRepositoryError
+                    .pendingApplicationConflict
+            }
+            let persistedSession = try loadUnlocked(expected.id)
+            guard persistedSession == expected else {
+                throw ZhulongSidecarRepositoryError.sessionConflict
+            }
+            try savePlaintextUnlocked(plaintext, id: replacement.id)
+        }
+    }
+
     public func load(_ id: ZhulongSessionID) throws -> ZhulongSession {
+        try loadUnlocked(id)
+    }
+
+    func loadUnlocked(_ id: ZhulongSessionID) throws -> ZhulongSession {
         let fileURL = fileURL(for: id)
         guard fileManager.fileExists(atPath: fileURL.path) else {
             throw ZhulongSidecarRepositoryError.missingSession
@@ -101,6 +166,16 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         _ plaintext: Data,
         id: ZhulongSessionID
     ) throws {
+        try transactionLock.withExclusiveLock {
+            try transactionLock.assertNoPendingApplicationUnlocked()
+            try savePlaintextUnlocked(plaintext, id: id)
+        }
+    }
+
+    private func savePlaintextUnlocked(
+        _ plaintext: Data,
+        id: ZhulongSessionID
+    ) throws {
         let key = try symmetricKey()
         let sealedBox = try AES.GCM.seal(
             plaintext,
@@ -129,6 +204,13 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
         try fileManager.setAttributes(
             [.posixPermissions: 0o600],
             ofItemAtPath: fileURL.path
+        )
+    }
+
+    private var transactionLock: ZhulongSidecarTransactionLock {
+        ZhulongSidecarTransactionLock(
+            directoryURL: directoryURL,
+            fileManager: fileManager
         )
     }
 

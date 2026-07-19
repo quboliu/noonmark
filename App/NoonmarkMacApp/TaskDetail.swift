@@ -68,7 +68,7 @@ struct TaskDetail: View {
                 taskTitle: definition.title,
                 editable: canEditText
             )
-            DetailSection(store.copy.subtasksTitle) {
+            DetailSection(store.copy.subtasksTitle, showsTitle: false) {
                 VStack(spacing: 6) {
                     ForEach(subtasks, id: \.id) { subtask in
                         SubtaskRow(subtask: subtask)
@@ -111,41 +111,13 @@ struct DetailProgressSection: View {
     let editable: Bool
 
     var body: some View {
-        if editable {
-            DetailSection(store.copy.completionProgressTitle) {
-                DetailProgressControl(
-                    traceID: traceID,
-                    progress: progress,
-                    editable: editable,
-                    showsPercent: true
-                )
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 7) {
-                DetailProgressHeader(progress: progress)
-                DetailProgressControl(
-                    traceID: traceID,
-                    progress: progress,
-                    editable: editable,
-                    showsPercent: false
-                )
-            }
-        }
-    }
-}
-
-struct DetailProgressHeader: View {
-    @EnvironmentObject private var store: NoonmarkStore
-    let progress: TraceProgress
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(store.copy.completionProgressTitle)
-                .font(.noonmarkSystem(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.text3)
-                .tracking(0.6)
-            Spacer()
-            DetailProgressPercent(progress: progress)
+        DetailSection(store.copy.completionProgressTitle, showsTitle: false) {
+            DetailProgressControl(
+                traceID: traceID,
+                progress: progress,
+                editable: editable,
+                showsPercent: true
+            )
         }
     }
 }
@@ -388,7 +360,7 @@ struct TaskNoteEntriesSection: View {
 
     var body: some View {
         if entries.isEmpty == false || editable {
-            DetailSection(store.copy.noteSectionTitle) {
+            DetailSection(store.copy.noteSectionTitle, showsTitle: false) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                         DetailNoteEntryRow(
@@ -537,7 +509,8 @@ struct DetailNoteEntryRow: View {
                     warm: true,
                     showsSurface: false,
                     height: 58,
-                    nativeAccessibilityIdentifier: "detail.note.editor.\(entry.id.description)"
+                    nativeAccessibilityIdentifier: "detail.note.editor.\(entry.id.description)",
+                    focusesOnAppear: true
                 )
                     .foregroundStyle(Theme.text1)
                     .frame(minHeight: 58)
@@ -572,6 +545,17 @@ struct DetailNoteEntryRow: View {
                     .foregroundStyle(Theme.text2)
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        guard editable, allowsActions else { return }
+                        onStartEditing()
+                    }
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "detail.note.body.\(entry.id.description)",
+                            verificationText: entry.body
+                        )
+                    }
             }
         }
         .padding(.horizontal, 10)

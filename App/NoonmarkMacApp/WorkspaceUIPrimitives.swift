@@ -632,20 +632,32 @@ private extension EmptyStateKind {
 
 struct DetailSection<Content: View>: View {
     let title: String
+    let showsTitle: Bool
     @ViewBuilder let content: Content
 
-    init(_ title: String, @ViewBuilder content: () -> Content) {
+    init(
+        _ title: String,
+        showsTitle: Bool = true,
+        @ViewBuilder content: () -> Content
+    ) {
         self.title = title
+        self.showsTitle = showsTitle
         self.content = content()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(title)
-                .font(.noonmarkSystem(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.text3)
-                .tracking(0.6)
+        if showsTitle {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(title)
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.6)
+                content
+            }
+        } else {
             content
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(title)
         }
     }
 }
@@ -658,7 +670,7 @@ struct TaskClassificationDetailSection: View {
     let editable: Bool
 
     var body: some View {
-        DetailSection(store.copy.classificationAndLabelsTitle) {
+        DetailSection(store.copy.classificationAndLabelsTitle, showsTitle: false) {
             if editable {
                 TaskClassificationEditor(
                     chainID: trace.chainID,

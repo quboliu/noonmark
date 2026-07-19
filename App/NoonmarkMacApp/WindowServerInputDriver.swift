@@ -242,7 +242,8 @@ final class WindowServerInputDriver {
         at point: CGPoint,
         gestureNumber: Int64,
         modifiers: NSEvent.ModifierFlags = [],
-        pressure: Double
+        pressure: Double,
+        clickCount: Int64 = 1
     ) throws {
         guard let event = CGEvent(
             mouseEventSource: source,
@@ -257,7 +258,7 @@ final class WindowServerInputDriver {
         event.setIntegerValueField(.mouseEventNumber, value: gestureNumber)
         event.setIntegerValueField(
             .mouseEventClickState,
-            value: type == .mouseMoved ? 0 : 1
+            value: type == .mouseMoved ? 0 : clickCount
         )
         event.setDoubleValueField(.mouseEventPressure, value: pressure)
         event.post(tap: .cghidEventTap)
@@ -266,6 +267,40 @@ final class WindowServerInputDriver {
     func postClick(
         at initialCoordinate: PointerCoordinate,
         modifiers: NSEvent.ModifierFlags,
+        resolveTarget: () throws -> PointerCoordinate
+    ) async throws {
+        try await postClickGesture(
+            at: initialCoordinate,
+            modifiers: modifiers,
+            clickCount: 1,
+            resolveTarget: resolveTarget
+        )
+    }
+
+    func postDoubleClick(
+        at initialCoordinate: PointerCoordinate,
+        modifiers: NSEvent.ModifierFlags,
+        resolveTarget: () throws -> PointerCoordinate
+    ) async throws {
+        try await postClickGesture(
+            at: initialCoordinate,
+            modifiers: modifiers,
+            clickCount: 1,
+            resolveTarget: resolveTarget
+        )
+        try await Task.sleep(nanoseconds: 50_000_000)
+        try await postClickGesture(
+            at: initialCoordinate,
+            modifiers: modifiers,
+            clickCount: 2,
+            resolveTarget: resolveTarget
+        )
+    }
+
+    private func postClickGesture(
+        at initialCoordinate: PointerCoordinate,
+        modifiers: NSEvent.ModifierFlags,
+        clickCount: Int64,
         resolveTarget: () throws -> PointerCoordinate
     ) async throws {
         try Task.checkCancellation()
@@ -317,7 +352,8 @@ final class WindowServerInputDriver {
                 at: finalCoordinate.quartzPoint,
                 gestureNumber: gestureNumber,
                 modifiers: modifiers,
-                pressure: 1
+                pressure: 1,
+                clickCount: clickCount
             )
             mouseDownWasPosted = true
             try Task.checkCancellation()
@@ -336,7 +372,8 @@ final class WindowServerInputDriver {
             try await releaseLeftButton(
                 at: finalCoordinate.quartzPoint,
                 gestureNumber: gestureNumber,
-                modifiers: modifiers
+                modifiers: modifiers,
+                clickCount: clickCount
             )
             try Task.checkCancellation()
         } catch {
@@ -346,7 +383,8 @@ final class WindowServerInputDriver {
                 try await releaseLeftButton(
                     at: finalCoordinate.quartzPoint,
                     gestureNumber: gestureNumber,
-                    modifiers: modifiers
+                    modifiers: modifiers,
+                    clickCount: clickCount
                 )
             } catch {
                 throw Failure.releaseCleanupFailed(
@@ -565,6 +603,10 @@ final class WindowServerInputDriver {
                     unicodeString: buffer.baseAddress
                 )
             }
+            // A combined-session source inherits the previous shortcut flags.
+            // Unicode typing must explicitly release them after e.g. Command-A.
+            keyDown.flags = []
+            keyUp.flags = []
             keyDown.setIntegerValueField(.eventSourceUserData, value: userData)
             keyUp.setIntegerValueField(.eventSourceUserData, value: userData)
             keyDown.post(tap: .cghidEventTap)
@@ -672,14 +714,16 @@ final class WindowServerInputDriver {
     private func releaseLeftButton(
         at point: CGPoint,
         gestureNumber: Int64,
-        modifiers: NSEvent.ModifierFlags
+        modifiers: NSEvent.ModifierFlags,
+        clickCount: Int64 = 1
     ) async throws {
         try postMouse(
             type: .leftMouseUp,
             at: point,
             gestureNumber: gestureNumber,
             modifiers: modifiers,
-            pressure: 0
+            pressure: 0,
+            clickCount: clickCount
         )
         await cancellationInsensitivePause()
         for attempt in 0 ..< 30 {
@@ -690,7 +734,8 @@ final class WindowServerInputDriver {
                     at: point,
                     gestureNumber: gestureNumber,
                     modifiers: modifiers,
-                    pressure: 0
+                    pressure: 0,
+                    clickCount: clickCount
                 )
             }
             await cancellationInsensitivePause()

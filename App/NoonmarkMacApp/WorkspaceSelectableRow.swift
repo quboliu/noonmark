@@ -10,6 +10,7 @@ struct WorkspaceSelectableRow: ViewModifier {
         let isSelected = store.isWorkspaceItemSelected(item)
         content
             .focusable(true)
+            .focusEffectDisabled()
             .onKeyPress(.return) {
                 store.userSelectWorkspaceItem(item)
                 return .handled

@@ -132,6 +132,66 @@ require_literal scripts/test-e2e "scenario_set="
 require_literal scripts/test-e2e "NOONMARK_EVIDENCE_RUN_ID"
 require_literal scripts/test-e2e "NOONMARK_EVIDENCE_REQUIRE_FULL_SUITE"
 require_literal scripts/test-e2e 'if [[ "$require_full_suite" == "1" && "$suite_mode" != "full" ]]'
+require_literal \
+  scripts/test-e2e \
+  '"day-pointer-selection|day|--e2e-selection-focus-result-url'
+require_literal \
+  scripts/test-e2e \
+  'xcrun swift scripts/assert-selection-focus-screenshot.swift'
+require_literal \
+  scripts/test-e2e \
+  'xcrun swift scripts/assert-task-detail-density-screenshot.swift'
+require_literal \
+  App/NoonmarkMacApp/ReviewEditorLayoutE2EAutomation.swift \
+  "let topGap = surfaceFrame.maxY - characterRect.maxY"
+require_literal \
+  App/NoonmarkMacApp/MarkdownEditing.swift \
+  "height: fixedHeight.map"
+require_literal \
+  App/NoonmarkMacApp/MarkdownEditing.swift \
+  'identifier: "\(nativeAccessibilityIdentifier).placeholder"'
+require_literal \
+  App/NoonmarkMacApp/ReviewEditorLayoutE2EAutomation.swift \
+  "try input.typeUnicode(sentinel)"
+require_literal \
+  App/NoonmarkMacApp/ReviewEditorLayoutE2EAutomation.swift \
+  'identifier: "\(identifier).placeholder"'
+require_literal \
+  App/NoonmarkMacApp/TaskNoteE2EUIInteractionDriver.swift \
+  "try await input.postDoubleClick("
+require_literal \
+  App/NoonmarkMacApp/TaskNoteE2EUIInteractionDriver.swift \
+  "try input.typeUnicode(editedBody)"
+require_literal \
+  scripts/test-e2e \
+  'NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \'
+require_literal \
+  App/NoonmarkMacApp/TaskDetail.swift \
+  ".onTapGesture(count: 2)"
+require_literal \
+  App/NoonmarkMacApp/TaskDetail.swift \
+  'DetailSection(store.copy.noteSectionTitle, showsTitle: false)'
+require_literal \
+  scripts/assert-task-detail-density-screenshot.swift \
+  '"完成进度"'
+require_literal \
+  scripts/assert-task-detail-density-screenshot.swift \
+  "requiredFragmentsByScreenshot"
+require_literal \
+  scripts/assert-task-detail-density-screenshot.swift \
+  "label.hasPrefix(heading)"
+require_literal \
+  scripts/test-e2e \
+  'missing task-detail density screenshot:'
+require_literal \
+  App/NoonmarkMacApp/SelectionFocusVisualE2EAutomation.swift \
+  "try await input.postClick("
+require_literal \
+  App/NoonmarkMacApp/WorkspaceSelectableRow.swift \
+  ".focusEffectDisabled()"
+require_literal \
+  scripts/assert-selection-focus-screenshot.swift \
+  "guard longestConsecutiveRows <= 1"
 require_literal scripts/test-e2e "--e2e-native-command-help-shortcut"
 require_order \
   scripts/test-e2e \

@@ -98,6 +98,7 @@ e2e_owned_artifact_roots=(
   artifacts/e2e-quick-add-ui
   artifacts/e2e-reactivation-atomicity
   artifacts/e2e-review-zhulong-entry
+  artifacts/e2e-review-detail-ux
   artifacts/e2e-runtime
   artifacts/e2e-seed-clock
   artifacts/e2e-subtask-clock
@@ -130,6 +131,7 @@ scenarios=(
   "day-subtasks-expanded|day|--e2e-expand-first-subtask-trace"
   "day-changed-target|day|--select changed"
   "day-detail|day|--select first"
+  "day-pointer-selection|day|--e2e-selection-focus-result-url $PWD/artifacts/e2e/day-pointer-selection-result.txt"
   "day-manual-detail|day|--select manual"
   "day-review-saved|day|--e2e-update-review --e2e-review-summary E2E自动保存反馈"
   "pool|pool|"
@@ -174,6 +176,7 @@ only_mode_specs=(
   "NOONMARK_E2E_SEED_CLOCK_ONLY:seed-clock"
   "NOONMARK_E2E_TASK_NOTE_ONLY:task-note"
   "NOONMARK_E2E_TASK_NOTE_ATOMICITY_ONLY:task-note-atomicity"
+  "NOONMARK_E2E_REVIEW_DETAIL_UX_ONLY:review-detail-ux"
   "NOONMARK_E2E_COPY_UNDO_ONLY:copy-undo"
   "NOONMARK_E2E_LIFECYCLE_ONLY:lifecycle"
   "NOONMARK_E2E_NATURAL_DAY_ONLY:natural-day"
@@ -1141,7 +1144,8 @@ capture_app_screenshot() {
       fi
     fi
     if [[ "${arguments[$index]}" == "--e2e-classification-manager-ui-result-url" ||
-      "${arguments[$index]}" == "--e2e-classification-overflow-ui-result-url" ]]; then
+      "${arguments[$index]}" == "--e2e-classification-overflow-ui-result-url" ||
+      "${arguments[$index]}" == "--e2e-selection-focus-result-url" ]]; then
       ui_entry_result="${arguments[$((index + 1))]:-}"
     fi
     if [[ "${arguments[$index]}" == "--e2e-english-ui-result-url" ]]; then
@@ -2068,6 +2072,25 @@ print(String(format: "title-description visible gap: %.2fpt", visibleGap))
   echo "E2E pool detail density: $(cat "$result")"
 }
 
+assert_task_detail_density_screenshots() {
+  local screenshots=()
+  local scenario
+  for scenario in day-detail pool-detail future-detail unfinished-detail completed-detail; do
+    if [[ -n "$requested_scenarios" && " $requested_scenarios " != *" $scenario "* ]]; then
+      continue
+    fi
+    if [[ ! -f "artifacts/e2e/${scenario}.png" ]]; then
+      echo "missing task-detail density screenshot: artifacts/e2e/${scenario}.png" >&2
+      exit 1
+    fi
+    screenshots+=("$PWD/artifacts/e2e/${scenario}.png")
+  done
+  if (( ${#screenshots[@]} == 0 )); then
+    return 0
+  fi
+  xcrun swift scripts/assert-task-detail-density-screenshot.swift "${screenshots[@]}"
+}
+
 assert_sidebar_semantic_icon_colors_screenshot() {
   local screenshot="artifacts/e2e/day.png"
   local zhulong_screenshot="artifacts/e2e/zhulong.png"
@@ -2189,52 +2212,25 @@ run_task_note_persistence_probe() {
   local restart_ocr_log="${note_dir}/task-note-restart-ocr.log"
   local copy_result="${note_dir}/english-copy-result.txt"
   local copy_log="${note_dir}/english-copy.log"
-  local mutate_pid
   local note_sql_probe
 
   rm -rf "$note_dir"
   mkdir -p "$note_dir"
 
-  "$app_executable_path" \
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "task-note mutation" \
+    "$mutate_result" \
+    "$mutate_log" \
     --data-url "$PWD/$note_db" \
     --page pool \
     --e2e-task-note-mutate \
     --e2e-task-note-state-url "$PWD/$note_state" \
-    --e2e-task-note-result-url "$PWD/$mutate_result" \
-    >"$mutate_log" 2>&1 &
-  mutate_pid=$!
-  for _ in {1..100}; do
-    if ! kill -0 "$mutate_pid" 2>/dev/null; then
-      break
-    fi
-    sleep 0.1
-  done
-  if kill -0 "$mutate_pid" 2>/dev/null; then
-    terminate_e2e_app
-    wait "$mutate_pid" 2>/dev/null || true
-    echo "task-note mutation automation did not terminate" >&2
-    cat "$mutate_log" >&2
-    exit 1
-  fi
-  if ! wait "$mutate_pid"; then
-    echo "task-note mutation app launch failed:" >&2
-    cat "$mutate_log" >&2
-    exit 1
-  fi
+    --e2e-task-note-result-url "$PWD/$mutate_result"
 
-  if [[ ! -f "$mutate_result" ]]; then
-    echo "task-note mutation result was not created: $mutate_result" >&2
-    exit 1
-  fi
-  if [[ "$(<"$mutate_result")" != "ok" ]]; then
-    echo "task-note mutation failed: $(<"$mutate_result")" >&2
-    exit 1
-  fi
   if [[ ! -s "$note_state" ]]; then
     echo "task-note mutation state was not created: $note_state" >&2
     exit 1
   fi
-  assert_clean_app_log "task-note mutation" "$mutate_log"
 
   capture_app_screenshot \
     "$note_dir" \
@@ -3606,6 +3602,25 @@ run_markdown_editor_ui_probe() {
     exit 1
   fi
   echo "E2E Markdown native focus, edit commands, indentation, and persistence: $markdown_db"
+}
+
+run_review_detail_ux_probe() {
+  local review_dir="artifacts/e2e-review-detail-ux"
+  local review_db="$review_dir/Noonmark.sqlite"
+  local review_result="$review_dir/result.txt"
+  local review_log="$review_dir/app.log"
+
+  rm -rf "$review_dir"
+  mkdir -p "$review_dir"
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "review editor first-line layout" \
+    "$review_result" \
+    "$review_log" \
+    --data-url "$PWD/$review_db" \
+    --page day \
+    --e2e-review-editor-layout-result-url "$PWD/$review_result"
+
+  echo "E2E review editor first-line layout: $review_result"
 }
 
 run_copy_undo_persistence_probe() {
@@ -5856,6 +5871,11 @@ if [[ "${NOONMARK_E2E_MARKDOWN_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_REVIEW_DETAIL_UX_ONLY:-0}" == "1" ]]; then
+  run_review_detail_ux_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_QUICK_ADD_UI_ONLY:-0}" == "1" ]]; then
   run_quick_add_ui_probe
   exit 0
@@ -5945,11 +5965,16 @@ for scenario in "${scenarios[@]}"; do
       "$screenshot_name" \
       "artifacts/e2e/${screenshot_name}.png"
   fi
+  if [[ "$screenshot_name" == "day-pointer-selection" ]]; then
+    xcrun swift scripts/assert-selection-focus-screenshot.swift \
+      "artifacts/e2e/${screenshot_name}.png"
+  fi
 done
 
 assert_pool_context_menu_screenshot
 assert_pool_classification_overflow_screenshot
 assert_pool_detail_density_screenshot
+assert_task_detail_density_screenshots
 assert_sidebar_semantic_icon_colors_screenshot
 
 if [[ "$english_scenarios_enabled" == "1" && "${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}" != "1" ]]; then
@@ -5985,6 +6010,8 @@ run_pool_context_menu_action_probe
 run_unfinished_action_probe
 
 run_markdown_editor_ui_probe
+
+run_review_detail_ux_probe
 
 run_window_resize_probe
 

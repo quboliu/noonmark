@@ -532,6 +532,22 @@
 - 根修：打开附言操作 popover 时读取其可见菜单项所属、已映射到 WindowServer 的 `PresentationWindowIdentity`；编辑或删除后只验证该精确 window number 不再可见／映射，同时继续验证编辑器、删除后的行、toast 与 SQLite。系统辅助 child window 不再影响产品 popover 的关闭结论。
 - 回归证据：旧实现以 fresh App 稳定 RED 为 `等待真实 UI 超时：删除后的附言行消失`，dump 与 SQLite 同时证明删除已成功；根修后 `NOONMARK_E2E_TASK_NOTE_ONLY=1 scripts/test-e2e debug` 通过真实编辑／删除、重启截图、English copy 与 SQLite `2 2 1 1 0 2 1 1` 对账。
 
+### UI-063：真实点击叠加系统 focus effect，使任务行选中框比截图 E2E 粗重
+
+- 状态：已验证。
+- 症状：用户在 release App 中真实点击 Day 任务行后，浅蓝选中面外出现高饱和粗蓝框；同尺寸 `artifacts/e2e/day-detail.png` 只有克制的浅蓝底与细边界。像素反馈环测得用户截图与新增真实点击场景均为上下各连续 7 px 高饱和全宽蓝线，旧截图场景为 0 px。
+- 根因：共享 `WorkspaceSelectableRow` 以 `.focusable(true)` 提供键盘事件，却没有关闭 SwiftUI／AppKit 默认 focus effect；真实点击把行设为 focus target 后，系统粗 focus ring 与 `listRowSurface` 已有的 accent-soft 底色和 1 px 边界叠加。原 `day-detail` 截图通过 `--select first` 直接修改 Store selection，没有真实点击；既有 workspace productivity 虽使用 WindowServer 点击，却只断言选择与键盘行为，没有截图像素 oracle。
+- 根修：保留 `.focusable(true)`、Return／Space、方向键、多选和 selected accessibility trait，在同一共享 modifier 上关闭系统默认 focus effect，让既有 `listRowSurface` 成为唯一选中视觉。新增 `day-pointer-selection` 场景，由稳定签名 E2E App 通过 `WindowServerInputDriver` 真点击第一条 Day 任务，外部截取真实窗口，并拒绝连续 2 px 以上的高饱和全宽蓝框；不建立未经确认的整图 reference。
+- 回归证据：测试先在未修改生产样式时稳定 RED 为 `selection focus visual is too heavy: found 7 consecutive saturated-blue rows`；根修后同一命令 `NOONMARK_E2E_SCREENSHOTS_ONLY=1 NOONMARK_E2E_SCENARIOS=day-pointer-selection scripts/test-e2e debug` 转为 `selection_focus_max_consecutive_blue_rows=0`。随后 `NOONMARK_E2E_WORKSPACE_PRODUCTIVITY_ONLY=1 scripts/test-e2e debug` 通过真实鼠标单选、Command／Shift 多选、上下键、拖放、批量动作、保存失败原子性与重启 SQLite 对账。未过滤 `scripts/test-e2e debug` 进一步以 42／42 截图、10／10 English 场景、Help／附言／WindowServer 综合交互、`windowserver_input_cleanup_result=ok` 和 exit 0 通过；最终 `make check` 亦已复核通过。
+
+### UI-064：复盘首行被内部 viewport 居中推低，详情栏重复标题阻碍直接编辑
+
+- 状态：已验证。
+- 症状：用户在 release App 的每日复盘输入“大发大”后，placeholder 所在首行变空，正文落到下一行；SQLite 取证确认 `review_summary='大发大'`、首字节即“大”，没有前导换行。与此同时，可编辑附言只能经三点菜单进入编辑，详情栏又以“完成进度／分组与标签／子任务／附言”重复解释已经自说明的控件。
+- 根因：`ReviewEditor` 的可见 surface 被外层扩到 `92pt`，但 `MarkdownTextViewRepresentable.sizeThatFits` 忽略父级明确的高度 proposal，仍以 `.body` 内容高度返回 `54pt`，SwiftUI 因而把实际可点击／输入 viewport 垂直居中；placeholder 与可见 surface 顶部对齐，真实文字却以内部 viewport 顶部为原点。附言条目只有 overflow menu 连接现有 `onStartEditing`，正文没有双击入口；共享详情 section 默认无条件渲染标题。
+- 根修：共享 Markdown editor 只让显式固定高度实例按 style 上下限采用该高度，三项复盘编辑器把原生 viewport 明确设为 `92pt`，placeholder 继续作为不参与布局的 overlay；其他自适应 editor 的尺寸语义不变。附言正文双击复用既有原位编辑 session 与权限判断，编辑器出现即取得输入焦点，历史／已完成只读边界不变。共享 `DetailSection` 新增隐藏可见标题但保留 accessibility label 的语义模式，进度、分类、子任务与附言在所有通用任务详情中使用该模式。
+- 回归证据：复盘真实指针首行 probe 在旧实现稳定 RED 为 `surface=92pt, scroll=54pt, topGap=25pt, allowed=14pt`，根修后同一 `NOONMARK_E2E_REVIEW_DETAIL_UX_ONLY=1 scripts/test-e2e debug` 以 WindowServer 点击／键入逐一覆盖三个字段，并断言输入后 placeholder 消失、清空后恢复；同一物理双击还证明已完成附言不出现编辑器。附言专项旧实现稳定 RED 为 `等待真实 UI 超时：附言编辑器`，根修后 WindowServer 双击／输入、编辑、保存、删除、重启截图、English copy 与 SQLite `2 2 1 1 0 2 1 1` 对账通过。Day／任务池／未来／未完成／已完成五张真实详情截图人工复核通过，OCR 右栏 fail-closed 约束同时拒绝四个冗余标题并要求对应功能事实仍可见。未过滤 `scripts/test-e2e debug` 最终以 42／42 截图、10／10 English 场景、Help／附言／复盘／WindowServer 综合交互、`windowserver_input_cleanup_result=ok` 和 exit 0 通过；`make check` 以 896 项测试、1 项显式 live iCloud skip、0 failures 及全部 lint／evidence contract 通过。
+
 ## 本轮新增 P 级收口策略
 
 - 风险：mutation clock、sync topology／waiting 和烛龙跨存储恢复均可能造成持久数据分叉或不可恢复覆盖，必须以 P 级处理；视觉与菜单改动虽然可回退，也不能以静态代码代替真实 App 用户路径。

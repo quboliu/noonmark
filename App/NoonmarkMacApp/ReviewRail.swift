@@ -55,6 +55,7 @@ struct ReviewRail: View {
                 ReviewEditor(
                     title: store.copy.todaySummaryTitle,
                     placeholder: store.copy.todaySummaryPlaceholder,
+                    accessibilityIdentifier: "review.summary",
                     text: Binding(
                         get: { day?.reviewSummary ?? "" },
                         set: { store.updateReview(summary: $0) }
@@ -63,6 +64,7 @@ struct ReviewRail: View {
                 ReviewEditor(
                     title: store.copy.unfinishedReasonTitle,
                     placeholder: store.copy.unfinishedReasonPlaceholder,
+                    accessibilityIdentifier: "review.unfinished-reason",
                     text: Binding(
                         get: { day?.reviewUnfinishedReason ?? "" },
                         set: { store.updateReview(reason: $0) }
@@ -71,6 +73,7 @@ struct ReviewRail: View {
                 ReviewEditor(
                     title: store.copy.tomorrowNotesTitle,
                     placeholder: store.copy.tomorrowNotesPlaceholder,
+                    accessibilityIdentifier: "review.tomorrow-note",
                     text: Binding(
                         get: { day?.reviewTomorrowNote ?? "" },
                         set: { store.updateReview(tomorrow: $0) }
@@ -198,6 +201,7 @@ struct ReviewStatsCard: View {
 struct ReviewEditor: View {
     let title: String
     let placeholder: String
+    let accessibilityIdentifier: String
     @Binding var text: String
 
     var body: some View {
@@ -205,9 +209,20 @@ struct ReviewEditor: View {
             Text(title)
                 .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                 .foregroundStyle(Theme.text2)
-            MarkdownEditor(text: $text, placeholder: placeholder, style: .body)
-                .frame(minHeight: 92)
+            MarkdownEditor(
+                text: $text,
+                placeholder: placeholder,
+                style: .body,
+                height: 92,
+                nativeAccessibilityIdentifier: accessibilityIdentifier
+            )
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "\(accessibilityIdentifier).surface",
+                        verificationText: placeholder
+                    )
+                }
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
         }
     }

@@ -76,6 +76,7 @@ struct MarkdownEditor: View {
     var onCommit: (() -> Void)?
     var onEndEditing: (() -> Void)?
     var nativeAccessibilityIdentifier: String?
+    var focusesOnAppear = false
     var focusRequest = 0
 
     var body: some View {
@@ -87,6 +88,8 @@ struct MarkdownEditor: View {
             onEndEditing: onEndEditing,
             accessibilityLabel: placeholder,
             nativeAccessibilityIdentifier: nativeAccessibilityIdentifier,
+            explicitHeight: height,
+            focusesOnAppear: focusesOnAppear,
             focusRequest: focusRequest
         )
         Group {
@@ -108,6 +111,14 @@ struct MarkdownEditor: View {
                         .padding(.horizontal, style.textContainerInset.width)
                         .padding(.vertical, style.textContainerInset.height)
                         .allowsHitTesting(false)
+                        .background {
+                            if let nativeAccessibilityIdentifier {
+                                AppE2EViewAnchor(
+                                    identifier: "\(nativeAccessibilityIdentifier).placeholder",
+                                    verificationText: placeholder
+                                )
+                            }
+                        }
                 }
             }
             .accessibilityLabel(placeholder)
@@ -122,6 +133,8 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     let onEndEditing: (() -> Void)?
     let accessibilityLabel: String
     let nativeAccessibilityIdentifier: String?
+    let explicitHeight: CGFloat?
+    let focusesOnAppear: Bool
     let focusRequest: Int
 
     func makeCoordinator() -> Coordinator {
@@ -197,6 +210,13 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         }
         context.coordinator.text = $text
         context.coordinator.onEndEditing = onEndEditing
+        if focusesOnAppear, context.coordinator.didRequestInitialFocus == false {
+            context.coordinator.didRequestInitialFocus = true
+            DispatchQueue.main.async { [weak scrollView, weak textView] in
+                guard let scrollView, let textView else { return }
+                scrollView.window?.makeFirstResponder(textView)
+            }
+        }
         if context.coordinator.focusRequest != focusRequest {
             context.coordinator.focusRequest = focusRequest
             DispatchQueue.main.async { [weak scrollView, weak textView] in
@@ -229,12 +249,18 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             attributes: [.font: style.font]
         )
         let contentHeight = ceil(measured.height + verticalInsets)
+        let preferredHeight = min(
+            max(contentHeight, style.minimumHeight),
+            style.maximumHeight
+        )
+        let fixedHeight = explicitHeight.flatMap { height in
+            height.isFinite && height > 0 ? height : nil
+        }
         return CGSize(
             width: width,
-            height: min(
-                max(contentHeight, style.minimumHeight),
-                style.maximumHeight
-            )
+            height: fixedHeight.map {
+                min(max($0, style.minimumHeight), style.maximumHeight)
+            } ?? preferredHeight
         )
     }
 
@@ -242,6 +268,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         var text: Binding<String>
         var onEndEditing: (() -> Void)?
         var focusRequest: Int
+        var didRequestInitialFocus = false
 
         init(
             text: Binding<String>,

@@ -42,13 +42,13 @@ struct PoolDetail: View {
             Text(store.copy.poolNoDayTodoNotice)
                 .font(.noonmarkSystem(size: 11))
                 .foregroundStyle(Theme.text3)
-            DetailSection(store.copy.classificationAndLabelsTitle) {
+            DetailSection(store.copy.classificationAndLabelsTitle, showsTitle: false) {
                 TaskClassificationEditor(
                     chainID: task.chain.id,
                     taskTitle: task.definition.title
                 )
             }
-            DetailSection(store.copy.subtasksTitle) {
+            DetailSection(store.copy.subtasksTitle, showsTitle: false) {
                 PoolPlannedSubtasksSection(task: task)
             }
             PoolNotesSection(chainID: task.chain.id, entries: task.chain.activeNoteEntries)

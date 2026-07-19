@@ -33,47 +33,72 @@ enum TaskNoteE2EUIInteractionDriver {
         }
 
         func start() {
-            waitFor("编辑目标的附言操作按钮") { [self] in
-                guard let button = element(identifier: editedActionsIdentifier) else { return false }
-                return click(button)
-            } onSuccess: { [self] in
-                selectEditMenuItem()
-            }
-        }
-
-        private func selectEditMenuItem() {
-            waitFor("编辑附言菜单项") { [self] in
-                guard let item = element(identifier: editedMenuIdentifier),
-                      let identity = AppViewTreeE2E.mappedPresentationWindow(
-                          identifier: editedMenuIdentifier
-                      )
-                else { return false }
-                actionMenuIdentity = identity
-                return click(item)
-            } onSuccess: { [self] in
-                enterEditedBody()
-            }
-        }
-
-        private func enterEditedBody() {
-            waitFor("附言编辑器") { [self] in
-                guard let actionMenuIdentity,
-                      AppViewTreeE2E.isPresentationWindowOpen(actionMenuIdentity) == false
-                else { return false }
-                guard let textView = element(
-                    identifier: "\(editedEditorIdentifier).input"
-                ) as? NSTextView else {
-                    return false
+            Task { @MainActor [self] in
+                do {
+                    try await enterEditedBodyThroughWindowServer()
+                    saveEdit()
+                } catch {
+                    fail(error.localizedDescription)
                 }
-                textView.window?.makeFirstResponder(textView)
-                textView.selectAll(nil)
-                textView.insertText(editedBody, replacementRange: textView.selectedRange())
-                return textView.string == editedBody
+            }
+        }
+
+        private func enterEditedBodyThroughWindowServer() async throws {
+            var body: NSView?
+            try await waitUntil("可双击的附言正文") {
+                body = self.element(identifier: self.editedBodyIdentifier)
+                return body != nil
+            }
+            guard let body, let window = body.window else {
+                throw InteractionFailure.failed("附言正文没有窗口坐标")
+            }
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+            try await waitUntil("附言所在窗口没有成为 key window") {
+                NSApp.isActive && window.isKeyWindow
+            }
+
+            let input = try WindowServerInputDriver()
+            let resolveTarget: @MainActor () throws
+                -> WindowServerInputDriver.PointerCoordinate = {
+                guard let currentBody = self.element(identifier: self.editedBodyIdentifier),
+                      currentBody === body,
+                      currentBody.window === window,
+                      window.isKeyWindow
+                else {
+                    throw InteractionFailure.failed("附言正文在 mouseDown 前变化")
+                }
+                let frame = AppViewTreeE2E.frameInWindow(for: currentBody)
+                return try input.pointerCoordinate(
+                    windowPoint: NSPoint(x: frame.midX, y: frame.midY),
+                    in: window
+                )
+            }
+            let initialTarget = try resolveTarget()
+            try await input.postDoubleClick(
+                at: initialTarget,
+                modifiers: [],
+                resolveTarget: resolveTarget
+            )
+
+            var textView: NSTextView?
+            try await waitUntil("双击后附言编辑器没有出现并聚焦") {
+                textView = self.element(
+                    identifier: "\(self.editedEditorIdentifier).input"
+                ) as? NSTextView
+                return textView.map { window.firstResponder === $0 } == true
+            }
+            guard let textView else {
+                throw InteractionFailure.failed("附言编辑器缺少原生 NSTextView")
+            }
+            try input.postKey(keyCode: 0, modifiers: .command)
+            try input.typeUnicode(editedBody)
+            try await waitUntil("WindowServer 输入没有写入附言编辑器") {
+                textView.string == self.editedBody
                     && AppViewTreeE2E.hasNoVisibleView(
-                        identifier: deletedActionsIdentifier
+                        identifier: self.deletedActionsIdentifier
                     )
-            } onSuccess: { [self] in
-                saveEdit()
             }
         }
 
@@ -145,6 +170,18 @@ enum TaskNoteE2EUIInteractionDriver {
             }
         }
 
+        private func waitUntil(
+            _ step: String,
+            attempts: Int = 120,
+            condition: @MainActor () -> Bool
+        ) async throws {
+            for _ in 0 ..< attempts {
+                if condition() { return }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            throw InteractionFailure.failed("等待真实 UI 超时：\(step)")
+        }
+
         private func element(identifier: String) -> NSView? {
             AppViewTreeE2E.view(identifier: identifier)
         }
@@ -177,10 +214,6 @@ enum TaskNoteE2EUIInteractionDriver {
             AppViewTreeE2E.writeDump(beside: resultURL)
         }
 
-        private var editedActionsIdentifier: String {
-            "detail.note.actions.\(state.editedNoteID.description)"
-        }
-
         private var deletedActionsIdentifier: String {
             "detail.note.actions.\(state.deletedNoteID.description)"
         }
@@ -193,12 +226,12 @@ enum TaskNoteE2EUIInteractionDriver {
             "detail.note.editor.state.\(state.editedNoteID.description)"
         }
 
-        private var deletedEntryStateIdentifier: String {
-            "detail.note.entry.state.\(state.deletedNoteID.description)"
+        private var editedBodyIdentifier: String {
+            "detail.note.body.\(state.editedNoteID.description)"
         }
 
-        private var editedMenuIdentifier: String {
-            "detail.note.edit.\(state.editedNoteID.description)"
+        private var deletedEntryStateIdentifier: String {
+            "detail.note.entry.state.\(state.deletedNoteID.description)"
         }
 
         private var deletedMenuIdentifier: String {
@@ -207,6 +240,16 @@ enum TaskNoteE2EUIInteractionDriver {
 
         private var editedSaveIdentifier: String {
             "detail.note.save.\(state.editedNoteID.description)"
+        }
+    }
+
+    private enum InteractionFailure: LocalizedError {
+        case failed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case let .failed(message): message
+            }
         }
     }
 }

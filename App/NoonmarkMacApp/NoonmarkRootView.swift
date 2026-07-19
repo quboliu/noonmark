@@ -68,6 +68,7 @@ struct NoonmarkRootView: View {
                 store: store,
                 stateRepository: workspaceStateRepository
             )
+            .ignoresSafeArea(.container, edges: .top)
             .background(Theme.background)
             .disabled(
                 store.showingClassificationManager

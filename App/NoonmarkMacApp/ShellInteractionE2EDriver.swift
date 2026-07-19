@@ -707,7 +707,6 @@ enum DetailRailLayoutUIE2EDriver {
                       $0.action == NSSelectorFromString("toggleDetailRailAction:")
                   }),
                   let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
-                  let toolbar = window.toolbar,
                   let closeButton = window.standardWindowButton(.closeButton),
                   let miniaturizeButton = window.standardWindowButton(.miniaturizeButton),
                   let zoomButton = window.standardWindowButton(.zoomButton),
@@ -725,6 +724,12 @@ enum DetailRailLayoutUIE2EDriver {
             let sidebarToggleFrame = AppViewTreeE2E.frameInWindow(for: sidebarToggle)
             let detailToggleFrame = AppViewTreeE2E.frameInWindow(for: detailToggle)
             let sidebarWidth = AppViewTreeE2E.frameInWindow(for: sidebar).width
+            let contentFrame = window.contentView.map {
+                $0.convert($0.bounds, to: nil)
+            } ?? .zero
+            let workspaceFrame = AppViewTreeE2E.view(
+                identifier: "shell.workspace-split"
+            ).map(AppViewTreeE2E.frameInWindow) ?? .zero
             viewMenu.update()
             let contractChecks: [(String, Bool)] = [
                 ("sidebar-expanded", store.isSidebarExpanded),
@@ -744,9 +749,13 @@ enum DetailRailLayoutUIE2EDriver {
                     "sidebar-width",
                     abs(sidebarWidth - NoonmarkVisualMetrics.sidebarWidth) <= 1
                 ),
-                ("toolbar-style", window.toolbarStyle == .unifiedCompact),
-                ("toolbar-display", toolbar.displayMode == .iconOnly),
-                ("empty-native-toolbar", toolbar.items.isEmpty),
+                ("no-empty-native-toolbar", window.toolbar == nil),
+                ("integrated-titlebar", window.titlebarSeparatorStyle == .none),
+                (
+                    "workspace-enters-titlebar",
+                    abs(workspaceFrame.maxY - contentFrame.maxY) <= 1
+                        && abs(workspaceFrame.height - contentFrame.height) <= 1
+                ),
                 ("close-visible", closeButton.isHidden == false),
                 ("miniaturize-visible", miniaturizeButton.isHidden == false),
                 ("zoom-visible", zoomButton.isHidden == false),
@@ -1100,7 +1109,7 @@ private enum NativeSettingsWindowE2E {
 }
 
 @MainActor
-private enum ShellInteractionE2EResult {
+enum ShellInteractionE2EResult {
     static func finish(_ result: String, at resultURL: URL) {
         if result != "ok" {
             AppViewTreeE2E.writeDump(beside: resultURL)

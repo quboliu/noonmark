@@ -51,7 +51,7 @@ public struct WorkspaceState: Codable, Equatable, Sendable {
 
 public enum WorkspaceGeometry {
     public static let defaultSidebarWidth = 220.0
-    public static let compactSidebarWidth = 52.0
+    public static let compactSidebarWidth = 72.0
     public static let defaultDetailWidth = 280.0
     public static let sidebarWidthRange = 180.0 ... 320.0
     public static let detailWidthRange = 240.0 ... 420.0

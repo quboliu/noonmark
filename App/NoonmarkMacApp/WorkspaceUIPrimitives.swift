@@ -146,14 +146,14 @@ struct PaneBoundaryToggle: View {
                 chevron
             }
             .frame(width: 17, height: 15)
+            .frame(
+                width: NoonmarkVisualMetrics.paneToggleButtonSize,
+                height: NoonmarkVisualMetrics.paneToggleButtonSize
+            )
+            .contentShape(Rectangle())
             .foregroundStyle(Theme.text3)
         }
         .buttonStyle(.plain)
-        .frame(
-            width: NoonmarkVisualMetrics.paneToggleButtonSize,
-            height: NoonmarkVisualMetrics.paneToggleButtonSize
-        )
-        .contentShape(Rectangle())
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier(identifier)
         .help(accessibilityLabel)
@@ -203,17 +203,20 @@ struct HeaderButton: View {
             Text(title)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
+                .font(.noonmarkSystem(size: 12))
+                .foregroundStyle(Theme.text2)
+                .padding(.horizontal, title.count == 1 ? 8 : 10)
+                .frame(
+                    minWidth: CGFloat(
+                        MacUIAccessibilityLayout.minimumInteractiveTargetSize
+                    ),
+                    minHeight: CGFloat(
+                        MacUIAccessibilityLayout.minimumInteractiveTargetSize
+                    )
+                )
+                .contentShape(Rectangle())
         }
             .buttonStyle(.plain)
-            .font(.noonmarkSystem(size: 12))
-            .foregroundStyle(Theme.text2)
-            .padding(.horizontal, title.count == 1 ? 8 : 10)
-            .frame(
-                minWidth: CGFloat(
-                    MacUIAccessibilityLayout.minimumInteractiveTargetSize
-                ),
-                minHeight: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
-            )
             .fixedSize(horizontal: true, vertical: false)
             .layoutPriority(1)
             .accessibilityLabel(accessibilityLabel ?? title)

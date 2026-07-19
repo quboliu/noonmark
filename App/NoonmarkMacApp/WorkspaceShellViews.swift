@@ -59,7 +59,7 @@ struct Sidebar: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.top, 14)
+        .padding(.top, 4)
         .padding(.bottom, 10)
         .background(Theme.sidebar)
         .background {

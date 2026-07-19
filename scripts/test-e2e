@@ -6503,6 +6503,75 @@ fi
 
 echo "E2E collapsible navigation and detail rails: $detail_rail_result"
 
+main_window_chrome_dir="artifacts/e2e-main-window-chrome"
+main_window_chrome_result="${main_window_chrome_dir}/main-window-chrome-result.txt"
+rm -rf "$main_window_chrome_dir"
+mkdir -p "$main_window_chrome_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page day \
+  --e2e-main-window-chrome \
+  --e2e-main-window-chrome-result-url "$PWD/$main_window_chrome_result"
+
+if [[ ! -f "$main_window_chrome_result" ]]; then
+  echo "main window chrome result was not created: $main_window_chrome_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$main_window_chrome_result")" != "ok" ]]; then
+  echo "main window chrome failed: $(cat "$main_window_chrome_result")" >&2
+  exit 1
+fi
+
+echo "E2E integrated main window chrome: $main_window_chrome_result"
+
+header_navigation_dir="artifacts/e2e-header-navigation-hit-target"
+header_navigation_result="${header_navigation_dir}/header-navigation-result.txt"
+rm -rf "$header_navigation_dir"
+mkdir -p "$header_navigation_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page day \
+  --e2e-header-navigation-hit-target \
+  --e2e-header-navigation-hit-target-result-url "$PWD/$header_navigation_result"
+
+if [[ ! -f "$header_navigation_result" ]]; then
+  echo "header navigation hit-target result was not created: $header_navigation_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$header_navigation_result")" != "ok" ]]; then
+  echo "header navigation hit-target failed: $(cat "$header_navigation_result")" >&2
+  exit 1
+fi
+
+echo "E2E complete header navigation hit targets: $header_navigation_result"
+
+calendar_grid_dir="artifacts/e2e-calendar-grid-topology"
+calendar_grid_result="${calendar_grid_dir}/calendar-grid-result.txt"
+rm -rf "$calendar_grid_dir"
+mkdir -p "$calendar_grid_dir"
+
+open -W -n "$app_path" --args \
+  --ephemeral \
+  --page calendar \
+  --e2e-calendar-grid-topology \
+  --e2e-calendar-grid-topology-result-url "$PWD/$calendar_grid_result"
+
+if [[ ! -f "$calendar_grid_result" ]]; then
+  echo "calendar grid topology result was not created: $calendar_grid_result" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$calendar_grid_result")" != "ok" ]]; then
+  echo "calendar grid topology failed: $(cat "$calendar_grid_result")" >&2
+  exit 1
+fi
+
+echo "E2E complete calendar grid topology: $calendar_grid_result"
+
 run_subtask_clock_probe
 
 run_zhulong_navigation_probe

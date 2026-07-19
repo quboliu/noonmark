@@ -103,7 +103,7 @@
 
 ### 必须保留的优势
 
-- 真正的 `NSWindow`、`NSToolbar`、`unifiedCompact`、traffic lights、关闭不退出与 Dock reopen；
+- 真正的 `NSWindow`、full-size content titlebar、traffic lights、关闭不退出与 Dock reopen；
 - 统一浅色连续工作台、低边界与语义状态色；
 - Day／详情关系、任务链／轨迹／延续领域逻辑与烛龙首页；
 - 系统 context menu、真实 `.app` E2E、SQLite 持久化探针；

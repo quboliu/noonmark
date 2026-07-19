@@ -8,7 +8,8 @@ public enum MacUINavigationGroup: String, CaseIterable, Sendable {
 
 public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case macWindowChrome
-    case nativeUnifiedCompactToolbar
+    case nativeFullSizeContentTitlebar
+    case workspaceExtendsIntoTitlebar
     case trafficLights
     case systemTrafficLights
     case operableTrafficLights
@@ -40,6 +41,10 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case calendarUsesCollapsibleDetailRail
     case stableWindowFrameDuringDetailRailToggle
     case spatiallySeparatedRailControls
+    case completePaneToggleHitTarget
+    case completeHeaderNavigationHitTarget
+    case paneSafeAreaHandledAtHostingBoundary
+    case calendarGridSlotsOwnBoundaries
     case viewMenuRailCommands
     case adaptiveMainSurfaceWidth
     case nativeMainMenu
@@ -71,7 +76,7 @@ public enum MacUIWindowLayout {
 
 public enum MacUIShellLayout {
     public static let sidebarWidth = 220.0
-    public static let compactSidebarWidth = 52.0
+    public static let compactSidebarWidth = 72.0
     public static let detailRailWidth = 280.0
     public static let calendarRailWidth = 248.0
     public static let paneToggleButtonSize = 28.0
@@ -81,6 +86,13 @@ public enum MacUIShellLayout {
     public static let navigationRowHeight = 34.0
     public static let sidebarExpandedByDefault = true
     public static let detailRailCollapsedByDefault = true
+}
+
+public enum MacUICalendarGridLayout {
+    public static let columnCount = 7
+    public static let minimumRowCount = 5
+    public static let completesTrailingBlankSlots = true
+    public static let blankSlotsRenderGridBoundaries = true
 }
 
 public enum MacUITaskRowLayout {

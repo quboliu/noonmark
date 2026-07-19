@@ -553,8 +553,24 @@
 - 状态：已实现，待解锁控制台完成 WindowServer 全量复核。
 - 症状：用户在真实 App 中指出标题栏前后两个 `sidebar.left`／`sidebar.right` 按钮形成孤立视觉单位；比较可交互原型后选择面板边界方案，并明确要求使用双尖括号、左栏收起后只保留一列图标宽度。
 - 根因：旧设计契约把两枚开关固定在近乎为空的原生 toolbar 两端，并把左栏收起直接映射为 `NSSplitViewItem.isCollapsed=true`；状态仓库只保存展开布尔值，E2E 也把左栏不可见当作正确结果。因此视觉构图、几何状态与测试 oracle 三层共同固化了问题。
-- 根修：主窗口保留原生空 `NSToolbar` 与 `.unifiedCompact`，栏位控制移入对应面板边界并以两枚同向 chevron 表达动作。左栏改为 `220pt` 完整态与固定 `52pt` 图标列，紧凑态保留全部导航图标和当前页选中背景，只隐藏文字、数量和分组标题；右栏仍完全收起，并在页面标题行提供恢复入口。`NSSplitViewItem` 不再允许左栏 collapse，完整宽度独立写入 `WorkspaceState.expandedSidebarWidth`，避免被紧凑宽度覆盖；完整态仍允许在 `180...320pt` 原生拖拽。
-- 当前证据：`make check` 通过，覆盖 build、896 项测试（1 项显式 live iCloud skip）、确定性仿真、证据契约、SwiftLint 与 SwiftFormat；`WorkspaceStateRepositoryTests` 与 `MacUIDesignContractTests` 的 26 项专项也单独通过。真实 `.app` 进程内栏位路径已走通右栏展开／收起、左栏 `220→52→220pt`、紧凑导航点击与窗口 frame 稳定；随后官方 `scripts/test-e2e` 在前置护栏因 `CGSSessionScreenIsLocked=Yes` fail-closed，物理 divider drag、跨重启和截图不得在锁屏状态伪报通过，待控制台解锁后补跑 `NOONMARK_E2E_WINDOW_STATE_ONLY=1 scripts/test-e2e debug` 与完整 E2E。
+- 根修：栏位控制移入对应面板边界并以两枚同向 chevron 表达动作。左栏改为 `220pt` 完整态与固定图标列，紧凑态保留全部导航图标和当前页选中背景，只隐藏文字、数量和分组标题；右栏仍完全收起，并在页面标题行提供恢复入口。`NSSplitViewItem` 不再允许左栏 collapse，完整宽度独立写入 `WorkspaceState.expandedSidebarWidth`，避免被紧凑宽度覆盖；完整态仍允许在 `180...320pt` 原生拖拽。首版 `52pt` 紧凑宽度与空 `NSToolbar` 所造成的缺陷分别由 UI-066、UI-067 继续根修，最终紧凑宽度为 `72pt`。
+- 当前证据：真实 `.app` 进程内栏位路径已走通右栏展开／收起、左栏 `220→72→220pt`、紧凑导航点击与窗口 frame 稳定；完整验证以 UI-067 的最新证据为准。
+
+### UI-066：栏位按钮移走后空标题栏仍占位，双尖括号外围点击无效
+
+- 状态：已实现，待解锁控制台完成 WindowServer 全量复核。
+- 症状：用户指出移除标题栏两端按钮后，窗口顶部仍保留整条无信息、无操作的空白；同时 `<<`／`>>` 多次点击偶尔不生效。旧真实 App view tree 量得窗口高 `768pt`、工作区高 `730pt`，空 `NSToolbarView` 独占顶部 `38pt`；按钮 E2E anchor 虽为 `28×28pt`，两枚实际 `_NSShapeHitTestingView` 却分别只有约 `4.5×7.5pt`。
+- 根因：主窗口仍安装没有 item 的 `NSToolbar`，SwiftUI 因其 safe-area reservation 把整块 `NSSplitView` 压到标题栏下方；`PaneBoundaryToggle` 又把 `28×28pt` frame 与 `contentShape` 放在 `Button` 外侧，扩大了视觉与 hover surface，却没有扩大 Button label 的真实命中区域。
+- 根修：移除主窗口空 toolbar 与 titlebar separator，让 full-size `NSSplitView` 进入窗口顶部，三栏背景与原生 titlebar 连成同一表面；traffic lights 仍由 AppKit 绘制，栏内内容继续通过原生 safe area 局部避让。把 `28×28pt` frame 与矩形 `contentShape` 移入共享 Button label，使视觉、hover、focus 与 action hit target 同源，左右栏所有入口同时受益。
+- 当前证据：新增真实 App 进程内外壳 probe 在旧实现稳定 RED，同时报告 `toolbar` 仍存在、工作区 `730/768pt`、表面未进入 traffic lights 后方，以及左栏九宫格 9 个点仅中心 1 点生效；根修后同一 probe 的 full-height 外壳、左栏 9／9 与右栏跨收起／展开位置 9／9 点击全部转为 GREEN，连续切换期间窗口 frame 不变。锁屏状态下不能把该进程内证据冒充 WindowServer 物理点击或视觉验收，解锁后仍需运行栏位专项与完整 E2E。
+
+### UI-067：独立 Hosting pane 重复保留顶部安全区，日期按钮与空白月历槽位没有承担完整交互／边线
+
+- 状态：已实现，待完整 E2E 与 `make check` 收口。
+- 症状：用户在最新 release App 中再次看到中栏横贯整窗的顶部空白；左栏紧凑后分隔线压过绿色 traffic light。Day Todo 与日历上一期／下一期控件只有点中尖括号才生效。2026 年 8 月月历中，1 号左侧以及 3－7 号上方缺线。
+- 根因：外层 `NativeWorkspaceSplitView` 虽已进入 full-size content titlebar，但内部三列分别创建 `NSHostingController`；中栏与右栏在新的 Hosting 边界再次取得约 `28pt` 顶部 safe area，叠加页面 `16pt` padding 后，标题距窗口顶部实测 `45.5pt`。原生 traffic lights 最大 x 为 `61pt`，首版固定 `52pt` 紧凑栏分隔线因此必然穿过绿色按钮。共享 `HeaderButton` 又把 padding 与最小 frame 放在 `Button` 外部，视觉方块没有成为 action hit target。日历只创建前置空白和真实日期，空白用无边线的 `Color.clear`；底边／右边由真实日期格单独绘制，所以相邻位置为空白时就没有边界。
+- 根修：中栏与右栏在各自 `NSHostingController.rootView` 上处理顶部 safe area，左栏继续保留系统避让并把额外内容 padding 收为 `4pt`；紧凑栏改为仍是一列图标的 `72pt`，让分隔线在绿色按钮外保留 `11pt`。共享 `HeaderButton` 把字体、padding、最小 `28×28pt` frame 与矩形 `contentShape` 全部放进 label。日历按 `rows × 7` 补齐前后空白槽位，所有槽位经同一个 modifier 绘制底边与右边，日期格只负责内容、hover 与选择态。
+- 当前证据：旧代码的真实 App 外壳 probe 稳定报告 `topGap=45.5pt`、绿色按钮 clearance `-9pt`；四枚日期按钮的九宫格点击各自只有中心 1／9 生效；用户截图缺线位置像素均为纯白。根修后外壳／交通灯 probe 为 `ok`，Day 与 Calendar 四枚按钮共 36 个分布点击点全部为 `ok`，固定 2026 年 8 月的 42 槽位 topology probe 为 `ok`。同一真实窗口截图中，1 号左边和 3－7 号上边均为 `(234,235,237)` 网格线，空白槽位内部仍为 `(255,255,255)`；截图还证明标题行已进入原生标题栏下方且紧凑栏不再压绿色按钮。
 
 ## 本轮新增 P 级收口策略
 

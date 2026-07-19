@@ -34,11 +34,13 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
         )
         let contentController = NSHostingController(
             rootView: MainSurface()
+                .ignoresSafeArea(.container, edges: .top)
                 .environmentObject(store)
                 .preferredColorScheme(.light)
         )
         let detailController = NSHostingController(
             rootView: DetailRail()
+                .ignoresSafeArea(.container, edges: .top)
                 .environmentObject(store)
                 .preferredColorScheme(.light)
                 .background {

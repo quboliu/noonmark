@@ -23,9 +23,23 @@ struct CalendarPage: View {
         let month = store.selectedCalendarDate.month
         let lead = NoonmarkStore.mondayLeadBlankCount(year: year, month: month)
         let dayCount = NoonmarkStore.daysInMonth(year: year, month: month)
-        var cells = (0..<lead).map { CalendarCellModel.blank(id: "blank-\($0)") }
+        var cells = (0..<lead).map {
+            CalendarCellModel.blank(id: "leading-blank-\($0)")
+        }
         cells += (1...dayCount).map { day in
             .date(LocalDate(year: year, month: month, day: day))
+        }
+        let occupiedRowCount = Int(
+            ceil(Double(cells.count) / Double(MacUICalendarGridLayout.columnCount))
+        )
+        let rowCount = max(
+            MacUICalendarGridLayout.minimumRowCount,
+            occupiedRowCount
+        )
+        let trailingBlankCount = rowCount * MacUICalendarGridLayout.columnCount
+            - cells.count
+        cells += (0..<trailingBlankCount).map {
+            CalendarCellModel.blank(id: "trailing-blank-\($0)")
         }
         return cells
     }
@@ -37,12 +51,28 @@ struct CalendarPage: View {
                     .font(.noonmarkSystem(size: 21, weight: .bold))
                     .foregroundStyle(Theme.text1)
                     .monospacedDigit()
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "calendar.header.month",
+                            verificationText: store.displayMonthYear(
+                                store.selectedCalendarDate
+                            )
+                        )
+                    }
                 Spacer()
-                HeaderButton("‹", accessibilityLabel: store.copy.previousMonth) {
+                calendarNavigationButton(
+                    "‹",
+                    accessibilityLabel: store.copy.previousMonth,
+                    identifier: "calendar.header.previous-action"
+                ) {
                     store.selectedCalendarDate = NoonmarkStore.shiftedMonth(from: store.selectedCalendarDate, by: -1)
                 }
                 HeaderButton(store.copy.today) { store.selectedCalendarDate = store.today }
-                HeaderButton("›", accessibilityLabel: store.copy.nextMonth) {
+                calendarNavigationButton(
+                    "›",
+                    accessibilityLabel: store.copy.nextMonth,
+                    identifier: "calendar.header.next-action"
+                ) {
                     store.selectedCalendarDate = NoonmarkStore.shiftedMonth(from: store.selectedCalendarDate, by: 1)
                 }
                 if store.hasDetailRailContent && store.isDetailRailExpanded == false {
@@ -76,25 +106,43 @@ struct CalendarPage: View {
             .padding(.top, 14)
 
             GeometryReader { proxy in
-                let rows = max(5, Int(ceil(Double(calendarCells.count) / 7.0)))
+                let rows = calendarCells.count
+                    / MacUICalendarGridLayout.columnCount
                 let rowHeight = max(88, proxy.size.height / CGFloat(rows))
                 LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7),
+                    columns: Array(
+                        repeating: GridItem(.flexible(), spacing: 0),
+                        count: MacUICalendarGridLayout.columnCount
+                    ),
                     spacing: 0
                 ) {
-                    ForEach(calendarCells) { cell in
-                        switch cell.kind {
-                        case .blank:
-                            Color.clear
-                                .frame(height: rowHeight)
-                        case let .date(date):
-                            CalendarCell(
-                                date: date,
-                                height: rowHeight,
-                                onSelect: {
-                                    focusRequest &+= 1
-                                    store.selectedCalendarDate = date
-                                }
+                    ForEach(
+                        Array(calendarCells.enumerated()),
+                        id: \.element.id
+                    ) { index, cell in
+                        Group {
+                            switch cell.kind {
+                            case .blank:
+                                Color.clear
+                            case let .date(date):
+                                CalendarCell(
+                                    date: date,
+                                    height: rowHeight,
+                                    onSelect: {
+                                        focusRequest &+= 1
+                                        store.selectedCalendarDate = date
+                                    }
+                                )
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: rowHeight)
+                        .calendarGridSlotSurface(
+                            identifier: "calendar.grid-slot.\(index)"
+                        )
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "calendar.grid-slot.\(index)"
                             )
                         }
                     }
@@ -113,6 +161,26 @@ struct CalendarPage: View {
                 onFocusChange: { _ in }
             )
         }
+    }
+
+    private func calendarNavigationButton(
+        _ title: String,
+        accessibilityLabel: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        HeaderButton(
+            title,
+            accessibilityLabel: accessibilityLabel,
+            action: action
+        )
+        .background {
+            AppE2EViewAnchor(
+                identifier: identifier,
+                verificationText: accessibilityLabel
+            )
+        }
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -213,12 +281,6 @@ struct CalendarCell: View {
             .padding(.bottom, 4)
             .frame(height: height, alignment: .top)
             .background(selected ? Theme.accentSoft : isHovered ? Theme.panel2 : Theme.panel)
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(Theme.line).frame(height: 1)
-            }
-            .overlay(alignment: .trailing) {
-                Rectangle().fill(Theme.line).frame(width: 1)
-            }
             .overlay(alignment: .leading) {
                 if selected {
                     Rectangle().fill(Theme.accent).frame(width: 2)
@@ -245,6 +307,40 @@ struct CalendarCell: View {
 
     func titleColor(for status: TraceStatus) -> Color {
         status.uiStyle.titleColor
+    }
+}
+
+private struct CalendarGridSlotSurface: ViewModifier {
+    let identifier: String
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Theme.line)
+                    .frame(height: 1)
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "\(identifier).bottom-boundary"
+                        )
+                    }
+            }
+            .overlay(alignment: .trailing) {
+                Rectangle()
+                    .fill(Theme.line)
+                    .frame(width: 1)
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "\(identifier).trailing-boundary"
+                        )
+                    }
+            }
+    }
+}
+
+private extension View {
+    func calendarGridSlotSurface(identifier: String) -> some View {
+        modifier(CalendarGridSlotSurface(identifier: identifier))
     }
 }
 

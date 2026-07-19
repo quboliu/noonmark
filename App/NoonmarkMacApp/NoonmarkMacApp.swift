@@ -13,10 +13,6 @@ import NoonmarkZhulongAI
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum NoonmarkToolbarIdentifier {
-    static let toolbar = NSToolbar.Identifier("Noonmark.MainToolbar")
-}
-
 @main
 @MainActor
 final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSWindowRestoration, NoonmarkMenuCommandTarget {
@@ -250,7 +246,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         window.title = store.windowTitle
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.titlebarSeparatorStyle = .line
+        window.titlebarSeparatorStyle = .none
         window.backgroundColor = .windowBackgroundColor
         window.isOpaque = true
         window.hasShadow = true
@@ -261,7 +257,6 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         window.isRestorable = windowStatePersistenceEnabled
         window.restorationClass = windowStatePersistenceEnabled ? Self.self : nil
         self.window = window
-        installToolbar(on: window)
         let hostingView = NSHostingView(rootView: root)
         hostingView.sizingOptions = []
         hostingView.frame = window.contentView?.bounds ?? .zero
@@ -297,15 +292,6 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             // Explicit quick-add and navigation commands request focus later.
             window.makeFirstResponder(nil)
         }
-    }
-
-    private func installToolbar(on window: NSWindow) {
-        let toolbar = NSToolbar(identifier: NoonmarkToolbarIdentifier.toolbar)
-        toolbar.displayMode = .iconOnly
-        toolbar.allowsUserCustomization = false
-        toolbar.autosavesConfiguration = false
-        window.toolbarStyle = .unifiedCompact
-        window.toolbar = toolbar
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

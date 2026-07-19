@@ -15,7 +15,7 @@ final class MacUIDesignContractTests: XCTestCase {
 
     func testCurrentShellLayoutMatchesCompactReference() {
         XCTAssertEqual(MacUIShellLayout.sidebarWidth, 220)
-        XCTAssertEqual(MacUIShellLayout.compactSidebarWidth, 52)
+        XCTAssertEqual(MacUIShellLayout.compactSidebarWidth, 72)
         XCTAssertEqual(MacUIShellLayout.detailRailWidth, 280)
         XCTAssertEqual(MacUIShellLayout.calendarRailWidth, 248)
         XCTAssertEqual(MacUICalendarInsightRowLayout.labelLineLimit, 1)
@@ -30,6 +30,10 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUIIconMetrics.navigationSize, 14)
         XCTAssertEqual(MacUIAccessibilityLayout.minimumInteractiveTargetSize, 28)
         XCTAssertEqual(MacUIShellLayout.navigationRowHeight, 34)
+        XCTAssertEqual(MacUICalendarGridLayout.columnCount, 7)
+        XCTAssertEqual(MacUICalendarGridLayout.minimumRowCount, 5)
+        XCTAssertTrue(MacUICalendarGridLayout.completesTrailingBlankSlots)
+        XCTAssertTrue(MacUICalendarGridLayout.blankSlotsRenderGridBoundaries)
     }
 
     func testGlobalMotionContractIncludesToastRiseAndDateStripSelection() {
@@ -166,7 +170,8 @@ final class MacUIDesignContractTests: XCTestCase {
         let contract = MacUIDesignContract.current
 
         XCTAssertTrue(contract.globalElements.contains(.macWindowChrome))
-        XCTAssertTrue(contract.globalElements.contains(.nativeUnifiedCompactToolbar))
+        XCTAssertTrue(contract.globalElements.contains(.nativeFullSizeContentTitlebar))
+        XCTAssertTrue(contract.globalElements.contains(.workspaceExtendsIntoTitlebar))
         XCTAssertTrue(contract.globalElements.contains(.trafficLights))
         XCTAssertTrue(contract.globalElements.contains(.systemTrafficLights))
         XCTAssertTrue(contract.globalElements.contains(.operableTrafficLights))
@@ -193,6 +198,10 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.globalElements.contains(.calendarUsesCollapsibleDetailRail))
         XCTAssertTrue(contract.globalElements.contains(.stableWindowFrameDuringDetailRailToggle))
         XCTAssertTrue(contract.globalElements.contains(.spatiallySeparatedRailControls))
+        XCTAssertTrue(contract.globalElements.contains(.completePaneToggleHitTarget))
+        XCTAssertTrue(contract.globalElements.contains(.completeHeaderNavigationHitTarget))
+        XCTAssertTrue(contract.globalElements.contains(.paneSafeAreaHandledAtHostingBoundary))
+        XCTAssertTrue(contract.globalElements.contains(.calendarGridSlotsOwnBoundaries))
         XCTAssertTrue(contract.globalElements.contains(.viewMenuRailCommands))
         XCTAssertTrue(contract.globalElements.contains(.adaptiveMainSurfaceWidth))
         XCTAssertTrue(contract.globalElements.contains(.nativeMainMenu))

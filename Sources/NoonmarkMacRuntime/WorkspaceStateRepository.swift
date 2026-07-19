@@ -6,27 +6,32 @@ public struct WorkspaceState: Codable, Equatable, Sendable {
     public static let defaultValue = WorkspaceState(
         sidebarExpanded: true,
         detailExpanded: false,
-        usesCustomDetailWidth: false
+        usesCustomDetailWidth: false,
+        expandedSidebarWidth: WorkspaceGeometry.defaultSidebarWidth
     )
 
     public var sidebarExpanded: Bool
     public var detailExpanded: Bool
     public var usesCustomDetailWidth: Bool
+    public var expandedSidebarWidth: Double
 
     public init(
         sidebarExpanded: Bool,
         detailExpanded: Bool,
-        usesCustomDetailWidth: Bool = false
+        usesCustomDetailWidth: Bool = false,
+        expandedSidebarWidth: Double = WorkspaceGeometry.defaultSidebarWidth
     ) {
         self.sidebarExpanded = sidebarExpanded
         self.detailExpanded = detailExpanded
         self.usesCustomDetailWidth = usesCustomDetailWidth
+        self.expandedSidebarWidth = expandedSidebarWidth
     }
 
     private enum CodingKeys: String, CodingKey {
         case sidebarExpanded
         case detailExpanded
         case usesCustomDetailWidth
+        case expandedSidebarWidth
     }
 
     public init(from decoder: Decoder) throws {
@@ -37,11 +42,16 @@ public struct WorkspaceState: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .usesCustomDetailWidth
         ) ?? false
+        expandedSidebarWidth = try container.decodeIfPresent(
+            Double.self,
+            forKey: .expandedSidebarWidth
+        ) ?? WorkspaceGeometry.defaultSidebarWidth
     }
 }
 
 public enum WorkspaceGeometry {
     public static let defaultSidebarWidth = 220.0
+    public static let compactSidebarWidth = 52.0
     public static let defaultDetailWidth = 280.0
     public static let sidebarWidthRange = 180.0 ... 320.0
     public static let detailWidthRange = 240.0 ... 420.0

@@ -548,6 +548,14 @@
 - 根修：共享 Markdown editor 只让显式固定高度实例按 style 上下限采用该高度，三项复盘编辑器把原生 viewport 明确设为 `92pt`，placeholder 继续作为不参与布局的 overlay；其他自适应 editor 的尺寸语义不变。附言正文双击复用既有原位编辑 session 与权限判断，编辑器出现即取得输入焦点，历史／已完成只读边界不变。共享 `DetailSection` 新增隐藏可见标题但保留 accessibility label 的语义模式，进度、分类、子任务与附言在所有通用任务详情中使用该模式。
 - 回归证据：复盘真实指针首行 probe 在旧实现稳定 RED 为 `surface=92pt, scroll=54pt, topGap=25pt, allowed=14pt`，根修后同一 `NOONMARK_E2E_REVIEW_DETAIL_UX_ONLY=1 scripts/test-e2e debug` 以 WindowServer 点击／键入逐一覆盖三个字段，并断言输入后 placeholder 消失、清空后恢复；同一物理双击还证明已完成附言不出现编辑器。附言专项旧实现稳定 RED 为 `等待真实 UI 超时：附言编辑器`，根修后 WindowServer 双击／输入、编辑、保存、删除、重启截图、English copy 与 SQLite `2 2 1 1 0 2 1 1` 对账通过。Day／任务池／未来／未完成／已完成五张真实详情截图人工复核通过，OCR 右栏 fail-closed 约束同时拒绝四个冗余标题并要求对应功能事实仍可见。未过滤 `scripts/test-e2e debug` 最终以 42／42 截图、10／10 English 场景、Help／附言／复盘／WindowServer 综合交互、`windowserver_input_cleanup_result=ok` 和 exit 0 通过；`make check` 以 896 项测试、1 项显式 live iCloud skip、0 failures 及全部 lint／evidence contract 通过。
 
+### UI-065：空标题栏两端的栏位按钮突兀，左栏完全隐藏损失导航上下文
+
+- 状态：已实现，待解锁控制台完成 WindowServer 全量复核。
+- 症状：用户在真实 App 中指出标题栏前后两个 `sidebar.left`／`sidebar.right` 按钮形成孤立视觉单位；比较可交互原型后选择面板边界方案，并明确要求使用双尖括号、左栏收起后只保留一列图标宽度。
+- 根因：旧设计契约把两枚开关固定在近乎为空的原生 toolbar 两端，并把左栏收起直接映射为 `NSSplitViewItem.isCollapsed=true`；状态仓库只保存展开布尔值，E2E 也把左栏不可见当作正确结果。因此视觉构图、几何状态与测试 oracle 三层共同固化了问题。
+- 根修：主窗口保留原生空 `NSToolbar` 与 `.unifiedCompact`，栏位控制移入对应面板边界并以两枚同向 chevron 表达动作。左栏改为 `220pt` 完整态与固定 `52pt` 图标列，紧凑态保留全部导航图标和当前页选中背景，只隐藏文字、数量和分组标题；右栏仍完全收起，并在页面标题行提供恢复入口。`NSSplitViewItem` 不再允许左栏 collapse，完整宽度独立写入 `WorkspaceState.expandedSidebarWidth`，避免被紧凑宽度覆盖；完整态仍允许在 `180...320pt` 原生拖拽。
+- 当前证据：`make check` 通过，覆盖 build、896 项测试（1 项显式 live iCloud skip）、确定性仿真、证据契约、SwiftLint 与 SwiftFormat；`WorkspaceStateRepositoryTests` 与 `MacUIDesignContractTests` 的 26 项专项也单独通过。真实 `.app` 进程内栏位路径已走通右栏展开／收起、左栏 `220→52→220pt`、紧凑导航点击与窗口 frame 稳定；随后官方 `scripts/test-e2e` 在前置护栏因 `CGSSessionScreenIsLocked=Yes` fail-closed，物理 divider drag、跨重启和截图不得在锁屏状态伪报通过，待控制台解锁后补跑 `NOONMARK_E2E_WINDOW_STATE_ONLY=1 scripts/test-e2e debug` 与完整 E2E。
+
 ## 本轮新增 P 级收口策略
 
 - 风险：mutation clock、sync topology／waiting 和烛龙跨存储恢复均可能造成持久数据分叉或不可恢复覆盖，必须以 P 级处理；视觉与菜单改动虽然可回退，也不能以静态代码代替真实 App 用户路径。

@@ -725,7 +725,6 @@ enum DetailRailLayoutUIE2EDriver {
             let sidebarToggleFrame = AppViewTreeE2E.frameInWindow(for: sidebarToggle)
             let detailToggleFrame = AppViewTreeE2E.frameInWindow(for: detailToggle)
             let sidebarWidth = AppViewTreeE2E.frameInWindow(for: sidebar).width
-            let toolbarItemIdentifiers = Set(toolbar.items.map(\.itemIdentifier))
             viewMenu.update()
             let contractChecks: [(String, Bool)] = [
                 ("sidebar-expanded", store.isSidebarExpanded),
@@ -747,21 +746,13 @@ enum DetailRailLayoutUIE2EDriver {
                 ),
                 ("toolbar-style", window.toolbarStyle == .unifiedCompact),
                 ("toolbar-display", toolbar.displayMode == .iconOnly),
-                (
-                    "sidebar-toolbar-item",
-                    toolbarItemIdentifiers.contains(NoonmarkToolbarIdentifier.sidebar)
-                ),
-                (
-                    "detail-toolbar-item",
-                    toolbarItemIdentifiers.contains(NoonmarkToolbarIdentifier.detailRail)
-                ),
+                ("empty-native-toolbar", toolbar.items.isEmpty),
                 ("close-visible", closeButton.isHidden == false),
                 ("miniaturize-visible", miniaturizeButton.isHidden == false),
                 ("zoom-visible", zoomButton.isHidden == false),
                 (
                     "sidebar-toggle-position",
-                    sidebarToggleFrame.midX
-                        <= sidebarWidth + NoonmarkVisualMetrics.toolbarButtonSize
+                    sidebarToggleFrame.midX <= sidebarWidth
                 ),
                 (
                     "detail-toggle-position",
@@ -808,19 +799,40 @@ enum DetailRailLayoutUIE2EDriver {
                 return
             }
             let middleWidth = AppViewTreeE2E.frameInWindow(for: middle).width
-            guard store.isSidebarExpanded == false,
-                  window.frame == initialWindowFrame,
-                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.sidebar"),
-                  AppViewTreeE2E.hasNoVisibleView(identifier: "sidebar.nav.calendar"),
-                  abs(middleWidth - initialMiddleWidth - initialSidebarWidth) <= 1
+            guard let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar"),
+                  let calendarNavigation = AppViewTreeE2E.view(
+                      identifier: "sidebar.nav.calendar"
+                  )
             else {
                 retry(attemptsRemaining, action: waitForCollapsedSidebar) {
-                    "failed: 左栏没有完全隐藏，窗口尺寸改变，或中栏没有接收完整宽度"
+                    "failed: 左栏紧凑态没有保留栏位或导航图标"
+                }
+                return
+            }
+            let compactSidebarWidth = AppViewTreeE2E.frameInWindow(
+                for: sidebar
+            ).width
+            guard store.isSidebarExpanded == false,
+                  window.frame == initialWindowFrame,
+                  calendarNavigation.isHidden == false,
+                  abs(
+                      compactSidebarWidth
+                          - NoonmarkVisualMetrics.compactSidebarWidth
+                  ) <= 1,
+                  abs(
+                      middleWidth
+                          - initialMiddleWidth
+                          - initialSidebarWidth
+                          + compactSidebarWidth
+                  ) <= 1
+            else {
+                retry(attemptsRemaining, action: waitForCollapsedSidebar) {
+                    "failed: 左栏没有收成固定图标列，窗口尺寸改变，或中栏宽度不正确"
                 }
                 return
             }
             guard AppViewTreeE2E.click(toggle) else {
-                finish("failed: 左栏完全隐藏后无法通过窗口入口重新展开")
+                finish("failed: 左栏紧凑后无法通过图标列入口重新展开")
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [self] in
@@ -895,9 +907,6 @@ enum DetailRailLayoutUIE2EDriver {
                 }
                 return
             }
-            let settingsToolbarIdentifiers = Set(
-                settingsWindow.toolbar?.items.map(\.itemIdentifier) ?? []
-            )
             let settingsChecks: [(String, Bool)] = [
                 ("calendar-page", store.page == .calendar),
                 ("main-window-frame", mainWindow.frame == initialWindowFrame),
@@ -910,28 +919,14 @@ enum DetailRailLayoutUIE2EDriver {
                     )
                 ),
                 (
-                    "no-main-sidebar-toolbar-item",
-                    settingsToolbarIdentifiers.contains(
-                        NoonmarkToolbarIdentifier.sidebar
-                    ) == false
-                ),
-                (
-                    "no-main-detail-toolbar-item",
-                    settingsToolbarIdentifiers.contains(
-                        NoonmarkToolbarIdentifier.detailRail
-                    ) == false
-                ),
-                (
-                    "no-visible-main-detail-toggle",
-                    AppViewTreeE2E.hasNoVisibleView(
+                    "main-detail-toggle-retained",
+                    AppViewTreeE2E.view(
                         identifier: "shell.detail-rail.toggle"
-                    )
+                    ) != nil
                 ),
                 (
-                    "main-detail-toolbar-retained",
-                    mainWindow.toolbar?.items.contains(where: {
-                        $0.itemIdentifier == NoonmarkToolbarIdentifier.detailRail
-                    }) == true
+                    "main-toolbar-empty",
+                    mainWindow.toolbar?.items.isEmpty == true
                 )
             ]
             let failedChecks = settingsChecks.compactMap { name, passed in
@@ -976,9 +971,7 @@ enum DetailRailLayoutUIE2EDriver {
                   abs(sidebarWidth - initialSidebarWidth) <= 1,
                   AppViewTreeE2E.view(identifier: "sidebar.nav.calendar") != nil,
                   AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil,
-                  mainWindow.toolbar?.items.contains(where: {
-                      $0.itemIdentifier == NoonmarkToolbarIdentifier.detailRail
-                  }) == true
+                  mainWindow.toolbar?.items.isEmpty == true
             else {
                 retry(attemptsRemaining, action: waitForMainWindowAfterSettings) {
                     "failed: 关闭 Settings 后没有回到原日历窗口与原始布局"

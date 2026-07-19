@@ -195,6 +195,15 @@ struct DayTodoHeader: View {
             ) {
                 store.showingPicker = .gotoDay
             }
+            if store.hasDetailRailContent && store.isDetailRailExpanded == false {
+                PaneBoundaryToggle(
+                    direction: .left,
+                    accessibilityLabel: store.copy.expandDetailRail,
+                    identifier: "shell.detail-rail.toggle"
+                ) {
+                    store.toggleDetailRail()
+                }
+            }
         }
         .fixedSize(horizontal: true, vertical: false)
         .layoutPriority(1)

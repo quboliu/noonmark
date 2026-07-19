@@ -40,7 +40,10 @@ struct AppCopy {
     var navZhulong: String { language == .chinese ? "烛龙" : "Zhulong" }
     var navSettings: String { language == .chinese ? "设置" : "Settings" }
     var expandSidebar: String { language == .chinese ? "展开左侧栏" : "Show navigation sidebar" }
-    var collapseSidebar: String { language == .chinese ? "收起左侧栏" : "Hide navigation sidebar" }
+    var collapseSidebar: String {
+        language == .chinese ? "收起左侧栏为图标列" : "Collapse navigation to icons"
+    }
+
     var expandDetailRail: String { language == .chinese ? "展开右侧栏" : "Show detail sidebar" }
     var collapseDetailRail: String { language == .chinese ? "收起右侧栏" : "Hide detail sidebar" }
     var today: String { language == .chinese ? "今天" : "Today" }

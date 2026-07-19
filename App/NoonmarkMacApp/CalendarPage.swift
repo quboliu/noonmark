@@ -45,6 +45,15 @@ struct CalendarPage: View {
                 HeaderButton("›", accessibilityLabel: store.copy.nextMonth) {
                     store.selectedCalendarDate = NoonmarkStore.shiftedMonth(from: store.selectedCalendarDate, by: 1)
                 }
+                if store.hasDetailRailContent && store.isDetailRailExpanded == false {
+                    PaneBoundaryToggle(
+                        direction: .left,
+                        accessibilityLabel: store.copy.expandDetailRail,
+                        identifier: "shell.detail-rail.toggle"
+                    ) {
+                        store.toggleDetailRail()
+                    }
+                }
             }
 
             Text(store.copy.calendarSubtitle)

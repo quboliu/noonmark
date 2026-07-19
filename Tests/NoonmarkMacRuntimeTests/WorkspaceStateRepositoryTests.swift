@@ -12,7 +12,8 @@ final class WorkspaceStateRepositoryTests: XCTestCase {
         let expected = WorkspaceState(
             sidebarExpanded: false,
             detailExpanded: true,
-            usesCustomDetailWidth: true
+            usesCustomDetailWidth: true,
+            expandedSidebarWidth: 264
         )
 
         repository.save(expected)
@@ -39,6 +40,10 @@ final class WorkspaceStateRepositoryTests: XCTestCase {
         XCTAssertFalse(decoded.sidebarExpanded)
         XCTAssertTrue(decoded.detailExpanded)
         XCTAssertFalse(decoded.usesCustomDetailWidth)
+        XCTAssertEqual(
+            decoded.expandedSidebarWidth,
+            WorkspaceGeometry.defaultSidebarWidth
+        )
     }
 
     func testMissingOrCorruptValueUsesDeterministicDefault() {

@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import CryptoKit
 import Darwin
 import NoonmarkAI
@@ -16,17 +15,13 @@ import UniformTypeIdentifiers
 
 enum NoonmarkToolbarIdentifier {
     static let toolbar = NSToolbar.Identifier("Noonmark.MainToolbar")
-    static let sidebar = NSToolbarItem.Identifier("shell.sidebar.toggle")
-    static let detailRail = NSToolbarItem.Identifier("shell.detail-rail.toggle")
 }
 
 @main
 @MainActor
-final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSWindowRestoration, NSToolbarDelegate, NoonmarkMenuCommandTarget {
+final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSWindowRestoration, NoonmarkMenuCommandTarget {
     private static var retainedDelegate: NoonmarkMacApp?
     private var window: NSWindow?
-    private var toolbarObservation: AnyCancellable?
-    private var zhulongToolbarObservation: AnyCancellable?
     private let store: NoonmarkStore
     private let fixedNaturalDayEnvironment: FixedNaturalDayEnvironment?
     private let workspaceStateRepository: WorkspaceStateRepository
@@ -168,7 +163,6 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         installMainMenu()
         store.onLanguageChange = { [weak self] in
             self?.installMainMenu()
-            self?.synchronizeToolbar()
             self?.settingsWindowController.refreshLocalizedChrome()
             self?.quickEntryWindowController.refreshLocalizedChrome()
             self?.searchWindowController.refreshLocalizedChrome()
@@ -307,165 +301,11 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     private func installToolbar(on window: NSWindow) {
         let toolbar = NSToolbar(identifier: NoonmarkToolbarIdentifier.toolbar)
-        toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         toolbar.autosavesConfiguration = false
         window.toolbarStyle = .unifiedCompact
         window.toolbar = toolbar
-
-        toolbarObservation = store.objectWillChange.sink { [weak self] _ in
-            Task { @MainActor in
-                self?.synchronizeToolbar()
-            }
-        }
-        synchronizeToolbar()
-    }
-
-    private func synchronizeToolbar() {
-        guard let toolbar = window?.toolbar else { return }
-        synchronizeZhulongToolbarObservation()
-        let detailIndex = toolbar.items.firstIndex {
-            $0.itemIdentifier == NoonmarkToolbarIdentifier.detailRail
-        }
-        if store.hasDetailRailContent, detailIndex == nil {
-            toolbar.insertItem(
-                withItemIdentifier: NoonmarkToolbarIdentifier.detailRail,
-                at: toolbar.items.count
-            )
-        } else if store.hasDetailRailContent == false, let detailIndex {
-            toolbar.removeItem(at: detailIndex)
-        }
-
-        updateToolbarItem(
-            identifier: NoonmarkToolbarIdentifier.sidebar,
-            label: store.isSidebarExpanded ? store.copy.collapseSidebar : store.copy.expandSidebar,
-            possibleLabels: [store.copy.collapseSidebar, store.copy.expandSidebar],
-            enabled: true
-        )
-        updateToolbarItem(
-            identifier: NoonmarkToolbarIdentifier.detailRail,
-            label: store.isDetailRailExpanded
-                ? store.copy.collapseDetailRail
-                : store.copy.expandDetailRail,
-            possibleLabels: [store.copy.collapseDetailRail, store.copy.expandDetailRail],
-            enabled: store.hasDetailRailContent
-        )
-    }
-
-    private func synchronizeZhulongToolbarObservation() {
-        guard store.page == .zhulong else {
-            zhulongToolbarObservation = nil
-            return
-        }
-        guard zhulongToolbarObservation == nil else { return }
-        zhulongToolbarObservation = store.zhulongWorkspace.$selectedSessionID
-            .removeDuplicates()
-            .sink { [weak self] _ in
-                Task { @MainActor in
-                    self?.synchronizeToolbar()
-                }
-            }
-    }
-
-    private func updateToolbarItem(
-        identifier: NSToolbarItem.Identifier,
-        label: String,
-        possibleLabels: Set<String>,
-        enabled: Bool
-    ) {
-        guard let item = window?.toolbar?.items.first(where: {
-            $0.itemIdentifier == identifier
-        }) else { return }
-        item.label = label
-        item.paletteLabel = label
-        item.possibleLabels = possibleLabels
-        item.toolTip = label
-        item.isEnabled = enabled
-        guard let button = item.view as? NSButton else { return }
-        button.toolTip = label
-        button.setAccessibilityLabel(label)
-        button.isEnabled = enabled
-    }
-
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [
-            NoonmarkToolbarIdentifier.sidebar,
-            .flexibleSpace,
-            NoonmarkToolbarIdentifier.detailRail
-        ]
-    }
-
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        var identifiers: [NSToolbarItem.Identifier] = [
-            NoonmarkToolbarIdentifier.sidebar,
-            .flexibleSpace
-        ]
-        if store.hasDetailRailContent {
-            identifiers.append(NoonmarkToolbarIdentifier.detailRail)
-        }
-        return identifiers
-    }
-
-    func toolbar(
-        _ toolbar: NSToolbar,
-        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
-        willBeInsertedIntoToolbar flag: Bool
-    ) -> NSToolbarItem? {
-        switch itemIdentifier {
-        case NoonmarkToolbarIdentifier.sidebar:
-            return makeToolbarItem(
-                identifier: itemIdentifier,
-                symbolName: "sidebar.left",
-                action: #selector(toggleSidebarAction(_:)),
-                isNavigational: true
-            )
-        case NoonmarkToolbarIdentifier.detailRail:
-            return makeToolbarItem(
-                identifier: itemIdentifier,
-                symbolName: "sidebar.right",
-                action: #selector(toggleDetailRailAction(_:)),
-                isNavigational: false
-            )
-        default:
-            return nil
-        }
-    }
-
-    private func makeToolbarItem(
-        identifier: NSToolbarItem.Identifier,
-        symbolName: String,
-        action: Selector,
-        isNavigational: Bool
-    ) -> NSToolbarItem {
-        let image = NSImage(
-            systemSymbolName: symbolName,
-            accessibilityDescription: nil
-        ) ?? NSImage()
-        image.isTemplate = true
-        let button = NSButton(image: image, target: self, action: action)
-        button.identifier = NSUserInterfaceItemIdentifier(identifier.rawValue)
-        button.imagePosition = .imageOnly
-        button.imageScaling = .scaleProportionallyDown
-        button.symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: NoonmarkVisualMetrics.toolbarIconSize,
-            weight: .medium
-        )
-        button.bezelStyle = .toolbar
-        button.showsBorderOnlyWhileMouseInside = true
-        button.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: NoonmarkVisualMetrics.toolbarButtonSize),
-            button.heightAnchor.constraint(equalToConstant: NoonmarkVisualMetrics.toolbarButtonSize)
-        ])
-
-        let item = NSToolbarItem(itemIdentifier: identifier)
-        item.view = button
-        item.target = self
-        item.action = action
-        item.isNavigational = isNavigational
-        item.visibilityPriority = .high
-        return item
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -608,12 +448,10 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     @objc func toggleSidebarAction(_ sender: Any?) {
         store.toggleSidebar()
-        synchronizeToolbar()
     }
 
     @objc func toggleDetailRailAction(_ sender: Any?) {
         store.toggleDetailRail()
-        synchronizeToolbar()
     }
 
     @objc func undoAction(_ sender: Any?) {

@@ -232,7 +232,7 @@ struct WorkspaceRestorationE2EAutomation: LaunchAutomationRunnable {
     private func ensureDetailExpanded(store: NoonmarkStore) async throws {
         if store.isDetailRailExpanded == false {
             guard AppViewTreeE2E.click(identifier: "shell.detail-rail.toggle") else {
-                throw Failure.failed("detail toolbar item rejected a real mouse click")
+                throw Failure.failed("detail boundary toggle rejected a real mouse click")
             }
         }
         try await waitUntil("detail rail did not expand") {
@@ -400,14 +400,14 @@ struct WorkspaceRestorationE2EAutomation: LaunchAutomationRunnable {
         )
 
         guard AppViewTreeE2E.click(identifier: "shell.detail-rail.toggle") else {
-            throw Failure.failed("detail toolbar item rejected the collapse click")
+            throw Failure.failed("detail boundary toggle rejected the collapse click")
         }
         try await waitUntil("detail rail did not collapse") {
             store.shouldShowDetailRail == false
                 && AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail")
         }
         guard AppViewTreeE2E.click(identifier: "shell.detail-rail.toggle") else {
-            throw Failure.failed("detail toolbar item rejected the expand click")
+            throw Failure.failed("detail boundary toggle rejected the expand click")
         }
         try await waitForDetailWidth(
             expectedDetailWidth,
@@ -421,17 +421,25 @@ struct WorkspaceRestorationE2EAutomation: LaunchAutomationRunnable {
         window: NSWindow
     ) async throws {
         guard AppViewTreeE2E.click(identifier: "shell.sidebar.toggle") else {
-            throw Failure.failed("sidebar toolbar item rejected a real mouse click")
+            throw Failure.failed("sidebar boundary toggle rejected a real mouse click")
         }
         try await waitUntil("sidebar did not collapse after a real mouse click") {
-            store.isSidebarExpanded == false
-                && AppViewTreeE2E.hasNoVisibleView(identifier: "shell.sidebar")
+            guard store.isSidebarExpanded == false,
+                  let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar")
+            else {
+                return false
+            }
+            return abs(
+                Double(AppViewTreeE2E.frameInWindow(for: sidebar).width)
+                    - WorkspaceGeometry.compactSidebarWidth
+            ) <= 2
         }
 
         let persisted = WorkspaceStateRepository().load()
         guard persisted.sidebarExpanded == false,
               persisted.detailExpanded,
-              persisted.usesCustomDetailWidth
+              persisted.usesCustomDetailWidth,
+              abs(persisted.expandedSidebarWidth - geometry.sidebarWidth) <= 2
         else {
             throw Failure.failed("workspace repository did not retain collapse state")
         }
@@ -475,8 +483,19 @@ struct WorkspaceRestorationE2EAutomation: LaunchAutomationRunnable {
                 && abs(frame.height - expected.windowHeight) <= 1
                 && store.isSidebarExpanded == false
                 && store.isDetailRailExpanded
-                && AppViewTreeE2E.hasNoVisibleView(identifier: "shell.sidebar")
+                && AppViewTreeE2E.view(identifier: "shell.sidebar") != nil
                 && AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail") == false
+        }
+
+        try await waitUntil("compact sidebar width was not restored") {
+            guard let sidebar = AppViewTreeE2E.view(identifier: "shell.sidebar")
+            else {
+                return false
+            }
+            return abs(
+                Double(AppViewTreeE2E.frameInWindow(for: sidebar).width)
+                    - WorkspaceGeometry.compactSidebarWidth
+            ) <= 2
         }
 
         var observedDetailWidth = 0.0

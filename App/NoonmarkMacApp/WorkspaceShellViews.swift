@@ -28,22 +28,31 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            NavGroupTitle(store.copy.planGroup)
+            sidebarHeader
             ForEach(planPages) { page in
                 NavItem(
                     page: page,
                     label: store.navigationLabel(for: page),
-                    count: store.navigationCount(for: page)
+                    count: store.navigationCount(for: page),
+                    isCompact: store.isSidebarExpanded == false
                 )
             }
 
-            NavGroupTitle(store.copy.traceGroup)
-                .padding(.top, 12)
+            if store.isSidebarExpanded {
+                NavGroupTitle(store.copy.traceGroup)
+                    .padding(.top, 12)
+            } else {
+                Divider()
+                    .overlay(Theme.line.opacity(0.72))
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 10)
+            }
             ForEach(tracePages) { page in
                 NavItem(
                     page: page,
                     label: store.navigationLabel(for: page),
-                    count: store.navigationCount(for: page)
+                    count: store.navigationCount(for: page),
+                    isCompact: store.isSidebarExpanded == false
                 )
             }
 
@@ -56,6 +65,33 @@ struct Sidebar: View {
         .background {
             AppE2EViewAnchor(identifier: "shell.sidebar")
         }
+    }
+
+    private var sidebarHeader: some View {
+        HStack(spacing: 0) {
+            if store.isSidebarExpanded {
+                NavGroupTitle(store.copy.planGroup)
+                    .padding(.bottom, 0)
+                Spacer(minLength: 4)
+            } else {
+                Spacer(minLength: 0)
+            }
+            PaneBoundaryToggle(
+                direction: store.isSidebarExpanded ? .left : .right,
+                accessibilityLabel: store.isSidebarExpanded
+                    ? store.copy.collapseSidebar
+                    : store.copy.expandSidebar,
+                identifier: "shell.sidebar.toggle"
+            ) {
+                store.toggleSidebar()
+            }
+            if store.isSidebarExpanded == false {
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.leading, store.isSidebarExpanded ? 0 : 5)
+        .padding(.trailing, store.isSidebarExpanded ? 10 : 5)
+        .padding(.bottom, 4)
     }
 }
 
@@ -81,6 +117,7 @@ struct NavItem: View {
     let page: NoonmarkStore.Page
     let label: String
     let count: Int
+    let isCompact: Bool
 
     var active: Bool { store.page == page }
 
@@ -88,23 +125,30 @@ struct NavItem: View {
         Button {
             store.selectPage(page)
         } label: {
-            HStack(spacing: 10) {
-                navigationIcon
-                Text(label)
-                    .font(.noonmarkSystem(size: 14.5, weight: active ? .semibold : .medium))
-                    .foregroundStyle(active ? Theme.text1 : Theme.text2)
-                Spacer()
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.noonmarkSystem(size: 12, weight: active ? .semibold : .regular))
-                        .foregroundStyle(Theme.text2)
-                        .padding(.horizontal, 7)
-                        .frame(minWidth: 21, minHeight: 18)
-                        .background(Capsule().fill(Theme.chip))
+            Group {
+                if isCompact {
+                    navigationIcon
+                        .frame(maxWidth: .infinity)
+                } else {
+                    HStack(spacing: 10) {
+                        navigationIcon
+                        Text(label)
+                            .font(.noonmarkSystem(size: 14.5, weight: active ? .semibold : .medium))
+                            .foregroundStyle(active ? Theme.text1 : Theme.text2)
+                        Spacer()
+                        if count > 0 {
+                            Text("\(count)")
+                                .font(.noonmarkSystem(size: 12, weight: active ? .semibold : .regular))
+                                .foregroundStyle(Theme.text2)
+                                .padding(.horizontal, 7)
+                                .frame(minWidth: 21, minHeight: 18)
+                                .background(Capsule().fill(Theme.chip))
+                        }
+                    }
+                    .padding(.leading, 14)
+                    .padding(.trailing, 12)
                 }
             }
-            .padding(.leading, 14)
-            .padding(.trailing, 12)
             .frame(height: NoonmarkVisualMetrics.navigationRowHeight)
             .hoverSurface(
                 active: active,
@@ -118,7 +162,7 @@ struct NavItem: View {
             )
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 9)
+        .padding(.horizontal, isCompact ? 7 : 9)
         .padding(.vertical, 1.5)
         .accessibilityLabel(label)
         .accessibilityAddTraits(active ? .isSelected : [])

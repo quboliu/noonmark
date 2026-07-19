@@ -10,17 +10,18 @@
 
 - 主窗口默认启动尺寸必须是 `1200 × 768pt`；右栏展开后中栏约 `700pt`，右栏收起后中栏约 `980pt`。
 - 主窗口最小尺寸必须是 `960 × 720pt`。
-- 左侧 Sidebar 宽度必须是 `220pt`。
+- 左侧 Sidebar 完整宽度必须是 `220pt`，紧凑图标列必须是 `52pt`。
 - 通用右侧 Detail Rail 宽度必须是 `280pt`。
-- 通用 Detail Rail 默认收起；点击任务时自动展开，也可由 `sidebar.right` 图标手动切换。切换时窗口 frame 保持不变，中栏精确让出或收回 `280pt`。
+- 通用 Detail Rail 默认收起；点击任务时自动展开，也可由面板边界的双 chevron 手动切换。切换时窗口 frame 保持不变，中栏精确让出或收回 `280pt`。
 - 日历内部分析 rail 宽度必须是 `248pt`。
 - 页面主要水平 padding 从 `24pt` 收紧为 `20pt`；列表行主要纵向 padding 从 `9–10pt` 收紧为 `7–8pt`。
 - 不设置虚假的最大内容尺寸；窗口继续支持系统缩放、关闭后保留进程及 Dock 重新打开。
 
 ## 原生窗口工具栏与导航
 
-- titlebar 必须使用真正的 `NSToolbar` 与 `.unifiedCompact`；traffic lights、窗口圆角、边界和阴影均由系统绘制，不保留 SwiftUI 自绘副本或固定 toolbar 高度 token。
-- toolbar 不显示 Clock Logo、品牌字或重复标题。`sidebar.left` 位于原生 toolbar 前端，`sidebar.right` 位于尾端；两个 SF Symbol 使用 `13pt`，按钮占位为 `28 × 28pt`，并从 `NoonmarkMacUIContract` 取值；无详情内容时移除右侧 item。
+- titlebar 必须使用真正的空 `NSToolbar` 与 `.unifiedCompact`；traffic lights、窗口圆角、边界和阴影均由系统绘制，不保留 SwiftUI 自绘副本或固定 toolbar 高度 token。
+- titlebar 不显示 Clock Logo、品牌字、重复标题或左右栏开关。栏位按钮进入对应面板的内侧边界，使用两个同向 chevron、`28 × 28pt` 点击区和轻量 hover；无详情内容时不得显示右侧入口。
+- 左栏完整宽度为 `220pt`，紧凑态为 `52pt`：保留居中的导航图标和当前页轻量选中底，隐藏名称、数量与分组标题。完整态以 `<<` 收起，紧凑态以 `>>` 恢复；右栏展开态以 `>>` 收起，隐藏态在页面标题行右端以 `<<` 恢复。
 - Sidebar 顶部 padding 为 `14pt`，横向起点维持约 `16pt`，避免导航内容贴边。
 - 导航 icon 视觉字号从 `15.5pt` 缩为 `14pt`，占位宽度从 `21pt` 缩为 `19pt`。
 - 导航主文字使用最终可读尺寸 `14.5pt`，导航行高从 `36pt` 收紧为 `34pt`。

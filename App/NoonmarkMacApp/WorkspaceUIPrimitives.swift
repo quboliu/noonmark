@@ -80,6 +80,7 @@ struct SegmentedOptionRow<Option: Hashable>: View {
 }
 
 struct PageHeader<Trailing: View>: View {
+    @EnvironmentObject private var store: NoonmarkStore
     let title: String
     let subtitle: String?
     let badge: String?
@@ -112,9 +113,73 @@ struct PageHeader<Trailing: View>: View {
             }
             Spacer()
             trailing
+            if store.hasDetailRailContent && store.isDetailRailExpanded == false {
+                PaneBoundaryToggle(
+                    direction: .left,
+                    accessibilityLabel: store.copy.expandDetailRail,
+                    identifier: "shell.detail-rail.toggle"
+                ) {
+                    store.toggleDetailRail()
+                }
+            }
         }
         .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
         .padding(.vertical, 14)
+    }
+}
+
+enum PaneBoundaryDirection {
+    case left
+    case right
+}
+
+struct PaneBoundaryToggle: View {
+    let direction: PaneBoundaryDirection
+    let accessibilityLabel: String
+    let identifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: -1.5) {
+                chevron
+                chevron
+            }
+            .frame(width: 17, height: 15)
+            .foregroundStyle(Theme.text3)
+        }
+        .buttonStyle(.plain)
+        .frame(
+            width: NoonmarkVisualMetrics.paneToggleButtonSize,
+            height: NoonmarkVisualMetrics.paneToggleButtonSize
+        )
+        .contentShape(Rectangle())
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier(identifier)
+        .help(accessibilityLabel)
+        .hoverSurface(
+            cornerRadius: 6,
+            idleFill: .clear,
+            hoverFill: Theme.listRowHover,
+            idleStroke: .clear,
+            hoverStroke: Theme.line.opacity(0.5)
+        )
+        .background {
+            AppE2EViewAnchor(
+                identifier: identifier,
+                verificationText: accessibilityLabel
+            )
+        }
+    }
+
+    private var chevron: some View {
+        Image(systemName: direction == .left ? "chevron.left" : "chevron.right")
+            .font(
+                .noonmarkRenderedSystem(
+                    size: NoonmarkVisualMetrics.paneToggleChevronSize,
+                    weight: .semibold
+                )
+            )
     }
 }
 

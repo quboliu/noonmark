@@ -456,6 +456,27 @@ struct DetailRail: View {
     @EnvironmentObject private var store: NoonmarkStore
 
     var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                PaneBoundaryToggle(
+                    direction: .right,
+                    accessibilityLabel: store.copy.collapseDetailRail,
+                    identifier: "shell.detail-rail.toggle"
+                ) {
+                    store.toggleDetailRail()
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 36)
+            .background(Theme.panel)
+
+            detailContent
+        }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
         switch store.detailRailRoute {
         case .some(.calendar):
             CalendarDetailPanel()

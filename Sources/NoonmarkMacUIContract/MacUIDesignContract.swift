@@ -33,7 +33,7 @@ public enum MacUIGlobalElement: String, CaseIterable, Sendable {
     case borderlessListRows
     case collapsibleSidebar
     case sidebarExpandedByDefault
-    case sidebarFullyHiddenWhenCollapsed
+    case sidebarCompactsToIconRail
     case stableWindowFrameDuringSidebarToggle
     case collapsibleDetailRail
     case detailRailCollapsedByDefault
@@ -71,10 +71,10 @@ public enum MacUIWindowLayout {
 
 public enum MacUIShellLayout {
     public static let sidebarWidth = 220.0
-    public static let collapsedSidebarWidth = 0.0
+    public static let compactSidebarWidth = 52.0
     public static let detailRailWidth = 280.0
     public static let calendarRailWidth = 248.0
-    public static let toolbarButtonSize = 28.0
+    public static let paneToggleButtonSize = 28.0
     public static let pageHorizontalPadding = 20.0
     public static let taskRowVerticalPadding = 8.0
     public static let detailPadding = 14.0
@@ -120,7 +120,7 @@ public enum MacUIFuturePlanDetailLayout {
 }
 
 public enum MacUIIconMetrics {
-    public static let toolbarSize = 13.0
+    public static let paneToggleChevronSize = 8.5
     public static let navigationSize = 14.0
 }
 

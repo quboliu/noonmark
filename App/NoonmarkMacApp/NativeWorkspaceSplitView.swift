@@ -49,9 +49,8 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
         let sidebarItem = NSSplitViewItem(
             sidebarWithViewController: sidebarController
         )
-        sidebarItem.canCollapse = true
-        sidebarItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
-        sidebarItem.minimumThickness = CGFloat(WorkspaceGeometry.sidebarWidthRange.lowerBound)
+        sidebarItem.canCollapse = false
+        sidebarItem.minimumThickness = CGFloat(WorkspaceGeometry.compactSidebarWidth)
         sidebarItem.maximumThickness = CGFloat(WorkspaceGeometry.sidebarWidthRange.upperBound)
         sidebarItem.preferredThicknessFraction = NSSplitViewItem.unspecifiedDimension
         sidebarItem.holdingPriority = NSLayoutConstraint.Priority(rawValue: 260)
@@ -107,6 +106,7 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
         private var isApplyingState = false
         private var appliedAutomaticDetailWidth: CGFloat?
         private var pendingAutomaticDetailWidth: CGFloat?
+        private var expandedSidebarWidth: CGFloat
 
         init(
             store: NoonmarkStore,
@@ -115,8 +115,11 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
             self.store = store
             self.stateRepository = stateRepository
             hadPersistedState = stateRepository.containsSavedState
-            usesCustomDetailWidth = stateRepository.load()
-                .usesCustomDetailWidth
+            let persistedState = stateRepository.load()
+            usesCustomDetailWidth = persistedState.usesCustomDetailWidth
+            expandedSidebarWidth = Self.clampedExpandedSidebarWidth(
+                persistedState.expandedSidebarWidth
+            )
             super.init()
         }
 
@@ -145,7 +148,6 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
 
             let sidebarItem = controller.splitViewItems[0]
             let detailItem = controller.splitViewItems[2]
-            let shouldCollapseSidebar = !store.isSidebarExpanded
             let shouldCollapseDetail = !store.shouldShowDetailRail
             let automaticDetailWidth = store.page.detailRailWidth
 
@@ -156,7 +158,10 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
             }
 
             isApplyingState = true
-            sidebarItem.isCollapsed = shouldCollapseSidebar
+            applySidebarGeometry(
+                sidebarItem: sidebarItem,
+                expanded: store.isSidebarExpanded
+            )
             detailItem.isCollapsed = shouldCollapseDetail
             let canApplyPendingDetailWidth = shouldCollapseDetail == false
                 && needsInitialGeometryRestore == false
@@ -193,9 +198,16 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                     controller.splitView.bounds.width
                 )
             }
-            let sidebarExpanded = !controller.splitViewItems[0].isCollapsed
-            if store.isSidebarExpanded != sidebarExpanded {
-                store.isSidebarExpanded = sidebarExpanded
+            if store.isSidebarExpanded {
+                let sidebarWidth = controller.splitViewItems[0]
+                    .viewController.view.frame.width
+                if WorkspaceGeometry.sidebarWidthRange.contains(
+                    Double(sidebarWidth)
+                ) {
+                    expandedSidebarWidth = Self.clampedExpandedSidebarWidth(
+                        Double(sidebarWidth)
+                    )
+                }
             }
             if store.hasDetailRailContent {
                 let detailExpanded = !controller.splitViewItems[2].isCollapsed
@@ -224,14 +236,26 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
             let sidebarItem = controller.splitViewItems[0]
             let detailItem = controller.splitViewItems[2]
             let automaticDetailWidth = store.page.detailRailWidth
-            if hadPersistedState == false {
-                sidebarItem.isCollapsed = false
+            sidebarItem.isCollapsed = false
+            if hadPersistedState == false, store.isSidebarExpanded {
                 controller.view.layoutSubtreeIfNeeded()
                 controller.splitView.setPosition(
                     CGFloat(WorkspaceGeometry.defaultSidebarWidth),
                     ofDividerAt: 0
                 )
+                expandedSidebarWidth = CGFloat(
+                    WorkspaceGeometry.defaultSidebarWidth
+                )
                 controller.view.layoutSubtreeIfNeeded()
+            } else if store.isSidebarExpanded {
+                let restoredWidth = sidebarItem.viewController.view.frame.width
+                if WorkspaceGeometry.sidebarWidthRange.contains(
+                    Double(restoredWidth)
+                ) {
+                    expandedSidebarWidth = Self.clampedExpandedSidebarWidth(
+                        Double(restoredWidth)
+                    )
+                }
             }
             if usesCustomDetailWidth == false {
                 detailItem.isCollapsed = false
@@ -240,7 +264,10 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                 appliedAutomaticDetailWidth = automaticDetailWidth
                 controller.view.layoutSubtreeIfNeeded()
             }
-            sidebarItem.isCollapsed = !store.isSidebarExpanded
+            applySidebarGeometry(
+                sidebarItem: sidebarItem,
+                expanded: store.isSidebarExpanded
+            )
             detailItem.isCollapsed = !store.shouldShowDetailRail
             controller.view.layoutSubtreeIfNeeded()
             pendingAutomaticDetailWidth = nil
@@ -257,6 +284,60 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                     - width
                     - controller.splitView.dividerThickness,
                 ofDividerAt: 1
+            )
+        }
+
+        private func applySidebarGeometry(
+            sidebarItem: NSSplitViewItem,
+            expanded: Bool
+        ) {
+            guard let controller else { return }
+            sidebarItem.isCollapsed = false
+
+            let compactWidth = CGFloat(WorkspaceGeometry.compactSidebarWidth)
+            let expandedRange = WorkspaceGeometry.sidebarWidthRange
+            if expanded {
+                sidebarItem.maximumThickness = CGFloat(expandedRange.upperBound)
+                sidebarItem.minimumThickness = compactWidth
+                let needsExpandedWidth = sidebarItem.viewController.view.frame.width
+                    < CGFloat(expandedRange.lowerBound)
+                if controller.splitView.bounds.width > 0, needsExpandedWidth {
+                    controller.splitView.setPosition(
+                        expandedSidebarWidth,
+                        ofDividerAt: 0
+                    )
+                    controller.view.layoutSubtreeIfNeeded()
+                }
+                sidebarItem.minimumThickness = CGFloat(expandedRange.lowerBound)
+            } else {
+                let currentWidth = sidebarItem.viewController.view.frame.width
+                if expandedRange.contains(Double(currentWidth)) {
+                    expandedSidebarWidth = Self.clampedExpandedSidebarWidth(
+                        Double(currentWidth)
+                    )
+                }
+                sidebarItem.minimumThickness = compactWidth
+                sidebarItem.maximumThickness = CGFloat(expandedRange.upperBound)
+                let needsCompactWidth = abs(currentWidth - compactWidth) > 0.5
+                if controller.splitView.bounds.width > 0, needsCompactWidth {
+                    controller.splitView.setPosition(
+                        compactWidth,
+                        ofDividerAt: 0
+                    )
+                    controller.view.layoutSubtreeIfNeeded()
+                }
+                sidebarItem.maximumThickness = compactWidth
+            }
+        }
+
+        private static func clampedExpandedSidebarWidth(
+            _ width: Double
+        ) -> CGFloat {
+            CGFloat(
+                min(
+                    max(width, WorkspaceGeometry.sidebarWidthRange.lowerBound),
+                    WorkspaceGeometry.sidebarWidthRange.upperBound
+                )
             )
         }
 
@@ -277,7 +358,8 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                 WorkspaceState(
                     sidebarExpanded: store.isSidebarExpanded,
                     detailExpanded: store.isDetailRailExpanded,
-                    usesCustomDetailWidth: usesCustomDetailWidth
+                    usesCustomDetailWidth: usesCustomDetailWidth,
+                    expandedSidebarWidth: Double(expandedSidebarWidth)
                 )
             )
         }

@@ -282,6 +282,7 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
     private let mode: Mode
     private let resultURL: URL
     private let keepsAppOpen: Bool
+    private let startGateConfiguration: UIEntryE2EStartGate.Configuration
 
     @MainActor
     static func fromCommandLine() -> UIEntryE2EAutomation? {
@@ -327,15 +328,47 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
         guard let resultPath = AppLaunchArguments.value(after: resultArgument) else {
             return nil
         }
+        let resultURL = URL(fileURLWithPath: resultPath)
         return UIEntryE2EAutomation(
             mode: mode,
-            resultURL: URL(fileURLWithPath: resultPath),
-            keepsAppOpen: AppLaunchArguments.contains("--e2e-ui-entry-keep-open")
+            resultURL: resultURL,
+            keepsAppOpen: AppLaunchArguments.contains("--e2e-ui-entry-keep-open"),
+            startGateConfiguration: UIEntryE2EStartGate.fromCommandLine(
+                resultURL: resultURL
+            )
         )
     }
 
     @MainActor
     func run(on store: NoonmarkStore) {
+        switch startGateConfiguration {
+        case .disabled:
+            startDriver(on: store)
+        case let .invalid(message):
+            finishStartGateFailure(message)
+        case let .enabled(startGate):
+            do {
+                try startGate.publishWaiting()
+            } catch {
+                finishStartGateFailure(error.localizedDescription)
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let expectedWindowNumber = try await startGate.waitForArm()
+                    try startGate.activateMainWindow(
+                        expectedWindowNumber: expectedWindowNumber
+                    )
+                    startDriver(on: store)
+                } catch {
+                    finishStartGateFailure(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func startDriver(on store: NoonmarkStore) {
         switch mode {
         case let .classificationManager(selectsLabels):
             ClassificationManagerUIE2EDriver.start(
@@ -394,6 +427,25 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
         case .zhulongWorkflows:
             ZhulongWorkflowE2EUIInteractionDriver.start(resultURL: resultURL)
         }
+    }
+
+    @MainActor
+    private func finishStartGateFailure(_ message: String) {
+        let result = "failed: UI-entry start gate：\(message)"
+        do {
+            try FileManager.default.createDirectory(
+                at: resultURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try result.write(to: resultURL, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog(
+                "Noonmark UI-entry start gate failure write failed: %@",
+                String(describing: error)
+            )
+        }
+        AppViewTreeE2E.writeDump(beside: resultURL)
+        E2EApplicationTermination.schedule()
     }
 }
 

@@ -83,6 +83,29 @@ enum AppViewTreeE2E {
             && mainWindowHasInteractionIdentity()
     }
 
+    /// Requests activation only for the exact externally observed main window.
+    /// AppKit completes foreground activation asynchronously; the UI driver
+    /// retains responsibility for observing the active/key/main readiness event.
+    static func activateMainWindow(expectedWindowNumber: Int) -> Bool {
+        guard expectedWindowNumber > 0,
+              let mainWindow = currentMainWindow(),
+              mainWindow.windowNumber == expectedWindowNumber
+        else {
+            return false
+        }
+        mainWindow.makeKeyAndOrderFront(nil)
+        mainWindow.makeMain()
+        NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        guard let activatedWindow = currentMainWindow(),
+              activatedWindow === mainWindow,
+              activatedWindow.windowNumber == expectedWindowNumber
+        else {
+            return false
+        }
+        return true
+    }
+
     static func mappedPresentationWindow(
         identifier: String
     ) -> PresentationWindowIdentity? {

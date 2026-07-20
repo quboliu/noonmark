@@ -79,6 +79,9 @@ active_native_command_helper_token=""
 active_helper_observer_pid=""
 active_helper_observer_parent_pid=""
 active_helper_observer_token=""
+active_ui_entry_start_gate=""
+active_ui_entry_start_gate_token=""
+ui_entry_start_gate_fd_open=0
 e2e_owned_artifact_roots=(
   artifacts/e2e
   artifacts/e2e-blank
@@ -996,6 +999,7 @@ finish_e2e_session() {
   local diagnostic_wait_attempts=30
 
   trap - EXIT
+  close_ui_entry_start_gate >/dev/null 2>&1 || suite_status=1
   if ! cleanup_native_command_helper; then
     suite_status=1
   fi
@@ -1117,9 +1121,11 @@ find_window_id() {
   local expected_title="$1"
   local expected_width="${2:-$expected_window_width}"
   local expected_height="${3:-$expected_window_height}"
+  local expected_process_id="$4"
   NOONMARK_E2E_EXPECTED_WINDOW_TITLE="$expected_title" \
     NOONMARK_E2E_EXPECTED_WINDOW_WIDTH="$expected_width" \
-    NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT="$expected_height" swift -e '
+    NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT="$expected_height" \
+    NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" swift -e '
 import CoreGraphics
 import Darwin
 import Foundation
@@ -1129,6 +1135,9 @@ let expectedDisplayName = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_
 let expectedTitle = ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_TITLE"] ?? "晷迹 · Day Todo — 7月5日"
 let expectedWidth = Double(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_WIDTH"] ?? "") ?? 0
 let expectedHeight = Double(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT"] ?? "") ?? 0
+let expectedProcessID = Int(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_PROCESS_ID"] ?? "") ?? -1
+
+guard expectedProcessID > 0 else { exit(2) }
 
 if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
     for window in list {
@@ -1138,7 +1147,9 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
         if expectedOwner == "NoonmarkMacApp" {
             allowedOwners.append(contentsOf: ["晷迹", "Noonmark", "NoonmarkMacApp"])
         }
-        if allowedOwners.contains(owner) && name == expectedTitle {
+        if allowedOwners.contains(owner), name == expectedTitle,
+           (window[kCGWindowOwnerPID as String] as? Int) == expectedProcessID
+        {
             let layer = window[kCGWindowLayer as String] as? Int ?? -1
             let bounds = window[kCGWindowBounds as String] as? [String: Any]
             let width = bounds?["Width"] as? Double ?? 0
@@ -1158,18 +1169,26 @@ exit(1)
 '
 }
 
-find_auxiliary_window_id() {
+probe_auxiliary_window_state() {
   local window_id="$1"
-  NOONMARK_E2E_WINDOW_ID="$window_id" swift -e '
+  local expected_process_id="$2"
+  NOONMARK_E2E_WINDOW_ID="$window_id" \
+    NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" swift -e '
 import CoreGraphics
+import Darwin
 import Foundation
 
 let expectedID = Int(ProcessInfo.processInfo.environment["NOONMARK_E2E_WINDOW_ID"] ?? "") ?? -1
+let expectedProcessID = Int(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_PROCESS_ID"] ?? "") ?? -1
 let expectedOwner = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_EXECUTABLE_NAME"] ?? "NoonmarkMacAppE2E"
 let expectedDisplayName = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
 
+guard expectedID > 0, expectedProcessID > 0 else { exit(2) }
 guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
       let main = list.first(where: { ($0[kCGWindowNumber as String] as? Int) == expectedID }),
+      (main[kCGWindowOwnerPID as String] as? Int) == expectedProcessID,
+      let mainOwner = main[kCGWindowOwnerName as String] as? String,
+      mainOwner == expectedOwner || mainOwner == expectedDisplayName,
       let mainBounds = main[kCGWindowBounds as String] as? [String: Any],
       let mainX = mainBounds["X"] as? Double,
       let mainY = mainBounds["Y"] as? Double,
@@ -1207,11 +1226,45 @@ for window in list {
     }
 }
 if let best {
-    print(best.id)
-    exit(0)
+    print("present|\(mainProcessID)|\(expectedID)|\(best.id)")
+} else {
+    print("clear|\(mainProcessID)|\(expectedID)")
 }
-exit(1)
 '
+}
+
+find_auxiliary_window_id() {
+  local window_id="$1"
+  local expected_process_id="$2"
+  local observation_state=""
+  local status=""
+  local observed_process_id=""
+  local observed_main_window_id=""
+  local observed_auxiliary_window_id=""
+  local extra_field=""
+
+  if ! observation_state="$(
+    probe_auxiliary_window_state "$window_id" "$expected_process_id"
+  )"; then
+    return 2
+  fi
+  IFS="|" read -r status observed_process_id observed_main_window_id \
+    observed_auxiliary_window_id extra_field <<<"$observation_state"
+  if [[ "$status" == "clear" &&
+    "$observed_process_id" == "$expected_process_id" &&
+    "$observed_main_window_id" == "$window_id" &&
+    -z "$observed_auxiliary_window_id" && -z "$extra_field" ]]; then
+    return 1
+  fi
+  if [[ "$status" == "present" &&
+    "$observed_process_id" == "$expected_process_id" &&
+    "$observed_main_window_id" == "$window_id" &&
+    "$observed_auxiliary_window_id" =~ ^[1-9][0-9]*$ &&
+    -z "$extra_field" ]]; then
+    printf '%s\n' "$observed_auxiliary_window_id"
+    return 0
+  fi
+  return 2
 }
 
 dump_visible_windows() {
@@ -1233,6 +1286,93 @@ if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
     }
 }
 '
+}
+
+close_ui_entry_start_gate() {
+  local gate_path="$active_ui_entry_start_gate"
+
+  if [[ "$ui_entry_start_gate_fd_open" == "1" ]]; then
+    exec 8>&-
+    ui_entry_start_gate_fd_open=0
+  fi
+  if [[ -n "$gate_path" ]]; then
+    if [[ "$gate_path" != "$repo_root/artifacts/e2e/"*.fifo ]]; then
+      echo "refusing to remove an unexpected UI-entry start gate: $gate_path" >&2
+      return 1
+    fi
+    rm -f -- "$gate_path"
+  fi
+  active_ui_entry_start_gate=""
+  active_ui_entry_start_gate_token=""
+}
+
+prepare_ui_entry_start_gate() {
+  local ui_entry_start_gate="$1"
+  local token="$2"
+
+  close_ui_entry_start_gate
+  if [[ "$ui_entry_start_gate" != "$repo_root/artifacts/e2e/"*.fifo ||
+    ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    echo "invalid UI-entry start gate identity" >&2
+    return 1
+  fi
+  rm -f -- "$ui_entry_start_gate"
+  mkfifo -m 600 "$ui_entry_start_gate"
+  exec 8<>"$ui_entry_start_gate"
+  ui_entry_start_gate_fd_open=1
+  active_ui_entry_start_gate="$ui_entry_start_gate"
+  active_ui_entry_start_gate_token="$token"
+}
+
+arm_ui_entry_start_gate() {
+  local result_path="$1"
+  local token="$2"
+  local process_id="$3"
+  local main_window_id="$4"
+  local observation_state=""
+  local observation_status=""
+  local observed_process_id=""
+  local observed_main_window_id=""
+  local unexpected_presentation_id=""
+  local extra_field=""
+
+  if [[ "$ui_entry_start_gate_fd_open" != "1" ||
+    "$active_ui_entry_start_gate_token" != "$token" ||
+    ! "$process_id" =~ ^[1-9][0-9]*$ ||
+    ! "$main_window_id" =~ ^[1-9][0-9]*$ ]]; then
+    echo "UI-entry start gate cannot be armed with a stale identity" >&2
+    return 1
+  fi
+  if ! observation_state="$(
+    probe_auxiliary_window_state \
+      "$main_window_id" \
+      "$process_id" 2>/dev/null
+  )"; then
+    echo "UI-entry pre-arm WindowServer observer failed" >&2
+    return 1
+  fi
+  IFS="|" read -r observation_status observed_process_id \
+    observed_main_window_id unexpected_presentation_id extra_field \
+    <<<"$observation_state"
+  if [[ "$observation_status" == "present" &&
+    "$observed_process_id" == "$process_id" &&
+    "$observed_main_window_id" == "$main_window_id" &&
+    "$unexpected_presentation_id" =~ ^[1-9][0-9]*$ &&
+    -z "$extra_field" ]]; then
+    echo "UI-entry transient presentation appeared before the external main-window discovery gate: $unexpected_presentation_id" >&2
+    return 1
+  fi
+  if [[ "$observation_status" != "clear" ||
+    "$observed_process_id" != "$process_id" ||
+    "$observed_main_window_id" != "$main_window_id" ||
+    -n "$unexpected_presentation_id" || -n "$extra_field" ]]; then
+    echo "UI-entry pre-arm WindowServer observer returned a malformed or stale identity: $observation_state" >&2
+    return 1
+  fi
+  printf 'arm|%s|%s|%s\n' "$token" "$process_id" "$main_window_id" >&8
+  printf 'armed|%s|%s|%s\n' \
+    "$token" "$process_id" "$main_window_id" \
+    >"${result_path}.start-gate.txt"
 }
 
 capture_classification_overflow_handshake() {
@@ -1270,19 +1410,25 @@ capture_classification_overflow_handshake() {
         ((ready_recovery_count >= expected_recovery_count)); then
         observed_presentation_window_id=""
         observed_presentation_window_id="$(
-          find_auxiliary_window_id "$main_window_id" 2>/dev/null || true
+          find_auxiliary_window_id \
+            "$main_window_id" \
+            "$process_id" 2>/dev/null || true
         )"
         if [[ "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
           screencapture -x -o -l"$main_window_id" "$warmup_screenshot"
           sleep 0.25
           observed_presentation_window_id="$(
-            find_auxiliary_window_id "$main_window_id" 2>/dev/null || true
+            find_auxiliary_window_id \
+              "$main_window_id" \
+              "$process_id" 2>/dev/null || true
           )"
           if [[ -f "$result_path" && "$(<"$result_path")" == "$result_value" &&
             "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
             screencapture -x -o -l"$main_window_id" "$screenshot"
             observed_presentation_window_id="$(
-              find_auxiliary_window_id "$main_window_id" 2>/dev/null || true
+              find_auxiliary_window_id \
+                "$main_window_id" \
+                "$process_id" 2>/dev/null || true
             )"
             if [[ -f "$result_path" && "$(<"$result_path")" == "$result_value" &&
               "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
@@ -1331,9 +1477,13 @@ capture_app_screenshot() {
   local expected_frame_height="$expected_window_height"
   local expected_language="${NOONMARK_E2E_EXPECTED_LANGUAGE:-chinese}"
   local ui_entry_result=""
+  local uses_ui_entry_start_gate=0
+  local ui_entry_start_gate=""
+  local ui_entry_start_gate_token=""
   local english_ui_result=""
   local zhulong_title_geometry_result=""
   local expected_overflow_recovery_count=0
+  local launch_arguments=()
   shift 3
 
   local arguments=("$@")
@@ -1361,6 +1511,9 @@ capture_app_screenshot() {
     fi
     if [[ "${arguments[$index]}" == "--e2e-classification-overflow-invalidate-first-ready" ]]; then
       expected_overflow_recovery_count=1
+    fi
+    if [[ "${arguments[$index]}" == "--e2e-classification-overflow-via-ui" ]]; then
+      uses_ui_entry_start_gate=1
     fi
   done
   if [[ -n "$ui_entry_result" ]]; then
@@ -1421,6 +1574,18 @@ capture_app_screenshot() {
   : >"$launch_log"
   for launch_attempt in {1..3}; do
     terminate_e2e_app
+    launch_arguments=("${arguments[@]}")
+    if [[ "$uses_ui_entry_start_gate" == "1" ]]; then
+      ui_entry_start_gate="${ui_entry_result}.start-gate.${launch_attempt}.fifo"
+      ui_entry_start_gate_token="$(uuidgen)"
+      prepare_ui_entry_start_gate \
+        "$ui_entry_start_gate" \
+        "$ui_entry_start_gate_token"
+      launch_arguments+=(
+        --e2e-ui-entry-start-gate-url "$ui_entry_start_gate"
+        --e2e-ui-entry-start-gate-token "$ui_entry_start_gate_token"
+      )
+    fi
     mkdir -p "$out_dir"
     echo "launch attempt=$launch_attempt page=$page expected_title=$expected_window_title" >>"$launch_log"
     if [[ -n "$ui_entry_result" ]]; then
@@ -1428,7 +1593,7 @@ capture_app_screenshot() {
         -o "$launch_log" \
         --stderr "$launch_log" \
         "$app_path" \
-        --args "$@" --page "$page" \
+        --args "${launch_arguments[@]}" --page "$page" \
         >"${launch_log}.open" 2>&1 &
       launcher_pid=$!
       app_pid=""
@@ -1440,7 +1605,7 @@ capture_app_screenshot() {
         sleep 0.1
       done
     else
-      "$app_executable_path" "$@" --page "$page" >>"$launch_log" 2>&1 &
+      "$app_executable_path" "${launch_arguments[@]}" --page "$page" >>"$launch_log" 2>&1 &
       launcher_pid=$!
       app_pid=$launcher_pid
     fi
@@ -1448,6 +1613,7 @@ capture_app_screenshot() {
       echo "launch attempt=$launch_attempt app_process=missing" >>"$launch_log"
       wait "$launcher_pid" 2>/dev/null || true
       cat "${launch_log}.open" >>"$launch_log" 2>/dev/null || true
+      close_ui_entry_start_gate
       continue
     fi
     if [[ -z "$ui_entry_result" ]]; then
@@ -1459,7 +1625,8 @@ capture_app_screenshot() {
         find_window_id \
           "$expected_window_title" \
           "$expected_frame_width" \
-          "$expected_frame_height" 2>/dev/null
+          "$expected_frame_height" \
+          "$app_pid" 2>/dev/null
       )"; then
         break
       fi
@@ -1467,6 +1634,15 @@ capture_app_screenshot() {
     done
 
     if [[ -n "$window_id" ]]; then
+      if [[ "$uses_ui_entry_start_gate" == "1" ]] &&
+        ! arm_ui_entry_start_gate \
+          "$ui_entry_result" \
+          "$ui_entry_start_gate_token" \
+          "$app_pid" \
+          "$window_id"; then
+        echo "failed to arm UI-entry start gate for ${screenshot_name}" >&2
+        exit 1
+      fi
       disown "$launcher_pid" 2>/dev/null || true
       break
     fi
@@ -1479,6 +1655,7 @@ capture_app_screenshot() {
     fi
     dump_visible_windows >>"$launch_log"
     terminate_e2e_app
+    close_ui_entry_start_gate
     sleep 0.5
   done
 
@@ -1567,6 +1744,7 @@ capture_app_screenshot() {
     screencapture -x -o -l"$window_id" "$screenshot"
     rm -f "$warmup_screenshot"
   fi
+  close_ui_entry_start_gate
   width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
   height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
 

@@ -166,6 +166,106 @@ require_literal \
   scripts/test-e2e \
   'NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \'
 require_literal \
+  scripts/test-e2e \
+  '--e2e-ui-entry-start-gate-url'
+require_literal \
+  scripts/test-e2e \
+  'mkfifo -m 600 "$ui_entry_start_gate"'
+require_literal \
+  scripts/test-e2e \
+  'arm_ui_entry_start_gate \'
+require_literal \
+  scripts/test-e2e \
+  'probe_auxiliary_window_state'
+require_literal \
+  scripts/test-e2e \
+  '"$app_pid" 2>/dev/null'
+capture_app_screenshot_function="$(
+  sed -n '/^capture_app_screenshot() {$/,/^}$/p' scripts/test-e2e
+)"
+if ! grep -F 'find_window_id \' <<<"$capture_app_screenshot_function" >/dev/null ||
+  ! grep -F 'arm_ui_entry_start_gate \' <<<"$capture_app_screenshot_function" >/dev/null; then
+  echo "UI-entry screenshot capture lacks its explicit post-discovery arm boundary" >&2
+  exit 1
+fi
+find_window_line="$(
+  grep -nF 'find_window_id \' <<<"$capture_app_screenshot_function" |
+    head -1 |
+    cut -d: -f1
+)"
+arm_gate_line="$(
+  grep -nF 'arm_ui_entry_start_gate \' <<<"$capture_app_screenshot_function" |
+    head -1 |
+    cut -d: -f1
+)"
+if [[ -z "$find_window_line" || -z "$arm_gate_line" ]] ||
+  (( find_window_line >= arm_gate_line )); then
+  echo "UI-entry start gate is armed before external main-window discovery" >&2
+  exit 1
+fi
+ui_entry_gate_function="$(
+  sed -n '/^arm_ui_entry_start_gate() {$/,/^}$/p' scripts/test-e2e
+)"
+if grep -E '(^|[[:space:]])sleep([[:space:]]|$)' <<<"$ui_entry_gate_function" >/dev/null; then
+  echo "UI-entry start gate uses a timing delay instead of an explicit event" >&2
+  exit 1
+fi
+if grep -F '|| true' <<<"$ui_entry_gate_function" >/dev/null; then
+  echo "UI-entry start gate suppresses its pre-arm observer failure" >&2
+  exit 1
+fi
+gate_contract_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-ui-entry-gate-contract.XXXXXX")"
+gate_contract_fifo="$gate_contract_root/start-gate.fifo"
+gate_contract_result="$gate_contract_root/result.txt"
+gate_contract_record="$gate_contract_root/arm-record.txt"
+gate_contract_token="11111111-2222-3333-4444-555555555555"
+mkfifo -m 600 "$gate_contract_fifo"
+if (
+  set -euo pipefail
+  active_ui_entry_start_gate_token="$gate_contract_token"
+  ui_entry_start_gate_fd_open=1
+  exec 8<>"$gate_contract_fifo"
+  find_auxiliary_window_id() { return 70; }
+  probe_auxiliary_window_state() { return 71; }
+  eval "$ui_entry_gate_function"
+  if arm_ui_entry_start_gate \
+    "$gate_contract_result" \
+    "$gate_contract_token" \
+    123 \
+    456 \
+    >/dev/null 2>&1; then
+    exit 0
+  fi
+  if IFS= read -r -t 0 -u 8 unexpected_arm_record; then
+    printf '%s\n' "$unexpected_arm_record" >"$gate_contract_record"
+  fi
+  exit 1
+); then
+  rm -rf "$gate_contract_root"
+  echo "UI-entry start gate armed after its pre-arm observer failed" >&2
+  exit 1
+fi
+if [[ -e "${gate_contract_result}.start-gate.txt" ]]; then
+  rm -rf "$gate_contract_root"
+  echo "UI-entry start gate wrote an arm ledger after observer failure" >&2
+  exit 1
+fi
+if [[ -e "$gate_contract_record" ]]; then
+  rm -rf "$gate_contract_root"
+  echo "UI-entry start gate wrote an arm record after observer failure" >&2
+  exit 1
+fi
+rm -rf "$gate_contract_root"
+require_literal \
+  App/NoonmarkMacApp/LegacyPoolUIEntryAutomations.swift \
+  'UIEntryE2EStartGate.fromCommandLine('
+require_literal \
+  App/NoonmarkMacApp/UIEntryE2EInteractionDriver.swift \
+  'arm|<token>|<pid>|<main-window-number>'
+require_literal \
+  App/NoonmarkMacApp/UIEntryE2EInteractionDriver.swift \
+  'activateMainWindow(expectedWindowNumber:'
+require_literal \
   App/NoonmarkMacApp/TaskDetail.swift \
   ".onTapGesture(count: 2)"
 require_literal \

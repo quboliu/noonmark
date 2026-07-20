@@ -350,13 +350,14 @@ extension NoonmarkStore {
         }
         let currentSnapshot = engine.snapshot()
         let candidate: NoonmarkEngine
+        var snapshotUndoOutcome = SnapshotUndoOutcome()
         var noteIdentityRemap: NoteIdentityRemap?
         let redoEntry: RedoEntry
         do {
             switch entry {
             case let .snapshot(snapshot, _):
                 candidate = try NoonmarkEngine(snapshot: snapshot)
-                try candidate.prepareSnapshotUndo(
+                snapshotUndoOutcome = try candidate.prepareSnapshotUndo(
                     replacing: currentSnapshot,
                     now: moment.instant
                 )
@@ -380,7 +381,11 @@ extension NoonmarkStore {
                 snapshotBeforeUndo: currentSnapshot,
                 noteIdentityRemap: noteIdentityRemap
             )
-            try save(candidate, mutationAt: moment.instant)
+            try saveSnapshotUndo(
+                candidate,
+                outcome: snapshotUndoOutcome,
+                mutationAt: moment.instant
+            )
         } catch {
             NSLog("Noonmark undo failed: %@", String(describing: error))
             showOperationFailure(.undo, error: error)
@@ -394,6 +399,9 @@ extension NoonmarkStore {
             }
         }
         engine = candidate
+        if snapshotUndoOutcome.automaticClassificationCancelledChainIDs.isEmpty == false {
+            automaticClassificationJobsDidChange()
+        }
         Theme.apply(engine.preferences.theme)
         normalizeSelection()
         showToast(copy.undoCompleted)
@@ -413,7 +421,15 @@ extension NoonmarkStore {
                 snapshotBeforeRedo: currentSnapshot,
                 moment: moment
             )
-            try save(replay.engine, mutationAt: moment.instant)
+            let automaticClassificationRedoJob = try automaticClassificationRedo(
+                for: replay.snapshotUndoOutcome,
+                candidate: replay.engine
+            )
+            try saveSnapshotRedo(
+                replay.engine,
+                redo: automaticClassificationRedoJob,
+                mutationAt: moment.instant
+            )
         } catch {
             NSLog("Noonmark redo failed: %@", String(describing: error))
             showOperationFailure(.redo, error: error)
@@ -425,6 +441,11 @@ extension NoonmarkStore {
             undoStack.removeFirst(undoStack.count - Self.undoHistoryLimit)
         }
         engine = replay.engine
+        if replay.snapshotUndoOutcome.automaticClassificationRestoredChainIDs
+            .isEmpty == false
+        {
+            automaticClassificationJobsDidChange()
+        }
         Theme.apply(engine.preferences.theme)
         normalizeSelection()
         showToast(copy.redoCompleted)
@@ -437,10 +458,11 @@ extension NoonmarkStore {
     ) throws -> RedoReplay {
         let candidate: NoonmarkEngine
         let undoEntry: UndoEntry
+        var snapshotUndoOutcome = SnapshotUndoOutcome()
         switch entry {
         case let .snapshot(snapshot, previousUndoEntry):
             candidate = try NoonmarkEngine(snapshot: snapshot)
-            try candidate.prepareSnapshotUndo(
+            snapshotUndoOutcome = try candidate.prepareSnapshotUndo(
                 replacing: snapshotBeforeRedo,
                 now: moment.instant
             )
@@ -529,7 +551,11 @@ extension NoonmarkStore {
                 deletedBody: note.body
             )
         }
-        return RedoReplay(engine: candidate, undoEntry: undoEntry)
+        return RedoReplay(
+            engine: candidate,
+            undoEntry: undoEntry,
+            snapshotUndoOutcome: snapshotUndoOutcome
+        )
     }
 
     private func applyNoteUndo(

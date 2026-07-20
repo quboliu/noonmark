@@ -36,10 +36,10 @@ extension NoonmarkStore {
         guard draft.title.isEmpty == false else { return false }
         let originDescription = copy.quickTaskOriginDescription
         do {
-            let undoPolicy: EngineMutationUndoPolicy = draft.labelNames.isEmpty
-                ? .snapshot(.addTask)
-                : .invalidate
-            try commitEngineMutation(undoPolicy: undoPolicy) { candidate, moment in
+            try commitEngineMutation(
+                undoPolicy: .snapshot(.addTask),
+                automaticClassificationPolicy: .newlyCreatedTaskChains
+            ) { candidate, moment in
                 let targetDate = switch target {
                 case .selectedDate:
                     selectedDate
@@ -78,10 +78,10 @@ extension NoonmarkStore {
         let description = copy.unscheduledPoolTaskDescription
         let initialNote = copy.unscheduledPoolTaskInitialNote
         do {
-            let undoPolicy: EngineMutationUndoPolicy = draft.labelNames.isEmpty
-                ? .snapshot(.addPoolTask)
-                : .invalidate
-            let chainID = try commitEngineMutation(undoPolicy: undoPolicy) { candidate, moment in
+            let chainID = try commitEngineMutation(
+                undoPolicy: .snapshot(.addPoolTask),
+                automaticClassificationPolicy: .newlyCreatedTaskChains
+            ) { candidate, moment in
                 let chainID = try candidate.createPoolTask(
                     title: draft.title,
                     descriptionText: description,

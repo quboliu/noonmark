@@ -48,6 +48,53 @@ struct LaunchAutomation {
         append(ZhulongExactRecoveryE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongPendingGateE2EAutomation.fromCommandLine(), to: &actions)
         append(ClassificationE2EAutomation.fromCommandLine(), to: &actions)
+        append(
+            AutomaticTaskClassificationE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
+        append(
+            AutomaticTaskClassificationLiveE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
+        append(
+            AutomaticTaskClassificationLifecycleE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
+        append(
+            AutomaticClassificationOperationalClockE2EAutomation
+                .fromCommandLine(),
+            to: &actions
+        )
+        append(
+            AutomaticClassificationCheckpointSetupE2EAutomation
+                .fromCommandLine(),
+            to: &actions
+        )
+        append(
+            AutomaticClassificationCheckpointVerifyE2EAutomation
+                .fromCommandLine(),
+            to: &actions
+        )
+        append(
+            ClassificationQueueE2EAutomation
+                .fromCommandLine(),
+            to: &actions
+        )
+        append(
+            AutomaticClassificationContentionSetupE2EAutomation
+                .fromCommandLine(),
+            to: &actions
+        )
+        append(
+            AutomaticClassificationContentionVerifyE2EAutomation
+                .fromCommandLine(),
+            to: &actions
+        )
+        append(
+            AutomaticClassificationProviderRaceE2EAutomation
+                .fromCommandLine(),
+            to: &actions
+        )
         append(WorkflowE2EAutomation.fromCommandLine(), to: &actions)
         append(LifecycleE2EAutomation.fromCommandLine(), to: &actions)
         append(LifecycleRestartE2EAutomation.fromCommandLine(), to: &actions)

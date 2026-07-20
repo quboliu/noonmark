@@ -152,6 +152,12 @@ final class NoonmarkStore: ObservableObject {
         case invalidate
     }
 
+    enum EngineMutationAutomaticClassificationPolicy {
+        case none
+        case newlyCreatedTaskChains
+        case userClassificationWins(TaskChainID)
+    }
+
     enum QuickTaskTarget {
         case selectedDate
         case today
@@ -334,6 +340,7 @@ final class NoonmarkStore: ObservableObject {
     struct RedoReplay {
         let engine: NoonmarkEngine
         let undoEntry: UndoEntry
+        let snapshotUndoOutcome: SnapshotUndoOutcome
     }
 
     struct ZhulongWorkflowRoute {
@@ -577,6 +584,13 @@ final class NoonmarkStore: ObservableObject {
     @Published var detailNoteText = ""
     @Published var toast: String?
     @Published var operationFailureNotice: AppOperationFailureNotice?
+    @Published var automaticClassificationStatusByChainID: [
+        TaskChainID: AutomaticClassificationPresentationStatus
+    ] = [:]
+    @Published var automaticClassificationBacklogPrompt:
+        AutomaticClassificationBacklogPrompt?
+    @Published var automaticClassificationCircuitPresentation:
+        AutomaticClassificationCircuitPresentation?
     @Published var zhulongProviderDraft = ZhulongProviderSettingsStore.load()
     @Published var reviewAutosaveMessage: String?
     @Published var isLocalFirstSyncing = false
@@ -594,6 +608,8 @@ final class NoonmarkStore: ObservableObject {
     let dayRolloverCoordinator = DayRolloverCoordinator()
     let dataRootProcessLease: NoonmarkDataRootProcessLease?
     let repository: SQLiteEngineRepository?
+    let automaticClassificationJobRepository: SQLiteAutomaticClassificationJobRepository?
+    let automaticClassificationOperationalClock: AutomaticClassificationOperationalClock
     let databaseURL: URL?
     let syncDeviceIdentity: SyncDeviceIdentity?
     let permitsPersistenceFailureE2E: Bool
@@ -603,6 +619,17 @@ final class NoonmarkStore: ObservableObject {
     )
     let toastScheduler = LatestTransientMessageScheduler()
     var localFirstSyncAutomationTask: Task<Void, Never>?
+    var automaticClassificationWorkerTask: Task<Void, Never>?
+    var automaticClassificationWorkerRestartRequested = false
+    var pendingAutomaticClassificationProviderReconciliation:
+        AutomaticClassificationProviderExecution?
+    var automaticClassificationProviderExecution:
+        AutomaticClassificationProviderExecution = .unconfigured
+    var automaticClassificationBacklogSnapshot:
+        AutomaticClassificationBacklogSnapshot?
+    var automaticClassificationBacklogDeferredForSession = false
+    var automaticClassificationBacklogDecisionTask: Task<Void, Never>?
+    var automaticClassificationCircuitRetryTask: Task<Void, Never>?
     var cloudKitAccountCheckTask: Task<Void, Never>?
     var naturalDayObservation: NaturalDayObservation?
     var accessibilityDisplayObservation: AnyCancellable?
@@ -618,9 +645,20 @@ final class NoonmarkStore: ObservableObject {
     var isDataImportCommitPausedForE2E = false
     var pendingZhulongEngineWriteAuthorized = false
 
-    init(dayContext: NaturalDayContext) throws {
+    init(
+        dayContext: NaturalDayContext,
+        automaticClassificationOperationalClock: AutomaticClassificationOperationalClock = .system
+    ) throws {
         let initialMoment = try dayContext.moment()
         self.dayContext = dayContext
+        self.automaticClassificationOperationalClock = automaticClassificationOperationalClock
+        if let executionRevision = ZhulongProviderSettingsStore
+            .persistedReadyExecutionRevision()
+        {
+            automaticClassificationProviderExecution = .configured(
+                executionRevision: executionRevision
+            )
+        }
         _today = Published(initialValue: initialMoment.today)
         _naturalDayState = Published(initialValue: initialMoment.state)
         _selectedDate = Published(initialValue: initialMoment.today)
@@ -636,6 +674,7 @@ final class NoonmarkStore: ObservableObject {
         if AppLaunchArguments.contains("--ephemeral") {
             dataRootProcessLease = nil
             repository = nil
+            automaticClassificationJobRepository = nil
             databaseURL = nil
             syncDeviceIdentity = nil
             try seed()
@@ -646,6 +685,9 @@ final class NoonmarkStore: ObservableObject {
             )
             databaseURL = configuredDatabaseURL
             repository = SQLiteEngineRepository(databaseURL: configuredDatabaseURL)
+            automaticClassificationJobRepository = SQLiteAutomaticClassificationJobRepository(
+                databaseURL: configuredDatabaseURL
+            )
             syncDeviceIdentity = Self.loadOrCreateSyncDeviceIdentity(
                 databaseURL: configuredDatabaseURL
             )
@@ -656,6 +698,7 @@ final class NoonmarkStore: ObservableObject {
         Theme.apply(engine.preferences.theme)
         restoreLocalFirstSyncStatus()
         restartLocalFirstSyncAutomation()
+        restoreAutomaticClassificationWork()
         naturalDayObservation = dayContext.observe { [weak self] event in
             self?.handleNaturalDayEvent(event)
         }
@@ -670,6 +713,10 @@ final class NoonmarkStore: ObservableObject {
 
     deinit {
         localFirstSyncAutomationTask?.cancel()
+        automaticClassificationWorkerRestartRequested = false
+        automaticClassificationWorkerTask?.cancel()
+        automaticClassificationBacklogDecisionTask?.cancel()
+        automaticClassificationCircuitRetryTask?.cancel()
         cloudKitAccountCheckTask?.cancel()
     }
 }

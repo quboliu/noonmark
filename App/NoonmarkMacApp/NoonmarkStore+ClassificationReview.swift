@@ -171,7 +171,10 @@ extension NoonmarkStore {
         labels: [TaskLabelChoice],
         interactionID: UUID = UUID()
     ) throws -> ClassificationReceipt {
-        try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
+        try commitEngineMutation(
+            undoPolicy: .invalidate,
+            automaticClassificationPolicy: .userClassificationWins(chainID)
+        ) { candidate, moment in
             let plan = try candidate.prepareClassification(
                 .setCurrent(
                     TaskClassificationDraft(
@@ -200,7 +203,7 @@ extension NoonmarkStore {
         _ intent: ClassificationIntent,
         interactionID: UUID = UUID()
     ) throws -> ClassificationReceipt {
-        try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
+        let receipt = try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
             let plan = try candidate.prepareClassification(
                 intent,
                 source: .userDirect,
@@ -221,5 +224,7 @@ extension NoonmarkStore {
                 now: moment.instant
             )
         }
+        automaticClassificationJobsDidChange()
+        return receipt
     }
 }

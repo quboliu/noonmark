@@ -336,6 +336,19 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                   $0.createdAt == receipt.appliedAt
               })
         else { return "failed: atomic application mismatch" }
+        let appliedChainIDs = Set(appliedDefinitions.map(\.chainID))
+        guard let jobRepository = store.automaticClassificationJobRepository,
+              let appliedJobs = try? jobRepository.jobs().filter({
+                  appliedChainIDs.contains($0.chainID)
+              }),
+              appliedJobs.count == 2,
+              Set(appliedJobs.map(\.chainID)) == appliedChainIDs,
+              appliedJobs.allSatisfy({
+                  $0.state == .waitingForConfiguration && $0.generation == 1
+              })
+        else {
+            return "failed: Zhulong tasks and automatic jobs were not atomic"
+        }
 
         store.poolText = Self.postApplyTitle
         store.addPoolTask()

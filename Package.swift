@@ -10,6 +10,10 @@ let package = Package(
     products: [
         .executable(name: "NoonmarkMacApp", targets: ["NoonmarkMacApp"]),
         .executable(
+            name: "NoonmarkAIProviderLiveSmoke",
+            targets: ["NoonmarkAIProviderLiveSmoke"]
+        ),
+        .executable(
             name: "NoonmarkDMGInstallHarness",
             targets: ["NoonmarkDMGInstallHarness"]
         ),
@@ -36,6 +40,11 @@ let package = Package(
         .executableTarget(
             name: "NoonmarkDMGInstallHarness",
             path: "Tools/NoonmarkDMGInstallHarness"
+        ),
+        .executableTarget(
+            name: "NoonmarkAIProviderLiveSmoke",
+            dependencies: ["NoonmarkAI"],
+            path: "Tools/NoonmarkAIProviderLiveSmoke"
         ),
         .target(name: "NoonmarkCore"),
         .target(

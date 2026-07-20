@@ -84,6 +84,7 @@ active_ui_entry_start_gate_token=""
 ui_entry_start_gate_fd_open=0
 e2e_owned_artifact_roots=(
   artifacts/e2e
+  artifacts/e2e-automatic-classification
   artifacts/e2e-blank
   artifacts/e2e-calendar-grid-topology
   artifacts/e2e-classification
@@ -191,6 +192,7 @@ scenarios=(
 
 english_full_scenario_set="english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
 only_mode_specs=(
+  "NOONMARK_E2E_AUTOMATIC_CLASSIFICATION_ONLY:automatic-classification"
   "NOONMARK_E2E_UI_ENTRY_ONLY:ui-entry"
   "NOONMARK_E2E_SEED_CLOCK_ONLY:seed-clock"
   "NOONMARK_E2E_TASK_NOTE_ONLY:task-note"
@@ -3639,7 +3641,10 @@ run_data_import_integrity_probe() {
   if [[ "$exercise_database_sha256" != "$baseline_database_sha256" \
     || "$exercise_journal_digest" != "$baseline_journal_digest" \
     || "$exercise_journal_count" != "$baseline_journal_count" ]]; then
-    echo "malformed data-import changed SQLite or its journal" >&2
+    echo "malformed data-import changed SQLite or its journal:" \
+      "database=${baseline_database_sha256}->${exercise_database_sha256}" \
+      "journal=${baseline_journal_digest}->${exercise_journal_digest}" \
+      "count=${baseline_journal_count}->${exercise_journal_count}" >&2
     exit 1
   fi
 
@@ -3663,7 +3668,10 @@ run_data_import_integrity_probe() {
   if [[ "$restart_database_sha256" != "$baseline_database_sha256" \
     || "$restart_journal_digest" != "$baseline_journal_digest" \
     || "$restart_journal_count" != "$baseline_journal_count" ]]; then
-    echo "malformed data-import baseline changed after restart" >&2
+    echo "malformed data-import baseline changed after restart:" \
+      "database=${baseline_database_sha256}->${restart_database_sha256}" \
+      "journal=${baseline_journal_digest}->${restart_journal_digest}" \
+      "count=${baseline_journal_count}->${restart_journal_count}" >&2
     exit 1
   fi
 
@@ -6056,6 +6064,1324 @@ run_zhulong_pending_gate_probe() {
   echo "E2E Zhulong bootstrap/direct-save/rollover/import/sync pending gate: $evidence_dir"
 }
 
+clear_automatic_classification_e2e_credentials() {
+  security delete-generic-password \
+    -s app.noonmark.zhulong.provider.e2e \
+    -a default-api-key \
+    >/dev/null 2>&1 || true
+  defaults delete \
+    app.noonmark.mac.e2e \
+    noonmark.zhulong.provider.config \
+    >/dev/null 2>&1 || true
+}
+
+assert_automatic_classification_e2e_credentials_cleared() {
+  if security find-generic-password \
+    -s app.noonmark.zhulong.provider.e2e \
+    -a default-api-key \
+    >/dev/null 2>&1; then
+    echo "automatic classification E2E Keychain credential was not cleared" >&2
+    exit 1
+  fi
+  if defaults read \
+    app.noonmark.mac.e2e \
+    noonmark.zhulong.provider.config \
+    >/dev/null 2>&1; then
+    echo "automatic classification E2E Provider defaults were not cleared" >&2
+    exit 1
+  fi
+}
+
+start_automatic_classification_e2e_provider() {
+  local ready_file="$1"
+  local count_file="$2"
+  local health_count_file="$3"
+  local log_file="$4"
+  local -a provider_arguments=(
+    --ready-file "$ready_file"
+    --count-file "$count_file"
+  )
+  shift 4
+
+  if [[ "$health_count_file" != "-" ]]; then
+    provider_arguments+=(--health-count-file "$health_count_file")
+  fi
+  provider_arguments+=("$@")
+  scripts/automatic-classification-provider-stub.py \
+    "${provider_arguments[@]}" >"$log_file" 2>&1 &
+  provider_pid=$!
+
+  for _ in {1..100}; do
+    [[ -s "$ready_file" ]] && break
+    kill -0 "$provider_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [[ ! -s "$ready_file" ]]; then
+    echo "automatic classification deterministic Provider did not become ready" >&2
+    cat "$log_file" >&2
+    exit 1
+  fi
+  provider_port="$(<"$ready_file")"
+  if [[ ! "$provider_port" =~ ^[0-9]+$ ]] \
+    || (( provider_port < 1 || provider_port > 65535 )); then
+    echo "automatic classification deterministic Provider returned an invalid port" >&2
+    exit 1
+  fi
+}
+
+assert_automatic_classification_provider_count() {
+  local label="$1"
+  local count_file="$2"
+  local expected="$3"
+  if [[ ! -f "$count_file" || "$(<"$count_file")" != "$expected" ]]; then
+    echo "$label expected $expected requests, observed $(cat "$count_file" 2>/dev/null || echo missing)" >&2
+    exit 1
+  fi
+}
+
+run_automatic_classification_operational_clock_probe() (
+  set -euo pipefail
+  local evidence_dir="artifacts/e2e-automatic-classification/operational-clock"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local result="${evidence_dir}/result.txt"
+  local app_log="${evidence_dir}/app.log"
+  local provider_ready="${evidence_dir}/provider-ready.txt"
+  local provider_count="${evidence_dir}/provider-count.txt"
+  local provider_log="${evidence_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
+  local sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  scripts/automatic-classification-provider-stub.py \
+    --ready-file "$PWD/$provider_ready" \
+    --count-file "$PWD/$provider_count" \
+    >"$provider_log" 2>&1 &
+  provider_pid=$!
+  for _ in {1..100}; do
+    [[ -s "$provider_ready" ]] && break
+    kill -0 "$provider_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [[ ! -s "$provider_ready" ]]; then
+    echo "automatic classification deterministic Provider did not become ready" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+  provider_port="$(<"$provider_ready")"
+  if [[ ! "$provider_port" =~ ^[0-9]+$ ]] \
+    || (( provider_port < 1 || provider_port > 65535 )); then
+    echo "automatic classification deterministic Provider returned an invalid port" >&2
+    exit 1
+  fi
+
+  NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
+    NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
+    NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
+    run_terminating_ui_probe \
+      "automatic classification future domain frontier" \
+      "$result" \
+      "$app_log" \
+      --data-url "$PWD/$database" \
+      --page day \
+      --e2e-automatic-classification-operational-clock \
+      --e2e-automatic-classification-result-url "$PWD/$result"
+
+  if [[ "$(<"$provider_count")" != "1" ]]; then
+    echo "future-frontier classification did not make exactly one Provider request" >&2
+    exit 1
+  fi
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    WITH target AS (
+      SELECT chain.id AS chain_id, definition.created_at,
+             definition.created_at_bits
+      FROM task_chains AS chain
+      JOIN task_definitions AS definition
+        ON definition.chain_id = chain.id
+      WHERE definition.title = 'E2E 未来前沿自动归类'
+        AND definition.superseded_at IS NULL
+    ), seed AS (
+      SELECT definition.created_at, definition.created_at_bits
+      FROM task_definitions AS definition
+      WHERE definition.title = 'E2E 未来领域时钟前沿'
+        AND definition.superseded_at IS NULL
+    ), automatic_change AS (
+      SELECT record.record_id
+      FROM classification_change_records AS record
+      JOIN classification_change_record_changes AS change
+        ON change.record_id = record.record_id
+      JOIN target ON target.chain_id = change.chain_id
+      WHERE change.kind = 'setCurrent'
+        AND record.source_kind = 'automaticAI'
+    )
+    SELECT
+      job.state,
+      job.attempt,
+      target.created_at_bits > seed.created_at_bits,
+      job.created_at < unixepoch(seed.created_at) - 978307200,
+      job.available_at < unixepoch(seed.created_at) - 978307200,
+      job.terminal_at < unixepoch(seed.created_at) - 978307200,
+      (SELECT count(*)
+       FROM change_journal AS journal
+       WHERE journal.entity_id = target.chain_id
+         AND journal.changed_at_bits > seed.created_at_bits),
+      (SELECT count(*) FROM automatic_change),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       WHERE fact.chain_id = target.chain_id
+         AND fact.kind = 'category'
+         AND fact.source_kind = 'automaticAI'),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       WHERE fact.chain_id = target.chain_id
+         AND fact.kind = 'label'
+         AND fact.source_kind = 'automaticAI')
+    FROM target, seed
+    JOIN automatic_classification_jobs AS job
+      ON job.chain_id = target.chain_id;
+  ")"
+  if [[ "$sqlite_probe" != "completed 1 1 1 1 1 1 1 1 2" ]]; then
+    echo "automatic classification operational/domain clock probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+  clear_automatic_classification_e2e_credentials
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification future domain frontier: $database (probe=$sqlite_probe)"
+)
+
+run_automatic_classification_checkpoint_restart_probe() (
+  set -euo pipefail
+  local evidence_dir="artifacts/e2e-automatic-classification/checkpoint-restart"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local state="${evidence_dir}/state.json"
+  local setup_result="${evidence_dir}/setup-result.txt"
+  local verify_result="${evidence_dir}/verify-result.txt"
+  local provider_ready="${evidence_dir}/provider-ready.txt"
+  local provider_count="${evidence_dir}/provider-count.txt"
+  local provider_log="${evidence_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
+  local checkpoint_probe
+  local completion_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  scripts/automatic-classification-provider-stub.py \
+    --ready-file "$PWD/$provider_ready" \
+    --count-file "$PWD/$provider_count" \
+    >"$provider_log" 2>&1 &
+  provider_pid=$!
+  for _ in {1..100}; do
+    [[ -s "$provider_ready" ]] && break
+    kill -0 "$provider_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [[ ! -s "$provider_ready" ]]; then
+    echo "checkpoint deterministic Provider did not become ready" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+  provider_port="$(<"$provider_ready")"
+  if [[ ! "$provider_port" =~ ^[0-9]+$ ]] \
+    || (( provider_port < 1 || provider_port > 65535 )); then
+    echo "checkpoint deterministic Provider returned an invalid port" >&2
+    exit 1
+  fi
+
+  NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
+    NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
+    NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
+    run_terminating_ui_probe \
+      "automatic classification checkpoint setup" \
+      "$setup_result" \
+      "${evidence_dir}/setup.log" \
+      --data-url "$PWD/$database" \
+      --page day \
+      --e2e-automatic-classification-checkpoint-setup \
+      --e2e-automatic-classification-state-url "$PWD/$state" \
+      --e2e-automatic-classification-result-url "$PWD/$setup_result"
+
+  checkpoint_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    SELECT state, attempt, proposal_checkpoint IS NOT NULL
+    FROM automatic_classification_jobs;
+  ")"
+  if [[ "$checkpoint_probe" != "proposalReady 1 1" \
+    || "$(<"$provider_count")" != "1" \
+    || ! -s "$state" ]]; then
+    echo "automatic classification checkpoint setup probe failed: ${checkpoint_probe:-missing}" >&2
+    exit 1
+  fi
+
+  # Phase two deliberately starts without Provider credentials. A durable
+  # proposalReady checkpoint must remain locally consumable while the provider
+  # circuit is unconfigured, without issuing a second paid request.
+  clear_automatic_classification_e2e_credentials
+  assert_automatic_classification_e2e_credentials_cleared
+
+  kill "$provider_pid" >/dev/null 2>&1 || true
+  wait "$provider_pid" 2>/dev/null || true
+  provider_pid=""
+
+  run_terminating_ui_probe \
+    "automatic classification checkpoint restart" \
+    "$verify_result" \
+    "${evidence_dir}/verify.log" \
+    --data-url "$PWD/$database" \
+    --page day \
+    --e2e-automatic-classification-checkpoint-verify \
+    --e2e-automatic-classification-state-url "$PWD/$state" \
+    --e2e-automatic-classification-result-url "$PWD/$verify_result"
+
+  completion_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    SELECT
+      job.state,
+      job.attempt,
+      job.proposal_checkpoint IS NULL,
+      job.terminal_at IS NOT NULL,
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       WHERE fact.chain_id = job.chain_id
+         AND fact.kind = 'category'
+         AND fact.source_kind = 'automaticAI'),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       WHERE fact.chain_id = job.chain_id
+         AND fact.kind = 'label'
+         AND fact.source_kind = 'automaticAI'),
+      (SELECT state FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT provider_execution_revision IS NULL
+         AND failure_code IS NULL AND retry_at IS NULL
+         AND probe_job_id IS NULL AND probe_generation IS NULL
+         AND probe_attempt IS NULL AND probe_claim_id IS NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1)
+    FROM automatic_classification_jobs AS job;
+  ")"
+  if [[ "$completion_probe" != "completed 2 1 1 1 2 unconfigured 1" \
+    || "$(<"$provider_count")" != "1" ]]; then
+    echo "automatic classification checkpoint restart repeated or failed: ${completion_probe:-missing}" >&2
+    exit 1
+  fi
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification checkpoint restart without repeated Provider: $database"
+)
+
+run_automatic_classification_backlog_start_probe() (
+  set -euo pipefail
+  local evidence_dir="artifacts/e2e-automatic-classification/backlog-start"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local result="${evidence_dir}/result.txt"
+  local provider_ready="${evidence_dir}/provider-ready.txt"
+  local provider_count="${evidence_dir}/provider-count.txt"
+  local health_count="${evidence_dir}/health-count.txt"
+  local request_received="${evidence_dir}/request-received.txt"
+  local response_release="${evidence_dir}/response-release.txt"
+  local provider_log="${evidence_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
+  local sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  start_automatic_classification_e2e_provider \
+    "$PWD/$provider_ready" \
+    "$PWD/$provider_count" \
+    "$PWD/$health_count" \
+    "$provider_log" \
+    --request-received-file "$PWD/$request_received" \
+    --response-gate-file "$PWD/$response_release"
+
+  NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
+    NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
+    NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
+    run_terminating_ui_probe \
+      "automatic classification exact backlog authorization" \
+      "$result" \
+      "${evidence_dir}/app.log" \
+      --data-url "$PWD/$database" \
+      --page settings \
+      --e2e-automatic-classification-backlog-start \
+      --e2e-provider-request-received-url "$PWD/$request_received" \
+      --e2e-provider-response-release-url "$PWD/$response_release" \
+      --e2e-automatic-classification-result-url "$PWD/$result"
+
+  if ! kill -0 "$provider_pid" 2>/dev/null; then
+    echo "backlog-start Provider exited before evidence collection" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+  assert_automatic_classification_provider_count \
+    "backlog-start classification" "$provider_count" 3
+  assert_automatic_classification_provider_count \
+    "backlog-start health" "$health_count" 0
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    SELECT
+      (SELECT count(*) FROM automatic_classification_jobs),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed'),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'superseded' AND generation = 1 AND attempt = 1
+         AND error_code = 'contentOrCatalogChanged'
+         AND dispatch_authorization = 'explicit'
+         AND authorization_id IS NOT NULL AND authorized_at IS NOT NULL
+         AND terminal_at IS NOT NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed' AND generation = 2 AND attempt = 1
+         AND error_code IS NULL AND dispatch_authorization = 'explicit'
+         AND authorization_id IS NOT NULL AND authorized_at IS NOT NULL
+         AND terminal_at IS NOT NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE dispatch_authorization = 'explicit'
+         AND authorization_id IS NOT NULL AND authorized_at IS NOT NULL),
+      (SELECT count(DISTINCT chain_id) FROM automatic_classification_jobs
+       WHERE dispatch_authorization = 'explicit'),
+      (SELECT count(DISTINCT authorization_id)
+       FROM automatic_classification_jobs
+       WHERE dispatch_authorization = 'explicit'),
+      (SELECT count(DISTINCT authorized_at)
+       FROM automatic_classification_jobs
+       WHERE dispatch_authorization = 'explicit'),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed' AND generation = 1 AND attempt = 1
+         AND error_code IS NULL AND dispatch_authorization = 'automatic'
+         AND authorization_id IS NULL AND authorized_at IS NULL),
+      (SELECT count(*) FROM classification_current_relation_facts AS fact
+       WHERE fact.kind = 'category' AND fact.source_kind = 'automaticAI'),
+      (SELECT count(*) FROM classification_current_relation_facts AS fact
+       WHERE fact.kind = 'label' AND fact.source_kind = 'automaticAI'),
+      (SELECT state FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT consecutive_failures FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT provider_execution_revision IS NOT NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1),
+      (SELECT failure_code IS NULL AND retry_at IS NULL
+         AND probe_job_id IS NULL AND probe_generation IS NULL
+         AND probe_attempt IS NULL AND probe_claim_id IS NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1);
+  ")"
+  if [[ "$sqlite_probe" != "5 3 2 2 4 2 1 1 1 3 6 closed 0 1 1" ]]; then
+    echo "automatic classification backlog-start SQLite probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+  clear_automatic_classification_e2e_credentials
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification exact backlog authorization: $database (probe=$sqlite_probe)"
+)
+
+run_automatic_classification_backlog_later_probe() (
+  set -euo pipefail
+  local evidence_dir="artifacts/e2e-automatic-classification/backlog-later"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local result="${evidence_dir}/result.txt"
+  local provider_ready="${evidence_dir}/provider-ready.txt"
+  local provider_count="${evidence_dir}/provider-count.txt"
+  local health_count="${evidence_dir}/health-count.txt"
+  local provider_log="${evidence_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
+  local sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  start_automatic_classification_e2e_provider \
+    "$PWD/$provider_ready" \
+    "$PWD/$provider_count" \
+    "$PWD/$health_count" \
+    "$provider_log"
+
+  NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
+    NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
+    NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
+    run_terminating_ui_probe \
+      "automatic classification later backlog decision" \
+      "$result" \
+      "${evidence_dir}/app.log" \
+      --data-url "$PWD/$database" \
+      --page settings \
+      --e2e-automatic-classification-backlog-later \
+      --e2e-automatic-classification-result-url "$PWD/$result"
+
+  if ! kill -0 "$provider_pid" 2>/dev/null; then
+    echo "backlog-later Provider exited before evidence collection" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+  assert_automatic_classification_provider_count \
+    "backlog-later classification" "$provider_count" 1
+  assert_automatic_classification_provider_count \
+    "backlog-later health" "$health_count" 0
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    SELECT
+      (SELECT count(*) FROM automatic_classification_jobs),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'waitingForConfiguration'
+         AND dispatch_authorization = 'pendingUserDecision'
+         AND attempt = 0 AND error_code IS NULL
+         AND authorization_id IS NULL AND authorized_at IS NULL
+         AND terminal_at IS NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed' AND dispatch_authorization = 'automatic'
+         AND attempt = 1 AND error_code IS NULL
+         AND authorization_id IS NULL AND authorized_at IS NULL
+         AND terminal_at IS NOT NULL),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE job.state = 'waitingForConfiguration'),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE job.state = 'completed' AND fact.kind = 'category'
+         AND fact.source_kind = 'automaticAI'),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE job.state = 'completed' AND fact.kind = 'label'
+         AND fact.source_kind = 'automaticAI'),
+      (SELECT state FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT consecutive_failures FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT provider_execution_revision IS NOT NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1),
+      (SELECT failure_code IS NULL AND retry_at IS NULL
+         AND probe_job_id IS NULL AND probe_generation IS NULL
+         AND probe_attempt IS NULL AND probe_claim_id IS NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1);
+  ")"
+  if [[ "$sqlite_probe" != "3 2 1 0 1 2 closed 0 1 1" ]]; then
+    echo "automatic classification backlog-later SQLite probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+  clear_automatic_classification_e2e_credentials
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification later session decision: $database (probe=$sqlite_probe)"
+)
+
+run_automatic_classification_future_only_probe() (
+  set -euo pipefail
+  local evidence_dir="artifacts/e2e-automatic-classification/future-only"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local result="${evidence_dir}/result.txt"
+  local provider_ready="${evidence_dir}/provider-ready.txt"
+  local provider_count="${evidence_dir}/provider-count.txt"
+  local health_count="${evidence_dir}/health-count.txt"
+  local provider_log="${evidence_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
+  local sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  start_automatic_classification_e2e_provider \
+    "$PWD/$provider_ready" \
+    "$PWD/$provider_count" \
+    "$PWD/$health_count" \
+    "$provider_log"
+
+  NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
+    NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
+    NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
+    run_terminating_ui_probe \
+      "automatic classification future-only backlog decision" \
+      "$result" \
+      "${evidence_dir}/app.log" \
+      --data-url "$PWD/$database" \
+      --page settings \
+      --e2e-automatic-classification-future-only \
+      --e2e-automatic-classification-result-url "$PWD/$result"
+
+  if ! kill -0 "$provider_pid" 2>/dev/null; then
+    echo "future-only Provider exited before evidence collection" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+  assert_automatic_classification_provider_count \
+    "future-only classification" "$provider_count" 1
+  assert_automatic_classification_provider_count \
+    "future-only health" "$health_count" 0
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    WITH manual_job AS (
+      SELECT chain_id FROM automatic_classification_jobs
+      WHERE state = 'superseded' AND error_code = 'manualClassificationWon'
+    )
+    SELECT
+      (SELECT count(*) FROM automatic_classification_jobs),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'superseded'
+         AND dispatch_authorization = 'pendingUserDecision'
+         AND attempt = 0 AND error_code = 'manualClassificationWon'
+         AND authorization_id IS NULL AND authorized_at IS NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'cancelled'
+         AND dispatch_authorization = 'pendingUserDecision'
+         AND attempt = 0 AND error_code = 'backlogSkippedByUser'
+         AND cancelled_by_undo = 0
+         AND authorization_id IS NULL AND authorized_at IS NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed' AND dispatch_authorization = 'automatic'
+         AND attempt = 1 AND error_code IS NULL
+         AND authorization_id IS NULL AND authorized_at IS NULL),
+      (SELECT count(*) FROM classification_current_relation_facts AS fact
+       JOIN manual_job ON manual_job.chain_id = fact.chain_id),
+      (SELECT count(*) FROM classification_current_relation_facts AS fact
+       JOIN manual_job ON manual_job.chain_id = fact.chain_id
+       WHERE fact.source_kind = 'userDirect'),
+      (SELECT count(*) FROM classification_current_relation_facts AS fact
+       JOIN manual_job ON manual_job.chain_id = fact.chain_id
+       WHERE fact.source_kind = 'automaticAI'),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE job.state = 'completed' AND fact.kind = 'category'
+         AND fact.source_kind = 'automaticAI'),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE job.state = 'completed' AND fact.kind = 'label'
+         AND fact.source_kind = 'automaticAI'),
+      (SELECT state FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT consecutive_failures FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT failure_code IS NULL AND retry_at IS NULL
+         AND probe_job_id IS NULL AND probe_generation IS NULL
+         AND probe_attempt IS NULL AND probe_claim_id IS NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1);
+  ")"
+  if [[ "$sqlite_probe" != "3 1 1 1 2 2 0 1 2 closed 0 1" ]]; then
+    echo "automatic classification future-only SQLite probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+  clear_automatic_classification_e2e_credentials
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification future-only and manual priority: $database (probe=$sqlite_probe)"
+)
+
+run_automatic_classification_provider_block_retry_probe() (
+  set -euo pipefail
+  local evidence_dir="artifacts/e2e-automatic-classification/provider-block-retry"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local result="${evidence_dir}/result.txt"
+  local provider_ready="${evidence_dir}/provider-ready.txt"
+  local provider_count="${evidence_dir}/provider-count.txt"
+  local health_count="${evidence_dir}/health-count.txt"
+  local provider_log="${evidence_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
+  local sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  start_automatic_classification_e2e_provider \
+    "$PWD/$provider_ready" \
+    "$PWD/$provider_count" \
+    "$PWD/$health_count" \
+    "$provider_log" \
+    --post-outcomes 401,200,200,200 \
+    --health-outcomes 200
+
+  NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
+    NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
+    NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
+    run_terminating_ui_probe \
+      "automatic classification blocked Provider health retry" \
+      "$result" \
+      "${evidence_dir}/app.log" \
+      --data-url "$PWD/$database" \
+      --page settings \
+      --e2e-automatic-classification-provider-block-retry \
+      --e2e-automatic-classification-result-url "$PWD/$result"
+
+  if ! kill -0 "$provider_pid" 2>/dev/null; then
+    echo "provider-block-retry Provider exited before evidence collection" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+  assert_automatic_classification_provider_count \
+    "provider-block-retry classification" "$provider_count" 4
+  assert_automatic_classification_provider_count \
+    "provider-block-retry health" "$health_count" 1
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    SELECT
+      (SELECT count(*) FROM automatic_classification_jobs),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed' AND error_code IS NULL
+         AND dispatch_authorization = 'automatic'
+         AND authorization_id IS NULL AND authorized_at IS NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'superseded' AND generation = 1 AND attempt = 1
+         AND error_code = 'contentOrCatalogChanged'
+         AND dispatch_authorization = 'automatic'
+         AND authorization_id IS NULL AND authorized_at IS NULL
+         AND terminal_at IS NOT NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed' AND generation = 2 AND attempt = 1
+         AND error_code IS NULL AND dispatch_authorization = 'automatic'
+         AND authorization_id IS NULL AND authorized_at IS NULL
+         AND terminal_at IS NOT NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed' AND generation = 1 AND attempt = 2
+         AND error_code IS NULL AND dispatch_authorization = 'automatic'
+         AND authorization_id IS NULL AND authorized_at IS NULL
+         AND terminal_at IS NOT NULL),
+      (SELECT count(*) FROM automatic_classification_jobs WHERE attempt = 2),
+      (SELECT count(*) FROM automatic_classification_jobs WHERE attempt = 1),
+      (SELECT sum(attempt) FROM automatic_classification_jobs),
+      (SELECT count(*) FROM classification_current_relation_facts AS fact
+       WHERE fact.kind = 'category' AND fact.source_kind = 'automaticAI'),
+      (SELECT count(*) FROM classification_current_relation_facts AS fact
+       WHERE fact.kind = 'label' AND fact.source_kind = 'automaticAI'),
+      (SELECT state FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT consecutive_failures FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT provider_execution_revision IS NOT NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1),
+      (SELECT failure_code IS NULL AND retry_at IS NULL
+         AND probe_job_id IS NULL AND probe_generation IS NULL
+         AND probe_attempt IS NULL AND probe_claim_id IS NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1);
+  ")"
+  if [[ "$sqlite_probe" != "5 3 2 2 1 1 4 6 3 6 closed 0 1 1" ]]; then
+    echo "automatic classification provider-block-retry SQLite probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+  clear_automatic_classification_e2e_credentials
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification global block and health retry: $database (probe=$sqlite_probe)"
+)
+
+run_automatic_classification_provider_transient_circuit_probe() (
+  set -euo pipefail
+  local evidence_dir="artifacts/e2e-automatic-classification/provider-transient-circuit"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local result="${evidence_dir}/result.txt"
+  local provider_ready="${evidence_dir}/provider-ready.txt"
+  local provider_count="${evidence_dir}/provider-count.txt"
+  local health_count="${evidence_dir}/health-count.txt"
+  local gate_directory="${evidence_dir}/provider-gates"
+  local provider_log="${evidence_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
+  local sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir" "$gate_directory"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  start_automatic_classification_e2e_provider \
+    "$PWD/$provider_ready" \
+    "$PWD/$provider_count" \
+    "$PWD/$health_count" \
+    "$provider_log" \
+    --post-outcomes 429,503,503 \
+    --response-gate-directory "$PWD/$gate_directory"
+
+  NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
+    NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
+    NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
+    run_terminating_ui_probe \
+      "automatic classification transient Provider circuit" \
+      "$result" \
+      "${evidence_dir}/app.log" \
+      --data-url "$PWD/$database" \
+      --page settings \
+      --e2e-automatic-classification-provider-transient-circuit \
+      --e2e-provider-gate-directory "$PWD/$gate_directory" \
+      --e2e-automatic-classification-retry-delays-ms 100,100,100 \
+      --e2e-automatic-classification-result-url "$PWD/$result"
+
+  if ! kill -0 "$provider_pid" 2>/dev/null; then
+    echo "provider-transient-circuit Provider exited before evidence collection" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+  assert_automatic_classification_provider_count \
+    "provider-transient-circuit classification" "$provider_count" 3
+  assert_automatic_classification_provider_count \
+    "provider-transient-circuit health" "$health_count" 0
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    SELECT
+      (SELECT count(*) FROM automatic_classification_jobs),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'ready' AND dispatch_authorization = 'automatic'
+         AND authorization_id IS NULL AND authorized_at IS NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE attempt = 3 AND error_code = 'providerUnavailable'
+         AND terminal_at IS NULL),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE attempt = 0 AND error_code IS NULL AND terminal_at IS NULL),
+      (SELECT sum(attempt) FROM automatic_classification_jobs),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE fact.source_kind = 'automaticAI'),
+      (SELECT state FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT failure_code FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT consecutive_failures FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT provider_execution_revision IS NOT NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1),
+      (SELECT retry_at IS NULL AND probe_job_id IS NULL
+         AND probe_generation IS NULL AND probe_attempt IS NULL
+         AND probe_claim_id IS NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1);
+  ")"
+  if [[ "$sqlite_probe" != "4 4 1 3 3 0 blocked providerUnavailable 3 1 1" ]]; then
+    echo "automatic classification provider-transient-circuit SQLite probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+  clear_automatic_classification_e2e_credentials
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification bounded global transient circuit: $database (probe=$sqlite_probe)"
+)
+
+run_automatic_classification_contention_probe() (
+  set -euo pipefail
+  local evidence_dir="artifacts/e2e-automatic-classification/contention"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local state="${evidence_dir}/state.json"
+  local setup_result="${evidence_dir}/setup-result.txt"
+  local setup_log="${evidence_dir}/setup.log"
+  local verify_result="${evidence_dir}/verify-result.txt"
+  local verify_log="${evidence_dir}/verify.log"
+  local contention_marker="${evidence_dir}/contention-marker.txt"
+  local sqlite_lock_fifo="${evidence_dir}/sqlite-lock.fifo"
+  local sqlite_lock_log="${evidence_dir}/sqlite-lock.log"
+  local provider_ready="${evidence_dir}/provider-ready.txt"
+  local provider_count="${evidence_dir}/provider-count.txt"
+  local health_count="${evidence_dir}/health-count.txt"
+  local provider_log="${evidence_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
+  local sqlite_lock_pid=""
+  local sqlite_lock_fd_open=0
+  local sqlite_lock_acquired=0
+  local provider_configuration_persisted=0
+  local app_pid=""
+  local sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
+      kill "$app_pid" >/dev/null 2>&1 || true
+      wait "$app_pid" 2>/dev/null || true
+    fi
+    if [[ "$sqlite_lock_fd_open" == "1" ]]; then
+      printf "ROLLBACK;\n.quit\n" >&9 2>/dev/null || true
+      exec 9>&-
+    fi
+    if [[ -n "$sqlite_lock_pid" ]]; then
+      wait "$sqlite_lock_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  run_terminating_ui_probe \
+    "automatic classification contention setup" \
+    "$setup_result" \
+    "$setup_log" \
+    --data-url "$PWD/$database" \
+    --page settings \
+    --e2e-automatic-classification-contention-setup \
+    --e2e-automatic-classification-state-url "$PWD/$state" \
+    --e2e-automatic-classification-result-url "$PWD/$setup_result" \
+    --e2e-quit-after-automation
+
+  start_automatic_classification_e2e_provider \
+    "$PWD/$provider_ready" \
+    "$PWD/$provider_count" \
+    "$PWD/$health_count" \
+    "$provider_log"
+
+  rm -f "$sqlite_lock_fifo" "$sqlite_lock_log" "$contention_marker" "$verify_result"
+  mkfifo -m 600 "$sqlite_lock_fifo"
+  sqlite3 "$database" <"$sqlite_lock_fifo" >"$sqlite_lock_log" 2>&1 &
+  sqlite_lock_pid=$!
+  exec 9>"$sqlite_lock_fifo"
+  sqlite_lock_fd_open=1
+  printf 'PRAGMA busy_timeout = 0;\nBEGIN IMMEDIATE;\n' >&9
+  for _ in {1..50}; do
+    if ! sqlite3 "$database" \
+      'PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK;' \
+      >/dev/null 2>&1; then
+      sqlite_lock_acquired=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$sqlite_lock_acquired" != "1" ]] \
+    || ! kill -0 "$sqlite_lock_pid" 2>/dev/null; then
+    echo "failed to hold automatic classification SQLite write lock" >&2
+    cat "$sqlite_lock_log" >&2
+    exit 1
+  fi
+
+  NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
+    NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
+    NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
+    "$app_executable_path" \
+      --data-url "$PWD/$database" \
+      --page settings \
+      --e2e-automatic-classification-contention \
+      --e2e-automatic-classification-contention-verify \
+      --e2e-automatic-classification-state-url "$PWD/$state" \
+      --e2e-automatic-classification-contention-marker-url "$PWD/$contention_marker" \
+      --e2e-automatic-classification-result-url "$PWD/$verify_result" \
+      >"$verify_log" 2>&1 &
+  app_pid=$!
+
+  # Store startup also reconciles the initially unconfigured circuit. Wait for
+  # the launch automation to persist the configured Provider, then discard any
+  # earlier marker so the observed retry belongs to that exact transition.
+  for _ in {1..200}; do
+    if defaults read \
+      app.noonmark.mac.e2e \
+      noonmark.zhulong.provider.config \
+      >/dev/null 2>&1 \
+      && security find-generic-password \
+        -s app.noonmark.zhulong.provider.e2e \
+        -a default-api-key \
+        >/dev/null 2>&1; then
+      provider_configuration_persisted=1
+      break
+    fi
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ "$provider_configuration_persisted" != "1" ]]; then
+    echo "contention App did not persist its configured Provider" >&2
+    cat "$verify_log" >&2
+    exit 1
+  fi
+  rm -f "$contention_marker"
+
+  for _ in {1..400}; do
+    if [[ -f "$contention_marker" ]] || ! kill -0 "$app_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ ! -f "$contention_marker" \
+    || "$(<"$contention_marker")" != "provider-reconciliation" ]]; then
+    echo "automatic classification did not expose Provider reconciliation contention" >&2
+    cat "$verify_log" >&2
+    exit 1
+  fi
+
+  printf 'ROLLBACK;\n.quit\n' >&9
+  exec 9>&-
+  sqlite_lock_fd_open=0
+  if ! wait "$sqlite_lock_pid"; then
+    echo "automatic classification SQLite lock holder failed" >&2
+    cat "$sqlite_lock_log" >&2
+    exit 1
+  fi
+  sqlite_lock_pid=""
+  rm -f "$sqlite_lock_fifo"
+
+  for _ in {1..400}; do
+    if [[ -f "$verify_result" ]] || ! kill -0 "$app_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ ! -f "$verify_result" || "$(<"$verify_result")" != "ok" ]]; then
+    echo "automatic classification contention verification failed: $(cat "$verify_result" 2>/dev/null || echo missing)" >&2
+    cat "$verify_log" >&2
+    exit 1
+  fi
+  for _ in {1..40}; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if kill -0 "$app_pid" 2>/dev/null; then
+    echo "automatic classification contention App did not terminate" >&2
+    cat "$verify_log" >&2
+    exit 1
+  fi
+  if ! wait "$app_pid"; then
+    echo "automatic classification contention App process failed" >&2
+    cat "$verify_log" >&2
+    exit 1
+  fi
+  app_pid=""
+  assert_clean_app_log "automatic classification Provider contention" "$verify_log"
+
+  if ! kill -0 "$provider_pid" 2>/dev/null; then
+    echo "contention Provider exited before evidence collection" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+  assert_automatic_classification_provider_count \
+    "contention classification" "$provider_count" 1
+  assert_automatic_classification_provider_count \
+    "contention health" "$health_count" 0
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    SELECT
+      (SELECT count(*) FROM automatic_classification_jobs),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed' AND generation = 1 AND attempt = 1
+         AND dispatch_authorization = 'explicit'
+         AND authorization_id IS NOT NULL AND authorized_at IS NOT NULL
+         AND error_code IS NULL),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE fact.kind = 'category' AND fact.source_kind = 'automaticAI'),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE fact.kind = 'label' AND fact.source_kind = 'automaticAI'),
+      (SELECT state FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT consecutive_failures FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT provider_execution_revision IS NOT NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1),
+      (SELECT failure_code IS NULL AND retry_at IS NULL
+         AND probe_job_id IS NULL AND probe_generation IS NULL
+         AND probe_attempt IS NULL AND probe_claim_id IS NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1);
+  ")"
+  if [[ "$sqlite_probe" != "1 1 1 2 closed 0 1 1" ]]; then
+    echo "automatic classification contention SQLite probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+  clear_automatic_classification_e2e_credentials
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification Provider reconciliation contention: $database (probe=$sqlite_probe)"
+)
+
+run_automatic_classification_provider_race_probe() (
+  set -euo pipefail
+  local evidence_dir="artifacts/e2e-automatic-classification/provider-race"
+  local database="${evidence_dir}/Noonmark.sqlite"
+  local result="${evidence_dir}/result.txt"
+  local app_log="${evidence_dir}/app.log"
+  local request_received="${evidence_dir}/request-received.txt"
+  local response_release="${evidence_dir}/response-release.txt"
+  local save_trigger="${evidence_dir}/save-trigger.txt"
+  local save_completed="${evidence_dir}/save-completed.txt"
+  local provider_ready="${evidence_dir}/provider-ready.txt"
+  local provider_count="${evidence_dir}/provider-count.txt"
+  local health_count="${evidence_dir}/health-count.txt"
+  local provider_log="${evidence_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
+  local app_pid=""
+  local sqlite_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$evidence_dir"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
+      kill "$app_pid" >/dev/null 2>&1 || true
+      wait "$app_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  start_automatic_classification_e2e_provider \
+    "$PWD/$provider_ready" \
+    "$PWD/$provider_count" \
+    "$PWD/$health_count" \
+    "$provider_log" \
+    --request-received-file "$PWD/$request_received" \
+    --response-gate-file "$PWD/$response_release"
+
+  NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
+    NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
+    NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
+    "$app_executable_path" \
+      --data-url "$PWD/$database" \
+      --page settings \
+      --e2e-automatic-classification-provider-race \
+      --e2e-automatic-classification-provider-save-trigger-url "$PWD/$save_trigger" \
+      --e2e-automatic-classification-provider-save-completed-url "$PWD/$save_completed" \
+      --e2e-automatic-classification-result-url "$PWD/$result" \
+      >"$app_log" 2>&1 &
+  app_pid=$!
+
+  for _ in {1..400}; do
+    if [[ -f "$request_received" ]] || ! kill -0 "$app_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ ! -f "$request_received" || "$(<"$request_received")" != "1" ]]; then
+    echo "Provider race did not reach its first in-flight request" >&2
+    cat "$app_log" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+
+  printf 'save\n' >"$save_trigger"
+  for _ in {1..400}; do
+    if [[ -f "$save_completed" ]] || ! kill -0 "$app_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ ! -f "$save_completed" || "$(<"$save_completed")" != "ok" ]]; then
+    echo "same-config Provider save did not preserve in-flight work" >&2
+    cat "$app_log" >&2
+    exit 1
+  fi
+
+  printf 'release\n' >"$response_release"
+  for _ in {1..400}; do
+    if [[ -f "$result" ]] || ! kill -0 "$app_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ ! -f "$result" || "$(<"$result")" != "ok" ]]; then
+    echo "Provider race verification failed: $(cat "$result" 2>/dev/null || echo missing)" >&2
+    cat "$app_log" >&2
+    exit 1
+  fi
+  for _ in {1..40}; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if kill -0 "$app_pid" 2>/dev/null; then
+    echo "Provider race App did not terminate" >&2
+    cat "$app_log" >&2
+    exit 1
+  fi
+  if ! wait "$app_pid"; then
+    echo "Provider race App process failed" >&2
+    cat "$app_log" >&2
+    exit 1
+  fi
+  app_pid=""
+  assert_clean_app_log "automatic classification same-config Provider race" "$app_log"
+
+  if ! kill -0 "$provider_pid" 2>/dev/null; then
+    echo "Provider race stub exited before evidence collection" >&2
+    cat "$provider_log" >&2
+    exit 1
+  fi
+  assert_automatic_classification_provider_count \
+    "Provider race classification" "$provider_count" 1
+  assert_automatic_classification_provider_count \
+    "Provider race health" "$health_count" 0
+  sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+    SELECT
+      (SELECT count(*) FROM automatic_classification_jobs),
+      (SELECT count(*) FROM automatic_classification_jobs
+       WHERE state = 'completed' AND generation = 1 AND attempt = 1
+         AND dispatch_authorization = 'automatic'
+         AND authorization_id IS NULL AND authorized_at IS NULL
+         AND proposal_checkpoint IS NULL AND error_code IS NULL),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE fact.kind = 'category' AND fact.source_kind = 'automaticAI'),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN automatic_classification_jobs AS job ON job.chain_id = fact.chain_id
+       WHERE fact.kind = 'label' AND fact.source_kind = 'automaticAI'),
+      (SELECT state FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT consecutive_failures FROM automatic_classification_provider_circuit
+       WHERE singleton_id = 1),
+      (SELECT provider_execution_revision IS NOT NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1),
+      (SELECT failure_code IS NULL AND retry_at IS NULL
+         AND probe_job_id IS NULL AND probe_generation IS NULL
+         AND probe_attempt IS NULL AND probe_claim_id IS NULL
+       FROM automatic_classification_provider_circuit WHERE singleton_id = 1);
+  ")"
+  if [[ "$sqlite_probe" != "1 1 1 2 closed 0 1 1" ]]; then
+    echo "automatic classification Provider race SQLite probe failed: ${sqlite_probe:-missing}" >&2
+    exit 1
+  fi
+  clear_automatic_classification_e2e_credentials
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification same-config Provider race: $database (probe=$sqlite_probe)"
+)
+
+run_automatic_classification_probe() {
+  local evidence_dir="artifacts/e2e-automatic-classification"
+  local enqueue_dir="${evidence_dir}/enqueue"
+  local enqueue_database="${enqueue_dir}/Noonmark.sqlite"
+  local enqueue_result="${enqueue_dir}/result.txt"
+  local enqueue_probe
+  local lifecycle_dir="${evidence_dir}/lifecycle"
+  local lifecycle_database="${lifecycle_dir}/Noonmark.sqlite"
+  local lifecycle_result="${lifecycle_dir}/result.txt"
+  local lifecycle_probe
+
+  rm -rf "$evidence_dir"
+  mkdir -p "$enqueue_dir" "$lifecycle_dir"
+  clear_automatic_classification_e2e_credentials
+
+  run_terminating_ui_probe \
+    "automatic classification atomic enqueue" \
+    "$enqueue_result" \
+    "${enqueue_dir}/app.log" \
+    --data-url "$PWD/$enqueue_database" \
+    --page day \
+    --e2e-automatic-classification-enqueue \
+    --e2e-automatic-classification-result-url "$PWD/$enqueue_result" \
+    --e2e-quit-after-automation
+
+  enqueue_probe="$(sqlite3 -noheader -separator ' ' "$enqueue_database" "
+    SELECT
+      (SELECT count(*)
+       FROM task_definitions
+       WHERE title IN (
+         'E2E 自动归类 Day 任务',
+         'E2E 自动归类任务池任务'
+       ) AND superseded_at IS NULL),
+      (SELECT count(*) FROM automatic_classification_jobs),
+      (SELECT count(*)
+       FROM automatic_classification_jobs
+       WHERE state = 'waitingForConfiguration' AND generation = 1),
+      (SELECT count(*)
+       FROM classification_current_relation_facts AS fact
+       JOIN task_labels AS label ON label.id = fact.item_id
+       WHERE fact.kind = 'label'
+         AND fact.source_kind = 'userDirect'
+         AND label.name = '用户标签');
+  ")"
+  if [[ "$enqueue_probe" != "2 2 2 1" ]]; then
+    echo "automatic classification enqueue persistence probe failed: ${enqueue_probe:-missing}" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "automatic classification lifecycle" \
+    "$lifecycle_result" \
+    "${lifecycle_dir}/app.log" \
+    --data-url "$PWD/$lifecycle_database" \
+    --page day \
+    --e2e-automatic-classification-lifecycle \
+    --e2e-automatic-classification-result-url "$PWD/$lifecycle_result" \
+    --e2e-quit-after-automation
+
+  lifecycle_probe="$(sqlite3 -noheader -separator ' ' "$lifecycle_database" "
+    SELECT
+      (SELECT count(*)
+       FROM automatic_classification_jobs
+       WHERE state = 'superseded'
+         AND error_code = 'manualClassificationWon'),
+      (SELECT count(*)
+       FROM automatic_classification_jobs
+       WHERE state = 'cancelled'
+         AND error_code = 'cancelledByUndo'
+         AND cancelled_by_undo = 1),
+      (SELECT count(*)
+       FROM automatic_classification_jobs
+       WHERE state = 'waitingForConfiguration'
+         AND generation = 2),
+      (SELECT count(*)
+       FROM automatic_classification_jobs
+       WHERE state NOT IN ('completed', 'superseded', 'cancelled', 'failed'));
+  ")"
+  if [[ "$lifecycle_probe" != "1 1 1 1" ]]; then
+    echo "automatic classification lifecycle persistence probe failed: ${lifecycle_probe:-missing}" >&2
+    exit 1
+  fi
+
+  run_automatic_classification_operational_clock_probe
+  run_automatic_classification_checkpoint_restart_probe
+  run_automatic_classification_backlog_start_probe
+  run_automatic_classification_backlog_later_probe
+  run_automatic_classification_future_only_probe
+  run_automatic_classification_provider_block_retry_probe
+  run_automatic_classification_provider_transient_circuit_probe
+  run_automatic_classification_contention_probe
+  run_automatic_classification_provider_race_probe
+  assert_automatic_classification_e2e_credentials_cleared
+  echo "E2E automatic classification enqueue/lifecycle: $evidence_dir"
+}
+
 run_zhulong_todo_diff_clock_probe() {
   local todo_dir="artifacts/e2e-zhulong-todo-diff"
   local todo_db="${todo_dir}/Noonmark.sqlite"
@@ -6081,12 +7407,12 @@ run_zhulong_todo_diff_clock_probe() {
 
   clock_probe="$(sqlite3 -noheader -separator ' ' "$todo_db" "
     WITH ai_definitions AS (
-      SELECT id, created_at_bits
+      SELECT id, chain_id, created_at_bits
       FROM task_definitions
       WHERE superseded_at IS NULL
         AND title IN ('E2E 编辑后的测量', 'E2E 拆分后的验证')
     ), post_apply AS (
-      SELECT id, created_at_bits
+      SELECT id, chain_id, created_at_bits
       FROM task_definitions
       WHERE superseded_at IS NULL
         AND title = 'E2E 烛龙应用后普通写入'
@@ -6113,9 +7439,26 @@ run_zhulong_todo_diff_clock_probe() {
            AND changed_at_bits = post_apply.created_at_bits
        )),
       (SELECT min(post_apply.created_at_bits) > max(ai_definitions.created_at_bits)
-       FROM post_apply, ai_definitions);
+       FROM post_apply, ai_definitions),
+      (SELECT count(*)
+       FROM automatic_classification_jobs AS job
+       WHERE job.chain_id IN (SELECT chain_id FROM ai_definitions)
+         AND job.state = 'waitingForConfiguration'
+         AND job.generation = 1),
+      (SELECT count(*)
+       FROM automatic_classification_jobs AS job
+       WHERE job.chain_id IN (SELECT chain_id FROM post_apply)
+         AND job.state = 'waitingForConfiguration'
+         AND job.generation = 1),
+      (SELECT count(DISTINCT job.chain_id)
+       FROM automatic_classification_jobs AS job
+       WHERE job.chain_id IN (
+         SELECT chain_id FROM ai_definitions
+         UNION ALL
+         SELECT chain_id FROM post_apply
+       ));
   ")"
-  if [[ "$clock_probe" != "2 1 2 1 1" \
+  if [[ "$clock_probe" != "2 1 2 1 1 2 1 3" \
     || -f "${todo_dir}/ZhulongSidecar/pending-application.zhj" ]]; then
     echo "zhulong Todo diff joint clock probe failed: ${clock_probe:-missing}" >&2
     exit 1
@@ -6763,6 +8106,11 @@ run_terminating_ui_probe() {
   fi
   assert_clean_app_log "$label" "$log"
 }
+
+if [[ "${NOONMARK_E2E_AUTOMATIC_CLASSIFICATION_ONLY:-0}" == "1" ]]; then
+  run_automatic_classification_probe
+  exit 0
+fi
 
 if [[ "${NOONMARK_E2E_UI_ENTRY_ONLY:-0}" == "1" ]]; then
   run_ui_entry_probes
@@ -7436,6 +8784,7 @@ run_zhulong_daily_recovery_clock_probe
 run_zhulong_exact_recovery_identity_probe
 run_zhulong_pending_gate_probe
 run_zhulong_todo_diff_clock_probe
+run_automatic_classification_probe
 
 review_zhulong_dir="artifacts/e2e-review-zhulong-entry"
 review_zhulong_result="${review_zhulong_dir}/review-zhulong-result.txt"

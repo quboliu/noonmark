@@ -576,12 +576,14 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
             }
             if shouldVerify {
                 try verifyProvider(on: store)
-                store.zhulongProviderDraft = try ZhulongProviderSettingsStore.clear()
+                store.zhulongProviderDraft = try ZhulongProviderSettingsStore
+                    .clear().draft
             }
             try writeResult("ok")
         } catch {
             if shouldVerify {
-                store.zhulongProviderDraft = (try? ZhulongProviderSettingsStore.clear()) ?? ZhulongProviderDraft()
+                store.zhulongProviderDraft = (try? ZhulongProviderSettingsStore
+                    .clear().draft) ?? ZhulongProviderDraft()
             }
             try? writeResult("failed: \(error.localizedDescription)")
         }
@@ -589,18 +591,119 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
 
     @MainActor
     private func configureProvider(on store: NoonmarkStore) throws {
-        store.zhulongProviderDraft = try ZhulongProviderSettingsStore.clear()
+        store.zhulongProviderDraft = try ZhulongProviderSettingsStore.clear().draft
         store.zhulongProviderDraft.displayName = expectedName
         store.zhulongProviderDraft.kind = .openAICompatible
         store.zhulongProviderDraft.baseURL = expectedBaseURL
         store.zhulongProviderDraft.model = expectedModel
         store.zhulongProviderDraft.apiKeyInput = expectedAPIKey
         store.zhulongProviderDraft.enabled = true
-        store.zhulongProviderDraft = try ZhulongProviderSettingsStore.save(store.zhulongProviderDraft)
+        let firstSave = try ZhulongProviderSettingsStore.save(
+            store.zhulongProviderDraft
+        )
+        guard firstSave.revisionChanged,
+              firstSave.readinessChanged,
+              firstSave.currentReadiness
+        else {
+            throw ProviderE2EAutomationError.mismatch("initialTransition")
+        }
+        store.zhulongProviderDraft = firstSave.draft
+
+        var sameKeyDraft = store.zhulongProviderDraft
+        sameKeyDraft.apiKeyInput = expectedAPIKey
+        let sameSave = try ZhulongProviderSettingsStore.save(sameKeyDraft)
+        guard sameSave.revisionChanged == false,
+              sameSave.readinessChanged == false,
+              sameSave.previousExecutionRevision
+              == firstSave.currentExecutionRevision,
+              sameSave.currentExecutionRevision
+              == firstSave.currentExecutionRevision
+        else {
+            throw ProviderE2EAutomationError.mismatch("sameConfigTransition")
+        }
+
+        var renamedDraft = sameSave.draft
+        renamedDraft.displayName += " E2E renamed"
+        let renamed = try ZhulongProviderSettingsStore.save(renamedDraft)
+        guard renamed.revisionChanged == false,
+              renamed.readinessChanged == false
+        else {
+            throw ProviderE2EAutomationError.mismatch("displayNameTransition")
+        }
+        var restoredNameDraft = renamed.draft
+        restoredNameDraft.displayName = expectedName
+        let restoredName = try ZhulongProviderSettingsStore.save(
+            restoredNameDraft
+        )
+        guard restoredName.revisionChanged == false else {
+            throw ProviderE2EAutomationError.mismatch("restoredNameTransition")
+        }
+
+        var replacementKeyDraft = restoredName.draft
+        replacementKeyDraft.apiKeyInput = "\(expectedAPIKey)-replacement"
+        let replacementKey = try ZhulongProviderSettingsStore.save(
+            replacementKeyDraft
+        )
+        guard replacementKey.revisionChanged,
+              replacementKey.readinessChanged == false
+        else {
+            throw ProviderE2EAutomationError.mismatch("replacementKeyTransition")
+        }
+        var restoredKeyDraft = replacementKey.draft
+        restoredKeyDraft.apiKeyInput = expectedAPIKey
+        let restoredKey = try ZhulongProviderSettingsStore.save(
+            restoredKeyDraft
+        )
+        guard restoredKey.revisionChanged,
+              restoredKey.readinessChanged == false
+        else {
+            throw ProviderE2EAutomationError.mismatch("restoredKeyTransition")
+        }
+
+        var disabledDraft = restoredKey.draft
+        disabledDraft.enabled = false
+        let disabled = try ZhulongProviderSettingsStore.save(disabledDraft)
+        guard disabled.revisionChanged == false,
+              disabled.previousReadiness,
+              disabled.currentReadiness == false
+        else {
+            throw ProviderE2EAutomationError.mismatch("disabledTransition")
+        }
+
+        var enabledDraft = disabled.draft
+        enabledDraft.enabled = true
+        let enabled = try ZhulongProviderSettingsStore.save(enabledDraft)
+        guard enabled.revisionChanged == false,
+              enabled.previousReadiness == false,
+              enabled.currentReadiness,
+              enabled.currentExecutionRevision
+              == restoredKey.currentExecutionRevision
+        else {
+            throw ProviderE2EAutomationError.mismatch("enabledTransition")
+        }
+        store.zhulongProviderDraft = enabled.draft
+
+        guard let persisted = UserDefaults.standard.data(
+            forKey: "noonmark.zhulong.provider.config"
+        ), let object = try JSONSerialization.jsonObject(with: persisted)
+            as? [String: Any],
+            Set(object.keys) == [
+                "baseURL", "displayName", "enabled", "executionRevision",
+                "kind", "model"
+            ],
+            persisted.range(of: Data(expectedAPIKey.utf8)) == nil
+        else {
+            throw ProviderE2EAutomationError.mismatch("nonSensitivePersistence")
+        }
     }
 
     @MainActor
     private func verifyProvider(on store: NoonmarkStore) throws {
+        guard ZhulongProviderKeychain.serviceIdentifier
+            == "app.noonmark.zhulong.provider.e2e"
+        else {
+            throw ProviderE2EAutomationError.mismatch("isolatedKeychainService")
+        }
         let draft = store.zhulongProviderDraft
         guard draft.displayName == expectedName else {
             throw ProviderE2EAutomationError.mismatch("displayName")

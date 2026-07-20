@@ -12,7 +12,7 @@ private func sqliteNonemptyInvariant(_ column: String) -> String {
 }
 
 public enum SQLiteSchema {
-    public static let version = 3
+    public static let version = 5
 
     public static let statements: [String] = [
         """
@@ -48,6 +48,235 @@ public enum SQLiteSchema {
             created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
             updated_at TEXT NOT NULL,
             updated_at_bits INTEGER NOT NULL CHECK (typeof(updated_at_bits) = 'integer')
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS automatic_classification_jobs (
+            id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+            chain_id TEXT NOT NULL REFERENCES task_chains(id),
+            content_digest TEXT NOT NULL CHECK (
+                length(content_digest) = 64
+                AND content_digest NOT GLOB '*[^0-9a-f]*'
+            ),
+            classification_fingerprint TEXT NOT NULL CHECK (
+                length(classification_fingerprint) = 64
+                AND classification_fingerprint NOT GLOB '*[^0-9a-f]*'
+            ),
+            authority_payload BLOB NOT NULL CHECK (
+                length(authority_payload) BETWEEN 1 AND 65536
+            ),
+            catalog_digest TEXT NOT NULL CHECK (
+                length(catalog_digest) = 64
+                AND catalog_digest NOT GLOB '*[^0-9a-f]*'
+            ),
+            generation INTEGER NOT NULL CHECK (
+                typeof(generation) = 'integer' AND generation > 0
+            ),
+            state TEXT NOT NULL CHECK (
+                state IN (
+                    'waitingForConfiguration', 'ready', 'running',
+                    'proposalReady', 'completed', 'superseded',
+                    'cancelled', 'failed'
+                )
+            ),
+            dispatch_authorization TEXT NOT NULL CHECK (
+                dispatch_authorization IN (
+                    'automatic', 'pendingUserDecision', 'explicit'
+                )
+            ),
+            authorization_id TEXT CHECK (
+                authorization_id IS NULL OR length(authorization_id) = 36
+            ),
+            authorized_at REAL,
+            attempt INTEGER NOT NULL CHECK (
+                typeof(attempt) = 'integer' AND attempt >= 0
+            ),
+            claim_id TEXT CHECK (claim_id IS NULL OR length(claim_id) = 36),
+            proposal_checkpoint BLOB CHECK (
+                proposal_checkpoint IS NULL
+                OR length(proposal_checkpoint) BETWEEN 1 AND 262144
+            ),
+            error_code TEXT CHECK (
+                error_code IS NULL OR error_code IN (
+                    'configurationUnavailable', 'providerUnavailable',
+                    'providerRateLimited', 'providerRejected',
+                    'invalidProviderResponse', 'invalidProposal',
+                    'retryLimitReached', 'transientStorageFailure',
+                    'cancelledByUndo', 'backlogSkippedByUser',
+                    'manualClassificationWon',
+                    'contentOrCatalogChanged', 'internalFailure'
+                )
+            ),
+            available_at REAL NOT NULL,
+            claimed_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            terminal_at REAL,
+            cancelled_by_undo INTEGER NOT NULL DEFAULT 0 CHECK (
+                cancelled_by_undo IN (0, 1)
+            ),
+            UNIQUE(chain_id, generation),
+            CHECK ((claim_id IS NULL) = (claimed_at IS NULL)),
+            CHECK (
+                (dispatch_authorization = 'explicit')
+                = (authorization_id IS NOT NULL AND authorized_at IS NOT NULL)
+            ),
+            CHECK (
+                dispatch_authorization != 'pendingUserDecision'
+                OR state IN (
+                    'waitingForConfiguration', 'superseded', 'cancelled', 'failed'
+                )
+            ),
+            CHECK (updated_at >= created_at),
+            CHECK (claimed_at IS NULL OR claimed_at >= created_at),
+            CHECK (terminal_at IS NULL OR terminal_at >= created_at),
+            CHECK (
+                (state IN ('completed', 'superseded', 'cancelled', 'failed'))
+                = (terminal_at IS NOT NULL)
+            ),
+            CHECK (
+                (state = 'proposalReady') = (proposal_checkpoint IS NOT NULL)
+            ),
+            CHECK (
+                state NOT IN ('waitingForConfiguration', 'ready')
+                OR (claim_id IS NULL AND proposal_checkpoint IS NULL)
+            ),
+            CHECK (cancelled_by_undo = 0 OR state = 'cancelled')
+        )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_automatic_classification_job_claim
+        ON automatic_classification_jobs(claim_id)
+        WHERE claim_id IS NOT NULL
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_one_live_automatic_classification_job_per_chain
+        ON automatic_classification_jobs(chain_id)
+        WHERE state IN (
+            'waitingForConfiguration', 'ready', 'running', 'proposalReady'
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_automatic_classification_job_claimable
+        ON automatic_classification_jobs(state, available_at, claimed_at, created_at, id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_automatic_classification_job_backlog
+        ON automatic_classification_jobs(
+            dispatch_authorization, state, created_at, id
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS automatic_classification_provider_circuit (
+            singleton_id INTEGER PRIMARY KEY NOT NULL CHECK (singleton_id = 1),
+            provider_execution_revision TEXT CHECK (
+                provider_execution_revision IS NULL OR (
+                    length(provider_execution_revision) = 36
+                    AND substr(provider_execution_revision, 9, 1) = '-'
+                    AND substr(provider_execution_revision, 14, 1) = '-'
+                    AND substr(provider_execution_revision, 19, 1) = '-'
+                    AND substr(provider_execution_revision, 24, 1) = '-'
+                )
+            ),
+            state TEXT NOT NULL CHECK (
+                state IN ('unconfigured', 'closed', 'open', 'halfOpen', 'blocked')
+            ),
+            failure_code TEXT CHECK (
+                failure_code IS NULL OR failure_code IN (
+                    'providerUnavailable', 'providerRateLimited', 'providerRejected'
+                )
+            ),
+            consecutive_failures INTEGER NOT NULL CHECK (
+                typeof(consecutive_failures) = 'integer'
+                AND consecutive_failures >= 0
+            ),
+            retry_at REAL,
+            probe_job_id TEXT CHECK (
+                probe_job_id IS NULL OR length(probe_job_id) = 36
+            ),
+            probe_generation INTEGER CHECK (
+                probe_generation IS NULL OR (
+                    typeof(probe_generation) = 'integer' AND probe_generation > 0
+                )
+            ),
+            probe_attempt INTEGER CHECK (
+                probe_attempt IS NULL OR (
+                    typeof(probe_attempt) = 'integer' AND probe_attempt > 0
+                )
+            ),
+            probe_claim_id TEXT CHECK (
+                probe_claim_id IS NULL OR length(probe_claim_id) = 36
+            ),
+            opened_at REAL,
+            updated_at REAL NOT NULL,
+            transition_version INTEGER NOT NULL CHECK (
+                typeof(transition_version) = 'integer'
+                AND transition_version >= 0
+            ),
+            CHECK (
+                (
+                    state = 'unconfigured'
+                    AND provider_execution_revision IS NULL
+                    AND failure_code IS NULL
+                    AND consecutive_failures = 0
+                    AND retry_at IS NULL
+                    AND probe_job_id IS NULL
+                    AND probe_generation IS NULL
+                    AND probe_attempt IS NULL
+                    AND probe_claim_id IS NULL
+                    AND opened_at IS NULL
+                )
+                OR (
+                    state = 'closed'
+                    AND provider_execution_revision IS NOT NULL
+                    AND failure_code IS NULL
+                    AND consecutive_failures = 0
+                    AND retry_at IS NULL
+                    AND probe_job_id IS NULL
+                    AND probe_generation IS NULL
+                    AND probe_attempt IS NULL
+                    AND probe_claim_id IS NULL
+                    AND opened_at IS NULL
+                )
+                OR (
+                    state = 'open'
+                    AND provider_execution_revision IS NOT NULL
+                    AND failure_code IN ('providerUnavailable', 'providerRateLimited')
+                    AND consecutive_failures BETWEEN 1 AND 2
+                    AND retry_at IS NOT NULL
+                    AND probe_job_id IS NULL
+                    AND probe_generation IS NULL
+                    AND probe_attempt IS NULL
+                    AND probe_claim_id IS NULL
+                    AND opened_at IS NOT NULL
+                )
+                OR (
+                    state = 'halfOpen'
+                    AND provider_execution_revision IS NOT NULL
+                    AND failure_code IN ('providerUnavailable', 'providerRateLimited')
+                    AND consecutive_failures BETWEEN 1 AND 2
+                    AND retry_at IS NULL
+                    AND probe_job_id IS NOT NULL
+                    AND probe_generation IS NOT NULL
+                    AND probe_attempt IS NOT NULL
+                    AND probe_claim_id IS NOT NULL
+                    AND opened_at IS NOT NULL
+                )
+                OR (
+                    state = 'blocked'
+                    AND provider_execution_revision IS NOT NULL
+                    AND failure_code IN (
+                        'providerUnavailable', 'providerRateLimited', 'providerRejected'
+                    )
+                    AND consecutive_failures > 0
+                    AND retry_at IS NULL
+                    AND probe_job_id IS NULL
+                    AND probe_generation IS NULL
+                    AND probe_attempt IS NULL
+                    AND probe_claim_id IS NULL
+                    AND opened_at IS NOT NULL
+                )
+            )
         )
         """,
         """
@@ -235,7 +464,8 @@ public enum SQLiteSchema {
                     'userDirect',
                     'zhulongSuggestion',
                     'inherited',
-                    'deterministicDomainAction'
+                    'deterministicDomainAction',
+                    'automaticAI'
                 )
             ),
             source_session_id TEXT,
@@ -290,6 +520,17 @@ public enum SQLiteSchema {
                     AND source_from_chain_id IS NULL
                     AND source_reason IS NOT NULL
                 )
+                OR (
+                    source_kind = 'automaticAI'
+                    AND source_session_id IS NOT NULL
+                    AND source_draft_id IS NULL
+                    AND source_draft_version IS NOT NULL
+                    AND typeof(source_draft_version) = 'integer'
+                    AND source_draft_version > 0
+                    AND source_evidence_id IS NULL
+                    AND source_from_chain_id IS NULL
+                    AND source_reason IS NULL
+                )
             )
         )
         """,
@@ -310,7 +551,8 @@ public enum SQLiteSchema {
                     'userDirect',
                     'zhulongSuggestion',
                     'inherited',
-                    'deterministicDomainAction'
+                    'deterministicDomainAction',
+                    'automaticAI'
                 )
             ),
             origin_source_session_id TEXT,
@@ -327,7 +569,8 @@ public enum SQLiteSchema {
                     'userDirect',
                     'zhulongSuggestion',
                     'inherited',
-                    'deterministicDomainAction'
+                    'deterministicDomainAction',
+                    'automaticAI'
                 )
             ),
             removed_source_session_id TEXT,
@@ -381,6 +624,17 @@ public enum SQLiteSchema {
                     AND origin_source_from_chain_id IS NULL
                     AND origin_source_reason IS NOT NULL
                 )
+                OR (
+                    origin_source_kind = 'automaticAI'
+                    AND origin_source_session_id IS NOT NULL
+                    AND origin_source_draft_id IS NULL
+                    AND origin_source_draft_version IS NOT NULL
+                    AND typeof(origin_source_draft_version) = 'integer'
+                    AND origin_source_draft_version > 0
+                    AND origin_source_evidence_id IS NULL
+                    AND origin_source_from_chain_id IS NULL
+                    AND origin_source_reason IS NULL
+                )
             ),
             CHECK (
                 (
@@ -419,6 +673,17 @@ public enum SQLiteSchema {
                     AND removed_source_evidence_id IS NULL
                     AND removed_source_from_chain_id IS NULL
                     AND removed_source_reason IS NOT NULL
+                )
+                OR (
+                    removed_source_kind = 'automaticAI'
+                    AND removed_source_session_id IS NOT NULL
+                    AND removed_source_draft_id IS NULL
+                    AND removed_source_draft_version IS NOT NULL
+                    AND typeof(removed_source_draft_version) = 'integer'
+                    AND removed_source_draft_version > 0
+                    AND removed_source_evidence_id IS NULL
+                    AND removed_source_from_chain_id IS NULL
+                    AND removed_source_reason IS NULL
                 )
             )
         )
@@ -562,7 +827,8 @@ public enum SQLiteSchema {
                     'userDirect',
                     'zhulongSuggestion',
                     'inherited',
-                    'deterministicDomainAction'
+                    'deterministicDomainAction',
+                    'automaticAI'
                 )
             ),
             source_session_id TEXT,
@@ -612,6 +878,17 @@ public enum SQLiteSchema {
                     AND source_from_chain_id IS NULL
                     AND source_reason IS NOT NULL
                 )
+                OR (
+                    source_kind = 'automaticAI'
+                    AND source_session_id IS NOT NULL
+                    AND source_draft_id IS NULL
+                    AND source_draft_version IS NOT NULL
+                    AND typeof(source_draft_version) = 'integer'
+                    AND source_draft_version > 0
+                    AND source_evidence_id IS NULL
+                    AND source_from_chain_id IS NULL
+                    AND source_reason IS NULL
+                )
             )
         )
         """,
@@ -655,6 +932,17 @@ public enum SQLiteSchema {
                 AND NEW.source_evidence_id IS NULL
                 AND NEW.source_from_chain_id IS NULL
                 AND NEW.source_reason IS NOT NULL
+            )
+            OR (
+                NEW.source_kind = 'automaticAI'
+                AND NEW.source_session_id IS NOT NULL
+                AND NEW.source_draft_id IS NULL
+                AND NEW.source_draft_version IS NOT NULL
+                AND typeof(NEW.source_draft_version) = 'integer'
+                AND NEW.source_draft_version > 0
+                AND NEW.source_evidence_id IS NULL
+                AND NEW.source_from_chain_id IS NULL
+                AND NEW.source_reason IS NULL
             )
         )
         BEGIN

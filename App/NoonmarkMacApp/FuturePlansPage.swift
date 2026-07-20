@@ -93,6 +93,11 @@ struct FuturePlanRow: View {
                     )
                     .padding(.top, 4)
                 }
+                AutomaticTaskClassificationStatusView(
+                    chainID: item.trace.chainID,
+                    taskTitle: item.definition.title
+                )
+                .padding(.top, 3)
             }
             Spacer()
             if selected {

@@ -393,6 +393,11 @@ private extension ClassificationCommitEnvelope {
         after: TaskClassificationState,
         changeRecord: ClassificationChangeRecord
     ) throws {
+        guard changeRecord.source.hasValidAutomaticClassificationGeneration else {
+            throw ClassificationCommitEnvelopeError.malformedCommit(
+                "automatic classification source generation is invalid"
+            )
+        }
         do {
             try before.validateIntegrity()
             try after.validateIntegrity()
@@ -442,7 +447,7 @@ private extension ClassificationCommitEnvelope {
                     "user-authorized classification commit is missing its receipt"
                 )
             }
-        case .inherited, .deterministicDomainAction:
+        case .inherited, .deterministicDomainAction, .automaticAI:
             guard receipt == nil else {
                 throw ClassificationCommitEnvelopeError.malformedCommit(
                     "deterministic classification commit must not carry a user receipt"
@@ -578,6 +583,11 @@ private extension ClassificationCommitEnvelope {
                 "classification sender revision, date, or audit digest is invalid"
             )
         }
+        guard classificationSources.allSatisfy(\.hasValidAutomaticClassificationGeneration) else {
+            throw ClassificationCommitEnvelopeError.malformedCommit(
+                "automatic classification source generation is invalid"
+            )
+        }
         try validateReceipt()
         try delta.validateCanonicalShape(changeRecord: changeRecord)
     }
@@ -598,13 +608,20 @@ private extension ClassificationCommitEnvelope {
                     "user-authorized classification audit or receipt is inconsistent"
                 )
             }
-        case .inherited, .deterministicDomainAction:
+        case .inherited, .deterministicDomainAction, .automaticAI:
             guard changeRecord.decisionID == nil, receipt == nil else {
                 throw ClassificationCommitEnvelopeError.malformedCommit(
                     "deterministic classification audit must not carry decision authority"
                 )
             }
         }
+    }
+}
+
+private extension ClassificationSource {
+    var hasValidAutomaticClassificationGeneration: Bool {
+        guard case let .automaticAI(_, generation) = self else { return true }
+        return generation > 0
     }
 }
 

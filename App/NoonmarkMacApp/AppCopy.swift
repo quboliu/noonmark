@@ -23,6 +23,36 @@ struct AppCopy {
     var delete: String { language == .chinese ? "删除" : "Delete" }
     var selectAll: String { language == .chinese ? "全选" : "Select All" }
     var retry: String { language == .chinese ? "重试" : "Retry" }
+    var automaticClassificationWorking: String {
+        language == .chinese ? "智能归类中…" : "Organizing…"
+    }
+
+    var automaticClassificationWaitingForConfiguration: String {
+        language == .chinese ? "等待配置 AI" : "Waiting for AI setup"
+    }
+
+    var automaticClassificationWaitingForDecision: String {
+        language == .chinese ? "等待确认是否归类" : "Waiting for your decision"
+    }
+
+    var automaticClassificationProviderPaused: String {
+        language == .chinese ? "智能归类已暂停 · 重试" : "Organizing paused · Retry"
+    }
+
+    var automaticClassificationFailed: String {
+        language == .chinese ? "归类失败 · 重试" : "Couldn’t organize · Retry"
+    }
+
+    func automaticClassificationStatusAccessibilityLabel(
+        _ status: String,
+        taskTitle: String
+    ) -> String {
+        switch language {
+        case .chinese: "任务“\(taskTitle)”：\(status)"
+        case .english: "Task “\(taskTitle)”: \(status)"
+        }
+    }
+
     var naturalDayBlockedTitle: String {
         language == .chinese
             ? "日期切换尚未安全完成，编辑已暂停"

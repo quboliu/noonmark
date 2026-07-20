@@ -467,6 +467,152 @@ public final class SQLiteEngineRepository {
         }
     }
 
+    public func save(
+        _ snapshot: NoonmarkSnapshot,
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date,
+        enqueuingAutomaticClassificationJobs jobs: [AutomaticClassificationJobEnqueue]
+    ) throws {
+        try saveWithAutomaticClassificationMutation(
+            snapshot,
+            recordingChangesFor: deviceID,
+            changedAt: changedAt
+        ) { database in
+            for job in jobs {
+                try SQLiteAutomaticClassificationJobSQL.enqueue(job, into: database)
+            }
+        }
+    }
+
+    public func save(
+        _ snapshot: NoonmarkSnapshot,
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date,
+        completingAutomaticClassificationJob claim: AutomaticClassificationJobClaim,
+        automaticClassificationTransitionAt transitionAt: Date
+    ) throws {
+        try SQLiteAutomaticClassificationJobSQL.validateDate(
+            transitionAt,
+            label: "automatic classification completion transitionAt"
+        )
+        try saveWithAutomaticClassificationMutation(
+            snapshot,
+            recordingChangesFor: deviceID,
+            changedAt: changedAt
+        ) { database in
+            try SQLiteAutomaticClassificationJobSQL.complete(
+                claim,
+                now: transitionAt,
+                in: database
+            )
+        }
+    }
+
+    public func save(
+        _ snapshot: NoonmarkSnapshot,
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date,
+        cancellingAutomaticClassificationJobsForUndoneChain chainID: TaskChainID,
+        automaticClassificationTransitionAt transitionAt: Date
+    ) throws {
+        try SQLiteAutomaticClassificationJobSQL.validateDate(
+            transitionAt,
+            label: "automatic classification cancellation transitionAt"
+        )
+        try saveWithAutomaticClassificationMutation(
+            snapshot,
+            recordingChangesFor: deviceID,
+            changedAt: changedAt
+        ) { database in
+            _ = try SQLiteAutomaticClassificationJobSQL.cancelJobs(
+                forUndoneChain: chainID,
+                now: transitionAt,
+                in: database
+            )
+        }
+    }
+
+    public func save(
+        _ snapshot: NoonmarkSnapshot,
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date,
+        supersedingAutomaticClassificationJobsForChain chainID: TaskChainID,
+        automaticClassificationTransitionAt transitionAt: Date
+    ) throws {
+        try SQLiteAutomaticClassificationJobSQL.validateDate(
+            transitionAt,
+            label: "automatic classification supersede transitionAt"
+        )
+        try saveWithAutomaticClassificationMutation(
+            snapshot,
+            recordingChangesFor: deviceID,
+            changedAt: changedAt
+        ) { database in
+            _ = try SQLiteAutomaticClassificationJobSQL.supersedeJobs(
+                forChain: chainID,
+                now: transitionAt,
+                in: database
+            )
+        }
+    }
+
+    public func save(
+        _ snapshot: NoonmarkSnapshot,
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date,
+        requeuingAutomaticClassificationJobForRedo redo: AutomaticClassificationJobRedo
+    ) throws {
+        try saveWithAutomaticClassificationMutation(
+            snapshot,
+            recordingChangesFor: deviceID,
+            changedAt: changedAt
+        ) { database in
+            try SQLiteAutomaticClassificationJobSQL.requeueCancelledByUndo(
+                redo,
+                in: database
+            )
+        }
+    }
+
+    private func saveWithAutomaticClassificationMutation(
+        _ snapshot: NoonmarkSnapshot,
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date,
+        mutation: (OpaquePointer?) throws -> Void
+    ) throws {
+        guard changedAt.timeIntervalSinceReferenceDate.isFinite else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "engine mutation changedAt must be finite"
+            )
+        }
+        try validateSnapshotForPersistence(snapshot)
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            let oldSnapshot = try loadSnapshot(from: database)
+            var journalEntries = try SyncSnapshotDiffer().journalEntries(
+                from: oldSnapshot,
+                to: snapshot,
+                changedAt: changedAt,
+                deviceID: deviceID
+            )
+            for index in journalEntries.indices {
+                journalEntries[index].id = journalEntryIDGenerator()
+            }
+            try advanceEngineSnapshotGeneration(in: database)
+            try persistValidatedSnapshot(snapshot, into: database)
+            try appendJournalEntries(journalEntries, into: database)
+            try mutation(database)
+            try execute("COMMIT", on: database)
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
     func validateSnapshotForPersistence(_ snapshot: NoonmarkSnapshot) throws {
         try snapshot.validateIntegrity()
     }
@@ -553,17 +699,27 @@ public final class SQLiteEngineRepository {
 }
 
 public enum SQLiteRepositoryError: Error, Equatable {
+    case transientContention
     case openFailed(String)
     case prepareFailed(String)
     case executeFailed(String)
     case stepFailed(String)
     case invalidStoredValue(String)
     case backupFailed(String)
+
+    public var isTransientContention: Bool {
+        if case .transientContention = self {
+            return true
+        }
+        return false
+    }
 }
 
 extension SQLiteRepositoryError: LocalizedError {
     public var errorDescription: String? {
         switch self {
+        case .transientContention:
+            return "SQLite is temporarily busy; retry later."
         case let .openFailed(message):
             return "SQLite open failed: \(message)"
         case let .prepareFailed(message):
@@ -2871,6 +3027,16 @@ private extension SQLiteEngineRepository {
                 fromChainID: nil,
                 reason: reason
             )
+        case let .automaticAI(jobID, generation):
+            SQLiteClassificationSourceRecord(
+                kind: "automaticAI",
+                sessionID: jobID,
+                draftID: nil,
+                draftVersion: generation,
+                evidenceID: nil,
+                fromChainID: nil,
+                reason: nil
+            )
         }
     }
 
@@ -4796,6 +4962,8 @@ private extension SQLiteEngineRepository {
             return try inheritedClassificationSource(stored)
         case "deterministicDomainAction":
             return try deterministicClassificationSource(stored)
+        case "automaticAI":
+            return try automaticAIClassificationSource(stored)
         default:
             throw SQLiteRepositoryError.invalidStoredValue("invalid classification source kind")
         }
@@ -4869,6 +5037,24 @@ private extension SQLiteEngineRepository {
             throw SQLiteRepositoryError.invalidStoredValue("invalid deterministic classification source")
         }
         return .deterministicDomainAction(reason: reason)
+    }
+
+    func automaticAIClassificationSource(
+        _ stored: SQLiteClassificationSourceRecord
+    ) throws -> ClassificationSource {
+        guard let jobID = stored.sessionID,
+              stored.draftID == nil,
+              let generation = stored.draftVersion,
+              generation > 0,
+              stored.evidenceID == nil,
+              stored.fromChainID == nil,
+              stored.reason == nil
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid automatic-AI classification source"
+            )
+        }
+        return .automaticAI(jobID: jobID, generation: generation)
     }
 
     func loadClassificationReceipts(

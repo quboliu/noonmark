@@ -490,6 +490,12 @@ struct TaskRow: View {
                         .padding(.top, 4)
                     }
 
+                    AutomaticTaskClassificationStatusView(
+                        chainID: trace.chainID,
+                        taskTitle: definition?.title ?? store.copy.untitledTask
+                    )
+                    .padding(.top, 3)
+
                     if showsProgress {
                         HStack(spacing: 6) {
                             GeometryReader { proxy in

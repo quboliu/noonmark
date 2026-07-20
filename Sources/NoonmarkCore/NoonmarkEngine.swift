@@ -1,5 +1,20 @@
 import Foundation
 
+public struct SnapshotUndoOutcome: Equatable, Sendable {
+    public let automaticClassificationCancelledChainIDs: [TaskChainID]
+    public let automaticClassificationRestoredChainIDs: [TaskChainID]
+
+    public init(
+        automaticClassificationCancelledChainIDs: [TaskChainID] = [],
+        automaticClassificationRestoredChainIDs: [TaskChainID] = []
+    ) {
+        self.automaticClassificationCancelledChainIDs =
+            automaticClassificationCancelledChainIDs
+        self.automaticClassificationRestoredChainIDs =
+            automaticClassificationRestoredChainIDs
+    }
+}
+
 public final class NoonmarkEngine {
     public private(set) var days: [LocalDate: Day]
     public private(set) var chains: [TaskChainID: TaskChain]
@@ -65,24 +80,27 @@ public final class NoonmarkEngine {
         )
     }
 
+    @discardableResult
     public func prepareSnapshotUndo(
         replacing currentSnapshot: NoonmarkSnapshot,
         now: Date = Date()
-    ) throws {
+    ) throws -> SnapshotUndoOutcome {
         let candidate = try NoonmarkEngine(snapshot: snapshot())
-        try candidate.prepareSnapshotUndoInPlace(
+        let outcome = try candidate.prepareSnapshotUndoInPlace(
             replacing: currentSnapshot,
             now: now
         )
         adoptState(from: candidate)
+        return outcome
     }
 
     private func prepareSnapshotUndoInPlace(
         replacing currentSnapshot: NoonmarkSnapshot,
         now: Date
-    ) throws {
+    ) throws -> SnapshotUndoOutcome {
         try currentSnapshot.validateIntegrity()
         let current = SnapshotUndoCurrentFacts(currentSnapshot)
+        let outcome = snapshotUndoOutcome(from: current)
         retainCurrentOnlySnapshotUndoFacts(from: current, now: now)
         try restoreSnapshotUndoChains(from: current, now: now)
         try restoreSnapshotUndoDefinitions(from: current, now: now)
@@ -90,10 +108,17 @@ public final class NoonmarkEngine {
         try restoreSnapshotUndoSubtasks(from: current, now: now)
 
         // Classification commits and captured history are immutable audit facts.
-        // Undo may restore Todo state while carrying the current classification
-        // ledger forward; direct classification edits invalidate the App stack.
+        // New-task undo compensates only current automatic relations. Explicit,
+        // inherited and deterministic relations remain current across undo/redo.
         classificationState = currentSnapshot.classifications
+        for chainID in outcome.automaticClassificationCancelledChainIDs {
+            try removeAutomaticClassificationForSnapshotUndo(
+                chainID: chainID,
+                now: now
+            )
+        }
         try snapshot().validateIntegrity()
+        return outcome
     }
 
     private func adoptState(from candidate: NoonmarkEngine) {
@@ -456,6 +481,7 @@ public final class NoonmarkEngine {
 
     private func removeCurrentClassificationForRetiredTask(
         chainID: TaskChainID,
+        reason: String = "task removed from task pool while preserving classification history",
         now: Date
     ) throws {
         guard let current = classificationState.currentByChainID[chainID],
@@ -471,10 +497,46 @@ public final class NoonmarkEngine {
                     labels: []
                 )
             ),
-            source: .deterministicDomainAction(
-                reason: "task removed from task pool while preserving classification history"
-            ),
+            source: .deterministicDomainAction(reason: reason),
             interactionID: interactionID,
+            now: now
+        )
+        try commitDeterministicDomainClassification(plan, now: now)
+    }
+
+    private func removeAutomaticClassificationForSnapshotUndo(
+        chainID: TaskChainID,
+        now: Date
+    ) throws {
+        guard let current = classificationState.currentByChainID[chainID]
+        else { return }
+        let category = current.category.flatMap { relation in
+            guard case .automaticAI = relation.source else {
+                return TaskCategoryChoice.existing(relation.categoryID)
+            }
+            return nil
+        }
+        let labels = current.labels.compactMap { relation in
+            guard case .automaticAI = relation.source else {
+                return TaskLabelChoice.existing(relation.labelID)
+            }
+            return nil
+        }
+        guard category != current.categoryID.map(TaskCategoryChoice.existing)
+            || labels.count != current.labels.count
+        else { return }
+        let plan = try prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: category,
+                    labels: labels
+                )
+            ),
+            source: .deterministicDomainAction(
+                reason: "snapshot undo cancelled a new task classification"
+            ),
+            interactionID: UUID(),
             now: now
         )
         try commitDeterministicDomainClassification(plan, now: now)
@@ -1428,6 +1490,31 @@ private struct SnapshotUndoCurrentFacts {
 }
 
 private extension NoonmarkEngine {
+    func snapshotUndoOutcome(
+        from current: SnapshotUndoCurrentFacts
+    ) -> SnapshotUndoOutcome {
+        let cancelled: [TaskChainID] = current.chains.compactMap { entry -> TaskChainID? in
+            let (chainID, chain) = entry
+            guard chain.state == .active,
+                  chains[chainID]?.state != .active
+            else { return nil }
+            return chainID
+        }
+        .sorted { $0.description < $1.description }
+        let restored: [TaskChainID] = chains.compactMap { entry -> TaskChainID? in
+            let (chainID, chain) = entry
+            guard chain.state == .active,
+                  current.chains[chainID]?.state == .abandoned
+            else { return nil }
+            return chainID
+        }
+        .sorted { $0.description < $1.description }
+        return SnapshotUndoOutcome(
+            automaticClassificationCancelledChainIDs: cancelled,
+            automaticClassificationRestoredChainIDs: restored
+        )
+    }
+
     func retainCurrentOnlySnapshotUndoFacts(
         from current: SnapshotUndoCurrentFacts,
         now: Date

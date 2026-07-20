@@ -7,3 +7,4 @@ DerivedData/
 *.xcresult/
 artifacts/
 dist/
+/config/ai-provider.local.json

@@ -427,6 +427,7 @@ public enum ClassificationSource: Codable, Equatable, Sendable {
         draftVersion: Int,
         evidenceID: UUID
     )
+    case automaticAI(jobID: UUID, generation: Int)
     case inherited(fromChainID: TaskChainID)
     case deterministicDomainAction(reason: String)
 }
@@ -1737,6 +1738,14 @@ public extension NoonmarkEngine {
         confirmation: ClassificationConfirmation,
         now: Date = Date()
     ) throws -> ClassificationReceipt {
+        switch plan.source {
+        case .userDirect, .zhulongSuggestion:
+            break
+        case .automaticAI, .inherited, .deterministicDomainAction:
+            throw NoonmarkError.invalidInput(
+                "classification source requires its bounded domain authority"
+            )
+        }
         guard confirmation.authorizes(plan) else {
             throw NoonmarkError.invalidInput("classification confirmation does not authorize this plan")
         }
@@ -1799,7 +1808,7 @@ public extension NoonmarkEngine {
         )
     }
 
-    private func validateClassificationCommit(
+    func validateClassificationCommit(
         _ plan: ClassificationPlan
     ) throws {
         guard try plan.hasValidDigest() else {
@@ -1810,13 +1819,16 @@ public extension NoonmarkEngine {
         }
     }
 
-    private func applyClassificationCommit(
+    func applyClassificationCommit(
         _ plan: ClassificationPlan,
         decisionID: UUID?,
         recordsUserReceipt: Bool,
+        enforcesBaseRevision: Bool = true,
         now: Date
     ) throws -> ClassificationReceipt? {
-        guard plan.baseRevision == classificationState.revision else {
+        guard enforcesBaseRevision == false
+            || plan.baseRevision == classificationState.revision
+        else {
             throw NoonmarkError.invalidTransition("classification plan is stale")
         }
         try validatePreparedClassificationPlan(plan)
@@ -1852,19 +1864,15 @@ public extension NoonmarkEngine {
         next.changeRecords = try ClassificationAuditCanonicalOrder.changeRecords(
             next.changeRecords + [changeRecord]
         )
-        let receipt: ClassificationReceipt? = if recordsUserReceipt {
-            ClassificationReceipt(
-                planID: plan.id,
-                revision: next.revision,
-                notices: plan.notices,
-                changeRecordID: changeRecord.id,
-                decisionID: decisionID,
-                changeRecordIntegrityDigest: changeRecord.integrityDigest
-            )
-        } else {
-            nil
-        }
-        if let receipt {
+        let receipt = ClassificationReceipt(
+            planID: plan.id,
+            revision: next.revision,
+            notices: plan.notices,
+            changeRecordID: changeRecord.id,
+            decisionID: decisionID,
+            changeRecordIntegrityDigest: changeRecord.integrityDigest
+        )
+        if recordsUserReceipt {
             next.committedReceiptsByInteractionID[plan.interactionID] = receipt
         }
         classificationState = next

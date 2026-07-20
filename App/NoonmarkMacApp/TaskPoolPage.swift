@@ -185,6 +185,10 @@ struct PoolTaskRow: View {
                     showsCategory: false
                 )
             }
+            AutomaticTaskClassificationStatusView(
+                chainID: task.chain.id,
+                taskTitle: task.definition.title
+            )
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)

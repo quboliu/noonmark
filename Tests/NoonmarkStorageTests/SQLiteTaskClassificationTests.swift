@@ -1,4 +1,4 @@
-@testable import NoonmarkCore
+@_spi(AutomaticClassificationJobAuthority) @testable import NoonmarkCore
 @testable import NoonmarkStorage
 @testable import NoonmarkSync
 import SQLite3
@@ -196,22 +196,24 @@ final class SQLiteTaskClassificationTests: XCTestCase {
 
     func testRepositoryRoundTripPreservesEveryCurrentClassificationSource() throws {
         let databaseURL = makeDatabaseURL("classification-sources")
-        defer { try? FileManager.default.removeItem(at: databaseURL) }
+        defer {
+            if FileManager.default.fileExists(atPath: databaseURL.path) {
+                try? FileManager.default.removeItem(at: databaseURL)
+            }
+        }
 
         let engine = NoonmarkEngine()
-        let chainIDs = try (0 ..< 4).map { index in
+        let chainIDs = try (0 ..< 5).map { index in
             try engine.createPoolTask(title: "分类来源 \(index)", now: now)
         }
-        let sources: [ClassificationSource] = [
+        var sources: [ClassificationSource] = [
             .userDirect,
             .zhulongSuggestion(
                 sessionID: UUID(),
                 draftID: UUID(),
                 draftVersion: Int(Int32.max) + 17,
                 evidenceID: UUID()
-            ),
-            .inherited(fromChainID: chainIDs[0]),
-            .deterministicDomainAction(reason: "复制任务时继承已确认分类")
+            )
         ]
 
         for (index, source) in sources.enumerated() {
@@ -236,6 +238,70 @@ final class SQLiteTaskClassificationTests: XCTestCase {
                 at: now.addingTimeInterval(TimeInterval(index))
             )
         }
+
+        let inheritedSource = ClassificationSource.inherited(
+            fromChainID: chainIDs[0]
+        )
+        try engine.inheritCurrentClassification(
+            from: chainIDs[0],
+            to: chainIDs[2],
+            now: now.addingTimeInterval(2)
+        )
+        sources.append(inheritedSource)
+
+        let deterministicSource = ClassificationSource.deterministicDomainAction(
+            reason: "复制任务时继承已确认分类"
+        )
+        let deterministicState = engine.snapshot().classifications
+        let deterministicPlan = try engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainIDs[3],
+                    category: .existing(
+                        try XCTUnwrap(deterministicState.categories.keys.first)
+                    ),
+                    labels: [
+                        .existing(
+                            try XCTUnwrap(deterministicState.labels.keys.first)
+                        )
+                    ]
+                )
+            ),
+            source: deterministicSource,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(3)
+        )
+        try engine.commitDeterministicDomainClassification(
+            deterministicPlan,
+            now: now.addingTimeInterval(3)
+        )
+        sources.append(deterministicSource)
+
+        let automaticJobID = UUID()
+        let automaticGeneration = Int(Int32.max) + 23
+        let automaticContext = try engine.issueAutomaticClassificationContext(
+            for: chainIDs[4],
+            jobID: automaticJobID,
+            generation: automaticGeneration
+        )
+        let catalog = engine.snapshot().classifications
+        let automaticPlan = try engine.prepareAutomaticClassification(
+            AutomaticClassificationApplicationProposal(
+                category: .existing(try XCTUnwrap(catalog.categories.keys.first)),
+                labels: [.existing(try XCTUnwrap(catalog.labels.keys.first))]
+            ),
+            authority: automaticContext.authority,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(4)
+        )
+        _ = try engine.commitAutomaticClassification(
+            automaticPlan,
+            authority: automaticContext.authority,
+            now: now.addingTimeInterval(4)
+        )
+        sources.append(
+            .automaticAI(jobID: automaticJobID, generation: automaticGeneration)
+        )
 
         let expected = engine.snapshot().classifications
         XCTAssertEqual(expected.changeRecords.map(\.source), sources)

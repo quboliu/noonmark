@@ -35,7 +35,7 @@ Neon 的可借鉴点：
   截图场景以 `scripts/test-e2e` 内的 `scenarios` 清单为唯一事实源，覆盖所有顶层页面、主要详情态、分类管理与任务详情分类编辑展开态、烛龙工作流和设置分区；其中 `pool-detail-classification-edit` 验证标签输入只在请求后展开。完整 E2E 还包含默认汇总侧栏 / 日历分析、当天子任务完成撤回和难度修改、附言逐条编辑 / 删除后重启、SQLite JSON 墓碑对账、废弃任务链留在未完成池、重新启用只取消废弃标记、烛龙导航随设置隐藏 / 显示等真实 App 探针。UI 调试时可用 `NOONMARK_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `NOONMARK_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。测试副本固定为当前唯一的 `NoonmarkMacAppE2E` 身份，不接受 executable 或 bundle ID override。
 - UI 视觉证据：当前只以真实 `.app` 的 E2E 截图、交互断言、Accessibility 标识、日志和持久化探针作为自动化证据。归档 HTML 原型已经不代表当前产品，不得作为视觉 oracle，也不得通过上调阈值吸收结构差异。`scripts/test-visual-regression` 只提供显式的两图比较能力；只有用户确认过的真实 App 截图才能传入 `NOONMARK_VISUAL_REFERENCE` 建立 reference，当前尚未固化默认 reference，因此该入口不进入 CI 或 release 门禁。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
-- Live AI Provider Smoke：真实 OpenAI-compatible provider 连通性测试，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，必须显式提供 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`；一旦手动启用，缺少 key 或 provider 不可达必须失败。
+- Live AI Provider Smoke：只验证真实 DeepSeek provider，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，优先读取被 Git 忽略且权限为 `0600` 的 `config/ai-provider.local.json`，格式参考 `config/ai-provider.local.example.json`；也可显式提供 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`。一旦手动启用，缺少 key、配置并非 DeepSeek 或 provider 不可达必须失败。
 - Live iCloud Sync：真实 Apple Account / iCloud Drive 手动测试，入口为 `scripts/test-icloud-sync-live`，不进入默认 `make check`；覆盖双 SQLite record merge、真实 `.app` 同步、SQLite status、仓库 ref 与 `brctl` 上传完成信号。
 - Live CloudKit Sync：真实签名 App / CloudKit Development container 手动测试，入口为 `scripts/test-cloudkit-sync-live`，不进入默认 `make check`；要求 Apple signing identity、provisioning profile 与 container 授权，覆盖独立 SQLite 上传／下载、`CKSyncEngine` state 落盘和隔离 test zone 清理。缺少任一外部条件必须失败，不能以 mock 或 ad-hoc 结果代替。
 
@@ -75,8 +75,8 @@ ST_SIM_RUNS=256 make test-deterministic-sim
 真实 AI provider smoke：
 
 ```bash
-NOONMARK_AI_BASE_URL=https://provider.example/v1 \
-NOONMARK_AI_MODEL=model-name \
+NOONMARK_AI_BASE_URL=https://api.deepseek.com \
+NOONMARK_AI_MODEL=deepseek-v4-flash \
 NOONMARK_AI_API_KEY=... \
 make test-ai-provider-live
 ```
@@ -164,7 +164,7 @@ Nightly：
 - 2026-07-16：原 release workflow 会把 Apple Development 签名、未公证产物直接发布到 GitHub Release，已改为仅限 `main` 手动触发的开发签名发行验收：权限降为只读、移除 tag 与 `gh release` 路径、artifact 明确标记 `not-for-distribution`。正式发行在 Developer ID、Hardened Runtime、secure timestamp、公证、staple 和 Gatekeeper 验收齐备前保持 fail-closed。
 - 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，新用户空库只初始化并写入 1 条 preferences，不自动灌入演示任务；演示数据只在 `--ephemeral` 测试 / 截图路径使用。
 - 2026-07-06：设置页导出 / 导入已接入 `NoonmarkDataPackage` JSON 数据包；`swift test --filter NoonmarkStorageTests` 通过 5 个 Storage 测试。
-- 2026-07-06：`NoonmarkAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 provider 验证入口为 `scripts/test-ai-provider-live`，缺少 `NOONMARK_AI_API_KEY` 时 fail-closed。
+- 2026-07-20：`NoonmarkAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 DeepSeek 验证入口为 `scripts/test-ai-provider-live`，缺少本地配置或显式环境凭证时 fail-closed。
 
 ## 后续缺口
 

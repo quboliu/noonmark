@@ -1,9 +1,60 @@
-@testable import NoonmarkCore
+@_spi(AutomaticClassificationJobAuthority) @testable import NoonmarkCore
 @testable import NoonmarkSync
 import XCTest
 
 final class ClassificationCommitEnvelopeTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testAutomaticClassificationRoundTripsWithoutUserReceipt() throws {
+        let source = NoonmarkEngine()
+        let chainID = try source.createPoolTask(
+            title: "自动归类同步",
+            now: now
+        )
+        let context = try source.issueAutomaticClassificationContext(
+            for: chainID,
+            jobID: uuid("0A000000-0000-0000-0000-000000000001"),
+            generation: 1
+        )
+        let before = source.snapshot()
+        let plan = try source.prepareAutomaticClassification(
+            AutomaticClassificationApplicationProposal(
+                category: .new(name: "工程", colorHex: "#2A6FDB"),
+                labels: [.new(name: "Swift", colorHex: "#0E9488")]
+            ),
+            authority: context.authority,
+            interactionID: uuid("0A000000-0000-0000-0000-000000000002"),
+            now: now.addingTimeInterval(1)
+        )
+        _ = try source.commitAutomaticClassification(
+            plan,
+            authority: context.authority,
+            now: now.addingTimeInterval(1)
+        )
+        let after = source.snapshot()
+        let record = try XCTUnwrap(after.classifications.changeRecords.last)
+        let envelope = try ClassificationCommitEnvelope(
+            before: before.classifications,
+            after: after.classifications,
+            changeRecord: record
+        )
+
+        XCTAssertNil(envelope.receipt)
+        XCTAssertEqual(
+            envelope.changeRecord.source,
+            .automaticAI(
+                jobID: uuid("0A000000-0000-0000-0000-000000000001"),
+                generation: 1
+            )
+        )
+        XCTAssertEqual(
+            ClassificationCommitEnvelopeReceiver().apply(
+                try ClassificationCommitEnvelope.decode(envelope.canonicalData()),
+                to: before
+            ),
+            .applied(after)
+        )
+    }
 
     func testCreateDeltaRoundTripsAndAppliesExactFacts() throws {
         let source = NoonmarkEngine()

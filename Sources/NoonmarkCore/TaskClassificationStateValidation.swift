@@ -28,6 +28,7 @@ private struct ClassificationStateValidator {
         try validateIdentityDictionaryKeys()
         try validateSnapshotStreams()
         try validateCanonicalNameOwnership()
+        try validateClassificationSources()
         try validateCurrentRelations()
         try validateRelationHistory()
         try validateChangeRecords()
@@ -205,6 +206,31 @@ private struct ClassificationCanonicalPair: Hashable {
 }
 
 private extension ClassificationStateValidator {
+    func validateClassificationSources() throws {
+        for current in state.currentByChainID.values {
+            if let category = current.category {
+                try validateClassificationSource(category.source)
+            }
+            for label in current.labels {
+                try validateClassificationSource(label.source)
+            }
+        }
+        for history in state.relationHistory {
+            try validateClassificationSource(history.originSource)
+            try validateClassificationSource(history.removedBySource)
+        }
+        for record in state.changeRecords {
+            try validateClassificationSource(record.source)
+        }
+    }
+
+    func validateClassificationSource(_ source: ClassificationSource) throws {
+        guard case let .automaticAI(_, generation) = source,
+              generation <= 0
+        else { return }
+        throw invalid("automatic classification source generation must be positive")
+    }
+
     func validateCurrentRelations() throws {
         for (chainID, current) in state.currentByChainID {
             if let category = current.category {
@@ -506,7 +532,7 @@ private extension ClassificationSource {
         switch self {
         case .userDirect, .zhulongSuggestion:
             true
-        case .inherited, .deterministicDomainAction:
+        case .automaticAI, .inherited, .deterministicDomainAction:
             false
         }
     }

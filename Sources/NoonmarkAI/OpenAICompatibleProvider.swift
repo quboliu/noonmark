@@ -37,7 +37,10 @@ public struct OpenAICompatibleProvider: AIProvider {
                 messages: [
                     ChatMessage(role: "system", content: request.systemPrompt),
                     ChatMessage(role: "user", content: request.userPrompt)
-                ]
+                ],
+                responseFormat: request.responseFormat == .jsonObject
+                    ? ChatCompletionResponseFormat(type: "json_object")
+                    : nil
             )
         )
 
@@ -122,6 +125,18 @@ private struct ChatCompletionRequest: Encodable {
     var model: String
     var messages: [ChatMessage]
     var temperature = 0.2
+    var responseFormat: ChatCompletionResponseFormat?
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case temperature
+        case responseFormat = "response_format"
+    }
+}
+
+private struct ChatCompletionResponseFormat: Encodable {
+    var type: String
 }
 
 private struct ChatMessage: Codable, Equatable {

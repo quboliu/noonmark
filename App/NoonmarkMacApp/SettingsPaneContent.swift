@@ -404,7 +404,12 @@ struct SettingsProviderOverviewCard: View {
     @EnvironmentObject private var store: NoonmarkStore
 
     var status: (text: String, color: Color) {
-        if store.zhulongProviderDraft.isConfigured {
+        if store.automaticClassificationCircuitPresentation != nil {
+            return (store.copy.automaticClassificationPaused, Theme.warn)
+        }
+        if store.zhulongProviderDraft.isConfigured,
+           store.zhulongProviderDraft.hasStoredAPIKey
+        {
             return (store.copy.providerConfigured, Theme.ok)
         }
         if store.zhulongProviderDraft.enabled {
@@ -448,9 +453,17 @@ struct SettingsProviderOverviewCard: View {
                 }
 
                 HStack(spacing: 8) {
-                    Image(systemName: store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
-                        .foregroundStyle(store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
-                    Text(store.zhulongProviderStatusMessage)
+                    Image(
+                        systemName: store.automaticClassificationCircuitPresentation == nil
+                            ? (store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
+                            : "pause.circle"
+                    )
+                    .foregroundStyle(
+                        store.automaticClassificationCircuitPresentation != nil
+                            ? Theme.warn
+                            : (store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
+                    )
+                    Text(providerStatusMessage)
                         .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(2)
@@ -460,15 +473,143 @@ struct SettingsProviderOverviewCard: View {
                 .padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier(
+                    "settings.zhulong.automatic-classification-circuit"
+                )
+
+                if let prompt = store.automaticClassificationBacklogPrompt {
+                    Rectangle()
+                        .fill(Theme.line)
+                        .frame(height: 1)
+                        .accessibilityHidden(true)
+
+                    AutomaticClassificationBacklogPromptView(
+                        count: prompt.count
+                    )
+                }
 
                 HStack(spacing: 8) {
                     SmallActionButton(store.copy.save, tone: .accent) { store.saveZhulongProvider() }
-                    SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
+                    if store.automaticClassificationCircuitPresentation != nil {
+                        SmallActionButton(
+                            store.copy.retryAutomaticClassificationProvider
+                        ) {
+                            store.retryAutomaticClassificationProviderCircuit()
+                        }
+                        .accessibilityIdentifier(
+                            "settings.zhulong.automatic-classification-circuit.retry"
+                        )
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "settings.zhulong.automatic-classification-circuit.retry",
+                                verificationText: store.copy
+                                    .retryAutomaticClassificationProvider
+                            )
+                        }
+                    } else {
+                        SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
+                    }
                     SmallActionButton(store.copy.clear, tone: .warn) { store.clearZhulongProvider() }
                     Spacer()
                 }
             }
         }
+    }
+
+    private var providerStatusMessage: String {
+        guard let circuit = store.automaticClassificationCircuitPresentation else {
+            return store.zhulongProviderStatusMessage
+        }
+        return store.copy.automaticClassificationCircuitMessage(
+            circuit.waitingCount,
+            failureCode: circuit.failureCode
+        )
+    }
+}
+
+private struct AutomaticClassificationBacklogPromptView: View {
+    @EnvironmentObject private var store: NoonmarkStore
+
+    let count: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(store.copy.automaticClassificationBacklogTitle(count))
+                .font(.noonmarkSystem(size: 12.5, weight: .medium))
+                .foregroundStyle(Theme.text1)
+
+            Text(store.copy.automaticClassificationBacklogExplanation)
+                .font(.noonmarkSystem(size: 11.5))
+                .foregroundStyle(Theme.text2)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                backlogButton(
+                    store.copy.startAutomaticClassificationBacklog(count),
+                    accessibilityLabel: store.copy
+                        .startAutomaticClassificationBacklogAccessibilityLabel(
+                            count
+                        ),
+                    identifier: "start",
+                    tone: .accent
+                ) {
+                    store.resolveAutomaticClassificationBacklog(.startExisting)
+                }
+                backlogButton(
+                    store.copy.classifyOnlyFutureTasks,
+                    accessibilityLabel: store.copy
+                        .classifyOnlyFutureTasksAccessibilityLabel(count),
+                    identifier: "future-only"
+                ) {
+                    store.resolveAutomaticClassificationBacklog(.futureOnly)
+                }
+                backlogButton(
+                    store.copy.decideAutomaticClassificationBacklogLater,
+                    accessibilityLabel: store.copy
+                        .decideAutomaticClassificationBacklogLaterAccessibilityLabel(
+                            count
+                        ),
+                    identifier: "later"
+                ) {
+                    store.resolveAutomaticClassificationBacklog(.later)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 4)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(
+            "settings.zhulong.automatic-classification-backlog"
+        )
+        .accessibilityLabel(
+            store.copy.automaticClassificationBacklogTitle(count)
+        )
+        .accessibilityValue(
+            store.copy.automaticClassificationBacklogAccessibilityValue(count)
+        )
+    }
+
+    private func backlogButton(
+        _ title: String,
+        accessibilityLabel: String,
+        identifier: String,
+        tone: SmallActionButton.Tone = .normal,
+        action: @escaping () -> Void
+    ) -> some View {
+        let fullIdentifier =
+            "settings.zhulong.automatic-classification-backlog.\(identifier)"
+        return SmallActionButton(title, tone: tone, action: action)
+            .accessibilityIdentifier(fullIdentifier)
+            .accessibilityLabel(accessibilityLabel)
+            .help(accessibilityLabel)
+            .background {
+                AppE2EViewAnchor(
+                    identifier: fullIdentifier,
+                    verificationText: accessibilityLabel
+                )
+            }
     }
 }
 

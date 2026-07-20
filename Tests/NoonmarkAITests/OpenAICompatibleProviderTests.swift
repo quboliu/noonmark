@@ -56,10 +56,50 @@ final class OpenAICompatibleProviderTests: XCTestCase {
 
         let body = try XCTUnwrap(capturedBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
         XCTAssertEqual(body["model"] as? String, "noonmark-model")
+        XCTAssertNil(body["response_format"])
         let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
         XCTAssertEqual(messages.map { $0["role"] }, ["system", "user"])
         XCTAssertEqual(messages.first?["content"], "系统边界")
         XCTAssertEqual(messages.last?["content"], "授权范围")
+    }
+
+    func testCompleteRequestsJSONObjectOnlyForStructuredOutput() async throws {
+        var capturedBody: Data?
+        URLProtocolStub.handler = { request in
+            capturedBody = request.httpBodyStream.flatMap(Self.data(from:))
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = #"{"choices":[{"message":{"role":"assistant","content":"{\"category\":{},\"labels\":[]}"}}]}"#
+            return (response, Data(body.utf8))
+        }
+
+        let provider = OpenAICompatibleProvider(
+            config: AIProviderConfig(
+                providerID: AIProviderID("openai-compatible"),
+                displayName: "测试 Provider",
+                kind: .openAICompatible,
+                baseURL: URL(string: "https://provider.example/v1")!,
+                model: "noonmark-model"
+            ),
+            session: makeSession()
+        )
+
+        _ = try await provider.complete(
+            AIRequest(
+                systemPrompt: "只输出 JSON",
+                userPrompt: "归类任务",
+                responseSchemaName: "noonmark.automatic-task-classification.v1",
+                responseFormat: .jsonObject
+            )
+        )
+
+        let body = try XCTUnwrap(capturedBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        let responseFormat = try XCTUnwrap(body["response_format"] as? [String: String])
+        XCTAssertEqual(responseFormat, ["type": "json_object"])
     }
 
     func testCompletePreservesStructuredPlanningOutputForTheCurrentAdapter() async throws {

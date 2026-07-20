@@ -68,21 +68,29 @@ public struct AIProviderConfig: Codable, Equatable, Sendable {
     }
 }
 
+public enum AIResponseFormat: Equatable, Sendable {
+    case text
+    case jsonObject
+}
+
 public struct AIRequest: Equatable, Sendable {
     public let systemPrompt: String
     public let userPrompt: String
     public let responseSchemaName: String
+    public let responseFormat: AIResponseFormat
     public let metadata: [String: String]
 
     public init(
         systemPrompt: String,
         userPrompt: String,
         responseSchemaName: String,
+        responseFormat: AIResponseFormat = .text,
         metadata: [String: String] = [:]
     ) {
         self.systemPrompt = systemPrompt
         self.userPrompt = userPrompt
         self.responseSchemaName = responseSchemaName
+        self.responseFormat = responseFormat
         self.metadata = metadata
     }
 }

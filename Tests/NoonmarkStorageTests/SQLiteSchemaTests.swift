@@ -37,6 +37,18 @@ final class SQLiteSchemaTests: XCTestCase {
                 $0.contains("CREATE TABLE IF NOT EXISTS sync_pending_download_dependencies")
             }
         )
+        let automaticClassificationJobTable = try XCTUnwrap(
+            SQLiteSchema.statements.first {
+                $0.contains("CREATE TABLE IF NOT EXISTS automatic_classification_jobs")
+            }
+        )
+        let automaticClassificationProviderCircuitTable = try XCTUnwrap(
+            SQLiteSchema.statements.first {
+                $0.contains(
+                    "CREATE TABLE IF NOT EXISTS automatic_classification_provider_circuit"
+                )
+            }
+        )
         let compactChangeJournalTable = changeJournalTable
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
@@ -47,7 +59,7 @@ final class SQLiteSchemaTests: XCTestCase {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
 
-        XCTAssertEqual(SQLiteSchema.version, 3)
+        XCTAssertEqual(SQLiteSchema.version, 5)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_canonical_name_ownership"))
@@ -157,6 +169,34 @@ final class SQLiteSchemaTests: XCTestCase {
             "remote_payload BLOB NOT NULL CHECK (length(remote_payload) > 0)"
         ))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_audit_log"))
+        XCTAssertTrue(automaticClassificationJobTable.contains("chain_id TEXT NOT NULL"))
+        XCTAssertTrue(automaticClassificationJobTable.contains("content_digest TEXT NOT NULL"))
+        XCTAssertTrue(automaticClassificationJobTable.contains(
+            "classification_fingerprint TEXT NOT NULL"
+        ))
+        XCTAssertTrue(automaticClassificationJobTable.contains(
+            "catalog_digest TEXT NOT NULL"
+        ))
+        XCTAssertTrue(automaticClassificationJobTable.contains("proposal_checkpoint BLOB"))
+        XCTAssertTrue(automaticClassificationJobTable.contains("cancelled_by_undo"))
+        XCTAssertTrue(automaticClassificationJobTable.contains("dispatch_authorization"))
+        XCTAssertTrue(automaticClassificationJobTable.contains("authorization_id"))
+        XCTAssertTrue(automaticClassificationJobTable.contains("authorized_at"))
+        XCTAssertFalse(automaticClassificationJobTable.contains("task_title"))
+        XCTAssertFalse(automaticClassificationJobTable.contains("description_text"))
+        XCTAssertFalse(automaticClassificationJobTable.contains("api_key"))
+        XCTAssertFalse(automaticClassificationJobTable.contains("raw_response"))
+        XCTAssertTrue(automaticClassificationProviderCircuitTable.contains(
+            "provider_execution_revision"
+        ))
+        XCTAssertTrue(automaticClassificationProviderCircuitTable.contains(
+            "'unconfigured', 'closed', 'open', 'halfOpen', 'blocked'"
+        ))
+        XCTAssertTrue(automaticClassificationProviderCircuitTable.contains("probe_claim_id"))
+        XCTAssertFalse(automaticClassificationProviderCircuitTable.contains("api_key"))
+        XCTAssertFalse(automaticClassificationProviderCircuitTable.contains("base_url"))
+        XCTAssertFalse(automaticClassificationProviderCircuitTable.contains("model"))
+        XCTAssertFalse(automaticClassificationProviderCircuitTable.contains("hash"))
         XCTAssertTrue(schema.contains("CREATE VIEW IF NOT EXISTS completed_subtask_record_view"))
         XCTAssertTrue(schema.contains("CREATE VIEW IF NOT EXISTS sync_endpoint_options_view"))
         XCTAssertTrue(schema.contains(

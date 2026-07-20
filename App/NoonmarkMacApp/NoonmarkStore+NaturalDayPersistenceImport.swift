@@ -20,6 +20,10 @@ extension NoonmarkStore {
     func prepareForTermination() {
         toastScheduler.cancel()
         localFirstSyncAutomationTask?.cancel()
+        automaticClassificationWorkerRestartRequested = false
+        automaticClassificationWorkerTask?.cancel()
+        automaticClassificationBacklogDecisionTask?.cancel()
+        automaticClassificationCircuitRetryTask?.cancel()
         cloudKitAccountCheckTask?.cancel()
         naturalDayObservation?.cancel()
         accessibilityDisplayObservation?.cancel()
@@ -523,6 +527,134 @@ extension NoonmarkStore {
         }
     }
 
+    func save(
+        _ candidate: NoonmarkEngine,
+        mutationAt mutationInstant: Date,
+        enqueuingAutomaticClassificationJobs jobs: [
+            AutomaticClassificationJobEnqueue
+        ]
+    ) throws {
+        guard jobs.isEmpty == false else {
+            try save(candidate, mutationAt: mutationInstant)
+            return
+        }
+        try assertEngineWriteAllowed()
+        guard let repository, let syncDeviceIdentity else {
+            throw AutomaticClassificationAppError.persistenceUnavailable
+        }
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
+        try repository.save(
+            candidate.snapshot(),
+            recordingChangesFor: syncDeviceIdentity.deviceID,
+            changedAt: mutationInstant,
+            enqueuingAutomaticClassificationJobs: jobs
+        )
+    }
+
+    func saveAutomaticClassificationCompletion(
+        _ candidate: NoonmarkEngine,
+        claim: AutomaticClassificationJobClaim,
+        mutationAt mutationInstant: Date
+    ) throws {
+        try assertEngineWriteAllowed()
+        guard let repository, let syncDeviceIdentity else {
+            throw AutomaticClassificationAppError.persistenceUnavailable
+        }
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
+        try repository.save(
+            candidate.snapshot(),
+            recordingChangesFor: syncDeviceIdentity.deviceID,
+            changedAt: mutationInstant,
+            completingAutomaticClassificationJob: claim,
+            automaticClassificationTransitionAt:
+            automaticClassificationOperationalClock.now()
+        )
+    }
+
+    func saveUserClassificationWinningOverAutomaticWork(
+        _ candidate: NoonmarkEngine,
+        chainID: TaskChainID,
+        mutationAt mutationInstant: Date
+    ) throws {
+        try assertEngineWriteAllowed()
+        guard let repository, let syncDeviceIdentity else {
+            try save(candidate, mutationAt: mutationInstant)
+            return
+        }
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
+        try repository.save(
+            candidate.snapshot(),
+            recordingChangesFor: syncDeviceIdentity.deviceID,
+            changedAt: mutationInstant,
+            supersedingAutomaticClassificationJobsForChain: chainID,
+            automaticClassificationTransitionAt:
+            automaticClassificationOperationalClock.now()
+        )
+    }
+
+    func saveSnapshotUndo(
+        _ candidate: NoonmarkEngine,
+        outcome: SnapshotUndoOutcome,
+        mutationAt mutationInstant: Date
+    ) throws {
+        guard outcome.automaticClassificationCancelledChainIDs.count <= 1 else {
+            throw NoonmarkError.invalidTransition(
+                "one undo operation cannot cancel multiple automatic classification jobs"
+            )
+        }
+        guard let chainID = outcome.automaticClassificationCancelledChainIDs.first,
+              let repository,
+              let syncDeviceIdentity
+        else {
+            try save(candidate, mutationAt: mutationInstant)
+            return
+        }
+        try assertEngineWriteAllowed()
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
+        try repository.save(
+            candidate.snapshot(),
+            recordingChangesFor: syncDeviceIdentity.deviceID,
+            changedAt: mutationInstant,
+            cancellingAutomaticClassificationJobsForUndoneChain: chainID,
+            automaticClassificationTransitionAt:
+            automaticClassificationOperationalClock.now()
+        )
+    }
+
+    func saveSnapshotRedo(
+        _ candidate: NoonmarkEngine,
+        redo: AutomaticClassificationJobRedo?,
+        mutationAt mutationInstant: Date
+    ) throws {
+        guard let redo, let repository, let syncDeviceIdentity else {
+            try save(candidate, mutationAt: mutationInstant)
+            return
+        }
+        try assertEngineWriteAllowed()
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
+        try repository.save(
+            candidate.snapshot(),
+            recordingChangesFor: syncDeviceIdentity.deviceID,
+            changedAt: mutationInstant,
+            requeuingAutomaticClassificationJobForRedo: redo
+        )
+    }
+
     private func replacePersistedData(with candidate: NoonmarkEngine) throws {
         try assertEngineWriteAllowed()
         guard let repository else { return }
@@ -551,6 +683,31 @@ extension NoonmarkStore {
         try save(candidate, mutationAt: mutationInstant)
     }
 
+    func savePendingZhulongApplication(
+        _ candidate: NoonmarkEngine,
+        originalSnapshot: NoonmarkSnapshot,
+        mutationAt mutationInstant: Date
+    ) throws {
+        guard pendingZhulongEngineWriteAuthorized == false else {
+            throw StoreMutationGateError.exclusiveOperationInProgress
+        }
+        try zhulongWorkspace.assertMatchesPendingApplicationAfterSnapshot(
+            candidate
+        )
+        let jobs = try automaticClassificationJobs(
+            for: .newlyCreatedTaskChains,
+            candidate: candidate,
+            originalSnapshot: originalSnapshot
+        )
+        pendingZhulongEngineWriteAuthorized = true
+        defer { pendingZhulongEngineWriteAuthorized = false }
+        try save(
+            candidate,
+            mutationAt: mutationInstant,
+            enqueuingAutomaticClassificationJobs: jobs
+        )
+    }
+
     func reconcileZhulongEnginePersistenceFailure(
         for pendingApplication: ZhulongPendingApplication
     ) throws -> ZhulongEnginePersistenceResolution {
@@ -576,6 +733,7 @@ extension NoonmarkStore {
     @discardableResult
     func commitEngineMutation<Result>(
         undoPolicy: EngineMutationUndoPolicy = .preserve,
+        automaticClassificationPolicy: EngineMutationAutomaticClassificationPolicy = .none,
         _ mutation: (NoonmarkEngine, StoreMutationMoment) throws -> Result
     ) throws -> Result {
         let moment = try prepareStoreMutation()
@@ -587,8 +745,28 @@ extension NoonmarkStore {
         )
         let candidate = try NoonmarkEngine(snapshot: originalSnapshot)
         let result = try mutation(candidate, moment)
+        let automaticClassificationJobs = try automaticClassificationJobs(
+            for: automaticClassificationPolicy,
+            candidate: candidate,
+            originalSnapshot: originalSnapshot
+        )
         do {
-            try save(candidate, mutationAt: moment.instant)
+            switch automaticClassificationPolicy {
+            case .none:
+                try save(candidate, mutationAt: moment.instant)
+            case .newlyCreatedTaskChains:
+                try save(
+                    candidate,
+                    mutationAt: moment.instant,
+                    enqueuingAutomaticClassificationJobs: automaticClassificationJobs
+                )
+            case let .userClassificationWins(chainID):
+                try saveUserClassificationWinningOverAutomaticWork(
+                    candidate,
+                    chainID: chainID,
+                    mutationAt: moment.instant
+                )
+            }
         } catch let gateError as StoreMutationGateError {
             throw gateError
         } catch {
@@ -602,6 +780,12 @@ extension NoonmarkStore {
         engine = candidate
         redoStack.removeAll()
         applyCommittedUndoPolicy(undoPolicy, undoEntry: undoEntry)
+        switch automaticClassificationPolicy {
+        case .none:
+            break
+        case .newlyCreatedTaskChains, .userClassificationWins:
+            automaticClassificationJobsDidChange()
+        }
         return result
     }
 
@@ -646,6 +830,10 @@ extension NoonmarkStore {
             ),
             naturalDay: naturalDay
         )
+    }
+
+    func prepareStoreMutationForAutomaticClassification() throws -> StoreMutationMoment {
+        try prepareStoreMutation()
     }
 
     func armPersistenceFailureForE2E(count: Int = 1) throws {

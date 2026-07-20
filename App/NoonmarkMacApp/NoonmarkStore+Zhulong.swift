@@ -9,7 +9,11 @@ import NoonmarkZhulongAI
 extension NoonmarkStore {
     func saveZhulongProvider() {
         do {
-            zhulongProviderDraft = try ZhulongProviderSettingsStore.save(zhulongProviderDraft)
+            let transition = try ZhulongProviderSettingsStore.save(
+                zhulongProviderDraft
+            )
+            zhulongProviderDraft = transition.draft
+            automaticClassificationProviderConfigurationDidChange(transition)
             if zhulongProviderDraft.enabled == false {
                 ensureVisiblePage()
             }
@@ -21,7 +25,9 @@ extension NoonmarkStore {
 
     func clearZhulongProvider() {
         do {
-            zhulongProviderDraft = try ZhulongProviderSettingsStore.clear()
+            let transition = try ZhulongProviderSettingsStore.clear()
+            zhulongProviderDraft = transition.draft
+            automaticClassificationProviderConfigurationDidChange(transition)
             ensureVisiblePage(preferredFallback: .day)
             showToast(zhulongCopy.providerActionNotice(.configurationCleared))
         } catch {
@@ -180,6 +186,7 @@ extension NoonmarkStore {
             return
         }
         guard let moment = prepareNaturalDayForUserMutation() else { return }
+        let originalSnapshot = engine.snapshot()
         guard let result = zhulongWorkspace.applyCurrentTodoDiff(
             to: engine,
             today: today,
@@ -187,6 +194,7 @@ extension NoonmarkStore {
             persistEngine: { [self] candidate, applyAt in
                 try savePendingZhulongApplication(
                     candidate,
+                    originalSnapshot: originalSnapshot,
                     mutationAt: applyAt
                 )
             },
@@ -195,6 +203,7 @@ extension NoonmarkStore {
             }
         ) else { return }
         engine = result.engine
+        automaticClassificationJobsDidChange()
         clearUndoHistory()
         normalizeSelection()
         if result.commitCompleted {
@@ -244,11 +253,13 @@ extension NoonmarkStore {
 
     func recoverPendingZhulongApplication() {
         guard repository != nil else { return }
+        let originalSnapshot = engine.snapshot()
         engine = zhulongWorkspace.recoverPendingApplication(
             currentEngine: engine,
             persistEngine: { [self] candidate, changedAt in
                 try savePendingZhulongApplication(
                     candidate,
+                    originalSnapshot: originalSnapshot,
                     mutationAt: changedAt
                 )
             },
@@ -256,6 +267,7 @@ extension NoonmarkStore {
                 try reconcileZhulongEnginePersistenceFailure(for: pending)
             }
         )
+        automaticClassificationJobsDidChange()
         clearUndoHistory()
     }
 

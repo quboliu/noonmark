@@ -1,6 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+cd "$repo_root"
+local_config_path="${NOONMARK_AI_CONFIG_FILE:-$repo_root/config/ai-provider.local.json}"
+
+if [[ -z "${NOONMARK_AI_BASE_URL:-}" || -z "${NOONMARK_AI_MODEL:-}" || -z "${NOONMARK_AI_API_KEY:-}" ]]; then
+  if [[ ! -f "$local_config_path" ]]; then
+    echo "missing DeepSeek configuration: create config/ai-provider.local.json from config/ai-provider.local.example.json" >&2
+    exit 1
+  fi
+  if [[ "$(stat -f '%Lp' "$local_config_path")" != "600" ]]; then
+    echo "unsafe DeepSeek configuration permissions: expected 0600 for $local_config_path" >&2
+    exit 1
+  fi
+  command -v jq >/dev/null 2>&1 || {
+    echo "jq is required to read the local DeepSeek configuration" >&2
+    exit 1
+  }
+  if [[ -z "${NOONMARK_AI_BASE_URL:-}" ]]; then
+    NOONMARK_AI_BASE_URL="$(jq -er '.baseURL | select(type == "string" and length > 0)' "$local_config_path")"
+  fi
+  if [[ -z "${NOONMARK_AI_MODEL:-}" ]]; then
+    NOONMARK_AI_MODEL="$(jq -er '.model | select(type == "string" and length > 0)' "$local_config_path")"
+  fi
+  if [[ -z "${NOONMARK_AI_API_KEY:-}" ]]; then
+    NOONMARK_AI_API_KEY="$(jq -er '.apiKey | select(type == "string" and length > 0)' "$local_config_path")"
+  fi
+  export NOONMARK_AI_BASE_URL NOONMARK_AI_MODEL NOONMARK_AI_API_KEY
+fi
+
 missing=0
 for name in NOONMARK_AI_BASE_URL NOONMARK_AI_MODEL NOONMARK_AI_API_KEY; do
   if [[ -z "${!name:-}" ]]; then
@@ -10,135 +40,148 @@ for name in NOONMARK_AI_BASE_URL NOONMARK_AI_MODEL NOONMARK_AI_API_KEY; do
 done
 
 if [[ "$missing" -ne 0 ]]; then
-  echo "usage: NOONMARK_AI_BASE_URL=https://provider.example/v1 NOONMARK_AI_MODEL=model NOONMARK_AI_API_KEY=... scripts/test-ai-provider-live" >&2
+  echo "usage: configure config/ai-provider.local.json or set the three NOONMARK_AI_* variables" >&2
   exit 1
 fi
 
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
+case "$NOONMARK_AI_BASE_URL" in
+  https://api.deepseek.com | https://api.deepseek.com/ | https://api.deepseek.com/v1 | https://api.deepseek.com/v1/) ;;
+  *)
+    echo "live AI tests only accept the official DeepSeek API base URL" >&2
+    exit 1
+    ;;
+esac
 
-swift_file="$tmpdir/live-ai-provider-smoke.swift"
-binary="$tmpdir/live-ai-provider-smoke"
+case "$NOONMARK_AI_MODEL" in
+  deepseek-*) ;;
+  *)
+    echo "live AI tests only accept a DeepSeek model" >&2
+    exit 1
+    ;;
+esac
 
-cat > "$swift_file" <<'SWIFT'
-import Foundation
+evidence_dir="artifacts/ai-provider-live"
+database="$evidence_dir/Noonmark.sqlite"
+result="$evidence_dir/result.txt"
+app_log="$evidence_dir/app.log"
+app_path="dist/NoonmarkMacAppE2E.app"
+app_executable="$app_path/Contents/MacOS/NoonmarkMacAppE2E"
+app_pid=""
 
-enum SmokeError: Error, CustomStringConvertible {
-    case missingEnvironment(String)
-    case invalidURL(String)
-    case invalidResponse(String)
-    case httpStatus(String, Int, String)
-    case emptyResponse(String)
-
-    var description: String {
-        switch self {
-        case let .missingEnvironment(name):
-            return "missing required environment variable: \(name)"
-        case let .invalidURL(value):
-            return "invalid NOONMARK_AI_BASE_URL: \(value)"
-        case let .invalidResponse(path):
-            return "\(path) returned a non-HTTP response"
-        case let .httpStatus(path, status, body):
-            return "\(path) returned HTTP \(status): \(body)"
-        case let .emptyResponse(path):
-            return "\(path) returned an empty response"
-        }
-    }
+clear_e2e_provider_credentials() {
+  security delete-generic-password \
+    -s app.noonmark.zhulong.provider.e2e \
+    -a default-api-key \
+    >/dev/null 2>&1 || true
+  defaults delete \
+    app.noonmark.mac.e2e \
+    noonmark.zhulong.provider.config \
+    >/dev/null 2>&1 || true
 }
 
-struct ChatCompletionRequest: Encodable {
-    var model: String
-    var messages: [ChatMessage]
-    var temperature = 0.0
+cleanup() {
+  if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
+    kill "$app_pid" 2>/dev/null || true
+    wait "$app_pid" 2>/dev/null || true
+  fi
+  clear_e2e_provider_credentials
 }
+trap cleanup EXIT
 
-struct ChatMessage: Codable {
-    var role: String
-    var content: String
-}
+rm -rf "$evidence_dir"
+mkdir -p "$evidence_dir"
+clear_e2e_provider_credentials
+scripts/build-mac-app debug e2e >/dev/null
 
-@main
-struct LiveAIProviderSmoke {
-    static func main() async {
-        do {
-            try await run()
-            print("AI provider live smoke passed: /models and /chat/completions returned usable responses.")
-        } catch {
-            fputs("AI provider live smoke failed: \(error)\n", stderr)
-            exit(1)
-        }
-    }
+"$app_executable" \
+  --data-url "$PWD/$database" \
+  --page day \
+  --e2e-automatic-classification-live \
+  --e2e-automatic-classification-result-url "$PWD/$result" \
+  >"$app_log" 2>&1 &
+app_pid=$!
 
-    private static func run() async throws {
-        let env = ProcessInfo.processInfo.environment
-        let baseURLText = try required("NOONMARK_AI_BASE_URL", env: env)
-        let model = try required("NOONMARK_AI_MODEL", env: env)
-        let apiKey = try required("NOONMARK_AI_API_KEY", env: env)
-        let timeout = TimeInterval(env["NOONMARK_AI_TIMEOUT_SECONDS"].flatMap(Double.init) ?? 20)
+for _ in {1..1000}; do
+  if [[ -f "$result" ]] || ! kill -0 "$app_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ ! -f "$result" ]]; then
+  echo "DeepSeek App E2E did not publish a result" >&2
+  sed -n '1,160p' "$app_log" >&2
+  exit 1
+fi
+if [[ "$(<"$result")" != "ok" ]]; then
+  echo "DeepSeek App E2E failed: $(<"$result")" >&2
+  sed -n '1,160p' "$app_log" >&2
+  exit 1
+fi
 
-        guard let baseURL = URL(string: baseURLText) else {
-            throw SmokeError.invalidURL(baseURLText)
-        }
+for _ in {1..50}; do
+  kill -0 "$app_pid" 2>/dev/null || break
+  sleep 0.1
+done
+if kill -0 "$app_pid" 2>/dev/null; then
+  echo "DeepSeek App E2E wrote ok but did not terminate" >&2
+  exit 1
+fi
+if ! wait "$app_pid"; then
+  echo "DeepSeek App E2E process failed" >&2
+  sed -n '1,160p' "$app_log" >&2
+  exit 1
+fi
+app_pid=""
 
-        var modelsRequest = URLRequest(url: baseURL.appendingPathComponent("models"), timeoutInterval: timeout)
-        modelsRequest.httpMethod = "GET"
-        modelsRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        _ = try await send(modelsRequest, path: "/models")
+sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
+  WITH target AS (
+    SELECT chain.id AS chain_id
+    FROM task_chains AS chain
+    JOIN task_definitions AS definition
+      ON definition.chain_id = chain.id
+    WHERE definition.title = 'E2E DeepSeek 自动归类真实任务'
+      AND definition.superseded_at IS NULL
+  )
+  SELECT
+    (SELECT count(*) FROM target),
+    (SELECT count(*)
+     FROM automatic_classification_jobs AS job
+     JOIN target ON target.chain_id = job.chain_id
+     WHERE job.state = 'completed'
+       AND job.attempt BETWEEN 1 AND 3
+       AND job.terminal_at IS NOT NULL),
+    (SELECT count(*)
+     FROM classification_current_relation_facts AS fact
+     JOIN target ON target.chain_id = fact.chain_id
+     WHERE fact.kind = 'category'
+       AND fact.source_kind = 'automaticAI'),
+    (SELECT count(*)
+     FROM classification_current_relation_facts AS fact
+     JOIN target ON target.chain_id = fact.chain_id
+     WHERE fact.kind = 'label'
+       AND fact.source_kind = 'automaticAI');
+")"
+read -r task_count job_count category_count label_count <<< "$sqlite_probe"
+if [[ "$task_count" != "1" || "$job_count" != "1" \
+  || "$category_count" != "1" \
+  || ! "$label_count" =~ ^[1-3]$ ]]; then
+  echo "DeepSeek App E2E persistence probe failed: ${sqlite_probe:-missing}" >&2
+  exit 1
+fi
 
-        var completionRequest = URLRequest(
-            url: baseURL.appendingPathComponent("chat/completions"),
-            timeoutInterval: timeout
-        )
-        completionRequest.httpMethod = "POST"
-        completionRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        completionRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        completionRequest.httpBody = try JSONEncoder().encode(
-            ChatCompletionRequest(
-                model: model,
-                messages: [
-                    ChatMessage(role: "system", content: "你是晷迹 AI provider 连通性探针。只回复一句简短中文。"),
-                    ChatMessage(role: "user", content: "回复：晷迹 live smoke ok")
-                ]
-            )
-        )
+if security find-generic-password \
+  -s app.noonmark.zhulong.provider.e2e \
+  -a default-api-key \
+  >/dev/null 2>&1; then
+  echo "DeepSeek App E2E Keychain credential was not cleared" >&2
+  exit 1
+fi
+if defaults read \
+  app.noonmark.mac.e2e \
+  noonmark.zhulong.provider.config \
+  >/dev/null 2>&1; then
+  echo "DeepSeek App E2E Provider defaults were not cleared" >&2
+  exit 1
+fi
 
-        let completionData = try await send(completionRequest, path: "/chat/completions")
-        let object = try JSONSerialization.jsonObject(with: completionData)
-        guard let root = object as? [String: Any],
-              let choices = root["choices"] as? [[String: Any]],
-              let first = choices.first,
-              let message = first["message"] as? [String: Any],
-              let content = message["content"] as? String,
-              content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        else {
-            throw SmokeError.emptyResponse("/chat/completions")
-        }
-    }
-
-    private static func required(_ name: String, env: [String: String]) throws -> String {
-        guard let value = env[name]?.trimmingCharacters(in: .whitespacesAndNewlines), value.isEmpty == false else {
-            throw SmokeError.missingEnvironment(name)
-        }
-        return value
-    }
-
-    private static func send(_ request: URLRequest, path: String) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw SmokeError.invalidResponse(path)
-        }
-        guard 200 ..< 300 ~= httpResponse.statusCode else {
-            let body = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8 body>"
-            throw SmokeError.httpStatus(path, httpResponse.statusCode, body)
-        }
-        guard data.isEmpty == false else {
-            throw SmokeError.emptyResponse(path)
-        }
-        return data
-    }
-}
-SWIFT
-
-scripts/reset-dev-data
-swiftc -parse-as-library "$swift_file" -o "$binary"
-"$binary"
+echo "DeepSeek real App automatic classification passed: $database (category=$category_count labels=$label_count)"

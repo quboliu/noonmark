@@ -511,9 +511,21 @@ public extension NoonmarkSnapshot {
         _ source: ClassificationSource,
         chainIDs: Set<TaskChainID>
     ) throws {
-        guard case let .inherited(fromChainID) = source else { return }
-        guard chainIDs.contains(fromChainID) else {
-            throw NoonmarkError.invalidInput("classification source references a missing task chain")
+        switch source {
+        case let .automaticAI(_, generation):
+            guard generation > 0 else {
+                throw NoonmarkError.invalidInput(
+                    "automatic classification source generation must be positive"
+                )
+            }
+        case let .inherited(fromChainID):
+            guard chainIDs.contains(fromChainID) else {
+                throw NoonmarkError.invalidInput(
+                    "classification source references a missing task chain"
+                )
+            }
+        case .userDirect, .zhulongSuggestion, .deterministicDomainAction:
+            break
         }
     }
 

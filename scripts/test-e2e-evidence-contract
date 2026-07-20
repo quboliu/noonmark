@@ -224,7 +224,13 @@ require_literal scripts/test-e2e "artifacts/e2e/zhulong-title-geometry.txt"
 require_literal scripts/test-e2e "artifacts/e2e/zhulong-stream-title-geometry.txt"
 require_literal scripts/test-e2e "artifacts/e2e-english/zhulong-title-geometry.txt"
 require_literal scripts/test-e2e "assert_zhulong_title_geometry_result"
-require_literal scripts/test-e2e "in_app_zhulong_title_geometry"
+require_literal scripts/evidence-common "in_app_zhulong_title_geometry"
+require_literal \
+  scripts/test-e2e \
+  'evidence_expected_english_oracles "$scenario_name"'
+require_literal \
+  scripts/verify-development-validation-evidence \
+  'evidence_expected_english_oracles "$scenario"'
 require_literal scripts/test-e2e "--e2e-native-command-help-shortcut"
 require_order \
   scripts/test-e2e \

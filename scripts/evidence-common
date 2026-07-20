@@ -14,6 +14,36 @@ evidence_validate_value() {
   [[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]]
 }
 
+evidence_expected_english_oracles() {
+  local scenario="$1"
+  local base="screenshot_vision_ocr_no_han"
+
+  case "$scenario" in
+    english-day)
+      printf '%s\n' \
+        "${base}+day_header_pixel+in_app_view_tree_ax+external_ax"
+      ;;
+    english-day-wide)
+      printf '%s\n' "${base}+day_header_pixel+in_app_view_tree_ax"
+      ;;
+    english-day-history-header)
+      printf '%s\n' \
+        "${base}+day_header_pixel+in_app_responsive_contract"
+      ;;
+    english-pool | english-future | english-unfinished | \
+      english-completed | english-calendar)
+      printf '%s\n' "${base}+in_app_view_tree_ax"
+      ;;
+    english-settings)
+      printf '%s\n' "${base}+settings_sidebar_vision_ocr"
+      ;;
+    english-zhulong)
+      printf '%s\n' "${base}+in_app_zhulong_title_geometry"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 evidence_absolute_repo_root() {
   local repo_root="$1"
 

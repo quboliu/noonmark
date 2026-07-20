@@ -584,7 +584,7 @@ for scenario in "${english_fixture_scenarios[@]}"; do
       oracles="screenshot_vision_ocr_no_han+settings_sidebar_vision_ocr"
       ;;
     english-zhulong)
-      oracles="screenshot_vision_ocr_no_han"
+      oracles="screenshot_vision_ocr_no_han+in_app_zhulong_title_geometry"
       ;;
   esac
   english_fixture_screenshot="$(

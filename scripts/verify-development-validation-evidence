@@ -208,36 +208,6 @@ require_safe_repo_relative_path() {
   esac
 }
 
-expected_english_oracles() {
-  local scenario="$1"
-  local base="screenshot_vision_ocr_no_han"
-
-  case "$scenario" in
-    english-day)
-      printf '%s\n' \
-        "${base}+day_header_pixel+in_app_view_tree_ax+external_ax"
-      ;;
-    english-day-wide)
-      printf '%s\n' "${base}+day_header_pixel+in_app_view_tree_ax"
-      ;;
-    english-day-history-header)
-      printf '%s\n' \
-        "${base}+day_header_pixel+in_app_responsive_contract"
-      ;;
-    english-pool | english-future | english-unfinished | \
-      english-completed | english-calendar)
-      printf '%s\n' "${base}+in_app_view_tree_ax"
-      ;;
-    english-settings)
-      printf '%s\n' "${base}+settings_sidebar_vision_ocr"
-      ;;
-    english-zhulong)
-      printf '%s\n' "$base"
-      ;;
-    *) return 1 ;;
-  esac
-}
-
 require_png_evidence() {
   local path="$1"
   local label="$2"
@@ -843,7 +813,8 @@ while IFS=$'\t' read -r \
   scenario scenario_binary recorded_screenshot_sha256 recorded_oracles \
   recorded_external_ax; do
   screenshot_path="$repo_root/artifacts/e2e/${scenario}.png"
-  if [[ "$(expected_english_oracles "$scenario")" != "$recorded_oracles" ]]; then
+  if [[ "$(evidence_expected_english_oracles "$scenario")" != \
+    "$recorded_oracles" ]]; then
     echo "English E2E scenario has an unexpected oracle set: $scenario" >&2
     exit 1
   fi

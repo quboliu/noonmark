@@ -1831,7 +1831,7 @@ record_english_scenario_evidence() {
   local screenshot="$2"
   local current_binary_sha256
   local external_ax="false"
-  local oracles="screenshot_vision_ocr_no_han"
+  local oracles
   local screenshot_sha256
 
   if [[ ! -s "$screenshot" ]]; then
@@ -1845,31 +1845,13 @@ record_english_scenario_evidence() {
   fi
   screenshot_sha256="$(shasum -a 256 "$screenshot" | awk '{print $1}')"
 
-  case "$scenario_name" in
-    english-day)
-      oracles+="+day_header_pixel+in_app_view_tree_ax+external_ax"
-      external_ax="true"
-      ;;
-    english-day-wide)
-      oracles+="+day_header_pixel+in_app_view_tree_ax"
-      ;;
-    english-day-history-header)
-      oracles+="+day_header_pixel+in_app_responsive_contract"
-      ;;
-    english-pool|english-future|english-unfinished|english-completed|english-calendar)
-      oracles+="+in_app_view_tree_ax"
-      ;;
-    english-settings)
-      oracles+="+settings_sidebar_vision_ocr"
-      ;;
-    english-zhulong)
-      oracles+="+in_app_zhulong_title_geometry"
-      ;;
-    *)
-      echo "unknown English evidence scenario: $scenario_name" >&2
-      exit 1
-      ;;
-  esac
+  if ! oracles="$(evidence_expected_english_oracles "$scenario_name")"; then
+    echo "unknown English evidence scenario: $scenario_name" >&2
+    exit 1
+  fi
+  if [[ "$scenario_name" == "english-day" ]]; then
+    external_ax="true"
+  fi
 
   printf '%s\t%s\t%s\t%s\t%s\n' \
     "$scenario_name" \

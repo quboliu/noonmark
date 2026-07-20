@@ -56,8 +56,7 @@ extension NoonmarkStore {
             let provider = OpenAICompatibleProvider(
                 config: config,
                 apiKeyResolver: { ref in
-                    guard ref == ZhulongProviderKeychain.keyRef else { return nil }
-                    return try ZhulongProviderKeychain.readAPIKey()
+                    try ZhulongProviderKeychain.resolveAPIKey(ref)
                 }
             )
             let health = await provider.healthCheck()
@@ -314,8 +313,7 @@ extension NoonmarkStore {
         let upstream = OpenAICompatibleProvider(
             config: config,
             apiKeyResolver: { ref in
-                guard ref == ZhulongProviderKeychain.keyRef else { return nil }
-                return try ZhulongProviderKeychain.readAPIKey()
+                try ZhulongProviderKeychain.resolveAPIKey(ref)
             }
         )
         return ZhulongAIProviderAdapter(

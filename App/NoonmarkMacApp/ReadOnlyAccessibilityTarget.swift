@@ -21,14 +21,61 @@ enum ReadOnlyAccessibilityTarget {
         let matches: [Match]
     }
 
-    struct Match {
+    struct Match: Equatable {
         let role: String
         let title: String?
         let description: String?
+        let value: String?
         let identifier: String?
         let enabled: Bool?
         let hidden: Bool?
         let frame: CGRect?
+    }
+
+    /// Returns one stable, visible snapshot of the matching identifiers in the
+    /// expected key/focused window. The duplicate entries are intentionally
+    /// preserved so callers can prove identifier uniqueness instead of hiding
+    /// collisions behind a dictionary or `Set`.
+    static func stableVisibleElements(
+        identifierPrefix: String,
+        in expectedWindow: NSWindow
+    ) -> [Match]? {
+        guard identifierPrefix.isEmpty == false else { return nil }
+        return stableVisibleElementsSnapshot(
+            identifierPrefix: identifierPrefix,
+            in: expectedWindow
+        )
+    }
+
+    static func stableVisibleElements(
+        in expectedWindow: NSWindow
+    ) -> [Match]? {
+        stableVisibleElementsSnapshot(identifierPrefix: nil, in: expectedWindow)
+    }
+
+    private static func stableVisibleElementsSnapshot(
+        identifierPrefix: String?,
+        in expectedWindow: NSWindow
+    ) -> [Match]? {
+        guard let initialQuery = windowDescendants(in: expectedWindow),
+              let currentQuery = windowDescendants(in: expectedWindow),
+              initialQuery.windowNumber == currentQuery.windowNumber,
+              initialQuery.keyWindowNumber == currentQuery.keyWindowNumber,
+              initialQuery.focusedWindowNumber
+              == currentQuery.focusedWindowNumber
+        else {
+            return nil
+        }
+        let initial = visibleElements(
+            identifierPrefix: identifierPrefix,
+            in: initialQuery
+        )
+        let current = visibleElements(
+            identifierPrefix: identifierPrefix,
+            in: currentQuery
+        )
+        guard initial == current else { return nil }
+        return current
     }
 
     static func focusedTextEntry(
@@ -297,6 +344,55 @@ enum ReadOnlyAccessibilityTarget {
         )
     }
 
+    private static func visibleElements(
+        identifierPrefix: String?,
+        in query: WindowQuery
+    ) -> [Match] {
+        query.matches.filter { match in
+            let identifierMatches = identifierPrefix.map {
+                match.identifier?.hasPrefix($0) == true
+            } ?? true
+            guard identifierMatches, match.hidden != true,
+                  let frame = match.frame,
+                  frame.isNull == false,
+                  frame.isInfinite == false,
+                  frame.origin.x.isFinite,
+                  frame.origin.y.isFinite,
+                  frame.width.isFinite,
+                  frame.height.isFinite,
+                  frame.width >= 2,
+                  frame.height >= 2
+            else {
+                return false
+            }
+            return true
+        }.sorted(by: matchOrder)
+    }
+
+    private static func matchOrder(_ lhs: Match, _ rhs: Match) -> Bool {
+        let lhsKey = [
+            lhs.identifier ?? "",
+            lhs.role,
+            lhs.title ?? "",
+            lhs.description ?? "",
+            lhs.value ?? "",
+            String(describing: lhs.enabled),
+            String(describing: lhs.hidden),
+            String(describing: lhs.frame)
+        ].joined(separator: "\u{0}")
+        let rhsKey = [
+            rhs.identifier ?? "",
+            rhs.role,
+            rhs.title ?? "",
+            rhs.description ?? "",
+            rhs.value ?? "",
+            String(describing: rhs.enabled),
+            String(describing: rhs.hidden),
+            String(describing: rhs.frame)
+        ].joined(separator: "\u{0}")
+        return lhsKey < rhsKey
+    }
+
     private static func validatedUniqueMenuEntry(
         _ matches: [Match]
     ) -> Match? {
@@ -450,6 +546,7 @@ enum ReadOnlyAccessibilityTarget {
             role: string(element, kAXRoleAttribute) ?? "",
             title: string(element, kAXTitleAttribute),
             description: string(element, kAXDescriptionAttribute),
+            value: string(element, kAXValueAttribute),
             identifier: string(element, kAXIdentifierAttribute),
             enabled: boolean(element, kAXEnabledAttribute),
             hidden: boolean(element, kAXHiddenAttribute),
@@ -466,6 +563,7 @@ enum ReadOnlyAccessibilityTarget {
             "[role=\(match.role),id=\(match.identifier ?? "nil"),"
                 + "title=\(match.title ?? "nil"),"
                 + "description=\(match.description ?? "nil"),"
+                + "value=\(match.value ?? "nil"),"
                 + "enabled=\(String(describing: match.enabled)),"
                 + "hidden=\(String(describing: match.hidden)),"
                 + "frame=\(String(describing: match.frame))]"

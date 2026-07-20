@@ -114,6 +114,13 @@ struct UnfinishedRow: View {
                             .padding(.top, 4)
                         }
                     }
+                    AutomaticTaskClassificationStatusView(
+                        chainID: item.chain.id,
+                        taskTitle: item.definition.title,
+                        accessibilitySurface: .unfinishedRow,
+                        accessibilityInstanceID: item.chain.id.description
+                    )
+                    .padding(.top, 3)
                 }
                 Spacer()
             }

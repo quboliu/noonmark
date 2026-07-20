@@ -32,7 +32,7 @@ struct AppCopy {
     }
 
     var automaticClassificationWaitingForDecision: String {
-        language == .chinese ? "等待确认是否归类" : "Waiting for your decision"
+        language == .chinese ? "等待你开始" : "Waiting for you to start"
     }
 
     var automaticClassificationProviderPaused: String {

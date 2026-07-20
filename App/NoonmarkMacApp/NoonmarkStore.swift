@@ -154,7 +154,11 @@ final class NoonmarkStore: ObservableObject {
 
     enum EngineMutationAutomaticClassificationPolicy {
         case none
+        case taskDefinitionChanged(TaskChainID)
+        case classificationCatalogChanged
         case newlyCreatedTaskChains
+        case taskBecameIneligible(TaskChainID)
+        case taskBecameEligible(TaskChainID)
         case userClassificationWins(TaskChainID)
     }
 
@@ -630,6 +634,7 @@ final class NoonmarkStore: ObservableObject {
     var automaticClassificationBacklogDeferredForSession = false
     var automaticClassificationBacklogDecisionTask: Task<Void, Never>?
     var automaticClassificationCircuitRetryTask: Task<Void, Never>?
+    var automaticClassificationDiagnosticSnapshotFingerprint: String?
     var cloudKitAccountCheckTask: Task<Void, Never>?
     var naturalDayObservation: NaturalDayObservation?
     var accessibilityDisplayObservation: AnyCancellable?

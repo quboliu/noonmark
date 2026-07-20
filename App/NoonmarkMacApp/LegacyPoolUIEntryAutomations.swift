@@ -679,6 +679,7 @@ private enum ContextMenuActionsE2EAutomationError: LocalizedError {
 struct QuickAddUIE2EAutomation: LaunchAutomationRunnable {
     enum Surface: String {
         case day
+        case future
         case pool
     }
 
@@ -710,6 +711,9 @@ struct QuickAddUIE2EAutomation: LaunchAutomationRunnable {
         case .day:
             store.page = .day
             store.selectedDate = store.today
+        case .future:
+            store.page = .day
+            store.selectedDate = NoonmarkStore.offset(store.today, by: 1)
         case .pool:
             store.page = .pool
         }
@@ -717,24 +721,31 @@ struct QuickAddUIE2EAutomation: LaunchAutomationRunnable {
         QuickAddUIE2EDriver.start(
             resultURL: resultURL,
             title: title,
-            editorIdentifier: "quick-add.\(surface.rawValue)",
+            editorIdentifier: surface == .pool ? "quick-add.pool" : "quick-add.day",
             inputReadback: {
                 switch surface {
-                case .day: store.quickText
+                case .day, .future: store.quickText
                 case .pool: store.poolText
                 }
             },
             taskExists: { candidateTitle in
-                switch surface {
+                let chainID: TaskChainID? = switch surface {
                 case .day:
-                    store.engine.getDayTodo(date: store.today).traces.contains { trace in
+                    store.engine.getDayTodo(date: store.today).traces.first { trace in
                         store.definition(for: trace)?.title == candidateTitle
-                    }
+                    }?.chainID
+                case .future:
+                    store.engine.futurePlans(today: store.today).first { plan in
+                        plan.definition.title == candidateTitle
+                    }?.trace.chainID
                 case .pool:
-                    store.engine.taskPool().contains { task in
+                    store.engine.taskPool().first { task in
                         task.definition.title == candidateTitle
-                    }
+                    }?.chain.id
                 }
+                guard let chainID else { return false }
+                return store.automaticClassificationStatus(for: chainID)
+                    == .waitingForConfiguration
             }
         )
     }

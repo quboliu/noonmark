@@ -1698,6 +1698,9 @@ private extension NoonmarkEngine {
             let restoresCancelledDraft =
                 currentTrace.status == .cancelledDraft
                     && candidate.status == .pending
+            let restoresAbandonedBoundary =
+                currentTrace.status != .abandoned
+                    && candidate.status == .abandoned
             if restoresCancelledDraft, let cancellationID = currentTrace.draftCancellationID {
                 candidate.draftCancellationID = cancellationID
                 candidate.draftCancelledOn = nil
@@ -1709,6 +1712,9 @@ private extension NoonmarkEngine {
                     now: now
                 )
             try candidate.markContentModified(at: clock)
+            if restoresAbandonedBoundary {
+                candidate.settledAt = clock
+            }
             traces[id] = candidate
         }
     }

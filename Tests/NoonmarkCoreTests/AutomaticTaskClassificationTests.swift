@@ -44,7 +44,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
                 labels: [.new(name: "深度工作", colorHex: "#0E9488")]
             ),
             authority: context.authority,
-            interactionID: UUID(uuidString: "A1000000-0000-0000-0000-000000000002")!
+            interactionID: UUID(uuidString: "A1000000-0000-0000-0000-000000000002")!,
+            now: base.addingTimeInterval(2)
         )
         let receipt = try engine.commitAutomaticClassification(
             plan,
@@ -106,7 +107,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
             try engine.prepareAutomaticClassification(
                 proposal(),
                 authority: context.authority,
-                interactionID: UUID()
+                interactionID: UUID(),
+                now: base.addingTimeInterval(2)
             )
         ) { error in
             XCTAssertEqual(
@@ -322,7 +324,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
             try engine.prepareAutomaticClassification(
                 proposal(),
                 authority: context.authority,
-                interactionID: UUID()
+                interactionID: UUID(),
+                now: base.addingTimeInterval(2)
             )
         ) { error in
             XCTAssertEqual(
@@ -377,7 +380,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
                     labels: [.new(name: "AI 标签", colorHex: "#0E9488")]
                 ),
                 authority: context.authority,
-                interactionID: UUID()
+                interactionID: UUID(),
+                now: base.addingTimeInterval(2)
             )
             _ = try engine.commitAutomaticClassification(
                 plan,
@@ -421,7 +425,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
             try engine.prepareAutomaticClassification(
                 proposal(),
                 authority: context.authority,
-                interactionID: UUID()
+                interactionID: UUID(),
+                now: base.addingTimeInterval(2)
             )
         ) { error in
             XCTAssertEqual(
@@ -528,12 +533,14 @@ final class AutomaticTaskClassificationTests: XCTestCase {
         let firstPlan = try engine.prepareAutomaticClassification(
             existingProposal,
             authority: firstContext.authority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(3)
         )
         let secondPlan = try engine.prepareAutomaticClassification(
             existingProposal,
             authority: secondContext.authority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(3)
         )
 
         _ = try engine.commitAutomaticClassification(
@@ -566,7 +573,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
         let plan = try engine.prepareAutomaticClassification(
             proposal(),
             authority: context.authority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(1)
         )
         try commitUserClassification(
             TaskClassificationDraft(
@@ -603,7 +611,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
         let plan = try engine.prepareAutomaticClassification(
             proposal(),
             authority: context.authority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(1)
         )
 
         XCTAssertThrowsError(
@@ -636,7 +645,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
         let plan = try engine.prepareAutomaticClassification(
             proposal(),
             authority: first.authority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(1)
         )
         let nextGeneration = try engine.issueAutomaticClassificationContext(
             for: chainID,
@@ -689,7 +699,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
                         labels: labels
                     ),
                     authority: context.authority,
-                    interactionID: UUID()
+                    interactionID: UUID(),
+                    now: base.addingTimeInterval(1)
                 )
             )
         }
@@ -723,7 +734,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
         let plan = try restored.prepareAutomaticClassification(
             proposal(),
             authority: persistedAuthority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(1)
         )
         XCTAssertNoThrow(
             try restored.commitAutomaticClassification(
@@ -768,7 +780,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
         let plan = try engine.prepareAutomaticClassification(
             proposal(),
             authority: context.authority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(1)
         )
         _ = try engine.commitAutomaticClassification(
             plan,
@@ -831,7 +844,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
         let plan = try current.prepareAutomaticClassification(
             proposal(),
             authority: context.authority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(1)
         )
         _ = try current.commitAutomaticClassification(
             plan,
@@ -974,7 +988,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
         let plan = try current.prepareAutomaticClassification(
             proposal(),
             authority: context.authority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(2)
         )
         _ = try current.commitAutomaticClassification(
             plan,
@@ -1131,7 +1146,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
                 labels: [.existing(automaticLabelID)]
             ),
             authority: context.authority,
-            interactionID: UUID()
+            interactionID: UUID(),
+            now: base.addingTimeInterval(6)
         )
         _ = try engine.commitAutomaticClassification(
             automaticPlan,
@@ -1320,7 +1336,8 @@ final class AutomaticTaskClassificationTests: XCTestCase {
             try engine.prepareAutomaticClassification(
                 proposal(),
                 authority: authority,
-                interactionID: UUID()
+                interactionID: UUID(),
+                now: try engine.nextMutationDate(reference: base)
             ),
             file: file,
             line: line

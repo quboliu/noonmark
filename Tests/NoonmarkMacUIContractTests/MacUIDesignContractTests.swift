@@ -96,6 +96,45 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertFalse(MacUITaskLabelPatchLayout.overflowUsesDashedBorder)
     }
 
+    func testAutomaticClassificationStatusRemainsReachableAcrossTaskSurfaces() {
+        let contract = MacUIDesignContract.current
+
+        XCTAssertTrue(
+            contract.unfinishedPoolElements.contains(.automaticClassificationStatus)
+        )
+        XCTAssertTrue(
+            contract.completedPoolElements.contains(.automaticClassificationStatus)
+        )
+
+        let instanceID = "chain-1"
+        let statusIdentifiers = MacUIAutomaticClassificationSurface.allCases.map {
+            MacUIAutomaticClassificationAccessibility.statusIdentifier(
+                surface: $0,
+                instanceID: instanceID
+            )
+        }
+        XCTAssertEqual(Set(statusIdentifiers).count, statusIdentifiers.count)
+        XCTAssertEqual(
+            MacUIAutomaticClassificationAccessibility.statusIdentifier(
+                surface: .unfinishedRow,
+                instanceID: instanceID
+            ),
+            "automatic-classification.status.unfinished-row.chain-1"
+        )
+        XCTAssertNotEqual(
+            MacUIAutomaticClassificationAccessibility.retryIdentifier(
+                surface: .completedRow,
+                instanceID: instanceID,
+                kind: .job
+            ),
+            MacUIAutomaticClassificationAccessibility.retryIdentifier(
+                surface: .completedRow,
+                instanceID: instanceID,
+                kind: .providerCircuit
+            )
+        )
+    }
+
     func testFuturePlanDetailUsesOneCompactMetadataLine() {
         XCTAssertEqual(MacUIFuturePlanDetailLayout.metadataSpacing, 8)
         XCTAssertEqual(MacUIFuturePlanDetailLayout.summaryCardCount, 0)
@@ -361,6 +400,7 @@ final class MacUIDesignContractTests: XCTestCase {
                 .abandonContextMenuAction,
                 .reenableAbandonedContextMenuAction,
                 .detailsExpansion,
+                .automaticClassificationStatus,
                 .emptyState
             ]
         )
@@ -376,6 +416,7 @@ final class MacUIDesignContractTests: XCTestCase {
                 .rowContextMenu,
                 .jumpDayContextMenuAction,
                 .copyAsNewTaskContextMenuAction,
+                .automaticClassificationStatus,
                 .emptyState
             ]
         )

@@ -355,7 +355,12 @@ extension NoonmarkStore {
             ? .snapshotIfAllowed(on: trace.date, action: .abandonTask)
             : .invalidate
         do {
-            try commitEngineMutation(undoPolicy: undoPolicy) { candidate, moment in
+            try commitEngineMutation(
+                undoPolicy: undoPolicy,
+                automaticClassificationPolicy: .taskBecameIneligible(
+                    trace.chainID
+                )
+            ) { candidate, moment in
                 try candidate.abandonChain(from: traceID, now: moment.instant)
             }
             showToast(copy.taskChainAbandoned)
@@ -367,8 +372,12 @@ extension NoonmarkStore {
     @discardableResult
     func reactivateAbandonedChain(from traceID: DayTraceID) -> Bool {
         do {
+            guard let chainID = engine.traces[traceID]?.chainID else {
+                throw NoonmarkError.notFound("day trace")
+            }
             _ = try commitEngineMutation(
-                undoPolicy: .snapshot(.reactivateTask)
+                undoPolicy: .snapshot(.reactivateTask),
+                automaticClassificationPolicy: .taskBecameEligible(chainID)
             ) { candidate, moment in
                 try candidate.reactivateAbandonedChain(
                     from: traceID,
@@ -438,12 +447,17 @@ extension NoonmarkStore {
     }
 
     func changeSelectedTrace() {
-        guard let selectedTraceID else { return }
+        guard let selectedTraceID,
+              let selectedTrace = engine.traces[selectedTraceID]
+        else { return }
         let title = changeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.isEmpty == false else { return }
         do {
             let newID = try commitEngineMutation(
-                undoPolicy: .invalidate
+                undoPolicy: .invalidate,
+                automaticClassificationPolicy: .taskBecameIneligible(
+                    selectedTrace.chainID
+                )
             ) { candidate, moment in
                 try candidate.changeTrace(
                     traceID: selectedTraceID,
@@ -623,6 +637,9 @@ extension NoonmarkStore {
                 undoPolicy: .snapshotIfAllowed(
                     on: trace.date,
                     action: .renameTask
+                ),
+                automaticClassificationPolicy: .taskDefinitionChanged(
+                    trace.chainID
                 )
             ) { candidate, moment in
                 try candidate.renameTaskTitle(
@@ -643,7 +660,8 @@ extension NoonmarkStore {
         guard nextTitle.isEmpty == false else { return }
         do {
             try commitEngineMutation(
-                undoPolicy: .snapshot(.renameTask)
+                undoPolicy: .snapshot(.renameTask),
+                automaticClassificationPolicy: .taskDefinitionChanged(chainID)
             ) { candidate, moment in
                 try candidate.renameTaskTitle(
                     chainID: chainID,
@@ -662,7 +680,8 @@ extension NoonmarkStore {
         guard let definition = currentDefinition(for: chainID) else { return }
         do {
             try commitEngineMutation(
-                undoPolicy: .snapshot(.editTaskText)
+                undoPolicy: .snapshot(.editTaskText),
+                automaticClassificationPolicy: .taskDefinitionChanged(chainID)
             ) { candidate, moment in
                 try candidate.updatePoolTask(
                     chainID: chainID,
@@ -679,7 +698,8 @@ extension NoonmarkStore {
     func deletePoolTask(_ chainID: TaskChainID) {
         do {
             let outcome = try commitEngineMutation(
-                undoPolicy: .invalidate
+                undoPolicy: .invalidate,
+                automaticClassificationPolicy: .taskBecameIneligible(chainID)
             ) { candidate, moment in
                 try candidate.removeTaskFromPool(
                     chainID: chainID,

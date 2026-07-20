@@ -492,7 +492,9 @@ struct TaskRow: View {
 
                     AutomaticTaskClassificationStatusView(
                         chainID: trace.chainID,
-                        taskTitle: definition?.title ?? store.copy.untitledTask
+                        taskTitle: definition?.title ?? store.copy.untitledTask,
+                        accessibilitySurface: .dayRow,
+                        accessibilityInstanceID: trace.id.description
                     )
                     .padding(.top, 3)
 

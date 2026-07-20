@@ -203,7 +203,10 @@ extension NoonmarkStore {
         _ intent: ClassificationIntent,
         interactionID: UUID = UUID()
     ) throws -> ClassificationReceipt {
-        let receipt = try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
+        let receipt = try commitEngineMutation(
+            undoPolicy: .invalidate,
+            automaticClassificationPolicy: .classificationCatalogChanged
+        ) { candidate, moment in
             let plan = try candidate.prepareClassification(
                 intent,
                 source: .userDirect,

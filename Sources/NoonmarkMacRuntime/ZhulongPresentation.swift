@@ -986,8 +986,8 @@ public struct ZhulongCopy: Sendable {
 
     public func providerSettingsFailure(_ failure: ZhulongProviderSettingsFailure) -> String {
         switch (language, failure) {
-        case (.chinese, .invalidBaseURL): "Base URL 必须是有效的 HTTP 或 HTTPS URL。"
-        case (.english, .invalidBaseURL): "Base URL must be a valid HTTP or HTTPS URL."
+        case (.chinese, .invalidBaseURL): "Base URL 必须使用 HTTPS；仅本机 loopback 可使用 HTTP。"
+        case (.english, .invalidBaseURL): "Base URL must use HTTPS; only local loopback may use HTTP."
         case (.chinese, .emptyModel): "模型名称不能为空。"
         case (.english, .emptyModel): "Model name cannot be empty."
         case (.chinese, .keychainUnavailable): "无法访问 Keychain，请稍后再试。"

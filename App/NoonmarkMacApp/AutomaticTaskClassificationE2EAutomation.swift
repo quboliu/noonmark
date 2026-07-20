@@ -91,7 +91,7 @@ struct AutomaticTaskClassificationLiveE2EAutomation: LaunchAutomationRunnable {
                 )
                 guard store.zhulongProviderDraft.hasStoredAPIKey == false,
                       store.zhulongProviderDraft.enabled == false,
-                      ZhulongProviderKeychain.hasAPIKey() == false
+                      try ZhulongProviderKeychain.hasAnyAPIKey() == false
                 else {
                     result = "failed: isolated Provider cleanup was incomplete"
                     try? writeResult(result)

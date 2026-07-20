@@ -535,25 +535,68 @@ private enum WorkflowE2EAutomationError: LocalizedError {
     }
 }
 
+private enum ProviderCredentialRecoveryE2EPhase {
+    case interruptedSaveSetup
+    case recoverOldAndPublishNew
+    case recoverNewAndInterruptClear
+    case recoverInterruptedClear
+
+    static func fromCommandLine() -> Self? {
+        if AppLaunchArguments.contains("--e2e-provider-credential-setup") {
+            return .interruptedSaveSetup
+        }
+        if AppLaunchArguments.contains("--e2e-provider-credential-recover-old") {
+            return .recoverOldAndPublishNew
+        }
+        if AppLaunchArguments.contains("--e2e-provider-credential-recover-new") {
+            return .recoverNewAndInterruptClear
+        }
+        if AppLaunchArguments.contains("--e2e-provider-credential-recover-clear") {
+            return .recoverInterruptedClear
+        }
+        return nil
+    }
+}
+
+private struct ProviderCredentialRecoveryE2EState: Codable {
+    let formatVersion: Int
+    let initialExecutionRevision: UUID
+    let interruptedExecutionRevision: UUID
+    var replacementExecutionRevision: UUID?
+}
+
 struct ProviderE2EAutomation: LaunchAutomationRunnable {
+    private static let replacementBaseURL =
+        "https://replacement.provider.example/v1"
+    private static let replacementAPIKey = "replacement-e2e-key"
+
     var expectedName: String
     var expectedBaseURL: String
     var expectedModel: String
     var expectedAPIKey: String
     var shouldConfigure: Bool
     var shouldVerify: Bool
+    private var credentialRecoveryPhase: ProviderCredentialRecoveryE2EPhase?
+    var credentialStateURL: URL?
     var resultURL: URL?
 
     @MainActor
     static func fromCommandLine() -> ProviderE2EAutomation? {
         let shouldConfigure = AppLaunchArguments.contains("--e2e-configure-provider")
         let shouldVerify = AppLaunchArguments.contains("--e2e-verify-provider")
-        guard shouldConfigure || shouldVerify else { return nil }
+        let credentialRecoveryPhase = ProviderCredentialRecoveryE2EPhase
+            .fromCommandLine()
+        guard shouldConfigure || shouldVerify || credentialRecoveryPhase != nil else {
+            return nil
+        }
 
         let expectedName = AppLaunchArguments.value(after: "--e2e-provider-name") ?? ""
         let expectedBaseURL = AppLaunchArguments.value(after: "--e2e-provider-base-url") ?? ""
         let expectedModel = AppLaunchArguments.value(after: "--e2e-provider-model") ?? ""
         let expectedAPIKey = AppLaunchArguments.value(after: "--e2e-provider-api-key") ?? ""
+        let credentialStateURL = AppLaunchArguments.value(
+            after: "--e2e-provider-credential-state-url"
+        ).map { URL(fileURLWithPath: $0) }
         let resultURL = AppLaunchArguments.value(after: "--e2e-provider-result-url")
             .map { URL(fileURLWithPath: $0) }
 
@@ -564,6 +607,8 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
             expectedAPIKey: expectedAPIKey,
             shouldConfigure: shouldConfigure,
             shouldVerify: shouldVerify,
+            credentialRecoveryPhase: credentialRecoveryPhase,
+            credentialStateURL: credentialStateURL,
             resultURL: resultURL
         )
     }
@@ -571,6 +616,12 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
     @MainActor
     func run(on store: NoonmarkStore) {
         do {
+            if let credentialRecoveryPhase {
+                try runCredentialRecoveryPhase(
+                    credentialRecoveryPhase,
+                    on: store
+                )
+            }
             if shouldConfigure {
                 try configureProvider(on: store)
             }
@@ -581,12 +632,339 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
             }
             try writeResult("ok")
         } catch {
-            if shouldVerify {
+            if shouldConfigure || shouldVerify || credentialRecoveryPhase != nil {
                 store.zhulongProviderDraft = (try? ZhulongProviderSettingsStore
                     .clear().draft) ?? ZhulongProviderDraft()
             }
             try? writeResult("failed: \(error.localizedDescription)")
         }
+    }
+
+    @MainActor
+    private func runCredentialRecoveryPhase(
+        _ phase: ProviderCredentialRecoveryE2EPhase,
+        on store: NoonmarkStore
+    ) throws {
+        guard Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e",
+              credentialStateURL != nil
+        else {
+            throw ProviderE2EAutomationError.mismatch(
+                "credentialRecoveryIsolation"
+            )
+        }
+        switch phase {
+        case .interruptedSaveSetup:
+            try prepareInterruptedCredentialSave(on: store)
+        case .recoverOldAndPublishNew:
+            try recoverOldCredentialAndPublishNew(on: store)
+        case .recoverNewAndInterruptClear:
+            try recoverNewCredentialAndInterruptClear(on: store)
+        case .recoverInterruptedClear:
+            try recoverInterruptedClear(on: store)
+        }
+    }
+
+    @MainActor
+    private func prepareInterruptedCredentialSave(on store: NoonmarkStore) throws {
+        store.zhulongProviderDraft = try ZhulongProviderSettingsStore.clear().draft
+        var insecureRemote = store.zhulongProviderDraft
+        insecureRemote.baseURL = "http://provider.example/v1"
+        insecureRemote.model = expectedModel
+        insecureRemote.enabled = true
+        guard insecureRemote.normalizedBaseURL == nil else {
+            throw ProviderE2EAutomationError.mismatch("remoteHTTPWasAccepted")
+        }
+        do {
+            _ = try ZhulongProviderSettingsStore.save(insecureRemote)
+            throw ProviderE2EAutomationError.mismatch("remoteHTTPWasPersisted")
+        } catch ZhulongProviderSettingsError.invalidBaseURL {
+            // Remote credentials must only travel over TLS.
+        }
+        for loopbackURL in [
+            "http://localhost:8080/v1",
+            "http://127.0.0.1:8080/v1",
+            "http://[::1]:8080/v1"
+        ] {
+            var loopback = insecureRemote
+            loopback.baseURL = loopbackURL
+            guard loopback.normalizedBaseURL != nil else {
+                throw ProviderE2EAutomationError.mismatch(
+                    "loopbackHTTPWasRejected"
+                )
+            }
+        }
+        var initial = store.zhulongProviderDraft
+        initial.displayName = expectedName
+        initial.kind = .openAICompatible
+        initial.baseURL = expectedBaseURL
+        initial.model = expectedModel
+        initial.apiKeyInput = expectedAPIKey
+        initial.enabled = true
+        let initialTransition = try ZhulongProviderSettingsStore.save(initial)
+
+        var replacement = initialTransition.draft
+        replacement.baseURL = Self.replacementBaseURL
+        replacement.apiKeyInput = Self.replacementAPIKey
+        var interruptedExecutionRevision: UUID?
+        do {
+            _ = try ZhulongProviderSettingsStore.save(
+                replacement,
+                afterCredentialWriteBeforeConfigPointer: { executionRevision in
+                    interruptedExecutionRevision = executionRevision
+                    throw ProviderE2EAutomationError.injectedInterruption
+                }
+            )
+            throw ProviderE2EAutomationError.mismatch("interruptionNotInjected")
+        } catch ProviderE2EAutomationError.injectedInterruption {
+            // The injected interruption models process death after the new
+            // credential is durable but before the config pointer is switched.
+        }
+
+        guard let initialExecutionRevision = initialTransition.currentExecutionRevision,
+              let persisted = try ZhulongProviderSettingsStore.makePersistedConfig(),
+              let persistedBaseURL = persisted.baseURL,
+              persistedBaseURL.absoluteString == URL(string: expectedBaseURL)?.absoluteString,
+              let keyRef = persisted.apiKeyRef,
+              keyRef == ZhulongProviderKeychain.keyRef(
+                  for: initialExecutionRevision
+              ),
+              try ZhulongProviderKeychain.resolveAPIKey(
+                  keyRef,
+                  expectedExecutionRevision: initialExecutionRevision
+              ) == expectedAPIKey,
+              let interruptedExecutionRevision,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: interruptedExecutionRevision
+              ) == Self.replacementAPIKey,
+              try ZhulongProviderSettingsStore.makePersistedConfig(
+                  expectedExecutionRevision: interruptedExecutionRevision
+              ) == nil,
+              try ZhulongProviderKeychain.resolveAPIKey(
+                  keyRef,
+                  expectedExecutionRevision: interruptedExecutionRevision
+              ) == nil,
+              try ZhulongProviderKeychain.resolveAPIKey(
+                  ZhulongProviderKeychain.keyRef(
+                      for: interruptedExecutionRevision
+                  ),
+                  expectedExecutionRevision: initialExecutionRevision
+              ) == nil
+        else {
+            throw ProviderE2EAutomationError.mismatch(
+                "interruptedCredentialWasPairedWithOldEndpoint"
+            )
+        }
+        try writeCredentialRecoveryState(
+            ProviderCredentialRecoveryE2EState(
+                formatVersion: 1,
+                initialExecutionRevision: initialExecutionRevision,
+                interruptedExecutionRevision: interruptedExecutionRevision,
+                replacementExecutionRevision: nil
+            )
+        )
+    }
+
+    @MainActor
+    private func recoverOldCredentialAndPublishNew(
+        on store: NoonmarkStore
+    ) throws {
+        var state = try readCredentialRecoveryState()
+        guard state.formatVersion == 1,
+              store.zhulongProviderDraft.normalizedBaseURL?.absoluteString
+              == URL(string: expectedBaseURL)?.absoluteString,
+              store.zhulongProviderDraft.hasStoredAPIKey,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: state.initialExecutionRevision
+              ) == expectedAPIKey,
+            try ZhulongProviderKeychain.readAPIKey(
+                for: state.interruptedExecutionRevision
+            ) == nil,
+              let persisted = try ZhulongProviderSettingsStore.makePersistedConfig(
+                  expectedExecutionRevision: state.initialExecutionRevision
+              ),
+              persisted.apiKeyRef == ZhulongProviderKeychain.keyRef(
+                  for: state.initialExecutionRevision
+              )
+        else {
+            throw ProviderE2EAutomationError.mismatch(
+                "freshLaunchDidNotRecoverOldCredential"
+            )
+        }
+
+        var replacement = store.zhulongProviderDraft
+        replacement.baseURL = Self.replacementBaseURL
+        replacement.apiKeyInput = Self.replacementAPIKey
+        var replacementExecutionRevision: UUID?
+        do {
+            _ = try ZhulongProviderSettingsStore.save(
+                replacement,
+                afterConfigPointerPublication: { executionRevision in
+                    replacementExecutionRevision = executionRevision
+                    throw ProviderE2EAutomationError.injectedInterruption
+                }
+            )
+            throw ProviderE2EAutomationError.mismatch(
+                "pointerPublicationInterruptionNotInjected"
+            )
+        } catch ProviderE2EAutomationError.injectedInterruption {
+            // This process exits with a published new pointer and both revisions
+            // still present. A fresh launch is solely responsible for cleanup.
+        }
+        guard let replacementExecutionRevision,
+              replacementExecutionRevision != state.initialExecutionRevision,
+              replacementExecutionRevision != state.interruptedExecutionRevision,
+              ZhulongProviderSettingsStore.persistedConfiguredExecutionRevision()
+              == replacementExecutionRevision,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: state.initialExecutionRevision
+              ) == expectedAPIKey,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: replacementExecutionRevision
+              ) == Self.replacementAPIKey
+        else {
+            throw ProviderE2EAutomationError.mismatch(
+                "newCredentialWasNotPublishedBeforeDeferredCleanup"
+            )
+        }
+        state.replacementExecutionRevision = replacementExecutionRevision
+        try writeCredentialRecoveryState(state)
+    }
+
+    @MainActor
+    private func recoverNewCredentialAndInterruptClear(
+        on store: NoonmarkStore
+    ) throws {
+        let state = try readCredentialRecoveryState()
+        guard let replacementExecutionRevision = state.replacementExecutionRevision,
+              store.zhulongProviderDraft.normalizedBaseURL?.absoluteString
+              == URL(string: Self.replacementBaseURL)?.absoluteString,
+              store.zhulongProviderDraft.hasStoredAPIKey,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: state.initialExecutionRevision
+              ) == nil,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: state.interruptedExecutionRevision
+              ) == nil,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: replacementExecutionRevision
+              ) == Self.replacementAPIKey,
+              try ZhulongProviderSettingsStore.makePersistedConfig(
+                  expectedExecutionRevision: replacementExecutionRevision
+              )?.apiKeyRef == ZhulongProviderKeychain.keyRef(
+                  for: replacementExecutionRevision
+              )
+        else {
+            throw ProviderE2EAutomationError.mismatch(
+                "freshLaunchDidNotRecoverNewCredential"
+            )
+        }
+
+        var interruptionReached = false
+        do {
+            _ = try ZhulongProviderSettingsStore.clear(
+                afterCredentialRemovalBeforeConfigPointer: {
+                    interruptionReached = true
+                    throw ProviderE2EAutomationError.injectedInterruption
+                }
+            )
+            throw ProviderE2EAutomationError.mismatch(
+                "clearInterruptionNotInjected"
+            )
+        } catch ProviderE2EAutomationError.injectedInterruption {
+            // A failed clear keeps the non-sensitive pointer for retry, but the
+            // credential has already been removed and cannot be dispatched.
+        }
+        let recoveredDraft = ZhulongProviderSettingsStore.load()
+        guard interruptionReached,
+              try ZhulongProviderKeychain.hasAnyAPIKey() == false,
+              recoveredDraft.enabled,
+              recoveredDraft.hasStoredAPIKey == false,
+              ZhulongProviderSettingsStore.persistedConfiguredExecutionRevision()
+              == replacementExecutionRevision,
+              try ZhulongProviderSettingsStore.makePersistedConfig() == nil
+        else {
+            throw ProviderE2EAutomationError.mismatch(
+                "interruptedClearWasNotFailClosed"
+            )
+        }
+    }
+
+    @MainActor
+    private func recoverInterruptedClear(on store: NoonmarkStore) throws {
+        let state = try readCredentialRecoveryState()
+        guard let replacementExecutionRevision = state.replacementExecutionRevision,
+              store.zhulongProviderDraft.enabled,
+              store.zhulongProviderDraft.hasStoredAPIKey == false,
+              try ZhulongProviderKeychain.hasAnyAPIKey() == false,
+              ZhulongProviderSettingsStore.persistedConfiguredExecutionRevision()
+              == replacementExecutionRevision,
+              try ZhulongProviderSettingsStore.makePersistedConfig() == nil
+        else {
+            throw ProviderE2EAutomationError.mismatch(
+                "freshLaunchDidNotRecoverInterruptedClear"
+            )
+        }
+
+        store.zhulongProviderDraft = try ZhulongProviderSettingsStore.clear().draft
+        guard try ZhulongProviderKeychain.hasAnyAPIKey() == false,
+              ZhulongProviderSettingsStore.persistedConfiguredExecutionRevision() == nil
+        else {
+            throw ProviderE2EAutomationError.mismatch(
+                "explicitClearLeftProviderState"
+            )
+        }
+
+        let retainedExecutionRevision = UUID()
+        try ZhulongProviderKeychain.saveAPIKey(
+            "retained-e2e-key",
+            for: retainedExecutionRevision
+        )
+        _ = ZhulongProviderSettingsStore.load()
+        guard try ZhulongProviderKeychain.readAPIKey(
+            for: retainedExecutionRevision
+        ) == "retained-e2e-key"
+        else {
+            throw ProviderE2EAutomationError.mismatch(
+                "cleanCutCredentialWasDeletedWithoutConfig"
+            )
+        }
+        store.zhulongProviderDraft = try ZhulongProviderSettingsStore.clear().draft
+        guard try ZhulongProviderKeychain.hasAnyAPIKey() == false else {
+            throw ProviderE2EAutomationError.mismatch(
+                "explicitClearLeftRetainedCredential"
+            )
+        }
+    }
+
+    private func readCredentialRecoveryState() throws
+        -> ProviderCredentialRecoveryE2EState
+    {
+        guard let credentialStateURL else {
+            throw ProviderE2EAutomationError.mismatch(
+                "credentialRecoveryStateURL"
+            )
+        }
+        return try JSONDecoder().decode(
+            ProviderCredentialRecoveryE2EState.self,
+            from: Data(contentsOf: credentialStateURL)
+        )
+    }
+
+    private func writeCredentialRecoveryState(
+        _ state: ProviderCredentialRecoveryE2EState
+    ) throws {
+        guard let credentialStateURL else {
+            throw ProviderE2EAutomationError.mismatch(
+                "credentialRecoveryStateURL"
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: credentialStateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(state).write(to: credentialStateURL, options: .atomic)
     }
 
     @MainActor
@@ -639,13 +1017,52 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
             throw ProviderE2EAutomationError.mismatch("restoredNameTransition")
         }
 
-        var replacementKeyDraft = restoredName.draft
+        var movedEndpointDraft = restoredName.draft
+        movedEndpointDraft.baseURL = "https://moved.provider.example/v1"
+        let movedEndpoint = try ZhulongProviderSettingsStore.save(
+            movedEndpointDraft
+        )
+        guard movedEndpoint.revisionChanged,
+              movedEndpoint.readinessChanged == false,
+              let firstExecutionRevision = firstSave.currentExecutionRevision,
+              let movedEndpointRevision = movedEndpoint.currentExecutionRevision,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: firstExecutionRevision
+              ) == expectedAPIKey,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: movedEndpointRevision
+              ) == expectedAPIKey
+        else {
+            throw ProviderE2EAutomationError.mismatch("movedEndpointTransition")
+        }
+        var restoredEndpointDraft = movedEndpoint.draft
+        restoredEndpointDraft.baseURL = expectedBaseURL
+        let restoredEndpoint = try ZhulongProviderSettingsStore.save(
+            restoredEndpointDraft
+        )
+        guard restoredEndpoint.revisionChanged,
+              restoredEndpoint.readinessChanged == false,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: movedEndpointRevision
+              ) == expectedAPIKey
+        else {
+            throw ProviderE2EAutomationError.mismatch("restoredEndpointTransition")
+        }
+
+        var replacementKeyDraft = restoredEndpoint.draft
         replacementKeyDraft.apiKeyInput = "\(expectedAPIKey)-replacement"
         let replacementKey = try ZhulongProviderSettingsStore.save(
             replacementKeyDraft
         )
         guard replacementKey.revisionChanged,
-              replacementKey.readinessChanged == false
+              replacementKey.readinessChanged == false,
+              let replacementExecutionRevision = replacementKey.currentExecutionRevision,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: firstExecutionRevision
+              ) == expectedAPIKey,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: replacementExecutionRevision
+              ) == "\(expectedAPIKey)-replacement"
         else {
             throw ProviderE2EAutomationError.mismatch("replacementKeyTransition")
         }
@@ -655,7 +1072,14 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
             restoredKeyDraft
         )
         guard restoredKey.revisionChanged,
-              restoredKey.readinessChanged == false
+              restoredKey.readinessChanged == false,
+              let restoredExecutionRevision = restoredKey.currentExecutionRevision,
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: replacementExecutionRevision
+              ) == "\(expectedAPIKey)-replacement",
+              try ZhulongProviderKeychain.readAPIKey(
+                  for: restoredExecutionRevision
+              ) == expectedAPIKey
         else {
             throw ProviderE2EAutomationError.mismatch("restoredKeyTransition")
         }
@@ -720,7 +1144,10 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
         guard draft.hasStoredAPIKey else {
             throw ProviderE2EAutomationError.mismatch("hasStoredAPIKey")
         }
-        guard try ZhulongProviderKeychain.readAPIKey() == expectedAPIKey else {
+        guard let persisted = try ZhulongProviderSettingsStore.makePersistedConfig(),
+              let keyRef = persisted.apiKeyRef,
+              try ZhulongProviderKeychain.resolveAPIKey(keyRef) == expectedAPIKey
+        else {
             throw ProviderE2EAutomationError.mismatch("apiKey")
         }
     }
@@ -737,11 +1164,14 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
 
 private enum ProviderE2EAutomationError: LocalizedError {
     case mismatch(String)
+    case injectedInterruption
 
     var errorDescription: String? {
         switch self {
         case let .mismatch(field):
             return "Provider E2E mismatch: \(field)"
+        case .injectedInterruption:
+            return "Provider E2E injected interruption"
         }
     }
 }

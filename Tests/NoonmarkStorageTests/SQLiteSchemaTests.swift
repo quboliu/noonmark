@@ -59,7 +59,7 @@ final class SQLiteSchemaTests: XCTestCase {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
 
-        XCTAssertEqual(SQLiteSchema.version, 5)
+        XCTAssertEqual(SQLiteSchema.version, 6)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_canonical_name_ownership"))

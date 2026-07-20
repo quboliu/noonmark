@@ -353,6 +353,7 @@ extension NoonmarkStore {
         var snapshotUndoOutcome = SnapshotUndoOutcome()
         var noteIdentityRemap: NoteIdentityRemap?
         let redoEntry: RedoEntry
+        let automaticClassificationJobsChanged: Bool
         do {
             switch entry {
             case let .snapshot(snapshot, _):
@@ -381,7 +382,7 @@ extension NoonmarkStore {
                 snapshotBeforeUndo: currentSnapshot,
                 noteIdentityRemap: noteIdentityRemap
             )
-            try saveSnapshotUndo(
+            automaticClassificationJobsChanged = try saveSnapshotUndo(
                 candidate,
                 outcome: snapshotUndoOutcome,
                 mutationAt: moment.instant
@@ -399,7 +400,7 @@ extension NoonmarkStore {
             }
         }
         engine = candidate
-        if snapshotUndoOutcome.automaticClassificationCancelledChainIDs.isEmpty == false {
+        if automaticClassificationJobsChanged {
             automaticClassificationJobsDidChange()
         }
         Theme.apply(engine.preferences.theme)
@@ -415,6 +416,7 @@ extension NoonmarkStore {
         }
         let currentSnapshot = engine.snapshot()
         let replay: RedoReplay
+        let automaticClassificationJobsChanged: Bool
         do {
             replay = try replayRedoEntry(
                 entry,
@@ -425,8 +427,9 @@ extension NoonmarkStore {
                 for: replay.snapshotUndoOutcome,
                 candidate: replay.engine
             )
-            try saveSnapshotRedo(
+            automaticClassificationJobsChanged = try saveSnapshotRedo(
                 replay.engine,
+                outcome: replay.snapshotUndoOutcome,
                 redo: automaticClassificationRedoJob,
                 mutationAt: moment.instant
             )
@@ -441,9 +444,7 @@ extension NoonmarkStore {
             undoStack.removeFirst(undoStack.count - Self.undoHistoryLimit)
         }
         engine = replay.engine
-        if replay.snapshotUndoOutcome.automaticClassificationRestoredChainIDs
-            .isEmpty == false
-        {
+        if automaticClassificationJobsChanged {
             automaticClassificationJobsDidChange()
         }
         Theme.apply(engine.preferences.theme)

@@ -12,7 +12,7 @@ private func sqliteNonemptyInvariant(_ column: String) -> String {
 }
 
 public enum SQLiteSchema {
-    public static let version = 5
+    public static let version = 6
 
     public static let statements: [String] = [
         """
@@ -104,7 +104,8 @@ public enum SQLiteSchema {
                     'retryLimitReached', 'transientStorageFailure',
                     'cancelledByUndo', 'backlogSkippedByUser',
                     'manualClassificationWon',
-                    'contentOrCatalogChanged', 'internalFailure'
+                    'contentOrCatalogChanged', 'taskBecameIneligible',
+                    'internalFailure'
                 )
             ),
             available_at REAL NOT NULL,

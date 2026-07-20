@@ -699,8 +699,11 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             requiring: editor
         )
         try await waitUntil("Quick Entry Return did not create and dismiss") {
-            panel.isVisible == false
-                && taskRecord(titled: Self.fixtureTitle, in: store) != nil
+            guard panel.isVisible == false,
+                  let task = taskRecord(titled: Self.fixtureTitle, in: store)
+            else { return false }
+            return store.automaticClassificationStatus(for: task.trace.chainID)
+                == .waitingForConfiguration
         }
     }
 
@@ -748,9 +751,12 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             input: input
         )
         try await waitUntil("Shift-Command-Z did not redo the Quick Entry task") {
-            taskRecord(titled: Self.fixtureTitle, in: store) != nil
-                && store.canUndoDomainAction
+            guard let task = taskRecord(titled: Self.fixtureTitle, in: store)
+            else { return false }
+            return store.canUndoDomainAction
                 && store.canRedoDomainAction == false
+                && store.automaticClassificationStatus(for: task.trace.chainID)
+                    == .waitingForConfiguration
         }
     }
 

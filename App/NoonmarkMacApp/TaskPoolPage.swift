@@ -187,7 +187,9 @@ struct PoolTaskRow: View {
             }
             AutomaticTaskClassificationStatusView(
                 chainID: task.chain.id,
-                taskTitle: task.definition.title
+                taskTitle: task.definition.title,
+                accessibilitySurface: .taskPoolRow,
+                accessibilityInstanceID: task.chain.id.description
             )
             Spacer(minLength: 0)
         }

@@ -425,7 +425,7 @@ _Avoid_: 已删除记忆副本, 隐藏记忆, 不可撤销封锁
 _Avoid_: 全量记忆注入, 隐式跨会话读取, 不可见系统画像
 
 **AI Provider**:
-用户配置的模型服务来源，例如 OpenAI-compatible endpoint、本地模型或自定义 HTTP provider。
+用户配置的模型服务来源，例如 OpenAI-compatible HTTPS endpoint、本机 loopback 模型或自定义 Provider；远程服务不得使用明文 HTTP。
 _Avoid_: 固定模型, 内置账号
 
 **Provider 配置身份**:

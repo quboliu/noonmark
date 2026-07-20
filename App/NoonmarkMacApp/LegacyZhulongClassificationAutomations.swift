@@ -254,7 +254,7 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                 )
                 store.publishCurrentZhulongTodoDiff()
                 guard let resultURL else { return }
-                let result = exerciseRevisionAndApply(on: store)
+                let result = await exerciseRevisionAndApply(on: store)
                 try? result.write(to: resultURL, atomically: true, encoding: .utf8)
                 store.persist()
                 NSApp.terminate(nil)
@@ -265,7 +265,7 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
     }
 
     @MainActor
-    private func exerciseRevisionAndApply(on store: NoonmarkStore) -> String {
+    private func exerciseRevisionAndApply(on store: NoonmarkStore) async -> String {
         guard let original = store.zhulongWorkspace.selectedSession?.currentTodoDiff,
               original.items.count == 2
         else { return "failed: missing original diff" }
@@ -317,7 +317,17 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
             return "failed: explicit preauthorization was not retained"
         }
 
-        store.confirmAndApplyCurrentZhulongTodoDiff()
+        do {
+            try await clickConfirmAndApply(on: store)
+            try await waitUntil("Todo diff UI application") {
+                store.zhulongWorkspace.selectedSession?.todoApplyReceipts.count == 1
+            }
+        } catch {
+            if let resultURL {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+            }
+            return "failed: real Todo diff confirmation failed: \(error.localizedDescription)"
+        }
         let appliedDefinitions = store.engine.definitions.values.filter {
             $0.title == "E2E 编辑后的测量"
                 || $0.title == "E2E 拆分后的验证"
@@ -360,6 +370,104 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
             return "failed: ordinary Store mutation did not advance after Zhulong apply"
         }
         return "ok"
+    }
+
+    @MainActor
+    private func clickConfirmAndApply(on store: NoonmarkStore) async throws {
+        let identifier = "zhulong-confirm-apply-todo-diff"
+        let streamIdentifier = "zhulong-session-stream"
+        let label = AppPresentation(language: store.engine.preferences.language)
+            .zhulong.confirmAndApplyAtomically
+        var mainWindow: NSWindow?
+        try await waitUntil("visible Todo diff session stream") {
+            guard AppViewTreeE2E.activateMainWindow(),
+                  let window = NSApp.windows.first(where: {
+                      $0 is NoonmarkWindow
+                          && $0.isVisible
+                          && $0.isMiniaturized == false
+                  }),
+                  AppViewTreeE2E.view(
+                      identifier: streamIdentifier,
+                      in: window
+                  ) != nil
+            else {
+                return false
+            }
+            mainWindow = window
+            return true
+        }
+        guard let mainWindow else {
+            throw ZhulongTodoDiffUIE2EError.failed(
+                "Todo diff main window disappeared"
+            )
+        }
+        try await waitUntil("visible Todo diff confirmation") {
+            guard let confirmation = AppViewTreeE2E.view(
+                identifier: identifier,
+                in: mainWindow
+            ) else {
+                return false
+            }
+            return AppViewTreeE2E.verificationText(for: confirmation) == label
+        }
+        let input = try WindowServerInputDriver()
+        let resolveTarget = {
+            () throws -> WindowServerInputDriver.PointerCoordinate in
+            guard NSApp.isActive,
+                  NSApp.keyWindow === mainWindow,
+                  let confirmation = AppViewTreeE2E.view(
+                      identifier: identifier,
+                      in: mainWindow
+                  ), AppViewTreeE2E.verificationText(for: confirmation) == label
+            else {
+                throw ZhulongTodoDiffUIE2EError.failed(
+                    "Todo diff confirmation changed before mouseDown"
+                )
+            }
+            let point = confirmation.convert(
+                NSPoint(
+                    x: confirmation.bounds.midX,
+                    y: confirmation.bounds.midY
+                ),
+                to: nil
+            )
+            return try input.pointerCoordinate(
+                windowPoint: point,
+                in: mainWindow
+            )
+        }
+        try await input.postClick(
+            at: try resolveTarget(),
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
+    }
+
+    @MainActor
+    private func waitUntil(
+        _ label: String,
+        timeout: TimeInterval = 10,
+        condition: @escaping @MainActor () throws -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if try condition() {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw ZhulongTodoDiffUIE2EError.failed("timed out: \(label)")
+    }
+}
+
+private enum ZhulongTodoDiffUIE2EError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message):
+            message
+        }
     }
 }
 

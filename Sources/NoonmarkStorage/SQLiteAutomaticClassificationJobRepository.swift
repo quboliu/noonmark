@@ -1746,6 +1746,38 @@ enum SQLiteAutomaticClassificationJobSQL {
         return changed
     }
 
+    static func invalidateJobs(
+        forChain chainID: TaskChainID,
+        now: Date,
+        in database: OpaquePointer?
+    ) throws -> Int {
+        try run(
+            """
+            UPDATE automatic_classification_jobs
+            SET state = 'superseded', proposal_checkpoint = NULL,
+                error_code = 'taskBecameIneligible', updated_at = ?,
+                terminal_at = ?, cancelled_by_undo = 0
+            WHERE chain_id = ?
+                AND state IN (
+                    'waitingForConfiguration', 'ready', 'running',
+                    'proposalReady', 'failed'
+                )
+            """,
+            on: database
+        ) { statement in
+            bind(now, to: 1, in: statement)
+            bind(now, to: 2, in: statement)
+            bind(chainID.rawValue.uuidString, to: 3, in: statement)
+        }
+        let changed = Int(sqlite3_changes(database))
+        try reopenCircuitIfCanaryIsNoLongerActive(
+            retryAt: now,
+            now: now,
+            in: database
+        )
+        return changed
+    }
+
     static func cancelJobs(
         forUndoneChain chainID: TaskChainID,
         now: Date,
@@ -1830,7 +1862,13 @@ enum SQLiteAutomaticClassificationJobSQL {
         try validate(replacement)
         guard let current = try job(id: fence.jobID, in: database),
               current.fence == fence,
-              current.state == .running || current.state == .proposalReady,
+              [
+                  .waitingForConfiguration,
+                  .ready,
+                  .running,
+                  .proposalReady,
+                  .failed
+              ].contains(current.state),
               replacement.id != current.id,
               replacement.chainID == current.chainID,
               replacement.generation > current.generation,
@@ -1843,15 +1881,93 @@ enum SQLiteAutomaticClassificationJobSQL {
                 "automatic classification replacement fence is invalid"
             )
         }
-        try supersede(
+        try supersedeForReplacement(
             fence,
-            errorCode: .contentOrCatalogChanged,
             now: now,
             in: database
         )
         try enqueue(
             replacement.preservingDispatchAuthorization(from: current),
             into: database
+        )
+    }
+
+    static func restoreEligibility(
+        _ fence: AutomaticClassificationJobFence,
+        with replacement: AutomaticClassificationJobEnqueue,
+        in database: OpaquePointer?
+    ) throws {
+        try validate(replacement)
+        guard let source = try job(id: fence.jobID, in: database),
+              source.fence == fence,
+              source.state == .superseded,
+              source.errorCode == .taskBecameIneligible,
+              replacement.id != source.id,
+              replacement.chainID == source.chainID,
+              source.generation < Int.max,
+              replacement.generation == source.generation + 1,
+              replacement.classificationFingerprint
+              == source.classificationFingerprint
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "automatic classification eligibility restoration fence is invalid"
+            )
+        }
+        let laterGenerations = try query(
+            """
+            SELECT COUNT(*)
+            FROM automatic_classification_jobs
+            WHERE chain_id = ? AND generation > ?
+            """,
+            on: database,
+            bind: { statement in
+                bind(source.chainID.rawValue.uuidString, to: 1, in: statement)
+                bind(source.generation, to: 2, in: statement)
+            },
+            row: { statement in
+                try int(statement, 0)
+            }
+        )
+        guard laterGenerations == [0] else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "automatic classification eligibility restoration was already consumed"
+            )
+        }
+        try enqueue(
+            replacement.preservingDispatchAuthorization(from: source),
+            into: database
+        )
+    }
+
+    private static func supersedeForReplacement(
+        _ fence: AutomaticClassificationJobFence,
+        now: Date,
+        in database: OpaquePointer?
+    ) throws {
+        try run(
+            """
+            UPDATE automatic_classification_jobs
+            SET state = 'superseded', proposal_checkpoint = NULL,
+                error_code = 'contentOrCatalogChanged', updated_at = ?,
+                terminal_at = ?, cancelled_by_undo = 0
+            WHERE id = ? AND generation = ? AND attempt = ?
+                AND claim_id IS ?
+                AND state IN (
+                    'waitingForConfiguration', 'ready', 'running',
+                    'proposalReady', 'failed'
+                )
+            """,
+            on: database
+        ) { statement in
+            bind(now, to: 1, in: statement)
+            bind(now, to: 2, in: statement)
+            bindFence(fence, startingAt: 3, in: statement)
+        }
+        try requireSingleCASChange(in: database)
+        try reopenCircuitIfCanaryIsNoLongerActive(
+            retryAt: now,
+            now: now,
+            in: database
         )
     }
 

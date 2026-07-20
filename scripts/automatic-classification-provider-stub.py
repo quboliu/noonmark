@@ -4,6 +4,8 @@
 Outcome sequences repeat their final status after they are exhausted. This makes
 ``--post-outcomes 429,503`` deterministic for any unexpected extra request: the
 third and later requests keep receiving 503 instead of silently succeeding.
+Assistant-content sequences use the same rule, so ``malformed,valid`` yields one
+HTTP 200 response with malformed classification JSON followed by valid replies.
 """
 
 import argparse
@@ -23,6 +25,7 @@ API_KEY = "noonmark-e2e-local-provider-key"
 CATEGORY_NAME = "E2E 自动分组"
 LABEL_NAMES = ("E2E 自动标签", "E2E 本地验证")
 SUPPORTED_OUTCOMES = frozenset({200, 401, 429, 503})
+SUPPORTED_CONTENT_OUTCOMES = frozenset({"valid", "malformed"})
 GATE_TIMEOUT_SECONDS = 60
 
 
@@ -56,6 +59,18 @@ def parse_outcomes(value: str) -> List[int]:
         supported = ", ".join(str(outcome) for outcome in sorted(SUPPORTED_OUTCOMES))
         raise argparse.ArgumentTypeError(
             f"outcomes must contain only supported statuses: {supported}"
+        )
+    return outcomes
+
+
+def parse_content_outcomes(value: str) -> List[str]:
+    outcomes = [item.strip() for item in value.split(",")]
+    if not outcomes or any(
+        outcome not in SUPPORTED_CONTENT_OUTCOMES for outcome in outcomes
+    ):
+        supported = ", ".join(sorted(SUPPORTED_CONTENT_OUTCOMES))
+        raise argparse.ArgumentTypeError(
+            f"content outcomes must contain only supported values: {supported}"
         )
     return outcomes
 
@@ -148,7 +163,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError, json.JSONDecodeError):
             self._send_error(422, "invalid_classification_catalog")
             return
-        request_number, outcome = self.server.record_post_request()
+        request_number, outcome, content_outcome = self.server.record_post_request()
         if self.server.request_received_path is not None:
             atomic_write(
                 self.server.request_received_path,
@@ -175,6 +190,8 @@ class ProviderHandler(BaseHTTPRequestHandler):
         if outcome != 200:
             self._send_error(outcome, "post_outcome")
             return
+        if content_outcome == "malformed":
+            response_content = "{"
         self._send_json(
             {
                 "choices": [
@@ -235,6 +252,7 @@ class ProviderServer(ThreadingHTTPServer):
         response_gate_path: Optional[pathlib.Path],
         response_gate_directory: Optional[pathlib.Path],
         post_outcomes: List[int],
+        post_content_outcomes: List[str],
         health_outcomes: List[int],
         health_count_path: Optional[pathlib.Path],
     ):
@@ -244,21 +262,25 @@ class ProviderServer(ThreadingHTTPServer):
         self.response_gate_path = response_gate_path
         self.response_gate_directory = response_gate_directory
         self.post_outcomes = post_outcomes
+        self.post_content_outcomes = post_content_outcomes
         self.health_outcomes = health_outcomes
         self.health_count_path = health_count_path
         self.request_count = 0
         self.health_count = 0
         self.count_lock = threading.Lock()
 
-    def record_post_request(self) -> Tuple[int, int]:
+    def record_post_request(self) -> Tuple[int, int, str]:
         with self.count_lock:
             self.request_count += 1
             request_number = self.request_count
             outcome = self.post_outcomes[
                 min(request_number - 1, len(self.post_outcomes) - 1)
             ]
+            content_outcome = self.post_content_outcomes[
+                min(request_number - 1, len(self.post_content_outcomes) - 1)
+            ]
             atomic_write(self.count_path, str(request_number))
-            return request_number, outcome
+            return request_number, outcome, content_outcome
 
     def record_health_request(self) -> Tuple[int, int]:
         with self.count_lock:
@@ -296,6 +318,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--post-content-outcomes",
+        type=parse_content_outcomes,
+        default=["valid"],
+        help=(
+            "comma-separated valid/malformed assistant-content sequence for "
+            "HTTP 200 responses; the final value repeats after exhaustion"
+        ),
+    )
+    parser.add_argument(
         "--health-outcomes",
         type=parse_outcomes,
         default=[200],
@@ -314,6 +345,7 @@ def main() -> None:
         arguments.response_gate_file,
         arguments.response_gate_directory,
         arguments.post_outcomes,
+        arguments.post_content_outcomes,
         arguments.health_outcomes,
         arguments.health_count_file,
     )

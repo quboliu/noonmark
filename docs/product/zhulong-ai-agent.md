@@ -51,6 +51,8 @@
 规则：
 
 - API Key 只能进入系统 Keychain 或等价安全存储，不能进入普通配置文件、日志、导出数据包或崩溃报告。
+- 每个 Provider execution revision 使用独立、不可变的 Keychain 凭证引用；新凭证先落 Keychain，再切换非敏感配置指针。旧 revision 只在下一次 fresh launch 确认持久指针后回收；显式清除先删固定 service 内的凭证，再删非敏感指针。请求只能解析与其 revision 完全一致的引用，崩溃恢复不得把新 Key 发往旧 URL 或旧模型。
+- 远程 Provider 只允许 HTTPS；明文 HTTP 仅开放给 `localhost`、`127.0.0.1` 与 `::1` loopback。
 - 开发者显式运行 DeepSeek live smoke 时，可由本机专用、Git 忽略且权限固定为 `0600` 的 `config/ai-provider.local.json` 经 shell 环境注入测试进程；正式 App 不读取或同步该文件，保存到烛龙设置的凭证仍只进入对应 App 身份的 Keychain。
 - provider 未配置或不可用时，烛龙入口显示为可配置状态，普通清单功能不降级。
 - provider 配置允许测试连接，但测试连接失败不能阻止用户继续使用清单。

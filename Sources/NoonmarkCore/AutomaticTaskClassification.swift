@@ -227,7 +227,7 @@ public extension NoonmarkEngine {
         _ proposal: AutomaticClassificationApplicationProposal,
         authority: AutomaticTaskClassificationAuthority,
         interactionID: UUID,
-        now: Date = Date()
+        now: Date
     ) throws -> AutomaticTaskClassificationPlan {
         try validateAutomaticClassificationAuthority(authority)
         guard (1 ... 3).contains(proposal.labels.count) else {
@@ -271,7 +271,7 @@ public extension NoonmarkEngine {
     func commitAutomaticClassification(
         _ plan: AutomaticTaskClassificationPlan,
         authority: AutomaticTaskClassificationAuthority,
-        now: Date = Date()
+        now: Date
     ) throws -> ClassificationReceipt {
         guard plan.authority == authority,
               plan.classificationPlan.source == .automaticAI(

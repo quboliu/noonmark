@@ -95,7 +95,9 @@ struct FuturePlanRow: View {
                 }
                 AutomaticTaskClassificationStatusView(
                     chainID: item.trace.chainID,
-                    taskTitle: item.definition.title
+                    taskTitle: item.definition.title,
+                    accessibilitySurface: .futureRow,
+                    accessibilityInstanceID: item.trace.id.description
                 )
                 .padding(.top, 3)
             }

@@ -561,6 +561,12 @@ struct ZhulongSessionStreamPage: View {
                         store.confirmAndApplyCurrentZhulongTodoDiff()
                     }
                     .accessibilityIdentifier("zhulong-confirm-apply-todo-diff")
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "zhulong-confirm-apply-todo-diff",
+                            verificationText: copy.confirmAndApplyAtomically
+                        )
+                    }
                 }
             } else {
                 SmallActionButton(copy.createReviewableTodoDiff, tone: .accent) {

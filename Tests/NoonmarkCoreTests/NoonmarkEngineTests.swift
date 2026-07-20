@@ -1569,6 +1569,56 @@ final class NoonmarkEngineTests: XCTestCase {
         )
     }
 
+    func testSnapshotRedoOfAbandonmentForwardsTheWholeTraceBoundary() throws {
+        let engine = NoonmarkEngine()
+        let abandonedChainID = try engine.createPoolTask(
+            title: "撤销后再次放弃",
+            now: now
+        )
+        let abandonedTraceID = try engine.scheduleFromPool(
+            chainID: abandonedChainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let unaffectedChainID = try engine.createPoolTask(
+            title: "不受放弃撤销影响",
+            now: now.addingTimeInterval(1)
+        )
+        let unaffectedTraceID = try engine.scheduleFromPool(
+            chainID: unaffectedChainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let active = engine.snapshot()
+        let unaffectedBefore = try XCTUnwrap(engine.traces[unaffectedTraceID])
+        try engine.abandonChain(
+            from: abandonedTraceID,
+            now: now.addingTimeInterval(2)
+        )
+        let abandoned = engine.snapshot()
+
+        let undone = try NoonmarkEngine(snapshot: active)
+        try undone.prepareSnapshotUndo(
+            replacing: abandoned,
+            now: now.addingTimeInterval(3)
+        )
+        let redone = try NoonmarkEngine(snapshot: abandoned)
+        try redone.prepareSnapshotUndo(
+            replacing: undone.snapshot(),
+            now: now.addingTimeInterval(4)
+        )
+
+        let redoneChain = try XCTUnwrap(redone.chains[abandonedChainID])
+        let redoneTrace = try XCTUnwrap(redone.traces[abandonedTraceID])
+        XCTAssertEqual(redoneChain.state, .abandoned)
+        XCTAssertEqual(redoneTrace.status, .abandoned)
+        XCTAssertEqual(redoneTrace.contentUpdatedAt, redoneChain.updatedAt)
+        XCTAssertEqual(redoneTrace.settledAt, redoneChain.updatedAt)
+        XCTAssertEqual(redone.traces[unaffectedTraceID], unaffectedBefore)
+    }
+
     func testContentClockIgnoresNoOpAndRejectsBackwardsMutation() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(

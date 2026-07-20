@@ -1,8 +1,11 @@
 import AppKit
+import ApplicationServices
 import Foundation
 import NoonmarkAI
 import NoonmarkCore
+import NoonmarkDayContext
 import NoonmarkMacRuntime
+import NoonmarkMacUIContract
 import NoonmarkStorage
 
 private enum AutomaticClassificationDeterministicProviderE2E {
@@ -49,7 +52,7 @@ private enum AutomaticClassificationDeterministicProviderE2E {
         store.automaticClassificationProviderConfigurationDidChange(transition)
         guard store.zhulongProviderDraft.hasStoredAPIKey == false,
               store.zhulongProviderDraft.enabled == false,
-              ZhulongProviderKeychain.hasAPIKey() == false
+              try ZhulongProviderKeychain.hasAnyAPIKey() == false
         else {
             throw AutomaticClassificationDeterministicE2EError.failed(
                 "isolated provider credentials were not cleared"
@@ -799,6 +802,8 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
         case backlogStart(requestReceivedURL: URL, responseReleaseURL: URL)
         case backlogLater
         case futureOnly
+        case failedEdit
+        case statusSurfaces(screenshotURL: URL)
         case providerBlockRetry
         case providerTransientCircuit(gateDirectory: URL)
     }
@@ -807,10 +812,23 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
         static let backlogA = "E2E 待归类积压 A"
         static let backlogB = "E2E 待归类积压 B"
         static let automaticC = "E2E 配置后自动归类 C"
+        static let failedEdit = "E2E 失败后编辑自动归类"
+        static let failedEditDescription = "E2E 用户编辑后的任务描述"
+        static let statusUnfinished = "E2E 自动归类状态未完成"
+        static let statusCompleted = "E2E 自动归类状态已完成"
+        static let statusSubtaskParent = "E2E 自动归类状态子任务父项"
+        static let statusSubtask = "E2E 自动归类状态已完成子任务"
+        static let statusFailedRetry = "E2E 自动归类状态失败重试"
         static let blockedPrefix = "E2E Provider 拒绝"
         static let transientPrefix = "E2E Provider 瞬时故障"
         static let manualCategory = "E2E 人工分组"
         static let manualLabel = "E2E 人工标签"
+    }
+
+    private struct ExpectedStatusAccessibility {
+        let identifier: String
+        let label: String
+        let isButton: Bool
     }
 
     private let scenario: Scenario
@@ -851,6 +869,25 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
             "--e2e-automatic-classification-backlog-later"
         ) {
             return Self(scenario: .backlogLater, resultURL: resultURL)
+        }
+        if AppLaunchArguments.contains(
+            "--e2e-automatic-classification-failed-edit"
+        ) {
+            return Self(scenario: .failedEdit, resultURL: resultURL)
+        }
+        if AppLaunchArguments.contains(
+            "--e2e-automatic-classification-status-surfaces"
+        ) {
+            guard let screenshotPath = AppLaunchArguments.value(
+                after: "--e2e-automatic-classification-status-screenshot-url"
+            ), screenshotPath.isEmpty == false
+            else { return nil }
+            return Self(
+                scenario: .statusSurfaces(
+                    screenshotURL: URL(fileURLWithPath: screenshotPath)
+                ),
+                resultURL: resultURL
+            )
         }
         if AppLaunchArguments.contains(
             "--e2e-automatic-classification-provider-block-retry"
@@ -897,6 +934,13 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
                 try await exerciseBacklogLater(on: store)
             case .futureOnly:
                 try await exerciseFutureOnly(on: store)
+            case .failedEdit:
+                try await exerciseFailedEdit(on: store)
+            case let .statusSurfaces(screenshotURL):
+                try await exerciseStatusSurfaces(
+                    on: store,
+                    screenshotURL: screenshotURL
+                )
             case .providerBlockRetry:
                 try await exerciseProviderBlockRetry(on: store)
             case let .providerTransientCircuit(gateDirectory):
@@ -1159,6 +1203,759 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
               try isHealthyClosedCircuit(repository)
         else {
             throw failure("future-only decision did not preserve manual authority")
+        }
+    }
+
+    @MainActor
+    private func exerciseFailedEdit(on store: NoonmarkStore) async throws {
+        let repository = try await prepareConfiguredStore(store)
+        let chainID = try addPoolTask(Title.failedEdit, to: store)
+
+        try await waitUntil("malformed Provider response failure", timeout: 30) {
+            guard let failed = try job(
+                for: chainID,
+                repository: repository
+            ) else { return false }
+            return failed.state == .failed
+                && failed.errorCode == .invalidProviderResponse
+                && store.automaticClassificationStatus(for: chainID) == .failed
+        }
+        guard let failed = try job(for: chainID, repository: repository),
+              failed.generation == 1,
+              failed.state == .failed,
+              failed.dispatchAuthorization == .automatic,
+              failed.authorizationID == nil,
+              failed.authorizedAt == nil,
+              failed.attempt == 1,
+              failed.claimID != nil,
+              failed.claimedAt != nil,
+              failed.proposalCheckpoint == nil,
+              failed.errorCode == .invalidProviderResponse,
+              failed.terminalAt != nil,
+              try hasNoClassification(chainID, store: store)
+        else {
+            throw failure("malformed Provider response did not become an exact failed job")
+        }
+
+        store.updatePoolTaskText(
+            chainID: chainID,
+            descriptionText: Title.failedEditDescription
+        )
+        guard store.currentDefinition(for: chainID)?.descriptionText
+            == Title.failedEditDescription
+        else {
+            throw failure("Store user edit did not update the task description")
+        }
+
+        try await waitUntil("edited failed job replacement", timeout: 30) {
+            let current = try jobs(for: [chainID], repository: repository)
+            return isCompletedFailedEditReplacement(current, failed: failed)
+        }
+        let completed = try jobs(for: [chainID], repository: repository)
+        guard isCompletedFailedEditReplacement(completed, failed: failed),
+              try hasAutomaticClassification(chainID, store: store),
+              store.automaticClassificationStatus(for: chainID) == nil,
+              try isHealthyClosedCircuit(repository)
+        else {
+            throw failure("user edit did not supersede and replace failed work")
+        }
+    }
+
+    @MainActor
+    private func exerciseStatusSurfaces(
+        on store: NoonmarkStore,
+        screenshotURL: URL
+    ) async throws {
+        var exerciseError: Error?
+        do {
+            try await exerciseStatusSurfaceUserPath(
+                on: store,
+                screenshotURL: screenshotURL
+            )
+        } catch {
+            exerciseError = error
+        }
+
+        do {
+            try await clearStatusSurfaceProvider(on: store)
+        } catch {
+            let exerciseDescription = exerciseError.map {
+                "; original failure: \($0.localizedDescription)"
+            } ?? ""
+            throw failure(
+                "status-surface Provider cleanup failed"
+                    + exerciseDescription
+            )
+        }
+        if let exerciseError {
+            throw exerciseError
+        }
+    }
+
+    @MainActor
+    // swiftlint:disable:next cyclomatic_complexity
+    private func exerciseStatusSurfaceUserPath(
+        on store: NoonmarkStore,
+        screenshotURL: URL
+    ) async throws {
+        let repository = try await prepareUnconfiguredStore(store)
+        guard store.engine.chains.isEmpty,
+              store.engine.definitions.isEmpty,
+              store.engine.traces.isEmpty,
+              store.engine.subtasks.isEmpty,
+              try repository.jobs().isEmpty
+        else {
+            throw failure("status-surface fixture was not isolated")
+        }
+
+        let unfinishedChainID = try addTask(Title.statusUnfinished, to: store)
+        let completedChainID = try addTask(Title.statusCompleted, to: store)
+        let subtaskChainID = try addTask(Title.statusSubtaskParent, to: store)
+        let unfinishedTrace = try currentTrace(
+            for: unfinishedChainID,
+            store: store
+        )
+        let completedTrace = try currentTrace(
+            for: completedChainID,
+            store: store
+        )
+        let subtaskParentTrace = try currentTrace(
+            for: subtaskChainID,
+            store: store
+        )
+
+        store.detailSubtaskText = Title.statusSubtask
+        store.addDetailSubtask(traceID: subtaskParentTrace.id)
+        guard let completedSubtask = store.subtasks(
+            for: subtaskParentTrace.id
+        ).first(where: { $0.title == Title.statusSubtask }) else {
+            throw failure("status-surface completed subtask was not created")
+        }
+        store.toggleSubtask(completedSubtask.id)
+        store.toggleComplete(completedTrace.id)
+        guard store.engine.subtasks[completedSubtask.id]?.status == .completed,
+              store.engine.traces[completedTrace.id]?.status == .completed,
+              store.engine.traces[unfinishedTrace.id]?.status == .pending,
+              store.engine.traces[subtaskParentTrace.id]?.status == .pending
+        else {
+            throw failure("status-surface lifecycle fixture was not committed")
+        }
+
+        let backlogChainIDs = Set([
+            unfinishedChainID,
+            completedChainID,
+            subtaskChainID
+        ])
+        try assertPendingBacklog(
+            chainIDs: backlogChainIDs,
+            repository: repository
+        )
+        try AutomaticClassificationDeterministicProviderE2E.configure(store)
+        try await waitUntil("status-surface configured backlog") {
+            guard store.automaticClassificationBacklogPrompt?.count == 3,
+                  backlogChainIDs.allSatisfy({
+                      store.automaticClassificationStatus(for: $0)
+                          == .waitingForDecision
+                  })
+            else {
+                return false
+            }
+            return try isClosedCircuit(repository)
+        }
+        try assertPendingBacklog(
+            chainIDs: backlogChainIDs,
+            repository: repository
+        )
+
+        let failedChainID = try addTask(Title.statusFailedRetry, to: store)
+        let failedTrace = try currentTrace(for: failedChainID, store: store)
+        try await waitUntil(
+            "status-surface malformed Provider failure",
+            timeout: 30
+        ) {
+            guard let failed = try job(
+                for: failedChainID,
+                repository: repository
+            ) else {
+                return false
+            }
+            return failed.generation == 1
+                && failed.state == .failed
+                && failed.attempt == 1
+                && failed.errorCode == .invalidProviderResponse
+                && store.automaticClassificationStatus(for: failedChainID)
+                == .failed
+        }
+        guard let failedBeforeRetry = try job(
+            for: failedChainID,
+            repository: repository
+        ), failedBeforeRetry.generation == 1,
+            failedBeforeRetry.state == .failed,
+            failedBeforeRetry.attempt == 1,
+            failedBeforeRetry.dispatchAuthorization == .automatic,
+            failedBeforeRetry.errorCode == .invalidProviderResponse,
+            try hasNoClassification(failedChainID, store: store)
+        else {
+            throw failure("status-surface failed job was not exact")
+        }
+
+        store.toggleComplete(failedTrace.id)
+        guard store.engine.traces[failedTrace.id]?.status == .completed,
+              store.automaticClassificationStatus(for: failedChainID)
+              == .failed,
+              try job(for: failedChainID, repository: repository)?.id
+              == failedBeforeRetry.id
+        else {
+            throw failure("completed failed task lost its retry status")
+        }
+
+        let mainWindow = try await visibleMainWindow()
+        let input = try WindowServerInputDriver()
+        try await activate(mainWindow)
+        try await clickMainWindowAnchor(
+            "sidebar.nav.completed",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Completed navigation for status surfaces") {
+            store.page == .completed
+        }
+
+        let completedStatusID = statusIdentifier(
+            surface: .completedRow,
+            instanceID: completedTrace.id.description
+        )
+        let completedSubtaskStatusID = statusIdentifier(
+            surface: .completedSubtaskRow,
+            instanceID: completedSubtask.id.description
+        )
+        let failedRetryID = retryIdentifier(
+            surface: .completedRow,
+            instanceID: failedTrace.id.description
+        )
+        let completedIdentifiers = try await assertStatusAccessibility(
+            [
+                ExpectedStatusAccessibility(
+                    identifier: completedStatusID,
+                    label: statusAccessibilityLabel(
+                        .waitingForDecision,
+                        taskTitle: Title.statusCompleted,
+                        store: store
+                    ),
+                    isButton: false
+                ),
+                ExpectedStatusAccessibility(
+                    identifier: completedSubtaskStatusID,
+                    label: statusAccessibilityLabel(
+                        .waitingForDecision,
+                        taskTitle: Title.statusSubtaskParent,
+                        store: store
+                    ),
+                    isButton: false
+                ),
+                ExpectedStatusAccessibility(
+                    identifier: failedRetryID,
+                    label: statusAccessibilityLabel(
+                        .failed,
+                        taskTitle: Title.statusFailedRetry,
+                        store: store
+                    ),
+                    isButton: true
+                )
+            ],
+            in: mainWindow
+        )
+        try captureStatusSurface(mainWindow, to: screenshotURL)
+
+        try await clickAutomaticClassificationRetry(
+            identifier: failedRetryID,
+            label: statusAccessibilityLabel(
+                .failed,
+                taskTitle: Title.statusFailedRetry,
+                store: store
+            ),
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil(
+            "status-surface failed retry completion",
+            timeout: 30
+        ) {
+            let current = try jobs(
+                for: [failedChainID],
+                repository: repository
+            )
+            guard isCompletedStatusRetryReplacement(
+                current,
+                failedJobID: failedBeforeRetry.id
+            ), store.automaticClassificationStatus(for: failedChainID) == nil,
+                try hasAutomaticClassification(
+                    failedChainID,
+                    store: store
+                )
+            else {
+                return false
+            }
+            return try isHealthyClosedCircuit(repository)
+        }
+        try assertPendingBacklog(
+            chainIDs: backlogChainIDs,
+            repository: repository
+        )
+        let postRetryIdentifiers = try await assertStatusAccessibility(
+            [
+                ExpectedStatusAccessibility(
+                    identifier: completedStatusID,
+                    label: statusAccessibilityLabel(
+                        .waitingForDecision,
+                        taskTitle: Title.statusCompleted,
+                        store: store
+                    ),
+                    isButton: false
+                ),
+                ExpectedStatusAccessibility(
+                    identifier: completedSubtaskStatusID,
+                    label: statusAccessibilityLabel(
+                        .waitingForDecision,
+                        taskTitle: Title.statusSubtaskParent,
+                        store: store
+                    ),
+                    isButton: false
+                )
+            ],
+            in: mainWindow
+        )
+        guard postRetryIdentifiers.contains(failedRetryID) == false else {
+            throw failure("completed retry control remained in the AX tree")
+        }
+
+        let sourceDate = store.today
+        let targetDate = NoonmarkStore.offset(sourceDate, by: 1)
+        let currentMoment = try store.dayContext.moment()
+        let rolloverMoment = NaturalDayMoment(
+            instant: currentMoment.instant.addingTimeInterval(24 * 60 * 60),
+            state: NaturalDayState(
+                today: targetDate,
+                timeZoneIdentifier: currentMoment.state.timeZoneIdentifier,
+                localeIdentifier: currentMoment.state.localeIdentifier
+            )
+        )
+        try store.reconcileNaturalDay(rolloverMoment, signal: .manual)
+        guard store.today == targetDate,
+              store.engine.traces[unfinishedTrace.id]?.status == .unfinished,
+              store.engine.traces[subtaskParentTrace.id]?.status == .unfinished,
+              store.engine.traces[completedTrace.id]?.status == .completed,
+              store.engine.traces[failedTrace.id]?.status == .completed,
+              store.engine.subtasks[completedSubtask.id]?.status == .completed
+        else {
+            throw failure("status-surface natural-day settlement was incomplete")
+        }
+
+        try await clickMainWindowAnchor(
+            "sidebar.nav.unfinished",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Unfinished navigation for status surfaces") {
+            store.page == .unfinished
+        }
+        let unfinishedIdentifiers = try await assertStatusAccessibility(
+            [
+                ExpectedStatusAccessibility(
+                    identifier: statusIdentifier(
+                        surface: .unfinishedRow,
+                        instanceID: unfinishedChainID.description
+                    ),
+                    label: statusAccessibilityLabel(
+                        .waitingForDecision,
+                        taskTitle: Title.statusUnfinished,
+                        store: store
+                    ),
+                    isButton: false
+                ),
+                ExpectedStatusAccessibility(
+                    identifier: statusIdentifier(
+                        surface: .unfinishedRow,
+                        instanceID: subtaskChainID.description
+                    ),
+                    label: statusAccessibilityLabel(
+                        .waitingForDecision,
+                        taskTitle: Title.statusSubtaskParent,
+                        store: store
+                    ),
+                    isButton: false
+                )
+            ],
+            in: mainWindow
+        )
+        guard completedIdentifiers.isDisjoint(with: unfinishedIdentifiers),
+              completedIdentifiers.count == 3,
+              unfinishedIdentifiers.count == 2,
+              postRetryIdentifiers == Set([
+                  completedStatusID,
+                  completedSubtaskStatusID
+              ])
+        else {
+            throw failure("automatic classification AX identifiers were not global")
+        }
+    }
+
+    @MainActor
+    private func clearStatusSurfaceProvider(
+        on store: NoonmarkStore
+    ) async throws {
+        guard let repository = store.automaticClassificationJobRepository else {
+            throw failure("status-surface cleanup lost its durable repository")
+        }
+        try AutomaticClassificationDeterministicProviderE2E.clear(store)
+        try await waitUntil("status-surface Provider cleanup") {
+            guard let circuit = try repository.providerCircuit() else {
+                return false
+            }
+            guard circuit.state == .unconfigured,
+                  circuit.providerExecutionRevision == nil,
+                  store.zhulongProviderDraft.enabled == false,
+                  store.zhulongProviderDraft.hasStoredAPIKey == false
+            else {
+                return false
+            }
+            return try ZhulongProviderKeychain.hasAnyAPIKey() == false
+        }
+    }
+
+    @MainActor
+    private func currentTrace(
+        for chainID: TaskChainID,
+        store: NoonmarkStore
+    ) throws -> DayTrace {
+        let matches = store.engine.traces.values.filter {
+            $0.chainID == chainID && $0.date == store.today
+        }
+        guard matches.count == 1, let trace = matches.first else {
+            throw failure("status-surface task did not have one current trace")
+        }
+        return trace
+    }
+
+    private func isCompletedStatusRetryReplacement(
+        _ jobs: [AutomaticClassificationJob],
+        failedJobID: UUID
+    ) -> Bool {
+        guard jobs.count == 2,
+              let original = jobs.first(where: { $0.generation == 1 }),
+              let replacement = jobs.first(where: { $0.generation == 2 })
+        else {
+            return false
+        }
+        return original.id == failedJobID
+            && original.state == .superseded
+            && original.dispatchAuthorization == .automatic
+            && original.authorizationID == nil
+            && original.authorizedAt == nil
+            && original.attempt == 2
+            && original.claimID != nil
+            && original.claimedAt != nil
+            && original.proposalCheckpoint == nil
+            && original.errorCode == .contentOrCatalogChanged
+            && original.terminalAt != nil
+            && replacement.id != failedJobID
+            && replacement.state == .completed
+            && replacement.dispatchAuthorization == .automatic
+            && replacement.authorizationID == nil
+            && replacement.authorizedAt == nil
+            && replacement.attempt == 1
+            && replacement.claimID != nil
+            && replacement.claimedAt != nil
+            && replacement.proposalCheckpoint == nil
+            && replacement.errorCode == nil
+            && replacement.terminalAt != nil
+    }
+
+    private func statusIdentifier(
+        surface: MacUIAutomaticClassificationSurface,
+        instanceID: String
+    ) -> String {
+        MacUIAutomaticClassificationAccessibility.statusIdentifier(
+            surface: surface,
+            instanceID: instanceID
+        )
+    }
+
+    private func retryIdentifier(
+        surface: MacUIAutomaticClassificationSurface,
+        instanceID: String
+    ) -> String {
+        MacUIAutomaticClassificationAccessibility.retryIdentifier(
+            surface: surface,
+            instanceID: instanceID,
+            kind: .job
+        )
+    }
+
+    @MainActor
+    private func statusAccessibilityLabel(
+        _ status: AutomaticClassificationPresentationStatus,
+        taskTitle: String,
+        store: NoonmarkStore
+    ) -> String {
+        let statusText: String = switch status {
+        case .working:
+            store.copy.automaticClassificationWorking
+        case .waitingForConfiguration:
+            store.copy.automaticClassificationWaitingForConfiguration
+        case .waitingForDecision:
+            store.copy.automaticClassificationWaitingForDecision
+        case .providerPaused:
+            store.copy.automaticClassificationProviderPaused
+        case .failed:
+            store.copy.automaticClassificationFailed
+        }
+        return store.copy.automaticClassificationStatusAccessibilityLabel(
+            statusText,
+            taskTitle: taskTitle
+        )
+    }
+
+    @MainActor
+    private func assertStatusAccessibility(
+        _ expected: [ExpectedStatusAccessibility],
+        in window: NSWindow
+    ) async throws -> Set<String> {
+        let expectedByIdentifier = Dictionary(
+            uniqueKeysWithValues: expected.map { ($0.identifier, $0) }
+        )
+        guard expectedByIdentifier.count == expected.count else {
+            throw failure("status-surface expected AX identifiers collided")
+        }
+        var observedIdentifiers: Set<String>?
+        var lastObservation = "stable-snapshot=nil"
+        do {
+            try await waitUntil("exact automatic classification AX snapshot") {
+                guard NSApp.isActive, NSApp.keyWindow === window else {
+                    lastObservation = "app-active=\(NSApp.isActive) key-window-match=\(NSApp.keyWindow === window)"
+                    return false
+                }
+                guard let matches = ReadOnlyAccessibilityTarget
+                    .stableVisibleElements(
+                        identifierPrefix: "automatic-classification.status.",
+                        in: window
+                    )
+                else {
+                    lastObservation = "stable-snapshot=nil"
+                    return false
+                }
+                lastObservation = matches.map {
+                    "id=\($0.identifier ?? "nil") role=\($0.role) title=\($0.title ?? "nil") description=\($0.description ?? "nil") value=\($0.value ?? "nil") enabled=\(String(describing: $0.enabled)) frame=\(String(describing: $0.frame))"
+                }.joined(separator: " | ")
+                guard matches.count == expected.count else { return false }
+                let grouped = Dictionary(grouping: matches) { $0.identifier ?? "" }
+                guard Set(grouped.keys) == Set(expectedByIdentifier.keys),
+                      grouped.values.allSatisfy({ $0.count == 1 })
+                else {
+                    return false
+                }
+                for item in expected {
+                    guard let match = grouped[item.identifier]?.first,
+                          match.title == item.label
+                          || match.description == item.label
+                          || match.value == item.label
+                    else {
+                        return false
+                    }
+                    if item.isButton {
+                        guard match.role == kAXButtonRole as String,
+                              match.enabled == true
+                        else {
+                            return false
+                        }
+                    } else if match.role == kAXButtonRole as String {
+                        return false
+                    }
+                }
+                observedIdentifiers = Set(grouped.keys)
+                return true
+            }
+        } catch {
+            let expectedIdentifiers = expected.map(\.identifier).joined(separator: ",")
+            let expectedLabels = Set(expected.map(\.label))
+            let labelMatches = ReadOnlyAccessibilityTarget
+                .stableVisibleElements(in: window)?
+                .filter {
+                    expectedLabels.contains($0.title ?? "")
+                        || expectedLabels.contains($0.description ?? "")
+                        || expectedLabels.contains($0.value ?? "")
+                }
+                .map {
+                    "id=\($0.identifier ?? "nil") role=\($0.role) title=\($0.title ?? "nil") description=\($0.description ?? "nil") value=\($0.value ?? "nil") enabled=\(String(describing: $0.enabled)) frame=\(String(describing: $0.frame))"
+                }
+                .joined(separator: " | ") ?? "stable-all=nil"
+            let appKitIdentifiers = AppViewTreeE2E.identifiers(
+                withPrefix: "automatic-classification.status."
+            )?.sorted().joined(separator: ",") ?? "appkit-prefix=nil-or-duplicate"
+            throw failure(
+                "exact automatic classification AX snapshot failed; expected=\(expectedIdentifiers); observed=\(lastObservation); label-matches=\(labelMatches); appkit-ids=\(appKitIdentifiers)"
+            )
+        }
+        guard let observedIdentifiers else {
+            throw failure("automatic classification AX snapshot disappeared")
+        }
+        return observedIdentifiers
+    }
+
+    @MainActor
+    private func clickAutomaticClassificationRetry(
+        identifier: String,
+        label: String,
+        in window: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        var initialPoint: CGPoint?
+        try await waitUntil("visible automatic classification retry") {
+            guard let frame = ReadOnlyAccessibilityTarget.uniqueButton(
+                identifier: identifier,
+                label: label,
+                enabled: true,
+                in: window
+            )?.frame else {
+                return false
+            }
+            initialPoint = retryPoint(in: frame)
+            return true
+        }
+        guard let initialPoint else {
+            throw failure("automatic classification retry frame disappeared")
+        }
+        let resolveTarget = {
+            () throws -> WindowServerInputDriver.PointerCoordinate in
+            guard NSApp.keyWindow === window,
+                  let frame = ReadOnlyAccessibilityTarget.uniqueButton(
+                      identifier: identifier,
+                      label: label,
+                      enabled: true,
+                      in: window
+                  )?.frame
+            else {
+                throw self.failure(
+                    "automatic classification retry changed before mouseDown"
+                )
+            }
+            return try input.pointerCoordinate(
+                quartzPoint: self.retryPoint(in: frame),
+                in: window
+            )
+        }
+        do {
+            try await input.postClick(
+                at: try input.pointerCoordinate(
+                    quartzPoint: initialPoint,
+                    in: window
+                ),
+                modifiers: [],
+                resolveTarget: resolveTarget
+            )
+        } catch {
+            throw failure(
+                "WindowServer retry click failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func retryPoint(in frame: CGRect) -> CGPoint {
+        CGPoint(
+            x: frame.minX + frame.width * 0.85,
+            y: frame.midY
+        )
+    }
+
+    @MainActor
+    private func clickMainWindowAnchor(
+        _ identifier: String,
+        in window: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        let resolveTarget = {
+            () throws -> WindowServerInputDriver.PointerCoordinate in
+            guard NSApp.isActive,
+                  NSApp.keyWindow === window,
+                  let view = AppViewTreeE2E.view(
+                      identifier: identifier,
+                      in: window
+                  ), view.window === window,
+                view.isHiddenOrHasHiddenAncestor == false,
+                view.bounds.width >= 2,
+                view.bounds.height >= 2
+            else {
+                throw self.failure(
+                    "main-window target changed before mouseDown: \(identifier)"
+                )
+            }
+            let point = view.convert(
+                NSPoint(x: view.bounds.midX, y: view.bounds.midY),
+                to: nil
+            )
+            return try input.pointerCoordinate(
+                windowPoint: point,
+                in: window
+            )
+        }
+        do {
+            try await input.postClick(
+                at: try resolveTarget(),
+                modifiers: [],
+                resolveTarget: resolveTarget
+            )
+        } catch {
+            throw failure(
+                "WindowServer navigation click failed for \(identifier): "
+                    + error.localizedDescription
+            )
+        }
+    }
+
+    @MainActor
+    private func visibleMainWindow() async throws -> NSWindow {
+        var window: NSWindow?
+        try await waitUntil("status-surface main window") {
+            window = NSApp.windows.first {
+                $0 is NoonmarkWindow
+                    && $0.isVisible
+                    && $0.isMiniaturized == false
+            }
+            return window != nil
+        }
+        guard let window else {
+            throw failure("status-surface main window disappeared")
+        }
+        return window
+    }
+
+    @MainActor
+    private func captureStatusSurface(
+        _ window: NSWindow,
+        to screenshotURL: URL
+    ) throws {
+        guard let contentView = window.contentView,
+              contentView.bounds.width > 0,
+              contentView.bounds.height > 0,
+              let bitmap = contentView.bitmapImageRepForCachingDisplay(
+                  in: contentView.bounds
+              )
+        else {
+            throw failure("status-surface screenshot buffer was unavailable")
+        }
+        window.displayIfNeeded()
+        contentView.cacheDisplay(in: contentView.bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:])
+        else {
+            throw failure("status-surface screenshot encoding failed")
+        }
+        do {
+            try data.write(to: screenshotURL, options: .atomic)
+        } catch {
+            throw failure(
+                "status-surface screenshot write failed: "
+                    + error.localizedDescription
+            )
         }
     }
 
@@ -1530,22 +2327,62 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
         return chainID
     }
 
+    @MainActor
+    private func addPoolTask(
+        _ title: String,
+        to store: NoonmarkStore
+    ) throws -> TaskChainID {
+        store.poolText = title
+        store.addPoolTask()
+        guard let chainID = store.engine.definitions.values.first(
+            where: { $0.title == title }
+        )?.chainID else {
+            throw failure("scenario pool task was not created")
+        }
+        return chainID
+    }
+
     private func assertPendingBacklog(
         chainIDs: Set<TaskChainID>,
         repository: SQLiteAutomaticClassificationJobRepository
     ) throws {
-        let current = try jobs(for: chainIDs, repository: repository)
+        let current = try latestJobs(for: chainIDs, repository: repository)
         guard current.count == chainIDs.count,
               current.allSatisfy({
                   $0.state == .waitingForConfiguration
                       && $0.dispatchAuthorization == .pendingUserDecision
                       && $0.attempt == 0
+                      && $0.claimID == nil
+                      && $0.claimedAt == nil
                       && $0.authorizationID == nil
                       && $0.authorizedAt == nil
+                      && $0.proposalCheckpoint == nil
+                      && $0.errorCode == nil
+                      && $0.terminalAt == nil
               })
         else {
             throw failure("backlog was dispatched without explicit authorization")
         }
+    }
+
+    private func latestJobs(
+        for chainIDs: Set<TaskChainID>,
+        repository: SQLiteAutomaticClassificationJobRepository
+    ) throws -> [AutomaticClassificationJob] {
+        var latestByChainID: [TaskChainID: AutomaticClassificationJob] = [:]
+        for job in try jobs(for: chainIDs, repository: repository) {
+            guard let current = latestByChainID[job.chainID] else {
+                latestByChainID[job.chainID] = job
+                continue
+            }
+            if job.generation == current.generation {
+                throw failure("backlog contains duplicate latest generations")
+            }
+            if job.generation > current.generation {
+                latestByChainID[job.chainID] = job
+            }
+        }
+        return Array(latestByChainID.values)
     }
 
     @MainActor
@@ -1637,11 +2474,53 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
             && replacement.terminalAt != nil
     }
 
+    private func isCompletedFailedEditReplacement(
+        _ jobs: [AutomaticClassificationJob],
+        failed: AutomaticClassificationJob
+    ) -> Bool {
+        guard jobs.count == 2,
+              let original = jobs.first(where: { $0.generation == 1 }),
+              let replacement = jobs.first(where: { $0.generation == 2 })
+        else { return false }
+        return original.id == failed.id
+            && original.contentDigest == failed.contentDigest
+            && original.state == .superseded
+            && original.dispatchAuthorization == .automatic
+            && original.authorizationID == nil
+            && original.authorizedAt == nil
+            && original.attempt == 1
+            && original.claimID == failed.claimID
+            && original.claimedAt == failed.claimedAt
+            && original.proposalCheckpoint == nil
+            && original.errorCode == .contentOrCatalogChanged
+            && original.terminalAt != nil
+            && replacement.id != failed.id
+            && replacement.contentDigest != failed.contentDigest
+            && replacement.generation == 2
+            && replacement.state == .completed
+            && replacement.dispatchAuthorization == .automatic
+            && replacement.authorizationID == nil
+            && replacement.authorizedAt == nil
+            && replacement.attempt == 1
+            && replacement.claimID != nil
+            && replacement.claimedAt != nil
+            && replacement.errorCode == nil
+            && replacement.terminalAt != nil
+    }
+
     private func job(
         for chainID: TaskChainID,
         repository: SQLiteAutomaticClassificationJobRepository
     ) throws -> AutomaticClassificationJob? {
-        try repository.jobs().first { $0.chainID == chainID }
+        let matching = try repository.jobs().filter { $0.chainID == chainID }
+        guard let latestGeneration = matching.map(\.generation).max() else {
+            return nil
+        }
+        let latest = matching.filter { $0.generation == latestGeneration }
+        guard latest.count == 1 else {
+            throw failure("automatic classification generation is not unique")
+        }
+        return latest[0]
     }
 
     @MainActor
@@ -1658,6 +2537,18 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
             if case .automaticAI = $0.source { return true }
             return false
         }
+    }
+
+    @MainActor
+    private func hasNoClassification(
+        _ chainID: TaskChainID,
+        store: NoonmarkStore
+    ) throws -> Bool {
+        guard let repository = store.repository else { return false }
+        guard let current = try repository.load().snapshot()
+            .classifications.currentByChainID[chainID]
+        else { return true }
+        return current.category == nil && current.labels.isEmpty
     }
 
     @MainActor

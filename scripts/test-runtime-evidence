@@ -12,11 +12,19 @@ trap 'rm -rf "$work_dir"' EXIT
 mkdir -p "$diagnostic_dir"
 
 clean_log="${work_dir}/clean.log"
+structured_diagnostic_log="${work_dir}/structured-diagnostic.log"
 failure_log="${work_dir}/failure.log"
 console_log="${work_dir}/console.log"
 premature_console_log="${work_dir}/premature-console.log"
 printf 'normal app lifecycle\n' >"$clean_log"
 runtime_evidence_assert_clean_logs "clean fixture" "$clean_log"
+
+printf '%s\n' \
+  'NoonmarkAutomaticClassificationDiagnostic event=snapshot max_attempt=2 failure=none failures=0' \
+  >"$structured_diagnostic_log"
+runtime_evidence_assert_clean_logs \
+  "structured diagnostic fixture" \
+  "$structured_diagnostic_log"
 
 runtime_evidence_start_console_capture \
   "NoonmarkRuntimeEvidenceFixture" \

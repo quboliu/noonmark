@@ -1,4 +1,5 @@
 import NoonmarkCore
+import NoonmarkMacUIContract
 import SwiftUI
 
 struct AutomaticTaskClassificationStatusView: View {
@@ -6,21 +7,19 @@ struct AutomaticTaskClassificationStatusView: View {
 
     let chainID: TaskChainID
     let taskTitle: String
+    let accessibilitySurface: MacUIAutomaticClassificationSurface
+    let accessibilityInstanceID: String
 
     var body: some View {
         if let status = store.automaticClassificationStatus(for: chainID) {
             statusContent(status)
-                .font(.noonmarkSystem(size: 10.5, weight: .medium))
-                .foregroundStyle(Theme.text3)
-                .fixedSize(horizontal: true, vertical: false)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier(
-                    "automatic-classification.status.\(chainID.description)"
-                )
-                .accessibilityLabel(
-                    store.copy.automaticClassificationStatusAccessibilityLabel(
-                        statusText(status),
-                        taskTitle: taskTitle
+                .modifier(
+                    AutomaticTaskClassificationStatusModifier(
+                        identifier: accessibilityIdentifier(for: status),
+                        label: store.copy.automaticClassificationStatusAccessibilityLabel(
+                            statusText(status),
+                            taskTitle: taskTitle
+                        )
                     )
                 )
         }
@@ -51,9 +50,6 @@ struct AutomaticTaskClassificationStatusView: View {
             .buttonStyle(.plain)
             .foregroundStyle(Theme.warn)
             .contentShape(Rectangle())
-            .accessibilityIdentifier(
-                "automatic-classification.status.\(chainID.description).circuit-retry"
-            )
             .accessibilityAddTraits(.isButton)
         case .failed:
             Button {
@@ -83,5 +79,44 @@ struct AutomaticTaskClassificationStatusView: View {
         case .failed:
             store.copy.automaticClassificationFailed
         }
+    }
+
+    private func accessibilityIdentifier(
+        for status: AutomaticClassificationPresentationStatus
+    ) -> String {
+        switch status {
+        case .providerPaused:
+            MacUIAutomaticClassificationAccessibility.retryIdentifier(
+                surface: accessibilitySurface,
+                instanceID: accessibilityInstanceID,
+                kind: .providerCircuit
+            )
+        case .failed:
+            MacUIAutomaticClassificationAccessibility.retryIdentifier(
+                surface: accessibilitySurface,
+                instanceID: accessibilityInstanceID,
+                kind: .job
+            )
+        case .working, .waitingForConfiguration, .waitingForDecision:
+            MacUIAutomaticClassificationAccessibility.statusIdentifier(
+                surface: accessibilitySurface,
+                instanceID: accessibilityInstanceID
+            )
+        }
+    }
+}
+
+private struct AutomaticTaskClassificationStatusModifier: ViewModifier {
+    let identifier: String
+    let label: String
+
+    func body(content: Content) -> some View {
+        content
+            .font(.noonmarkSystem(size: 10.5, weight: .medium))
+            .foregroundStyle(Theme.text3)
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier(identifier)
+            .accessibilityLabel(label)
     }
 }

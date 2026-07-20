@@ -92,6 +92,13 @@ struct CompletedRow: View {
                         )
                         .padding(.top, 4)
                     }
+                    AutomaticTaskClassificationStatusView(
+                        chainID: item.trace.chainID,
+                        taskTitle: item.definition.title,
+                        accessibilitySurface: .completedRow,
+                        accessibilityInstanceID: item.trace.id.description
+                    )
+                    .padding(.top, 3)
                 }
                 Spacer()
                 CompletionTimeText(time: store.displayTime(item.trace.completedAt))
@@ -139,6 +146,13 @@ struct CompletedSubtaskRow: View {
                         )
                         .padding(.top, 4)
                     }
+                    AutomaticTaskClassificationStatusView(
+                        chainID: record.parentTrace.chainID,
+                        taskTitle: record.parentDefinition.title,
+                        accessibilitySurface: .completedSubtaskRow,
+                        accessibilityInstanceID: record.subtask.id.description
+                    )
+                    .padding(.top, 3)
                 }
                 Spacer()
                 CompletionKindPill(text: store.copy.subtask, color: Theme.accent)

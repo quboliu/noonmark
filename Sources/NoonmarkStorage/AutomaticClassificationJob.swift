@@ -69,6 +69,7 @@ public enum AutomaticClassificationJobErrorCode: String, CaseIterable, Codable, 
     case backlogSkippedByUser
     case manualClassificationWon
     case contentOrCatalogChanged
+    case taskBecameIneligible
     case internalFailure
 }
 
@@ -309,4 +310,19 @@ public struct AutomaticClassificationJobRedo: Equatable, Sendable {
         self.cancelledJob = cancelledJob
         self.replacement = replacement
     }
+}
+
+public enum AutomaticClassificationJobMutation: Equatable, Sendable {
+    case replace(
+        AutomaticClassificationJobFence,
+        with: AutomaticClassificationJobEnqueue
+    )
+    case invalidateChain(TaskChainID)
+    case supersedeChain(TaskChainID)
+    case restoreEligibility(
+        AutomaticClassificationJobFence,
+        with: AutomaticClassificationJobEnqueue
+    )
+    case cancelForUndo(TaskChainID)
+    case requeueCancelledByUndo(AutomaticClassificationJobRedo)
 }

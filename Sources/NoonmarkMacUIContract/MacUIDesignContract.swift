@@ -347,6 +347,7 @@ public enum MacUIUnfinishedPoolElement: String, CaseIterable, Sendable {
     case abandonContextMenuAction
     case reenableAbandonedContextMenuAction
     case detailsExpansion
+    case automaticClassificationStatus
     case emptyState
 }
 
@@ -360,6 +361,7 @@ public enum MacUICompletedPoolElement: String, CaseIterable, Sendable {
     case rowContextMenu
     case jumpDayContextMenuAction
     case copyAsNewTaskContextMenuAction
+    case automaticClassificationStatus
     case emptyState
 }
 
@@ -622,6 +624,37 @@ public enum MacUIClassificationAccessibility {
     public static let archiveActionPrefix = "classification.manager.lifecycle.archive"
     public static let restoreActionPrefix = "classification.manager.lifecycle.restore"
     public static let discardActionPrefix = "classification.manager.lifecycle.discard"
+}
+
+public enum MacUIAutomaticClassificationSurface: String, CaseIterable, Sendable {
+    case dayRow = "day-row"
+    case taskPoolRow = "task-pool-row"
+    case futureRow = "future-row"
+    case unfinishedRow = "unfinished-row"
+    case completedRow = "completed-row"
+    case completedSubtaskRow = "completed-subtask-row"
+}
+
+public enum MacUIAutomaticClassificationRetryKind: String, Sendable {
+    case job
+    case providerCircuit = "provider-circuit"
+}
+
+public enum MacUIAutomaticClassificationAccessibility {
+    public static func statusIdentifier(
+        surface: MacUIAutomaticClassificationSurface,
+        instanceID: String
+    ) -> String {
+        "automatic-classification.status.\(surface.rawValue).\(instanceID)"
+    }
+
+    public static func retryIdentifier(
+        surface: MacUIAutomaticClassificationSurface,
+        instanceID: String,
+        kind: MacUIAutomaticClassificationRetryKind
+    ) -> String {
+        "\(statusIdentifier(surface: surface, instanceID: instanceID)).retry.\(kind.rawValue)"
+    }
 }
 
 public enum MacUIBackendCapability: String, CaseIterable, Sendable {

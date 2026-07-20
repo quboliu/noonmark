@@ -68,29 +68,98 @@ app_path="dist/NoonmarkMacAppE2E.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacAppE2E"
 app_pid=""
 
-clear_e2e_provider_credentials() {
-  security delete-generic-password \
+e2e_provider_credential_state() {
+  local find_status=0
+  security find-generic-password \
     -s app.noonmark.zhulong.provider.e2e \
-    -a default-api-key \
-    >/dev/null 2>&1 || true
-  defaults delete \
-    app.noonmark.mac.e2e \
-    noonmark.zhulong.provider.config \
-    >/dev/null 2>&1 || true
+    >/dev/null 2>&1 || find_status=$?
+  return "$find_status"
 }
 
-cleanup() {
+e2e_provider_defaults_state() {
+  local defaults_output=""
+  if defaults_output="$(
+    defaults read \
+      app.noonmark.mac.e2e \
+      noonmark.zhulong.provider.config \
+      2>&1
+  )"; then
+    return 0
+  fi
+  if [[ "$defaults_output" == *"does not exist"* ]]; then
+    return 44
+  fi
+  return 1
+}
+
+clear_e2e_provider_credentials() {
+  local deletion_count=0
+  local credential_state=0
+  local defaults_state=0
+  while true; do
+    credential_state=0
+    e2e_provider_credential_state || credential_state=$?
+    if [[ "$credential_state" -eq 44 ]]; then
+      break
+    fi
+    if [[ "$credential_state" -ne 0 ]]; then
+      return 1
+    fi
+    if ! security delete-generic-password \
+      -s app.noonmark.zhulong.provider.e2e \
+      >/dev/null 2>&1; then
+      return 1
+    fi
+    deletion_count=$((deletion_count + 1))
+    if [[ "$deletion_count" -ge 64 ]]; then
+      return 1
+    fi
+  done
+  defaults_state=0
+  e2e_provider_defaults_state || defaults_state=$?
+  if [[ "$defaults_state" -eq 0 ]]; then
+    defaults delete \
+      app.noonmark.mac.e2e \
+      noonmark.zhulong.provider.config \
+      >/dev/null 2>&1 || return 1
+  elif [[ "$defaults_state" -ne 44 ]]; then
+    return 1
+  fi
+  credential_state=0
+  e2e_provider_credential_state || credential_state=$?
+  defaults_state=0
+  e2e_provider_defaults_state || defaults_state=$?
+  [[ "$credential_state" -eq 44 && "$defaults_state" -eq 44 ]]
+}
+
+cleanup_resources() {
   if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
-    kill "$app_pid" 2>/dev/null || true
+    if ! kill "$app_pid" 2>/dev/null && kill -0 "$app_pid" 2>/dev/null; then
+      return 1
+    fi
     wait "$app_pid" 2>/dev/null || true
   fi
+  app_pid=""
   clear_e2e_provider_credentials
 }
-trap cleanup EXIT
+
+cleanup_on_exit() {
+  local status=$?
+  trap - EXIT
+  if ! cleanup_resources; then
+    echo "DeepSeek App E2E cleanup failed; isolated Provider state may remain" >&2
+    exit 1
+  fi
+  exit "$status"
+}
+trap cleanup_on_exit EXIT
 
 rm -rf "$evidence_dir"
 mkdir -p "$evidence_dir"
-clear_e2e_provider_credentials
+if ! clear_e2e_provider_credentials; then
+  echo "DeepSeek App E2E preflight cleanup failed" >&2
+  exit 1
+fi
 scripts/build-mac-app debug e2e >/dev/null
 
 "$app_executable" \
@@ -169,19 +238,10 @@ if [[ "$task_count" != "1" || "$job_count" != "1" \
   exit 1
 fi
 
-if security find-generic-password \
-  -s app.noonmark.zhulong.provider.e2e \
-  -a default-api-key \
-  >/dev/null 2>&1; then
-  echo "DeepSeek App E2E Keychain credential was not cleared" >&2
+if ! cleanup_resources; then
+  echo "DeepSeek App E2E final cleanup failed" >&2
   exit 1
 fi
-if defaults read \
-  app.noonmark.mac.e2e \
-  noonmark.zhulong.provider.config \
-  >/dev/null 2>&1; then
-  echo "DeepSeek App E2E Provider defaults were not cleared" >&2
-  exit 1
-fi
+trap - EXIT
 
 echo "DeepSeek real App automatic classification passed: $database (category=$category_count labels=$label_count)"

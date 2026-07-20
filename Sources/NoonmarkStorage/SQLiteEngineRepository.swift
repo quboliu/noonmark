@@ -488,6 +488,71 @@ public final class SQLiteEngineRepository {
         _ snapshot: NoonmarkSnapshot,
         recordingChangesFor deviceID: SyncDeviceID,
         changedAt: Date,
+        enqueuingAutomaticClassificationJobs jobs: [AutomaticClassificationJobEnqueue],
+        applyingAutomaticClassificationJobMutations mutations: [
+            AutomaticClassificationJobMutation
+        ],
+        automaticClassificationTransitionAt transitionAt: Date
+    ) throws {
+        try SQLiteAutomaticClassificationJobSQL.validateDate(
+            transitionAt,
+            label: "automatic classification reconciliation transitionAt"
+        )
+        try saveWithAutomaticClassificationMutation(
+            snapshot,
+            recordingChangesFor: deviceID,
+            changedAt: changedAt
+        ) { database in
+            for mutation in mutations {
+                switch mutation {
+                case let .replace(fence, replacement):
+                    try SQLiteAutomaticClassificationJobSQL.replace(
+                        fence,
+                        with: replacement,
+                        now: transitionAt,
+                        in: database
+                    )
+                case let .invalidateChain(chainID):
+                    _ = try SQLiteAutomaticClassificationJobSQL.invalidateJobs(
+                        forChain: chainID,
+                        now: transitionAt,
+                        in: database
+                    )
+                case let .supersedeChain(chainID):
+                    _ = try SQLiteAutomaticClassificationJobSQL.supersedeJobs(
+                        forChain: chainID,
+                        now: transitionAt,
+                        in: database
+                    )
+                case let .restoreEligibility(fence, replacement):
+                    try SQLiteAutomaticClassificationJobSQL.restoreEligibility(
+                        fence,
+                        with: replacement,
+                        in: database
+                    )
+                case let .cancelForUndo(chainID):
+                    _ = try SQLiteAutomaticClassificationJobSQL.cancelJobs(
+                        forUndoneChain: chainID,
+                        now: transitionAt,
+                        in: database
+                    )
+                case let .requeueCancelledByUndo(redo):
+                    try SQLiteAutomaticClassificationJobSQL.requeueCancelledByUndo(
+                        redo,
+                        in: database
+                    )
+                }
+            }
+            for job in jobs {
+                try SQLiteAutomaticClassificationJobSQL.enqueue(job, into: database)
+            }
+        }
+    }
+
+    public func save(
+        _ snapshot: NoonmarkSnapshot,
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date,
         completingAutomaticClassificationJob claim: AutomaticClassificationJobClaim,
         automaticClassificationTransitionAt transitionAt: Date
     ) throws {

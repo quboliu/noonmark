@@ -259,6 +259,81 @@ final class SnapshotUndoSyncTests: XCTestCase {
         )
     }
 
+    func testAbandonUndoRedoUndoKeepsAValidForwardReactivationBoundary() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "反复撤销放弃仍可同步",
+            now: base
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: base.addingTimeInterval(1)
+        )
+        let active = engine.snapshot()
+        try engine.abandonChain(
+            from: traceID,
+            now: base.addingTimeInterval(2)
+        )
+        let abandoned = engine.snapshot()
+
+        let firstUndo = try NoonmarkEngine(snapshot: active)
+        try firstUndo.prepareSnapshotUndo(
+            replacing: abandoned,
+            now: base.addingTimeInterval(3)
+        )
+        let firstUndone = firstUndo.snapshot()
+        _ = try SyncSnapshotDiffer(mapper: mapper).journalEntries(
+            from: abandoned,
+            to: firstUndone,
+            changedAt: base.addingTimeInterval(3),
+            deviceID: SyncDeviceID("first-undo")
+        )
+
+        let redo = try NoonmarkEngine(snapshot: abandoned)
+        try redo.prepareSnapshotUndo(
+            replacing: firstUndone,
+            now: base.addingTimeInterval(4)
+        )
+        let redone = redo.snapshot()
+        _ = try SyncSnapshotDiffer(mapper: mapper).journalEntries(
+            from: firstUndone,
+            to: redone,
+            changedAt: base.addingTimeInterval(4),
+            deviceID: SyncDeviceID("redo")
+        )
+        let redoneChain = try XCTUnwrap(redo.chains[chainID])
+        let redoneTrace = try XCTUnwrap(redo.traces[traceID])
+        XCTAssertEqual(redoneChain.state, .abandoned)
+        XCTAssertEqual(redoneTrace.status, .abandoned)
+        XCTAssertEqual(redoneTrace.contentUpdatedAt, redoneChain.updatedAt)
+        XCTAssertEqual(redoneTrace.settledAt, redoneChain.updatedAt)
+
+        let secondUndo = try NoonmarkEngine(snapshot: firstUndone)
+        try secondUndo.prepareSnapshotUndo(
+            replacing: redone,
+            now: base.addingTimeInterval(5)
+        )
+        let secondUndone = secondUndo.snapshot()
+        let entries = try SyncSnapshotDiffer(mapper: mapper).journalEntries(
+            from: redone,
+            to: secondUndone,
+            changedAt: base.addingTimeInterval(5),
+            deviceID: SyncDeviceID("second-undo")
+        )
+        let records = try SyncRecordMaterializer(mapper: mapper).records(
+            for: entries,
+            in: secondUndone
+        )
+        let chainRecord = try XCTUnwrap(
+            records.first { $0.entityType == .taskChain }
+        )
+        XCTAssertEqual(chainRecord.reactivationWitnesses.count, 1)
+        XCTAssertEqual(secondUndo.chains[chainID]?.state, .active)
+        XCTAssertEqual(secondUndo.traces[traceID]?.status, .pending)
+    }
+
     func testUnclassifiedCopiedTaskUndoConvergesWithoutResurrectionInBothInputOrders() throws {
         let source = NoonmarkEngine()
         let sourceChainID = try source.createPoolTask(

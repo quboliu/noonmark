@@ -135,6 +135,15 @@ private enum AutomaticClassificationProviderFailureResolution {
             .transientFailure(retryAt: now.addingTimeInterval(retryDelay))
         }
     }
+
+    var diagnosticCode: String {
+        switch self {
+        case .invalidResponse: "invalid-response"
+        case .credentialsRejected: "credentials-rejected"
+        case .rateLimited: "rate-limited"
+        case .transientFailure: "transient-failure"
+        }
+    }
 }
 
 private enum AutomaticClassificationWorkerDirective {
@@ -273,6 +282,9 @@ extension NoonmarkStore {
                 availableAt: now,
                 now: now
             )
+            recordAutomaticClassificationDiagnostic(
+                "event=manual-retry job_id=\(failed.id.uuidString) generation=\(failed.generation) prior_attempt=\(failed.attempt)"
+            )
             automaticClassificationJobsDidChange()
         } catch {
             refreshAutomaticClassificationStatuses()
@@ -337,39 +349,50 @@ extension NoonmarkStore {
         pendingAutomaticClassificationProviderReconciliation = nil
     }
 
-    func automaticClassificationJobs(
+    func automaticClassificationMutationPlan(
         for policy: EngineMutationAutomaticClassificationPolicy,
         candidate: NoonmarkEngine,
         originalSnapshot: NoonmarkSnapshot
-    ) throws -> [AutomaticClassificationJobEnqueue] {
-        guard case .newlyCreatedTaskChains = policy,
-              automaticClassificationJobRepository != nil,
-              syncDeviceIdentity != nil
-        else { return [] }
-        let originalChainIDs = Set(originalSnapshot.chains.map(\.id))
-        let operationalNow = automaticClassificationOperationalClock.now()
-        let providerIsReady = automaticClassificationProviderIsReady
-        return try candidate.chains.keys
-            .filter { originalChainIDs.contains($0) == false }
-            .sorted { $0.description < $1.description }
-            .map { chainID in
-                let context = try candidate.issueAutomaticClassificationContext(
-                    for: chainID,
-                    jobID: UUID(),
-                    generation: 1
-                )
-                return try AutomaticClassificationJobEnqueue(
-                    authority: context.authority,
-                    initialState: providerIsReady
-                        ? .ready
-                        : .waitingForConfiguration,
-                    dispatchAuthorization: providerIsReady
-                        ? .automatic
-                        : .pendingUserDecision,
-                    availableAt: operationalNow,
-                    createdAt: operationalNow
+    ) throws -> AutomaticClassificationJobMutationPlan {
+        guard case .none = policy else {
+            guard let automaticClassificationJobRepository,
+                  syncDeviceIdentity != nil
+            else {
+                return AutomaticClassificationJobMutationPlan(
+                    enqueues: [],
+                    mutations: []
                 )
             }
+            let storagePolicy: AutomaticClassificationJobMutationPolicy =
+                switch policy {
+                case .none:
+                    .reconcileExisting
+                case let .taskDefinitionChanged(chainID):
+                    .taskDefinitionChanged(chainID)
+                case .classificationCatalogChanged:
+                    .classificationCatalogChanged
+                case .newlyCreatedTaskChains:
+                    .newlyCreatedTaskChains
+                case let .taskBecameIneligible(chainID):
+                    .taskBecameIneligible(chainID)
+                case let .taskBecameEligible(chainID):
+                    .taskBecameEligible(chainID)
+                case let .userClassificationWins(chainID):
+                    .userClassificationWins(chainID)
+                }
+            return try AutomaticClassificationJobMutationPlanner().plan(
+                policy: storagePolicy,
+                candidate: candidate,
+                originalSnapshot: originalSnapshot,
+                existingJobs: automaticClassificationJobRepository.jobs(),
+                providerIsReady: automaticClassificationProviderIsReady,
+                operationalNow: automaticClassificationOperationalClock.now()
+            )
+        }
+        return AutomaticClassificationJobMutationPlan(
+            enqueues: [],
+            mutations: []
+        )
     }
 
     func automaticClassificationRedo(
@@ -457,16 +480,22 @@ extension NoonmarkStore {
         }
     }
 
-    private func makeAutomaticClassificationProvider() throws -> OpenAICompatibleProvider {
-        guard let config = try ZhulongProviderSettingsStore.makePersistedConfig()
+    private func makeAutomaticClassificationProvider(
+        executionRevision: UUID
+    ) throws -> OpenAICompatibleProvider {
+        guard let config = try ZhulongProviderSettingsStore.makePersistedConfig(
+            expectedExecutionRevision: executionRevision
+        )
         else {
             throw AutomaticClassificationAppError.providerUnavailable
         }
         return OpenAICompatibleProvider(
             config: config,
             apiKeyResolver: { ref in
-                guard ref == ZhulongProviderKeychain.keyRef else { return nil }
-                return try ZhulongProviderKeychain.readAPIKey()
+                try ZhulongProviderKeychain.resolveAPIKey(
+                    ref,
+                    expectedExecutionRevision: executionRevision
+                )
             }
         )
     }
@@ -477,6 +506,7 @@ extension NoonmarkStore {
             automaticClassificationBacklogSnapshot = nil
             automaticClassificationBacklogPrompt = nil
             automaticClassificationCircuitPresentation = nil
+            automaticClassificationDiagnosticSnapshotFingerprint = nil
             return
         }
         do {
@@ -564,11 +594,16 @@ extension NoonmarkStore {
                 statuses[job.chainID] = status
             }
             automaticClassificationStatusByChainID = statuses
+            recordAutomaticClassificationDiagnosticSnapshot(
+                repository: automaticClassificationJobRepository,
+                circuit: circuit
+            )
         } catch {
             automaticClassificationStatusByChainID = [:]
             automaticClassificationBacklogSnapshot = nil
             automaticClassificationBacklogPrompt = nil
             automaticClassificationCircuitPresentation = nil
+            recordAutomaticClassificationDiagnostic("event=snapshot-read-failed")
         }
     }
 
@@ -580,6 +615,9 @@ extension NoonmarkStore {
         else { return }
         switch decision {
         case .later:
+            recordAutomaticClassificationDiagnostic(
+                "event=backlog-decision decision=later item_count=\(snapshot.items.count)"
+            )
             automaticClassificationBacklogDeferredForSession = true
             automaticClassificationBacklogPrompt = nil
         case .startExisting:
@@ -587,11 +625,17 @@ extension NoonmarkStore {
                 refreshAutomaticClassificationStatuses()
                 return
             }
+            recordAutomaticClassificationDiagnostic(
+                "event=backlog-decision decision=start-existing item_count=\(snapshot.items.count)"
+            )
             resolveAutomaticClassificationBacklog(
                 snapshot,
                 storageDecision: .authorize(decisionID: UUID())
             )
         case .futureOnly:
+            recordAutomaticClassificationDiagnostic(
+                "event=backlog-decision decision=future-only item_count=\(snapshot.items.count)"
+            )
             resolveAutomaticClassificationBacklog(
                 snapshot,
                 storageDecision: .skip
@@ -656,6 +700,9 @@ extension NoonmarkStore {
         else { return }
         automaticClassificationCircuitRetryTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            recordAutomaticClassificationDiagnostic(
+                "event=circuit-manual-retry phase=started execution_revision=\(executionRevision.uuidString)"
+            )
             defer { automaticClassificationCircuitRetryTask = nil }
             do {
                 guard let circuit = try automaticClassificationJobRepository?
@@ -666,7 +713,9 @@ extension NoonmarkStore {
                     refreshAutomaticClassificationStatuses()
                     return
                 }
-                let provider = try makeAutomaticClassificationProvider()
+                let provider = try makeAutomaticClassificationProvider(
+                    executionRevision: executionRevision
+                )
                 let health = await provider.healthCheck()
                 try Task.checkCancellation()
                 guard health.status == .healthy else {
@@ -682,14 +731,23 @@ extension NoonmarkStore {
                 try await resetAutomaticClassificationProviderCircuit(
                     executionRevision: executionRevision
                 )
+                recordAutomaticClassificationDiagnostic(
+                    "event=circuit-manual-retry phase=succeeded execution_revision=\(executionRevision.uuidString)"
+                )
                 automaticClassificationJobsDidChange()
                 showToast(
                     AppPresentation(language: engine.preferences.language)
                         .zhulong.providerActionNotice(.connectionSucceeded)
                 )
             } catch is CancellationError {
+                recordAutomaticClassificationDiagnostic(
+                    "event=circuit-manual-retry phase=cancelled execution_revision=\(executionRevision.uuidString)"
+                )
                 return
             } catch {
+                recordAutomaticClassificationDiagnostic(
+                    "event=circuit-manual-retry phase=failed execution_revision=\(executionRevision.uuidString)"
+                )
                 refreshAutomaticClassificationStatuses()
                 showToast(
                     AppPresentation(language: engine.preferences.language)
@@ -993,7 +1051,9 @@ extension NoonmarkStore {
                 }
                 let response: AIProviderResponse
                 do {
-                    response = try await makeAutomaticClassificationProvider()
+                    response = try await makeAutomaticClassificationProvider(
+                        executionRevision: executionRevision
+                    )
                         .complete(request)
                 } catch is CancellationError {
                     throw CancellationError()
@@ -1300,10 +1360,20 @@ extension NoonmarkStore {
         while Task.isCancelled == false {
             do {
                 let now = automaticClassificationOperationalClock.now()
+                let outcome = resolution.storageOutcome(now: now)
                 try automaticClassificationJobRepository.resolveProviderAttempt(
-                    resolution.storageOutcome(now: now),
+                    outcome,
                     for: claim,
                     now: now
+                )
+                let retryAtBits = switch outcome {
+                case let .rateLimited(retryAt), let .transientFailure(retryAt):
+                    String(retryAt.timeIntervalSinceReferenceDate.bitPattern)
+                case .checkpoint, .invalidResponse, .credentialsRejected:
+                    "none"
+                }
+                recordAutomaticClassificationDiagnostic(
+                    "event=provider-outcome code=\(resolution.diagnosticCode) job_id=\(claim.jobID.uuidString) generation=\(claim.generation) attempt=\(claim.attempt) retry_at_bits=\(retryAtBits)"
                 )
                 refreshAutomaticClassificationStatuses()
                 return
@@ -1325,5 +1395,96 @@ extension NoonmarkStore {
                 return
             }
         }
+    }
+}
+
+@MainActor
+extension NoonmarkStore {
+    func recordAutomaticClassificationMutationDiagnostics(
+        _ plan: AutomaticClassificationJobMutationPlan
+    ) {
+        if plan.enqueues.isEmpty == false {
+            recordAutomaticClassificationDiagnostic(
+                "event=job-mutation kind=enqueue count=\(plan.enqueues.count)"
+            )
+        }
+        for mutation in plan.mutations {
+            let detail = switch mutation {
+            case let .replace(fence, replacement):
+                "kind=replace job_id=\(fence.jobID.uuidString) generation=\(fence.generation) replacement_job_id=\(replacement.id.uuidString) replacement_generation=\(replacement.generation)"
+            case let .invalidateChain(chainID):
+                "kind=fence-invalidated reason=task-ineligible chain_id=\(chainID.description)"
+            case let .supersedeChain(chainID):
+                "kind=fence-invalidated reason=user-classification-won chain_id=\(chainID.description)"
+            case let .restoreEligibility(fence, replacement):
+                "kind=restore-eligibility job_id=\(fence.jobID.uuidString) generation=\(fence.generation) replacement_job_id=\(replacement.id.uuidString) replacement_generation=\(replacement.generation)"
+            case let .cancelForUndo(chainID):
+                "kind=fence-invalidated reason=snapshot-undo chain_id=\(chainID.description)"
+            case let .requeueCancelledByUndo(redo):
+                "kind=requeue-redo job_id=\(redo.cancelledJob.jobID.uuidString) generation=\(redo.cancelledJob.generation) replacement_job_id=\(redo.replacement.id.uuidString) replacement_generation=\(redo.replacement.generation)"
+            }
+            recordAutomaticClassificationDiagnostic(
+                "event=job-mutation \(detail)"
+            )
+        }
+    }
+
+    func recordAutomaticClassificationDiagnostic(_ fields: String) {
+        NSLog("NoonmarkAutomaticClassificationDiagnostic %@", fields)
+    }
+
+    private func recordAutomaticClassificationDiagnosticSnapshot(
+        repository: SQLiteAutomaticClassificationJobRepository,
+        circuit: AutomaticClassificationProviderCircuit?
+    ) {
+        guard let jobs = try? repository.jobs() else {
+            recordAutomaticClassificationDiagnostic("event=snapshot-read-failed")
+            return
+        }
+        let stateCounts = AutomaticClassificationJobState.allCases.map { state in
+            "\(state.rawValue):\(jobs.count { $0.state == state })"
+        }.joined(separator: ",")
+        let authorizationCounts = [
+            AutomaticClassificationDispatchAuthorization.automatic,
+            .pendingUserDecision,
+            .explicit
+        ].map { authorization in
+            "\(authorization.rawValue):\(jobs.count { $0.dispatchAuthorization == authorization })"
+        }.joined(separator: ",")
+        let errorCounts = AutomaticClassificationJobErrorCode.allCases.compactMap {
+            code -> String? in
+            let count = jobs.count { $0.errorCode == code }
+            return count == 0 ? nil : "\(code.rawValue):\(count)"
+        }.joined(separator: ",")
+        let circuitFields: String = if let circuit {
+            [
+                "state=\(circuit.state.rawValue)",
+                "failure=\(circuit.failureCode?.rawValue ?? "none")",
+                "failures=\(circuit.consecutiveFailures)",
+                "retry_at_bits=\(diagnosticDateBits(circuit.retryAt))",
+                "opened_at_bits=\(diagnosticDateBits(circuit.openedAt))",
+                "transition_version=\(circuit.transitionVersion)",
+                "probe=\(circuit.probeFence == nil ? "none" : "claimed")"
+            ].joined(separator: " ")
+        } else {
+            "state=none failure=none failures=0 retry_at_bits=none opened_at_bits=none transition_version=0 probe=none"
+        }
+        let fingerprint = [
+            "states=\(stateCounts)",
+            "authorizations=\(authorizationCounts)",
+            "max_attempt=\(jobs.map(\.attempt).max() ?? 0)",
+            "errors=\(errorCounts.isEmpty ? "none" : errorCounts)",
+            circuitFields
+        ].joined(separator: " ")
+        guard fingerprint != automaticClassificationDiagnosticSnapshotFingerprint else {
+            return
+        }
+        automaticClassificationDiagnosticSnapshotFingerprint = fingerprint
+        recordAutomaticClassificationDiagnostic("event=snapshot \(fingerprint)")
+    }
+
+    private func diagnosticDateBits(_ date: Date?) -> String {
+        guard let date else { return "none" }
+        return String(date.timeIntervalSinceReferenceDate.bitPattern)
     }
 }

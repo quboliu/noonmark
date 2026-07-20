@@ -902,6 +902,851 @@ final class AutomaticClassificationJobStorageTests: XCTestCase {
         XCTAssertEqual(try repository.job(id: catalogReplacement.id)?.state, .ready)
     }
 
+    func testWaitingJobTaskContentAndJournalRefreshCommitAtomically() throws {
+        let databaseURL = makeDatabaseURL("atomic-waiting-content-refresh")
+        defer { removeDatabase(at: databaseURL) }
+        let fixture = try seedWaitingJob(at: databaseURL, generation: 1)
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let source = try XCTUnwrap(jobRepository.job(id: fixture.enqueue.id))
+        let journalCountBefore = try syncRepository.journalEntries().count
+
+        try fixture.engine.updatePoolTask(
+            chainID: fixture.enqueue.chainID,
+            title: "等待配置期间改写后的任务",
+            descriptionText: "新定义必须产生新的 Provider context。",
+            now: now.addingTimeInterval(1)
+        )
+        let replacement = try makeEnqueue(
+            engine: fixture.engine,
+            chainID: fixture.enqueue.chainID,
+            generation: 2,
+            initialState: .waitingForConfiguration,
+            availableAt: now.addingTimeInterval(2),
+            createdAt: now.addingTimeInterval(2)
+        )
+
+        try engineRepository.save(
+            fixture.engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("waiting-content-refresh-device"),
+            changedAt: now.addingTimeInterval(1),
+            enqueuingAutomaticClassificationJobs: [],
+            applyingAutomaticClassificationJobMutations: [
+                .replace(source.fence, with: replacement)
+            ],
+            automaticClassificationTransitionAt: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(try engineRepository.load().snapshot(), fixture.engine.snapshot())
+        XCTAssertGreaterThan(try syncRepository.journalEntries().count, journalCountBefore)
+        let superseded = try XCTUnwrap(jobRepository.job(id: source.id))
+        XCTAssertEqual(superseded.state, .superseded)
+        XCTAssertEqual(superseded.errorCode, .contentOrCatalogChanged)
+        let refreshed = try XCTUnwrap(jobRepository.job(id: replacement.id))
+        XCTAssertEqual(refreshed.state, .waitingForConfiguration)
+        XCTAssertEqual(refreshed.generation, 2)
+        XCTAssertEqual(refreshed.dispatchAuthorization, .pendingUserDecision)
+        XCTAssertNotEqual(refreshed.contentDigest, source.contentDigest)
+        XCTAssertEqual(
+            try AutomaticClassificationAuthorityPayload.decode(
+                refreshed.authorityPayload
+            ),
+            try AutomaticClassificationAuthorityPayload.decode(
+                replacement.authorityPayload
+            )
+        )
+    }
+
+    func testFailedJobContentChangePlansFreshAutomaticGenerationWithoutRetry() throws {
+        let databaseURL = makeDatabaseURL("failed-content-refresh-plan")
+        defer { removeDatabase(at: databaseURL) }
+        let fixture = try seedReadyJob(at: databaseURL, generation: 1)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        _ = try jobRepository.reconcileProviderExecution(
+            .configured(executionRevision: UUID()),
+            now: now.addingTimeInterval(0.5)
+        )
+        let claim = try XCTUnwrap(
+            jobRepository.claimNext(
+                now: now.addingTimeInterval(1),
+                staleBefore: now,
+                claimID: UUID()
+            )
+        )
+        try jobRepository.resolveProviderAttempt(
+            .invalidResponse,
+            for: claim,
+            now: now.addingTimeInterval(2)
+        )
+        let failed = try XCTUnwrap(jobRepository.job(id: fixture.enqueue.id))
+        XCTAssertEqual(failed.state, .failed)
+
+        let originalSnapshot = fixture.engine.snapshot()
+        try fixture.engine.updatePoolTask(
+            chainID: fixture.enqueue.chainID,
+            title: "修正后应自动再归类",
+            descriptionText: "内容修正本身就是新的可执行尝试。",
+            now: now.addingTimeInterval(3)
+        )
+        let plan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .reconcileExisting,
+            candidate: fixture.engine,
+            originalSnapshot: originalSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: true,
+            operationalNow: now.addingTimeInterval(4)
+        )
+
+        XCTAssertTrue(plan.enqueues.isEmpty)
+        guard case let .replace(sourceFence, replacement) = plan.mutations.first,
+              plan.mutations.count == 1
+        else {
+            return XCTFail("failed content change did not plan one replacement")
+        }
+        XCTAssertEqual(sourceFence, failed.fence)
+        XCTAssertEqual(replacement.chainID, failed.chainID)
+        XCTAssertEqual(replacement.generation, 2)
+        XCTAssertEqual(replacement.initialState, .ready)
+        XCTAssertEqual(replacement.dispatchAuthorization, .automatic)
+        XCTAssertEqual(
+            replacement.classificationFingerprint,
+            failed.classificationFingerprint
+        )
+        XCTAssertNotEqual(replacement.contentDigest, failed.contentDigest)
+
+        try SQLiteEngineRepository(databaseURL: databaseURL).save(
+            fixture.engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("failed-content-refresh-device"),
+            changedAt: now.addingTimeInterval(3),
+            enqueuingAutomaticClassificationJobs: plan.enqueues,
+            applyingAutomaticClassificationJobMutations: plan.mutations,
+            automaticClassificationTransitionAt: now.addingTimeInterval(4)
+        )
+        XCTAssertEqual(
+            try jobRepository.job(id: failed.id)?.state,
+            .superseded
+        )
+        let refreshed = try XCTUnwrap(jobRepository.job(id: replacement.id))
+        XCTAssertEqual(refreshed.state, .ready)
+        let automaticClaim = try XCTUnwrap(
+            jobRepository.claimNext(
+                now: now.addingTimeInterval(5),
+                staleBefore: now.addingTimeInterval(4),
+                claimID: UUID()
+            )
+        )
+        XCTAssertEqual(automaticClaim.jobID, replacement.id)
+    }
+
+    func testActiveCatalogChangePlansAndAtomicallyReplacesEveryReadyJob() throws {
+        let databaseURL = makeDatabaseURL("active-catalog-refresh")
+        defer { removeDatabase(at: databaseURL) }
+        let fixture = try seedReadyJobs(at: databaseURL, count: 2)
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        let originalSnapshot = fixture.engine.snapshot()
+        let catalogOwner = try fixture.engine.createPoolTask(
+            title: "建立新的有效目录内容",
+            now: now.addingTimeInterval(1)
+        )
+        let catalogPlan = try fixture.engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: catalogOwner,
+                    category: .new(name: "新增有效分组", colorHex: "#2A6FDB"),
+                    labels: [.new(name: "新增有效标签", colorHex: "#0E9488")]
+                )
+            ),
+            source: .userDirect,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(1)
+        )
+        _ = try fixture.engine.commitClassification(
+            catalogPlan,
+            confirmation: .user(decisionID: UUID()),
+            now: now.addingTimeInterval(1)
+        )
+
+        let mutationPlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .reconcileExisting,
+            candidate: fixture.engine,
+            originalSnapshot: originalSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: true,
+            operationalNow: now.addingTimeInterval(2)
+        )
+        XCTAssertTrue(mutationPlan.enqueues.isEmpty)
+        XCTAssertEqual(mutationPlan.mutations.count, 2)
+        var sourceIDs: Set<UUID> = []
+        var replacements: [AutomaticClassificationJobEnqueue] = []
+        for mutation in mutationPlan.mutations {
+            guard case let .replace(sourceFence, replacement) = mutation else {
+                return XCTFail("catalog change superseded an unchanged task baseline")
+            }
+            sourceIDs.insert(sourceFence.jobID)
+            replacements.append(replacement)
+            XCTAssertEqual(replacement.generation, 2)
+            XCTAssertEqual(replacement.initialState, .ready)
+        }
+        XCTAssertEqual(sourceIDs, Set(fixture.enqueues.map(\.id)))
+        XCTAssertTrue(replacements.allSatisfy { replacement in
+            fixture.enqueues.contains { source in
+                source.chainID == replacement.chainID
+                    && source.catalogDigest != replacement.catalogDigest
+                    && source.classificationFingerprint
+                    == replacement.classificationFingerprint
+            }
+        })
+
+        try engineRepository.save(
+            fixture.engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("active-catalog-refresh-device"),
+            changedAt: now.addingTimeInterval(1),
+            enqueuingAutomaticClassificationJobs: mutationPlan.enqueues,
+            applyingAutomaticClassificationJobMutations: mutationPlan.mutations,
+            automaticClassificationTransitionAt: now.addingTimeInterval(2)
+        )
+        for source in fixture.enqueues {
+            XCTAssertEqual(try jobRepository.job(id: source.id)?.state, .superseded)
+        }
+        for replacement in replacements {
+            XCTAssertEqual(try jobRepository.job(id: replacement.id)?.state, .ready)
+        }
+    }
+
+    func testDefinitionEditPolicyRefreshesOnlyTheEditedTask() throws {
+        let databaseURL = makeDatabaseURL("scoped-definition-refresh")
+        defer { removeDatabase(at: databaseURL) }
+        let fixture = try seedReadyJobs(at: databaseURL, count: 2)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        let originalSnapshot = fixture.engine.snapshot()
+        let editedChainID = fixture.enqueues[0].chainID
+        let unrelatedChainID = fixture.enqueues[1].chainID
+        try fixture.engine.updatePoolTask(
+            chainID: editedChainID,
+            title: "用户这次实际编辑的任务",
+            now: now.addingTimeInterval(1)
+        )
+        try fixture.engine.updatePoolTask(
+            chainID: unrelatedChainID,
+            title: "模拟先前已失效但不属于本次 mutation 的任务",
+            now: now.addingTimeInterval(1)
+        )
+
+        let mutationPlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .taskDefinitionChanged(editedChainID),
+            candidate: fixture.engine,
+            originalSnapshot: originalSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: true,
+            operationalNow: now.addingTimeInterval(2)
+        )
+        guard case let .replace(sourceFence, replacement) = mutationPlan.mutations.first,
+              mutationPlan.mutations.count == 1
+        else {
+            return XCTFail("definition edit was not scoped to one replacement")
+        }
+        XCTAssertEqual(sourceFence.jobID, fixture.enqueues[0].id)
+        XCTAssertEqual(replacement.chainID, editedChainID)
+        XCTAssertFalse(mutationPlan.mutations.contains {
+            if case let .replace(_, candidate) = $0 {
+                candidate.chainID == unrelatedChainID
+            } else {
+                false
+            }
+        })
+    }
+
+    func testUserClassificationBaselineChangePlansSupersedeNotReplacement() throws {
+        let databaseURL = makeDatabaseURL("user-baseline-wins-plan")
+        defer { removeDatabase(at: databaseURL) }
+        let fixture = try seedWaitingJob(at: databaseURL, generation: 1)
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        let originalSnapshot = fixture.engine.snapshot()
+        let userPlan = try fixture.engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: fixture.enqueue.chainID,
+                    category: .new(name: "人工决定分组", colorHex: "#2A6FDB"),
+                    labels: [.new(name: "人工决定标签", colorHex: "#0E9488")]
+                )
+            ),
+            source: .userDirect,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(1)
+        )
+        _ = try fixture.engine.commitClassification(
+            userPlan,
+            confirmation: .user(decisionID: UUID()),
+            now: now.addingTimeInterval(1)
+        )
+
+        let mutationPlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .reconcileExisting,
+            candidate: fixture.engine,
+            originalSnapshot: originalSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: false,
+            operationalNow: now.addingTimeInterval(2)
+        )
+        XCTAssertTrue(mutationPlan.enqueues.isEmpty)
+        XCTAssertEqual(
+            mutationPlan.mutations,
+            [.supersedeChain(fixture.enqueue.chainID)]
+        )
+        try engineRepository.save(
+            fixture.engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("user-baseline-wins-device"),
+            changedAt: now.addingTimeInterval(1),
+            enqueuingAutomaticClassificationJobs: mutationPlan.enqueues,
+            applyingAutomaticClassificationJobMutations: mutationPlan.mutations,
+            automaticClassificationTransitionAt: now.addingTimeInterval(2)
+        )
+        let userWon = try XCTUnwrap(
+            jobRepository.job(id: fixture.enqueue.id)
+        )
+        XCTAssertEqual(userWon.state, .superseded)
+        XCTAssertEqual(userWon.errorCode, .manualClassificationWon)
+        let eligibilityPlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .taskBecameEligible(fixture.enqueue.chainID),
+            candidate: fixture.engine,
+            originalSnapshot: originalSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: true,
+            operationalNow: now.addingTimeInterval(3)
+        )
+        XCTAssertTrue(eligibilityPlan.isEmpty)
+    }
+
+    func testTaskAndJournalRollBackWhenAtomicJobReplacementFenceFails() throws {
+        let databaseURL = makeDatabaseURL("content-refresh-rollback")
+        defer { removeDatabase(at: databaseURL) }
+        let fixture = try seedWaitingJob(at: databaseURL, generation: 1)
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let persistedBefore = try engineRepository.load().snapshot()
+        let journalBefore = try syncRepository.journalEntries()
+        let source = try XCTUnwrap(jobRepository.job(id: fixture.enqueue.id))
+        let originalSnapshot = fixture.engine.snapshot()
+        try fixture.engine.updatePoolTask(
+            chainID: fixture.enqueue.chainID,
+            title: "事务必须整体回滚",
+            now: now.addingTimeInterval(1)
+        )
+        let validPlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .reconcileExisting,
+            candidate: fixture.engine,
+            originalSnapshot: originalSnapshot,
+            existingJobs: [source],
+            providerIsReady: false,
+            operationalNow: now.addingTimeInterval(2)
+        )
+        guard case let .replace(_, replacement) = validPlan.mutations.first else {
+            return XCTFail("content change did not create a replacement plan")
+        }
+        let staleFence = AutomaticClassificationJobFence(
+            jobID: source.id,
+            generation: source.generation,
+            attempt: source.attempt + 1,
+            claimID: source.claimID
+        )
+
+        XCTAssertThrowsError(
+            try engineRepository.save(
+                fixture.engine.snapshot(),
+                recordingChangesFor: SyncDeviceID("content-refresh-rollback-device"),
+                changedAt: now.addingTimeInterval(1),
+                enqueuingAutomaticClassificationJobs: [],
+                applyingAutomaticClassificationJobMutations: [
+                    .replace(staleFence, with: replacement)
+                ],
+                automaticClassificationTransitionAt: now.addingTimeInterval(2)
+            )
+        )
+        XCTAssertEqual(try engineRepository.load().snapshot(), persistedBefore)
+        XCTAssertEqual(try syncRepository.journalEntries(), journalBefore)
+        XCTAssertEqual(try jobRepository.job(id: source.id), source)
+        XCTAssertNil(try jobRepository.job(id: replacement.id))
+    }
+
+    func testChangedTraceAtomicallyTerminatesOldWorkWithoutQueuingInheritedChain() throws {
+        let databaseURL = makeDatabaseURL("changed-trace-terminates-work")
+        defer { removeDatabase(at: databaseURL) }
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        let engine = NoonmarkEngine()
+        try engineRepository.save(engine.snapshot())
+        let today = LocalDate("2026-07-20")
+        let sourceChainID = try engine.createPoolTask(
+            title: "旧承诺不应在变更后重新归类",
+            now: now
+        )
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: sourceChainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        let enqueue = try makeEnqueue(
+            engine: engine,
+            chainID: sourceChainID,
+            generation: 1,
+            initialState: .ready,
+            availableAt: now,
+            createdAt: now
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("changed-trace-device"),
+            changedAt: now,
+            enqueuingAutomaticClassificationJobs: [enqueue]
+        )
+
+        let originalSnapshot = engine.snapshot()
+        let replacementTraceID = try engine.changeTrace(
+            traceID: sourceTraceID,
+            newTitle: "继承的新承诺不属于自动捕获入口",
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let replacementChainID = try XCTUnwrap(
+            engine.traces[replacementTraceID]?.chainID
+        )
+        XCTAssertNotEqual(replacementChainID, sourceChainID)
+        let mutationPlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .taskBecameIneligible(sourceChainID),
+            candidate: engine,
+            originalSnapshot: originalSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: true,
+            operationalNow: now.addingTimeInterval(2)
+        )
+        XCTAssertTrue(mutationPlan.enqueues.isEmpty)
+        XCTAssertEqual(
+            mutationPlan.mutations,
+            [.invalidateChain(sourceChainID)]
+        )
+
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("changed-trace-device"),
+            changedAt: now.addingTimeInterval(1),
+            enqueuingAutomaticClassificationJobs: mutationPlan.enqueues,
+            applyingAutomaticClassificationJobMutations: mutationPlan.mutations,
+            automaticClassificationTransitionAt: now.addingTimeInterval(2)
+        )
+        let terminated = try XCTUnwrap(jobRepository.job(id: enqueue.id))
+        XCTAssertEqual(terminated.state, .superseded)
+        XCTAssertEqual(terminated.errorCode, .taskBecameIneligible)
+        let persistedJobs = try jobRepository.jobs()
+        XCTAssertEqual(persistedJobs.map(\.chainID), [sourceChainID])
+        XCTAssertFalse(persistedJobs.contains {
+            $0.chainID == replacementChainID
+        })
+    }
+
+    func testAbandonUndoAtomicallyRestoresOnlyTheIneligibleJob() throws {
+        let databaseURL = makeDatabaseURL("abandon-undo-restores-ineligible")
+        defer { removeDatabase(at: databaseURL) }
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        let engine = NoonmarkEngine()
+        try engineRepository.save(engine.snapshot())
+        let today = LocalDate("2026-07-20")
+        let chainID = try engine.createPoolTask(
+            title: "撤销放弃后继续原有自动归类",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let activeSnapshot = engine.snapshot()
+        let authorizationID = UUID()
+        let enqueue = try makeEnqueue(
+            engine: engine,
+            chainID: chainID,
+            generation: 1,
+            initialState: .ready,
+            dispatchAuthorization: .explicit,
+            authorizationID: authorizationID,
+            authorizedAt: now.addingTimeInterval(1),
+            availableAt: now.addingTimeInterval(1),
+            createdAt: now.addingTimeInterval(1)
+        )
+        try engineRepository.save(
+            activeSnapshot,
+            recordingChangesFor: SyncDeviceID("abandon-undo-device"),
+            changedAt: now.addingTimeInterval(1),
+            enqueuingAutomaticClassificationJobs: [enqueue]
+        )
+
+        try engine.abandonChain(from: traceID, now: now.addingTimeInterval(2))
+        let abandonedSnapshot = engine.snapshot()
+        let abandonPlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .taskBecameIneligible(chainID),
+            candidate: engine,
+            originalSnapshot: activeSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: true,
+            operationalNow: now.addingTimeInterval(3)
+        )
+        try engineRepository.save(
+            abandonedSnapshot,
+            recordingChangesFor: SyncDeviceID("abandon-undo-device"),
+            changedAt: now.addingTimeInterval(2),
+            enqueuingAutomaticClassificationJobs: abandonPlan.enqueues,
+            applyingAutomaticClassificationJobMutations: abandonPlan.mutations,
+            automaticClassificationTransitionAt: now.addingTimeInterval(3)
+        )
+        let ineligible = try XCTUnwrap(jobRepository.job(id: enqueue.id))
+        XCTAssertEqual(ineligible.state, .superseded)
+        XCTAssertEqual(ineligible.errorCode, .taskBecameIneligible)
+
+        let undoCandidate = try NoonmarkEngine(snapshot: activeSnapshot)
+        let undoOutcome = try undoCandidate.prepareSnapshotUndo(
+            replacing: abandonedSnapshot,
+            now: now.addingTimeInterval(4)
+        )
+        XCTAssertEqual(
+            undoOutcome.automaticClassificationRestoredChainIDs,
+            [chainID]
+        )
+        let restorePlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .taskBecameEligible(chainID),
+            candidate: undoCandidate,
+            originalSnapshot: abandonedSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: true,
+            operationalNow: now.addingTimeInterval(5)
+        )
+        guard case let .restoreEligibility(sourceFence, replacement) =
+            restorePlan.mutations.first,
+            restorePlan.mutations.count == 1
+        else {
+            return XCTFail("undo did not plan one fenced eligibility restoration")
+        }
+        XCTAssertEqual(sourceFence, ineligible.fence)
+        XCTAssertEqual(replacement.generation, 2)
+
+        try engineRepository.save(
+            undoCandidate.snapshot(),
+            recordingChangesFor: SyncDeviceID("abandon-undo-device"),
+            changedAt: now.addingTimeInterval(4),
+            enqueuingAutomaticClassificationJobs: restorePlan.enqueues,
+            applyingAutomaticClassificationJobMutations: restorePlan.mutations,
+            automaticClassificationTransitionAt: now.addingTimeInterval(5)
+        )
+        XCTAssertEqual(try jobRepository.job(id: enqueue.id), ineligible)
+        let restored = try XCTUnwrap(jobRepository.job(id: replacement.id))
+        XCTAssertEqual(restored.state, .ready)
+        XCTAssertEqual(restored.generation, 2)
+        XCTAssertEqual(restored.dispatchAuthorization, .explicit)
+        XCTAssertEqual(restored.authorizationID, authorizationID)
+        XCTAssertEqual(restored.authorizedAt, now.addingTimeInterval(1))
+
+        let firstUndoSnapshot = undoCandidate.snapshot()
+        let redoCandidate = try NoonmarkEngine(snapshot: abandonedSnapshot)
+        let redoOutcome = try redoCandidate.prepareSnapshotUndo(
+            replacing: firstUndoSnapshot,
+            now: now.addingTimeInterval(6)
+        )
+        XCTAssertEqual(
+            redoOutcome.automaticClassificationCancelledChainIDs,
+            [chainID]
+        )
+        try engineRepository.save(
+            redoCandidate.snapshot(),
+            recordingChangesFor: SyncDeviceID("abandon-undo-device"),
+            changedAt: now.addingTimeInterval(6),
+            enqueuingAutomaticClassificationJobs: [],
+            applyingAutomaticClassificationJobMutations: [
+                .invalidateChain(chainID)
+            ],
+            automaticClassificationTransitionAt: now.addingTimeInterval(7)
+        )
+        let reinvalidated = try XCTUnwrap(
+            jobRepository.job(id: replacement.id)
+        )
+        XCTAssertEqual(reinvalidated.state, .superseded)
+        XCTAssertEqual(reinvalidated.errorCode, .taskBecameIneligible)
+
+        let secondUndoCandidate = try NoonmarkEngine(snapshot: firstUndoSnapshot)
+        let secondUndoOutcome = try secondUndoCandidate.prepareSnapshotUndo(
+            replacing: redoCandidate.snapshot(),
+            now: now.addingTimeInterval(8)
+        )
+        XCTAssertEqual(
+            secondUndoOutcome.automaticClassificationRestoredChainIDs,
+            [chainID]
+        )
+        let secondRestorePlan = try AutomaticClassificationJobMutationPlanner()
+            .plan(
+                policy: .taskBecameEligible(chainID),
+                candidate: secondUndoCandidate,
+                originalSnapshot: redoCandidate.snapshot(),
+                existingJobs: jobRepository.jobs(),
+                providerIsReady: true,
+                operationalNow: now.addingTimeInterval(9)
+            )
+        guard case let .restoreEligibility(secondFence, secondReplacement) =
+            secondRestorePlan.mutations.first
+        else {
+            return XCTFail("second undo did not restore the next generation")
+        }
+        XCTAssertEqual(secondFence, reinvalidated.fence)
+        XCTAssertEqual(secondReplacement.generation, 3)
+        try engineRepository.save(
+            secondUndoCandidate.snapshot(),
+            recordingChangesFor: SyncDeviceID("abandon-undo-device"),
+            changedAt: now.addingTimeInterval(8),
+            enqueuingAutomaticClassificationJobs: secondRestorePlan.enqueues,
+            applyingAutomaticClassificationJobMutations:
+            secondRestorePlan.mutations,
+            automaticClassificationTransitionAt: now.addingTimeInterval(9)
+        )
+        let secondRestored = try XCTUnwrap(
+            jobRepository.job(id: secondReplacement.id)
+        )
+        XCTAssertEqual(secondRestored.generation, 3)
+        XCTAssertEqual(secondRestored.state, .ready)
+        XCTAssertEqual(secondRestored.dispatchAuthorization, .explicit)
+        XCTAssertEqual(secondRestored.authorizationID, authorizationID)
+    }
+
+    func testExplicitReactivateRestorationFenceFailureRollsBackEverything() throws {
+        let databaseURL = makeDatabaseURL("reactivate-restoration-rollback")
+        defer { removeDatabase(at: databaseURL) }
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        try engineRepository.save(engine.snapshot())
+        let today = LocalDate("2026-07-20")
+        let chainID = try engine.createPoolTask(
+            title: "重新启用后恢复等待授权的归类",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let activeSnapshot = engine.snapshot()
+        let enqueue = try makeEnqueue(
+            engine: engine,
+            chainID: chainID,
+            generation: 1,
+            initialState: .waitingForConfiguration,
+            availableAt: now.addingTimeInterval(1),
+            createdAt: now.addingTimeInterval(1)
+        )
+        try engineRepository.save(
+            activeSnapshot,
+            recordingChangesFor: SyncDeviceID("reactivate-rollback-device"),
+            changedAt: now.addingTimeInterval(1),
+            enqueuingAutomaticClassificationJobs: [enqueue]
+        )
+        try engine.abandonChain(from: traceID, now: now.addingTimeInterval(2))
+        let abandonPlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .taskBecameIneligible(chainID),
+            candidate: engine,
+            originalSnapshot: activeSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: false,
+            operationalNow: now.addingTimeInterval(3)
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("reactivate-rollback-device"),
+            changedAt: now.addingTimeInterval(2),
+            enqueuingAutomaticClassificationJobs: abandonPlan.enqueues,
+            applyingAutomaticClassificationJobMutations: abandonPlan.mutations,
+            automaticClassificationTransitionAt: now.addingTimeInterval(3)
+        )
+        let ineligible = try XCTUnwrap(jobRepository.job(id: enqueue.id))
+
+        _ = try engine.reactivateAbandonedChain(
+            from: traceID,
+            today: today,
+            now: now.addingTimeInterval(4)
+        )
+        let restorePlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .taskBecameEligible(chainID),
+            candidate: engine,
+            originalSnapshot: activeSnapshot,
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: false,
+            operationalNow: now.addingTimeInterval(5)
+        )
+        guard case let .restoreEligibility(_, replacement) =
+            restorePlan.mutations.first
+        else {
+            return XCTFail("reactivation did not plan eligibility restoration")
+        }
+        let persistedBefore = try engineRepository.load().snapshot()
+        let journalBefore = try syncRepository.journalEntries()
+        let staleFence = AutomaticClassificationJobFence(
+            jobID: ineligible.id,
+            generation: ineligible.generation,
+            attempt: ineligible.attempt + 1,
+            claimID: ineligible.claimID
+        )
+        XCTAssertThrowsError(
+            try engineRepository.save(
+                engine.snapshot(),
+                recordingChangesFor: SyncDeviceID("reactivate-rollback-device"),
+                changedAt: now.addingTimeInterval(4),
+                enqueuingAutomaticClassificationJobs: [],
+                applyingAutomaticClassificationJobMutations: [
+                    .restoreEligibility(staleFence, with: replacement)
+                ],
+                automaticClassificationTransitionAt: now.addingTimeInterval(5)
+            )
+        )
+        XCTAssertEqual(try engineRepository.load().snapshot(), persistedBefore)
+        XCTAssertEqual(try syncRepository.journalEntries(), journalBefore)
+        XCTAssertEqual(try jobRepository.job(id: enqueue.id), ineligible)
+        XCTAssertNil(try jobRepository.job(id: replacement.id))
+
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("reactivate-rollback-device"),
+            changedAt: now.addingTimeInterval(4),
+            enqueuingAutomaticClassificationJobs: restorePlan.enqueues,
+            applyingAutomaticClassificationJobMutations: restorePlan.mutations,
+            automaticClassificationTransitionAt: now.addingTimeInterval(5)
+        )
+        let restored = try XCTUnwrap(jobRepository.job(id: replacement.id))
+        XCTAssertEqual(restored.state, .waitingForConfiguration)
+        XCTAssertEqual(restored.dispatchAuthorization, .pendingUserDecision)
+        XCTAssertNil(restored.authorizationID)
+        XCTAssertNil(restored.authorizedAt)
+    }
+
+    func testIneligibleMutationDoesNotRewriteCompletedJobHistory() throws {
+        let databaseURL = makeDatabaseURL("ineligible-preserves-completed-history")
+        defer { removeDatabase(at: databaseURL) }
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let jobRepository = SQLiteAutomaticClassificationJobRepository(
+            databaseURL: databaseURL
+        )
+        let engine = NoonmarkEngine()
+        try engineRepository.save(engine.snapshot())
+        let chainID = try engine.createPoolTask(
+            title: "已经成功自动归类的任务",
+            now: now
+        )
+        let enqueue = try makeEnqueue(
+            engine: engine,
+            chainID: chainID,
+            generation: 1,
+            initialState: .ready,
+            availableAt: now,
+            createdAt: now
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("completed-history-device"),
+            changedAt: now,
+            enqueuingAutomaticClassificationJobs: [enqueue]
+        )
+        _ = try jobRepository.reconcileProviderExecution(
+            .configured(executionRevision: UUID()),
+            now: now.addingTimeInterval(1)
+        )
+        let claim = try XCTUnwrap(
+            jobRepository.claimNext(
+                now: now.addingTimeInterval(2),
+                staleBefore: now,
+                claimID: UUID()
+            )
+        )
+        try jobRepository.checkpointProposal(
+            Data("completed-history-proposal".utf8),
+            for: claim,
+            now: now.addingTimeInterval(3)
+        )
+        let authority = try AutomaticClassificationAuthorityPayload.decode(
+            enqueue.authorityPayload
+        )
+        let classificationPlan = try engine.prepareAutomaticClassification(
+            AutomaticClassificationApplicationProposal(
+                category: .new(name: "已完成自动分组", colorHex: "#2A6FDB"),
+                labels: [.new(name: "已完成自动标签", colorHex: "#0E9488")]
+            ),
+            authority: authority,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(4)
+        )
+        _ = try engine.commitAutomaticClassification(
+            classificationPlan,
+            authority: authority,
+            now: now.addingTimeInterval(4)
+        )
+        let proposalReadyClaim = try XCTUnwrap(
+            jobRepository.claimNext(
+                now: now.addingTimeInterval(4),
+                staleBefore: now.addingTimeInterval(3),
+                claimID: UUID()
+            )
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("completed-history-device"),
+            changedAt: now.addingTimeInterval(4),
+            completingAutomaticClassificationJob: proposalReadyClaim,
+            automaticClassificationTransitionAt: now.addingTimeInterval(4)
+        )
+        let completed = try XCTUnwrap(jobRepository.job(id: enqueue.id))
+        XCTAssertEqual(completed.state, .completed)
+
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("completed-history-device"),
+            changedAt: now.addingTimeInterval(5),
+            enqueuingAutomaticClassificationJobs: [],
+            applyingAutomaticClassificationJobMutations: [
+                .invalidateChain(chainID)
+            ],
+            automaticClassificationTransitionAt: now.addingTimeInterval(5)
+        )
+        XCTAssertEqual(try jobRepository.job(id: enqueue.id), completed)
+        let restorePlan = try AutomaticClassificationJobMutationPlanner().plan(
+            policy: .taskBecameEligible(chainID),
+            candidate: engine,
+            originalSnapshot: engine.snapshot(),
+            existingJobs: jobRepository.jobs(),
+            providerIsReady: true,
+            operationalNow: now.addingTimeInterval(6)
+        )
+        XCTAssertTrue(restorePlan.isEmpty)
+    }
+
     func testFinalSnapshotJournalAndCompletionUseOneFullClaimCAS() throws {
         let databaseURL = makeDatabaseURL("atomic-completion")
         defer { removeDatabase(at: databaseURL) }

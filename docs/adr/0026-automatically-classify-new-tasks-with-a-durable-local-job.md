@@ -24,6 +24,7 @@
 - 付费授权与工作生命周期是两条正交轴。Provider 可用时创建的新工作获得自动授权；Provider 不可用时创建的工作等待用户决定；用户明确启动历史积压后获得显式授权。授权决定以用户当时看到的精确工作集合做 CAS，不得把稍后进入队列的工作顺带放行。
 - Provider 健康度由本机 durable circuit 独立记录。`open` 冷却到期后只能有一条工作进入 `half-open` 探测；成功保存 proposal 后才关闭 circuit。401／403 等确定性配置拒绝直接进入 `blocked`；429、5xx、超时和断网使用全局退避，不能让每条积压工作分别消耗完整重试次数。
 - circuit 只引用不透明的 Provider execution revision，不保存 API Key、API Key hash、URL、模型名、请求正文或原始响应。显示名称、开关等不改变执行身份的保存不得废弃在途 claim；真正的 URL、模型或凭证变化才产生新 revision。
+- Keychain 凭证以 execution revision 建立不可变项目。保存新身份时必须先写入新 revision 的凭证，再切换非敏感配置指针；Provider resolver 只接受与该次请求 revision 完全匹配的凭证引用。保存进程不删除旧 revision；只有下一次 fresh launch 观察到已经持久化的配置指针后，才在当前 App 的固定 Keychain service 内回收非 active 项目。显式清除则先完整删除该 service 的凭证，再删除非敏感指针；中断时宁可留下无凭证的可重试指针，也不能留下仍存在、却无法再由 App 识别的 Key。任一步骤崩溃绝不能把新凭证配给旧 URL 或模型。
 - `proposalReady` 已经完成外部付费步骤，始终绕过 dispatch authorization 与 Provider circuit，只执行本地严格校验和提交。
 - Provider 返回到 proposal checkpoint 落盘之间若发生 SQLite 瞬态竞争，worker 必须保留内存 proposal 与同一 claim 原地退避重试，不得重新调用 Provider。若进程在 checkpoint 前不可恢复地退出，而 Provider 又不支持幂等请求键，外部 exactly-once 无法由本机单方面保证；监控必须将该极窄窗口与已 checkpoint 的零重复恢复区分开。
 - 最终分类项、当前关系、分类审计、同步 outbox 与工作完成状态在一个事务中发布；不得出现“显示已完成但分类没保存”或部分新建标签。
@@ -31,6 +32,7 @@
 ### AI 契约与最小数据
 
 - 请求只发送任务标题、任务描述，以及 active 分组／标签的稳定 handle、显示名称和目录 revision；不发送内部 UUID、附言、历史、复盘、同步资料或其他任务。
+- 远程 Provider 必须使用 HTTPS；HTTP 只允许 `localhost`、`127.0.0.1` 或 `::1` loopback，供用户本机服务和确定性 E2E 使用。
 - 输出必须是严格 JSON typed proposal：恰好一个分组及一至三个 AI 标签。快速输入中用户显式给出的 `#标签` 必须保留，AI 可以补充但不能删除。
 - 优先复用语义匹配的现有项；只有没有合适项时才提议新建。名称仍须经过分类 Module 的 canonical、近似重复和 lifecycle 规则，模型输出不能绕过领域验证。
 - 自动新建项使用本地确定性颜色；Provider 不能决定任意 UI 色值或稳定身份。
@@ -77,4 +79,5 @@
 - Core 测试覆盖自动来源 authority、原子应用、用户修改优先、目录 revision fence、撤销补偿及重做边界。
 - Storage 测试覆盖任务与工作同事务、claim 恢复、typed proposal checkpoint、最终发布原子性、精确积压授权、跳过、全局 circuit、单一 half-open probe、重启及本地队列不进入同步／导出；并以领先 wall clock 的未来领域 frontier 验证新工作仍可立即 claim、队列 transition 不受未来领域时间污染。
 - 真实 `.app` E2E 覆盖各新任务入口、等待配置、积压未授权零请求、显式授权、跳过、运行、401／429 全局背压、成功、失败重试、用户抢先修改和重启恢复，并用 Provider 请求计数、SQLite 探针与运行日志对账。
+- Provider 设置 E2E 使用四个独立 App launch，依次覆盖“新 revision 凭证已写但指针尚未切换”、“新指针已发布但旧 Key 尚未回收”及“显式清除已删 Key 但尚未删指针”的确定性中断状态；每个后续 fresh launch 都对配置 revision、Keychain 项与 resolver fence 对账，最终由 App 与 shell 双重证明 E2E Keychain service 及配置指针已经清空。
 - `scripts/test-ai-provider-live` 必须用本机显式 DeepSeek 配置走生产 provider 与自动分类 contract；缺 key 或依赖不可达时 fail-closed，不进入默认 `make check`。

@@ -25,10 +25,12 @@ struct ZhulongProviderDraft: Equatable {
 
     var normalizedBaseURL: URL? {
         let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false, let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
+        guard trimmed.isEmpty == false,
+              let url = URL(string: trimmed),
+              ZhulongProviderEndpointPolicy.permits(url)
+        else {
             return nil
         }
-        guard scheme == "http" || scheme == "https" else { return nil }
         return url
     }
 
@@ -74,14 +76,20 @@ enum ZhulongProviderSettingsStore {
 
     static func load() -> ZhulongProviderDraft {
         var draft = ZhulongProviderDraft()
-        if let stored = storedConfig() {
+        let stored = storedConfig()
+        if let stored {
+            try? ZhulongProviderKeychain.removeCredentials(
+                except: stored.executionRevision
+            )
             draft.displayName = stored.displayName
             draft.kind = stored.kind
             draft.baseURL = stored.baseURL.absoluteString
             draft.model = stored.model
             draft.enabled = stored.enabled
+            draft.hasStoredAPIKey = ZhulongProviderKeychain.hasAPIKey(
+                for: stored.executionRevision
+            )
         }
-        draft.hasStoredAPIKey = ZhulongProviderKeychain.hasAPIKey()
         if draft.enabled {
             draft.status = draft.hasStoredAPIKey ? .savedWithCredential : .savedWithoutCredential
         }
@@ -101,7 +109,9 @@ enum ZhulongProviderSettingsStore {
         guard let stored = storedConfig(),
               readiness(
                   config: stored,
-                  hasCredential: try ZhulongProviderKeychain.readAPIKey()?.isEmpty == false
+                  hasCredential: try ZhulongProviderKeychain.readAPIKey(
+                      for: stored.executionRevision
+                  )?.isEmpty == false
               )
         else { return nil }
         return stored.executionRevision
@@ -112,17 +122,22 @@ enum ZhulongProviderSettingsStore {
               stored.enabled,
               stored.kind == .openAICompatible,
               stored.model.isEmpty == false,
-              let scheme = stored.baseURL.scheme?.lowercased(),
-              scheme == "http" || scheme == "https"
+              ZhulongProviderEndpointPolicy.permits(stored.baseURL)
         else { return nil }
         return stored.executionRevision
     }
 
-    static func makePersistedConfig() throws -> AIProviderConfig? {
+    static func makePersistedConfig(
+        expectedExecutionRevision: UUID? = nil
+    ) throws -> AIProviderConfig? {
         guard let stored = storedConfig(),
+              expectedExecutionRevision == nil
+              || stored.executionRevision == expectedExecutionRevision,
               readiness(
                   config: stored,
-                  hasCredential: try ZhulongProviderKeychain.readAPIKey()?.isEmpty == false
+                  hasCredential: try ZhulongProviderKeychain.readAPIKey(
+                      for: stored.executionRevision
+                  )?.isEmpty == false
               )
         else { return nil }
         return AIProviderConfig(
@@ -131,13 +146,17 @@ enum ZhulongProviderSettingsStore {
             kind: stored.kind,
             baseURL: stored.baseURL,
             model: stored.model,
-            apiKeyRef: ZhulongProviderKeychain.keyRef,
+            apiKeyRef: ZhulongProviderKeychain.keyRef(
+                for: stored.executionRevision
+            ),
             enabled: stored.enabled
         )
     }
 
     static func save(
-        _ draft: ZhulongProviderDraft
+        _ draft: ZhulongProviderDraft,
+        afterCredentialWriteBeforeConfigPointer: ((UUID) throws -> Void)? = nil,
+        afterConfigPointerPublication: ((UUID) throws -> Void)? = nil
     ) throws -> ZhulongProviderSettingsTransition {
         guard draft.enabled == false || draft.normalizedBaseURL != nil else {
             throw ZhulongProviderSettingsError.invalidBaseURL
@@ -147,7 +166,9 @@ enum ZhulongProviderSettingsStore {
         }
         let baseURL = draft.normalizedBaseURL ?? URL(string: "https://api.example.com/v1")!
         let previous = storedConfig()
-        let previousAPIKey = try ZhulongProviderKeychain.readAPIKey()
+        let previousAPIKey = try previous.flatMap {
+            try ZhulongProviderKeychain.readAPIKey(for: $0.executionRevision)
+        }
         let submittedAPIKey = draft.apiKeyInput
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty
@@ -160,24 +181,33 @@ enum ZhulongProviderSettingsStore {
             || previous?.model != draft.normalizedModel
             || submittedAPIKey.map { $0 != previousAPIKey } == true
 
+        let executionRevision = executionChanged
+            ? UUID()
+            : previous?.executionRevision ?? UUID()
         let stored = StoredZhulongProviderConfig(
             displayName: draft.normalizedDisplayName,
             kind: draft.kind,
             baseURL: baseURL,
             model: draft.normalizedModel,
             enabled: draft.enabled,
-            executionRevision: executionChanged
-                ? UUID()
-                : previous?.executionRevision ?? UUID()
+            executionRevision: executionRevision
         )
         let data = try JSONEncoder().encode(stored)
 
-        if let submittedAPIKey, submittedAPIKey != previousAPIKey {
-            try ZhulongProviderKeychain.saveAPIKey(submittedAPIKey)
+        if executionChanged, let currentAPIKey, currentAPIKey.isEmpty == false {
+            try ZhulongProviderKeychain.saveAPIKey(
+                currentAPIKey,
+                for: executionRevision
+            )
+            try afterCredentialWriteBeforeConfigPointer?(executionRevision)
         }
         if stored != previous {
             UserDefaults.standard.set(data, forKey: defaultsKey)
+            guard UserDefaults.standard.data(forKey: defaultsKey) == data else {
+                throw ZhulongProviderSettingsError.configPointerFailure
+            }
         }
+        try afterConfigPointerPublication?(executionRevision)
 
         var next = draft
         next.displayName = stored.displayName
@@ -205,11 +235,19 @@ enum ZhulongProviderSettingsStore {
         )
     }
 
-    static func clear() throws -> ZhulongProviderSettingsTransition {
+    static func clear(
+        afterCredentialRemovalBeforeConfigPointer: (() throws -> Void)? = nil
+    ) throws -> ZhulongProviderSettingsTransition {
         let previous = storedConfig()
-        let previousAPIKey = try ZhulongProviderKeychain.readAPIKey()
-        try ZhulongProviderKeychain.deleteAPIKey()
+        let previousAPIKey = try previous.flatMap {
+            try ZhulongProviderKeychain.readAPIKey(for: $0.executionRevision)
+        }
+        try ZhulongProviderKeychain.removeCredentials(except: nil)
+        try afterCredentialRemovalBeforeConfigPointer?()
         UserDefaults.standard.removeObject(forKey: defaultsKey)
+        guard UserDefaults.standard.data(forKey: defaultsKey) == nil else {
+            throw ZhulongProviderSettingsError.configPointerFailure
+        }
         return ZhulongProviderSettingsTransition(
             draft: ZhulongProviderDraft(),
             previousExecutionRevision: previous?.executionRevision,
@@ -230,8 +268,7 @@ enum ZhulongProviderSettingsStore {
               config.enabled,
               config.kind == .openAICompatible,
               config.model.isEmpty == false,
-              let scheme = config.baseURL.scheme?.lowercased(),
-              scheme == "http" || scheme == "https"
+              ZhulongProviderEndpointPolicy.permits(config.baseURL)
         else { return false }
         return hasCredential
     }
@@ -243,21 +280,53 @@ enum ZhulongProviderSettingsStore {
         guard draft.normalizedModel.isEmpty == false else {
             throw ZhulongProviderSettingsError.emptyModel
         }
+        let keyRef: String? = if draft.hasStoredAPIKey,
+                                 let stored = storedConfig(),
+                                 stored.kind == draft.kind,
+                                 stored.baseURL == baseURL,
+                                 stored.model == draft.normalizedModel,
+                                 try ZhulongProviderKeychain.readAPIKey(
+                                     for: stored.executionRevision
+                                 )?.isEmpty == false
+        {
+            ZhulongProviderKeychain.keyRef(for: stored.executionRevision)
+        } else {
+            nil
+        }
         return AIProviderConfig(
             providerID: AIProviderID("default"),
             displayName: draft.normalizedDisplayName,
             kind: draft.kind,
             baseURL: baseURL,
             model: draft.normalizedModel,
-            apiKeyRef: draft.hasStoredAPIKey ? ZhulongProviderKeychain.keyRef : nil,
+            apiKeyRef: keyRef,
             enabled: draft.enabled
         )
+    }
+}
+
+private enum ZhulongProviderEndpointPolicy {
+    static func permits(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              let rawHost = url.host?.lowercased(),
+              let decodedHost = rawHost.removingPercentEncoding
+        else { return false }
+        let host = decodedHost.trimmingCharacters(
+            in: CharacterSet(charactersIn: "[]")
+        )
+        guard host.isEmpty == false else { return false }
+        if scheme == "https" {
+            return true
+        }
+        guard scheme == "http" else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 }
 
 enum ZhulongProviderSettingsError: Error, Equatable {
     case invalidBaseURL
     case emptyModel
+    case configPointerFailure
     case keychainFailure(OSStatus)
 
     var presentationFailure: ZhulongProviderSettingsFailure {
@@ -268,26 +337,48 @@ enum ZhulongProviderSettingsError: Error, Equatable {
             .emptyModel
         case .keychainFailure:
             .keychainUnavailable
+        case .configPointerFailure:
+            .unexpected
         }
     }
 }
 
 enum ZhulongProviderKeychain {
-    static let keyRef = "keychain:noonmark.zhulong.default"
+    private static let keyRefPrefix = "keychain:noonmark.zhulong.execution:"
+    private static let accountPrefix = "execution-"
+    private static let accountSuffix = "-api-key"
+
     static var serviceIdentifier: String {
         Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e"
             ? "app.noonmark.zhulong.provider.e2e"
             : "app.noonmark.zhulong.provider"
     }
 
-    private static let account = "default-api-key"
-
-    static func hasAPIKey() -> Bool {
-        (try? readAPIKey())?.isEmpty == false
+    static func keyRef(for executionRevision: UUID) -> String {
+        keyRefPrefix + executionRevision.uuidString.lowercased()
     }
 
-    static func readAPIKey() throws -> String? {
-        var query = baseQuery()
+    static func hasAPIKey(for executionRevision: UUID) -> Bool {
+        (try? readAPIKey(for: executionRevision))?.isEmpty == false
+    }
+
+    static func hasAnyAPIKey() throws -> Bool {
+        try credentialAccounts().isEmpty == false
+    }
+
+    static func resolveAPIKey(
+        _ keyRef: String,
+        expectedExecutionRevision: UUID? = nil
+    ) throws -> String? {
+        guard let executionRevision = executionRevision(from: keyRef),
+              expectedExecutionRevision == nil
+              || executionRevision == expectedExecutionRevision
+        else { return nil }
+        return try readAPIKey(for: executionRevision)
+    }
+
+    static func readAPIKey(for executionRevision: UUID) throws -> String? {
+        var query = credentialQuery(for: executionRevision)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -303,42 +394,88 @@ enum ZhulongProviderKeychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func saveAPIKey(_ apiKey: String) throws {
+    static func saveAPIKey(
+        _ apiKey: String,
+        for executionRevision: UUID
+    ) throws {
         let data = Data(apiKey.utf8)
-        let query = baseQuery()
-        let attributes = [kSecValueData as String: data]
-        var status = SecItemUpdate(
-            query as CFDictionary,
-            attributes as CFDictionary
-        )
-        if status == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            status = SecItemAdd(addQuery as CFDictionary, nil)
-            if status == errSecDuplicateItem {
-                status = SecItemUpdate(
-                    query as CFDictionary,
-                    attributes as CFDictionary
-                )
-            }
+        var query = credentialQuery(for: executionRevision)
+        query[kSecValueData as String] = data
+        let status = SecItemAdd(query as CFDictionary, nil)
+        if status == errSecDuplicateItem,
+           try readAPIKey(for: executionRevision) == apiKey
+        {
+            return
         }
         guard status == errSecSuccess else {
             throw ZhulongProviderSettingsError.keychainFailure(status)
         }
     }
 
-    static func deleteAPIKey() throws {
-        let status = SecItemDelete(baseQuery() as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw ZhulongProviderSettingsError.keychainFailure(status)
+    static func removeCredentials(except activeExecutionRevision: UUID?) throws {
+        let activeAccount = activeExecutionRevision.map(account(for:))
+        for account in try credentialAccounts() where account != activeAccount {
+            let status = SecItemDelete(
+                serviceQuery(account: account) as CFDictionary
+            )
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw ZhulongProviderSettingsError.keychainFailure(status)
+            }
         }
     }
 
-    private static func baseQuery() -> [String: Any] {
-        [
+    private static func executionRevision(from keyRef: String) -> UUID? {
+        guard keyRef.hasPrefix(keyRefPrefix),
+              let revision = UUID(
+                  uuidString: String(keyRef.dropFirst(keyRefPrefix.count))
+              ),
+              keyRef == self.keyRef(for: revision)
+        else { return nil }
+        return revision
+    }
+
+    private static func credentialAccounts() throws -> [String] {
+        var query = serviceQuery(account: nil)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitAll
+        var items: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &items)
+        if status == errSecItemNotFound {
+            return []
+        }
+        guard status == errSecSuccess else {
+            throw ZhulongProviderSettingsError.keychainFailure(status)
+        }
+        let dictionaries: [[String: Any]] = if let values = items as? [[String: Any]] {
+            values
+        } else if let value = items as? [String: Any] {
+            [value]
+        } else {
+            []
+        }
+        return dictionaries.compactMap {
+            $0[kSecAttrAccount as String] as? String
+        }
+    }
+
+    private static func credentialQuery(
+        for executionRevision: UUID
+    ) -> [String: Any] {
+        serviceQuery(account: account(for: executionRevision))
+    }
+
+    private static func account(for executionRevision: UUID) -> String {
+        accountPrefix + executionRevision.uuidString.lowercased() + accountSuffix
+    }
+
+    private static func serviceQuery(account: String?) -> [String: Any] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceIdentifier,
-            kSecAttrAccount as String: account
+            kSecAttrService as String: serviceIdentifier
         ]
+        if let account {
+            query[kSecAttrAccount as String] = account
+        }
+        return query
     }
 }

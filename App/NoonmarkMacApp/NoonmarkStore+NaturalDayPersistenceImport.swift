@@ -554,6 +554,35 @@ extension NoonmarkStore {
         )
     }
 
+    func save(
+        _ candidate: NoonmarkEngine,
+        mutationAt mutationInstant: Date,
+        applyingAutomaticClassificationPlan plan: AutomaticClassificationJobMutationPlan
+    ) throws {
+        guard plan.isEmpty == false else {
+            try save(candidate, mutationAt: mutationInstant)
+            return
+        }
+        try assertEngineWriteAllowed()
+        guard let repository, let syncDeviceIdentity else {
+            throw AutomaticClassificationAppError.persistenceUnavailable
+        }
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
+        try repository.save(
+            candidate.snapshot(),
+            recordingChangesFor: syncDeviceIdentity.deviceID,
+            changedAt: mutationInstant,
+            enqueuingAutomaticClassificationJobs: plan.enqueues,
+            applyingAutomaticClassificationJobMutations: plan.mutations,
+            automaticClassificationTransitionAt:
+            automaticClassificationOperationalClock.now()
+        )
+        recordAutomaticClassificationMutationDiagnostics(plan)
+    }
+
     func saveAutomaticClassificationCompletion(
         _ candidate: NoonmarkEngine,
         claim: AutomaticClassificationJobClaim,
@@ -577,82 +606,71 @@ extension NoonmarkStore {
         )
     }
 
-    func saveUserClassificationWinningOverAutomaticWork(
-        _ candidate: NoonmarkEngine,
-        chainID: TaskChainID,
-        mutationAt mutationInstant: Date
-    ) throws {
-        try assertEngineWriteAllowed()
-        guard let repository, let syncDeviceIdentity else {
-            try save(candidate, mutationAt: mutationInstant)
-            return
-        }
-        if persistenceFailuresRemainingForE2E > 0 {
-            persistenceFailuresRemainingForE2E -= 1
-            throw PersistenceFailureE2EError.injectedSaveFailure
-        }
-        try repository.save(
-            candidate.snapshot(),
-            recordingChangesFor: syncDeviceIdentity.deviceID,
-            changedAt: mutationInstant,
-            supersedingAutomaticClassificationJobsForChain: chainID,
-            automaticClassificationTransitionAt:
-            automaticClassificationOperationalClock.now()
-        )
-    }
-
     func saveSnapshotUndo(
         _ candidate: NoonmarkEngine,
         outcome: SnapshotUndoOutcome,
         mutationAt mutationInstant: Date
-    ) throws {
+    ) throws -> Bool {
         guard outcome.automaticClassificationCancelledChainIDs.count <= 1 else {
             throw NoonmarkError.invalidTransition(
                 "one undo operation cannot cancel multiple automatic classification jobs"
             )
         }
-        guard let chainID = outcome.automaticClassificationCancelledChainIDs.first,
-              let repository,
-              let syncDeviceIdentity
-        else {
+        guard repository != nil, syncDeviceIdentity != nil else {
             try save(candidate, mutationAt: mutationInstant)
-            return
+            return false
         }
-        try assertEngineWriteAllowed()
-        if persistenceFailuresRemainingForE2E > 0 {
-            persistenceFailuresRemainingForE2E -= 1
-            throw PersistenceFailureE2EError.injectedSaveFailure
+        var mutations = outcome.automaticClassificationCancelledChainIDs.map {
+            AutomaticClassificationJobMutation.cancelForUndo($0)
         }
-        try repository.save(
-            candidate.snapshot(),
-            recordingChangesFor: syncDeviceIdentity.deviceID,
-            changedAt: mutationInstant,
-            cancellingAutomaticClassificationJobsForUndoneChain: chainID,
-            automaticClassificationTransitionAt:
-            automaticClassificationOperationalClock.now()
+        var enqueues: [AutomaticClassificationJobEnqueue] = []
+        for chainID in outcome.automaticClassificationRestoredChainIDs {
+            let restoration = try automaticClassificationMutationPlan(
+                for: .taskBecameEligible(chainID),
+                candidate: candidate,
+                originalSnapshot: engine.snapshot()
+            )
+            enqueues.append(contentsOf: restoration.enqueues)
+            mutations.append(contentsOf: restoration.mutations)
+        }
+        let plan = AutomaticClassificationJobMutationPlan(
+            enqueues: enqueues,
+            mutations: mutations
         )
+        try save(
+            candidate,
+            mutationAt: mutationInstant,
+            applyingAutomaticClassificationPlan: plan
+        )
+        return plan.isEmpty == false
     }
 
     func saveSnapshotRedo(
         _ candidate: NoonmarkEngine,
+        outcome: SnapshotUndoOutcome,
         redo: AutomaticClassificationJobRedo?,
         mutationAt mutationInstant: Date
-    ) throws {
-        guard let redo, let repository, let syncDeviceIdentity else {
+    ) throws -> Bool {
+        guard repository != nil, syncDeviceIdentity != nil else {
             try save(candidate, mutationAt: mutationInstant)
-            return
+            return false
         }
-        try assertEngineWriteAllowed()
-        if persistenceFailuresRemainingForE2E > 0 {
-            persistenceFailuresRemainingForE2E -= 1
-            throw PersistenceFailureE2EError.injectedSaveFailure
+        var mutations = outcome.automaticClassificationCancelledChainIDs.map {
+            AutomaticClassificationJobMutation.invalidateChain($0)
         }
-        try repository.save(
-            candidate.snapshot(),
-            recordingChangesFor: syncDeviceIdentity.deviceID,
-            changedAt: mutationInstant,
-            requeuingAutomaticClassificationJobForRedo: redo
+        if let redo {
+            mutations.append(.requeueCancelledByUndo(redo))
+        }
+        let plan = AutomaticClassificationJobMutationPlan(
+            enqueues: [],
+            mutations: mutations
         )
+        try save(
+            candidate,
+            mutationAt: mutationInstant,
+            applyingAutomaticClassificationPlan: plan
+        )
+        return plan.isEmpty == false
     }
 
     private func replacePersistedData(with candidate: NoonmarkEngine) throws {
@@ -694,7 +712,7 @@ extension NoonmarkStore {
         try zhulongWorkspace.assertMatchesPendingApplicationAfterSnapshot(
             candidate
         )
-        let jobs = try automaticClassificationJobs(
+        let automaticClassificationPlan = try automaticClassificationMutationPlan(
             for: .newlyCreatedTaskChains,
             candidate: candidate,
             originalSnapshot: originalSnapshot
@@ -704,7 +722,7 @@ extension NoonmarkStore {
         try save(
             candidate,
             mutationAt: mutationInstant,
-            enqueuingAutomaticClassificationJobs: jobs
+            applyingAutomaticClassificationPlan: automaticClassificationPlan
         )
     }
 
@@ -745,7 +763,7 @@ extension NoonmarkStore {
         )
         let candidate = try NoonmarkEngine(snapshot: originalSnapshot)
         let result = try mutation(candidate, moment)
-        let automaticClassificationJobs = try automaticClassificationJobs(
+        let automaticClassificationPlan = try automaticClassificationMutationPlan(
             for: automaticClassificationPolicy,
             candidate: candidate,
             originalSnapshot: originalSnapshot
@@ -754,17 +772,16 @@ extension NoonmarkStore {
             switch automaticClassificationPolicy {
             case .none:
                 try save(candidate, mutationAt: moment.instant)
-            case .newlyCreatedTaskChains:
+            case .taskDefinitionChanged, .classificationCatalogChanged,
+                 .newlyCreatedTaskChains,
+                 .taskBecameIneligible,
+                 .taskBecameEligible,
+                 .userClassificationWins:
                 try save(
                     candidate,
                     mutationAt: moment.instant,
-                    enqueuingAutomaticClassificationJobs: automaticClassificationJobs
-                )
-            case let .userClassificationWins(chainID):
-                try saveUserClassificationWinningOverAutomaticWork(
-                    candidate,
-                    chainID: chainID,
-                    mutationAt: moment.instant
+                    applyingAutomaticClassificationPlan:
+                    automaticClassificationPlan
                 )
             }
         } catch let gateError as StoreMutationGateError {
@@ -783,8 +800,14 @@ extension NoonmarkStore {
         switch automaticClassificationPolicy {
         case .none:
             break
-        case .newlyCreatedTaskChains, .userClassificationWins:
-            automaticClassificationJobsDidChange()
+        case .taskDefinitionChanged, .classificationCatalogChanged,
+             .newlyCreatedTaskChains,
+             .taskBecameIneligible,
+             .taskBecameEligible,
+             .userClassificationWins:
+            if automaticClassificationPlan.isEmpty == false {
+                automaticClassificationJobsDidChange()
+            }
         }
         return result
     }

@@ -179,6 +179,13 @@ require_literal \
   "requiredFragmentsByScreenshot"
 require_literal \
   scripts/assert-task-detail-density-screenshot.swift \
+  "request.regionOfInterest = rightRailRegion"
+require_order \
+  scripts/assert-task-detail-density-screenshot.swift \
+  "request.regionOfInterest = rightRailRegion" \
+  "perform([request])"
+require_literal \
+  scripts/assert-task-detail-density-screenshot.swift \
   "label.hasPrefix(heading)"
 require_literal \
   scripts/test-e2e \
@@ -192,6 +199,32 @@ require_literal \
 require_literal \
   scripts/assert-selection-focus-screenshot.swift \
   "guard longestConsecutiveRows <= 1"
+require_literal \
+  App/NoonmarkMacApp/ZhulongConvergedHome.swift \
+  'titleAnchorIdentifier: "zhulong.home.title"'
+require_literal \
+  App/NoonmarkMacApp/ZhulongSessionStreamPage.swift \
+  'titleAnchorIdentifier: "zhulong.session.title"'
+require_literal \
+  App/NoonmarkMacApp/LegacyLaunchAutomations.swift \
+  "append(ZhulongTitleGeometryE2EAutomation.fromCommandLine(), to: &actions)"
+require_literal \
+  App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
+  'AppViewTreeE2E.view(identifier: "shell.middle-pane")'
+require_literal \
+  App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
+  "let delta = abs(titleFrame.midX - middleFrame.midX)"
+require_literal \
+  App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
+  "guard delta <= 1"
+require_literal \
+  App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
+  '"expected_text=\(expectedText)"'
+require_literal scripts/test-e2e "artifacts/e2e/zhulong-title-geometry.txt"
+require_literal scripts/test-e2e "artifacts/e2e/zhulong-stream-title-geometry.txt"
+require_literal scripts/test-e2e "artifacts/e2e-english/zhulong-title-geometry.txt"
+require_literal scripts/test-e2e "assert_zhulong_title_geometry_result"
+require_literal scripts/test-e2e "in_app_zhulong_title_geometry"
 require_literal scripts/test-e2e "--e2e-native-command-help-shortcut"
 require_order \
   scripts/test-e2e \
@@ -202,63 +235,185 @@ require_order \
   '"English native Help shortcut"' \
   '"English native menu exercise"'
 require_literal \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  "func prepareMenuKeyboardSelection()"
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  'after: "--e2e-native-command-help-ready-url"'
 require_literal \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  "let inheritedModifierFlags = Self.cgFlags("
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  'after: "--e2e-native-command-help-token"'
 require_literal \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  "event.flags.subtract(inheritedModifierFlags)"
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  'after: "--e2e-native-command-help-completion-url"'
+for ready_field in \
+  status launch_token pid app_path window_number window_title menu_title menu_item_title; do
+  require_literal \
+    App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+    "(\"$ready_field\","
+done
 require_literal \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  "func prepareMenuBarGesture("
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "try (lines.joined(separator: \"\\n\") + \"\\n\").write("
 require_literal \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  "func postMenuBarKeyboardSelection("
-require_literal \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  "func postMenuBarMouseUp("
-require_order \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  "let events = [gesture.mouseDown, gesture.mouseUp]" \
-  "+ selection.highlightEvents"
-require_order \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  "+ selection.highlightEvents" \
-  "+ selection.confirmationEvents"
-require_order \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  "let baseTimestamp = DispatchTime.now().uptimeNanoseconds" \
-  "event.timestamp = baseTimestamp + UInt64(offset)"
-menu_keyboard_post_function="$fixture_root/post-menu-keyboard-selection.swift"
-sed -n \
-  '/^    func postMenuBarKeyboardSelection($/,/^    }$/p' \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift \
-  >"$menu_keyboard_post_function"
-require_order \
-  "$menu_keyboard_post_function" \
-  "event.timestamp = baseTimestamp + UInt64(offset)" \
-  "event.post(tap: .cghidEventTap)"
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "CharacterSet.controlCharacters.contains(\$0) == false"
 require_literal \
   App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
   "NSMenu.didBeginTrackingNotification"
 require_literal \
   App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "NSMenu.didEndTrackingNotification"
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
   "NSMenu.didSendActionNotification"
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "guard menu === trackedMenu else { return }"
 require_order \
   App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
   "let helpItem = try menuItem(action: NoonmarkMenuAction.showHelp)" \
-  "input.postMenuBarKeyboardSelection("
+  "try writeHelpReady("
+require_order \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "try writeHelpReady(" \
+  'try await waitForExternalHelpProtocolPhase('
+native_help_exercise_function="$fixture_root/native-help-exercise.swift"
+sed -n \
+  '/^    private func exerciseHelpWindow(/,/^    private func exerciseQuickEntry(/p' \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  >"$native_help_exercise_function"
+require_order \
+  "$native_help_exercise_function" \
+  'try await assertAnchor(' \
+  '_ = try await waitForHelpCompletion('
+require_order \
+  "$native_help_exercise_function" \
+  '_ = try await waitForHelpCompletion(' \
+  'action: #selector(NSWindow.performClose(_:))'
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  'O_RDONLY | O_CLOEXEC | O_NOFOLLOW'
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  'Help completion was not exactly seven lines'
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  'fields["launch_token"] == launchToken'
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  'externalHelpProtocolPhaseDeadline: Duration = .seconds(60)'
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  'waitForExternalHelpProtocolPhase('
+for forbidden_external_help_ui_wait in \
+  'waitUntil("external Help menu selection did not finish")' \
+  'waitUntil("external Help Helper did not publish completion")'; do
+  if grep -F "$forbidden_external_help_ui_wait" \
+    App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift >/dev/null; then
+    echo "external Help protocol still reuses the five-second UI wait" >&2
+    exit 1
+  fi
+done
 require_literal \
   App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
   "trackingProbe.sentActionCount == 1"
-if grep -F \
-  "func postMenuBarClick(" \
-  App/NoonmarkMacApp/WindowServerInputDriver.swift >/dev/null; then
-  echo "legacy menu-bar click does not prequeue the exact selection start" >&2
-  exit 1
-fi
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "trackingProbe.endTrackingCount == 1"
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "trackingProbe.openCount == 1"
+require_literal \
+  App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift \
+  "trackingProbe.closeCount == 1"
+for forbidden_app_menu_driver in \
+  selectionPostCount \
+  onMenuWillOpen \
+  armKeyboardSelection \
+  prepareMenuKeyboardSelection \
+  prepareMenuBarGesture \
+  postMenuBarMouseDown \
+  postMenuKeyboardSelectionAndMouseUp \
+  uniqueMenuBarItem; do
+  if grep -F "$forbidden_app_menu_driver" \
+    App/NoonmarkMacApp/NativeCommandSurfaceE2EAutomation.swift >/dev/null; then
+    echo "native Help exercise still contains in-process menu input: $forbidden_app_menu_driver" >&2
+    exit 1
+  fi
+done
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'case e2eMenuCommand = "e2e-menu-command"'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  "func performE2EMenuCommand() throws"
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  "let topLevelMatches = target.directMatches("
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  "let menuItem: AXTarget.Match = try target.wait("
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  '"menu-command",'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'let completionPath = values["--completion"]'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'try CompletionArtifact.publish('
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  '"completion",'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/WindowServerInputDriver.swift \
+  "event.flags = []"
+helper_menu_command_function="$fixture_root/helper-menu-command.swift"
+sed -n \
+  '/^    func performE2EMenuCommand() throws {$/,/^    }$/p' \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  >"$helper_menu_command_function"
+require_order \
+  "$helper_menu_command_function" \
+  "try input.click(frame: topLevelFrame)" \
+  "try input.click(frame: menuItemFrame)"
+require_order \
+  "$helper_menu_command_function" \
+  "try input.click(frame: menuItemFrame)" \
+  '"menu-command",'
+require_order \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'try runner.performE2EMenuCommand()' \
+  'try CompletionArtifact.publish('
+require_order \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'try CompletionArtifact.publish(' \
+  '"completion",'
+require_literal scripts/test-e2e "parse_native_command_help_ready()"
+require_literal scripts/test-e2e "assert_native_command_helper_completion()"
+require_literal scripts/test-e2e "run_native_command_menu_helper()"
+require_literal scripts/test-e2e "run_native_command_surface_exercise()"
+require_literal scripts/test-e2e "e2e-menu-command"
+require_literal scripts/test-e2e 'expected[10] = "completion"'
+require_literal scripts/test-e2e 'expected[11] = "complete"'
+require_literal scripts/test-e2e '--e2e-native-command-help-token'
+require_literal scripts/test-e2e '--e2e-native-command-help-completion-url'
+require_literal scripts/test-e2e 'NOONMARK_E2E_ENGLISH_NATIVE_COMMANDS_ONLY:english-native-commands'
+require_literal scripts/test-e2e '[[ "$only_mode" == "english-native-commands" ]]'
+require_literal scripts/test-e2e 'NOONMARK_E2E_NATIVE_COMMAND_STRESS_COUNT must be an integer from 1 through 32'
+require_literal scripts/test-e2e 'run_english_menu_probe "$PWD/$english_native_db"'
+require_literal scripts/test-e2e 'helper_requested="$english_helper_requested"'
+native_command_exercise_function="$fixture_root/native-command-exercise.sh"
+sed -n \
+  '/^run_native_command_surface_exercise() {$/,/^}$/p' \
+  scripts/test-e2e \
+  >"$native_command_exercise_function"
+require_order \
+  "$native_command_exercise_function" \
+  "parse_native_command_help_ready" \
+  "run_native_command_menu_helper"
+require_order \
+  "$native_command_exercise_function" \
+  "run_native_command_menu_helper" \
+  'if [[ ! -f "$result" || "$(<"$result")" != "ok" ]]'
 require_literal scripts/test-e2e "english-scenario-ledger.tsv"
 require_literal scripts/test-e2e "english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
 require_literal scripts/test-e2e "app_binary_sha256_before="

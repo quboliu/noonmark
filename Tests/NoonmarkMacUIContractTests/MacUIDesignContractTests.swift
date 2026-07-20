@@ -47,6 +47,29 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUIAnimationMetrics.dateStripSpringDampingFraction, 0.74)
     }
 
+    func testDatePickerUsesOneCompactLocalDateGridContract() {
+        XCTAssertEqual(MacUIDatePickerLayout.sheetWidth, 340)
+        XCTAssertEqual(MacUIDatePickerLayout.outerPadding, 18)
+        XCTAssertEqual(MacUIDatePickerLayout.contentWidth, 304)
+        XCTAssertEqual(
+            MacUIDatePickerLayout.contentWidth,
+            MacUIDatePickerLayout.sheetWidth - (MacUIDatePickerLayout.outerPadding * 2)
+        )
+        XCTAssertEqual(MacUIDatePickerLayout.columnCount, 7)
+        XCTAssertEqual(MacUIDatePickerLayout.rowCount, 6)
+        XCTAssertEqual(MacUIDatePickerLayout.columnSpacing, 4)
+        XCTAssertEqual(MacUIDatePickerLayout.rowSpacing, 2)
+        XCTAssertEqual(MacUIDatePickerLayout.dayCellHeight, 30)
+        XCTAssertEqual(MacUIDatePickerLayout.selectionDiameter, 24)
+        XCTAssertTrue(MacUIDatePickerLayout.fullCellHitTarget)
+        XCTAssertTrue(MacUIDatePickerLayout.localDateOnlyDraft)
+        XCTAssertTrue(MacUIDatePickerLayout.stablePresentationIdentity)
+        XCTAssertTrue(MacUIDatePickerLayout.showsAdjacentDates)
+        XCTAssertTrue(MacUIDatePickerLayout.omitsUnconstrainedHint)
+        XCTAssertTrue(MacUIDatePickerLayout.purposeSpecificConfirmation)
+        XCTAssertTrue(MacUIDatePickerLayout.supportsKeyboardArrows)
+    }
+
     func testDayTaskRowKeepsIdentityFirstAndCompletionAtTheTrailingEdge() {
         XCTAssertEqual(MacUITaskRowLayout.completionControlSize, 28)
         XCTAssertEqual(MacUITaskRowLayout.accessorySpacing, 12)
@@ -447,6 +470,19 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(
             MacUIZhulongHomeLayout.contentPlacement(hasPendingSessions: true),
             .topAligned
+        )
+    }
+
+    func testZhulongTitleCentersWithoutChangingSharedPageHeaderDefault() {
+        XCTAssertEqual(MacUIPageHeaderLayout.defaultTitlePlacement, .leading)
+        XCTAssertEqual(
+            MacUIZhulongHomeLayout.titlePlacement,
+            .centeredInMainSurface
+        )
+        XCTAssertTrue(
+            MacUIDesignContract.current.zhulongHomeElements.contains(
+                .centeredPageTitle
+            )
         )
     }
 

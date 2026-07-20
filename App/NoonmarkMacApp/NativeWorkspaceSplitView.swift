@@ -3,7 +3,7 @@ import NoonmarkMacRuntime
 import SwiftUI
 
 /// A three-column AppKit split workspace with native draggable dividers and
-/// automatic divider-position restoration.
+/// one explicit persistence authority for divider restoration.
 struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
     @ObservedObject var store: NoonmarkStore
     let stateRepository: WorkspaceStateRepository
@@ -16,10 +16,6 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
         let controller = WorkspaceSplitViewController()
         controller.splitView.isVertical = true
         controller.splitView.dividerStyle = .thin
-        if stateRepository.persistenceEnabled {
-            controller.splitView.autosaveName = NoonmarkMainWindowState
-                .splitViewAutosaveName
-        }
         controller.splitView.identifier = NSUserInterfaceItemIdentifier(
             "shell.workspace-split"
         )
@@ -102,13 +98,13 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
         weak var store: NoonmarkStore?
         private weak var controller: WorkspaceSplitViewController?
         private let stateRepository: WorkspaceStateRepository
-        private let hadPersistedState: Bool
         private var usesCustomDetailWidth: Bool
         private var needsInitialGeometryRestore = true
         private var isApplyingState = false
         private var appliedAutomaticDetailWidth: CGFloat?
         private var pendingAutomaticDetailWidth: CGFloat?
         private var expandedSidebarWidth: CGFloat
+        private var customDetailWidth: CGFloat
 
         init(
             store: NoonmarkStore,
@@ -116,11 +112,13 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
         ) {
             self.store = store
             self.stateRepository = stateRepository
-            hadPersistedState = stateRepository.containsSavedState
             let persistedState = stateRepository.load()
             usesCustomDetailWidth = persistedState.usesCustomDetailWidth
             expandedSidebarWidth = Self.clampedExpandedSidebarWidth(
                 persistedState.expandedSidebarWidth
+            )
+            customDetailWidth = Self.clampedCustomDetailWidth(
+                persistedState.customDetailWidth
             )
             super.init()
         }
@@ -167,15 +165,21 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
             detailItem.isCollapsed = shouldCollapseDetail
             let canApplyPendingDetailWidth = shouldCollapseDetail == false
                 && needsInitialGeometryRestore == false
-            let visiblePendingDetailWidth = canApplyPendingDetailWidth
-                ? pendingAutomaticDetailWidth
-                : nil
-            if let visiblePendingDetailWidth {
+            let visibleDetailWidth: CGFloat? = if canApplyPendingDetailWidth {
+                usesCustomDetailWidth
+                    ? customDetailWidth
+                    : pendingAutomaticDetailWidth
+            } else {
+                nil
+            }
+            if let visibleDetailWidth {
                 controller.view.layoutSubtreeIfNeeded()
-                applyDetailWidth(visiblePendingDetailWidth)
+                applyDetailWidth(visibleDetailWidth)
                 controller.view.layoutSubtreeIfNeeded()
-                appliedAutomaticDetailWidth = visiblePendingDetailWidth
-                self.pendingAutomaticDetailWidth = nil
+                if usesCustomDetailWidth == false {
+                    appliedAutomaticDetailWidth = visibleDetailWidth
+                    pendingAutomaticDetailWidth = nil
+                }
             }
             isApplyingState = false
 
@@ -200,7 +204,9 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                     controller.splitView.bounds.width
                 )
             }
-            if store.isSidebarExpanded {
+            let capturesSidebarWidth = store.isSidebarExpanded
+                && isUserDraggingDivider(notification, at: 0)
+            if capturesSidebarWidth {
                 let sidebarWidth = controller.splitViewItems[0]
                     .viewController.view.frame.width
                 if WorkspaceGeometry.sidebarWidthRange.contains(
@@ -217,8 +223,17 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                     store.isDetailRailExpanded = detailExpanded
                 }
             }
-            if isUserDraggingDetailDivider(notification) {
+            if isUserDraggingDivider(notification, at: 1) {
                 usesCustomDetailWidth = true
+                let detailWidth = controller.splitViewItems[2]
+                    .viewController.view.frame.width
+                if WorkspaceGeometry.detailWidthRange.contains(
+                    Double(detailWidth)
+                ) {
+                    customDetailWidth = Self.clampedCustomDetailWidth(
+                        Double(detailWidth)
+                    )
+                }
                 appliedAutomaticDetailWidth = nil
                 pendingAutomaticDetailWidth = nil
             }
@@ -239,33 +254,24 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
             let detailItem = controller.splitViewItems[2]
             let automaticDetailWidth = store.page.detailRailWidth
             sidebarItem.isCollapsed = false
-            if hadPersistedState == false, store.isSidebarExpanded {
+            if store.isSidebarExpanded {
                 controller.view.layoutSubtreeIfNeeded()
                 controller.splitView.setPosition(
-                    CGFloat(WorkspaceGeometry.defaultSidebarWidth),
+                    expandedSidebarWidth,
                     ofDividerAt: 0
                 )
-                expandedSidebarWidth = CGFloat(
-                    WorkspaceGeometry.defaultSidebarWidth
-                )
                 controller.view.layoutSubtreeIfNeeded()
-            } else if store.isSidebarExpanded {
-                let restoredWidth = sidebarItem.viewController.view.frame.width
-                if WorkspaceGeometry.sidebarWidthRange.contains(
-                    Double(restoredWidth)
-                ) {
-                    expandedSidebarWidth = Self.clampedExpandedSidebarWidth(
-                        Double(restoredWidth)
-                    )
-                }
             }
+            detailItem.isCollapsed = false
+            controller.view.layoutSubtreeIfNeeded()
+            let restoredDetailWidth = usesCustomDetailWidth
+                ? customDetailWidth
+                : automaticDetailWidth
+            applyDetailWidth(restoredDetailWidth)
             if usesCustomDetailWidth == false {
-                detailItem.isCollapsed = false
-                controller.view.layoutSubtreeIfNeeded()
-                applyDetailWidth(automaticDetailWidth)
                 appliedAutomaticDetailWidth = automaticDetailWidth
-                controller.view.layoutSubtreeIfNeeded()
             }
+            controller.view.layoutSubtreeIfNeeded()
             applySidebarGeometry(
                 sidebarItem: sidebarItem,
                 expanded: store.isSidebarExpanded
@@ -313,11 +319,6 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                 sidebarItem.minimumThickness = CGFloat(expandedRange.lowerBound)
             } else {
                 let currentWidth = sidebarItem.viewController.view.frame.width
-                if expandedRange.contains(Double(currentWidth)) {
-                    expandedSidebarWidth = Self.clampedExpandedSidebarWidth(
-                        Double(currentWidth)
-                    )
-                }
                 sidebarItem.minimumThickness = compactWidth
                 sidebarItem.maximumThickness = CGFloat(expandedRange.upperBound)
                 let needsCompactWidth = abs(currentWidth - compactWidth) > 0.5
@@ -343,15 +344,27 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
             )
         }
 
-        private func isUserDraggingDetailDivider(
-            _ notification: Notification
+        private static func clampedCustomDetailWidth(
+            _ width: Double
+        ) -> CGFloat {
+            CGFloat(
+                min(
+                    max(width, WorkspaceGeometry.detailWidthRange.lowerBound),
+                    WorkspaceGeometry.detailWidthRange.upperBound
+                )
+            )
+        }
+
+        private func isUserDraggingDivider(
+            _ notification: Notification,
+            at expectedIndex: Int
         ) -> Bool {
             guard let dividerIndex = notification.userInfo?[
                 "NSSplitViewDividerIndex"
             ] as? NSNumber else {
                 return false
             }
-            return dividerIndex.intValue == 1
+            return dividerIndex.intValue == expectedIndex
                 && NSApp.currentEvent?.type == .leftMouseDragged
         }
 
@@ -361,7 +374,8 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                     sidebarExpanded: store.isSidebarExpanded,
                     detailExpanded: store.isDetailRailExpanded,
                     usesCustomDetailWidth: usesCustomDetailWidth,
-                    expandedSidebarWidth: Double(expandedSidebarWidth)
+                    expandedSidebarWidth: Double(expandedSidebarWidth),
+                    customDetailWidth: Double(customDetailWidth)
                 )
             )
         }

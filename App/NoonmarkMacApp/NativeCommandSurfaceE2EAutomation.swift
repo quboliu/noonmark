@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import NoonmarkCore
 import NoonmarkMacRuntime
@@ -20,6 +21,16 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         let chainID: String
         let traceID: String
         let date: String
+    }
+
+    private struct HelpCommandHandshake {
+        let launchToken: String
+        let readyURL: URL
+        let completionURL: URL
+    }
+
+    private struct HelpCommandCompletion {
+        let helperPID: pid_t
     }
 
     private struct MenuShortcut {
@@ -95,10 +106,13 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         private(set) var openCount = 0
         private(set) var closeCount = 0
         private(set) var beginTrackingCount = 0
+        private(set) var endTrackingCount = 0
         private(set) var sentActionCount = 0
         private var observers: [NSObjectProtocol] = []
+        private let trackedMenu: NSMenu
 
         init(menu: NSMenu, trackingRootMenu: NSMenu) {
+            trackedMenu = menu
             super.init()
             let notificationCenter = NotificationCenter.default
             observers.append(
@@ -110,6 +124,17 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                     MainActor.assumeIsolated {
                         guard let self else { return }
                         self.beginTrackingCount += 1
+                    }
+                }
+            )
+            observers.append(
+                notificationCenter.addObserver(
+                    forName: NSMenu.didEndTrackingNotification,
+                    object: trackingRootMenu,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.endTrackingCount += 1
                     }
                 }
             )
@@ -132,10 +157,12 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         }
 
         func menuWillOpen(_ menu: NSMenu) {
+            guard menu === trackedMenu else { return }
             openCount += 1
         }
 
         func menuDidClose(_ menu: NSMenu) {
+            guard menu === trackedMenu else { return }
             closeCount += 1
         }
 
@@ -160,10 +187,14 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     }
 
     private static let fixtureTitle = "commandrecoverytask"
+    private static let maximumHelpProtocolArtifactSize: off_t = 8192
+    private static let externalHelpProtocolPhaseDeadline: Duration = .seconds(60)
+    private static let externalHelpProtocolPollNanoseconds: UInt64 = 50_000_000
 
     private let mode: Mode
     private let stateURL: URL
     private let resultURL: URL
+    private let helpCommandHandshake: HelpCommandHandshake?
 
     static func fromCommandLine() -> Self? {
         let mode: Mode
@@ -188,11 +219,45 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         ) else {
             return nil
         }
+        let helpCommandHandshake: HelpCommandHandshake?
+        switch mode {
+        case .exercise:
+            guard let helpReadyPath = AppLaunchArguments.value(
+                after: "--e2e-native-command-help-ready-url"
+            ), Self.isAbsoluteProtocolPath(helpReadyPath),
+                let rawLaunchToken = AppLaunchArguments.value(
+                    after: "--e2e-native-command-help-token"
+                ), let launchToken = UUID(uuidString: rawLaunchToken)?.uuidString,
+                launchToken == rawLaunchToken,
+                let helpCompletionPath = AppLaunchArguments.value(
+                    after: "--e2e-native-command-help-completion-url"
+                ), Self.isAbsoluteProtocolPath(helpCompletionPath),
+                helpCompletionPath != helpReadyPath
+            else {
+                return nil
+            }
+            helpCommandHandshake = HelpCommandHandshake(
+                launchToken: launchToken,
+                readyURL: URL(fileURLWithPath: helpReadyPath),
+                completionURL: URL(fileURLWithPath: helpCompletionPath)
+            )
+        case .helpShortcut, .verifyRestart:
+            helpCommandHandshake = nil
+        }
         return Self(
             mode: mode,
             stateURL: URL(fileURLWithPath: statePath),
-            resultURL: URL(fileURLWithPath: resultPath)
+            resultURL: URL(fileURLWithPath: resultPath),
+            helpCommandHandshake: helpCommandHandshake
         )
+    }
+
+    private static func isAbsoluteProtocolPath(_ path: String) -> Bool {
+        path.hasPrefix("/")
+            && path.unicodeScalars.allSatisfy {
+                CharacterSet.controlCharacters.contains($0) == false
+            }
+            && URL(fileURLWithPath: path).standardizedFileURL.path == path
     }
 
     func run(on store: NoonmarkStore) {
@@ -226,6 +291,9 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         guard taskRecord(titled: Self.fixtureTitle, in: store) == nil else {
             throw Failure.failed("isolated command database already contained the fixture")
         }
+        guard let helpCommandHandshake else {
+            throw Failure.failed("native command exercise lacked its Help handshake")
+        }
 
         try await exerciseSettingsShortcut(
             mainWindow: mainWindow,
@@ -235,6 +303,7 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         try await exerciseHelpWindow(
             mainWindow: mainWindow,
             copy: store.copy,
+            handshake: helpCommandHandshake,
             input: input
         )
         try await exerciseQuickEntry(
@@ -429,6 +498,7 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     private func exerciseHelpWindow(
         mainWindow: NSWindow,
         copy: AppCopy,
+        handshake: HelpCommandHandshake,
         input: WindowServerInputDriver
     ) async throws {
         try await activate(mainWindow)
@@ -448,81 +518,74 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             helpMenu.delegate = originalHelpMenuDelegate
         }
 
-        var helpMenuBarTarget = ReadOnlyAccessibilityTarget.uniqueMenuBarItem(
-            title: copy.helpMenu
-        )
-        try await waitUntil("Help menu bar item lacked stable accessibility geometry") {
-            helpMenuBarTarget = ReadOnlyAccessibilityTarget.uniqueMenuBarItem(
-                title: copy.helpMenu
-            )
-            return helpMenuBarTarget?.frame != nil
-        }
-        guard let helpMenuBarFrame = helpMenuBarTarget?.frame else {
-            throw Failure.failed("Help menu bar accessibility geometry disappeared")
-        }
-        let helpMenuBarPoint = CGPoint(
-            x: helpMenuBarFrame.midX,
-            y: helpMenuBarFrame.midY
-        )
         let helpItem = try menuItem(action: NoonmarkMenuAction.showHelp)
         guard helpMenu.items.first(where: {
             $0.isSeparatorItem == false && $0.isEnabled
-        }) === helpItem else {
+        }) === helpItem,
+            helpItem.title == copy.noonmarkHelp,
+            validate(helpItem)
+        else {
             throw Failure.failed(
                 "native Help command was not the first keyboard-selectable item"
             )
         }
-        let keyboardSelection = try input.prepareMenuKeyboardSelection()
-        let menuBarGesture = try await input.prepareMenuBarGesture(
-            at: helpMenuBarPoint,
-            resolveSource: {
-                guard let frame = ReadOnlyAccessibilityTarget.uniqueMenuBarItem(
-                    title: copy.helpMenu
-                )?.frame else {
-                    return nil
-                }
-                return CGPoint(x: frame.midX, y: frame.midY)
-            }
+        guard NSApp.windows.contains(where: {
+            $0.identifier == NoonmarkHelpWindowController.windowIdentifier
+                && $0.isVisible
+        }) == false else {
+            throw Failure.failed("Help window was already visible before external selection")
+        }
+        try requireMissingProtocolArtifact(
+            at: handshake.completionURL,
+            label: "Help completion"
         )
-        let openCountBeforeSelection = trackingProbe.openCount
+
+        try writeHelpReady(
+            to: handshake.readyURL,
+            launchToken: handshake.launchToken,
+            mainWindow: mainWindow,
+            menuTitle: copy.helpMenu,
+            menuItemTitle: copy.noonmarkHelp
+        )
+
+        var helpWindow: NSWindow?
         do {
-            input.postMenuBarKeyboardSelection(
-                menuBarGesture,
-                selection: keyboardSelection
-            )
-            try await waitUntil("physical Help menu selection did not finish tracking") {
-                trackingProbe.openCount > openCountBeforeSelection
+            try await waitForExternalHelpProtocolPhase(
+                "external Help menu selection did not finish"
+            ) {
+                let matches = NSApp.windows.filter {
+                    $0.identifier == NoonmarkHelpWindowController.windowIdentifier
+                        && $0.isVisible
+                        && $0.isMiniaturized == false
+                        && $0.isKeyWindow
+                }
+                if matches.count == 1 {
+                    helpWindow = matches[0]
+                }
+                return trackingProbe.openCount == 1
+                    && trackingProbe.closeCount == 1
                     && trackingProbe.beginTrackingCount == 1
+                    && trackingProbe.endTrackingCount == 1
                     && trackingProbe.sentActionCount == 1
-                    && trackingProbe.openCount == trackingProbe.closeCount
+                    && matches.count == 1
             }
-            try await input.waitForMenuBarMouseUp()
         } catch {
-            if input.isLeftButtonDown {
-                input.postMenuBarMouseUp(menuBarGesture)
-                try? await input.waitForMenuBarMouseUp()
-            }
             throw Failure.failed(
-                "physical Help menu keyboard selection did not select its item: "
-                    + "before=\(openCountBeforeSelection),"
+                "external Help menu click did not produce one complete command: "
                     + "opens=\(trackingProbe.openCount),"
                     + "closes=\(trackingProbe.closeCount),"
                     + "trackingBegins=\(trackingProbe.beginTrackingCount),"
+                    + "trackingEnds=\(trackingProbe.endTrackingCount),"
                     + "sentActions=\(trackingProbe.sentActionCount),"
-                    + "point=\(helpMenuBarPoint),"
-                    + "pointer=\(String(describing: input.currentPointerLocation)),"
+                    + "helpWindows=\(NSApp.windows.filter { $0.identifier == NoonmarkHelpWindowController.windowIdentifier && $0.isVisible }.count),"
+                    + "ready=\(handshake.readyURL.path),"
                     + "underlying=\(error.localizedDescription)"
             )
         }
 
-        let helpWindow = try await visibleWindow(
-            identifier: NoonmarkHelpWindowController.windowIdentifier,
-            failure: "physical Help menu selection did not open its native window: "
-                + "opens=\(trackingProbe.openCount),"
-                + "closes=\(trackingProbe.closeCount),"
-                + "trackingBegins=\(trackingProbe.beginTrackingCount),"
-                + "sentActions=\(trackingProbe.sentActionCount)"
-        )
+        guard let helpWindow else {
+            throw Failure.failed("external Help window disappeared after observation")
+        }
         guard helpWindow !== mainWindow,
               helpWindow is NSPanel == false,
               helpWindow.parent == nil,
@@ -543,6 +606,14 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             "help.window",
             verificationText: copy.noonmarkHelp,
             in: helpWindow
+        )
+
+        _ = try await waitForHelpCompletion(
+            at: handshake.completionURL,
+            launchToken: handshake.launchToken,
+            mainWindow: mainWindow,
+            menuTitle: copy.helpMenu,
+            menuItemTitle: copy.noonmarkHelp
         )
 
         try performMenuShortcut(
@@ -1658,6 +1729,294 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             withIntermediateDirectories: true
         )
         try JSONEncoder().encode(state).write(to: stateURL, options: .atomic)
+    }
+
+    private func writeHelpReady(
+        to readyURL: URL,
+        launchToken: String,
+        mainWindow: NSWindow,
+        menuTitle: String,
+        menuItemTitle: String
+    ) throws {
+        let processID = ProcessInfo.processInfo.processIdentifier
+        let windowNumber = mainWindow.windowNumber
+        let appPath = Bundle.main.bundleURL.standardizedFileURL.path
+        try requireMissingProtocolArtifact(at: readyURL, label: "Help ready")
+        guard processID > 0,
+              windowNumber > 0,
+              mainWindow.isVisible,
+              mainWindow.isKeyWindow,
+              NSApp.isActive,
+              appPath.hasPrefix("/")
+        else {
+            throw Failure.failed(
+                "Help ready precondition failed: pid=\(processID),"
+                    + "window=\(windowNumber),visible=\(mainWindow.isVisible),"
+                    + "key=\(mainWindow.isKeyWindow),active=\(NSApp.isActive),"
+                    + "app=\(appPath)"
+            )
+        }
+        let fields: [(String, String)] = [
+            ("status", "ready"),
+            ("launch_token", launchToken),
+            ("pid", String(processID)),
+            ("app_path", appPath),
+            ("window_number", String(windowNumber)),
+            ("window_title", mainWindow.title),
+            ("menu_title", menuTitle),
+            ("menu_item_title", menuItemTitle)
+        ]
+        let lines = try fields.map { name, value in
+            guard value.isEmpty == false,
+                  value.contains("=") == false,
+                  value.unicodeScalars.allSatisfy({
+                      CharacterSet.controlCharacters.contains($0) == false
+                  })
+            else {
+                throw Failure.failed("invalid Help ready field: \(name)")
+            }
+            return "\(name)=\(value)"
+        }
+        try FileManager.default.createDirectory(
+            at: readyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try (lines.joined(separator: "\n") + "\n").write(
+            to: readyURL,
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private func waitForHelpCompletion(
+        at completionURL: URL,
+        launchToken: String,
+        mainWindow: NSWindow,
+        menuTitle: String,
+        menuItemTitle: String
+    ) async throws -> HelpCommandCompletion {
+        var completion: HelpCommandCompletion?
+        var parsingFailure: Error?
+        try await waitForExternalHelpProtocolPhase(
+            "external Help Helper did not publish completion"
+        ) {
+            do {
+                completion = try readHelpCompletion(
+                    at: completionURL,
+                    launchToken: launchToken,
+                    mainWindow: mainWindow,
+                    menuTitle: menuTitle,
+                    menuItemTitle: menuItemTitle
+                )
+                return completion != nil
+            } catch {
+                parsingFailure = error
+                return true
+            }
+        }
+        if let parsingFailure {
+            throw parsingFailure
+        }
+        guard let completion else {
+            throw Failure.failed(
+                "external Help Helper completion disappeared: \(completionURL.path)"
+            )
+        }
+        return completion
+    }
+
+    /// Bounds observation of the separately supervised Helper. A satisfied
+    /// evidence condition returns immediately; this never repeats input or
+    /// sleeps for a fixed grace period.
+    private func waitForExternalHelpProtocolPhase(
+        _ failure: String,
+        condition: @MainActor () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(
+            by: Self.externalHelpProtocolPhaseDeadline
+        )
+        while clock.now < deadline {
+            if condition() { return }
+            try await Task.sleep(
+                nanoseconds: Self.externalHelpProtocolPollNanoseconds
+            )
+        }
+        if condition() { return }
+        throw Failure.failed(failure)
+    }
+
+    private func readHelpCompletion(
+        at completionURL: URL,
+        launchToken: String,
+        mainWindow: NSWindow,
+        menuTitle: String,
+        menuItemTitle: String
+    ) throws -> HelpCommandCompletion? {
+        guard let data = try readBoundedRegularProtocolFile(at: completionURL) else {
+            return nil
+        }
+        guard data.last == 0x0A,
+              let text = String(data: data, encoding: .utf8)
+        else {
+            throw Failure.failed(
+                "Help completion was not trailing-newline UTF-8"
+            )
+        }
+        var rawLines = text.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        guard rawLines.count == 8, rawLines.removeLast().isEmpty else {
+            throw Failure.failed("Help completion was not exactly seven lines")
+        }
+
+        let expectedKeys = [
+            "status",
+            "launch_token",
+            "helper_pid",
+            "target_pid",
+            "window_number",
+            "menu_title",
+            "menu_item_title"
+        ]
+        var parsedKeys: [String] = []
+        var fields: [String: String] = [:]
+        for rawLine in rawLines {
+            let line = String(rawLine)
+            let pair = line.split(
+                separator: "=",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            )
+            guard pair.count == 2 else {
+                throw Failure.failed("Help completion contained a malformed field")
+            }
+            let key = String(pair[0])
+            let value = String(pair[1])
+            guard key.isEmpty == false,
+                  value.isEmpty == false,
+                  value.contains("=") == false,
+                  key.unicodeScalars.allSatisfy({
+                      CharacterSet.controlCharacters.contains($0) == false
+                  }),
+                  value.unicodeScalars.allSatisfy({
+                      CharacterSet.controlCharacters.contains($0) == false
+                  }),
+                  fields.updateValue(value, forKey: key) == nil
+            else {
+                throw Failure.failed(
+                    "Help completion contained an invalid or duplicate field"
+                )
+            }
+            parsedKeys.append(key)
+        }
+
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        guard parsedKeys == expectedKeys,
+              fields["status"] == "complete",
+              fields["launch_token"] == launchToken,
+              let rawHelperPID = fields["helper_pid"],
+              let helperPID = pid_t(rawHelperPID),
+              helperPID > 0,
+              helperPID != currentPID,
+              let rawTargetPID = fields["target_pid"],
+              let targetPID = pid_t(rawTargetPID),
+              targetPID == currentPID,
+              let rawWindowNumber = fields["window_number"],
+              let windowNumber = Int(rawWindowNumber),
+              windowNumber > 0,
+              windowNumber == mainWindow.windowNumber,
+              fields["menu_title"] == menuTitle,
+              fields["menu_item_title"] == menuItemTitle
+        else {
+            throw Failure.failed(
+                "Help completion did not match this App launch and command"
+            )
+        }
+        return HelpCommandCompletion(helperPID: helperPID)
+    }
+
+    private func readBoundedRegularProtocolFile(at url: URL) throws -> Data? {
+        let descriptor = Darwin.open(
+            url.path,
+            O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
+        )
+        guard descriptor >= 0 else {
+            let openError = errno
+            if openError == ENOENT {
+                return nil
+            }
+            throw Failure.failed(
+                "Help completion could not be opened without following links: "
+                    + String(cString: strerror(openError))
+            )
+        }
+        defer { _ = Darwin.close(descriptor) }
+
+        var initialStatus = stat()
+        guard fstat(descriptor, &initialStatus) == 0,
+              initialStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              initialStatus.st_size > 0,
+              initialStatus.st_size <= Self.maximumHelpProtocolArtifactSize
+        else {
+            throw Failure.failed(
+                "Help completion was not one bounded regular file"
+            )
+        }
+
+        let maximumSize = Int(Self.maximumHelpProtocolArtifactSize)
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+        var data = Data()
+        while data.count <= maximumSize {
+            let readLimit = min(4096, maximumSize + 1 - data.count)
+            guard readLimit > 0,
+                  let chunk = try handle.read(upToCount: readLimit),
+                  chunk.isEmpty == false
+            else {
+                break
+            }
+            data.append(chunk)
+        }
+
+        var finalStatus = stat()
+        var pathStatus = stat()
+        guard data.count <= maximumSize,
+              fstat(descriptor, &finalStatus) == 0,
+              lstat(url.path, &pathStatus) == 0,
+              finalStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              pathStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              initialStatus.st_dev == finalStatus.st_dev,
+              initialStatus.st_ino == finalStatus.st_ino,
+              initialStatus.st_size == finalStatus.st_size,
+              initialStatus.st_mtimespec.tv_sec == finalStatus.st_mtimespec.tv_sec,
+              initialStatus.st_mtimespec.tv_nsec == finalStatus.st_mtimespec.tv_nsec,
+              finalStatus.st_dev == pathStatus.st_dev,
+              finalStatus.st_ino == pathStatus.st_ino,
+              finalStatus.st_size == off_t(data.count)
+        else {
+            throw Failure.failed(
+                "Help completion changed while being read or exceeded its bound"
+            )
+        }
+        return data
+    }
+
+    private func requireMissingProtocolArtifact(
+        at url: URL,
+        label: String
+    ) throws {
+        var status = stat()
+        guard lstat(url.path, &status) != 0 else {
+            throw Failure.failed("\(label) artifact already existed: \(url.path)")
+        }
+        let statusError = errno
+        guard statusError == ENOENT else {
+            throw Failure.failed(
+                "\(label) absence could not be verified: "
+                    + String(cString: strerror(statusError))
+            )
+        }
     }
 
     private func readState() throws -> ProbeState {

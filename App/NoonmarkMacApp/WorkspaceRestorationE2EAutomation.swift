@@ -439,7 +439,8 @@ struct WorkspaceRestorationE2EAutomation: LaunchAutomationRunnable {
         guard persisted.sidebarExpanded == false,
               persisted.detailExpanded,
               persisted.usesCustomDetailWidth,
-              abs(persisted.expandedSidebarWidth - geometry.sidebarWidth) <= 2
+              abs(persisted.expandedSidebarWidth - geometry.sidebarWidth) <= 2,
+              abs(persisted.customDetailWidth - geometry.detailWidth) <= 2
         else {
             throw Failure.failed("workspace repository did not retain collapse state")
         }
@@ -468,7 +469,10 @@ struct WorkspaceRestorationE2EAutomation: LaunchAutomationRunnable {
 
     private func verifyRestart(store: NoonmarkStore) async throws {
         let expected = try readState()
-        guard WorkspaceStateRepository().load().usesCustomDetailWidth else {
+        let persisted = WorkspaceStateRepository().load()
+        guard persisted.usesCustomDetailWidth,
+              abs(persisted.customDetailWidth - expected.detailWidth) <= 2
+        else {
             throw Failure.failed("restart lost the persisted custom-width mode")
         }
         let window = try await mainWindow()
@@ -540,10 +544,13 @@ struct WorkspaceRestorationE2EAutomation: LaunchAutomationRunnable {
                 ) <= 2
         }
 
-        let persisted = WorkspaceStateRepository().load()
-        guard persisted.sidebarExpanded,
-              persisted.detailExpanded,
-              persisted.usesCustomDetailWidth
+        let updatedPersisted = WorkspaceStateRepository().load()
+        guard updatedPersisted.sidebarExpanded,
+              updatedPersisted.detailExpanded,
+              updatedPersisted.usesCustomDetailWidth,
+              abs(
+                  updatedPersisted.customDetailWidth - expected.detailWidth
+              ) <= 2
         else {
             throw Failure.failed("expanded column state was not persisted after restart")
         }
@@ -848,6 +855,9 @@ struct WorkspaceRestorationE2EAutomation: LaunchAutomationRunnable {
         }
         guard let resolved else {
             throw Failure.failed("native workspace split view disappeared")
+        }
+        guard resolved.autosaveName == nil else {
+            throw Failure.failed("workspace split view regained a second autosave authority")
         }
         return resolved
     }

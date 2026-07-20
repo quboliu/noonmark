@@ -189,11 +189,8 @@ struct NoonmarkRootView: View {
             }
             .environmentObject(store)
         }
-        .sheet(item: Binding(
-            get: { store.showingPicker.map(PickerSheetState.init(purpose:)) },
-            set: { if $0 == nil { store.showingPicker = nil } }
-        )) { state in
-            DatePickerSheet(state: state)
+        .sheet(item: $store.showingPicker) { purpose in
+            DatePickerSheet(purpose: purpose)
                 .environmentObject(store)
         }
         .sheet(isPresented: $store.showingFromPoolPicker) {
@@ -263,9 +260,4 @@ struct NoonmarkRootView: View {
             NSApp.keyWindow?.makeFirstResponder(nil)
         }
     }
-}
-
-struct PickerSheetState: Identifiable {
-    let id = UUID()
-    let purpose: NoonmarkStore.DatePickerPurpose
 }

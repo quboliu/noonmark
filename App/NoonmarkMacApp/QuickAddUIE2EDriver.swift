@@ -105,6 +105,33 @@ enum QuickAddUIE2EDriver {
             window.makeMain()
             NSApp.activate(ignoringOtherApps: true)
             NSRunningApplication.current.activate(options: [.activateAllWindows])
+            waitForInteractiveWindow(textView: textView)
+        }
+
+        private func waitForInteractiveWindow(
+            textView: NSTextView,
+            attemptsRemaining: Int = 40
+        ) {
+            guard let window = textView.window,
+                  NSApp.isActive,
+                  NSApp.keyWindow === window,
+                  NSApp.mainWindow === window,
+                  window.isKeyWindow,
+                  window.isMainWindow
+            else {
+                retryOrFail(
+                    attemptsRemaining: attemptsRemaining,
+                    phase: "activation",
+                    message: "quick-add 所在 App 与窗口尚未进入可交互状态",
+                    geometry: geometrySnapshot(for: textView)
+                ) { [self] nextAttempts in
+                    waitForInteractiveWindow(
+                        textView: textView,
+                        attemptsRemaining: nextAttempts
+                    )
+                }
+                return
+            }
             guard AppViewTreeE2E.click(textView) else {
                 finish(
                     failure(
@@ -128,7 +155,7 @@ enum QuickAddUIE2EDriver {
                 retryOrFail(
                     attemptsRemaining: attemptsRemaining,
                     phase: "focus",
-                    message: "quick-add 没有成为真实窗口 first responder",
+                    message: "quick-add 没有成为真实窗口 first responder actual=\(firstResponderDescription(for: textView))",
                     geometry: geometrySnapshot(for: textView)
                 ) { [self] nextAttempts in
                     waitForFirstResponder(
@@ -473,6 +500,14 @@ enum QuickAddUIE2EDriver {
                 centerError: abs(caretRect.midY - fieldRect.midY),
                 whitespaceImbalance: abs(topWhitespace - bottomWhitespace)
             )
+        }
+
+        private func firstResponderDescription(for textView: NSTextView) -> String {
+            guard let responder = textView.window?.firstResponder else { return "nil" }
+            if let view = responder as? NSView {
+                return "\(String(describing: type(of: view))):\(view.identifier?.rawValue ?? "unidentified")"
+            }
+            return String(describing: type(of: responder))
         }
 
         private func keystroke(for character: Character) -> Keystroke? {

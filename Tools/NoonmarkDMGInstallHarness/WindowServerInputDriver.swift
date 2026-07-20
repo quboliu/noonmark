@@ -189,6 +189,7 @@ final class WindowServerInputDriver {
         ) else {
             throw Failure.eventConstructionFailed("mouse event \(type.rawValue)")
         }
+        event.flags = []
         event.setIntegerValueField(.eventSourceUserData, value: userData)
         event.setIntegerValueField(.mouseEventNumber, value: gestureNumber)
         event.setIntegerValueField(

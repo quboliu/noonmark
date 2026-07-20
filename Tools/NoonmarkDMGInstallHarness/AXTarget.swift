@@ -69,22 +69,7 @@ final class AXTarget {
         while index < queue.count, result.count < maximumCount {
             let (current, depth) = queue[index]
             index += 1
-            let role = string(current, kAXRoleAttribute as String) ?? ""
-            result.append(
-                Match(
-                    element: current,
-                    role: role,
-                    title: string(current, kAXTitleAttribute as String),
-                    description: string(
-                        current,
-                        kAXDescriptionAttribute as String
-                    ),
-                    identifier: string(current, kAXIdentifierAttribute as String),
-                    enabled: boolean(current, kAXEnabledAttribute as String),
-                    hidden: boolean(current, kAXHiddenAttribute as String),
-                    frame: frame(current)
-                )
-            )
+            result.append(match(current))
             guard depth < maximumDepth else { continue }
             for child in elements(current, kAXChildrenAttribute as String) {
                 queue.append((child, depth + 1))
@@ -130,21 +115,7 @@ final class AXTarget {
                     "pending element count exceeded \(maximumCount)"
                 )
             }
-            result.append(
-                Match(
-                    element: current,
-                    role: string(current, kAXRoleAttribute as String) ?? "",
-                    title: string(current, kAXTitleAttribute as String),
-                    description: string(
-                        current,
-                        kAXDescriptionAttribute as String
-                    ),
-                    identifier: string(current, kAXIdentifierAttribute as String),
-                    enabled: boolean(current, kAXEnabledAttribute as String),
-                    hidden: boolean(current, kAXHiddenAttribute as String),
-                    frame: frame(current)
-                )
-            )
+            result.append(match(current))
             queue.append(contentsOf: children.map { ($0, depth + 1) })
         }
         return result
@@ -156,12 +127,40 @@ final class AXTarget {
         titles: Set<String>? = nil,
         identifier: String? = nil
     ) -> [Match] {
-        descendants(of: root).filter { match in
-            if let roles, roles.contains(match.role) == false { return false }
-            if let titles, titles.contains(match.title ?? "") == false { return false }
-            if let identifier, match.identifier != identifier { return false }
-            return true
-        }
+        filteredMatches(
+            descendants(of: root),
+            roles: roles,
+            titles: titles,
+            identifier: identifier
+        )
+    }
+
+    func strictMatches(
+        in root: AXUIElement,
+        roles: Set<String>? = nil,
+        titles: Set<String>? = nil,
+        identifier: String? = nil
+    ) throws -> [Match] {
+        filteredMatches(
+            try strictDescendants(of: root),
+            roles: roles,
+            titles: titles,
+            identifier: identifier
+        )
+    }
+
+    func directMatches(
+        in root: AXUIElement,
+        roles: Set<String>? = nil,
+        titles: Set<String>? = nil,
+        identifier: String? = nil
+    ) -> [Match] {
+        filteredMatches(
+            elements(root, kAXChildrenAttribute as String).map(match),
+            roles: roles,
+            titles: titles,
+            identifier: identifier
+        )
     }
 
     func wait<T>(
@@ -246,6 +245,33 @@ final class AXTarget {
             return nil
         }
         return CGRect(origin: position, size: size)
+    }
+
+    private func match(_ element: AXUIElement) -> Match {
+        Match(
+            element: element,
+            role: string(element, kAXRoleAttribute as String) ?? "",
+            title: string(element, kAXTitleAttribute as String),
+            description: string(element, kAXDescriptionAttribute as String),
+            identifier: string(element, kAXIdentifierAttribute as String),
+            enabled: boolean(element, kAXEnabledAttribute as String),
+            hidden: boolean(element, kAXHiddenAttribute as String),
+            frame: frame(element)
+        )
+    }
+
+    private func filteredMatches(
+        _ candidates: [Match],
+        roles: Set<String>?,
+        titles: Set<String>?,
+        identifier: String?
+    ) -> [Match] {
+        candidates.filter { match in
+            if let roles, roles.contains(match.role) == false { return false }
+            if let titles, titles.contains(match.title ?? "") == false { return false }
+            if let identifier, match.identifier != identifier { return false }
+            return true
+        }
     }
 
     private func value(_ target: AXUIElement, _ attribute: String) -> CFTypeRef? {

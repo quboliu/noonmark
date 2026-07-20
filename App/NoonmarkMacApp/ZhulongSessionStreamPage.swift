@@ -1,4 +1,5 @@
 import NoonmarkMacRuntime
+import NoonmarkMacUIContract
 import NoonmarkZhulong
 import SwiftUI
 
@@ -31,7 +32,9 @@ struct ZhulongSessionStreamPage: View {
                 title: copy.name,
                 subtitle: workspace.selectedSession?.primaryIntent,
                 badge: workspace.selectedSessionStatus(using: copy),
-                badgeColor: statusColor
+                badgeColor: statusColor,
+                titlePlacement: .centeredInMainSurface,
+                titleAnchorIdentifier: "zhulong.session.title"
             ) {
                 HStack(spacing: 7) {
                     HeaderButton(copy.allSessionsAction) { workspace.showHome() }

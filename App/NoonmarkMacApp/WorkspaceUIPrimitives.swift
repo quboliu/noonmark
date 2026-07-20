@@ -85,13 +85,25 @@ struct PageHeader<Trailing: View>: View {
     let subtitle: String?
     let badge: String?
     let badgeColor: Color
+    let titlePlacement: MacUIPageHeaderTitlePlacement
+    let titleAnchorIdentifier: String?
     let trailing: Trailing
 
-    init(title: String, subtitle: String? = nil, badge: String? = nil, badgeColor: Color = Theme.accent, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+    init(
+        title: String,
+        subtitle: String? = nil,
+        badge: String? = nil,
+        badgeColor: Color = Theme.accent,
+        titlePlacement: MacUIPageHeaderTitlePlacement = MacUIPageHeaderLayout.defaultTitlePlacement,
+        titleAnchorIdentifier: String? = nil,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() }
+    ) {
         self.title = title
         self.subtitle = subtitle
         self.badge = badge
         self.badgeColor = badgeColor
+        self.titlePlacement = titlePlacement
+        self.titleAnchorIdentifier = titleAnchorIdentifier
         self.trailing = trailing()
     }
 
@@ -99,8 +111,13 @@ struct PageHeader<Trailing: View>: View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
-                    Text(title)
-                        .font(.noonmarkSystem(size: 21, weight: .bold))
+                    if titlePlacement == .centeredInMainSurface {
+                        titleLabel(exposesE2EAnchor: false)
+                            .hidden()
+                            .accessibilityHidden(true)
+                    } else {
+                        titleLabel(exposesE2EAnchor: true)
+                    }
                     if let badge {
                         StatusPill(text: badge, color: badgeColor)
                     }
@@ -123,8 +140,28 @@ struct PageHeader<Trailing: View>: View {
                 }
             }
         }
+        .overlay(alignment: .top) {
+            if titlePlacement == .centeredInMainSurface {
+                titleLabel(exposesE2EAnchor: true)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .allowsHitTesting(false)
+            }
+        }
         .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
         .padding(.vertical, 14)
+    }
+
+    private func titleLabel(exposesE2EAnchor: Bool) -> some View {
+        Text(title)
+            .font(.noonmarkSystem(size: 21, weight: .bold))
+            .background {
+                if exposesE2EAnchor, let titleAnchorIdentifier {
+                    AppE2EViewAnchor(
+                        identifier: titleAnchorIdentifier,
+                        verificationText: title
+                    )
+                }
+            }
     }
 }
 

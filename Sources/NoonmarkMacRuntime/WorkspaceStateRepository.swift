@@ -1,51 +1,34 @@
 import Foundation
 
-/// Restorable visibility preferences for the main three-column workspace.
-/// Divider geometry is owned by NSSplitView's native autosave contract.
+/// Restorable visibility and divider geometry for the main workspace.
+/// Keeping both divider widths here avoids competing with AppKit autosave.
 public struct WorkspaceState: Codable, Equatable, Sendable {
     public static let defaultValue = WorkspaceState(
         sidebarExpanded: true,
         detailExpanded: false,
         usesCustomDetailWidth: false,
-        expandedSidebarWidth: WorkspaceGeometry.defaultSidebarWidth
+        expandedSidebarWidth: WorkspaceGeometry.defaultSidebarWidth,
+        customDetailWidth: WorkspaceGeometry.defaultDetailWidth
     )
 
     public var sidebarExpanded: Bool
     public var detailExpanded: Bool
     public var usesCustomDetailWidth: Bool
     public var expandedSidebarWidth: Double
+    public var customDetailWidth: Double
 
     public init(
         sidebarExpanded: Bool,
         detailExpanded: Bool,
         usesCustomDetailWidth: Bool = false,
-        expandedSidebarWidth: Double = WorkspaceGeometry.defaultSidebarWidth
+        expandedSidebarWidth: Double = WorkspaceGeometry.defaultSidebarWidth,
+        customDetailWidth: Double = WorkspaceGeometry.defaultDetailWidth
     ) {
         self.sidebarExpanded = sidebarExpanded
         self.detailExpanded = detailExpanded
         self.usesCustomDetailWidth = usesCustomDetailWidth
         self.expandedSidebarWidth = expandedSidebarWidth
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case sidebarExpanded
-        case detailExpanded
-        case usesCustomDetailWidth
-        case expandedSidebarWidth
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        sidebarExpanded = try container.decode(Bool.self, forKey: .sidebarExpanded)
-        detailExpanded = try container.decode(Bool.self, forKey: .detailExpanded)
-        usesCustomDetailWidth = try container.decodeIfPresent(
-            Bool.self,
-            forKey: .usesCustomDetailWidth
-        ) ?? false
-        expandedSidebarWidth = try container.decodeIfPresent(
-            Double.self,
-            forKey: .expandedSidebarWidth
-        ) ?? WorkspaceGeometry.defaultSidebarWidth
+        self.customDetailWidth = customDetailWidth
     }
 }
 

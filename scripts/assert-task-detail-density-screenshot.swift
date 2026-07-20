@@ -27,6 +27,11 @@ let requiredFragmentsByScreenshot: [String: [String]] = [
     "completed-detail.png": ["100%", "生活", "任务轨迹"]
 ]
 
+// Vision must segment the detail rail itself. Segmenting the full 2400×1536
+// window first and filtering observations afterwards can merge or truncate
+// small Chinese labels before the rail filter ever sees them.
+let rightRailRegion = CGRect(x: 0.75, y: 0, width: 0.25, height: 1)
+
 for path in screenshotPaths {
     guard let image = NSImage(contentsOfFile: path),
           let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
@@ -39,6 +44,7 @@ for path in screenshotPaths {
     request.recognitionLevel = .accurate
     request.recognitionLanguages = ["zh-Hans", "en-US"]
     request.usesLanguageCorrection = false
+    request.regionOfInterest = rightRailRegion
     do {
         try VNImageRequestHandler(cgImage: cgImage).perform([request])
     } catch {
@@ -46,9 +52,8 @@ for path in screenshotPaths {
         exit(2)
     }
 
-    let rightRailLabels = (request.results ?? []).compactMap { observation -> String? in
-        guard observation.boundingBox.minX > 0.75 else { return nil }
-        return observation.topCandidates(1).first?.string
+    let rightRailLabels = (request.results ?? []).compactMap { observation in
+        observation.topCandidates(1).first?.string
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
     guard rightRailLabels.count >= 3 else {

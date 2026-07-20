@@ -153,6 +153,22 @@ extension AppCopy {
         language == .chinese ? "改到哪个未来日期？" : "Choose a new future date"
     }
 
+    var jumpToDateAction: String {
+        language == .chinese ? "跳转" : "Go"
+    }
+
+    var scheduleDateAction: String {
+        language == .chinese ? "排期" : "Schedule"
+    }
+
+    var continueDateAction: String {
+        language == .chinese ? "延续" : "Continue"
+    }
+
+    var rescheduleDateAction: String {
+        language == .chinese ? "改期" : "Reschedule"
+    }
+
     var anyDateHint: String {
         language == .chinese
             ? "可选择任意有效日期。"
@@ -169,6 +185,28 @@ extension AppCopy {
         language == .chinese
             ? "请选择今天之后的任意未来日期。"
             : "Choose any date after today."
+    }
+
+    func datePickerDayAccessibilityValue(
+        isToday: Bool,
+        isSelected: Bool,
+        isEnabled: Bool
+    ) -> String {
+        let states: [String?] = switch language {
+        case .chinese:
+            [
+                isToday ? "今天" : nil,
+                isSelected ? "已选择" : nil,
+                isEnabled ? nil : "不可选择"
+            ]
+        case .english:
+            [
+                isToday ? "Today" : nil,
+                isSelected ? "Selected" : nil,
+                isEnabled ? nil : "Unavailable"
+            ]
+        }
+        return states.compactMap { $0 }.joined(separator: ", ")
     }
 
     // MARK: - Workspace content

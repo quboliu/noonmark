@@ -13,7 +13,8 @@ final class WorkspaceStateRepositoryTests: XCTestCase {
             sidebarExpanded: false,
             detailExpanded: true,
             usesCustomDetailWidth: true,
-            expandedSidebarWidth: 264
+            expandedSidebarWidth: 264,
+            customDetailWidth: 336
         )
 
         repository.save(expected)
@@ -22,28 +23,26 @@ final class WorkspaceStateRepositoryTests: XCTestCase {
         XCTAssertEqual(repository.load(), expected)
     }
 
-    func testLegacyExpansionStateDefaultsToAutomaticDetailWidth() throws {
-        let legacyData = Data(
+    func testIncompleteExpansionStateFailsClosedToCurrentDefault() {
+        let (suiteName, defaults) = makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let repository = WorkspaceStateRepository(defaults: defaults)
+        let incompleteData = Data(
             """
             {
               "sidebarExpanded": false,
-              "detailExpanded": true
+              "detailExpanded": true,
+              "usesCustomDetailWidth": true
             }
             """.utf8
         )
-
-        let decoded = try JSONDecoder().decode(
-            WorkspaceState.self,
-            from: legacyData
+        defaults.set(
+            incompleteData,
+            forKey: WorkspaceStateRepository.defaultStorageKey
         )
 
-        XCTAssertFalse(decoded.sidebarExpanded)
-        XCTAssertTrue(decoded.detailExpanded)
-        XCTAssertFalse(decoded.usesCustomDetailWidth)
-        XCTAssertEqual(
-            decoded.expandedSidebarWidth,
-            WorkspaceGeometry.defaultSidebarWidth
-        )
+        XCTAssertTrue(repository.containsSavedState)
+        XCTAssertEqual(repository.load(), .defaultValue)
     }
 
     func testMissingOrCorruptValueUsesDeterministicDefault() {

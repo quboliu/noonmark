@@ -82,6 +82,8 @@ struct LaunchAutomation {
         append(MainWindowChromeE2EAutomation.fromCommandLine(), to: &actions)
         append(HeaderNavigationHitTargetE2EAutomation.fromCommandLine(), to: &actions)
         append(CalendarGridTopologyE2EAutomation.fromCommandLine(), to: &actions)
+        append(DatePickerSheetE2EAutomation.fromCommandLine(), to: &actions)
+        append(ZhulongTitleGeometryE2EAutomation.fromCommandLine(), to: &actions)
         append(WorkspaceRestorationE2EAutomation.fromCommandLine(), to: &actions)
         append(NativeCommandSurfaceE2EAutomation.fromCommandLine(), to: &actions)
         append(CompletionControlE2EAutomation.fromCommandLine(), to: &actions)

@@ -18,30 +18,12 @@ struct CalendarPage: View {
     @EnvironmentObject private var store: NoonmarkStore
     @State private var focusRequest = 0
 
-    var calendarCells: [CalendarCellModel] {
-        let year = store.selectedCalendarDate.year
-        let month = store.selectedCalendarDate.month
-        let lead = NoonmarkStore.mondayLeadBlankCount(year: year, month: month)
-        let dayCount = NoonmarkStore.daysInMonth(year: year, month: month)
-        var cells = (0..<lead).map {
-            CalendarCellModel.blank(id: "leading-blank-\($0)")
-        }
-        cells += (1...dayCount).map { day in
-            .date(LocalDate(year: year, month: month, day: day))
-        }
-        let occupiedRowCount = Int(
-            ceil(Double(cells.count) / Double(MacUICalendarGridLayout.columnCount))
+    var calendarGrid: WorkspaceMonthGrid {
+        NoonmarkStore.monthGrid(
+            containing: store.selectedCalendarDate,
+            rowCount: .minimum(MacUICalendarGridLayout.minimumRowCount),
+            outsideMonth: .blank
         )
-        let rowCount = max(
-            MacUICalendarGridLayout.minimumRowCount,
-            occupiedRowCount
-        )
-        let trailingBlankCount = rowCount * MacUICalendarGridLayout.columnCount
-            - cells.count
-        cells += (0..<trailingBlankCount).map {
-            CalendarCellModel.blank(id: "trailing-blank-\($0)")
-        }
-        return cells
     }
 
     var body: some View {
@@ -106,9 +88,10 @@ struct CalendarPage: View {
             .padding(.top, 14)
 
             GeometryReader { proxy in
-                let rows = calendarCells.count
-                    / MacUICalendarGridLayout.columnCount
-                let rowHeight = max(88, proxy.size.height / CGFloat(rows))
+                let rowHeight = max(
+                    88,
+                    proxy.size.height / CGFloat(calendarGrid.rowCount)
+                )
                 LazyVGrid(
                     columns: Array(
                         repeating: GridItem(.flexible(), spacing: 0),
@@ -117,14 +100,14 @@ struct CalendarPage: View {
                     spacing: 0
                 ) {
                     ForEach(
-                        Array(calendarCells.enumerated()),
-                        id: \.element.id
-                    ) { index, cell in
+                        calendarGrid.slots,
+                        id: \.index
+                    ) { slot in
                         Group {
-                            switch cell.kind {
+                            switch slot.content {
                             case .blank:
                                 Color.clear
-                            case let .date(date):
+                            case let .date(date, _):
                                 CalendarCell(
                                     date: date,
                                     height: rowHeight,
@@ -138,11 +121,11 @@ struct CalendarPage: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: rowHeight)
                         .calendarGridSlotSurface(
-                            identifier: "calendar.grid-slot.\(index)"
+                            identifier: "calendar.grid-slot.\(slot.index)"
                         )
                         .background {
                             AppE2EViewAnchor(
-                                identifier: "calendar.grid-slot.\(index)"
+                                identifier: "calendar.grid-slot.\(slot.index)"
                             )
                         }
                     }
@@ -181,24 +164,6 @@ struct CalendarPage: View {
             )
         }
         .accessibilityIdentifier(identifier)
-    }
-}
-
-struct CalendarCellModel: Identifiable {
-    enum Kind {
-        case blank
-        case date(LocalDate)
-    }
-
-    let id: String
-    let kind: Kind
-
-    static func blank(id: String) -> CalendarCellModel {
-        CalendarCellModel(id: id, kind: .blank)
-    }
-
-    static func date(_ date: LocalDate) -> CalendarCellModel {
-        CalendarCellModel(id: date.description, kind: .date(date))
     }
 }
 

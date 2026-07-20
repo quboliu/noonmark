@@ -88,11 +88,39 @@ public enum MacUIShellLayout {
     public static let detailRailCollapsedByDefault = true
 }
 
+public enum MacUIPageHeaderTitlePlacement: Equatable, Sendable {
+    case leading
+    case centeredInMainSurface
+}
+
+public enum MacUIPageHeaderLayout {
+    public static let defaultTitlePlacement = MacUIPageHeaderTitlePlacement.leading
+}
+
 public enum MacUICalendarGridLayout {
     public static let columnCount = 7
     public static let minimumRowCount = 5
     public static let completesTrailingBlankSlots = true
     public static let blankSlotsRenderGridBoundaries = true
+}
+
+public enum MacUIDatePickerLayout {
+    public static let sheetWidth = 340.0
+    public static let outerPadding = 18.0
+    public static let contentWidth = 304.0
+    public static let columnCount = 7
+    public static let rowCount = 6
+    public static let columnSpacing = 4.0
+    public static let rowSpacing = 2.0
+    public static let dayCellHeight = 30.0
+    public static let selectionDiameter = 24.0
+    public static let fullCellHitTarget = true
+    public static let localDateOnlyDraft = true
+    public static let stablePresentationIdentity = true
+    public static let showsAdjacentDates = true
+    public static let omitsUnconstrainedHint = true
+    public static let purposeSpecificConfirmation = true
+    public static let supportsKeyboardArrows = true
 }
 
 public enum MacUITaskRowLayout {
@@ -231,6 +259,7 @@ public enum MacUIPage: String, CaseIterable, Sendable {
 public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
     case freeformIntentComposer
     case verticallyCenteredHomeContent
+    case centeredPageTitle
     case singleVisualAxis
     case roundedRectIntentComposer
     case flatWorkflowList
@@ -581,6 +610,7 @@ public enum MacUIZhulongHomeLayout {
     public static let composerActionCount = 1
     public static let collapsesEmptyPendingSection = true
     public static let collapsesHomeDetailRail = true
+    public static let titlePlacement = MacUIPageHeaderTitlePlacement.centeredInMainSurface
 
     public static func contentPlacement(hasPendingSessions: Bool) -> MacUIZhulongHomeContentPlacement {
         hasPendingSessions ? .topAligned : .centered

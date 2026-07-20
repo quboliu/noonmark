@@ -33,15 +33,28 @@ enum TaskNoteCopyE2EUIInteractionDriver {
         }
 
         private func openActionMenu() {
-            waitFor("English 附言操作入口") { [self] in
+            synchronizeMainWindow(
+                before: "English 附言主窗口激活"
+            ) { [self] in
+                clickActionMenuButton(after: "English 附言操作入口") { [self] in
+                    verifyMenu()
+                }
+            }
+        }
+
+        private func clickActionMenuButton(
+            after step: String,
+            onSuccess: @escaping @MainActor () -> Void
+        ) {
+            waitFor(step) { [self] in
                 guard let button = AppViewTreeE2E.view(
                     identifier: actionsIdentifier
                 ), elementHasText(button, expected: "Note actions") else {
                     return false
                 }
                 return AppViewTreeE2E.click(button)
-            } onSuccess: { [self] in
-                verifyMenu()
+            } onSuccess: {
+                onSuccess()
             }
         }
 
@@ -86,28 +99,49 @@ enum TaskNoteCopyE2EUIInteractionDriver {
         }
 
         private func openDeleteMenu() {
-            waitFor("取消编辑后的 English 附言操作入口") { [self] in
-                guard let button = AppViewTreeE2E.view(
-                    identifier: actionsIdentifier
-                ) else {
-                    return false
+            synchronizeMainWindow(
+                before: "取消编辑后的 English 主窗口激活"
+            ) { [self] in
+                clickActionMenuButton(
+                    after: "取消编辑后的 English 附言操作入口"
+                ) { [self] in
+                    verifyDeleteMenu()
                 }
-                return AppViewTreeE2E.click(button)
+            }
+        }
+
+        private func synchronizeMainWindow(
+            before step: String,
+            onSuccess: @escaping @MainActor () -> Void
+        ) {
+            guard AppViewTreeE2E.requestMainWindowActivation() else {
+                fail("无法请求主窗口激活：\(step)")
+                return
+            }
+            waitFor(step) {
+                AppViewTreeE2E.mainWindowHasInteractionIdentity()
+            } onSuccess: {
+                onSuccess()
+            }
+        }
+
+        private func verifyDeleteMenu() {
+            waitFor("English 删除附言菜单") { [self] in
+                elementHasText(identifier: deleteMenuIdentifier, expected: "Delete note")
+                    && AppViewTreeE2E.mappedPresentationWindow(
+                        identifier: deleteMenuIdentifier
+                    ) != nil
             } onSuccess: { [self] in
-                waitFor("English 删除附言菜单") { [self] in
-                    elementHasText(identifier: deleteMenuIdentifier, expected: "Delete note")
-                } onSuccess: { [self] in
-                    guard let deleteButton = AppViewTreeE2E.view(
-                        identifier: deleteMenuIdentifier
-                    ), let identity = AppViewTreeE2E.mappedPresentationWindow(
-                        identifier: deleteMenuIdentifier
-                    ), AppViewTreeE2E.click(deleteButton) else {
-                        fail("无法通过真实 UI 删除 English 附言")
-                        return
-                    }
-                    actionMenuIdentity = identity
-                    verifyDeleteToast()
+                guard let deleteButton = AppViewTreeE2E.view(
+                    identifier: deleteMenuIdentifier
+                ), let identity = AppViewTreeE2E.mappedPresentationWindow(
+                    identifier: deleteMenuIdentifier
+                ), AppViewTreeE2E.click(deleteButton) else {
+                    fail("无法通过真实 UI 删除 English 附言")
+                    return
                 }
+                actionMenuIdentity = identity
+                verifyDeleteToast()
             }
         }
 

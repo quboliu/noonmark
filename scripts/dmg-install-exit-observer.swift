@@ -38,7 +38,13 @@ let environment = ProcessInfo.processInfo.environment
 let resultPath = environment["NOONMARK_HELPER_EXIT_RESULT_PATH"] ?? ""
 do {
     guard let mode = environment["NOONMARK_HELPER_MODE"],
-          ["preflight", "exercise", "restart", "e2e-inspect"].contains(mode),
+          [
+              "preflight",
+              "exercise",
+              "restart",
+              "e2e-inspect",
+              "e2e-menu-command"
+          ].contains(mode),
           let rawPID = environment["NOONMARK_HELPER_PID"],
           let pid = UInt64(rawPID), pid > 0,
           let token = environment["NOONMARK_HELPER_TOKEN"],

@@ -322,19 +322,18 @@ extension NoonmarkStore {
         return max(1, days + 1)
     }
 
-    func performDateChoice(_ date: LocalDate) {
-        guard let showingPicker else { return }
-        switch showingPicker {
+    func performDateChoice(
+        _ date: LocalDate,
+        for purpose: DatePickerPurpose
+    ) {
+        guard showingPicker?.id == purpose.id else { return }
+        switch purpose {
         case .gotoDay:
             selectedDate = date
             selectedCalendarDate = date
             page = .day
         case let .schedulePool(chainID):
             schedulePoolTask(chainID, date: date)
-        case .scheduleSelectedPool:
-            if let selectedPoolChainID {
-                schedulePoolTask(selectedPoolChainID, date: date)
-            }
         case let .continueTrace(traceID):
             continueTrace(traceID, to: date)
         case let .reschedule(traceID):
@@ -859,6 +858,20 @@ extension NoonmarkStore {
     static func shiftedMonth(from date: LocalDate, by delta: Int) -> LocalDate {
         requireCivilDate {
             try WorkspaceCivilCalendar.shiftedMonth(from: date, by: delta)
+        }
+    }
+
+    static func monthGrid(
+        containing date: LocalDate,
+        rowCount: WorkspaceMonthGrid.RowCount,
+        outsideMonth: WorkspaceMonthGrid.OutsideMonth
+    ) -> WorkspaceMonthGrid {
+        requireCivilDate {
+            try WorkspaceMonthGrid(
+                monthContaining: date,
+                rowCount: rowCount,
+                outsideMonth: outsideMonth
+            )
         }
     }
 

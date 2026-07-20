@@ -13,6 +13,7 @@ enum NoonmarkDMGInstallHarness {
         case exercise
         case restart
         case e2eInspect = "e2e-inspect"
+        case e2eMenuCommand = "e2e-menu-command"
     }
 
     struct Configuration {
@@ -26,6 +27,9 @@ enum NoonmarkDMGInstallHarness {
         let windowNumber: CGWindowID
         let windowTitle: String
         let expectationsPath: String
+        let menuTitle: String
+        let menuItemTitle: String
+        let completionPath: String
 
         static func parse(_ arguments: [String]) throws -> Self {
             var values: [String: String] = [:]
@@ -52,7 +56,10 @@ enum NoonmarkDMGInstallHarness {
                 "--start-gate",
                 "--window-number",
                 "--window-title",
-                "--expectations"
+                "--expectations",
+                "--menu-title",
+                "--menu-item-title",
+                "--completion"
             ])
             let unknown = Set(values.keys).subtracting(allowed)
             guard unknown.isEmpty else {
@@ -69,8 +76,9 @@ enum NoonmarkDMGInstallHarness {
                   Self.isAbsoluteSingleLinePath(startGatePath)
             else {
                 throw HarnessFailure.invalidArguments(
-                    "required: --mode preflight|exercise|restart|e2e-inspect --ledger PATH "
-                        + "--launch-token UUID --start-gate ABSOLUTE_PATH"
+                    "required: --mode preflight|exercise|restart|e2e-inspect|"
+                        + "e2e-menu-command --ledger PATH --launch-token UUID "
+                        + "--start-gate ABSOLUTE_PATH"
                 )
             }
             if mode == .preflight {
@@ -90,7 +98,10 @@ enum NoonmarkDMGInstallHarness {
                     startGatePath: startGatePath,
                     windowNumber: 0,
                     windowTitle: "",
-                    expectationsPath: ""
+                    expectationsPath: "",
+                    menuTitle: "",
+                    menuItemTitle: "",
+                    completionPath: ""
                 )
             }
             if mode == .e2eInspect {
@@ -123,10 +134,58 @@ enum NoonmarkDMGInstallHarness {
                     startGatePath: startGatePath,
                     windowNumber: windowNumber,
                     windowTitle: windowTitle,
-                    expectationsPath: expectationsPath
+                    expectationsPath: expectationsPath,
+                    menuTitle: "",
+                    menuItemTitle: "",
+                    completionPath: ""
+                )
+            }
+            if mode == .e2eMenuCommand {
+                guard values.count == 11,
+                      let rawPID = values["--pid"],
+                      let parsedPID = Int32(rawPID),
+                      parsedPID > 0,
+                      let appPath = values["--app-path"],
+                      Self.isAbsoluteSingleLinePath(appPath),
+                      let rawWindowNumber = values["--window-number"],
+                      let windowNumber = CGWindowID(rawWindowNumber),
+                      windowNumber > 0,
+                      let windowTitle = values["--window-title"],
+                      Self.isNonemptySingleLineText(windowTitle),
+                      let menuTitle = values["--menu-title"],
+                      let menuItemTitle = values["--menu-item-title"],
+                      let completionPath = values["--completion"],
+                      Self.isAbsoluteSingleLinePath(completionPath),
+                      Self.isSupportedHelpCommand(
+                          menuTitle: menuTitle,
+                          menuItemTitle: menuItemTitle
+                      )
+                else {
+                    throw HarnessFailure.invalidArguments(
+                        "e2e-menu-command requires exact --pid, --app-path, "
+                            + "--window-number, --window-title, --menu-title and "
+                            + "--menu-item-title for the localized Help command, "
+                            + "plus --completion ABSOLUTE_PATH"
+                    )
+                }
+                return Self(
+                    mode: mode,
+                    pid: parsedPID,
+                    appPath: appPath,
+                    taskTitle: "",
+                    ledgerPath: ledgerPath,
+                    launchToken: launchToken,
+                    startGatePath: startGatePath,
+                    windowNumber: windowNumber,
+                    windowTitle: windowTitle,
+                    expectationsPath: "",
+                    menuTitle: menuTitle,
+                    menuItemTitle: menuItemTitle,
+                    completionPath: completionPath
                 )
             }
             guard
+                  values.count == 7,
                   let rawPID = values["--pid"], let parsedPID = Int32(rawPID), parsedPID > 0,
                   let appPath = values["--app-path"], appPath.isEmpty == false,
                   let taskTitle = values["--task-title"],
@@ -151,8 +210,19 @@ enum NoonmarkDMGInstallHarness {
                 startGatePath: startGatePath,
                 windowNumber: 0,
                 windowTitle: "",
-                expectationsPath: ""
+                expectationsPath: "",
+                menuTitle: "",
+                menuItemTitle: "",
+                completionPath: ""
             )
+        }
+
+        private static func isSupportedHelpCommand(
+            menuTitle: String,
+            menuItemTitle: String
+        ) -> Bool {
+            (menuTitle == "帮助" && menuItemTitle == "晷迹使用帮助")
+                || (menuTitle == "Help" && menuItemTitle == "Noonmark Help")
         }
 
         private static func isNonemptySingleLineText(_ text: String) -> Bool {
@@ -207,6 +277,11 @@ enum NoonmarkDMGInstallHarness {
                 "mode=\(configuration.mode.rawValue) helper_pid=\(helperPID) "
                     + "launch_token=\(configuration.launchToken)"
             )
+            if configuration.mode == .e2eMenuCommand {
+                try CompletionArtifact.validateDestination(
+                    path: configuration.completionPath
+                )
+            }
             try waitForExitObserver(
                 configuration: configuration,
                 helperPID: helperPID
@@ -246,6 +321,17 @@ enum NoonmarkDMGInstallHarness {
                 try runner.verifyRestart()
             case .e2eInspect:
                 try runner.inspectE2EAccessibility()
+            case .e2eMenuCommand:
+                try runner.performE2EMenuCommand()
+                try CompletionArtifact.publish(
+                    configuration: configuration,
+                    helperPID: helperPID
+                )
+                try ledger?.pass(
+                    "completion",
+                    "path=\(configuration.completionPath) atomic=true "
+                        + "exact=true lines=7"
+                )
             }
             try ledger?.pass("complete", "mode=\(configuration.mode.rawValue)")
             exit(EXIT_SUCCESS)
@@ -309,9 +395,12 @@ enum NoonmarkDMGInstallHarness {
         configuration: Configuration,
         ledger: HarnessLedger?
     ) throws -> AXTarget {
-        let expectedBundleIdentifier = configuration.mode == .e2eInspect
-            ? expectedE2EBundleIdentifier
-            : expectedProductionBundleIdentifier
+        let expectedBundleIdentifier = switch configuration.mode {
+        case .e2eInspect, .e2eMenuCommand:
+            expectedE2EBundleIdentifier
+        case .preflight, .exercise, .restart:
+            expectedProductionBundleIdentifier
+        }
         guard let running = NSRunningApplication(
             processIdentifier: configuration.pid
         ), running.isTerminated == false else {
@@ -362,7 +451,258 @@ private extension NoonmarkDMGInstallHarness.Configuration {
                 + "window_number=\(windowNumber) window=\(windowTitle) "
                 + "expectations=\(expectationsPath)"
         }
+        if mode == .e2eMenuCommand {
+            return "mode=\(mode.rawValue) pid=\(pid) app=\(appPath) "
+                + "window_number=\(windowNumber) window=\(windowTitle) "
+                + "menu=\(menuTitle) item=\(menuItemTitle) "
+                + "completion=\(completionPath)"
+        }
         return "mode=\(mode.rawValue) pid=\(pid) app=\(appPath)"
+    }
+}
+
+private enum CompletionArtifact {
+    static func validateDestination(path: String) throws {
+        let destination = URL(fileURLWithPath: path)
+        var destinationStatus = stat()
+        let destinationResult = destination.withUnsafeFileSystemRepresentation { pointer in
+            guard let pointer else { return Int32.min }
+            return lstat(pointer, &destinationStatus)
+        }
+        guard destinationResult != Int32.min else {
+            throw contract("completion path has no filesystem representation")
+        }
+        if destinationResult == 0 {
+            throw contract("completion already exists: \(path)")
+        }
+        guard errno == ENOENT else {
+            throw posixFailure("inspect completion destination", code: errno)
+        }
+
+        let parent = destination.deletingLastPathComponent()
+        var parentStatus = stat()
+        let parentResult = parent.withUnsafeFileSystemRepresentation { pointer in
+            guard let pointer else { return Int32.min }
+            return lstat(pointer, &parentStatus)
+        }
+        guard parentResult != Int32.min else {
+            throw contract("completion parent has no filesystem representation")
+        }
+        guard parentResult == 0 else {
+            throw posixFailure("inspect completion parent", code: errno)
+        }
+        guard parentStatus.st_mode & S_IFMT == S_IFDIR else {
+            throw contract("completion parent is not a real directory: \(parent.path)")
+        }
+    }
+
+    static func publish(
+        configuration: NoonmarkDMGInstallHarness.Configuration,
+        helperPID: pid_t
+    ) throws {
+        try validateDestination(path: configuration.completionPath)
+        let expected = [
+            "status=complete",
+            "launch_token=\(configuration.launchToken)",
+            "helper_pid=\(helperPID)",
+            "target_pid=\(configuration.pid)",
+            "window_number=\(configuration.windowNumber)",
+            "menu_title=\(configuration.menuTitle)",
+            "menu_item_title=\(configuration.menuItemTitle)"
+        ].joined(separator: "\n") + "\n"
+        let expectedData = Data(expected.utf8)
+        let destination = URL(fileURLWithPath: configuration.completionPath)
+        let temporary = destination
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                ".\(destination.lastPathComponent)."
+                    + "\(configuration.launchToken).\(helperPID).tmp"
+            )
+        try requireAbsent(temporary, description: "completion temporary file")
+
+        let descriptor = try openExclusive(temporary)
+        var descriptorIsOpen = true
+        var temporaryIsPresent = true
+        defer {
+            if descriptorIsOpen { _ = Darwin.close(descriptor) }
+            if temporaryIsPresent {
+                temporary.withUnsafeFileSystemRepresentation { pointer in
+                    guard let pointer else { return }
+                    _ = Darwin.unlink(pointer)
+                }
+            }
+        }
+
+        try write(expectedData, to: descriptor)
+        guard fchmod(descriptor, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
+            throw posixFailure("set completion permissions", code: errno)
+        }
+        try synchronize(descriptor, description: "completion temporary file")
+        descriptorIsOpen = false
+        guard Darwin.close(descriptor) == 0 else {
+            throw posixFailure("close completion temporary file", code: errno)
+        }
+
+        try renameExclusive(temporary, destination)
+        temporaryIsPresent = false
+        try synchronizeDirectory(destination.deletingLastPathComponent())
+        try verify(destination, equals: expectedData)
+    }
+
+    private static func requireAbsent(
+        _ url: URL,
+        description: String
+    ) throws {
+        var status = stat()
+        let result = url.withUnsafeFileSystemRepresentation { pointer in
+            guard let pointer else { return Int32.min }
+            return lstat(pointer, &status)
+        }
+        guard result != Int32.min else {
+            throw contract("\(description) has no filesystem representation")
+        }
+        if result == 0 {
+            throw contract("\(description) already exists: \(url.path)")
+        }
+        guard errno == ENOENT else {
+            throw posixFailure("inspect \(description)", code: errno)
+        }
+    }
+
+    private static func openExclusive(_ url: URL) throws -> Int32 {
+        let descriptor = url.withUnsafeFileSystemRepresentation { pointer in
+            guard let pointer else { return Int32.min }
+            return Darwin.open(
+                pointer,
+                O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC,
+                mode_t(S_IRUSR | S_IWUSR)
+            )
+        }
+        guard descriptor != Int32.min else {
+            throw contract("completion temporary path has no filesystem representation")
+        }
+        guard descriptor >= 0 else {
+            throw posixFailure("create completion temporary file", code: errno)
+        }
+        return descriptor
+    }
+
+    private static func write(_ data: Data, to descriptor: Int32) throws {
+        var offset = 0
+        while offset < data.count {
+            let count = try data.withUnsafeBytes { bytes -> Int in
+                guard let baseAddress = bytes.baseAddress else { return 0 }
+                let result = Darwin.write(
+                    descriptor,
+                    baseAddress.advanced(by: offset),
+                    bytes.count - offset
+                )
+                if result < 0 {
+                    let code = errno
+                    if code == EINTR { return -1 }
+                    throw posixFailure("write completion temporary file", code: code)
+                }
+                return result
+            }
+            if count == -1 { continue }
+            guard count > 0 else {
+                throw contract("completion temporary write made no progress")
+            }
+            offset += count
+        }
+    }
+
+    private static func synchronize(
+        _ descriptor: Int32,
+        description: String
+    ) throws {
+        while fsync(descriptor) != 0 {
+            let code = errno
+            if code == EINTR { continue }
+            throw posixFailure("synchronize \(description)", code: code)
+        }
+    }
+
+    private static func renameExclusive(_ source: URL, _ destination: URL) throws {
+        let result = source.withUnsafeFileSystemRepresentation { sourcePointer in
+            destination.withUnsafeFileSystemRepresentation { destinationPointer in
+                guard let sourcePointer, let destinationPointer else {
+                    return Int32.min
+                }
+                return renamex_np(
+                    sourcePointer,
+                    destinationPointer,
+                    UInt32(RENAME_EXCL)
+                )
+            }
+        }
+        guard result != Int32.min else {
+            throw contract("completion publish path has no filesystem representation")
+        }
+        guard result == 0 else {
+            throw posixFailure("publish completion without overwrite", code: errno)
+        }
+    }
+
+    private static func synchronizeDirectory(_ directory: URL) throws {
+        let descriptor = directory.withUnsafeFileSystemRepresentation { pointer in
+            guard let pointer else { return Int32.min }
+            return Darwin.open(
+                pointer,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+        }
+        guard descriptor != Int32.min else {
+            throw contract("completion parent has no filesystem representation")
+        }
+        guard descriptor >= 0 else {
+            throw posixFailure("open completion parent", code: errno)
+        }
+        var descriptorIsOpen = true
+        defer {
+            if descriptorIsOpen { _ = Darwin.close(descriptor) }
+        }
+        try synchronize(descriptor, description: "completion parent")
+        descriptorIsOpen = false
+        guard Darwin.close(descriptor) == 0 else {
+            throw posixFailure("close completion parent", code: errno)
+        }
+    }
+
+    private static func verify(_ url: URL, equals expected: Data) throws {
+        var status = stat()
+        let result = url.withUnsafeFileSystemRepresentation { pointer in
+            guard let pointer else { return Int32.min }
+            return lstat(pointer, &status)
+        }
+        guard result != Int32.min else {
+            throw contract("published completion has no filesystem representation")
+        }
+        guard result == 0 else {
+            throw posixFailure("inspect published completion", code: errno)
+        }
+        guard status.st_mode & S_IFMT == S_IFREG,
+              status.st_size == expected.count,
+              let first = try? Data(contentsOf: url),
+              let second = try? Data(contentsOf: url),
+              first == expected,
+              second == expected
+        else {
+            throw contract("published completion did not match its exact seven-line payload")
+        }
+    }
+
+    private static func contract(
+        _ message: String
+    ) -> NoonmarkDMGInstallHarness.HarnessFailure {
+        .contract(message)
+    }
+
+    private static func posixFailure(
+        _ operation: String,
+        code: Int32
+    ) -> NoonmarkDMGInstallHarness.HarnessFailure {
+        .contract("\(operation) failed: errno=\(code) \(String(cString: strerror(code)))")
     }
 }
 
@@ -459,6 +799,13 @@ private struct E2EAccessibilityExpectation {
     }
 }
 
+private struct CorrelatedE2EWindow {
+    let element: AXUIElement
+    let frame: CGRect
+    let cgTitle: String?
+    let initialWindows: [AXUIElement]
+}
+
 private final class Runner {
     private let configuration: NoonmarkDMGInstallHarness.Configuration
     private let target: AXTarget
@@ -495,42 +842,15 @@ private final class Runner {
         let expectations = try E2EAccessibilityExpectation.load(
             from: configuration.expectationsPath
         )
-        let cgWindow = try exactCGWindow()
-        let cgWindowFrame = cgWindow.frame
-        let initialWindows = target.windows()
-        let matchingWindows = initialWindows.filter { window in
-            target.string(window, kAXRoleAttribute as String)
-                == kAXWindowRole as String
-                && target.string(window, kAXTitleAttribute as String)
-                == configuration.windowTitle
-                && target.frame(window) == cgWindowFrame
-        }
-        guard matchingWindows.count == 1 else {
-            let observedWindows = initialWindows.map { window in
-                let role = target.string(window, kAXRoleAttribute as String) ?? "nil"
-                let title = target.string(window, kAXTitleAttribute as String) ?? "nil"
-                let frame = target.frame(window).map { String(describing: $0) } ?? "nil"
-                return "role=\(role) title=\(title) frame=\(frame)"
-            }
-            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "E2E AX target window count was \(matchingWindows.count), expected 1; "
-                    + "CG frame=\(cgWindowFrame) observed=\(observedWindows)"
-            )
-        }
-        let window = matchingWindows[0]
-        let windowFrame = try target.requiredFrame(
-            window,
-            description: "E2E English Day window"
-        )
-        guard windowFrame.width >= 960, windowFrame.height >= 720 else {
-            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "E2E English Day window is below its minimum size: \(windowFrame)"
-            )
-        }
+        let correlated = try correlatedE2EWindow(requireFocused: false)
+        let cgWindowFrame = correlated.frame
+        let initialWindows = correlated.initialWindows
+        let window = correlated.element
+        let windowFrame = correlated.frame
         try ledger?.pass(
             "e2e-window",
             "window_number=\(configuration.windowNumber) "
-                + "cg_title=\(cgWindow.title == nil ? "private" : "matched") "
+                + "cg_title=\(correlated.cgTitle == nil ? "private" : "matched") "
                 + "ax_title=\(configuration.windowTitle) cg_frame=\(cgWindowFrame) "
                 + "ax_frame=\(windowFrame) correlation=unique exact=true"
         )
@@ -613,6 +933,273 @@ private final class Runner {
             "e2e-remove-buttons",
             "count=2 unique=true \(evidence.joined(separator: " | "))"
         )
+    }
+
+    func performE2EMenuCommand() throws {
+        let correlated = try correlatedE2EWindow(requireFocused: true)
+        let mainWindow = correlated.element
+        let initialWindows = correlated.initialWindows
+        let preexistingHelpWindows = exactWindows(titled: configuration.menuItemTitle)
+        guard preexistingHelpWindows.isEmpty else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "Help window was already present before the external menu command: "
+                    + "count=\(preexistingHelpWindows.count)"
+            )
+        }
+        try ledger?.pass(
+            "e2e-window",
+            "window_number=\(configuration.windowNumber) "
+                + "cg_title=\(correlated.cgTitle == nil ? "private" : "matched") "
+                + "ax_title=\(configuration.windowTitle) cg_frame=\(correlated.frame) "
+                + "ax_frame=\(correlated.frame) correlation=unique exact=true "
+                + "focused=true"
+        )
+
+        let menuBar = try target.menuBar()
+        let topLevelMatches = target.directMatches(
+            in: menuBar,
+            roles: [kAXMenuBarItemRole as String],
+            titles: [configuration.menuTitle]
+        )
+        guard topLevelMatches.count == 1 else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "top-level Help menu count was \(topLevelMatches.count), expected 1"
+            )
+        }
+        let topLevel = topLevelMatches[0]
+        guard topLevel.enabled == true, topLevel.hidden != true else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "top-level Help menu was not visible and enabled"
+            )
+        }
+        let topLevelFrame = try target.requiredFrame(
+            topLevel,
+            description: "top-level Help menu"
+        )
+        try input.click(frame: topLevelFrame)
+        try ledger?.pass(
+            "menu-bar",
+            "title=\(configuration.menuTitle) role=AXMenuBarItem enabled=true "
+                + "hidden=\(topLevel.hidden.map(String.init) ?? "nil") "
+                + "frame=\(topLevelFrame) source=cghidEventTap"
+        )
+
+        let menuItem: AXTarget.Match = try target.wait(
+            description: "the exact visible Help menu command"
+        ) {
+            try visibleMenuItem(in: menuBar)
+        }
+        let menuItemFrame = try target.requiredFrame(
+            menuItem,
+            description: "Help menu command"
+        )
+        try ledger?.pass(
+            "menu-item",
+            "title=\(configuration.menuItemTitle) role=AXMenuItem enabled=true "
+                + "hidden=\(menuItem.hidden.map(String.init) ?? "nil") "
+                + "frame=\(menuItemFrame) exact=true"
+        )
+        try input.click(frame: menuItemFrame)
+
+        let helpWindow: AXUIElement = try target.wait(
+            description: "one independent focused Help window after its menu closes"
+        ) {
+            let candidates = exactWindows(titled: configuration.menuItemTitle)
+            guard candidates.count <= 1 else {
+                throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                    "duplicate Help windows after menu command: count=\(candidates.count)"
+                )
+            }
+            guard let candidate = candidates.first else { return nil }
+            guard initialWindows.contains(where: { CFEqual($0, candidate) }) == false else {
+                throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                    "Help command reused a preexisting target window"
+                )
+            }
+            guard try visibleMenuItem(in: menuBar) == nil else { return nil }
+            guard let focused = target.element(
+                target.application,
+                kAXFocusedWindowAttribute as String
+            ), CFEqual(focused, candidate) else {
+                return nil
+            }
+            return candidate
+        }
+        let helpFrame = try target.requiredFrame(
+            helpWindow,
+            description: "independent Help window"
+        )
+        guard CFEqual(helpWindow, mainWindow) == false,
+              helpFrame.width >= 520,
+              helpFrame.height >= 420,
+              target.windows().contains(where: { CFEqual($0, mainWindow) })
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "Help was not a separate minimum-size window: frame=\(helpFrame)"
+            )
+        }
+        let helpCGWindow: (number: CGWindowID, title: String?) = try target.wait(
+            description: "the exact onscreen CG Help window"
+        ) {
+            try onscreenCGWindow(
+                frame: helpFrame,
+                title: configuration.menuItemTitle
+            )
+        }
+        try ledger?.pass(
+            "menu-command",
+            "menu=\(configuration.menuTitle) item=\(configuration.menuItemTitle) "
+                + "source=cghidEventTap clicks=2 menu_closed=true independent=true "
+                + "focused=true help_window_number=\(helpCGWindow.number) "
+                + "cg_title=\(helpCGWindow.title == nil ? "private" : "matched") "
+                + "help_frame=\(helpFrame)"
+        )
+    }
+
+    private func correlatedE2EWindow(
+        requireFocused: Bool
+    ) throws -> CorrelatedE2EWindow {
+        let cgWindow = try exactCGWindow()
+        let initialWindows = target.windows()
+        let matchingWindows = initialWindows.filter { window in
+            target.string(window, kAXRoleAttribute as String)
+                == kAXWindowRole as String
+                && target.string(window, kAXTitleAttribute as String)
+                == configuration.windowTitle
+                && target.frame(window) == cgWindow.frame
+        }
+        guard matchingWindows.count == 1 else {
+            let observedWindows = initialWindows.map { window in
+                let role = target.string(window, kAXRoleAttribute as String) ?? "nil"
+                let title = target.string(window, kAXTitleAttribute as String) ?? "nil"
+                let frame = target.frame(window).map { String(describing: $0) } ?? "nil"
+                return "role=\(role) title=\(title) frame=\(frame)"
+            }
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E AX target window count was \(matchingWindows.count), expected 1; "
+                    + "CG frame=\(cgWindow.frame) observed=\(observedWindows)"
+            )
+        }
+        let window = matchingWindows[0]
+        let frame = try target.requiredFrame(
+            window,
+            description: "E2E main window"
+        )
+        guard frame.width >= 960, frame.height >= 720 else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E main window is below its minimum size: \(frame)"
+            )
+        }
+        if requireFocused {
+            guard let focused = target.element(
+                target.application,
+                kAXFocusedWindowAttribute as String
+            ), CFEqual(focused, window) else {
+                throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                    "the configured E2E main window was not the focused AX window"
+                )
+            }
+        }
+        return CorrelatedE2EWindow(
+            element: window,
+            frame: frame,
+            cgTitle: cgWindow.title,
+            initialWindows: initialWindows
+        )
+    }
+
+    private func exactWindows(titled title: String) -> [AXUIElement] {
+        target.windows().filter { window in
+            target.string(window, kAXRoleAttribute as String)
+                == kAXWindowRole as String
+                && target.string(window, kAXTitleAttribute as String) == title
+        }
+    }
+
+    private func visibleMenuItem(
+        in menuBar: AXUIElement
+    ) throws -> AXTarget.Match? {
+        let exactMatches = try target.strictMatches(
+            in: menuBar,
+            roles: [kAXMenuItemRole as String],
+            titles: [configuration.menuItemTitle]
+        )
+        let matches = exactMatches.filter { match in
+            match.hidden != true
+                && (try? target.requiredFrame(
+                    match,
+                    description: "visible Help menu command"
+                )) != nil
+        }
+        guard matches.count <= 1 else {
+            let observed = matches.map { match in
+                let frame = match.frame.map { String(describing: $0) } ?? "nil"
+                return "role=\(match.role) title=\(match.title ?? "nil") "
+                    + "enabled=\(match.enabled.map(String.init) ?? "nil") "
+                    + "hidden=\(match.hidden.map(String.init) ?? "nil") "
+                    + "frame=\(frame) "
+                    + "identity=\(CFHash(match.element))"
+            }
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "exact Help menu command was duplicated: count=\(matches.count) "
+                    + "observed=\(observed)"
+            )
+        }
+        guard let match = matches.first else {
+            return nil
+        }
+        guard match.enabled == true else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "exact Help menu command was visible but disabled"
+            )
+        }
+        return match
+    }
+
+    private func onscreenCGWindow(
+        frame: CGRect,
+        title: String
+    ) throws -> (number: CGWindowID, title: String?)? {
+        guard let records = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "onscreen CG window list was unavailable"
+            )
+        }
+        var candidates: [(number: CGWindowID, title: String?)] = []
+        for record in records {
+            let ownerPID = (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+            let number = (record[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+            let recordTitle = record[kCGWindowName as String] as? String
+            let layer = (record[kCGWindowLayer as String] as? NSNumber)?.intValue
+            let isOnscreen = (record[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue
+            let alpha = (record[kCGWindowAlpha as String] as? NSNumber)?.doubleValue
+            guard ownerPID == configuration.pid,
+                  let number,
+                  recordTitle == nil || recordTitle == title,
+                  layer == 0,
+                  isOnscreen == true,
+                  let alpha,
+                  alpha > 0,
+                  let bounds = record[kCGWindowBounds as String] as? [String: Any],
+                  let x = (bounds["X"] as? NSNumber)?.doubleValue,
+                  let y = (bounds["Y"] as? NSNumber)?.doubleValue,
+                  let width = (bounds["Width"] as? NSNumber)?.doubleValue,
+                  let height = (bounds["Height"] as? NSNumber)?.doubleValue,
+                  CGRect(x: x, y: y, width: width, height: height) == frame
+            else {
+                continue
+            }
+            candidates.append((number: number, title: recordTitle))
+        }
+        guard candidates.count <= 1 else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "Help AX frame correlated with duplicate CG windows: count=\(candidates.count)"
+            )
+        }
+        return candidates.first
     }
 
     private func exactCGWindow() throws -> (frame: CGRect, title: String?) {

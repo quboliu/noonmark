@@ -445,18 +445,30 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
-    enum DatePickerPurpose {
+    enum DatePickerPurpose: Identifiable {
         case gotoDay
         case schedulePool(TaskChainID)
-        case scheduleSelectedPool
         case continueTrace(DayTraceID)
         case reschedule(DayTraceID)
+
+        var id: String {
+            switch self {
+            case .gotoDay:
+                "goto-day"
+            case let .schedulePool(chainID):
+                "schedule-pool-\(chainID.description)"
+            case let .continueTrace(traceID):
+                "continue-trace-\(traceID.description)"
+            case let .reschedule(traceID):
+                "reschedule-trace-\(traceID.description)"
+            }
+        }
 
         func title(copy: AppCopy) -> String {
             switch self {
             case .gotoDay:
                 return copy.jumpToDateTitle
-            case .schedulePool, .scheduleSelectedPool:
+            case .schedulePool:
                 return copy.scheduleDateTitle
             case .continueTrace:
                 return copy.continueDateTitle
@@ -479,10 +491,43 @@ final class NoonmarkStore: ObservableObject {
             switch self {
             case .gotoDay:
                 return copy.anyDateHint
-            case .schedulePool, .scheduleSelectedPool, .continueTrace:
+            case .schedulePool, .continueTrace:
                 return copy.todayOrFutureDateHint
             case .reschedule:
                 return copy.futureDateHint
+            }
+        }
+
+        var hasRangeConstraint: Bool {
+            allowsPastDates == false
+        }
+
+        @MainActor
+        func minimumDate(today: LocalDate) -> LocalDate? {
+            guard allowsPastDates == false else { return nil }
+            return futureOnly
+                ? NoonmarkStore.offset(today, by: 1)
+                : today
+        }
+
+        @MainActor
+        func allows(_ date: LocalDate, today: LocalDate) -> Bool {
+            guard let minimumDate = minimumDate(today: today) else {
+                return true
+            }
+            return date >= minimumDate
+        }
+
+        func confirmationTitle(copy: AppCopy) -> String {
+            switch self {
+            case .gotoDay:
+                copy.jumpToDateAction
+            case .schedulePool:
+                copy.scheduleDateAction
+            case .continueTrace:
+                copy.continueDateAction
+            case .reschedule:
+                copy.rescheduleDateAction
             }
         }
     }

@@ -97,7 +97,9 @@ private struct ZhulongWorkspaceHome: View {
                 VStack(alignment: .leading, spacing: 0) {
                     PageHeader(
                         title: store.copy.navZhulong,
-                        subtitle: copy.homeSubtitle
+                        subtitle: copy.homeSubtitle,
+                        titlePlacement: .centeredInMainSurface,
+                        titleAnchorIdentifier: "zhulong.home.title"
                     )
                     .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.headerOuterMaxWidth))
                     .frame(maxWidth: .infinity)

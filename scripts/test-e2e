@@ -10,6 +10,7 @@ cd "$repo_root"
 
 source scripts/runtime-evidence
 source scripts/evidence-common
+source scripts/dmg-install-observer-common
 
 configuration="${1:-debug}"
 evidence_prepare_fresh_directory "$repo_root" "artifacts/e2e-runtime"
@@ -57,6 +58,8 @@ evidence_app_snapshot="${runtime_evidence_dir}/app-snapshot/NoonmarkMacAppE2E.ap
 english_scenario_ledger="${runtime_evidence_dir}/english-scenario-ledger.tsv"
 helper_process_name="NoonmarkDMGInstallHarness"
 helper_bundle="artifacts/dmg-install-harness/${helper_process_name}.app"
+helper_executable_path="${repo_root}/${helper_bundle}/Contents/MacOS/${helper_process_name}"
+helper_bundle_identifier="app.noonmark.test.dmg-install-harness"
 helper_diagnostic_baseline="${runtime_evidence_dir}/helper-diagnostic-baseline.txt"
 helper_diagnostic_result="${runtime_evidence_dir}/helper-diagnostic-result.txt"
 evidence_helper_start="${runtime_evidence_dir}/helper-start.fragment"
@@ -70,9 +73,16 @@ only_mode=""
 app_binary_sha256_before=""
 helper_binary_sha256_before=""
 english_helper_requested=0
+helper_requested=0
+active_native_command_helper_pid=""
+active_native_command_helper_token=""
+active_helper_observer_pid=""
+active_helper_observer_parent_pid=""
+active_helper_observer_token=""
 e2e_owned_artifact_roots=(
   artifacts/e2e
   artifacts/e2e-blank
+  artifacts/e2e-calendar-grid-topology
   artifacts/e2e-classification
   artifacts/e2e-completion-control
   artifacts/e2e-context-menu-actions
@@ -81,14 +91,20 @@ e2e_owned_artifact_roots=(
   artifacts/e2e-data-import-ui
   artifacts/e2e-data-package
   artifacts/e2e-data-package-import-failure
+  artifacts/e2e-date-picker
   artifacts/e2e-date-strip
   artifacts/e2e-detail-rail
   artifacts/e2e-english
+  artifacts/e2e-english-native-command-surface
+  artifacts/e2e-english-native-command-stress
+  artifacts/e2e-header-navigation-hit-target
   artifacts/e2e-keyboard-date
   artifacts/e2e-lifecycle
   artifacts/e2e-markdown-editor
+  artifacts/e2e-main-window-chrome
   artifacts/e2e-mutation-clock
   artifacts/e2e-native-command-surface
+  artifacts/e2e-native-command-stress
   artifacts/e2e-natural-day
   artifacts/e2e-persistence
   artifacts/e2e-pool-context-menu-action
@@ -149,8 +165,8 @@ scenarios=(
   "completed-detail|completed|--select first"
   "calendar|calendar|"
   "calendar-detail-expanded|calendar|--e2e-expand-detail-rail"
-  "zhulong|zhulong|--e2e-enable-zhulong"
-  "zhulong-stream|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session"
+  "zhulong|zhulong|--e2e-enable-zhulong --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-title-geometry.txt"
+  "zhulong-stream|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-stream-title-geometry.txt"
   "zhulong-authorized|zhulong|--e2e-zhulong-sidecar-key --e2e-start-zhulong-workflow dailyReview"
   "zhulong-todo-diff-editor|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-todo-diff --e2e-open-zhulong-todo-diff-editor"
   "settings|settings|"
@@ -167,7 +183,7 @@ scenarios=(
   "english-completed|completed|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/completed-ui.txt|english"
   "english-calendar|calendar|--e2e-expand-detail-rail --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/calendar-ui.txt|english"
   "english-settings|settings||english"
-  "english-zhulong|zhulong|--e2e-enable-zhulong|english"
+  "english-zhulong|zhulong|--e2e-enable-zhulong --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e-english/zhulong-title-geometry.txt|english"
 )
 
 english_full_scenario_set="english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
@@ -187,10 +203,12 @@ only_mode_specs=(
   "NOONMARK_E2E_COMPLETION_SEQUENCE_ONLY:completion-sequence"
   "NOONMARK_E2E_WINDOW_STATE_ONLY:window-state"
   "NOONMARK_E2E_NATIVE_COMMANDS_ONLY:native-commands"
+  "NOONMARK_E2E_ENGLISH_NATIVE_COMMANDS_ONLY:english-native-commands"
   "NOONMARK_E2E_COMPLETION_CONTROL_ONLY:completion-control"
   "NOONMARK_E2E_WORKSPACE_PRODUCTIVITY_ONLY:workspace-productivity"
   "NOONMARK_E2E_DATA_IMPORT_UI_ONLY:data-import-ui"
   "NOONMARK_E2E_DATA_IMPORT_INTEGRITY_ONLY:data-import-integrity"
+  "NOONMARK_E2E_DATE_PICKER_ONLY:date-picker"
   "NOONMARK_E2E_POOL_LIST_LAYOUT_ONLY:pool-list-layout"
   "NOONMARK_E2E_POOL_CONTEXT_ACTION_ONLY:pool-context-action"
   "NOONMARK_E2E_UNFINISHED_ACTION_ONLY:unfinished-action"
@@ -216,6 +234,18 @@ for only_spec in "${only_mode_specs[@]}"; do
 done
 if (( only_mode_count > 1 )); then
   echo "exactly zero or one NOONMARK_E2E_*_ONLY mode may be enabled" >&2
+  exit 1
+fi
+
+native_command_stress_count="${NOONMARK_E2E_NATIVE_COMMAND_STRESS_COUNT:-1}"
+if [[ ! "$native_command_stress_count" =~ ^[1-9][0-9]*$ ]] ||
+  (( native_command_stress_count > 32 )); then
+  echo "NOONMARK_E2E_NATIVE_COMMAND_STRESS_COUNT must be an integer from 1 through 32" >&2
+  exit 1
+fi
+if (( native_command_stress_count > 1 )) &&
+  [[ "$only_mode" != "native-commands" && "$only_mode" != "english-native-commands" ]]; then
+  echo "native command stress requires one native-command ONLY mode" >&2
   exit 1
 fi
 
@@ -304,6 +334,15 @@ for english_scenario_name in "${english_scenario_names[@]:-}"; do
     break
   fi
 done
+helper_requested="$english_helper_requested"
+if [[ "$screenshots_only" != "1" ]] && {
+  (( only_mode_count == 0 )) ||
+    [[ "$only_mode" == "native-commands" ]] ||
+    [[ "$only_mode" == "english-native-commands" ]] ||
+    [[ "$only_mode" == "completion-sequence" ]];
+}; then
+  helper_requested=1
+fi
 
 mkdir -p artifacts
 for artifact_root in "${e2e_owned_artifact_roots[@]}"; do
@@ -357,7 +396,7 @@ if (( only_mode_count == 0 )); then
     fi
   done
 fi
-if [[ "$english_helper_requested" == "1" ]]; then
+if [[ "$helper_requested" == "1" ]]; then
   scripts/build-dmg-install-harness "$configuration"
   evidence_capture_bundle \
     "$helper_bundle" \
@@ -405,6 +444,168 @@ terminate_e2e_app() {
   done
   echo "failed to close visible ${app_display_name} windows" >&2
   return 1
+}
+
+native_command_helper_process_matches() {
+  local pid="$1"
+  local mode="$2"
+  local token="$3"
+  local command_line
+
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ || "$mode" != "e2e-menu-command" ||
+    ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    return 2
+  fi
+  if ! command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
+    return 1
+  fi
+  { [[ "$command_line" == "$helper_executable_path" ]] ||
+    [[ "$command_line" == "$helper_executable_path "* ]]; } &&
+    [[ " $command_line " == *" --mode $mode "* ]] &&
+    [[ " $command_line " == *" --launch-token $token "* ]]
+}
+
+native_command_helper_bundle_matches() {
+  local pid="$1"
+
+  NOONMARK_E2E_HELPER_PID="$pid" \
+    NOONMARK_E2E_HELPER_BUNDLE="$PWD/$helper_bundle" \
+    NOONMARK_E2E_HELPER_BUNDLE_ID="$helper_bundle_identifier" \
+    swift -e '
+import AppKit
+import Darwin
+import Foundation
+
+let environment = ProcessInfo.processInfo.environment
+guard let rawPID = environment["NOONMARK_E2E_HELPER_PID"],
+      let pid = Int32(rawPID), pid > 0,
+      let expectedBundle = environment["NOONMARK_E2E_HELPER_BUNDLE"],
+      let expectedBundleID = environment["NOONMARK_E2E_HELPER_BUNDLE_ID"]
+else {
+    exit(2)
+}
+let expectedPath = URL(fileURLWithPath: expectedBundle)
+    .standardizedFileURL.resolvingSymlinksInPath().path
+let deadline = ProcessInfo.processInfo.systemUptime + 3
+repeat {
+    if let app = NSRunningApplication(processIdentifier: pid),
+       app.isTerminated == false,
+       let bundleURL = app.bundleURL,
+       app.bundleIdentifier == expectedBundleID,
+       bundleURL.standardizedFileURL.resolvingSymlinksInPath().path == expectedPath
+    {
+        exit(0)
+    }
+    usleep(25_000)
+} while ProcessInfo.processInfo.systemUptime < deadline
+fputs("helper LaunchServices bundle identity did not match\n", stderr)
+exit(1)
+'
+}
+
+native_command_app_ready_identity_matches() {
+  local pid="$1"
+  local app_bundle_path="$2"
+  local window_number="$3"
+  local window_title="$4"
+
+  NOONMARK_E2E_READY_PID="$pid" \
+    NOONMARK_E2E_READY_APP="$app_bundle_path" \
+    NOONMARK_E2E_READY_WINDOW_NUMBER="$window_number" \
+    NOONMARK_E2E_READY_WINDOW_TITLE="$window_title" \
+    swift -e '
+import AppKit
+import CoreGraphics
+import Darwin
+import Foundation
+
+let environment = ProcessInfo.processInfo.environment
+guard let rawPID = environment["NOONMARK_E2E_READY_PID"],
+      let pid = Int32(rawPID), pid > 0,
+      let expectedApp = environment["NOONMARK_E2E_READY_APP"],
+      let rawWindowNumber = environment["NOONMARK_E2E_READY_WINDOW_NUMBER"],
+      let windowNumber = UInt32(rawWindowNumber), windowNumber > 0,
+      let expectedWindowTitle = environment["NOONMARK_E2E_READY_WINDOW_TITLE"],
+      expectedWindowTitle.isEmpty == false,
+      let app = NSRunningApplication(processIdentifier: pid),
+      app.isTerminated == false,
+      app.isActive,
+      app.bundleIdentifier == "app.noonmark.mac.e2e",
+      let bundleURL = app.bundleURL
+else {
+    fputs("ready App process identity was invalid\n", stderr)
+    exit(1)
+}
+let expectedPath = URL(fileURLWithPath: expectedApp)
+    .standardizedFileURL.resolvingSymlinksInPath().path
+let actualPath = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
+guard actualPath == expectedPath,
+      let records = CGWindowListCopyWindowInfo(
+          [.optionIncludingWindow],
+          CGWindowID(windowNumber)
+      ) as? [[String: Any]],
+      records.count == 1,
+      let ownerPID = (records[0][kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+      ownerPID == pid,
+      let layer = (records[0][kCGWindowLayer as String] as? NSNumber)?.intValue,
+      layer == 0,
+      let isOnscreen = (records[0][kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue,
+      isOnscreen
+else {
+    fputs("ready App bundle or CGWindow identity was invalid\n", stderr)
+    exit(1)
+}
+if let title = records[0][kCGWindowName as String] as? String,
+   title != expectedWindowTitle
+{
+    fputs("ready CGWindow title did not match\n", stderr)
+    exit(1)
+}
+'
+}
+
+cleanup_native_command_helper() {
+  local cleanup_status=0
+  local command_line=""
+
+  if [[ -n "$active_native_command_helper_pid" ]] &&
+    kill -0 "$active_native_command_helper_pid" 2>/dev/null; then
+    command_line="$(
+      ps -ww -p "$active_native_command_helper_pid" -o command= 2>/dev/null || true
+    )"
+    if native_command_helper_process_matches \
+      "$active_native_command_helper_pid" \
+      "e2e-menu-command" \
+      "$active_native_command_helper_token"; then
+      kill -TERM "$active_native_command_helper_pid" 2>/dev/null || true
+      for _ in {1..80}; do
+        if ! kill -0 "$active_native_command_helper_pid" 2>/dev/null; then
+          break
+        fi
+        sleep 0.025
+      done
+      if kill -0 "$active_native_command_helper_pid" 2>/dev/null; then
+        kill -KILL "$active_native_command_helper_pid" 2>/dev/null || true
+        cleanup_status=1
+      fi
+    else
+      echo "refusing to terminate an unverified helper process: $command_line" >&2
+      cleanup_status=1
+    fi
+  fi
+  if [[ -n "$active_helper_observer_pid" ]] &&
+    [[ "$active_helper_observer_parent_pid" == "$$" ]]; then
+    if kill -0 "$active_helper_observer_pid" 2>/dev/null; then
+      kill -TERM "$active_helper_observer_pid" 2>/dev/null || true
+    fi
+    wait "$active_helper_observer_pid" 2>/dev/null || true
+  fi
+  active_native_command_helper_pid=""
+  active_native_command_helper_token=""
+  active_helper_observer_pid=""
+  active_helper_observer_parent_pid=""
+  active_helper_observer_token=""
+  return "$cleanup_status"
 }
 
 run_windowserver_input_cleanup() {
@@ -619,7 +820,7 @@ finish_e2e_evidence() {
     echo "could not preserve the exact E2E App bundle snapshot" >&2
     suite_status=1
   fi
-  if [[ "$english_helper_requested" == "1" ]]; then
+  if [[ "$helper_requested" == "1" ]]; then
     required_keys+=(
       helper_binary_sha256_before
       helper_binary_sha256_after
@@ -752,7 +953,7 @@ finish_e2e_evidence() {
   if [[ -d "${runtime_evidence_dir}/DiagnosticReports" ]]; then
     artifact_paths+=("${runtime_evidence_dir}/DiagnosticReports")
   fi
-  if [[ "$english_helper_requested" == "1" ]]; then
+  if [[ "$helper_requested" == "1" ]]; then
     artifact_paths+=(
       "$evidence_helper_snapshot"
       "$helper_diagnostic_baseline"
@@ -795,6 +996,9 @@ finish_e2e_session() {
   local diagnostic_wait_attempts=30
 
   trap - EXIT
+  if ! cleanup_native_command_helper; then
+    suite_status=1
+  fi
   if ! terminate_e2e_app >/dev/null 2>&1; then
     suite_status=1
   fi
@@ -831,7 +1035,7 @@ finish_e2e_session() {
       printf 'new_diagnostic_count=nonzero\n' >"$runtime_diagnostic_result"
       suite_status=1
     fi
-    if [[ "$english_helper_requested" == "1" ]]; then
+    if [[ "$helper_requested" == "1" ]]; then
       if runtime_evidence_assert_no_new_diagnostics \
         "$helper_process_name" \
         "$helper_diagnostic_baseline" \
@@ -888,7 +1092,7 @@ mkdir -p "$runtime_evidence_dir"
 runtime_evidence_snapshot_diagnostics \
   "$app_executable_name" \
   "$runtime_diagnostic_baseline"
-if [[ "$english_helper_requested" == "1" ]]; then
+if [[ "$helper_requested" == "1" ]]; then
   runtime_evidence_snapshot_diagnostics \
     "$helper_process_name" \
     "$helper_diagnostic_baseline"
@@ -897,7 +1101,7 @@ runtime_evidence_write_manifest_start \
   "$runtime_manifest" \
   "$app_executable_name" \
   "$app_path"
-if [[ "$english_helper_requested" == "1" ]]; then
+if [[ "$helper_requested" == "1" ]]; then
   runtime_evidence_start_console_capture \
     "$app_executable_name" \
     "$runtime_console_log" \
@@ -1128,6 +1332,7 @@ capture_app_screenshot() {
   local expected_language="${NOONMARK_E2E_EXPECTED_LANGUAGE:-chinese}"
   local ui_entry_result=""
   local english_ui_result=""
+  local zhulong_title_geometry_result=""
   local expected_overflow_recovery_count=0
   shift 3
 
@@ -1151,6 +1356,9 @@ capture_app_screenshot() {
     if [[ "${arguments[$index]}" == "--e2e-english-ui-result-url" ]]; then
       english_ui_result="${arguments[$((index + 1))]:-}"
     fi
+    if [[ "${arguments[$index]}" == "--e2e-zhulong-title-geometry-result-url" ]]; then
+      zhulong_title_geometry_result="${arguments[$((index + 1))]:-}"
+    fi
     if [[ "${arguments[$index]}" == "--e2e-classification-overflow-invalidate-first-ready" ]]; then
       expected_overflow_recovery_count=1
     fi
@@ -1160,6 +1368,9 @@ capture_app_screenshot() {
   fi
   if [[ -n "$english_ui_result" ]]; then
     rm -f "$english_ui_result"
+  fi
+  if [[ -n "$zhulong_title_geometry_result" ]]; then
+    rm -f "$zhulong_title_geometry_result"
   fi
   if [[ "$page" == "settings" ]]; then
     expected_frame_width=0
@@ -1316,6 +1527,23 @@ capture_app_screenshot() {
         "$expected_window_title" \
         "$english_ui_result" \
         "$PWD/artifacts/e2e-english/day-ax"
+    fi
+  fi
+  if [[ -n "$zhulong_title_geometry_result" ]]; then
+    for _ in {1..80}; do
+      if [[ -f "$zhulong_title_geometry_result" ]]; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ ! -f "$zhulong_title_geometry_result" ]]; then
+      echo "Zhulong title geometry result was not created: $zhulong_title_geometry_result" >&2
+      exit 1
+    fi
+    if [[ "$(head -n 1 "$zhulong_title_geometry_result")" != "ok" ]]; then
+      echo "Zhulong title geometry verification failed:" >&2
+      cat "$zhulong_title_geometry_result" >&2
+      exit 1
     fi
   fi
 
@@ -1568,6 +1796,36 @@ guard text.range(of: "\\p{Han}", options: .regularExpression) == nil else {
   echo "E2E English ${page} screenshot has no recognized Han text: $screenshot"
 }
 
+assert_zhulong_title_geometry_result() {
+  local result="$1"
+  local expected_surface="$2"
+  local expected_identifier="$3"
+  local expected_text="$4"
+  local mid_x_delta
+
+  if [[ ! -f "$result" || "$(head -n 1 "$result")" != "ok" ]]; then
+    echo "Zhulong title geometry manifest is missing or failed: $result" >&2
+    [[ -f "$result" ]] && cat "$result" >&2
+    exit 1
+  fi
+  mid_x_delta="$(awk -F= '$1 == "mid_x_delta" { print $2 }' "$result")"
+  if ! grep -Fqx "surface=$expected_surface" "$result" ||
+    ! grep -Fqx "identifier=$expected_identifier" "$result" ||
+    ! grep -Fqx "expected_text=$expected_text" "$result" ||
+    ! grep -Fq "title_frame=x:" "$result" ||
+    ! grep -Fq "middle_frame=x:" "$result" ||
+    ! grep -Fq "title_mid_x=" "$result" ||
+    ! grep -Fq "middle_mid_x=" "$result" ||
+    ! grep -Fqx "tolerance=1.000" "$result" ||
+    [[ ! "$mid_x_delta" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+    ! awk -v delta="$mid_x_delta" 'BEGIN { exit !(delta <= 1) }'; then
+    echo "Zhulong title geometry manifest lost its exact centering evidence: $result" >&2
+    cat "$result" >&2
+    exit 1
+  fi
+  echo "E2E Zhulong ${expected_surface} title geometry: $result (delta=${mid_x_delta}pt)"
+}
+
 record_english_scenario_evidence() {
   local scenario_name="$1"
   local screenshot="$2"
@@ -1604,7 +1862,9 @@ record_english_scenario_evidence() {
     english-settings)
       oracles+="+settings_sidebar_vision_ocr"
       ;;
-    english-zhulong) ;;
+    english-zhulong)
+      oracles+="+in_app_zhulong_title_geometry"
+      ;;
     *)
       echo "unknown English evidence scenario: $scenario_name" >&2
       exit 1
@@ -1806,6 +2066,8 @@ run_english_menu_probe() {
   local help_shortcut_log="$menu_dir/help-shortcut.log"
   local exercise_result="$menu_dir/exercise-result.txt"
   local exercise_log="$menu_dir/exercise.log"
+  local help_ready_path="$menu_dir/help-ready.txt"
+  local helper_evidence_dir="$menu_dir/help-menu-helper"
   local verify_result="$menu_dir/verify-result.txt"
   local verify_log="$menu_dir/verify.log"
   local pool_result="$menu_dir/pool-result.txt"
@@ -1830,10 +2092,14 @@ run_english_menu_probe() {
     --e2e-native-command-state-url "$PWD/$state_file" \
     --e2e-native-command-result-url "$PWD/$help_shortcut_result"
 
-  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+  run_native_command_surface_exercise \
     "English native menu exercise" \
     "$exercise_result" \
     "$exercise_log" \
+    "$help_ready_path" \
+    "$helper_evidence_dir" \
+    "Help" \
+    "Noonmark Help" \
     --data-url "$database_path" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
@@ -2711,6 +2977,8 @@ run_native_command_surface_probe() {
   local help_shortcut_log="$command_dir/help-shortcut.log"
   local exercise_result="$command_dir/exercise-result.txt"
   local exercise_log="$command_dir/exercise.log"
+  local help_ready_path="$command_dir/help-ready.txt"
+  local helper_evidence_dir="$command_dir/help-menu-helper"
   local verify_result="$command_dir/verify-result.txt"
   local verify_log="$command_dir/verify.log"
   local sqlite_probe
@@ -2729,10 +2997,14 @@ run_native_command_surface_probe() {
     --e2e-native-command-state-url "$PWD/$state_file" \
     --e2e-native-command-result-url "$PWD/$help_shortcut_result"
 
-  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+  run_native_command_surface_exercise \
     "native command surface exercise" \
     "$exercise_result" \
     "$exercise_log" \
+    "$help_ready_path" \
+    "$helper_evidence_dir" \
+    "帮助" \
+    "晷迹使用帮助" \
     --data-url "$PWD/$command_db" \
     --page day \
     --e2e-reset-selection \
@@ -5692,6 +5964,588 @@ run_zhulong_todo_diff_clock_probe() {
   echo "E2E fixed-clock Zhulong Todo apply and following Store mutation: $todo_db (probe=$clock_probe)"
 }
 
+run_date_picker_probe() {
+  local picker_dir="artifacts/e2e-date-picker"
+  local picker_result="${picker_dir}/result.txt"
+  local picker_log="${picker_dir}/app.log"
+  local picker_screenshot="${picker_dir}/sheet.png"
+
+  rm -rf "$picker_dir"
+  mkdir -p "$picker_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "custom date picker sheet" \
+    "$picker_result" \
+    "$picker_log" \
+    --ephemeral \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-reset-selection \
+    --e2e-date-picker-sheet \
+    --e2e-date-picker-result-url "$PWD/$picker_result" \
+    --e2e-date-picker-screenshot-url "$PWD/$picker_screenshot"
+
+  if [[ ! -s "$picker_screenshot" ]]; then
+    echo "custom date picker screenshot was not created: $picker_screenshot" >&2
+    exit 1
+  fi
+
+  echo "E2E custom date picker geometry, input, purpose, and screenshot contract: $picker_result"
+}
+
+parse_native_command_help_ready() {
+  local ready_path="$1"
+  local expected_token="$2"
+  local expected_menu_title="$3"
+  local expected_menu_item_title="$4"
+  local status_line token_line pid_line app_path_line window_number_line
+  local window_title_line menu_title_line menu_item_title_line
+  local final_byte
+
+  NATIVE_COMMAND_READY_TOKEN=""
+  NATIVE_COMMAND_READY_PID=""
+  NATIVE_COMMAND_READY_APP_PATH=""
+  NATIVE_COMMAND_READY_WINDOW_NUMBER=""
+  NATIVE_COMMAND_READY_WINDOW_TITLE=""
+  NATIVE_COMMAND_READY_MENU_TITLE=""
+  NATIVE_COMMAND_READY_MENU_ITEM_TITLE=""
+
+  if [[ ! "$expected_token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    echo "native command Help ready expectation had an invalid launch token" >&2
+    return 1
+  fi
+  if [[ ! -f "$ready_path" || -L "$ready_path" ]] ||
+    [[ "$(stat -f '%z' "$ready_path" 2>/dev/null || printf '0')" -gt 8192 ]] ||
+    [[ "$(awk 'END { print NR + 0 }' "$ready_path")" != "8" ]]; then
+    echo "native command Help ready artifact was not one bounded eight-line file" >&2
+    return 1
+  fi
+  final_byte="$(tail -c 1 "$ready_path" | od -An -t u1 | tr -d ' ')"
+  if [[ "$final_byte" != "10" ]]; then
+    echo "native command Help ready artifact lacked its exact trailing newline" >&2
+    return 1
+  fi
+
+  status_line="$(sed -n '1p' "$ready_path")"
+  token_line="$(sed -n '2p' "$ready_path")"
+  pid_line="$(sed -n '3p' "$ready_path")"
+  app_path_line="$(sed -n '4p' "$ready_path")"
+  window_number_line="$(sed -n '5p' "$ready_path")"
+  window_title_line="$(sed -n '6p' "$ready_path")"
+  menu_title_line="$(sed -n '7p' "$ready_path")"
+  menu_item_title_line="$(sed -n '8p' "$ready_path")"
+
+  if [[ "$status_line" != "status=ready" ||
+    "$token_line" != "launch_token=$expected_token" ||
+    ! "$pid_line" =~ ^pid=([1-9][0-9]*)$ ||
+    "$app_path_line" != "app_path=$PWD/$app_path" ||
+    ! "$window_number_line" =~ ^window_number=([1-9][0-9]*)$ ||
+    "$window_title_line" != window_title=* ||
+    "$menu_title_line" != "menu_title=$expected_menu_title" ||
+    "$menu_item_title_line" != "menu_item_title=$expected_menu_item_title" ]]; then
+    echo "native command Help ready artifact did not match its fixed field schema" >&2
+    cat "$ready_path" >&2
+    return 1
+  fi
+
+  NATIVE_COMMAND_READY_TOKEN="${token_line#launch_token=}"
+  NATIVE_COMMAND_READY_PID="${pid_line#pid=}"
+  NATIVE_COMMAND_READY_APP_PATH="${app_path_line#app_path=}"
+  NATIVE_COMMAND_READY_WINDOW_NUMBER="${window_number_line#window_number=}"
+  NATIVE_COMMAND_READY_WINDOW_TITLE="${window_title_line#window_title=}"
+  NATIVE_COMMAND_READY_MENU_TITLE="${menu_title_line#menu_title=}"
+  NATIVE_COMMAND_READY_MENU_ITEM_TITLE="${menu_item_title_line#menu_item_title=}"
+  if [[ -z "$NATIVE_COMMAND_READY_WINDOW_TITLE" ||
+    "$NATIVE_COMMAND_READY_WINDOW_TITLE" == *"="* ||
+    "$NATIVE_COMMAND_READY_WINDOW_TITLE" == *$'\t'* ||
+    "$NATIVE_COMMAND_READY_MENU_TITLE" == *$'\t'* ||
+    "$NATIVE_COMMAND_READY_MENU_ITEM_TITLE" == *$'\t'* ]]; then
+    echo "native command Help ready artifact contained an invalid controlled value" >&2
+    return 1
+  fi
+  native_command_app_ready_identity_matches \
+    "$NATIVE_COMMAND_READY_PID" \
+    "$NATIVE_COMMAND_READY_APP_PATH" \
+    "$NATIVE_COMMAND_READY_WINDOW_NUMBER" \
+    "$NATIVE_COMMAND_READY_WINDOW_TITLE"
+}
+
+assert_native_command_helper_completion() {
+  local completion_path="$1"
+  local token="$2"
+  local helper_pid="$3"
+  local target_pid="$4"
+  local window_number="$5"
+  local menu_title="$6"
+  local menu_item_title="$7"
+  local final_byte
+
+  if [[ ! -f "$completion_path" || -L "$completion_path" ]] ||
+    [[ "$(stat -f '%z' "$completion_path" 2>/dev/null || printf '0')" -gt 8192 ]] ||
+    [[ "$(awk 'END { print NR + 0 }' "$completion_path")" != "7" ]]; then
+    echo "native command Helper completion was not one bounded seven-line file" >&2
+    return 1
+  fi
+  final_byte="$(tail -c 1 "$completion_path" | od -An -t u1 | tr -d ' ')"
+  if [[ "$final_byte" != "10" ]] ||
+    [[ "$(sed -n '1p' "$completion_path")" != "status=complete" ]] ||
+    [[ "$(sed -n '2p' "$completion_path")" != "launch_token=$token" ]] ||
+    [[ "$(sed -n '3p' "$completion_path")" != "helper_pid=$helper_pid" ]] ||
+    [[ "$(sed -n '4p' "$completion_path")" != "target_pid=$target_pid" ]] ||
+    [[ "$(sed -n '5p' "$completion_path")" != "window_number=$window_number" ]] ||
+    [[ "$(sed -n '6p' "$completion_path")" != "menu_title=$menu_title" ]] ||
+    [[ "$(sed -n '7p' "$completion_path")" != "menu_item_title=$menu_item_title" ]]; then
+    echo "native command Helper completion did not match this exact launch" >&2
+    cat "$completion_path" >&2
+    return 1
+  fi
+}
+
+dump_native_command_helper_evidence() {
+  local path
+  for path in "$@"; do
+    if [[ -f "$path" ]]; then
+      echo "native command Helper evidence: $path" >&2
+      cat "$path" >&2
+    fi
+  done
+}
+
+wait_for_native_command_helper_process_record() {
+  local ledger_path="$1"
+  local token="$2"
+  local process_count process_detail mode_field pid_field token_field extra_field
+  local helper_pid live_pids
+
+  NATIVE_COMMAND_HELPER_PID=""
+  for _ in {1..400}; do
+    if [[ -f "$ledger_path" ]]; then
+      if grep -F $'\tFAIL\t' "$ledger_path" >/dev/null 2>&1; then
+        echo "native command Helper failed before publishing its process identity" >&2
+        return 1
+      fi
+      IFS=$'\t' read -r process_count process_detail < <(
+        awk -F $'\t' '
+          $2 == "PASS" && $3 == "process" { count += 1; detail = $4 }
+          END { printf "%d\t%s\n", count + 0, detail }
+        ' "$ledger_path"
+      )
+      if [[ "$process_count" -gt 1 ]]; then
+        echo "native command Helper published duplicate process identities" >&2
+        return 1
+      fi
+      if [[ "$process_count" -eq 1 ]]; then
+        read -r mode_field pid_field token_field extra_field <<<"$process_detail"
+        if [[ -n "${extra_field:-}" || "$mode_field" != "mode=e2e-menu-command" ||
+          "$pid_field" != helper_pid=* || "$token_field" != "launch_token=$token" ]]; then
+          echo "native command Helper process record was invalid: $process_detail" >&2
+          return 1
+        fi
+        helper_pid="${pid_field#helper_pid=}"
+        if ! native_command_helper_process_matches \
+          "$helper_pid" \
+          "e2e-menu-command" \
+          "$token"; then
+          echo "native command Helper executable, mode, or token identity did not match" >&2
+          return 1
+        fi
+        if ! native_command_helper_bundle_matches "$helper_pid"; then
+          return 1
+        fi
+        live_pids="$(pgrep -x "$helper_process_name" 2>/dev/null || true)"
+        if [[ "$live_pids" != "$helper_pid" ]]; then
+          echo "native command Helper launch was not the sole exact helper process: ${live_pids:-none}" >&2
+          return 1
+        fi
+        NATIVE_COMMAND_HELPER_PID="$helper_pid"
+        return 0
+      fi
+    fi
+    sleep 0.025
+  done
+  echo "timed out waiting for the native command Helper process identity" >&2
+  return 1
+}
+
+assert_native_command_helper_completed() {
+  local ledger_path="$1"
+  local stdout_path="$2"
+  local stderr_path="$3"
+  local launch_path="$4"
+  local observer_log_path="$5"
+  local exit_result_path="$6"
+  local completion_path="$7"
+  local helper_pid="$8"
+  local token="$9"
+  local target_pid="${10}"
+  local target_app_path="${11}"
+  local window_number="${12}"
+  local window_title="${13}"
+  local menu_title="${14}"
+  local menu_item_title="${15}"
+  local argument_detail
+
+  if ! awk -v pid="$helper_pid" -v token="$token" '
+    NR == 1 { valid += ($0 == "status=PASS") }
+    NR == 2 { valid += ($0 == "mode=e2e-menu-command") }
+    NR == 3 { valid += ($0 == "helper_pid=" pid) }
+    NR == 4 { valid += ($0 == "launch_token=" token) }
+    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]+$/) }
+    NR == 6 { valid += ($0 == "raw_status=0") }
+    NR == 7 { valid += ($0 == "normal_exit=true") }
+    NR == 8 { valid += ($0 == "exit_code=0") }
+    NR == 9 { valid += ($0 == "signal=0") }
+    END { exit !(NR == 9 && valid == 9) }
+  ' "$exit_result_path"; then
+    echo "native command Helper did not expose one normal kernel exit" >&2
+    return 1
+  fi
+  if [[ ! -s "$ledger_path" ]] || ! cmp -s "$ledger_path" "$stdout_path" ||
+    [[ -s "$stderr_path" || -s "$launch_path" || -s "$observer_log_path" ]] ||
+    grep -F $'\tFAIL\t' "$ledger_path" >/dev/null 2>&1; then
+    echo "native command Helper output was incomplete, divergent, or failed" >&2
+    return 1
+  fi
+  if ! awk -F $'\t' \
+    -v pid="$helper_pid" \
+    -v token="$token" \
+    -v app="$target_app_path" '
+      BEGIN {
+        expected[1] = "arguments"
+        expected[2] = "process"
+        expected[3] = "exit-observer"
+        expected[4] = "permissions"
+        expected[5] = "target"
+        expected[6] = "e2e-window"
+        expected[7] = "menu-bar"
+        expected[8] = "menu-item"
+        expected[9] = "menu-command"
+        expected[10] = "completion"
+        expected[11] = "complete"
+      }
+      NF != 4 || $2 != "PASS" || $3 != expected[NR] { exit 1 }
+      NR == 2 && $4 != "mode=e2e-menu-command helper_pid=" pid " launch_token=" token {
+        exit 1
+      }
+      NR == 3 && $4 != "helper_pid=" pid " launch_token=" token " observer=EVFILT_PROC+NOTE_EXITSTATUS" {
+        exit 1
+      }
+      NR == 4 && $4 != "AXIsProcessTrusted=true CGPreflightPostEventAccess=true" {
+        exit 1
+      }
+      NR == 5 && index($4, "bundle=app.noonmark.mac.e2e path=" app " frontmost=true windows=") != 1 {
+        exit 1
+      }
+      NR == 11 && $4 != "mode=e2e-menu-command" { exit 1 }
+      END { exit !(NR == 11) }
+    ' "$ledger_path"; then
+    echo "native command Helper ledger lost its exact ordered protocol" >&2
+    return 1
+  fi
+  argument_detail="mode=e2e-menu-command pid=$target_pid app=$target_app_path window_number=$window_number window=$window_title menu=$menu_title item=$menu_item_title completion=$completion_path"
+  if ! awk -F $'\t' -v detail="$argument_detail" '
+    NR == 1 && $2 == "PASS" && $3 == "arguments" && $4 == detail { found = 1 }
+    END { exit !found }
+  ' "$ledger_path"; then
+    echo "native command Helper arguments were not bound to the parsed App ready artifact" >&2
+    return 1
+  fi
+  if ! assert_native_command_helper_completion \
+    "$completion_path" \
+    "$token" \
+    "$helper_pid" \
+    "$target_pid" \
+    "$window_number" \
+    "$menu_title" \
+    "$menu_item_title"; then
+    return 1
+  fi
+}
+
+run_native_command_menu_helper() {
+  local target_pid="$1"
+  local target_app_path="$2"
+  local window_number="$3"
+  local window_title="$4"
+  local menu_title="$5"
+  local menu_item_title="$6"
+  local token="$7"
+  local completion_path="$8"
+  local evidence_dir="$9"
+  local ledger_path="$evidence_dir/ledger.tsv"
+  local stdout_path="$evidence_dir/stdout.log"
+  local stderr_path="$evidence_dir/stderr.log"
+  local launch_path="$evidence_dir/open.log"
+  local observer_log_path="$evidence_dir/exit-observer.log"
+  local observer_gate_path="$evidence_dir/exit-observer-gate.txt"
+  local exit_result_path="$evidence_dir/exit-status.txt"
+  local helper_pid live_pids
+
+  if [[ "$evidence_dir" != /* ]]; then
+    evidence_dir="$PWD/$evidence_dir"
+    ledger_path="$evidence_dir/ledger.tsv"
+    stdout_path="$evidence_dir/stdout.log"
+    stderr_path="$evidence_dir/stderr.log"
+    launch_path="$evidence_dir/open.log"
+    observer_log_path="$evidence_dir/exit-observer.log"
+    observer_gate_path="$evidence_dir/exit-observer-gate.txt"
+    exit_result_path="$evidence_dir/exit-status.txt"
+  fi
+
+  if [[ "$helper_requested" != "1" || ! -x "$helper_executable_path" ]] ||
+    ! codesign --verify --deep --strict "$helper_bundle" >/dev/null 2>&1; then
+    echo "native command exercise lacks its verified signed Helper bundle" >&2
+    return 1
+  fi
+  if [[ ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ||
+    "$completion_path" != /* || -e "$completion_path" || -L "$completion_path" ]]; then
+    echo "native command exercise received an invalid Helper completion boundary" >&2
+    return 1
+  fi
+  live_pids="$(pgrep -x "$helper_process_name" 2>/dev/null || true)"
+  if [[ -n "$live_pids" ]]; then
+    echo "native command exercise refuses to overlap live Helper processes: $live_pids" >&2
+    return 1
+  fi
+
+  mkdir -p "$evidence_dir"
+  rm -f \
+    "$ledger_path" \
+    "$stdout_path" \
+    "$stderr_path" \
+    "$launch_path" \
+    "$observer_log_path" \
+    "$observer_gate_path" \
+    "$exit_result_path"
+  : >"$stdout_path"
+  : >"$stderr_path"
+  : >"$launch_path"
+  : >"$observer_log_path"
+
+  active_native_command_helper_pid=""
+  active_native_command_helper_token="$token"
+
+  if ! /usr/bin/open \
+    -n \
+    -g \
+    --stdout "$stdout_path" \
+    --stderr "$stderr_path" \
+    "$PWD/$helper_bundle" \
+    --args \
+    --mode e2e-menu-command \
+    --ledger "$ledger_path" \
+    --launch-token "$token" \
+    --start-gate "$observer_gate_path" \
+    --pid "$target_pid" \
+    --app-path "$target_app_path" \
+    --window-number "$window_number" \
+    --window-title "$window_title" \
+    --menu-title "$menu_title" \
+    --menu-item-title "$menu_item_title" \
+    --completion "$completion_path" \
+    >"$launch_path" 2>&1; then
+    echo "LaunchServices rejected the native command Helper launch" >&2
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path"
+    return 1
+  fi
+  if [[ -s "$launch_path" ]]; then
+    echo "LaunchServices emitted output for the native command Helper launch" >&2
+    dump_native_command_helper_evidence "$launch_path"
+    return 1
+  fi
+
+  if ! wait_for_native_command_helper_process_record "$ledger_path" "$token"; then
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path"
+    return 1
+  fi
+  helper_pid="$NATIVE_COMMAND_HELPER_PID"
+  active_native_command_helper_pid="$helper_pid"
+  if ! start_helper_exit_observer_process \
+    "e2e-menu-command" \
+    "$helper_pid" \
+    "$token" \
+    "$observer_gate_path" \
+    "$exit_result_path" \
+    "$observer_log_path" \
+    30 \
+    "$repo_root/scripts/dmg-install-exit-observer.swift"; then
+    dump_native_command_helper_evidence "$ledger_path" "$observer_log_path"
+    return 1
+  fi
+  if ! wait_for_helper_observer_gate \
+    "e2e-menu-command" \
+    "$helper_pid" \
+    "$token" \
+    "$observer_gate_path" \
+    "$exit_result_path"; then
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$observer_log_path" "$exit_result_path"
+    return 1
+  fi
+  if ! wait_for_helper_exit_result \
+    "$helper_pid" \
+    "e2e-menu-command" \
+    "$token" \
+    "$exit_result_path"; then
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stderr_path" "$observer_log_path" "$exit_result_path"
+    return 1
+  fi
+  if ! assert_native_command_helper_completed \
+    "$ledger_path" \
+    "$stdout_path" \
+    "$stderr_path" \
+    "$launch_path" \
+    "$observer_log_path" \
+    "$exit_result_path" \
+    "$completion_path" \
+    "$helper_pid" \
+    "$token" \
+    "$target_pid" \
+    "$target_app_path" \
+    "$window_number" \
+    "$window_title" \
+    "$menu_title" \
+    "$menu_item_title"; then
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path" \
+      "$observer_log_path" "$exit_result_path"
+    return 1
+  fi
+
+  for _ in {1..160}; do
+    if ! kill -0 "$helper_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  live_pids="$(pgrep -x "$helper_process_name" 2>/dev/null || true)"
+  if kill -0 "$helper_pid" 2>/dev/null || [[ -n "$live_pids" ]]; then
+    echo "native command Helper remained after its verified exit: ${live_pids:-$helper_pid}" >&2
+    return 1
+  fi
+  active_native_command_helper_pid=""
+  active_native_command_helper_token=""
+}
+
+run_native_command_surface_exercise() {
+  local label="$1"
+  local result="$2"
+  local log="$3"
+  local ready_path="$4"
+  local helper_evidence_dir="$5"
+  local expected_menu_title="$6"
+  local expected_menu_item_title="$7"
+  local completion_path="${ready_path%/*}/help-completion.txt"
+  local token launcher_pid app_pid app_exit_status=0
+  shift 7
+
+  rm -f "$result" "$ready_path" "$completion_path"
+  rm -rf "$helper_evidence_dir"
+  if [[ -n "$(pgrep -x "$helper_process_name" 2>/dev/null || true)" ]]; then
+    echo "$label refused to start while a Helper process was already live" >&2
+    return 1
+  fi
+  token="$(uuidgen)"
+  if [[ ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    echo "$label could not create one valid Help command token" >&2
+    return 1
+  fi
+  /usr/bin/open -W -n "$app_path" --args \
+    "$@" \
+    --e2e-native-command-help-ready-url "$PWD/$ready_path" \
+    --e2e-native-command-help-completion-url "$PWD/$completion_path" \
+    --e2e-native-command-help-token "$token" \
+    >"$log" 2>&1 &
+  launcher_pid=$!
+
+  for _ in {1..1200}; do
+    if [[ -f "$ready_path" || -f "$result" ]] ||
+      ! kill -0 "$launcher_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  if [[ ! -f "$ready_path" ]] ||
+    ! parse_native_command_help_ready \
+      "$ready_path" \
+      "$token" \
+      "$expected_menu_title" \
+      "$expected_menu_item_title"; then
+    terminate_e2e_app >/dev/null 2>&1 || true
+    wait "$launcher_pid" 2>/dev/null || true
+    echo "$label did not publish one valid Help-ready boundary" >&2
+    [[ -f "$result" ]] && cat "$result" >&2
+    cat "$log" >&2
+    return 1
+  fi
+  app_pid="$NATIVE_COMMAND_READY_PID"
+
+  if ! run_native_command_menu_helper \
+    "$NATIVE_COMMAND_READY_PID" \
+    "$NATIVE_COMMAND_READY_APP_PATH" \
+    "$NATIVE_COMMAND_READY_WINDOW_NUMBER" \
+    "$NATIVE_COMMAND_READY_WINDOW_TITLE" \
+    "$NATIVE_COMMAND_READY_MENU_TITLE" \
+    "$NATIVE_COMMAND_READY_MENU_ITEM_TITLE" \
+    "$token" \
+    "$PWD/$completion_path" \
+    "$helper_evidence_dir"; then
+    cleanup_native_command_helper >/dev/null 2>&1 || true
+    terminate_e2e_app >/dev/null 2>&1 || true
+    wait "$launcher_pid" 2>/dev/null || true
+    echo "$label external Help selection failed" >&2
+    [[ -f "$result" ]] && cat "$result" >&2
+    cat "$log" >&2
+    return 1
+  fi
+
+  # Helper result, kernel exit, and absence are authoritative before the App
+  # result is observed. This prevents an App-side window check from masking a
+  # failed, duplicated, or lingering physical input sender.
+  for _ in {1..1600}; do
+    if [[ -f "$result" ]] || ! kill -0 "$launcher_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  if [[ ! -f "$result" || "$(<"$result")" != "ok" ]]; then
+    terminate_e2e_app >/dev/null 2>&1 || true
+    wait "$launcher_pid" 2>/dev/null || true
+    echo "$label App result failed: $([[ -f "$result" ]] && cat "$result" || printf 'missing')" >&2
+    cat "$log" >&2
+    return 1
+  fi
+  for _ in {1..160}; do
+    if ! kill -0 "$launcher_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  if kill -0 "$launcher_pid" 2>/dev/null; then
+    terminate_e2e_app >/dev/null 2>&1 || true
+    wait "$launcher_pid" 2>/dev/null || true
+    echo "$label wrote ok but its LaunchServices wait did not terminate" >&2
+    cat "$log" >&2
+    return 1
+  fi
+  wait "$launcher_pid" || app_exit_status=$?
+  if [[ "$app_exit_status" != "0" ]]; then
+    echo "$label App process failed with status $app_exit_status" >&2
+    cat "$log" >&2
+    return 1
+  fi
+  if kill -0 "$app_pid" 2>/dev/null; then
+    echo "$label App process remained after its successful result" >&2
+    return 1
+  fi
+  assert_clean_app_log "$label" "$log"
+}
+
 run_terminating_ui_probe() {
   local label="$1"
   local result="$2"
@@ -5821,8 +6675,41 @@ if [[ "${NOONMARK_E2E_WINDOW_STATE_ONLY:-0}" == "1" ]]; then
 fi
 
 if [[ "${NOONMARK_E2E_NATIVE_COMMANDS_ONLY:-0}" == "1" ]]; then
-  run_native_command_surface_probe
+  native_stress_dir="artifacts/e2e-native-command-stress"
+  rm -rf "$native_stress_dir"
+  mkdir -p "$native_stress_dir"
+  for (( iteration = 1; iteration <= native_command_stress_count; iteration++ )); do
+    run_native_command_surface_probe
+    printf -v iteration_label '%02d' "$iteration"
+    cp -R \
+      artifacts/e2e-native-command-surface \
+      "$native_stress_dir/$iteration_label"
+    echo "E2E native command stress iteration: $iteration_label/$native_command_stress_count"
+  done
   run_window_close_behavior_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_ENGLISH_NATIVE_COMMANDS_ONLY:-0}" == "1" ]]; then
+  english_native_stress_dir="artifacts/e2e-english-native-command-stress"
+  rm -rf "$english_native_stress_dir"
+  mkdir -p "$english_native_stress_dir"
+  for (( iteration = 1; iteration <= native_command_stress_count; iteration++ )); do
+    printf -v iteration_label '%02d' "$iteration"
+    english_native_dir="artifacts/e2e-english-native-command-surface"
+    english_native_db="$english_native_dir/Noonmark.sqlite"
+    rm -rf "$english_native_dir"
+    mkdir -p "$english_native_dir"
+    prepare_english_screenshot_database \
+      "$PWD/$english_native_db" \
+      "$english_native_dir/bootstrap.log"
+    run_english_menu_probe "$PWD/$english_native_db"
+    cp -R "$english_native_dir" "$english_native_stress_dir/$iteration_label"
+    cp -R \
+      artifacts/e2e-english/menu \
+      "$english_native_stress_dir/$iteration_label/menu"
+    echo "E2E English native command stress iteration: $iteration_label/$native_command_stress_count"
+  done
   exit 0
 fi
 
@@ -5843,6 +6730,11 @@ fi
 
 if [[ "${NOONMARK_E2E_DATA_IMPORT_INTEGRITY_ONLY:-0}" == "1" ]]; then
   run_data_import_integrity_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_DATE_PICKER_ONLY:-0}" == "1" ]]; then
+  run_date_picker_probe
   exit 0
 fi
 
@@ -5960,6 +6852,29 @@ for scenario in "${scenarios[@]}"; do
       "artifacts/e2e/${screenshot_name}.png" \
       english
   fi
+  case "$screenshot_name" in
+    zhulong)
+      assert_zhulong_title_geometry_result \
+        "artifacts/e2e/zhulong-title-geometry.txt" \
+        home \
+        zhulong.home.title \
+        烛龙
+      ;;
+    zhulong-stream)
+      assert_zhulong_title_geometry_result \
+        "artifacts/e2e/zhulong-stream-title-geometry.txt" \
+        session \
+        zhulong.session.title \
+        烛龙
+      ;;
+    english-zhulong)
+      assert_zhulong_title_geometry_result \
+        "artifacts/e2e-english/zhulong-title-geometry.txt" \
+        home \
+        zhulong.home.title \
+        Zhulong
+      ;;
+  esac
   if [[ "$scenario_language" == "english" ]]; then
     record_english_scenario_evidence \
       "$screenshot_name" \
@@ -6000,6 +6915,8 @@ run_copy_undo_persistence_probe
 run_ui_entry_probes
 
 run_quick_add_ui_probe
+
+run_date_picker_probe
 
 run_seed_clock_probe
 

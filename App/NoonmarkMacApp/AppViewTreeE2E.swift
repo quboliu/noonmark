@@ -60,12 +60,27 @@ enum AppViewTreeE2E {
             }
     }
 
-    static func activateMainWindow() -> Bool {
+    static func requestMainWindowActivation() -> Bool {
         guard let mainWindow = currentMainWindow() else { return false }
         mainWindow.makeKeyAndOrderFront(nil)
+        mainWindow.makeMain()
         NSApp.activate(ignoringOtherApps: true)
         NSRunningApplication.current.activate(options: [.activateAllWindows])
-        return NSApp.isActive && mainWindow.isKeyWindow
+        return true
+    }
+
+    static func mainWindowHasInteractionIdentity() -> Bool {
+        guard let mainWindow = currentMainWindow() else { return false }
+        return NSApp.isActive
+            && NSApp.keyWindow === mainWindow
+            && NSApp.mainWindow === mainWindow
+            && mainWindow.isKeyWindow
+            && mainWindow.isMainWindow
+    }
+
+    static func activateMainWindow() -> Bool {
+        requestMainWindowActivation()
+            && mainWindowHasInteractionIdentity()
     }
 
     static func mappedPresentationWindow(

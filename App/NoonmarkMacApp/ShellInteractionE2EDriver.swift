@@ -928,14 +928,15 @@ enum DetailRailLayoutUIE2EDriver {
                     )
                 ),
                 (
-                    "main-detail-toggle-retained",
+                    "main-boundary-toggle-retained",
                     AppViewTreeE2E.view(
-                        identifier: "shell.detail-rail.toggle"
+                        identifier: "shell.detail-rail.toggle",
+                        in: mainWindow
                     ) != nil
                 ),
                 (
-                    "main-toolbar-empty",
-                    mainWindow.toolbar?.items.isEmpty == true
+                    "main-toolbar-removed",
+                    mainWindow.toolbar == nil
                 )
             ]
             let failedChecks = settingsChecks.compactMap { name, passed in
@@ -980,7 +981,7 @@ enum DetailRailLayoutUIE2EDriver {
                   abs(sidebarWidth - initialSidebarWidth) <= 1,
                   AppViewTreeE2E.view(identifier: "sidebar.nav.calendar") != nil,
                   AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil,
-                  mainWindow.toolbar?.items.isEmpty == true
+                  mainWindow.toolbar == nil
             else {
                 retry(attemptsRemaining, action: waitForMainWindowAfterSettings) {
                     "failed: 关闭 Settings 后没有回到原日历窗口与原始布局"

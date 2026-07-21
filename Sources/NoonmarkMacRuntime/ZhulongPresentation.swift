@@ -304,7 +304,7 @@ public struct ZhulongCopy: Sendable {
     public var name: String { localized(chinese: "烛龙", english: "Zhulong") }
     public var homeSubtitle: String {
         localized(
-            chinese: "把模糊的事想清楚，把已经开始的事继续推进。",
+            chinese: "天东有若木，下置衔烛龙。 吾将斩龙足、嚼龙肉， 使之朝不得回、夜不得伏。",
             english: "Clarify what is vague and keep what is underway moving."
         )
     }

@@ -7,7 +7,7 @@ final class ZhulongPresentationTests: XCTestCase {
         let chinese = AppPresentation(language: .chinese).zhulong
         let english = AppPresentation(language: .english).zhulong
 
-        XCTAssertEqual(chinese.homeSubtitle, "把模糊的事想清楚，把已经开始的事继续推进。")
+        XCTAssertEqual(chinese.homeSubtitle, "天东有若木，下置衔烛龙。 吾将斩龙足、嚼龙肉， 使之朝不得回、夜不得伏。")
         XCTAssertEqual(english.homeSubtitle, "Clarify what is vague and keep what is underway moving.")
         XCTAssertEqual(chinese.intentPlaceholder, "说说你现在想推进什么……")
         XCTAssertEqual(english.intentPlaceholder, "What would you like to move forward?")

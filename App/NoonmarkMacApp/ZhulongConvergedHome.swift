@@ -99,6 +99,7 @@ private struct ZhulongWorkspaceHome: View {
                         title: store.copy.navZhulong,
                         subtitle: copy.homeSubtitle,
                         titlePlacement: .centeredInMainSurface,
+                        centerSubtitleWithTitle: true,
                         titleAnchorIdentifier: "zhulong.home.title"
                     )
                     .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.headerOuterMaxWidth))

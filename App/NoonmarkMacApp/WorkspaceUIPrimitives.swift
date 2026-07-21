@@ -86,6 +86,7 @@ struct PageHeader<Trailing: View>: View {
     let badge: String?
     let badgeColor: Color
     let titlePlacement: MacUIPageHeaderTitlePlacement
+    let centerSubtitleWithTitle: Bool
     let titleAnchorIdentifier: String?
     let trailing: Trailing
 
@@ -95,6 +96,7 @@ struct PageHeader<Trailing: View>: View {
         badge: String? = nil,
         badgeColor: Color = Theme.accent,
         titlePlacement: MacUIPageHeaderTitlePlacement = MacUIPageHeaderLayout.defaultTitlePlacement,
+        centerSubtitleWithTitle: Bool = false,
         titleAnchorIdentifier: String? = nil,
         @ViewBuilder trailing: () -> Trailing = { EmptyView() }
     ) {
@@ -103,6 +105,7 @@ struct PageHeader<Trailing: View>: View {
         self.badge = badge
         self.badgeColor = badgeColor
         self.titlePlacement = titlePlacement
+        self.centerSubtitleWithTitle = centerSubtitleWithTitle
         self.titleAnchorIdentifier = titleAnchorIdentifier
         self.trailing = trailing()
     }
@@ -123,9 +126,13 @@ struct PageHeader<Trailing: View>: View {
                     }
                 }
                 if let subtitle {
-                    Text(subtitle)
-                        .font(.noonmarkSystem(size: 12))
-                        .foregroundStyle(Theme.text3)
+                    if centerSubtitleWithTitle, titlePlacement == .centeredInMainSurface {
+                        subtitleLabel(subtitle)
+                            .hidden()
+                            .accessibilityHidden(true)
+                    } else {
+                        subtitleLabel(subtitle)
+                    }
                 }
             }
             Spacer()
@@ -142,7 +149,13 @@ struct PageHeader<Trailing: View>: View {
         }
         .overlay(alignment: .top) {
             if titlePlacement == .centeredInMainSurface {
-                titleLabel(exposesE2EAnchor: true)
+                VStack(spacing: 2) {
+                    titleLabel(exposesE2EAnchor: true)
+                    if centerSubtitleWithTitle, let subtitle {
+                        subtitleLabel(subtitle)
+                            .multilineTextAlignment(.center)
+                    }
+                }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .allowsHitTesting(false)
             }
@@ -162,6 +175,12 @@ struct PageHeader<Trailing: View>: View {
                     )
                 }
             }
+    }
+
+    private func subtitleLabel(_ subtitle: String) -> some View {
+        Text(subtitle)
+            .font(.noonmarkSystem(size: 12))
+            .foregroundStyle(Theme.text3)
     }
 }
 
@@ -506,45 +525,60 @@ struct PriorityStepper: View {
     let moveUp: () -> Void
     let moveDown: () -> Void
 
+    private let segmentSize = CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
+
     var body: some View {
-        HStack(spacing: 2) {
-            stepButton(
-                systemName: "chevron.up",
+        HStack(spacing: 0) {
+            PriorityStepButton(
+                systemName: "arrow.up",
                 enabled: canMoveUp,
                 accessibilityLabel: store.copy.movePriorityUp,
                 action: moveUp
             )
-            stepButton(
-                systemName: "chevron.down",
+            Rectangle()
+                .fill(Theme.line)
+                .frame(width: 1, height: 12)
+            PriorityStepButton(
+                systemName: "arrow.down",
                 enabled: canMoveDown,
                 accessibilityLabel: store.copy.movePriorityDown,
                 action: moveDown
             )
         }
+        .frame(height: segmentSize)
+        .background(Theme.controlFill)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Theme.line)
+        )
         .help(store.copy.adjustDayPriority)
     }
+}
 
-    func stepButton(systemName: String, enabled: Bool, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
+private struct PriorityStepButton: View {
+    let systemName: String
+    let enabled: Bool
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.noonmarkSystem(size: 9, weight: .bold))
+                .font(.noonmarkSystem(size: 10, weight: .semibold))
                 .foregroundStyle(enabled ? Theme.text2 : Theme.line2)
                 .frame(
                     width: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize),
                     height: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
                 )
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(enabled ? Theme.controlFill : Theme.panel2)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Theme.line)
-                )
+                .background(isHovered && enabled ? Theme.chip : .clear)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(enabled == false)
+        .disabled(!enabled)
+        .onHover { isHovered = enabled && $0 }
         .accessibilityLabel(accessibilityLabel)
     }
 }

@@ -74,6 +74,16 @@ public enum MacUIWindowLayout {
     public static let minimumHeight = 720.0
 }
 
+public enum MacUISettingsWindowLayout {
+    public static let minimumContentWidth = 700.0
+    public static let minimumContentHeight = 520.0
+    public static let initialContentWidth = 860.0
+    public static let initialContentHeight = 660.0
+    public static let sidebarMinimumWidth = 220.0
+    public static let sidebarIdealWidth = 260.0
+    public static let sidebarMaximumWidth = 300.0
+}
+
 public enum MacUIShellLayout {
     public static let sidebarWidth = 220.0
     public static let compactSidebarWidth = 72.0
@@ -617,6 +627,25 @@ public enum MacUIZhulongHomeLayout {
     public static func contentPlacement(hasPendingSessions: Bool) -> MacUIZhulongHomeContentPlacement {
         hasPendingSessions ? .topAligned : .centered
     }
+}
+
+public enum MacUIZhulongConversationLayout {
+    public static let contentMaxWidth = 840.0
+    public static let messageSpacing = 32.0
+    public static let assistantBodyPointSize = 15.5
+    public static let userBodyPointSize = 14.5
+    public static let userBubbleMaxWidth = 570.0
+    public static let userBubbleCornerRadius = 20.0
+    public static let composerMinimumHeight = 106.0
+    public static let composerEditorHeight = 62.0
+    public static let composerCornerRadius = 20.0
+    public static let composerBodyPointSize = 14.5
+    public static let composerHorizontalInset = 16.0
+    public static let composerVerticalInset = 10.0
+    public static let hasPersistentBottomComposer = true
+    public static let showsAssistantAvatar = false
+    public static let showsMessageTimestamps = false
+    public static let sharesComposerAcrossProjections = true
 }
 
 public enum MacUIClassificationAccessibility {

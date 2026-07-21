@@ -132,3 +132,12 @@ public protocol AIProvider: Sendable {
     func complete(_ request: AIRequest) async throws -> AIProviderResponse
     func healthCheck() async -> AIProviderHealth
 }
+
+/// A Provider that can expose response text as it arrives. Streamed fragments
+/// are intentionally transient: callers decide when a complete response is
+/// safe to persist as a domain record.
+public protocol AIProviderStreaming: AIProvider {
+    func stream(
+        _ request: AIRequest
+    ) async throws -> AsyncThrowingStream<String, Error>
+}

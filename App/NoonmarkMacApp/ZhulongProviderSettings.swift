@@ -149,7 +149,8 @@ enum ZhulongProviderSettingsStore {
             apiKeyRef: ZhulongProviderKeychain.keyRef(
                 for: stored.executionRevision
             ),
-            enabled: stored.enabled
+            enabled: stored.enabled,
+            capabilities: AIProviderCapabilities(supportsStreaming: true)
         )
     }
 
@@ -300,7 +301,8 @@ enum ZhulongProviderSettingsStore {
             baseURL: baseURL,
             model: draft.normalizedModel,
             apiKeyRef: keyRef,
-            enabled: draft.enabled
+            enabled: draft.enabled,
+            capabilities: AIProviderCapabilities(supportsStreaming: true)
         )
     }
 }

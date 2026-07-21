@@ -134,9 +134,11 @@ e2e_owned_artifact_roots=(
   artifacts/e2e-workspace-productivity
   artifacts/e2e-workspace-restoration
   artifacts/e2e-zhulong
+  artifacts/e2e-zhulong-chat
   artifacts/e2e-zhulong-exact-recovery
   artifacts/e2e-zhulong-navigation
   artifacts/e2e-zhulong-pending-gate
+  artifacts/e2e-zhulong-provider-settings
   artifacts/e2e-zhulong-recovery
   artifacts/e2e-zhulong-todo-diff
 )
@@ -199,6 +201,8 @@ english_full_scenario_set="english-day,english-day-wide,english-day-history-head
 only_mode_specs=(
   "NOONMARK_E2E_AUTOMATIC_CLASSIFICATION_ONLY:automatic-classification"
   "NOONMARK_E2E_AUTOMATIC_CLASSIFICATION_STATUS_SURFACES_ONLY:automatic-classification-status-surfaces"
+  "NOONMARK_E2E_AUTOMATIC_CLASSIFICATION_PROVIDER_BLOCK_RETRY_ONLY:automatic-classification-provider-block-retry"
+  "NOONMARK_E2E_CONTEXT_MENU_ACTIONS_ONLY:context-menu-actions"
   "NOONMARK_E2E_UI_ENTRY_ONLY:ui-entry"
   "NOONMARK_E2E_SEED_CLOCK_ONLY:seed-clock"
   "NOONMARK_E2E_TASK_NOTE_ONLY:task-note"
@@ -228,7 +232,10 @@ only_mode_specs=(
   "NOONMARK_E2E_MARKDOWN_ONLY:markdown"
   "NOONMARK_E2E_QUICK_ADD_UI_ONLY:quick-add-ui"
   "NOONMARK_E2E_ZHULONG_NAVIGATION_ONLY:zhulong-navigation"
+  "NOONMARK_E2E_ZHULONG_CHAT_ONLY:zhulong-chat"
+  "NOONMARK_E2E_ZHULONG_PROVIDER_SETTINGS_ONLY:zhulong-provider-settings"
   "NOONMARK_E2E_ZHULONG_PENDING_GATE_ONLY:zhulong-pending-gate"
+  "NOONMARK_E2E_ZHULONG_TODO_DIFF_ONLY:zhulong-todo-diff"
   "NOONMARK_E2E_ZHULONG_APPLICATION_CLOCK_ONLY:zhulong-application-clock"
 )
 only_mode_count=0
@@ -3947,6 +3954,27 @@ run_pool_context_menu_action_probe() {
   echo "E2E pool context-menu schedule and persistence: $action_db"
 }
 
+run_context_menu_action_matrix_probe() {
+  local context_menu_dir="artifacts/e2e-context-menu-actions"
+  local context_menu_result="$context_menu_dir/context-menu-result.txt"
+  local context_menu_log="$context_menu_dir/app.log"
+
+  rm -rf "$context_menu_dir"
+  mkdir -p "$context_menu_dir"
+
+  run_terminating_ui_probe \
+    "context menu action matrix" \
+    "$context_menu_result" \
+    "$context_menu_log" \
+    --ephemeral \
+    --page day \
+    --e2e-context-menu-actions \
+    --e2e-context-menu-result-url "$PWD/$context_menu_result" \
+    --e2e-quit-after-automation
+
+  echo "E2E context menu action matrix: $context_menu_result"
+}
+
 run_unfinished_action_probe() {
   local action_dir="artifacts/e2e-unfinished-actions"
   local action_db="$action_dir/Noonmark.sqlite"
@@ -5612,6 +5640,67 @@ run_zhulong_navigation_probe() {
     --e2e-zhulong-navigation-result-url "$PWD/$navigation_result"
 
   echo "E2E zhulong navigation visibility: $navigation_result"
+}
+
+run_zhulong_chat_conversation_probe() {
+  local chat_dir="artifacts/e2e-zhulong-chat"
+  local chat_database="${chat_dir}/Noonmark.sqlite"
+  local interaction_result="${chat_dir}/interaction-result.txt"
+  local interaction_log="${chat_dir}/interaction.log"
+  local restart_result="${chat_dir}/restart-result.txt"
+
+  rm -rf "$chat_dir"
+  mkdir -p "$chat_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "zhulong chat keyboard, reauthorization, and workflow context" \
+    "$interaction_result" \
+    "$interaction_log" \
+    --data-url "$PWD/$chat_database" \
+    --page zhulong \
+    --e2e-zhulong-sidecar-key \
+    --e2e-zhulong-chat-provider \
+    --e2e-zhulong-chat-ui \
+    --e2e-zhulong-chat-result-url "$PWD/$interaction_result"
+
+  capture_app_screenshot \
+    "$chat_dir" \
+    "zhulong-chat-restart" \
+    zhulong \
+    --data-url "$PWD/$chat_database" \
+    --e2e-zhulong-sidecar-key \
+    --e2e-zhulong-chat-provider \
+    --e2e-zhulong-chat-restart \
+    --e2e-zhulong-chat-result-url "$PWD/$restart_result"
+
+  if [[ ! -f "$restart_result" || "$(<"$restart_result")" != "ok" ]]; then
+    echo "zhulong chat restart persistence failed: $(cat "$restart_result" 2>/dev/null || echo missing)" >&2
+    terminate_e2e_app
+    exit 1
+  fi
+  terminate_e2e_app
+  echo "E2E zhulong chat keyboard, reauthorization, workflow context, and restart persistence: $chat_dir"
+}
+
+run_zhulong_provider_settings_ui_probe() {
+  local settings_dir="artifacts/e2e-zhulong-provider-settings"
+  local settings_result="${settings_dir}/settings-result.txt"
+  local settings_log="${settings_dir}/settings.log"
+
+  rm -rf "$settings_dir"
+  mkdir -p "$settings_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "zhulong Provider settings API Key mask" \
+    "$settings_result" \
+    "$settings_log" \
+    --ephemeral \
+    --page settings \
+    --e2e-settings-zhulong \
+    --e2e-zhulong-provider-settings-ui \
+    --e2e-zhulong-provider-settings-result-url "$PWD/$settings_result"
+
+  echo "E2E zhulong Provider Settings save, mask, and clear: $settings_result"
 }
 
 run_zhulong_daily_recovery_clock_probe() {
@@ -8694,6 +8783,16 @@ if [[ "${NOONMARK_E2E_AUTOMATIC_CLASSIFICATION_STATUS_SURFACES_ONLY:-0}" == "1" 
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_AUTOMATIC_CLASSIFICATION_PROVIDER_BLOCK_RETRY_ONLY:-0}" == "1" ]]; then
+  run_automatic_classification_provider_block_retry_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_CONTEXT_MENU_ACTIONS_ONLY:-0}" == "1" ]]; then
+  run_context_menu_action_matrix_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_UI_ENTRY_ONLY:-0}" == "1" ]]; then
   run_ui_entry_probes
   exit 0
@@ -8874,8 +8973,23 @@ if [[ "${NOONMARK_E2E_ZHULONG_NAVIGATION_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_ZHULONG_CHAT_ONLY:-0}" == "1" ]]; then
+  run_zhulong_chat_conversation_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_ZHULONG_PROVIDER_SETTINGS_ONLY:-0}" == "1" ]]; then
+  run_zhulong_provider_settings_ui_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_ZHULONG_PENDING_GATE_ONLY:-0}" == "1" ]]; then
   run_zhulong_pending_gate_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_ZHULONG_TODO_DIFF_ONLY:-0}" == "1" ]]; then
+  run_zhulong_todo_diff_clock_probe
   exit 0
 fi
 
@@ -9403,29 +9517,7 @@ fi
 
 echo "E2E review zhulong entry: $review_zhulong_result"
 
-context_menu_dir="artifacts/e2e-context-menu-actions"
-context_menu_result="${context_menu_dir}/context-menu-result.txt"
-rm -rf "$context_menu_dir"
-mkdir -p "$context_menu_dir"
-
-open -W -n "$app_path" --args \
-  --ephemeral \
-  --page day \
-  --e2e-context-menu-actions \
-  --e2e-context-menu-result-url "$PWD/$context_menu_result" \
-  --e2e-quit-after-automation
-
-if [[ ! -f "$context_menu_result" ]]; then
-  echo "context menu action result was not created: $context_menu_result" >&2
-  exit 1
-fi
-
-if [[ "$(cat "$context_menu_result")" != "ok" ]]; then
-  echo "context menu action matrix failed: $(cat "$context_menu_result")" >&2
-  exit 1
-fi
-
-echo "E2E context menu action matrix: $context_menu_result"
+run_context_menu_action_matrix_probe
 
 undo_dir="artifacts/e2e-undo"
 undo_result="${undo_dir}/undo-result.txt"
@@ -9593,6 +9685,8 @@ echo "E2E complete calendar grid topology: $calendar_grid_result"
 run_subtask_clock_probe
 
 run_zhulong_navigation_probe
+run_zhulong_chat_conversation_probe
+run_zhulong_provider_settings_ui_probe
 
 provider_dir="artifacts/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"

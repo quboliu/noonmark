@@ -1,12 +1,15 @@
 import AppKit
+import NoonmarkMacUIContract
 import SwiftUI
 
 @MainActor
 final class NoonmarkSettingsWindowController: NSWindowController, NSWindowDelegate {
     static let windowIdentifier = NSUserInterfaceItemIdentifier("Noonmark.SettingsWindow")
     static let frameAutosaveName = "Noonmark.SettingsWindow.Frame"
-    static let toolbarIdentifier = NSToolbar.Identifier("Noonmark.SettingsWindow.Toolbar")
-    static let minimumContentSize = NSSize(width: 680, height: 500)
+    static let minimumContentSize = NSSize(
+        width: CGFloat(MacUISettingsWindowLayout.minimumContentWidth),
+        height: CGFloat(MacUISettingsWindowLayout.minimumContentHeight)
+    )
 
     private let store: NoonmarkStore
 
@@ -20,23 +23,23 @@ final class NoonmarkSettingsWindowController: NSWindowController, NSWindowDelega
             .preferredColorScheme(.light)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 640),
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: CGFloat(MacUISettingsWindowLayout.initialContentWidth),
+                height: CGFloat(MacUISettingsWindowLayout.initialContentHeight)
+            ),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.identifier = Self.windowIdentifier
         window.title = store.copy.navSettings
+        window.titleVisibility = .visible
         window.isReleasedWhenClosed = false
         window.isRestorable = true
         window.tabbingMode = .disallowed
         window.enableNoonmarkDynamicKeyViewLoop()
-        let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
-        toolbar.displayMode = .iconOnly
-        toolbar.allowsUserCustomization = false
-        toolbar.autosavesConfiguration = false
-        window.toolbarStyle = .unified
-        window.toolbar = toolbar
         window.installNoonmarkResizableHostingContent(
             root,
             minimumContentSize: Self.minimumContentSize
@@ -92,7 +95,11 @@ private struct NoonmarkSettingsWindowRoot: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        // Settings always keeps its navigation visible. NavigationSplitView adds
+        // a sidebar-toggle toolbar item on macOS, even though this window has no
+        // compact sidebar state. HSplitView preserves the native, resizable
+        // sidebar without advertising that unavailable action in the title bar.
+        HSplitView {
             List(SettingsPane.allCases, selection: $selectedPane) { pane in
                 Label(pane.title(copy: store.copy), systemImage: pane.systemImage)
                     .tag(pane)
@@ -104,25 +111,30 @@ private struct NoonmarkSettingsWindowRoot: View {
                         )
                     }
             }
-            .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
+            .listStyle(.sidebar)
+            .frame(
+                minWidth: CGFloat(MacUISettingsWindowLayout.sidebarMinimumWidth),
+                idealWidth: CGFloat(MacUISettingsWindowLayout.sidebarIdealWidth),
+                maxWidth: CGFloat(MacUISettingsWindowLayout.sidebarMaximumWidth)
+            )
             .accessibilityIdentifier("settings.sidebar")
             .background {
                 AppE2EViewAnchor(identifier: "settings.sidebar")
             }
-        } detail: {
+
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 22) {
                     Text(selectedPane.title(copy: store.copy))
-                        .font(.noonmarkSystem(size: 22, weight: .semibold))
+                        .font(.noonmarkSystem(size: 20, weight: .semibold))
                         .foregroundStyle(Theme.text1)
                         .accessibilityAddTraits(.isHeader)
 
                     SettingsPaneContent(pane: selectedPane)
-                        .frame(maxWidth: 620, alignment: .topLeading)
+                        .frame(maxWidth: 660, alignment: .topLeading)
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 24)
+                .padding(.horizontal, 34)
+                .padding(.vertical, 30)
             }
             .background(Theme.background)
             .accessibilityIdentifier("settings.content")

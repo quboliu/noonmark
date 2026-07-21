@@ -953,6 +953,47 @@ final class NoonmarkEngineTests: XCTestCase {
         )
     }
 
+    func testTraceDescriptionPreservesWhitespaceDuringCharacterLevelInput() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "即时描述", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+
+        try engine.updateTraceText(
+            traceID: traceID,
+            descriptionText: "first",
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+        try engine.updateTraceText(
+            traceID: traceID,
+            descriptionText: "first ",
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+        XCTAssertEqual(engine.traces[traceID]?.descriptionText, "first ")
+
+        try engine.updateTraceText(
+            traceID: traceID,
+            descriptionText: "first second  \nthird",
+            today: day1,
+            now: now.addingTimeInterval(4)
+        )
+        XCTAssertEqual(engine.traces[traceID]?.descriptionText, "first second  \nthird")
+
+        try engine.updateTraceText(
+            traceID: traceID,
+            descriptionText: " \n\t",
+            today: day1,
+            now: now.addingTimeInterval(5)
+        )
+        XCTAssertNil(engine.traces[traceID]?.descriptionText)
+    }
+
     func testTraceDescriptionAndNoteAreEditableOnlyBeforeHistoryLocks() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(

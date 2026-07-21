@@ -608,7 +608,14 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
                         in: store
                     )
                 ),
-                [.markComplete, .continueTo, .changeToNewTask, .returnToPool, .abandonChain],
+                [
+                    .markComplete,
+                    .continueTo,
+                    .changeToNewTask,
+                    .returnToPool,
+                    .abandonChain,
+                    .deleteNewCurrentDayTask
+                ],
                 "current pending with resolved subtasks"
             )
             try store.engine.markCompleted(

@@ -7,6 +7,7 @@ enum MarkdownEditorStyle {
     case body
     case detailBody
     case compact
+    case conversation
 
     var font: NSFont {
         switch self {
@@ -14,6 +15,8 @@ enum MarkdownEditorStyle {
         case .body, .detailBody: .noonmarkSystemFont(ofSize: 12)
         case .compact:
             .systemFont(ofSize: NoonmarkVisualMetrics.compactEditorPointSize, weight: .medium)
+        case .conversation:
+            .noonmarkSystemFont(ofSize: NoonmarkVisualMetrics.zhulongConversationComposerBodyPointSize)
         }
     }
 
@@ -26,6 +29,8 @@ enum MarkdownEditorStyle {
                 size: NoonmarkVisualMetrics.compactEditorPointSize,
                 weight: .medium
             )
+        case .conversation:
+            .noonmarkSystem(size: NoonmarkVisualMetrics.zhulongConversationComposerBodyPointSize)
         }
     }
 
@@ -35,6 +40,7 @@ enum MarkdownEditorStyle {
         case .body: 54
         case .detailBody: NoonmarkVisualMetrics.detailDescriptionMinimumHeight
         case .compact: 32
+        case .conversation: NoonmarkVisualMetrics.zhulongConversationComposerEditorHeight
         }
     }
 
@@ -44,6 +50,7 @@ enum MarkdownEditorStyle {
         case .detailBody: NoonmarkVisualMetrics.detailDescriptionMaximumHeight
         case .body: 132
         case .compact: 32
+        case .conversation: 168
         }
     }
 
@@ -61,6 +68,11 @@ enum MarkdownEditorStyle {
             // leaves 17 pt of vertical whitespace. Split that evenly so the
             // text system does not scroll a 35 pt document inside the viewport.
             NSSize(width: 5, height: NoonmarkVisualMetrics.compactEditorVerticalInset)
+        case .conversation:
+            NSSize(
+                width: NoonmarkVisualMetrics.zhulongConversationComposerHorizontalInset - 5,
+                height: NoonmarkVisualMetrics.zhulongConversationComposerVerticalInset
+            )
         }
     }
 }

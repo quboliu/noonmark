@@ -70,6 +70,14 @@ struct ZhulongStreamRecord: Identifiable, Equatable {
     let body: String?
     let isBoundary: Bool
     let isInvalidation: Bool
+    let isCriticalSystemNotice: Bool
+}
+
+/// Text currently arriving from an authorized Provider. This exists only in
+/// memory; a completed Provider response remains the sole source of a durable
+/// Zhulong conversation record.
+struct ZhulongLiveResponse: Equatable {
+    var content: String
 }
 
 @MainActor
@@ -78,6 +86,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
     @Published private(set) var selectedSessionID: ZhulongSessionID?
     @Published private(set) var memoryLedger = ZhulongMemoryLedger()
     @Published private(set) var status: ZhulongWorkspaceNotice?
+    @Published private(set) var liveResponses: [ZhulongSessionID: ZhulongLiveResponse] = [:]
     @Published private(set) var presentationLanguage: AppLanguage = .chinese
     @Published var variant: ZhulongStreamView {
         didSet {
@@ -121,6 +130,11 @@ final class ZhulongWorkspaceStore: ObservableObject {
         return sessions.first { $0.id == selectedSessionID }
     }
 
+    var selectedLiveResponse: ZhulongLiveResponse? {
+        guard let selectedSessionID else { return nil }
+        return liveResponses[selectedSessionID]
+    }
+
     var statusMessage: String? {
         status.map { presentationCopy.notice($0) }
     }
@@ -128,7 +142,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
     func records(using copy: ZhulongCopy) -> [ZhulongStreamRecord] {
         guard let session = selectedSession else { return [] }
         var projected = session.entries.map { record(for: $0, copy: copy) }
-        projected.append(contentsOf: session.events.map { record(for: $0, copy: copy) })
+        projected.append(contentsOf: session.events
+            .filter { isConversationResponseEvent($0, in: session) == false }
+            .map { record(for: $0, copy: copy) })
         return projected.sorted { lhs, rhs in
             if lhs.occurredAt != rhs.occurredAt { return lhs.occurredAt < rhs.occurredAt }
             return lhs.id < rhs.id
@@ -194,10 +210,11 @@ final class ZhulongWorkspaceStore: ObservableObject {
         selectedSessionID = nil
     }
 
+    @discardableResult
     func authorizeCurrentSession(
         providerIdentity: ZhulongProviderConfigurationIdentity,
         now: Date = Date()
-    ) {
+    ) -> Bool {
         updateSelectedSession { session in
             try session.authorizeScope(
                 session.proposedScopes,
@@ -216,12 +233,13 @@ final class ZhulongWorkspaceStore: ObservableObject {
         updateSelectedSession { try $0.resume(now: now) }
     }
 
+    @discardableResult
     func appendToCurrentSession(
         author: ZhulongSessionEntryAuthor,
         kind: ZhulongSessionEntryKind,
         content: String,
         now: Date = Date()
-    ) {
+    ) -> Bool {
         updateSelectedSession { session in
             try session.appendEntry(
                 author: author,
@@ -700,19 +718,41 @@ final class ZhulongWorkspaceStore: ObservableObject {
         do {
             try assertNoPendingApplication()
             status = .providerRunning
-            let session = try await providerOrchestrator.run(
+            liveResponses[selectedSessionID] = ZhulongLiveResponse(content: "")
+            let session = try await providerOrchestrator.runStreaming(
                 sessionID: selectedSessionID,
                 payload: payload,
-                provider: provider
+                provider: provider,
+                onDelta: { [weak self] delta in
+                    await self?.appendLiveResponse(
+                        delta,
+                        for: selectedSessionID
+                    )
+                }
             )
             replaceLoadedSession(session)
+            clearLiveResponse(for: selectedSessionID)
             status = nil
         } catch {
+            clearLiveResponse(for: selectedSessionID)
             reload()
             projectSidecarMutationFailure(
                 fallback: .providerRunFailed
             )
         }
+    }
+
+    private func appendLiveResponse(
+        _ delta: String,
+        for sessionID: ZhulongSessionID
+    ) {
+        guard var liveResponse = liveResponses[sessionID] else { return }
+        liveResponse.content += delta
+        liveResponses[sessionID] = liveResponse
+    }
+
+    private func clearLiveResponse(for sessionID: ZhulongSessionID) {
+        liveResponses[sessionID] = nil
     }
 
     func runCurrentPlanningSession(
@@ -1046,8 +1086,21 @@ final class ZhulongWorkspaceStore: ObservableObject {
             title: copy.entryTitle(titleKey),
             body: entry.content,
             isBoundary: entry.kind == .decision || entry.kind == .correction,
-            isInvalidation: false
+            isInvalidation: false,
+            isCriticalSystemNotice: false
         )
+    }
+
+    private func isConversationResponseEvent(
+        _ event: ZhulongSessionEvent,
+        in session: ZhulongSession
+    ) -> Bool {
+        guard event.kind == .draftReady,
+              let runID = event.providerRunID,
+              let send = session.providerSends.last(where: { $0.runID == runID })
+        else { return false }
+        guard case .conversation = send.purpose else { return false }
+        return true
     }
 
     private func record(
@@ -1066,7 +1119,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
             ),
             body: detail(for: event, copy: copy),
             isBoundary: isBoundary(event.kind),
-            isInvalidation: isInvalidation(event.kind)
+            isInvalidation: isInvalidation(event.kind),
+            isCriticalSystemNotice: isCriticalSystemNotice(event.kind)
         )
     }
 
@@ -1168,6 +1222,15 @@ final class ZhulongWorkspaceStore: ObservableObject {
     private func isInvalidation(_ kind: ZhulongSessionEventKind) -> Bool {
         switch kind {
         case .planningBriefInvalidated, .planningDelegationInvalidated, .planningRunInvalidated:
+            true
+        default:
+            false
+        }
+    }
+
+    private func isCriticalSystemNotice(_ kind: ZhulongSessionEventKind) -> Bool {
+        switch kind {
+        case .providerRunFailed, .todoBatchApplied, .dailyReviewApplied, .sessionArchived:
             true
         default:
             false

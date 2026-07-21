@@ -4,43 +4,8 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
-local_config_path="${NOONMARK_AI_CONFIG_FILE:-$repo_root/config/ai-provider.local.json}"
-
-if [[ -z "${NOONMARK_AI_BASE_URL:-}" || -z "${NOONMARK_AI_MODEL:-}" || -z "${NOONMARK_AI_API_KEY:-}" ]]; then
-  if [[ ! -f "$local_config_path" ]]; then
-    echo "missing DeepSeek configuration: create config/ai-provider.local.json from config/ai-provider.local.example.json" >&2
-    exit 1
-  fi
-  if [[ "$(stat -f '%Lp' "$local_config_path")" != "600" ]]; then
-    echo "unsafe DeepSeek configuration permissions: expected 0600 for $local_config_path" >&2
-    exit 1
-  fi
-  command -v jq >/dev/null 2>&1 || {
-    echo "jq is required to read the local DeepSeek configuration" >&2
-    exit 1
-  }
-  if [[ -z "${NOONMARK_AI_BASE_URL:-}" ]]; then
-    NOONMARK_AI_BASE_URL="$(jq -er '.baseURL | select(type == "string" and length > 0)' "$local_config_path")"
-  fi
-  if [[ -z "${NOONMARK_AI_MODEL:-}" ]]; then
-    NOONMARK_AI_MODEL="$(jq -er '.model | select(type == "string" and length > 0)' "$local_config_path")"
-  fi
-  if [[ -z "${NOONMARK_AI_API_KEY:-}" ]]; then
-    NOONMARK_AI_API_KEY="$(jq -er '.apiKey | select(type == "string" and length > 0)' "$local_config_path")"
-  fi
-  export NOONMARK_AI_BASE_URL NOONMARK_AI_MODEL NOONMARK_AI_API_KEY
-fi
-
-missing=0
-for name in NOONMARK_AI_BASE_URL NOONMARK_AI_MODEL NOONMARK_AI_API_KEY; do
-  if [[ -z "${!name:-}" ]]; then
-    echo "missing required environment variable: ${name}" >&2
-    missing=1
-  fi
-done
-
-if [[ "$missing" -ne 0 ]]; then
-  echo "usage: configure config/ai-provider.local.json or set the three NOONMARK_AI_* variables" >&2
+source "$script_dir/load-ai-provider-config"
+if ! noonmark_load_ai_provider_config; then
   exit 1
 fi
 
@@ -64,6 +29,7 @@ evidence_dir="artifacts/ai-provider-live"
 database="$evidence_dir/Noonmark.sqlite"
 result="$evidence_dir/result.txt"
 app_log="$evidence_dir/app.log"
+stream_log="$evidence_dir/stream-transport.log"
 app_path="dist/NoonmarkMacAppE2E.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacAppE2E"
 app_pid=""
@@ -160,6 +126,13 @@ if ! clear_e2e_provider_credentials; then
   echo "DeepSeek App E2E preflight cleanup failed" >&2
   exit 1
 fi
+scripts/reset-dev-data
+if ! swift run NoonmarkAIProviderLiveSmoke >"$stream_log" 2>&1; then
+  echo "DeepSeek streaming transport smoke failed" >&2
+  sed -n '1,160p' "$stream_log" >&2
+  exit 1
+fi
+echo "DeepSeek live streaming transport passed: $stream_log"
 scripts/build-mac-app debug e2e >/dev/null
 
 "$app_executable" \

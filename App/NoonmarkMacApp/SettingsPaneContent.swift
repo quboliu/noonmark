@@ -417,90 +417,158 @@ struct SettingsProviderOverviewCard: View {
 
     var body: some View {
         SettingsCard(subtitle: store.copy.providerSubtitle) {
-            VStack(alignment: .leading, spacing: 12) {
-                SettingSection(title: store.copy.zhulongFeaturesTitle) {
-                    featureToggle(
-                        title: store.copy.enableZhulongPage,
-                        description: store.copy.zhulongPageSwitchDescription,
-                        isOn: Binding(
-                            get: { store.isZhulongEnabled },
-                            set: { store.setZhulongPageEnabled($0) }
-                        ),
-                        identifier: "settings.zhulong.page.enabled"
-                    )
-                    featureToggle(
-                        title: store.copy.enableAutomaticClassification,
-                        description: store.copy.automaticClassificationSwitchDescription,
-                        isOn: Binding(
-                            get: { store.isAutomaticClassificationEnabled },
-                            set: { store.setAutomaticClassificationEnabled($0) }
-                        ),
-                        identifier: "settings.zhulong.automatic-classification.enabled"
-                    )
-                }
-
-                Divider()
-                    .overlay(Theme.line)
-
+            VStack(alignment: .leading, spacing: 22) {
                 SettingSection(title: store.copy.providerConfigurationTitle) {
-                HStack(spacing: 10) {
-                    Toggle(store.copy.enableProvider, isOn: $store.zhulongProviderDraft.enabled)
-                        .toggleStyle(.checkbox)
-                        .font(.noonmarkSystem(size: 12.5, weight: .medium))
-                        .background {
-                            AppE2EViewAnchor(
-                                identifier: "settings.zhulong.provider.enabled",
-                                verificationText: store.zhulongProviderDraft.enabled ? "enabled" : "disabled"
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(spacing: 10) {
+                            HStack(spacing: 8) {
+                                Text(store.copy.enableProvider)
+                                    .font(.noonmarkSystem(size: 12.5, weight: .medium))
+                                    .accessibilityHidden(true)
+                                NativeSettingsSwitch(
+                                    isOn: $store.zhulongProviderDraft.enabled,
+                                    identifier: "settings.zhulong.provider.enabled",
+                                    accessibilityLabel: store.copy.enableProvider
+                                )
+                            }
+                            .background {
+                                AppE2EViewAnchor(
+                                    identifier: "settings.zhulong.provider.enabled.anchor",
+                                    verificationText: store.zhulongProviderDraft.enabled ? "enabled" : "disabled"
+                                )
+                            }
+                            StatusPill(text: status.text, color: status.color)
+                            Spacer()
+                        }
+
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text(store.copy.providerType)
+                                .font(.noonmarkSystem(size: 11, weight: .semibold))
+                                .foregroundStyle(Theme.text3)
+                            ZhulongProviderKindPicker(selection: $store.zhulongProviderDraft.kind)
+                        }
+
+                        SettingsFormRows {
+                            ZhulongProviderTextField(
+                                label: store.copy.providerName,
+                                text: $store.zhulongProviderDraft.displayName,
+                                placeholder: store.copy.customProvider,
+                                accessibilityIdentifier: "settings.zhulong.provider.name"
+                            )
+                            ZhulongProviderTextField(
+                                label: store.copy.baseURLLabel,
+                                text: $store.zhulongProviderDraft.baseURL,
+                                placeholder: "https://api.example.com/v1",
+                                accessibilityIdentifier: "settings.zhulong.provider.base-url"
+                            )
+                            ZhulongProviderTextField(
+                                label: store.copy.providerModel,
+                                text: $store.zhulongProviderDraft.model,
+                                placeholder: "gpt-4.1-mini / llama3.1",
+                                accessibilityIdentifier: "settings.zhulong.provider.model"
+                            )
+                            ZhulongProviderSecureField(
+                                label: store.copy.apiKeyLabel,
+                                text: $store.zhulongProviderDraft.apiKeyInput,
+                                placeholder: store.copy.apiKeyPlaceholder,
+                                hasStoredValue: store.zhulongProviderDraft.hasStoredAPIKey
                             )
                         }
-                    StatusPill(text: status.text, color: status.color)
-                    Spacer()
-                }
+
+                        HStack(spacing: 8) {
+                            providerActionButton(
+                                store.copy.save,
+                                tone: .accent,
+                                identifier: "settings.zhulong.provider.save"
+                            ) {
+                                store.saveZhulongProvider()
+                            }
+                            providerActionButton(
+                                store.copy.testConnection,
+                                identifier: "settings.zhulong.provider.test"
+                            ) {
+                                store.testZhulongProvider()
+                            }
+                            providerActionButton(
+                                store.copy.clear,
+                                tone: .warn,
+                                identifier: "settings.zhulong.provider.clear"
+                            ) {
+                                store.clearZhulongProvider()
+                            }
+                            Spacer()
+                        }
+                        .padding(.top, 2)
+                    }
                 }
 
-                SettingSection(title: store.copy.providerType) {
-                    ZhulongProviderKindPicker(selection: $store.zhulongProviderDraft.kind)
-                }
-
-                SettingsFormRows {
-                    ZhulongProviderTextField(label: store.copy.providerName, text: $store.zhulongProviderDraft.displayName, placeholder: store.copy.customProvider)
-                    ZhulongProviderTextField(label: store.copy.baseURLLabel, text: $store.zhulongProviderDraft.baseURL, placeholder: "https://api.example.com/v1")
-                    ZhulongProviderTextField(label: store.copy.providerModel, text: $store.zhulongProviderDraft.model, placeholder: "gpt-4.1-mini / llama3.1")
-                    ZhulongProviderSecureField(
-                        label: store.copy.apiKeyLabel,
-                        text: $store.zhulongProviderDraft.apiKeyInput,
-                        placeholder: store.zhulongProviderDraft.hasStoredAPIKey
-                            ? store.copy.retainedKeychainCredentialPlaceholder
-                            : store.copy.keychainOnlyPlaceholder
-                    )
+                SettingSection(title: store.copy.zhulongFeaturesTitle) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        featureToggle(
+                            title: store.copy.enableZhulongPage,
+                            description: store.copy.zhulongPageSwitchDescription,
+                            isOn: Binding(
+                                get: { store.isZhulongEnabled },
+                                set: { store.setZhulongPageEnabled($0) }
+                            ),
+                            identifier: "settings.zhulong.page.enabled"
+                        )
+                        Divider()
+                        featureToggle(
+                            title: store.copy.enableAutomaticClassification,
+                            description: store.copy.automaticClassificationSwitchDescription,
+                            isOn: Binding(
+                                get: { store.isAutomaticClassificationEnabled },
+                                set: { store.setAutomaticClassificationEnabled($0) }
+                            ),
+                            identifier: "settings.zhulong.automatic-classification.enabled"
+                        )
+                    }
                 }
 
                 if store.isAutomaticClassificationEnabled {
                     HStack(spacing: 8) {
-                    Image(
-                        systemName: store.automaticClassificationCircuitPresentation == nil
-                            ? (store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
-                            : "pause.circle"
-                    )
-                    .foregroundStyle(
-                        store.automaticClassificationCircuitPresentation != nil
-                            ? Theme.warn
-                            : (store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
-                    )
-                    Text(providerStatusMessage)
-                        .font(.noonmarkSystem(size: 11.5))
-                        .foregroundStyle(Theme.text3)
-                        .lineLimit(2)
-                    Spacer()
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-                .accessibilityElement(children: .combine)
+                        Image(
+                            systemName: store.automaticClassificationCircuitPresentation == nil
+                                ? (store.zhulongProviderDraft.hasStoredAPIKey ? "checkmark.circle" : "exclamationmark.circle")
+                                : "pause.circle"
+                        )
+                        .foregroundStyle(
+                            store.automaticClassificationCircuitPresentation != nil
+                                ? Theme.warn
+                                : (store.zhulongProviderDraft.hasStoredAPIKey ? Theme.ok : Theme.text3)
+                        )
+                        Text(providerStatusMessage)
+                            .font(.noonmarkSystem(size: 11.5))
+                            .foregroundStyle(Theme.text3)
+                            .lineLimit(2)
+                        Spacer()
+                    }
+                    .accessibilityElement(children: .combine)
                     .accessibilityIdentifier(
                         "settings.zhulong.automatic-classification-circuit"
                     )
+
+                    if store.automaticClassificationCircuitPresentation != nil {
+                        HStack {
+                            SmallActionButton(
+                                store.copy.retryAutomaticClassificationProvider
+                            ) {
+                                store.retryAutomaticClassificationProviderCircuit()
+                            }
+                            .accessibilityIdentifier(
+                                "settings.zhulong.automatic-classification-circuit.retry"
+                            )
+                            .background {
+                                AppE2EViewAnchor(
+                                    identifier: "settings.zhulong.automatic-classification-circuit.retry",
+                                    verificationText: store.copy
+                                        .retryAutomaticClassificationProvider
+                                )
+                            }
+                            Spacer()
+                        }
+                    }
                 }
 
                 if let prompt = store.automaticClassificationBacklogPrompt {
@@ -513,31 +581,6 @@ struct SettingsProviderOverviewCard: View {
                         count: prompt.count
                     )
                 }
-
-                HStack(spacing: 8) {
-                    SmallActionButton(store.copy.save, tone: .accent) { store.saveZhulongProvider() }
-                    if store.automaticClassificationCircuitPresentation != nil {
-                        SmallActionButton(
-                            store.copy.retryAutomaticClassificationProvider
-                        ) {
-                            store.retryAutomaticClassificationProviderCircuit()
-                        }
-                        .accessibilityIdentifier(
-                            "settings.zhulong.automatic-classification-circuit.retry"
-                        )
-                        .background {
-                            AppE2EViewAnchor(
-                                identifier: "settings.zhulong.automatic-classification-circuit.retry",
-                                verificationText: store.copy
-                                    .retryAutomaticClassificationProvider
-                            )
-                        }
-                    } else {
-                        SmallActionButton(store.copy.testConnection) { store.testZhulongProvider() }
-                    }
-                    SmallActionButton(store.copy.clear, tone: .warn) { store.clearZhulongProvider() }
-                    Spacer()
-                }
             }
         }
     }
@@ -549,6 +592,33 @@ struct SettingsProviderOverviewCard: View {
         return store.copy.automaticClassificationCircuitMessage(
             circuit.waitingCount,
             failureCode: circuit.failureCode
+        )
+    }
+
+    /// Provider credentials are security-sensitive settings, so their actions
+    /// deliberately use one native control each. This makes the visible
+    /// control, its AppKit accessibility identity, and its hit target the
+    /// same object for VoiceOver and the real-App E2E path.
+    private func providerActionButton(
+        _ title: String,
+        tone: SmallActionButton.Tone = .normal,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        NativeSmallActionButton(
+            title: title,
+            tone: tone,
+            identifier: identifier,
+            accessibilityLabel: title,
+            action: action
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .hoverSurface(
+            cornerRadius: 6,
+            idleFill: Theme.controlFill,
+            hoverFill: Theme.listRowHover,
+            idleStroke: Theme.line.opacity(0.72),
+            hoverStroke: Theme.line2.opacity(0.72)
         )
     }
 

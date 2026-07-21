@@ -207,9 +207,15 @@ struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
             store.startZhulongWorkspaceSession(intent: "结束今天并安排明天")
             try expect(store.zhulongWorkspace.sessions.count == sessionCount + 1, "workspace session was not created")
             try expect(store.zhulongWorkspace.selectedSession?.phase == .scopeReview, "new session bypassed scope review")
-            try expect(store.zhulongWorkspace.selectedSession?.purpose == .dailyClose, "freeform daily close lost its purpose")
+            try expect(store.zhulongWorkspace.selectedSession?.purpose == .freeform, "natural chat intent became a workflow")
             store.authorizeCurrentZhulongWorkspaceSession()
             try expect(store.zhulongWorkspace.selectedSession?.phase == .readyForProvider, "scope authorization was not persisted")
+
+            store.requestZhulongDailyReviewFromReviewRail()
+            try expect(
+                store.zhulongWorkspace.selectedSession?.purpose == .dailyClose,
+                "explicit daily review entry lost its workflow"
+            )
 
             store.zhulongProviderDraft.enabled = false
             try expect(

@@ -38,6 +38,19 @@ final class ZhulongPresentationTests: XCTestCase {
         }
     }
 
+    func testConversationComposerAndProjectionCopyIsBilingual() {
+        let chinese = AppPresentation(language: .chinese).zhulong
+        let english = AppPresentation(language: .english).zhulong
+
+        XCTAssertEqual(chinese.composerScopeAuthorizationHint, "请先确认本次阅读范围，再发送消息")
+        XCTAssertEqual(english.composerProviderRunningHint, "Zhulong is responding…")
+        XCTAssertEqual(chinese.dossierSectionTitle("意图与范围"), "记录 · 意图与范围")
+        XCTAssertEqual(english.chapterSectionTitle(number: 2, section: "Decisions"), "Chapter 2 · Decisions")
+        XCTAssertFalse(containsHan(english.composerScopeAuthorizationHint))
+        XCTAssertFalse(containsHan(english.composerDecisionGateHint))
+        XCTAssertFalse(containsHan(english.composerPausedHint))
+    }
+
     func testEveryEventKeyHasAnEnglishPresentationWithoutReplacingChineseAuditDetail() {
         let chinese = AppPresentation(language: .chinese).zhulong
         let english = AppPresentation(language: .english).zhulong
@@ -277,21 +290,25 @@ final class ZhulongPresentationTests: XCTestCase {
 
         XCTAssertEqual(chinese.todoEditorTitle, "审查 Todo 变更")
         XCTAssertEqual(english.todoEditorTitle, "Review Todo changes")
+        XCTAssertEqual(chinese.messageComposerPlaceholder, "向烛龙发消息……")
+        XCTAssertEqual(english.messageComposerPlaceholder, "Message Zhulong…")
+        XCTAssertEqual(chinese.openPlanningWorkflow, "整理为规划简报")
+        XCTAssertEqual(english.openDailyReviewWorkflow, "Turn into today’s review")
         XCTAssertEqual(chinese.todoValidationMessage(.missingTitle), "任务标题不能为空。")
         XCTAssertEqual(english.todoValidationMessage(.missingTitle), "Task title cannot be empty.")
         XCTAssertEqual(chinese.todoTitlePart(1), "（部分 1）")
         XCTAssertEqual(english.todoTitlePart(2), " (Part 2)")
         XCTAssertEqual(chinese.providerStatus(.notConfigured), "未配置 Provider")
         XCTAssertEqual(english.providerStatus(.notConfigured), "Provider not configured")
-        XCTAssertEqual(chinese.providerStatus(.savedWithCredential), "Provider 已保存，API Key 在 Keychain 中")
-        XCTAssertEqual(english.providerStatus(.savedWithCredential), "Provider saved; API key is in Keychain")
+        XCTAssertEqual(chinese.providerStatus(.savedWithCredential), "Provider 已保存，API Key 已就绪")
+        XCTAssertEqual(english.providerStatus(.savedWithCredential), "Provider saved; API key is ready")
         XCTAssertEqual(
             chinese.providerSettingsFailure(.keychainUnavailable),
-            "无法访问 Keychain，请稍后再试。"
+            "无法保存 API Key，请稍后再试。"
         )
         XCTAssertEqual(
             english.providerSettingsFailure(.keychainUnavailable),
-            "Keychain could not be accessed. Try again shortly."
+            "The API key could not be saved. Try again shortly."
         )
         for notice in ZhulongProviderActionNotice.allCases {
             XCTAssertFalse(chinese.providerActionNotice(notice).isEmpty)

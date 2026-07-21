@@ -1068,7 +1068,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
     ) throws {
         guard state.workspaceStatus == .active,
               state.waitingForSendResult == false,
-              state.phase == .scopeReview || state.phase == .readyForProvider,
+              state.phase == .scopeReview || state.phase == .readyForProvider ||
+                  state.phase == .draftReview,
               state.authorizationIndex < authorizations.count,
               event == authorizationEvent(
                   authorizations[state.authorizationIndex],
@@ -1220,8 +1221,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
     ) -> Bool {
         switch send.purpose {
         case .conversation:
-            return state.pendingPlanningRunDelegationID == nil &&
-                state.activeDelegationID == nil
+            return state.pendingPlanningRunDelegationID == nil
         case let .delegatedPlanning(contract):
             guard state.pendingPlanningRunDelegationID == contract.delegationID,
                   let delegation = planningDelegations.first(where: {
@@ -1238,7 +1238,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
         phase: ZhulongSessionPhase
     ) -> Bool {
         switch send.purpose {
-        case .conversation: phase == .readyForProvider
+        case .conversation:
+            phase == .readyForProvider || phase == .draftReview
         case .delegatedPlanning:
             phase == .readyForProvider || phase == .draftReview
         }

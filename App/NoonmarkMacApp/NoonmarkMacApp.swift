@@ -50,6 +50,20 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     static func main() {
         do {
+            let didBootstrapProvider = try ZhulongProviderLaunchBootstrap
+                .applyIfRequested()
+            if try ZhulongProviderLaunchBootstrap.reportPersistedReadinessIfRequested() {
+                return
+            }
+            if didBootstrapProvider, ZhulongProviderLaunchBootstrap.exitsAfterBootstrap() {
+                return
+            }
+        } catch {
+            let message = "Noonmark Provider bootstrap failed.\n"
+            FileHandle.standardError.write(Data(message.utf8))
+            exit(EX_CONFIG)
+        }
+        do {
             _ = try CloudKitSyncLaunchConfiguration.resolve(
                 arguments: AppLaunchArguments.values
             )

@@ -109,7 +109,63 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         XCTAssertEqual(try repository.load(session.id), completed)
     }
 
-    func testConversationRunCannotBypassActivePlanningDelegation() async throws {
+    func testStreamingConversationKeepsDeltasTransientUntilTerminalResponse() async throws {
+        let repository = makeRepository()
+        let session = try makeAuthorizedSession()
+        try repository.save(session)
+        let gate = StreamingProviderGate()
+        let provider = GatedStreamingZhulongProvider(
+            identity: try makeProviderIdentity(),
+            gate: gate
+        )
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let received = StreamingDeltaProbe()
+        let sessionID = session.id
+        let payload = try makePayload()
+        let startedAt = baseDate.addingTimeInterval(2)
+        let completedAt = baseDate.addingTimeInterval(3)
+
+        let running = Task {
+            try await orchestrator.runStreaming(
+                sessionID: sessionID,
+                payload: payload,
+                provider: provider,
+                onDelta: { delta in
+                    await received.append(delta)
+                },
+                startedAt: startedAt,
+                completedAt: { completedAt }
+            )
+        }
+        await gate.waitUntilStarted()
+        await gate.yield(.delta("先确认问题，"))
+        await received.waitUntilCount(1)
+
+        let duringStream = try repository.load(session.id)
+        XCTAssertEqual(duringStream.phase, .providerRunning)
+        XCTAssertEqual(duringStream.providerSends.last?.status, .running)
+        XCTAssertFalse(duringStream.entries.contains(where: { $0.author == .zhulong }))
+
+        await gate.yield(.delta("再安排验证。"))
+        await gate.finish(
+            .success(
+                ZhulongProviderResponse(
+                    content: "先确认问题，再安排验证。",
+                    draftVersion: 1
+                )
+            )
+        )
+        let completed = try await running.value
+
+        let deltaValues = await received.values
+        XCTAssertEqual(deltaValues, ["先确认问题，", "再安排验证。"])
+        XCTAssertEqual(completed.phase, .draftReview)
+        XCTAssertEqual(completed.entries.last?.content, "先确认问题，再安排验证。")
+        XCTAssertEqual(completed.providerSends.last?.status, .succeeded)
+        XCTAssertEqual(try repository.load(session.id), completed)
+    }
+
+    func testConversationRunCanContinueAlongsideActivePlanningDelegation() async throws {
         let repository = makeRepository()
         let prepared = try makeDelegatedPlanningSession()
         try repository.save(prepared.session)
@@ -118,21 +174,80 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         let orchestrator = ZhulongProviderOrchestrator(repository: repository)
         let completedAt = baseDate.addingTimeInterval(6)
 
-        await XCTAssertThrowsErrorAsync {
-            _ = try await orchestrator.run(
-                sessionID: prepared.session.id,
-                payload: try makePayload(),
-                provider: provider,
-                startedAt: baseDate.addingTimeInterval(5),
-                completedAt: { completedAt }
-            )
-        } errorHandler: { error in
-            XCTAssertEqual(error as? ZhulongSessionError, .planningDelegationRequired)
-        }
+        let completed = try await orchestrator.run(
+            sessionID: prepared.session.id,
+            payload: try makePayload(),
+            provider: provider,
+            startedAt: baseDate.addingTimeInterval(5),
+            completedAt: { completedAt }
+        )
 
         let callCount = await probe.callCount
-        XCTAssertEqual(callCount, 0)
-        XCTAssertEqual(try repository.load(prepared.session.id), prepared.session)
+        XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(completed.phase, .draftReview)
+        XCTAssertEqual(completed.activePlanningDelegation, prepared.delegation)
+        XCTAssertEqual(completed.entries.last?.author, .zhulong)
+        XCTAssertEqual(try repository.load(prepared.session.id), completed)
+    }
+
+    func testConversationReauthorizesAfterProviderChangeInDraftReviewAndPersists() async throws {
+        let repository = makeRepository()
+        let initialSession = try makeAuthorizedSession()
+        try repository.save(initialSession)
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let firstProvider = StubZhulongProvider(
+            identity: try makeProviderIdentity(),
+            probe: ProviderProbe(result: .success(makeResponse()))
+        )
+        let firstCompletionDate = baseDate.addingTimeInterval(3)
+
+        _ = try await orchestrator.run(
+            sessionID: initialSession.id,
+            payload: try makePayload(),
+            provider: firstProvider,
+            startedAt: baseDate.addingTimeInterval(2),
+            completedAt: { firstCompletionDate }
+        )
+
+        let replacementIdentity = try makeProviderIdentity(version: "v5")
+        var reauthorized = try repository.load(initialSession.id)
+        XCTAssertEqual(reauthorized.phase, .draftReview)
+        XCTAssertTrue(
+            reauthorized.requiresScopeAuthorization(
+                for: replacementIdentity,
+                at: baseDate.addingTimeInterval(4)
+            )
+        )
+        try reauthorized.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: replacementIdentity,
+            expiresAt: baseDate.addingTimeInterval(600),
+            now: baseDate.addingTimeInterval(4)
+        )
+        try repository.save(reauthorized)
+        let restoredAfterAuthorization = try repository.load(initialSession.id)
+        XCTAssertEqual(restoredAfterAuthorization.phase, .readyForProvider)
+        XCTAssertNil(restoredAfterAuthorization.draftVersion)
+        XCTAssertEqual(restoredAfterAuthorization.authorization?.providerIdentity, replacementIdentity)
+
+        let replacementProvider = StubZhulongProvider(
+            identity: replacementIdentity,
+            probe: ProviderProbe(result: .success(makeResponse(draftVersion: 2)))
+        )
+        let replacementCompletionDate = baseDate.addingTimeInterval(6)
+        let completed = try await orchestrator.run(
+            sessionID: initialSession.id,
+            payload: try makePayload(contextVersion: "context-v2"),
+            provider: replacementProvider,
+            startedAt: baseDate.addingTimeInterval(5),
+            completedAt: { replacementCompletionDate }
+        )
+
+        XCTAssertEqual(completed.phase, .draftReview)
+        XCTAssertEqual(completed.authorizations.count, 2)
+        XCTAssertEqual(completed.providerSends.count, 2)
+        XCTAssertEqual(completed.providerSends.last?.providerIdentity, replacementIdentity)
+        XCTAssertEqual(try repository.load(initialSession.id), completed)
     }
 
     func testPlanningRunAtomicallyConsumesExactDelegationBeforeProviderCall() async throws {
@@ -830,6 +945,31 @@ private struct GatedZhulongProvider: ZhulongProvider {
     }
 }
 
+private struct GatedStreamingZhulongProvider: ZhulongStreamingProvider {
+    let configurationIdentity: ZhulongProviderConfigurationIdentity
+    let gate: StreamingProviderGate
+
+    init(identity: ZhulongProviderConfigurationIdentity, gate: StreamingProviderGate) {
+        configurationIdentity = identity
+        self.gate = gate
+    }
+
+    func complete(_: ZhulongProviderRequest) async -> ZhulongProviderResult {
+        .failure(ZhulongProviderFailure(
+            code: "unexpected_non_streaming_call",
+            message: "该测试 Provider 只允许流式调用"
+        ))
+    }
+
+    func stream(_: ZhulongProviderRequest) -> AsyncStream<ZhulongProviderStreamEvent> {
+        AsyncStream { continuation in
+            Task {
+                await gate.open(continuation)
+            }
+        }
+    }
+}
+
 private actor ProviderGate {
     private let result: ZhulongProviderResult
     private var called = false
@@ -862,6 +1002,55 @@ private actor ProviderGate {
     func release() {
         releaseWaiter?.resume()
         releaseWaiter = nil
+    }
+}
+
+private actor StreamingProviderGate {
+    private var continuation: AsyncStream<ZhulongProviderStreamEvent>.Continuation?
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func open(_ continuation: AsyncStream<ZhulongProviderStreamEvent>.Continuation) {
+        self.continuation = continuation
+        started = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+    }
+
+    func waitUntilStarted() async {
+        guard started == false else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func yield(_ event: ZhulongProviderStreamEvent) {
+        continuation?.yield(event)
+    }
+
+    func finish(_ result: ZhulongProviderResult) {
+        continuation?.yield(.finished(result))
+        continuation?.finish()
+        continuation = nil
+    }
+}
+
+private actor StreamingDeltaProbe {
+    private(set) var values: [String] = []
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func append(_ value: String) {
+        values.append(value)
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+
+    func waitUntilCount(_ count: Int) async {
+        while values.count < count {
+            await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
+        }
     }
 }
 

@@ -19,11 +19,10 @@ struct SettingSection<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(title)
-                .font(.noonmarkSystem(size: 11, weight: .semibold))
+                .font(.noonmarkSystem(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.text3)
-                .tracking(0.6)
             content
         }
     }
@@ -411,6 +410,157 @@ final class NativeSmallActionButtonView: NSButton {
             width: ceil(titleSize.width) + 18,
             height: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
         )
+    }
+}
+
+/// A native switch whose visible hit target and accessibility identity are the
+/// same AppKit control. Settings uses this for stateful controls that must be
+/// equally reliable for keyboard, VoiceOver, and real-App automation.
+struct NativeSettingsSwitch: NSViewRepresentable {
+    @Binding var isOn: Bool
+    let identifier: String
+    let accessibilityLabel: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isOn: $isOn)
+    }
+
+    func makeNSView(context: Context) -> NSSwitch {
+        let control = NSSwitch()
+        control.target = context.coordinator
+        control.action = #selector(Coordinator.performAction(_:))
+        configure(control)
+        return control
+    }
+
+    func updateNSView(_ control: NSSwitch, context: Context) {
+        context.coordinator.isOn = $isOn
+        configure(control)
+    }
+
+    private func configure(_ control: NSSwitch) {
+        let targetState: NSControl.StateValue = isOn ? .on : .off
+        if control.state != targetState {
+            control.state = targetState
+        }
+        control.identifier = NSUserInterfaceItemIdentifier(identifier)
+        control.toolTip = accessibilityLabel
+        control.setAccessibilityIdentifier(identifier)
+        control.setAccessibilityLabel(accessibilityLabel)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var isOn: Binding<Bool>
+
+        init(isOn: Binding<Bool>) {
+            self.isOn = isOn
+        }
+
+        @objc func performAction(_ sender: Any?) {
+            guard let control = sender as? NSSwitch else { return }
+            isOn.wrappedValue = control.state == .on
+        }
+    }
+}
+
+/// A native single-line field for settings whose identifier must belong to the
+/// actual editable AppKit control, rather than a SwiftUI hosting wrapper.
+struct NativeSettingsTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let identifier: String
+    let accessibilityLabel: String
+
+    func makeCoordinator() -> NativeSettingsTextFieldCoordinator {
+        NativeSettingsTextFieldCoordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.delegate = context.coordinator
+        configure(field)
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.text = $text
+        configure(field)
+    }
+
+    private func configure(_ field: NSTextField) {
+        if field.stringValue != text {
+            field.stringValue = text
+        }
+        field.placeholderString = placeholder
+        field.font = .noonmarkSystemFont(ofSize: 12.5)
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.drawsBackground = true
+        field.identifier = NSUserInterfaceItemIdentifier(identifier)
+        field.toolTip = accessibilityLabel
+        field.setAccessibilityIdentifier(identifier)
+        field.setAccessibilityLabel(accessibilityLabel)
+    }
+}
+
+/// The secure counterpart of `NativeSettingsTextField`. Its value is kept in
+/// memory only until the caller saves it, while the AppKit field itself keeps a
+/// stable accessibility identity for a normal, masked credential entry flow.
+struct NativeSettingsSecureField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let identifier: String
+    let accessibilityLabel: String
+
+    func makeCoordinator() -> NativeSettingsTextFieldCoordinator {
+        NativeSettingsTextFieldCoordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSSecureTextField {
+        let field = NSSecureTextField()
+        field.delegate = context.coordinator
+        configure(field)
+        return field
+    }
+
+    func updateNSView(_ field: NSSecureTextField, context: Context) {
+        context.coordinator.text = $text
+        configure(field)
+    }
+
+    private func configure(_ field: NSSecureTextField) {
+        if field.stringValue != text {
+            field.stringValue = text
+        }
+        field.placeholderString = placeholder
+        field.font = .noonmarkSystemFont(ofSize: 12.5)
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.drawsBackground = true
+        field.identifier = NSUserInterfaceItemIdentifier(identifier)
+        field.toolTip = accessibilityLabel
+        field.setAccessibilityIdentifier(identifier)
+        field.setAccessibilityLabel(accessibilityLabel)
+    }
+}
+
+final class NativeSettingsTextFieldCoordinator: NSObject, NSTextFieldDelegate {
+    var text: Binding<String>
+
+    init(text: Binding<String>) {
+        self.text = text
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField else { return }
+        let nextText = field.stringValue
+        guard text.wrappedValue != nextText else { return }
+        text.wrappedValue = nextText
     }
 }
 

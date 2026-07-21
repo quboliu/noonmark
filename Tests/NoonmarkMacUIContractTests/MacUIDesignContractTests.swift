@@ -36,6 +36,24 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(MacUICalendarGridLayout.blankSlotsRenderGridBoundaries)
     }
 
+    func testSettingsWindowSidebarKeepsLocalizedSectionTitlesReadable() {
+        XCTAssertEqual(MacUISettingsWindowLayout.minimumContentWidth, 700)
+        XCTAssertEqual(MacUISettingsWindowLayout.minimumContentHeight, 520)
+        XCTAssertEqual(MacUISettingsWindowLayout.initialContentWidth, 860)
+        XCTAssertEqual(MacUISettingsWindowLayout.initialContentHeight, 660)
+        XCTAssertEqual(MacUISettingsWindowLayout.sidebarMinimumWidth, 220)
+        XCTAssertEqual(MacUISettingsWindowLayout.sidebarIdealWidth, 260)
+        XCTAssertEqual(MacUISettingsWindowLayout.sidebarMaximumWidth, 300)
+        XCTAssertLessThanOrEqual(
+            MacUISettingsWindowLayout.sidebarMinimumWidth,
+            MacUISettingsWindowLayout.sidebarIdealWidth
+        )
+        XCTAssertLessThanOrEqual(
+            MacUISettingsWindowLayout.sidebarIdealWidth,
+            MacUISettingsWindowLayout.sidebarMaximumWidth
+        )
+    }
+
     func testGlobalMotionContractIncludesToastRiseAndDateStripSelection() {
         let globalElements = MacUIDesignContract.current.globalElements
 
@@ -512,6 +530,22 @@ final class MacUIDesignContractTests: XCTestCase {
             MacUIZhulongHomeLayout.contentPlacement(hasPendingSessions: true),
             .topAligned
         )
+    }
+
+    func testZhulongConversationUsesOneReadableChatAxis() {
+        XCTAssertEqual(MacUIZhulongConversationLayout.contentMaxWidth, 840)
+        XCTAssertEqual(MacUIZhulongConversationLayout.messageSpacing, 32)
+        XCTAssertEqual(MacUIZhulongConversationLayout.assistantBodyPointSize, 15.5)
+        XCTAssertEqual(MacUIZhulongConversationLayout.userBodyPointSize, 14.5)
+        XCTAssertEqual(MacUIZhulongConversationLayout.userBubbleMaxWidth, 570)
+        XCTAssertEqual(MacUIZhulongConversationLayout.userBubbleCornerRadius, 20)
+        XCTAssertEqual(MacUIZhulongConversationLayout.composerMinimumHeight, 106)
+        XCTAssertEqual(MacUIZhulongConversationLayout.composerEditorHeight, 62)
+        XCTAssertEqual(MacUIZhulongConversationLayout.composerCornerRadius, 20)
+        XCTAssertTrue(MacUIZhulongConversationLayout.hasPersistentBottomComposer)
+        XCTAssertFalse(MacUIZhulongConversationLayout.showsAssistantAvatar)
+        XCTAssertFalse(MacUIZhulongConversationLayout.showsMessageTimestamps)
+        XCTAssertTrue(MacUIZhulongConversationLayout.sharesComposerAcrossProjections)
     }
 
     func testZhulongTitleCentersWithoutChangingSharedPageHeaderDefault() {

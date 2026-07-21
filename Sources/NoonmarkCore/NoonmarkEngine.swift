@@ -1169,10 +1169,10 @@ public final class NoonmarkEngine {
             throw NoonmarkError.immutableHistory
         }
 
-        let normalizedDescription = normalizedOptionalText(descriptionText)
-        guard trace.descriptionText != normalizedDescription else { return }
+        let nextDescription = optionalTextPreservingWhitespace(descriptionText)
+        guard trace.descriptionText != nextDescription else { return }
         try trace.markContentModified(at: now)
-        trace.descriptionText = normalizedDescription
+        trace.descriptionText = nextDescription
         traces[trace.id] = trace
     }
 
@@ -1928,6 +1928,17 @@ private extension NoonmarkEngine {
     func normalizedOptionalText(_ text: String?) -> String? {
         let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == true ? nil : trimmed
+    }
+
+    /// Descriptions are Markdown text. Leading indentation and trailing spaces can be
+    /// meaningful, and must survive character-by-character immediate persistence.
+    func optionalTextPreservingWhitespace(_ text: String?) -> String? {
+        guard let text,
+              text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        else {
+            return nil
+        }
+        return text
     }
 
     func pendingPrioritySlots(on date: LocalDate) -> [DayTrace] {

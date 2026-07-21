@@ -63,6 +63,62 @@ final class OpenAICompatibleProviderTests: XCTestCase {
         XCTAssertEqual(messages.last?["content"], "授权范围")
     }
 
+    func testStreamPostsChatCompletionAndYieldsSSEContentDeltas() async throws {
+        var capturedBody: Data?
+        URLProtocolStub.handler = { request in
+            capturedBody = request.httpBodyStream.flatMap(Self.data(from:))
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            let body = """
+            data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}
+
+            data: {\"choices\":[{\"delta\":{\"content\":\"今天有 \"}}]}
+
+            data: {\"choices\":[{\"delta\":{\"content\":\"2 个未完成。\"}}]}
+
+            data: [DONE]
+
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let provider = OpenAICompatibleProvider(
+            config: AIProviderConfig(
+                providerID: AIProviderID("openai-compatible"),
+                displayName: "测试 Provider",
+                kind: .openAICompatible,
+                baseURL: URL(string: "https://provider.example/v1")!,
+                model: "noonmark-model",
+                apiKeyRef: "keychain:test"
+            ),
+            session: makeSession(),
+            apiKeyResolver: { _ in "secret-token" }
+        )
+
+        let stream = try await provider.stream(
+            AIRequest(
+                systemPrompt: "系统边界",
+                userPrompt: "授权范围",
+                responseSchemaName: "noonmark.zhulong.conversation"
+            )
+        )
+        var deltas: [String] = []
+        for try await delta in stream {
+            deltas.append(delta)
+        }
+
+        XCTAssertEqual(deltas, ["今天有 ", "2 个未完成。"])
+        let body = try XCTUnwrap(capturedBody.flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        })
+        XCTAssertEqual(body["stream"] as? Bool, true)
+        XCTAssertNil(body["response_format"])
+    }
+
     func testCompleteRequestsJSONObjectOnlyForStructuredOutput() async throws {
         var capturedBody: Data?
         URLProtocolStub.handler = { request in

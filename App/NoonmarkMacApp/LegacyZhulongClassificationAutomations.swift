@@ -66,7 +66,17 @@ struct ZhulongStreamE2EAutomation: LaunchAutomationRunnable {
             store.zhulongWorkspace.appendToCurrentSession(
                 author: .zhulong,
                 kind: .statement,
-                content: "已读取授权范围，并建立每日收尾事实基线。"
+                content: "我在。我们可以先回看今天真实发生了什么，再一起安排明天。"
+            )
+            store.zhulongWorkspace.appendToCurrentSession(
+                author: .user,
+                kind: .statement,
+                content: "我希望明天只保留一个可以兑现的承诺。"
+            )
+            store.zhulongWorkspace.appendToCurrentSession(
+                author: .zhulong,
+                kind: .statement,
+                content: "好，我们会把明天的开始点收束为一个可验证的动作。"
             )
             store.zhulongWorkspace.pauseCurrentSession()
             store.zhulongWorkspace.resumeCurrentSession()
@@ -215,8 +225,19 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                 baseURL: nil,
                 location: .local,
                 model: "deterministic-plan",
-                dataCapabilities: [.structuredOutput, .taskContext]
+                dataCapabilities: [
+                    .structuredOutput,
+                    .taskContext,
+                    .sessionSummary,
+                    .memoryContext
+                ]
             )
+            var providerDraft = store.zhulongProviderDraft
+            providerDraft.displayName = "e2e-todo-diff"
+            providerDraft.kind = .localModel
+            providerDraft.model = "deterministic-plan"
+            providerDraft.enabled = true
+            store.zhulongProviderDraft = providerDraft
             store.zhulongWorkspace.createSession(
                 intent: "审查并形成可信的 Todo 变更",
                 scopes: [.currentDayTodo]
@@ -315,6 +336,9 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
         )
         guard store.zhulongWorkspace.hasActiveTodoAuthorization else {
             return "failed: explicit preauthorization was not retained"
+        }
+        guard store.currentZhulongSessionNeedsScopeAuthorization == false else {
+            return "failed: Todo diff fixture Provider identity diverged from its session"
         }
 
         do {

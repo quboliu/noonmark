@@ -25,22 +25,14 @@ struct ZhulongProviderKindPicker: View {
     @Binding var selection: AIProviderKind
 
     var body: some View {
-        HStack(spacing: 6) {
+        Picker("", selection: $selection) {
             ForEach([AIProviderKind.openAICompatible, .localModel, .customHTTP], id: \.self) { kind in
-                Button {
-                    selection = kind
-                } label: {
-                    Text(label(for: kind))
-                        .font(.noonmarkSystem(size: 11.5, weight: selection == kind ? .semibold : .medium))
-                        .foregroundStyle(selection == kind ? Theme.accent : Theme.text2)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 28)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(selection == kind ? Theme.accentSoft : Theme.panel))
-                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(selection == kind ? Theme.accent : Theme.line))
-                }
-                .buttonStyle(.plain)
+                Text(label(for: kind)).tag(kind)
             }
         }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 420)
     }
 
     func label(for kind: AIProviderKind) -> String {
@@ -59,19 +51,20 @@ struct ZhulongProviderTextField: View {
     let label: String
     @Binding var text: String
     let placeholder: String
+    let accessibilityIdentifier: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(label)
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
-            TextField(placeholder, text: $text)
-                .textFieldStyle(.plain)
-                .font(.noonmarkSystem(size: 12.5))
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            NativeSettingsTextField(
+                text: $text,
+                placeholder: placeholder,
+                identifier: accessibilityIdentifier,
+                accessibilityLabel: label
+            )
+            .frame(maxWidth: .infinity)
         }
     }
 }
@@ -80,19 +73,24 @@ struct ZhulongProviderSecureField: View {
     let label: String
     @Binding var text: String
     let placeholder: String
+    let hasStoredValue: Bool
+
+    private var displayedPlaceholder: String {
+        text.isEmpty && hasStoredValue ? "••••••••••••" : placeholder
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(label)
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
-            SecureField(placeholder, text: $text)
-                .textFieldStyle(.plain)
-                .font(.noonmarkSystem(size: 12.5))
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            NativeSettingsSecureField(
+                text: $text,
+                placeholder: displayedPlaceholder,
+                identifier: "settings.zhulong.provider.api-key",
+                accessibilityLabel: label
+            )
+            .frame(maxWidth: .infinity)
         }
     }
 }

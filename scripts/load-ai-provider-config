@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+# Loads the developer-only Provider configuration into the current shell. The
+# API key stays in shell variables and is deliberately never printed.
+noonmark_load_ai_provider_config() {
+  local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local repo_root="$(cd "$script_dir/.." && pwd)"
+  local local_config_path="${NOONMARK_AI_CONFIG_FILE:-$repo_root/config/ai-provider.local.json}"
+  local name=""
+
+  if [[ -z "${NOONMARK_AI_BASE_URL:-}" || -z "${NOONMARK_AI_MODEL:-}" || -z "${NOONMARK_AI_API_KEY:-}" ]]; then
+    if [[ ! -f "$local_config_path" ]]; then
+      echo "missing AI Provider configuration: create config/ai-provider.local.json from config/ai-provider.local.example.json" >&2
+      return 1
+    fi
+    if [[ "$(stat -f '%Lp' "$local_config_path")" != "600" ]]; then
+      echo "unsafe AI Provider configuration permissions: expected 0600 for $local_config_path" >&2
+      return 1
+    fi
+    command -v jq >/dev/null 2>&1 || {
+      echo "jq is required to read the local AI Provider configuration" >&2
+      return 1
+    }
+    if [[ -z "${NOONMARK_AI_BASE_URL:-}" ]]; then
+      NOONMARK_AI_BASE_URL="$(jq -er '.baseURL | select(type == "string" and length > 0)' "$local_config_path")"
+    fi
+    if [[ -z "${NOONMARK_AI_MODEL:-}" ]]; then
+      NOONMARK_AI_MODEL="$(jq -er '.model | select(type == "string" and length > 0)' "$local_config_path")"
+    fi
+    if [[ -z "${NOONMARK_AI_API_KEY:-}" ]]; then
+      NOONMARK_AI_API_KEY="$(jq -er '.apiKey | select(type == "string" and length > 0)' "$local_config_path")"
+    fi
+  fi
+
+  for name in NOONMARK_AI_BASE_URL NOONMARK_AI_MODEL NOONMARK_AI_API_KEY; do
+    if [[ -z "${!name:-}" ]]; then
+      echo "missing required environment variable: $name" >&2
+      return 1
+    fi
+  done
+
+  export NOONMARK_AI_BASE_URL NOONMARK_AI_MODEL NOONMARK_AI_API_KEY
+}

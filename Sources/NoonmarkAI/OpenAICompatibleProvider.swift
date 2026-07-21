@@ -11,7 +11,7 @@ public enum AIProviderHTTPError: Error, Equatable, Sendable {
     case emptyResponse
 }
 
-public struct OpenAICompatibleProvider: AIProvider {
+public struct OpenAICompatibleProvider: AIProvider, AIProviderStreaming {
     public let config: AIProviderConfig
 
     private let session: URLSession
@@ -56,6 +56,88 @@ public struct OpenAICompatibleProvider: AIProvider {
             text: content,
             rawContent: content
         )
+    }
+
+    public func stream(
+        _ request: AIRequest
+    ) async throws -> AsyncThrowingStream<String, Error> {
+        let model = try modelName()
+        let url = try endpoint("chat/completions")
+        var urlRequest = try await authorizedRequest(url: url, method: "POST")
+        urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        urlRequest.httpBody = try JSONEncoder().encode(
+            ChatCompletionRequest(
+                model: model,
+                messages: [
+                    ChatMessage(role: "system", content: request.systemPrompt),
+                    ChatMessage(role: "user", content: request.userPrompt)
+                ],
+                responseFormat: request.responseFormat == .jsonObject
+                    ? ChatCompletionResponseFormat(type: "json_object")
+                    : nil,
+                stream: true
+            )
+        )
+
+        let (bytes, response) = try await session.bytes(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIProviderHTTPError.invalidResponse
+        }
+        guard 200 ..< 300 ~= httpResponse.statusCode else {
+            let data = try await data(from: bytes)
+            let providerMessage = try? JSONDecoder()
+                .decode(ProviderErrorResponse.self, from: data)
+                .error.message
+            throw AIProviderHTTPError.httpStatus(httpResponse.statusCode, providerMessage)
+        }
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var dataLines: [String] = []
+                    var lineData = Data()
+                    var finished = false
+
+                    for try await byte in bytes {
+                        try Task.checkCancellation()
+                        if byte == 0x0A {
+                            if lineData.last == 0x0D {
+                                lineData.removeLast()
+                            }
+                            let line = String(decoding: lineData, as: UTF8.self)
+                            lineData.removeAll(keepingCapacity: true)
+                            finished = try consumeStreamLine(
+                                line,
+                                dataLines: &dataLines,
+                                to: continuation
+                            )
+                            if finished { break }
+                        } else {
+                            lineData.append(byte)
+                        }
+                    }
+
+                    if finished == false {
+                        if lineData.isEmpty == false {
+                            finished = try consumeStreamLine(
+                                String(decoding: lineData, as: UTF8.self),
+                                dataLines: &dataLines,
+                                to: continuation
+                            )
+                        }
+                    }
+                    if finished == false {
+                        _ = try emitStreamEvent(dataLines, to: continuation)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
     }
 
     public func healthCheck() async -> AIProviderHealth {
@@ -119,6 +201,54 @@ public struct OpenAICompatibleProvider: AIProvider {
         }
         return data
     }
+
+    private func data(from bytes: URLSession.AsyncBytes) async throws -> Data {
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+        }
+        return data
+    }
+
+    private func emitStreamEvent(
+        _ dataLines: [String],
+        to continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) throws -> Bool {
+        guard dataLines.isEmpty == false else { return false }
+        let data = dataLines.joined(separator: "\n")
+        if data == "[DONE]" {
+            return true
+        }
+        guard let chunk = try? JSONDecoder().decode(
+            ChatCompletionStreamChunk.self,
+            from: Data(data.utf8)
+        ) else {
+            throw AIProviderHTTPError.invalidResponse
+        }
+        let content = chunk.choices.compactMap(\.delta.content).joined()
+        if content.isEmpty == false {
+            continuation.yield(content)
+        }
+        return false
+    }
+
+    private func consumeStreamLine(
+        _ line: String,
+        dataLines: inout [String],
+        to continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) throws -> Bool {
+        if line.isEmpty {
+            let finished = try emitStreamEvent(dataLines, to: continuation)
+            dataLines.removeAll(keepingCapacity: true)
+            return finished
+        }
+        guard line.hasPrefix("data:") else { return false }
+        let value = line.dropFirst("data:".count)
+        dataLines.append(
+            value.first == " " ? String(value.dropFirst()) : String(value)
+        )
+        return false
+    }
 }
 
 private struct ChatCompletionRequest: Encodable {
@@ -126,12 +256,26 @@ private struct ChatCompletionRequest: Encodable {
     var messages: [ChatMessage]
     var temperature = 0.2
     var responseFormat: ChatCompletionResponseFormat?
+    var stream: Bool
+
+    init(
+        model: String,
+        messages: [ChatMessage],
+        responseFormat: ChatCompletionResponseFormat?,
+        stream: Bool = false
+    ) {
+        self.model = model
+        self.messages = messages
+        self.responseFormat = responseFormat
+        self.stream = stream
+    }
 
     enum CodingKeys: String, CodingKey {
         case model
         case messages
         case temperature
         case responseFormat = "response_format"
+        case stream
     }
 }
 
@@ -149,6 +293,18 @@ private struct ChatCompletionResponse: Decodable {
 
     struct Choice: Decodable {
         var message: ChatMessage
+    }
+}
+
+private struct ChatCompletionStreamChunk: Decodable {
+    var choices: [Choice]
+
+    struct Choice: Decodable {
+        var delta: Delta
+    }
+
+    struct Delta: Decodable {
+        var content: String?
     }
 }
 

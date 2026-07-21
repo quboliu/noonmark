@@ -1145,6 +1145,7 @@ struct ProviderE2EAutomation: LaunchAutomationRunnable {
             throw ProviderE2EAutomationError.mismatch("hasStoredAPIKey")
         }
         guard let persisted = try ZhulongProviderSettingsStore.makePersistedConfig(),
+              persisted.capabilities.supportsStreaming,
               let keyRef = persisted.apiKeyRef,
               try ZhulongProviderKeychain.resolveAPIKey(keyRef) == expectedAPIKey
         else {

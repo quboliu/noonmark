@@ -368,7 +368,7 @@ public struct ZhulongSession: Equatable, Sendable {
         guard workspaceStatus == .active else {
             throw ZhulongSessionError.workspaceInactive
         }
-        let canExplicitlyReauthorize = phase == .readyForProvider
+        let canExplicitlyReauthorize = phase == .readyForProvider || phase == .draftReview
         guard phase == .scopeReview || canExplicitlyReauthorize else {
             throw ZhulongSessionError.invalidTransition(from: phase, to: .readyForProvider)
         }
@@ -387,6 +387,11 @@ public struct ZhulongSession: Equatable, Sendable {
             grantedAt: now,
             expiresAt: expiresAt
         ))
+        // A draft belongs to the Provider identity that produced it. Once the
+        // user explicitly reauthorises a different identity (or renews an
+        // expired one), that old draft remains in the append-only history but
+        // cannot keep posing as the current provider result.
+        draftVersion = nil
         phase = .readyForProvider
         appendEvent(
             .scopeAuthorized,
@@ -411,19 +416,29 @@ public struct ZhulongSession: Equatable, Sendable {
         }
     }
 
+    public func requiresScopeAuthorization(
+        for providerIdentity: ZhulongProviderConfigurationIdentity,
+        at now: Date = Date()
+    ) -> Bool {
+        guard workspaceStatus == .active else { return false }
+        if phase == .scopeReview { return true }
+        guard phase == .readyForProvider || phase == .draftReview else {
+            return false
+        }
+        guard let authorization else { return true }
+        return authorization.providerIdentity != providerIdentity || authorization.isValid(at: now) == false
+    }
+
     public mutating func beginProviderRun(
         payload: ZhulongProviderPayload,
         providerIdentity: ZhulongProviderConfigurationIdentity,
         runID: ZhulongProviderRunID = ZhulongProviderRunID(),
         now: Date = Date()
     ) throws -> ZhulongProviderRequest {
-        guard activePlanningDelegation == nil else {
-            throw ZhulongSessionError.planningDelegationRequired
-        }
         let authorization = try validateProviderStart(
             providerIdentity: providerIdentity,
             now: now,
-            allowsDraftReview: false
+            allowsDraftReview: true
         )
         guard payload.scopes.isSubset(of: authorization.scopes) else {
             throw ZhulongSessionError.providerPayloadScopeMismatch
@@ -570,6 +585,14 @@ public struct ZhulongSession: Equatable, Sendable {
         try validateEventTime(now)
 
         providerSends[sendIndex] = providerSends[sendIndex].completing(with: response, at: now)
+        entries.append(ZhulongSessionEntry(
+            id: ZhulongSessionEntryID(),
+            author: .zhulong,
+            kind: .statement,
+            content: response.content,
+            createdAt: now,
+            correctsEntryID: nil
+        ))
         draftVersion = responseDraftVersion
         phase = .draftReview
         appendEvent(

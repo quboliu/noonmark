@@ -5,22 +5,61 @@ configuration="${1:-debug}"
 bundle_name="Noonmark"
 executable_name="NoonmarkMacApp"
 app_path="dist/${bundle_name}.app"
+app_executable="$app_path/Contents/MacOS/$executable_name"
+bootstrap_log="artifacts/interactive-provider-bootstrap.log"
+readiness_result="artifacts/interactive-provider-readiness.txt"
+interactive_page="zhulong"
+
+source scripts/load-ai-provider-config
+noonmark_load_ai_provider_config
 
 scripts/build-mac-app "$configuration" >/dev/null
 
-if [[ ! -x "$app_path/Contents/MacOS/$executable_name" ]]; then
+if [[ ! -x "$app_executable" ]]; then
   echo "missing built app executable: $app_path/Contents/MacOS/$executable_name" >&2
   exit 1
 fi
 
-open -n "$app_path"
+mkdir -p "$(dirname "$bootstrap_log")"
+NOONMARK_BOOTSTRAP_PROVIDER=1 \
+NOONMARK_BOOTSTRAP_PROVIDER_ONLY=1 \
+NOONMARK_AI_BASE_URL="$NOONMARK_AI_BASE_URL" \
+NOONMARK_AI_MODEL="$NOONMARK_AI_MODEL" \
+NOONMARK_AI_API_KEY="$NOONMARK_AI_API_KEY" \
+"$app_executable" >"$bootstrap_log" 2>&1
+
+rm -f "$readiness_result"
+NOONMARK_PROVIDER_READINESS_RESULT_PATH="$PWD/$readiness_result" \
+  "$app_executable" >>"$bootstrap_log" 2>&1
+
+if [[ ! -f "$readiness_result" || "$(<"$readiness_result")" != "ready" ]]; then
+  echo "Provider bootstrap did not leave a ready interactive configuration" >&2
+  exit 1
+fi
+
+open -n "$app_path" --args --page "$interactive_page"
+
+target_pid=""
 for _ in {1..50}; do
-  if pgrep -x "$executable_name" >/dev/null 2>&1; then
-    echo "$app_path"
-    exit 0
+  candidate_pid="$(pgrep -f -x "$PWD/$app_executable --page $interactive_page" || true)"
+  if [[ -n "$candidate_pid" ]]; then
+    target_pid="$candidate_pid"
+    break
   fi
   sleep 0.1
 done
 
-echo "failed to launch $app_path" >&2
-exit 1
+if [[ -z "$target_pid" ]]; then
+  echo "failed to launch the requested app bundle: $app_path" >&2
+  exit 1
+fi
+
+for _ in {1..20}; do
+  if ! kill -0 "$target_pid" >/dev/null 2>&1; then
+    echo "requested app bundle exited during launch: $app_path" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
+echo "$app_path"

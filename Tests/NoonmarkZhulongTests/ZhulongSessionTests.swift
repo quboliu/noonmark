@@ -146,9 +146,128 @@ final class ZhulongSessionTests: XCTestCase {
 
         XCTAssertEqual(session.phase, .draftReview)
         XCTAssertEqual(session.draftVersion, 1)
+        XCTAssertEqual(session.entries.last?.author, .zhulong)
+        XCTAssertEqual(session.entries.last?.kind, .statement)
+        XCTAssertEqual(session.entries.last?.content, "{}")
         XCTAssertEqual(session.events.count, 4)
         XCTAssertEqual(session.events.last?.kind, .draftReady)
         XCTAssertEqual(session.events.map(\.sequence), [1, 2, 3, 4])
+    }
+
+    func testConversationCanContinueAfterAReplyAndPersistsEveryTurn() throws {
+        var session = try makeSession()
+        let identity = try makeProviderIdentity()
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: identity,
+            expiresAt: now.addingTimeInterval(600),
+            now: now.addingTimeInterval(1)
+        )
+
+        let firstRequest = try session.beginProviderRun(
+            payload: makePayload(),
+            providerIdentity: identity,
+            now: now.addingTimeInterval(2)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(content: "先从今天最重要的一件事开始。", draftVersion: 1),
+            runID: firstRequest.runID,
+            now: now.addingTimeInterval(3)
+        )
+        _ = try session.appendEntry(
+            author: .user,
+            kind: .statement,
+            content: "那件事是整理发布计划。",
+            now: now.addingTimeInterval(4)
+        )
+        let secondRequest = try session.beginProviderRun(
+            payload: makePayload(),
+            providerIdentity: identity,
+            now: now.addingTimeInterval(5)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(content: "好，我们先把发布计划拆成今天能完成的切片。", draftVersion: 1),
+            runID: secondRequest.runID,
+            now: now.addingTimeInterval(6)
+        )
+
+        XCTAssertEqual(session.phase, .draftReview)
+        XCTAssertEqual(session.entries.map(\.author), [.user, .zhulong, .user, .zhulong])
+        XCTAssertEqual(session.entries.map(\.content), [
+            "结束今天并安排明天",
+            "先从今天最重要的一件事开始。",
+            "那件事是整理发布计划。",
+            "好，我们先把发布计划拆成今天能完成的切片。"
+        ])
+        XCTAssertEqual(session.providerSends.map(\.status), [.succeeded, .succeeded])
+    }
+
+    func testConversationCanBeReauthorizedAfterProviderChangesInDraftReview() throws {
+        var session = try makeSession()
+        let firstIdentity = try makeProviderIdentity()
+        let replacementIdentity = try makeProviderIdentity(version: "v5")
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: firstIdentity,
+            expiresAt: now.addingTimeInterval(300),
+            now: now.addingTimeInterval(1)
+        )
+        let firstRequest = try session.beginProviderRun(
+            payload: makePayload(),
+            providerIdentity: firstIdentity,
+            now: now.addingTimeInterval(2)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(content: "我们继续聊。", draftVersion: 1),
+            runID: firstRequest.runID,
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertFalse(
+            session.requiresScopeAuthorization(
+                for: firstIdentity,
+                at: now.addingTimeInterval(4)
+            )
+        )
+        XCTAssertTrue(
+            session.requiresScopeAuthorization(
+                for: replacementIdentity,
+                at: now.addingTimeInterval(4)
+            )
+        )
+
+        XCTAssertThrowsError(
+            try session.beginProviderRun(
+                payload: makePayload(),
+                providerIdentity: replacementIdentity,
+                now: now.addingTimeInterval(4)
+            )
+        ) { error in
+            XCTAssertEqual(error as? ZhulongSessionError, .providerIdentityMismatch)
+        }
+
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: replacementIdentity,
+            expiresAt: now.addingTimeInterval(600),
+            now: now.addingTimeInterval(5)
+        )
+        XCTAssertNil(session.draftVersion)
+        let continuedRequest = try session.beginProviderRun(
+            payload: makePayload(),
+            providerIdentity: replacementIdentity,
+            now: now.addingTimeInterval(6)
+        )
+
+        XCTAssertEqual(session.authorization?.providerIdentity, replacementIdentity)
+        XCTAssertEqual(session.authorizations.count, 2)
+        XCTAssertEqual(continuedRequest.providerIdentity, replacementIdentity)
+        XCTAssertFalse(
+            session.requiresScopeAuthorization(
+                for: replacementIdentity,
+                at: now.addingTimeInterval(6)
+            )
+        )
     }
 
     func testExpiredAuthorizationCannotRunAndCanBeExplicitlyRenewed() throws {

@@ -64,6 +64,42 @@ enum NoonmarkVisualMetrics {
     static let compactEditorVerticalInset = CGFloat(
         MacUITypographyMetrics.compactEditorVerticalInset
     )
+    static let zhulongConversationContentMaxWidth = CGFloat(
+        MacUIZhulongConversationLayout.contentMaxWidth
+    )
+    static let zhulongConversationMessageSpacing = CGFloat(
+        MacUIZhulongConversationLayout.messageSpacing
+    )
+    static let zhulongConversationAssistantBodyPointSize = CGFloat(
+        MacUIZhulongConversationLayout.assistantBodyPointSize
+    )
+    static let zhulongConversationUserBodyPointSize = CGFloat(
+        MacUIZhulongConversationLayout.userBodyPointSize
+    )
+    static let zhulongConversationUserBubbleMaxWidth = CGFloat(
+        MacUIZhulongConversationLayout.userBubbleMaxWidth
+    )
+    static let zhulongConversationUserBubbleCornerRadius = CGFloat(
+        MacUIZhulongConversationLayout.userBubbleCornerRadius
+    )
+    static let zhulongConversationComposerMinimumHeight = CGFloat(
+        MacUIZhulongConversationLayout.composerMinimumHeight
+    )
+    static let zhulongConversationComposerEditorHeight = CGFloat(
+        MacUIZhulongConversationLayout.composerEditorHeight
+    )
+    static let zhulongConversationComposerCornerRadius = CGFloat(
+        MacUIZhulongConversationLayout.composerCornerRadius
+    )
+    static let zhulongConversationComposerBodyPointSize = CGFloat(
+        MacUIZhulongConversationLayout.composerBodyPointSize
+    )
+    static let zhulongConversationComposerHorizontalInset = CGFloat(
+        MacUIZhulongConversationLayout.composerHorizontalInset
+    )
+    static let zhulongConversationComposerVerticalInset = CGFloat(
+        MacUIZhulongConversationLayout.composerVerticalInset
+    )
 
     static func compactPointSize(_ baseSize: CGFloat) -> CGFloat {
         CGFloat(MacUITypographyMetrics.compactPointSize(Double(baseSize)))

@@ -293,7 +293,7 @@ struct EditableDetailText: View {
     var body: some View {
         if editable {
             MarkdownEditor(
-                text: normalizedBinding,
+                text: $text,
                 placeholder: placeholder,
                 style: .detailBody,
                 warm: warm,
@@ -311,13 +311,6 @@ struct EditableDetailText: View {
                 .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    private var normalizedBinding: Binding<String> {
-        Binding(
-            get: { text },
-            set: { text = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : $0 }
-        )
     }
 }
 

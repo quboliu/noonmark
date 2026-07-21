@@ -77,7 +77,8 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                 savedText: Self.daySavedDescription,
                 clickAwayIdentifier: dayIdentifier(fixture.daySiblingTraceID),
                 selectedAfterClick: { store.selectedTraceID == fixture.daySiblingTraceID },
-                readback: { store.engine.traces[fixture.dayTraceID]?.descriptionText }
+                readback: { store.engine.traces[fixture.dayTraceID]?.descriptionText },
+                failureContext: { store.operationFailureNotice?.message ?? "none" }
             ),
             input: input
         )
@@ -107,7 +108,8 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                 savedText: Self.poolSavedDescription,
                 clickAwayIdentifier: poolIdentifier(fixture.poolSiblingChainID),
                 selectedAfterClick: { store.selectedPoolChainID == fixture.poolSiblingChainID },
-                readback: { store.currentDefinition(for: fixture.poolChainID)?.descriptionText }
+                readback: { store.currentDefinition(for: fixture.poolChainID)?.descriptionText },
+                failureContext: { store.operationFailureNotice?.message ?? "none" }
             ),
             input: input
         )
@@ -277,8 +279,21 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         }
         try input.postKey(keyCode: 0, modifiers: .command)
         try input.typeUnicode(edit.savedText)
-        try await waitUntil("typed description was not saved before focus changed") {
-            editor.string == edit.savedText && edit.readback() == edit.savedText
+        var lastEditorText = editor.string
+        var lastReadback = edit.readback()
+        do {
+            try await waitUntil("typed description was not saved before focus changed") {
+                lastEditorText = editor.string
+                lastReadback = edit.readback()
+                return lastEditorText == edit.savedText && lastReadback == edit.savedText
+            }
+        } catch {
+            throw Failure.failed(
+                "typed description was not saved before focus changed "
+                    + "editor=\(String(reflecting: lastEditorText)) "
+                    + "readback=\(String(reflecting: lastReadback)) "
+                    + "operationFailure=\(edit.failureContext())"
+            )
         }
 
         try await click(identifier: edit.clickAwayIdentifier, modifiers: [], input: input)
@@ -437,6 +452,7 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         let clickAwayIdentifier: String
         let selectedAfterClick: @MainActor () -> Bool
         let readback: @MainActor () -> String?
+        let failureContext: @MainActor () -> String
     }
 
     private final class MenuTrackingProbe: @unchecked Sendable {

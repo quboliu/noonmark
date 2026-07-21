@@ -957,12 +957,18 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
             }
             return "ok"
         } catch is CancellationError {
-            return "failed: automatic classification automation was cancelled"
+            return failedResult("automatic classification automation was cancelled")
         } catch let error as AutomaticClassificationDeterministicE2EError {
-            return "failed: \(error.message)"
+            return failedResult(error.message)
         } catch {
-            return "failed: unexpected automatic classification automation failure"
+            return failedResult("unexpected automatic classification automation failure")
         }
+    }
+
+    @MainActor
+    private func failedResult(_ message: String) -> String {
+        AppViewTreeE2E.writeDump(beside: resultURL)
+        return "failed: \(message)"
     }
 
     @MainActor
@@ -2672,11 +2678,21 @@ private enum AutomaticClassificationSettingsE2EInteraction {
         else {
             return nil
         }
-        let frame = target.convert(target.bounds, to: nil)
-        guard frame.isNull == false,
-              frame.isInfinite == false,
-              frame.width >= 2,
-              frame.height >= 2
+        let initialFrame = target.convert(target.bounds, to: nil)
+        guard initialFrame.isNull == false,
+              initialFrame.isInfinite == false,
+              initialFrame.width >= 2,
+              initialFrame.height >= 2
+        else {
+            return nil
+        }
+        target.scrollToVisible(target.bounds)
+        settingsWindow.displayIfNeeded()
+        let visibleFrame = target.convert(target.bounds, to: nil)
+        guard let contentBounds = settingsWindow.contentView?.bounds,
+              visibleFrame.intersects(contentBounds),
+              visibleFrame.intersection(contentBounds).width >= 2,
+              visibleFrame.intersection(contentBounds).height >= 2
         else {
             return nil
         }

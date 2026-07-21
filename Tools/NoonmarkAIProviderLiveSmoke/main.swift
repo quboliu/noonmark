@@ -7,6 +7,8 @@ private enum LiveSmokeError: Error, CustomStringConvertible {
     case providerUnavailable
     case providerRequestFailed
     case invalidClassificationProposal
+    case providerStreamFailed
+    case invalidStreamedConversation
 
     var description: String {
         switch self {
@@ -20,6 +22,10 @@ private enum LiveSmokeError: Error, CustomStringConvertible {
             "DeepSeek completion request did not succeed"
         case .invalidClassificationProposal:
             "DeepSeek returned an invalid automatic-classification proposal"
+        case .providerStreamFailed:
+            "DeepSeek streaming request did not succeed"
+        case .invalidStreamedConversation:
+            "DeepSeek did not return multiple usable streaming fragments"
         }
     }
 }
@@ -28,10 +34,11 @@ private enum LiveSmokeError: Error, CustomStringConvertible {
 private struct NoonmarkAIProviderLiveSmoke {
     static func main() async {
         do {
-            let labelCount = try await run()
+            let result = try await run()
             print(
-                "DeepSeek live automatic-classification contract passed "
-                    + "(one category, \(labelCount) labels)."
+                "DeepSeek live automatic-classification and streaming contracts passed "
+                    + "(one category, \(result.labelCount) labels, "
+                    + "\(result.streamFragmentCount) streamed fragments)."
             )
         } catch let error as LiveSmokeError {
             fputs("DeepSeek live automatic-classification contract failed: \(error)\n", stderr)
@@ -42,7 +49,10 @@ private struct NoonmarkAIProviderLiveSmoke {
         }
     }
 
-    private static func run() async throws -> Int {
+    private static func run() async throws -> (
+        labelCount: Int,
+        streamFragmentCount: Int
+    ) {
         let environment = ProcessInfo.processInfo.environment
         let baseURLText = try required("NOONMARK_AI_BASE_URL", in: environment)
         let model = try required("NOONMARK_AI_MODEL", in: environment)
@@ -110,7 +120,33 @@ private struct NoonmarkAIProviderLiveSmoke {
         else {
             throw LiveSmokeError.invalidClassificationProposal
         }
-        return proposal.labels.count
+
+        let streamRequest = AIRequest(
+            systemPrompt: "你是晷迹中的烛龙。回答清晰、简短、直接。",
+            userPrompt: "请用三句中文说明如何开始规划一项任务；每句不超过二十字。",
+            responseSchemaName: "noonmark.zhulong.live-stream.v1"
+        )
+        let stream: AsyncThrowingStream<String, Error>
+        do {
+            stream = try await provider.stream(streamRequest)
+        } catch {
+            throw LiveSmokeError.providerStreamFailed
+        }
+        var streamFragmentCount = 0
+        var streamedCharacterCount = 0
+        do {
+            for try await fragment in stream {
+                guard fragment.isEmpty == false else { continue }
+                streamFragmentCount += 1
+                streamedCharacterCount += fragment.count
+            }
+        } catch {
+            throw LiveSmokeError.providerStreamFailed
+        }
+        guard streamFragmentCount >= 2, streamedCharacterCount >= 12 else {
+            throw LiveSmokeError.invalidStreamedConversation
+        }
+        return (proposal.labels.count, streamFragmentCount)
     }
 
     private static func required(

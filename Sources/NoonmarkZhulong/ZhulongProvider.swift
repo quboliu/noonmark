@@ -109,10 +109,23 @@ public enum ZhulongProviderResult: Equatable, Sendable {
     case failure(ZhulongProviderFailure)
 }
 
+/// An ephemeral event emitted while a conversational Provider response is in
+/// flight. Only the terminal result is eligible to become a session record.
+public enum ZhulongProviderStreamEvent: Equatable, Sendable {
+    case delta(String)
+    case finished(ZhulongProviderResult)
+}
+
 public protocol ZhulongProvider: Sendable {
     var configurationIdentity: ZhulongProviderConfigurationIdentity { get }
 
     func complete(_ request: ZhulongProviderRequest) async -> ZhulongProviderResult
+}
+
+public protocol ZhulongStreamingProvider: ZhulongProvider {
+    func stream(
+        _ request: ZhulongProviderRequest
+    ) -> AsyncStream<ZhulongProviderStreamEvent>
 }
 
 public enum ZhulongProviderSendStatus: String, Codable, Equatable, Sendable {

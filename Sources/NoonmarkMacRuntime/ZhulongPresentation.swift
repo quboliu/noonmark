@@ -436,14 +436,14 @@ public struct ZhulongCopy: Sendable {
     }
 
     public var confirmScopeTitle: String {
-        localized(chinese: "共同决策点 · 确认本次范围", english: "Shared decision · Confirm this scope")
+        localized(chinese: "开始前，确认本次阅读范围", english: "Before we begin, confirm this reading scope")
     }
 
     public var sharedDecisionTitle: String {
         localized(chinese: "共同决策点", english: "Shared decision")
     }
 
-    public var waitingForYou: String { localized(chinese: "等待你", english: "Waiting for you") }
+    public var waitingForYou: String { localized(chinese: "需要你的确认", english: "Needs your confirmation") }
     public var scopeDisclosure: String {
         localized(
             chinese: "烛龙只读取下列范围形成可审查结果；规划委托、Todo 写入和长期记忆仍分别确认。",
@@ -550,6 +550,21 @@ public struct ZhulongCopy: Sendable {
 
     public var condenseBriefTitle: String {
         localized(chinese: "把初步结果收束为规划简报", english: "Turn the initial result into a planning brief")
+    }
+
+    public var conversationWorkflowBoundary: String {
+        localized(
+            chinese: "需要保存复盘、形成规划或写入 Todo 时，再进入相应的确认流程。",
+            english: "Enter the relevant confirmation flow only when you want to save a review, make a plan, or change Todo."
+        )
+    }
+
+    public var openDailyReviewWorkflow: String {
+        localized(chinese: "整理为今日复盘", english: "Turn into today’s review")
+    }
+
+    public var openPlanningWorkflow: String {
+        localized(chinese: "整理为规划简报", english: "Turn into a planning brief")
     }
 
     public var goalPlaceholder: String { localized(chinese: "目标", english: "Goal") }
@@ -681,11 +696,56 @@ public struct ZhulongCopy: Sendable {
         localized(chinese: "废弃任务链", english: "Abandon task chain")
     }
 
-    public var appendEntryPlaceholder: String {
-        localized(chinese: "追加说明或更正上下文……", english: "Add context or a correction…")
+    public var messageComposerPlaceholder: String {
+        localized(chinese: "向烛龙发消息……", english: "Message Zhulong…")
     }
 
-    public var appendAction: String { localized(chinese: "追加", english: "Add") }
+    public var messageComposerKeyboardHint: String {
+        localized(chinese: "Enter 发送 · Shift+Enter 换行", english: "Enter to send · Shift+Enter for a new line")
+    }
+
+    public var composerScopeAuthorizationHint: String {
+        localized(
+            chinese: "请先确认本次阅读范围，再发送消息",
+            english: "Confirm this session’s reading scope before sending"
+        )
+    }
+
+    public var composerProviderRunningHint: String {
+        localized(
+            chinese: "烛龙正在回应…",
+            english: "Zhulong is responding…"
+        )
+    }
+
+    public var composerDecisionGateHint: String {
+        localized(
+            chinese: "请先完成当前确认，再继续对话",
+            english: "Complete the current confirmation before continuing"
+        )
+    }
+
+    public var composerPausedHint: String {
+        localized(
+            chinese: "会话已暂停；继续后即可发送",
+            english: "This session is paused. Continue it to send"
+        )
+    }
+
+    public func dossierSectionTitle(_ section: String) -> String {
+        localized(chinese: "记录 · \(section)", english: "Record · \(section)")
+    }
+
+    public func chapterSectionTitle(number: Int, section: String) -> String {
+        localized(
+            chinese: "第 \(number) 节 · \(section)",
+            english: "Chapter \(number) · \(section)"
+        )
+    }
+
+    public var sendMessageAccessibilityLabel: String {
+        localized(chinese: "发送给烛龙", english: "Send to Zhulong")
+    }
 
     public var workspaceTitle: String { localized(chinese: "工作空间", english: "Workspace") }
     public var currentSessionTitle: String {
@@ -777,7 +837,7 @@ public struct ZhulongCopy: Sendable {
     public func entryTitle(_ key: ZhulongEntryKindCopyKey) -> String {
         switch key {
         case .userStatement: localized(chinese: "用户说明", english: "User note")
-        case .zhulongStatement: localized(chinese: "烛龙说明", english: "Zhulong note")
+        case .zhulongStatement: localized(chinese: "烛龙", english: "Zhulong")
         case .question: localized(chinese: "需要澄清", english: "Clarification needed")
         case .answer: localized(chinese: "用户回答", english: "User answer")
         case .decision: localized(chinese: "用户决定", english: "User decision")
@@ -975,8 +1035,8 @@ public struct ZhulongCopy: Sendable {
         switch (language, status) {
         case (.chinese, .notConfigured): "未配置 Provider"
         case (.english, .notConfigured): "Provider not configured"
-        case (.chinese, .savedWithCredential): "Provider 已保存，API Key 在 Keychain 中"
-        case (.english, .savedWithCredential): "Provider saved; API key is in Keychain"
+        case (.chinese, .savedWithCredential): "Provider 已保存，API Key 已就绪"
+        case (.english, .savedWithCredential): "Provider saved; API key is ready"
         case (.chinese, .savedWithoutCredential): "Provider 已保存，未保存 API Key"
         case (.english, .savedWithoutCredential): "Provider saved without an API key"
         case (.chinese, .disabled): "烛龙已关闭，普通清单不受影响"
@@ -990,8 +1050,8 @@ public struct ZhulongCopy: Sendable {
         case (.english, .invalidBaseURL): "Base URL must use HTTPS; only local loopback may use HTTP."
         case (.chinese, .emptyModel): "模型名称不能为空。"
         case (.english, .emptyModel): "Model name cannot be empty."
-        case (.chinese, .keychainUnavailable): "无法访问 Keychain，请稍后再试。"
-        case (.english, .keychainUnavailable): "Keychain could not be accessed. Try again shortly."
+        case (.chinese, .keychainUnavailable): "无法保存 API Key，请稍后再试。"
+        case (.english, .keychainUnavailable): "The API key could not be saved. Try again shortly."
         case (.chinese, .unexpected): "Provider 配置操作未完成，请稍后再试。"
         case (.english, .unexpected): "The Provider configuration action could not be completed. Try again shortly."
         }

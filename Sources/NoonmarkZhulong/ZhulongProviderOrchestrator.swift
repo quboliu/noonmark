@@ -46,7 +46,26 @@ public actor ZhulongProviderOrchestrator {
             payload: payload,
             provider: provider,
             authority: .conversation,
-            timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt)
+            timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt),
+            onDelta: nil
+        )
+    }
+
+    public func runStreaming(
+        sessionID: ZhulongSessionID,
+        payload: ZhulongProviderPayload,
+        provider: any ZhulongProvider,
+        onDelta: @escaping @Sendable (String) async -> Void,
+        startedAt: Date = Date(),
+        completedAt: @escaping @Sendable () -> Date = Date.init
+    ) async throws -> ZhulongSession {
+        try await execute(
+            sessionID: sessionID,
+            payload: payload,
+            provider: provider,
+            authority: .conversation,
+            timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt),
+            onDelta: onDelta
         )
     }
 
@@ -63,7 +82,8 @@ public actor ZhulongProviderOrchestrator {
             payload: payload,
             provider: provider,
             authority: .planning(delegationID),
-            timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt)
+            timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt),
+            onDelta: nil
         )
     }
 
@@ -72,7 +92,8 @@ public actor ZhulongProviderOrchestrator {
         payload: ZhulongProviderPayload,
         provider: any ZhulongProvider,
         authority: ZhulongProviderRunAuthority,
-        timing: ZhulongProviderRunTiming
+        timing: ZhulongProviderRunTiming,
+        onDelta: (@Sendable (String) async -> Void)?
     ) async throws -> ZhulongSession {
         guard activeSessionIDs.contains(sessionID) == false else {
             throw ZhulongProviderOrchestrationError.providerRunStillActive
@@ -94,7 +115,12 @@ public actor ZhulongProviderOrchestrator {
         activeSessionIDs.insert(sessionID)
         defer { activeSessionIDs.remove(sessionID) }
 
-        let result = await provider.complete(request)
+        let result = await providerResult(
+            for: request,
+            provider: provider,
+            authority: authority,
+            onDelta: onDelta
+        )
         let sessionBeforeResponse = try repository.load(sessionID)
         session = sessionBeforeResponse
         guard session.providerSends.last(where: { $0.runID == request.runID })?.status == .running else {
@@ -151,6 +177,46 @@ public actor ZhulongProviderOrchestrator {
             )
             throw ZhulongProviderOrchestrationError.providerFailed(recordedFailure.code)
         }
+    }
+
+    private func providerResult(
+        for request: ZhulongProviderRequest,
+        provider: any ZhulongProvider,
+        authority: ZhulongProviderRunAuthority,
+        onDelta: (@Sendable (String) async -> Void)?
+    ) async -> ZhulongProviderResult {
+        guard case .conversation = authority,
+              let onDelta,
+              let streamingProvider = provider as? any ZhulongStreamingProvider
+        else {
+            return await provider.complete(request)
+        }
+
+        for await event in streamingProvider.stream(request) {
+            if Task.isCancelled {
+                return cancelledProviderResult()
+            }
+            switch event {
+            case let .delta(delta):
+                guard delta.isEmpty == false else { continue }
+                await onDelta(delta)
+            case let .finished(result):
+                return result
+            }
+        }
+        return Task.isCancelled
+            ? cancelledProviderResult()
+            : .failure(ZhulongProviderFailure(
+                code: "stream_ended_without_terminal_result",
+                message: "Provider 流式响应未完成"
+            ))
+    }
+
+    private func cancelledProviderResult() -> ZhulongProviderResult {
+        .failure(ZhulongProviderFailure(
+            code: "provider_stream_cancelled",
+            message: "Provider 流式响应已取消"
+        ))
     }
 
     public func correctPlanningSource(

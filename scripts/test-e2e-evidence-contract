@@ -522,6 +522,8 @@ require_order \
   'if [[ ! -f "$result" || "$(<"$result")" != "ok" ]]'
 require_literal scripts/test-e2e "english-scenario-ledger.tsv"
 require_literal scripts/test-e2e "english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
+require_literal scripts/test-e2e "NOONMARK_E2E_ZHULONG_CHAT_ONLY:zhulong-chat"
+require_literal scripts/test-e2e "NOONMARK_E2E_ZHULONG_PROVIDER_SETTINGS_ONLY:zhulong-provider-settings"
 require_literal scripts/test-e2e "app_binary_sha256_before="
 require_literal scripts/test-e2e "app_binary_sha256_after="
 require_literal scripts/test-e2e "run_windowserver_input_cleanup"

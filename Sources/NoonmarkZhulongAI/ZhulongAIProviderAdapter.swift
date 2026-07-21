@@ -1,7 +1,7 @@
 import NoonmarkAI
 import NoonmarkZhulong
 
-public struct ZhulongAIProviderAdapter: ZhulongProvider {
+public struct ZhulongAIProviderAdapter: ZhulongProvider, ZhulongStreamingProvider {
     public let configurationIdentity: ZhulongProviderConfigurationIdentity
     public let upstream: any AIProvider
 
@@ -14,11 +14,81 @@ public struct ZhulongAIProviderAdapter: ZhulongProvider {
     }
 
     public func complete(_ request: ZhulongProviderRequest) async -> ZhulongProviderResult {
+        let upstreamRequest = upstreamRequest(for: request)
+
+        do {
+            let response = try await upstream.complete(upstreamRequest)
+            return responseResult(response, for: request)
+        } catch {
+            return providerFailure(from: error)
+        }
+    }
+
+    public func stream(
+        _ request: ZhulongProviderRequest
+    ) -> AsyncStream<ZhulongProviderStreamEvent> {
+        AsyncStream { continuation in
+            let task = Task {
+                guard case .conversation = request.purpose,
+                      upstream.config.capabilities.supportsStreaming,
+                      let streamingUpstream = upstream as? any AIProviderStreaming
+                else {
+                    let result = await complete(request)
+                    continuation.yield(.finished(result))
+                    continuation.finish()
+                    return
+                }
+
+                let upstreamRequest = upstreamRequest(for: request)
+                var emittedDelta = false
+                do {
+                    let stream = try await streamingUpstream.stream(upstreamRequest)
+                    var content = ""
+                    for try await delta in stream {
+                        try Task.checkCancellation()
+                        guard delta.isEmpty == false else { continue }
+                        emittedDelta = true
+                        content += delta
+                        continuation.yield(.delta(delta))
+                    }
+                    guard content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                        continuation.yield(.finished(.failure(ZhulongProviderFailure(
+                            code: "empty_streamed_response",
+                            message: "Provider 未返回有效内容"
+                        ))))
+                        continuation.finish()
+                        return
+                    }
+                    continuation.yield(.finished(.success(ZhulongProviderResponse(
+                        content: content,
+                        draftVersion: 1
+                    ))))
+                } catch {
+                    if Task.isCancelled {
+                        continuation.finish()
+                        return
+                    }
+                    if emittedDelta {
+                        continuation.yield(.finished(providerFailure(from: error)))
+                    } else {
+                        let result = await complete(request)
+                        continuation.yield(.finished(result))
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    private func upstreamRequest(for request: ZhulongProviderRequest) -> AIRequest {
         let scopeText = request.payload.scopeContent
             .sorted { $0.key.rawValue < $1.key.rawValue }
             .map { "[\($0.key.rawValue)]\n\($0.value)" }
             .joined(separator: "\n\n")
-        let upstreamRequest = AIRequest(
+        return AIRequest(
             systemPrompt: request.payload.systemPrompt,
             userPrompt: "\(request.payload.userPrompt)\n\n授权数据：\n\(scopeText)",
             responseSchemaName: schemaName(for: request.purpose),
@@ -28,19 +98,23 @@ public struct ZhulongAIProviderAdapter: ZhulongProvider {
                 "contextVersion": request.payload.contextVersion
             ]
         )
+    }
 
-        do {
-            let response = try await upstream.complete(upstreamRequest)
-            switch request.purpose {
-            case .conversation:
-                return .success(ZhulongProviderResponse(content: response.text, draftVersion: 1))
-            case .delegatedPlanning:
-                guard let rawContent = response.rawContent else {
-                    return .failure(ZhulongProviderFailure(
-                        code: "missing_structured_planning_output",
-                        message: "Provider 未返回可验证的结构化规划内容"
-                    ))
-                }
+    private func responseResult(
+        _ response: AIProviderResponse,
+        for request: ZhulongProviderRequest
+    ) -> ZhulongProviderResult {
+        switch request.purpose {
+        case .conversation:
+            return .success(ZhulongProviderResponse(content: response.text, draftVersion: 1))
+        case .delegatedPlanning:
+            guard let rawContent = response.rawContent else {
+                return .failure(ZhulongProviderFailure(
+                    code: "missing_structured_planning_output",
+                    message: "Provider 未返回可验证的结构化规划内容"
+                ))
+            }
+            do {
                 let output = try ZhulongPlanningOutputParser().parse(rawContent)
                 let draftVersion: Int? = switch output {
                 case .decisionGate: nil
@@ -50,13 +124,17 @@ public struct ZhulongAIProviderAdapter: ZhulongProvider {
                     content: rawContent,
                     draftVersion: draftVersion
                 ))
+            } catch {
+                return providerFailure(from: error)
             }
-        } catch {
-            return .failure(ZhulongProviderFailure(
-                code: "upstream_provider_failed",
-                message: String(describing: error)
-            ))
         }
+    }
+
+    private func providerFailure(from error: Error) -> ZhulongProviderResult {
+        .failure(ZhulongProviderFailure(
+            code: "upstream_provider_failed",
+            message: String(describing: error)
+        ))
     }
 
     private func schemaName(for purpose: ZhulongProviderRunPurpose) -> String {

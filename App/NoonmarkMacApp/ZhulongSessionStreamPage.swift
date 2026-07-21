@@ -6,7 +6,6 @@ import SwiftUI
 struct ZhulongSessionStreamPage: View {
     @EnvironmentObject private var store: NoonmarkStore
     @ObservedObject var workspace: ZhulongWorkspaceStore
-    @State private var expandedSections: Set<ZhulongStreamSection> = []
     @State private var entryText = ""
     @State private var briefGoal = ""
     @State private var briefSuccessCriteria = ""
@@ -15,26 +14,29 @@ struct ZhulongSessionStreamPage: View {
     @State private var dailyReviewTomorrow = ""
     @State private var decisionSupplement = ""
     @State private var todoDiffBeingEdited: ZhulongTodoDiffDraft?
+    @State private var isWorkflowActionExpanded = false
+    @State private var selectedConversationWorkflow: ZhulongConversationWorkflowSelection?
+    @State private var selectedConversationWorkflowRecordID: String?
 
     private var copy: ZhulongCopy {
         AppPresentation(language: store.engine.preferences.language).zhulong
     }
 
-    private var dateTimeFormatter: AppDateTimeFormatter {
-        AppDateTimeFormatter(language: store.engine.preferences.language)
+    private var records: [ZhulongStreamRecord] {
+        workspace.records(using: copy).filter { record in
+            record.actor != .system || record.isCriticalSystemNotice || record.isInvalidation
+        }
     }
 
-    private var records: [ZhulongStreamRecord] { workspace.records(using: copy) }
     private var currentRecordID: String? { records.last?.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(
                 title: copy.name,
-                subtitle: workspace.selectedSession?.primaryIntent,
-                badge: workspace.selectedSessionStatus(using: copy),
-                badgeColor: statusColor,
+                subtitle: copy.homeSubtitle,
                 titlePlacement: .centeredInMainSurface,
+                centerSubtitleWithTitle: true,
                 titleAnchorIdentifier: "zhulong.session.title"
             ) {
                 HStack(spacing: 7) {
@@ -49,6 +51,10 @@ struct ZhulongSessionStreamPage: View {
                     variantMenu(accessibilityIdentifier: "zhulong-stream-variant-menu")
                     if workspace.selectedSession?.workspaceStatus == .paused {
                         HeaderButton(copy.continueAction) { workspace.resumeCurrentSession() }
+                    } else if workspace.selectedSession?.phase == .providerRunning {
+                        Text(copy.composerProviderRunningHint)
+                            .font(.noonmarkSystem(size: 11, weight: .medium))
+                            .foregroundStyle(Theme.text3)
                     } else {
                         HeaderButton(copy.pauseAction) { workspace.pauseCurrentSession() }
                     }
@@ -57,25 +63,34 @@ struct ZhulongSessionStreamPage: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: NoonmarkVisualMetrics.zhulongConversationMessageSpacing) {
                         streamContent
-                        if workspace.variant != .conversation {
-                            currentAction
+                        if let liveResponse = workspace.selectedLiveResponse {
+                            ZhulongLiveAssistantMessage(
+                                content: liveResponse.content,
+                                waitingText: copy.composerProviderRunningHint
+                            )
+                            .id("zhulong-live-assistant-message")
                         }
-                        if workspace.variant != .conversation {
-                            entryComposer
+                        if hasCurrentAction {
+                            currentAction
+                                .id("zhulong-stream-conversation-current-action")
                         }
                         if let notice = workspace.status {
-                            Notice(text: copy.notice(notice), tone: .locked)
+                            Text(copy.notice(notice))
+                                .font(.noonmarkSystem(size: 11.5, weight: .medium))
+                                .foregroundStyle(Theme.warn)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
-                    .padding(.top, 18)
-                    .padding(
-                        .bottom,
-                        workspace.variant == .conversation ? 112 : 40
+                    .frame(
+                        maxWidth: NoonmarkVisualMetrics.zhulongConversationContentMaxWidth,
+                        alignment: .leading
                     )
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+                    .padding(.top, 28)
+                    .padding(.bottom, 36)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .accessibilityIdentifier("zhulong-session-stream")
                 .background {
@@ -83,6 +98,15 @@ struct ZhulongSessionStreamPage: View {
                         identifier: "zhulong-session-stream",
                         verificationText: copy.sessionStreamVerificationTitle
                     )
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if canComposeEntry {
+                        entryComposer
+                            .frame(maxWidth: NoonmarkVisualMetrics.zhulongConversationContentMaxWidth)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+                            .padding(.bottom, 16)
+                    }
                 }
                 .onChange(of: records.count) {
                     guard let currentRecordID else { return }
@@ -95,22 +119,19 @@ struct ZhulongSessionStreamPage: View {
                     proxy.scrollTo(currentRecordID, anchor: .center)
                 }
                 .onChange(of: workspace.selectedSession?.events.count) {
-                    guard workspace.variant == .conversation, hasCurrentAction else { return }
+                    guard hasCurrentAction else { return }
                     proxy.scrollTo("zhulong-stream-conversation-current-action", anchor: .bottom)
+                }
+                .onChange(of: workspace.selectedLiveResponse?.content) {
+                    guard workspace.selectedLiveResponse != nil else { return }
+                    withAnimation(Theme.shouldReduceMotion ? nil : .easeOut(duration: 0.16)) {
+                        proxy.scrollTo("zhulong-live-assistant-message", anchor: .bottom)
+                    }
                 }
                 .onAppear {
-                    guard workspace.variant == .conversation, hasCurrentAction else { return }
+                    guard hasCurrentAction else { return }
                     proxy.scrollTo("zhulong-stream-conversation-current-action", anchor: .bottom)
                 }
-            }
-            if workspace.variant == .conversation {
-                entryComposer
-                    .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
-                    .padding(.vertical, 10)
-                    .background(Theme.background)
-                    .overlay(alignment: .top) {
-                        Rectangle().fill(Theme.line.opacity(0.7)).frame(height: 1)
-                    }
             }
         }
         .background(Theme.background)
@@ -124,9 +145,6 @@ struct ZhulongSessionStreamPage: View {
             )
         }
         .onAppear {
-            if expandedSections.isEmpty, let section = records.last?.section {
-                expandedSections.insert(section)
-            }
             if briefGoal.isEmpty {
                 briefGoal = workspace.selectedSession?.primaryIntent ?? ""
             }
@@ -140,6 +158,11 @@ struct ZhulongSessionStreamPage: View {
         }
         .onChange(of: workspace.selectedSession?.currentTodoDiff?.id.rawValue) {
             openTodoDiffEditorForE2EIfReady()
+        }
+        .onChange(of: workspace.selectedSessionID) {
+            isWorkflowActionExpanded = false
+            selectedConversationWorkflow = nil
+            selectedConversationWorkflowRecordID = nil
         }
         .sheet(
             isPresented: Binding(
@@ -181,220 +204,37 @@ struct ZhulongSessionStreamPage: View {
         .accessibilityIdentifier(accessibilityIdentifier)
     }
 
-    @ViewBuilder
     private var streamContent: some View {
-        switch workspace.variant {
-        case .conversation:
-            conversationView
-        case .dossier:
-            dossierView
-        case .chapters:
-            chapterView
-        case .weave:
-            weaveView
+        ZhulongChatTranscript(
+            records: records,
+            variant: workspace.variant,
+            sectionTitle: { sectionTitle($0) },
+            dossierSectionTitle: { copy.dossierSectionTitle($0) },
+            chapterSectionTitle: { copy.chapterSectionTitle(number: $0, section: $1) },
+            planningWorkflowTitle: copy.openPlanningWorkflow,
+            dailyReviewWorkflowTitle: copy.openDailyReviewWorkflow,
+            onWorkflowSelection: openConversationWorkflow
+        ) { record in
+            inlineConversationWorkflowAction(for: record)
         }
-    }
-
-    private var conversationView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(records) { record in
-                conversationRow(record)
-                    .id(record.id)
-            }
-            if hasCurrentAction {
-                currentAction
-                    .padding(.top, 12)
-                    .accessibilityIdentifier("zhulong-stream-conversation-current-action")
-                    .id("zhulong-stream-conversation-current-action")
-            }
-        }
-        .frame(maxWidth: 760)
-        .frame(maxWidth: .infinity)
-        .accessibilityIdentifier("zhulong-stream-conversation")
-    }
-
-    @ViewBuilder
-    private func conversationRow(_ record: ZhulongStreamRecord) -> some View {
-        switch record.actor {
-        case .user:
-            HStack {
-                Spacer(minLength: 84)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(record.title)
-                        .font(.noonmarkSystem(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.text1)
-                    if let body = record.body {
-                        Text(body)
-                            .font(.noonmarkSystem(size: 12))
-                            .foregroundStyle(Theme.text2)
-                            .lineSpacing(3)
-                    }
-                }
-                .padding(.horizontal, 13)
-                .padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 14).fill(Theme.controlFill))
-            }
-            .padding(.vertical, 8)
-        case .zhulong:
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "sparkles")
-                    .font(.noonmarkSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.navZhulong)
-                    .frame(width: 22, height: 22)
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(record.title)
-                            .font(.noonmarkSystem(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.text1)
-                        Spacer()
-                        Text(shortTime(record.occurredAt))
-                            .font(.noonmarkSystem(size: 9.5).monospacedDigit())
-                            .foregroundStyle(Theme.text3)
-                    }
-                    if let body = record.body {
-                        Text(body)
-                            .font(.noonmarkSystem(size: 12))
-                            .foregroundStyle(Theme.text2)
-                            .lineSpacing(3)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-            .padding(.vertical, 11)
-            .opacity(record.isInvalidation ? 0.62 : 1)
-        case .system:
-            HStack(spacing: 8) {
-                Image(systemName: record.isInvalidation ? "exclamationmark.circle" : "checkmark.circle")
-                    .foregroundStyle(record.isInvalidation ? Theme.warn : Theme.text3)
-                Text(record.title)
-                    .font(.noonmarkSystem(size: 11.5, weight: .medium))
-                    .foregroundStyle(record.isInvalidation ? Theme.warn : Theme.text2)
-                if let body = record.body {
-                    Text(body)
-                        .font(.noonmarkSystem(size: 11))
-                        .foregroundStyle(Theme.text3)
-                        .lineLimit(2)
-                }
-                Spacer()
-                Text(shortTime(record.occurredAt))
-                    .font(.noonmarkSystem(size: 9.5).monospacedDigit())
-                    .foregroundStyle(Theme.text3)
-            }
-            .padding(.vertical, 8)
-        }
-    }
-
-    private var dossierView: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
-                HStack(alignment: .top, spacing: 10) {
-                    dossierSpine(record: record, isLast: index == records.count - 1)
-                    legacyStreamCard(record, isCurrent: record.id == currentRecordID)
-                    Text(shortTime(record.occurredAt))
-                        .font(.noonmarkSystem(size: 9.5).monospacedDigit())
-                        .foregroundStyle(Theme.text3)
-                        .frame(width: 42, alignment: .trailing)
-                        .padding(.top, 11)
-                }
-                .id(record.id)
-            }
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-        .accessibilityIdentifier("zhulong-stream-dossier")
-    }
-
-    private var chapterView: some View {
-        VStack(spacing: 0) {
-            ForEach(activeSections) { section in
-                let sectionRecords = records.filter { $0.section == section }
-                DisclosureGroup(
-                    isExpanded: Binding(
-                        get: { expandedSections.contains(section) },
-                        set: { expanded in
-                            if expanded {
-                                expandedSections.insert(section)
-                            } else {
-                                expandedSections.remove(section)
-                            }
-                        }
-                    )
-                ) {
-                    VStack(spacing: 8) {
-                        ForEach(sectionRecords) { record in
-                            legacyStreamCard(record, isCurrent: record.id == currentRecordID)
-                                .id(record.id)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
-                } label: {
-                    chapterHeader(section, records: sectionRecords)
-                }
-                .tint(Theme.text3)
-                if section != activeSections.last {
-                    Rectangle().fill(Theme.line).frame(height: 1)
-                }
-            }
-        }
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-        .accessibilityIdentifier("zhulong-stream-chapters")
-    }
-
-    private var weaveView: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                Text(store.engine.preferences.language == .chinese ? "烛龙 · 分析、选项与执行" : "Zhulong · Analysis, options and execution")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(store.engine.preferences.language == .chinese ? "你 · 决定与授权" : "You · Decisions and authority")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-            .foregroundStyle(Theme.text3)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(Theme.panel2)
-            .overlay(alignment: .bottom) { Rectangle().fill(Theme.line).frame(height: 1) }
-
-            VStack(spacing: 9) {
-                ForEach(records) { record in
-                    weaveRow(record)
-                        .id(record.id)
-                }
-            }
-            .padding(12)
-        }
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-        .accessibilityIdentifier("zhulong-stream-weave")
     }
 
     @ViewBuilder
     private var currentAction: some View {
-        if let session = workspace.selectedSession, isScopeReviewActive {
-            VStack(alignment: .leading, spacing: 11) {
-                HStack {
-                    Text(copy.confirmScopeTitle)
-                        .font(.noonmarkSystem(size: 12.5, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                    Spacer()
-                    StatusPill(text: copy.waitingForYou, color: Theme.accent)
-                }
+        if let session = workspace.selectedSession, needsScopeAuthorization {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(copy.confirmScopeTitle)
+                    .font(.noonmarkSystem(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
                 Text(copy.scopeDisclosure)
-                    .font(.noonmarkSystem(size: 11.5))
+                    .font(.noonmarkSystem(size: 12))
                     .foregroundStyle(Theme.text2)
                     .lineSpacing(3)
                 HStack(spacing: 6) {
                     ForEach(session.proposedScopes.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { scope in
                         Text(scopeLabel(scope))
-                            .font(.noonmarkSystem(size: 10.5, weight: .medium))
-                            .foregroundStyle(Theme.text2)
-                            .padding(.horizontal, 8)
-                            .frame(height: 23)
-                            .background(Capsule().fill(Theme.chip))
-                            .overlay(Capsule().stroke(Theme.line))
+                            .font(.noonmarkSystem(size: 11, weight: .medium))
+                            .foregroundStyle(Theme.text3)
                             .accessibilityIdentifier("zhulong-session-scope-\(scope.rawValue)")
                             .background {
                                 AppE2EViewAnchor(
@@ -408,20 +248,34 @@ struct ZhulongSessionStreamPage: View {
                     store.authorizeCurrentZhulongWorkspaceSession()
                 }
                 .accessibilityIdentifier("zhulong-authorize-scope")
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "zhulong-authorize-scope",
+                        verificationText: copy.useThisSessionOnly
+                    )
+                }
             }
-            .padding(13)
-            .background(RoundedRectangle(cornerRadius: 8).fill(actionEmphasisFill))
-            .overlay(alignment: .leading) {
-                Rectangle().fill(actionEmphasisStroke).frame(width: 3)
-            }
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(actionEmphasisStroke.opacity(0.25)))
-        } else if workspace.selectedSession?.phase == .readyForProvider {
+            .padding(.vertical, 4)
+        } else if let gate = workspace.selectedSession?.currentDecisionGate {
+            decisionGateAction(gate)
+        } else if let session = workspace.selectedSession,
+                  let workflow = conversationWorkflowForCurrentAction
+        {
+            conversationWorkflowAction(workflow, session: session)
+        } else if let session = workspace.selectedSession,
+                  session.phase == .readyForProvider,
+                  session.purpose != .freeform
+        {
             if let session = decisionRevisionSession {
                 decisionGateRevisionAction(session)
             } else if let context = readyPlanningBriefContext {
                 planningBriefAction(context.brief, session: context.session)
             } else if let session = readyDailyReviewSession {
-                dailyReviewAction(session)
+                if needsExplicitWorkflowEntry(for: session) {
+                    workflowEntryAction(for: session)
+                } else {
+                    dailyReviewAction(session)
+                }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     Notice(
@@ -443,15 +297,123 @@ struct ZhulongSessionStreamPage: View {
                     }
                 }
             }
-        } else if let session = workspace.selectedSession, session.phase == .draftReview {
-            if isDailyReviewSession(session) {
+        } else if let session = workspace.selectedSession,
+                  session.phase == .draftReview,
+                  session.purpose != .freeform
+        {
+            if needsExplicitWorkflowEntry(for: session) {
+                workflowEntryAction(for: session)
+            } else if isDailyReviewSession(session) {
                 dailyReviewAction(session)
             } else {
                 draftReviewAction(session)
             }
-        } else if let gate = workspace.selectedSession?.currentDecisionGate {
-            decisionGateAction(gate)
         }
+    }
+
+    @ViewBuilder
+    private func inlineConversationWorkflowAction(for record: ZhulongStreamRecord) -> some View {
+        if let selectedConversationWorkflow,
+           selectedConversationWorkflowRecordID == record.id,
+           let session = workspace.selectedSession,
+           canPresentConversationWorkflow(for: session)
+        {
+            conversationWorkflowAction(selectedConversationWorkflow, session: session)
+                .accessibilityIdentifier(
+                    "zhulong-inline-workflow-\(selectedConversationWorkflow.accessibilityIdentifier)"
+                )
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "zhulong-inline-workflow-\(selectedConversationWorkflow.accessibilityIdentifier)",
+                        verificationText: selectedConversationWorkflow == .planning
+                            ? copy.openPlanningWorkflow
+                            : copy.openDailyReviewWorkflow
+                    )
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func conversationWorkflowAction(
+        _ workflow: ZhulongConversationWorkflowSelection,
+        session: ZhulongSession
+    ) -> some View {
+        switch workflow {
+        case .planning:
+            if let artifact = session.effectivePlanArtifact {
+                planArtifactAction(artifact, session: session)
+            } else if let brief = session.currentPlanningBrief {
+                planningBriefAction(brief, session: session)
+            } else {
+                draftReviewAction(session)
+            }
+        case .dailyReview:
+            if session.dailyCloseSnapshots.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(copy.conversationWorkflowBoundary)
+                        .font(.noonmarkSystem(size: 12))
+                        .foregroundStyle(Theme.text2)
+                    SmallActionButton(copy.captureTodayFacts, tone: .accent) {
+                        store.captureCurrentZhulongDailyClose()
+                    }
+                    .accessibilityIdentifier("zhulong-capture-daily-close")
+                }
+                .padding(.vertical, 4)
+            } else {
+                dailyReviewAction(session)
+            }
+        }
+    }
+
+    private func openConversationWorkflow(
+        _ workflow: ZhulongConversationWorkflowSelection,
+        from record: ZhulongStreamRecord
+    ) {
+        guard record.actor == .user else { return }
+        selectedConversationWorkflow = workflow
+        selectedConversationWorkflowRecordID = record.id
+        let content = conversationRecordContent(record)
+        switch workflow {
+        case .planning:
+            if briefGoal.isEmpty {
+                briefGoal = content
+            }
+        case .dailyReview:
+            if dailyReviewSummary.isEmpty {
+                dailyReviewSummary = content
+            }
+        }
+    }
+
+    private func conversationRecordContent(_ record: ZhulongStreamRecord) -> String {
+        let content = record.body?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return content?.isEmpty == false ? content! : record.title
+    }
+
+    private var conversationWorkflowForCurrentAction: ZhulongConversationWorkflowSelection? {
+        guard selectedConversationWorkflowRecordID == nil,
+              let session = workspace.selectedSession,
+              session.purpose == .freeform,
+              canPresentConversationWorkflow(for: session)
+        else { return nil }
+        if let selectedConversationWorkflow {
+            return selectedConversationWorkflow
+        }
+        if session.currentPlanningBrief != nil || session.effectivePlanArtifact != nil {
+            return .planning
+        }
+        if session.dailyCloseSnapshots.isEmpty == false,
+           session.dailyReviewReceipts.isEmpty
+        {
+            return .dailyReview
+        }
+        return nil
+    }
+
+    private func canPresentConversationWorkflow(for session: ZhulongSession) -> Bool {
+        session.workspaceStatus == .active &&
+            needsScopeAuthorization == false &&
+            (session.phase == .readyForProvider || session.phase == .draftReview)
     }
 
     private func decisionGateAction(_ gate: ZhulongDecisionGate) -> some View {
@@ -601,7 +563,34 @@ struct ZhulongSessionStreamPage: View {
     }
 
     private func isDailyReviewSession(_ session: ZhulongSession) -> Bool {
-        store.zhulongTask(for: session) == .dailyReview
+        session.purpose == .dailyClose
+    }
+
+    private func needsExplicitWorkflowEntry(for session: ZhulongSession) -> Bool {
+        guard session.purpose != .freeform,
+              isWorkflowActionExpanded == false
+        else { return false }
+        if isDailyReviewSession(session) {
+            return session.dailyReviewDrafts.isEmpty
+        }
+        return session.currentPlanningBrief == nil && session.effectivePlanArtifact == nil
+    }
+
+    private func workflowEntryAction(for session: ZhulongSession) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(copy.conversationWorkflowBoundary)
+                .font(.noonmarkSystem(size: 12))
+                .foregroundStyle(Theme.text2)
+                .fixedSize(horizontal: false, vertical: true)
+            SmallActionButton(
+                isDailyReviewSession(session)
+                    ? copy.openDailyReviewWorkflow
+                    : copy.openPlanningWorkflow
+            ) {
+                isWorkflowActionExpanded = true
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     private var readyDailyReviewSession: ZhulongSession? {
@@ -837,58 +826,64 @@ struct ZhulongSessionStreamPage: View {
         todoDiffBeingEdited = diff
     }
 
-    @ViewBuilder
     private var entryComposer: some View {
-        if canComposeEntry {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top, spacing: 9) {
-                    MarkdownEditor(
-                        text: $entryText,
-                        placeholder: copy.appendEntryPlaceholder,
-                        style: .compact,
-                        showsSurface: false,
-                        onCommit: appendEntry
-                    )
-                        .accessibilityIdentifier("zhulong-session-entry")
-                    SmallActionButton(copy.appendAction) { appendEntry() }
-                        .disabled(entryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                if workspace.variant == .conversation {
-                    HStack {
-                        Spacer()
-                        variantMenu(accessibilityIdentifier: "zhulong-stream-variant-menu.composer")
-                            .font(.noonmarkSystem(size: 10.5, weight: .medium))
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(minHeight: 54)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-        }
+        ZhulongChatComposer(
+            text: $entryText,
+            placeholder: copy.messageComposerPlaceholder,
+            keyboardHint: composerHint,
+            sendAccessibilityLabel: copy.sendMessageAccessibilityLabel,
+            canSubmit: canSubmitEntry,
+            onSend: sendMessage
+        )
     }
 
     private var canComposeEntry: Bool {
+        workspace.selectedSession != nil
+    }
+
+    private var canSubmitEntry: Bool {
         guard let session = workspace.selectedSession else { return false }
         return session.workspaceStatus == .active &&
-            session.phase != .providerRunning &&
-            session.phase != .decisionGate
+            needsScopeAuthorization == false &&
+            (session.phase == .readyForProvider || session.phase == .draftReview)
+    }
+
+    private var composerHint: String {
+        guard let session = workspace.selectedSession else {
+            return copy.messageComposerKeyboardHint
+        }
+        if needsScopeAuthorization {
+            return copy.composerScopeAuthorizationHint
+        }
+        if session.workspaceStatus == .paused {
+            return copy.composerPausedHint
+        }
+        switch session.phase {
+        case .providerRunning:
+            return copy.composerProviderRunningHint
+        case .decisionGate:
+            return copy.composerDecisionGateHint
+        case .scopeReview:
+            return copy.composerScopeAuthorizationHint
+        case .readyForProvider, .draftReview:
+            return copy.messageComposerKeyboardHint
+        }
     }
 
     private var hasCurrentAction: Bool {
-        isScopeReviewActive || workspace.selectedSession?.phase == .readyForProvider
-            || workspace.selectedSession?.phase == .draftReview
-            || workspace.selectedSession?.currentDecisionGate != nil
+        guard let session = workspace.selectedSession else { return false }
+        return needsScopeAuthorization
+            || session.currentDecisionGate != nil
+            || conversationWorkflowForCurrentAction != nil
+            || (session.purpose != .freeform
+                && (session.phase == .readyForProvider || session.phase == .draftReview))
     }
 
-    private func appendEntry() {
+    private func sendMessage() {
         let content = entryText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard content.isEmpty == false else { return }
-        workspace.appendToCurrentSession(
-            author: .user,
-            kind: workspace.selectedSession?.phase == .draftReview ? .answer : .statement,
-            content: content
-        )
+        guard content.isEmpty == false, canSubmitEntry else { return }
+        guard store.sendZhulongConversationMessage(content) else { return }
+        isWorkflowActionExpanded = false
         entryText = ""
     }
 
@@ -919,212 +914,24 @@ struct ZhulongSessionStreamPage: View {
             .filter { $0.isEmpty == false }
     }
 
-    private var isScopeReviewActive: Bool {
-        workspace.selectedSession?.workspaceStatus == .active &&
-            workspace.selectedSession?.phase == .scopeReview
-    }
-
-    private var statusColor: Color {
-        switch workspace.selectedSession?.workspaceStatus {
-        case .paused: Theme.warn
-        case .archived: Theme.text3
-        case .active, nil: Theme.accent
-        }
+    private var needsScopeAuthorization: Bool {
+        store.currentZhulongSessionNeedsScopeAuthorization
     }
 
     private var actionSurfaceFill: Color {
-        workspace.variant == .conversation ? .clear : Theme.panel
+        .clear
     }
 
     private var actionSurfaceStroke: Color {
-        workspace.variant == .conversation ? .clear : Theme.line
+        .clear
     }
 
     private var actionEmphasisFill: Color {
-        workspace.variant == .conversation ? .clear : Theme.accentSoft.opacity(0.5)
+        .clear
     }
 
     private var actionEmphasisStroke: Color {
-        workspace.variant == .conversation ? .clear : Theme.accent
-    }
-
-    private var activeSections: [ZhulongStreamSection] {
-        ZhulongStreamSection.allCases.filter { section in
-            records.contains { $0.section == section }
-        }
-    }
-
-    private func dossierSpine(record: ZhulongStreamRecord, isLast: Bool) -> some View {
-        VStack(spacing: 0) {
-            ZStack {
-                Circle().fill(actorColor(record.actor).opacity(0.14))
-                Text(actorMark(record.actor))
-                    .font(.noonmarkSystem(size: 8.5, weight: .bold))
-                    .foregroundStyle(actorColor(record.actor))
-            }
-            .frame(width: 20, height: 20)
-            if isLast == false {
-                Rectangle().fill(Theme.line2.opacity(0.65)).frame(width: 1, height: 42)
-            }
-        }
-        .frame(width: 24)
-        .padding(.top, 9)
-    }
-
-    private func chapterHeader(
-        _ section: ZhulongStreamSection,
-        records: [ZhulongStreamRecord]
-    ) -> some View {
-        HStack(spacing: 11) {
-            Text(String(format: "%02d", (activeSections.firstIndex(of: section) ?? 0) + 1))
-                .font(.noonmarkSystem(size: 10.5, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Theme.text3)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(sectionTitle(section))
-                    .font(.noonmarkSystem(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                Text(records.last?.title ?? "")
-                    .font(.noonmarkSystem(size: 10.5))
-                    .foregroundStyle(Theme.text3)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Text(store.engine.preferences.language == .chinese ? "\(records.count) 条" : "\(records.count) entries")
-                .font(.noonmarkSystem(size: 10.5).monospacedDigit())
-                .foregroundStyle(Theme.text3)
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 50)
-    }
-
-    @ViewBuilder
-    private func weaveRow(_ record: ZhulongStreamRecord) -> some View {
-        if record.isBoundary || record.actor == .system {
-            legacyStreamCard(record, isCurrent: record.id == currentRecordID)
-                .frame(maxWidth: .infinity)
-        } else {
-            HStack(alignment: .top, spacing: 8) {
-                if record.actor == .zhulong {
-                    legacyStreamCard(record, isCurrent: record.id == currentRecordID)
-                    causalNode(record)
-                    Color.clear.frame(maxWidth: .infinity)
-                } else {
-                    Color.clear.frame(maxWidth: .infinity)
-                    causalNode(record)
-                    legacyStreamCard(record, isCurrent: record.id == currentRecordID)
-                }
-            }
-        }
-    }
-
-    private func causalNode(_ record: ZhulongStreamRecord) -> some View {
-        VStack(spacing: 0) {
-            Rectangle().fill(Theme.line2).frame(width: 1, height: 8)
-            Circle().fill(actorColor(record.actor)).frame(width: 7, height: 7)
-            Rectangle().fill(Theme.line2).frame(width: 1, height: 34)
-        }
-        .frame(width: 20)
-    }
-
-    private func legacyStreamCard(_ record: ZhulongStreamRecord, isCurrent: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text(record.eyebrow)
-                    .font(.noonmarkSystem(size: 9.5, weight: .semibold))
-                    .foregroundStyle(record.isInvalidation ? Theme.warn : actorColor(record.actor))
-                    .tracking(0.35)
-                Spacer()
-                Text(shortTime(record.occurredAt))
-                    .font(.noonmarkSystem(size: 9.5).monospacedDigit())
-                    .foregroundStyle(Theme.text3)
-            }
-            Text(record.title)
-                .font(.noonmarkSystem(size: 12.5, weight: .semibold))
-                .foregroundStyle(record.isInvalidation ? Theme.text2 : Theme.text1)
-            if let body = record.body {
-                Text(body)
-                    .font(.noonmarkSystem(size: 11.5))
-                    .foregroundStyle(Theme.text2)
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(11)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8).fill(
-                isCurrent
-                    ? Theme.accentSoft.opacity(0.62)
-                    : record.actor == .zhulong ? Theme.navZhulong.opacity(0.035) : Theme.panel2
-            )
-        )
-        .overlay(alignment: .leading) {
-            if isCurrent {
-                Rectangle().fill(Theme.accent).frame(width: 3)
-            }
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isCurrent ? Theme.accent.opacity(0.24) : Theme.line)
-        )
-        .opacity(record.isInvalidation ? 0.62 : 1)
-    }
-
-    private func streamRow(_ record: ZhulongStreamRecord) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            Text(record.eyebrow)
-                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                .foregroundStyle(record.isInvalidation ? Theme.warn : actorColor(record.actor))
-                .frame(width: 60, alignment: .trailing)
-                .padding(.top, 1)
-            streamCard(record)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 12)
-        .background(record.id == currentRecordID ? Theme.accentSoft.opacity(0.34) : Color.clear)
-    }
-
-    private func streamCard(_ record: ZhulongStreamRecord) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text(record.title)
-                    .font(.noonmarkSystem(size: 12.5, weight: .semibold))
-                    .foregroundStyle(record.isInvalidation ? Theme.text2 : Theme.text1)
-                Spacer()
-                Text(shortTime(record.occurredAt))
-                    .font(.noonmarkSystem(size: 9.5).monospacedDigit())
-                    .foregroundStyle(Theme.text3)
-            }
-            if let body = record.body {
-                Text(body)
-                    .font(.noonmarkSystem(size: 11.5))
-                    .foregroundStyle(Theme.text2)
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .opacity(record.isInvalidation ? 0.62 : 1)
-    }
-
-    private func actorColor(_ actor: ZhulongStreamActor) -> Color {
-        switch actor {
-        case .user: Theme.accent
-        case .zhulong: Theme.navZhulong
-        case .system: Theme.text3
-        }
-    }
-
-    private func actorMark(_ actor: ZhulongStreamActor) -> String {
-        switch (actor, store.engine.preferences.language) {
-        case (.user, .chinese): "你"
-        case (.user, .english): "You"
-        case (.zhulong, .chinese): "烛"
-        case (.zhulong, .english): "Z"
-        case (.system, .chinese): "系"
-        case (.system, .english): "S"
-        }
+        .clear
     }
 
     private func sectionTitle(_ section: ZhulongStreamSection) -> String {
@@ -1146,11 +953,16 @@ struct ZhulongSessionStreamPage: View {
         }
     }
 
-    private func shortTime(_ date: Date) -> String {
-        dateTimeFormatter.string(from: date, style: .shortTime)
-    }
-
     private func scopeLabel(_ scope: ZhulongDataScope) -> String {
         copy.scopeTitle(scope.presentationCopyKey)
+    }
+}
+
+private extension ZhulongConversationWorkflowSelection {
+    var accessibilityIdentifier: String {
+        switch self {
+        case .planning: "planning"
+        case .dailyReview: "daily-review"
+        }
     }
 }

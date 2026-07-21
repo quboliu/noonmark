@@ -50,14 +50,8 @@ extension AppCopy {
         language == .chinese ? "Provider" : "Provider"
     }
 
-    var retainedKeychainCredentialPlaceholder: String {
-        language == .chinese
-            ? "Keychain 中已有凭证，留空则保留"
-            : "Credential is stored in Keychain; leave blank to keep it"
-    }
-
-    var keychainOnlyPlaceholder: String {
-        language == .chinese ? "只保存到 Keychain" : "Stored only in Keychain"
+    var apiKeyPlaceholder: String {
+        language == .chinese ? "输入 API Key" : "Enter API key"
     }
 
     var localModel: String { language == .chinese ? "本地模型" : "Local model" }

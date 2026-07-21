@@ -71,7 +71,10 @@ struct ZhulongSessionStreamPage: View {
                     }
                     .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
                     .padding(.top, 18)
-                    .padding(.bottom, 40)
+                    .padding(
+                        .bottom,
+                        workspace.variant == .conversation ? 112 : 40
+                    )
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .accessibilityIdentifier("zhulong-session-stream")
@@ -90,6 +93,14 @@ struct ZhulongSessionStreamPage: View {
                 .onChange(of: workspace.variant) {
                     guard let currentRecordID else { return }
                     proxy.scrollTo(currentRecordID, anchor: .center)
+                }
+                .onChange(of: workspace.selectedSession?.events.count) {
+                    guard workspace.variant == .conversation, hasCurrentAction else { return }
+                    proxy.scrollTo("zhulong-stream-conversation-current-action", anchor: .bottom)
+                }
+                .onAppear {
+                    guard workspace.variant == .conversation, hasCurrentAction else { return }
+                    proxy.scrollTo("zhulong-stream-conversation-current-action", anchor: .bottom)
                 }
             }
             if workspace.variant == .conversation {
@@ -194,6 +205,7 @@ struct ZhulongSessionStreamPage: View {
                 currentAction
                     .padding(.top, 12)
                     .accessibilityIdentifier("zhulong-stream-conversation-current-action")
+                    .id("zhulong-stream-conversation-current-action")
             }
         }
         .frame(maxWidth: 760)

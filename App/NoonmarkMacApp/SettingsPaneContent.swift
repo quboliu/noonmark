@@ -648,16 +648,21 @@ private struct AutomaticClassificationBacklogPromptView: View {
     ) -> some View {
         let fullIdentifier =
             "settings.zhulong.automatic-classification-backlog.\(identifier)"
-        return SmallActionButton(title, tone: tone, action: action)
-            .accessibilityIdentifier(fullIdentifier)
-            .accessibilityLabel(accessibilityLabel)
-            .help(accessibilityLabel)
-            .background {
-                AppE2EViewAnchor(
-                    identifier: fullIdentifier,
-                    verificationText: accessibilityLabel
-                )
-            }
+        return NativeSmallActionButton(
+            title: title,
+            tone: tone,
+            identifier: fullIdentifier,
+            accessibilityLabel: accessibilityLabel,
+            action: action
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .hoverSurface(
+            cornerRadius: 6,
+            idleFill: Theme.controlFill,
+            hoverFill: Theme.listRowHover,
+            idleStroke: Theme.line.opacity(0.72),
+            hoverStroke: Theme.line2.opacity(0.72)
+        )
     }
 }
 

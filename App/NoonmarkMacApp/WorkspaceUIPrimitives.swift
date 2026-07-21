@@ -308,6 +308,93 @@ struct SmallActionButton: View {
     }
 }
 
+/// A single native control for compact settings actions that require a stable
+/// AppKit accessibility identity. Its SwiftUI surface supplies the visual
+/// treatment; this button remains the only hit-test and accessibility target.
+struct NativeSmallActionButton: NSViewRepresentable {
+    let title: String
+    let tone: SmallActionButton.Tone
+    let identifier: String
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> NativeSmallActionButtonView {
+        let button = NativeSmallActionButtonView(frame: .zero)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.performAction(_:))
+        configure(button)
+        return button
+    }
+
+    func updateNSView(_ button: NativeSmallActionButtonView, context: Context) {
+        context.coordinator.action = action
+        configure(button)
+    }
+
+    private func configure(_ button: NativeSmallActionButtonView) {
+        button.title = title
+        button.font = .noonmarkSystemFont(ofSize: 11.5)
+        button.contentTintColor = NSColor(color)
+        button.identifier = NSUserInterfaceItemIdentifier(identifier)
+        button.toolTip = accessibilityLabel
+        button.setAccessibilityIdentifier(identifier)
+        button.setAccessibilityLabel(accessibilityLabel)
+        button.invalidateIntrinsicContentSize()
+    }
+
+    private var color: Color {
+        switch tone {
+        case .normal: Theme.text2
+        case .accent: Theme.accent
+        case .warn: Theme.warn
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var action: () -> Void
+
+        init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func performAction(_ sender: Any?) {
+            action()
+        }
+    }
+}
+
+final class NativeSmallActionButtonView: NSButton {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        alignment = .center
+        lineBreakMode = .byTruncatingTail
+        setButtonType(.momentaryPushIn)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let titleSize = title.size(withAttributes: [
+            .font: font ?? .noonmarkSystemFont(ofSize: 11.5),
+        ])
+        return NSSize(
+            width: ceil(titleSize.width) + 18,
+            height: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
+        )
+    }
+}
+
 struct HoverSurfaceModifier: ViewModifier {
     @State private var hovering = false
 
@@ -326,10 +413,12 @@ struct HoverSurfaceModifier: ViewModifier {
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(active ? activeFill : hovering ? hoverFill : idleFill)
+                    .allowsHitTesting(false)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(active ? activeStroke : hovering ? hoverStroke : idleStroke, lineWidth: active ? activeLineWidth : 1)
+                    .allowsHitTesting(false)
             )
             .onHover { hovering = $0 }
     }

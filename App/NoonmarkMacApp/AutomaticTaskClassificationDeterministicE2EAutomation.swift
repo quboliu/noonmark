@@ -535,7 +535,13 @@ struct AutomaticClassificationContentionVerifyE2EAutomation:
                     "configured backlog dispatched before explicit authorization"
                 )
             }
-            store.resolveAutomaticClassificationBacklog(.startExisting)
+            try await AutomaticClassificationSettingsE2EInteraction
+                .clickZhulongButton(
+                    identifier: "settings.zhulong.automatic-classification-backlog.start",
+                    label: store.copy
+                        .startAutomaticClassificationBacklogAccessibilityLabel(1),
+                    store: store
+                )
             let deadline = Date().addingTimeInterval(30)
             while Date() < deadline {
                 guard let job = try repository.job(id: jobID) else {
@@ -1411,7 +1417,9 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
 
         let mainWindow = try await visibleMainWindow()
         let input = try WindowServerInputDriver()
-        try await activate(mainWindow)
+        try await AutomaticClassificationSettingsE2EInteraction.activate(
+            mainWindow
+        )
         try await clickMainWindowAnchor(
             "sidebar.nav.completed",
             in: mainWindow,
@@ -2112,173 +2120,12 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
         label: String,
         store: NoonmarkStore
     ) async throws {
-        let settingsWindow = try await visibleSettingsWindow()
-        try await activate(settingsWindow)
-        try await clickSettingsSidebar(
-            in: settingsWindow,
-            label: store.copy.providerTitle
-        )
-        try await assertVisibleSettingsButton(
-            identifier: identifier,
-            label: label,
-            in: settingsWindow
-        )
-        try await clickSettingsButton(
-            identifier: identifier,
-            label: label,
-            in: settingsWindow
-        )
-
-        guard store.automaticClassificationJobRepository != nil else {
-            throw failure("UI action lost its durable classification repository")
-        }
-    }
-
-    @MainActor
-    private func visibleSettingsWindow() async throws -> NSWindow {
-        var resolved: NSWindow?
-        try await waitUntil("native Settings window") {
-            let matches = NSApp.windows.filter {
-                $0.identifier
-                    == NoonmarkSettingsWindowController.windowIdentifier
-                    && $0.isVisible
-                    && $0.isMiniaturized == false
-                    && $0 is NSPanel == false
-                    && $0.parent == nil
-                    && $0.attachedSheet == nil
-            }
-            guard matches.count == 1, NSApp.modalWindow == nil else {
-                return false
-            }
-            resolved = matches[0]
-            return true
-        }
-        guard let resolved else {
-            throw failure("native Settings window disappeared")
-        }
-        return resolved
-    }
-
-    @MainActor
-    private func activate(_ window: NSWindow) async throws {
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        NSRunningApplication.current.activate(options: [.activateAllWindows])
-        try await waitUntil("native Settings window activation") {
-            NSApp.isActive
-                && NSApp.keyWindow === window
-                && window.isKeyWindow
-                && window.isVisible
-                && window.isMiniaturized == false
-                && window.attachedSheet == nil
-                && NSApp.modalWindow == nil
-        }
-    }
-
-    @MainActor
-    private func clickSettingsSidebar(
-        in settingsWindow: NSWindow,
-        label: String
-    ) async throws {
-        let identifier = "settings.sidebar.zhulong"
-        try await waitUntil("visible Zhulong Settings sidebar target") {
-            settingsInteractionTarget(
+        try await AutomaticClassificationSettingsE2EInteraction
+            .clickZhulongButton(
                 identifier: identifier,
-                in: settingsWindow,
-                verificationText: label
-            ) != nil
-        }
-        guard let target = settingsInteractionTarget(
-            identifier: identifier,
-            in: settingsWindow,
-            verificationText: label
-        ) else {
-            throw failure("Zhulong Settings sidebar target disappeared")
-        }
-        guard AppViewTreeE2E.click(target) else {
-            throw failure(
-                "AppKit sidebar click failed for \(identifier)"
+                label: label,
+                store: store
             )
-        }
-        NSLog("Noonmark E2E AppKit click identifier=%@", identifier)
-    }
-
-    @MainActor
-    private func settingsInteractionTarget(
-        identifier: String,
-        in settingsWindow: NSWindow,
-        verificationText: String
-    ) -> NSView? {
-        guard NSApp.isActive,
-              NSApp.keyWindow === settingsWindow,
-              settingsWindow.isKeyWindow,
-              settingsWindow.isVisible,
-              settingsWindow.isMiniaturized == false,
-              settingsWindow.attachedSheet == nil,
-              NSApp.modalWindow == nil,
-              let target = AppViewTreeE2E.view(
-                  identifier: identifier,
-                  in: settingsWindow
-              ),
-              target.window === settingsWindow,
-              target.isHiddenOrHasHiddenAncestor == false,
-              target.alphaValue > 0,
-              AppViewTreeE2E.verificationText(for: target)
-              == verificationText
-        else {
-            return nil
-        }
-        let frame = target.convert(target.bounds, to: nil)
-        guard frame.isNull == false,
-              frame.isInfinite == false,
-              frame.width >= 2,
-              frame.height >= 2
-        else {
-            return nil
-        }
-        return target
-    }
-
-    @MainActor
-    private func assertVisibleSettingsButton(
-        identifier: String,
-        label: String,
-        in settingsWindow: NSWindow
-    ) async throws {
-        do {
-            try await waitUntil("visible Settings button \(identifier)") {
-                settingsInteractionTarget(
-                    identifier: identifier,
-                    in: settingsWindow,
-                    verificationText: label
-                ) != nil
-            }
-        } catch {
-            throw failure(
-                "Settings button geometry was not rendered: \(identifier)"
-            )
-        }
-    }
-
-    @MainActor
-    private func clickSettingsButton(
-        identifier: String,
-        label: String,
-        in settingsWindow: NSWindow
-    ) async throws {
-        guard let target = settingsInteractionTarget(
-            identifier: identifier,
-            in: settingsWindow,
-            verificationText: label
-        ) else {
-            throw failure("Settings button frame disappeared: \(identifier)")
-        }
-        guard AppViewTreeE2E.click(target) else {
-            throw failure(
-                "AppKit button click failed for \(identifier)"
-            )
-        }
-        NSLog("Noonmark E2E AppKit click identifier=%@", identifier)
     }
 
     @MainActor
@@ -2666,6 +2513,190 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func failure(
+        _ message: String
+    ) -> AutomaticClassificationDeterministicE2EError {
+        .failed(message)
+    }
+}
+
+/// Keeps every automatic-classification decision on the same real Settings
+/// window path: activate, select Zhulong, observe one visible control, then
+/// activate that control's native target/action.
+@MainActor
+private enum AutomaticClassificationSettingsE2EInteraction {
+    static func clickZhulongButton(
+        identifier: String,
+        label: String,
+        store: NoonmarkStore
+    ) async throws {
+        let settingsWindow = try await visibleSettingsWindow()
+        try await activate(settingsWindow)
+        try await clickSettingsSidebar(
+            in: settingsWindow,
+            label: store.copy.providerTitle
+        )
+        try await waitUntil("visible Settings button \(identifier)") {
+            settingsInteractionTarget(
+                identifier: identifier,
+                in: settingsWindow,
+                verificationText: label
+            ) != nil
+        }
+        guard let target = settingsInteractionTarget(
+            identifier: identifier,
+            in: settingsWindow,
+            verificationText: label
+        ) else {
+            throw failure("Settings button frame disappeared: \(identifier)")
+        }
+        if let nativeButton = target as? NativeSmallActionButtonView {
+            try clickNativeSettingsButton(
+                nativeButton,
+                in: settingsWindow
+            )
+        } else if AppViewTreeE2E.click(target) == false {
+            throw failure("Settings button click failed for \(identifier)")
+        }
+        guard store.automaticClassificationJobRepository != nil else {
+            throw failure("UI action lost its durable classification repository")
+        }
+        NSLog("Noonmark E2E AppKit click identifier=%@", identifier)
+    }
+
+    private static func clickNativeSettingsButton(
+        _ button: NativeSmallActionButtonView,
+        in settingsWindow: NSWindow
+    ) throws {
+        guard button.window === settingsWindow,
+              button.isHiddenOrHasHiddenAncestor == false,
+              button.isEnabled,
+              button.bounds.width >= 2,
+              button.bounds.height >= 2
+        else {
+            throw failure(
+                "native Settings button disappeared before activation: "
+                    + "\(button.identifier?.rawValue ?? "unknown")"
+            )
+        }
+        // This host does not grant WindowServer event-posting access. Activating
+        // the one visible native NSButton still exercises its real AppKit
+        // target/action without calling the Store or duplicating the control.
+        button.performClick(nil)
+    }
+
+    private static func visibleSettingsWindow() async throws -> NSWindow {
+        var resolved: NSWindow?
+        try await waitUntil("native Settings window") {
+            let matches = NSApp.windows.filter {
+                $0.identifier
+                    == NoonmarkSettingsWindowController.windowIdentifier
+                    && $0.isVisible
+                    && $0.isMiniaturized == false
+                    && $0 is NSPanel == false
+                    && $0.parent == nil
+                    && $0.attachedSheet == nil
+            }
+            guard matches.count == 1, NSApp.modalWindow == nil else {
+                return false
+            }
+            resolved = matches[0]
+            return true
+        }
+        guard let resolved else {
+            throw failure("native Settings window disappeared")
+        }
+        return resolved
+    }
+
+    static func activate(_ window: NSWindow) async throws {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        try await waitUntil("native Settings window activation") {
+            NSApp.isActive
+                && NSApp.keyWindow === window
+                && window.isKeyWindow
+                && window.isVisible
+                && window.isMiniaturized == false
+                && window.attachedSheet == nil
+                && NSApp.modalWindow == nil
+        }
+    }
+
+    private static func clickSettingsSidebar(
+        in settingsWindow: NSWindow,
+        label: String
+    ) async throws {
+        let identifier = "settings.sidebar.zhulong"
+        try await waitUntil("visible Zhulong Settings sidebar target") {
+            settingsInteractionTarget(
+                identifier: identifier,
+                in: settingsWindow,
+                verificationText: label
+            ) != nil
+        }
+        guard let target = settingsInteractionTarget(
+            identifier: identifier,
+            in: settingsWindow,
+            verificationText: label
+        ) else {
+            throw failure("Zhulong Settings sidebar target disappeared")
+        }
+        guard AppViewTreeE2E.click(target) else {
+            throw failure("AppKit sidebar click failed for \(identifier)")
+        }
+        NSLog("Noonmark E2E AppKit click identifier=%@", identifier)
+    }
+
+    private static func settingsInteractionTarget(
+        identifier: String,
+        in settingsWindow: NSWindow,
+        verificationText: String
+    ) -> NSView? {
+        guard NSApp.isActive,
+              NSApp.keyWindow === settingsWindow,
+              settingsWindow.isKeyWindow,
+              settingsWindow.isVisible,
+              settingsWindow.isMiniaturized == false,
+              settingsWindow.attachedSheet == nil,
+              NSApp.modalWindow == nil,
+              let target = AppViewTreeE2E.view(
+                  identifier: identifier,
+                  in: settingsWindow
+              ),
+              target.window === settingsWindow,
+              target.isHiddenOrHasHiddenAncestor == false,
+              target.alphaValue > 0,
+              AppViewTreeE2E.verificationText(for: target)
+              == verificationText
+        else {
+            return nil
+        }
+        let frame = target.convert(target.bounds, to: nil)
+        guard frame.isNull == false,
+              frame.isInfinite == false,
+              frame.width >= 2,
+              frame.height >= 2
+        else {
+            return nil
+        }
+        return target
+    }
+
+    private static func waitUntil(
+        _ label: String,
+        timeout: TimeInterval = 10,
+        condition: @MainActor () throws -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if try condition() { return }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        throw failure("\(label) timed out")
+    }
+
+    private static func failure(
         _ message: String
     ) -> AutomaticClassificationDeterministicE2EError {
         .failed(message)

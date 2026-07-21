@@ -551,6 +551,10 @@ final class NoonmarkStore: ObservableObject {
 
     @Published var page: Page = .day {
         didSet {
+            if page == .zhulong, zhulongFeaturePreferences.pageEnabled == false {
+                page = .day
+                return
+            }
             if oldValue != page {
                 clearSelection()
             }
@@ -596,6 +600,7 @@ final class NoonmarkStore: ObservableObject {
     @Published var automaticClassificationCircuitPresentation:
         AutomaticClassificationCircuitPresentation?
     @Published var zhulongProviderDraft = ZhulongProviderSettingsStore.load()
+    @Published var zhulongFeaturePreferences: ZhulongFeaturePreferences
     @Published var reviewAutosaveMessage: String?
     @Published var isLocalFirstSyncing = false
     @Published var localFirstSyncMessage: String?
@@ -614,6 +619,7 @@ final class NoonmarkStore: ObservableObject {
     let repository: SQLiteEngineRepository?
     let automaticClassificationJobRepository: SQLiteAutomaticClassificationJobRepository?
     let automaticClassificationOperationalClock: AutomaticClassificationOperationalClock
+    let zhulongFeaturePreferencesRepository: ZhulongFeaturePreferencesRepository
     let databaseURL: URL?
     let syncDeviceIdentity: SyncDeviceIdentity?
     let permitsPersistenceFailureE2E: Bool
@@ -657,6 +663,11 @@ final class NoonmarkStore: ObservableObject {
         let initialMoment = try dayContext.moment()
         self.dayContext = dayContext
         self.automaticClassificationOperationalClock = automaticClassificationOperationalClock
+        let zhulongFeaturePreferencesRepository = ZhulongFeaturePreferencesRepository()
+        self.zhulongFeaturePreferencesRepository = zhulongFeaturePreferencesRepository
+        _zhulongFeaturePreferences = Published(
+            initialValue: zhulongFeaturePreferencesRepository.load()
+        )
         if let executionRevision = ZhulongProviderSettingsStore
             .persistedReadyExecutionRevision()
         {

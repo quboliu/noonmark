@@ -79,14 +79,26 @@ final class ZhulongWorkspaceStore: ObservableObject {
     @Published private(set) var memoryLedger = ZhulongMemoryLedger()
     @Published private(set) var status: ZhulongWorkspaceNotice?
     @Published private(set) var presentationLanguage: AppLanguage = .chinese
+    @Published var variant: ZhulongStreamView {
+        didSet {
+            streamViewRepository.save(variant)
+        }
+    }
+
     private let directoryURL: URL
     private let sessionRepository: EncryptedFileZhulongSessionRepository
     private let memoryRepository: EncryptedFileZhulongMemoryRepository
     private let providerOrchestrator: ZhulongProviderOrchestrator
     private let applicationJournal: EncryptedFileZhulongApplicationJournal
+    private let streamViewRepository: ZhulongStreamViewRepository
 
     init(directoryURL: URL, keySource: any ZhulongSidecarKeySource) {
         self.directoryURL = directoryURL
+        let streamViewRepository = ZhulongStreamViewRepository()
+        self.streamViewRepository = streamViewRepository
+        variant = AppLaunchArguments.value(after: "--e2e-zhulong-stream-variant")
+            .flatMap(ZhulongStreamView.init(rawValue:))
+            ?? streamViewRepository.load()
         let sessionRepository = EncryptedFileZhulongSessionRepository(
             directoryURL: directoryURL,
             keySource: keySource

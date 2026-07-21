@@ -565,7 +565,7 @@ private extension ClassificationPlanChange {
             case .removed:
                 return sourceID == expectedItemID
             }
-        case .create, .hardDelete, .rename, .lifecycle:
+        case .create, .hardDelete, .rename, .lifecycle, .categoryPresentationApproval:
             return false
         }
     }

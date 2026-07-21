@@ -4130,6 +4130,8 @@ final class SyncRecordMergerTests: XCTestCase {
             .create(remappedMutation)
         case .rename:
             .rename(remappedMutation)
+        case .categoryPresentationApproval:
+            .categoryPresentationApproval(remappedMutation)
         case .lifecycle:
             .lifecycle(remappedMutation)
         case .merge:
@@ -4173,6 +4175,8 @@ final class SyncRecordMergerTests: XCTestCase {
             .create(replacement)
         case .rename:
             .rename(replacement)
+        case .categoryPresentationApproval:
+            .categoryPresentationApproval(replacement)
         case .lifecycle:
             .lifecycle(replacement)
         case .merge:

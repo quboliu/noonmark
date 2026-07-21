@@ -547,7 +547,7 @@ public extension NoonmarkSnapshot {
             else {
                 throw NoonmarkError.invalidInput("classification merge impact contains a missing reference")
             }
-        case .create, .hardDelete, .rename, .lifecycle:
+        case .create, .hardDelete, .rename, .lifecycle, .categoryPresentationApproval:
             break
         }
     }

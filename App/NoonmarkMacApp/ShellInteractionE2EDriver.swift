@@ -286,10 +286,10 @@ enum ZhulongNavigationUIE2EDriver {
             guard let pageBeforeSettings,
                   store.page == pageBeforeSettings,
                   let toggle = AppViewTreeE2E.view(
-                      identifier: "settings.zhulong.enabled"
+                      identifier: "settings.zhulong.page.enabled"
                   ),
                   AppViewTreeE2E.verificationText(for: toggle) == "disabled",
-                  clickControl(identifier: "settings.zhulong.enabled")
+                  clickControl(identifier: "settings.zhulong.page.enabled")
             else {
                 retry(attemptsRemaining, action: waitForDisabledSetting) {
                     "failed: 无法通过设置中的启用烛龙开关开启功能"
@@ -428,9 +428,11 @@ enum ZhulongNavigationUIE2EDriver {
         private func waitForEnabledSetting(attemptsRemaining: Int = 60) {
             guard let pageBeforeSettings,
                   store.page == pageBeforeSettings,
-                  let toggle = AppViewTreeE2E.view(identifier: "settings.zhulong.enabled"),
+                  let toggle = AppViewTreeE2E.view(
+                      identifier: "settings.zhulong.page.enabled"
+                  ),
                   AppViewTreeE2E.verificationText(for: toggle) == "enabled",
-                  clickControl(identifier: "settings.zhulong.enabled")
+                  clickControl(identifier: "settings.zhulong.page.enabled")
             else {
                 retry(attemptsRemaining, action: waitForEnabledSetting) {
                     "failed: 无法通过设置中的启用烛龙开关关闭功能"
@@ -473,7 +475,7 @@ enum ZhulongNavigationUIE2EDriver {
                 return
             }
 
-            store.zhulongProviderDraft.enabled = true
+            store.setZhulongPageEnabled(true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
                 reopenZhulongForFallbackCheck()
             }
@@ -500,7 +502,7 @@ enum ZhulongNavigationUIE2EDriver {
                 }
                 return
             }
-            store.zhulongProviderDraft.enabled = false
+            store.setZhulongPageEnabled(false)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
                 waitForVisiblePageFallback()
             }

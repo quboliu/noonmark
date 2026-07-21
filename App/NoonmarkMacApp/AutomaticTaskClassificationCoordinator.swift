@@ -266,7 +266,9 @@ extension NoonmarkStore {
     }
 
     func retryAutomaticClassification(for chainID: TaskChainID) {
-        guard let automaticClassificationJobRepository else { return }
+        guard isAutomaticClassificationEnabled,
+              let automaticClassificationJobRepository
+        else { return }
         do {
             let failed = try automaticClassificationJobRepository
                 .jobs(states: [.failed])
@@ -296,12 +298,20 @@ extension NoonmarkStore {
             currentAutomaticClassificationProviderExecution
         )
         refreshAutomaticClassificationStatuses()
-        restartAutomaticClassificationWorker()
+        if isAutomaticClassificationEnabled {
+            restartAutomaticClassificationWorker()
+        }
     }
 
     func automaticClassificationJobsDidChange() {
         refreshAutomaticClassificationStatuses()
-        restartAutomaticClassificationWorker()
+        if isAutomaticClassificationEnabled {
+            restartAutomaticClassificationWorker()
+        }
+    }
+
+    func refreshAutomaticClassificationStatusesForFeatureChange() {
+        refreshAutomaticClassificationStatuses()
     }
 
     func automaticClassificationProviderConfigurationDidChange(
@@ -331,9 +341,10 @@ extension NoonmarkStore {
     ) {
         pendingAutomaticClassificationProviderReconciliation = execution
         if automaticClassificationWorkerTask != nil {
-            automaticClassificationWorkerRestartRequested = true
+            automaticClassificationWorkerRestartRequested =
+                isAutomaticClassificationEnabled
             automaticClassificationWorkerTask?.cancel()
-        } else {
+        } else if isAutomaticClassificationEnabled {
             restartAutomaticClassificationWorker()
         }
     }
@@ -380,7 +391,7 @@ extension NoonmarkStore {
                 case let .userClassificationWins(chainID):
                     .userClassificationWins(chainID)
                 }
-            return try AutomaticClassificationJobMutationPlanner().plan(
+            let plan = try AutomaticClassificationJobMutationPlanner().plan(
                 policy: storagePolicy,
                 candidate: candidate,
                 originalSnapshot: originalSnapshot,
@@ -388,6 +399,13 @@ extension NoonmarkStore {
                 providerIsReady: automaticClassificationProviderIsReady,
                 operationalNow: automaticClassificationOperationalClock.now()
             )
+            guard isAutomaticClassificationEnabled else {
+                return AutomaticClassificationJobMutationPlan(
+                    enqueues: [],
+                    mutations: plan.mutations
+                )
+            }
+            return plan
         }
         return AutomaticClassificationJobMutationPlan(
             enqueues: [],
@@ -404,7 +422,8 @@ extension NoonmarkStore {
                 "one redo operation cannot restore multiple automatic classification jobs"
             )
         }
-        guard let chainID = outcome
+        guard isAutomaticClassificationEnabled,
+              let chainID = outcome
             .automaticClassificationRestoredChainIDs.first,
             let automaticClassificationJobRepository,
             syncDeviceIdentity != nil
@@ -523,7 +542,8 @@ extension NoonmarkStore {
             let backlog = try automaticClassificationJobRepository.pendingBacklog()
             automaticClassificationBacklogSnapshot = backlog
 
-            if automaticClassificationProviderIsReady,
+            if isAutomaticClassificationEnabled,
+               automaticClassificationProviderIsReady,
                backlog.items.isEmpty == false,
                automaticClassificationBacklogDeferredForSession == false,
                automaticClassificationBacklogDecisionTask == nil
@@ -610,7 +630,8 @@ extension NoonmarkStore {
     func resolveAutomaticClassificationBacklog(
         _ decision: AutomaticClassificationBacklogUserDecision
     ) {
-        guard let snapshot = automaticClassificationBacklogSnapshot,
+        guard isAutomaticClassificationEnabled,
+              let snapshot = automaticClassificationBacklogSnapshot,
               snapshot.items.isEmpty == false
         else { return }
         switch decision {
@@ -694,7 +715,8 @@ extension NoonmarkStore {
     }
 
     func retryAutomaticClassificationProviderCircuit() {
-        guard automaticClassificationCircuitRetryTask == nil,
+        guard isAutomaticClassificationEnabled,
+              automaticClassificationCircuitRetryTask == nil,
               case let .configured(executionRevision) =
               currentAutomaticClassificationProviderExecution
         else { return }
@@ -784,6 +806,11 @@ extension NoonmarkStore {
     }
 
     private func restartAutomaticClassificationWorker() {
+        guard isAutomaticClassificationEnabled else {
+            automaticClassificationWorkerRestartRequested = false
+            automaticClassificationWorkerTask = nil
+            return
+        }
         guard automaticClassificationJobRepository != nil else {
             automaticClassificationWorkerTask = nil
             pendingAutomaticClassificationProviderReconciliation = nil
@@ -796,7 +823,9 @@ extension NoonmarkStore {
     }
 
     private func runAutomaticClassificationWorker() async {
-        guard let automaticClassificationJobRepository else { return }
+        guard isAutomaticClassificationEnabled,
+              let automaticClassificationJobRepository
+        else { return }
         defer {
             let shouldRestart = automaticClassificationWorkerRestartRequested
             automaticClassificationWorkerRestartRequested = false
@@ -806,7 +835,7 @@ extension NoonmarkStore {
             }
         }
         var contentionAttempt = 0
-        while Task.isCancelled == false {
+        while Task.isCancelled == false, isAutomaticClassificationEnabled {
             let providerDirective = await reconcileAutomaticClassificationProvider(
                 contentionAttempt: &contentionAttempt
             )
@@ -905,6 +934,7 @@ extension NoonmarkStore {
         repository: SQLiteAutomaticClassificationJobRepository,
         contentionAttempt: inout Int
     ) async -> AutomaticClassificationWorkerDirective {
+        guard isAutomaticClassificationEnabled else { return .stop }
         let now = automaticClassificationOperationalClock.now()
         do {
             let dispatch = try repository.nextDispatch(
@@ -1026,6 +1056,8 @@ extension NoonmarkStore {
 
         var checkpointIsDurable = claim.proposalCheckpoint != nil
         do {
+            try Task.checkCancellation()
+            try requireAutomaticClassificationEnabled()
             let handles = try AutomaticClassificationCatalogHandles(
                 context: context
             )
@@ -1127,6 +1159,7 @@ extension NoonmarkStore {
             }
 
             try Task.checkCancellation()
+            try requireAutomaticClassificationEnabled()
             let moment = try prepareStoreMutationForAutomaticClassification()
             let candidate = try NoonmarkEngine(snapshot: engine.snapshot())
             let currentContext = try candidate.automaticClassificationContext(
@@ -1146,6 +1179,8 @@ extension NoonmarkStore {
                 authority: authority,
                 now: moment.instant
             )
+            try Task.checkCancellation()
+            try requireAutomaticClassificationEnabled()
             try saveAutomaticClassificationCompletion(
                 candidate,
                 claim: claim,
@@ -1208,6 +1243,12 @@ extension NoonmarkStore {
                     claim.jobID.uuidString
                 )
             }
+        }
+    }
+
+    private func requireAutomaticClassificationEnabled() throws {
+        guard isAutomaticClassificationEnabled else {
+            throw CancellationError()
         }
     }
 

@@ -8,6 +8,11 @@ public enum ClassificationLifecycle: String, Codable, Equatable, Sendable {
     case merged
 }
 
+public enum CategoryPresentationApproval: String, Codable, Equatable, Sendable {
+    case userApproved
+    case pendingAIReview
+}
+
 public enum ClassificationNameCanonicalizer {
     private static let caseFolder = ICUNFKCCaseFolder()
 
@@ -214,6 +219,7 @@ public struct TaskCategory: Codable, Equatable, Sendable, Identifiable {
         case canonicalKey
         case canonicalKeyVersion
         case colorHex
+        case presentationApproval
         case lifecycle
         case nameVersions
         case createdAt
@@ -225,6 +231,7 @@ public struct TaskCategory: Codable, Equatable, Sendable, Identifiable {
     public var canonicalKey: String
     public var canonicalKeyVersion: String
     public var colorHex: String
+    public var presentationApproval: CategoryPresentationApproval
     public var lifecycle: ClassificationLifecycle
     public var nameVersions: [ClassificationNameVersion]
     public let createdAt: Date
@@ -236,6 +243,22 @@ public struct TaskCategory: Codable, Equatable, Sendable, Identifiable {
         colorHex: String,
         now: Date
     ) {
+        self.init(
+            id: id,
+            name: name,
+            colorHex: colorHex,
+            presentationApproval: .userApproved,
+            now: now
+        )
+    }
+
+    public init(
+        id: TaskCategoryID,
+        name: String,
+        colorHex: String,
+        presentationApproval: CategoryPresentationApproval,
+        now: Date
+    ) {
         let displayName = ClassificationNameCanonicalizer.displayName(name)
         let canonicalKey = ClassificationNameCanonicalizer.canonicalKey(displayName)
         self.id = id
@@ -243,6 +266,7 @@ public struct TaskCategory: Codable, Equatable, Sendable, Identifiable {
         self.canonicalKey = canonicalKey
         self.canonicalKeyVersion = ClassificationNameCanonicalizer.algorithmVersion
         self.colorHex = colorHex
+        self.presentationApproval = presentationApproval
         self.lifecycle = .active
         self.nameVersions = [
             ClassificationNameVersion(name: displayName, canonicalKey: canonicalKey, validFrom: now)
@@ -256,6 +280,10 @@ public struct TaskCategory: Codable, Equatable, Sendable, Identifiable {
         id = try container.decode(TaskCategoryID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         colorHex = try container.decode(String.self, forKey: .colorHex)
+        presentationApproval = try container.decode(
+            CategoryPresentationApproval.self,
+            forKey: .presentationApproval
+        )
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         canonicalKey = try container.decode(String.self, forKey: .canonicalKey)
@@ -285,6 +313,7 @@ public struct TaskCategory: Codable, Equatable, Sendable, Identifiable {
         try container.encode(canonicalKey, forKey: .canonicalKey)
         try container.encode(canonicalKeyVersion, forKey: .canonicalKeyVersion)
         try container.encode(colorHex, forKey: .colorHex)
+        try container.encode(presentationApproval, forKey: .presentationApproval)
         try container.encode(lifecycle, forKey: .lifecycle)
         try container.encode(nameVersions, forKey: .nameVersions)
         try container.encode(createdAt, forKey: .createdAt)
@@ -412,6 +441,7 @@ public enum ClassificationIntent: Equatable, Sendable {
     case hardDeleteLabel(TaskLabelID)
     case setCurrent(TaskClassificationDraft)
     case renameCategory(TaskCategoryID, to: String)
+    case approveCategoryPresentation(TaskCategoryID)
     case renameLabel(TaskLabelID, to: String)
     case archiveCategory(TaskCategoryID)
     case restoreCategory(TaskCategoryID)
@@ -430,6 +460,13 @@ public enum ClassificationSource: Codable, Equatable, Sendable {
     case automaticAI(jobID: UUID, generation: Int)
     case inherited(fromChainID: TaskChainID)
     case deterministicDomainAction(reason: String)
+}
+
+private extension ClassificationSource {
+    var categoryPresentationApproval: CategoryPresentationApproval {
+        if case .automaticAI = self { return .pendingAIReview }
+        return .userApproved
+    }
 }
 
 public struct ClassificationConfirmation: Equatable, Sendable {
@@ -641,6 +678,12 @@ public enum ClassificationPlanChange: Codable, Equatable, Sendable {
         beforeName: String,
         afterName: String
     )
+    case categoryPresentationApproval(
+        itemID: String,
+        name: String,
+        before: CategoryPresentationApproval,
+        after: CategoryPresentationApproval
+    )
     case lifecycle(
         kind: ClassificationItemKind,
         itemID: String,
@@ -816,6 +859,8 @@ public struct ClassificationChangeRecord: Codable, Equatable, Sendable, Identifi
             switch change {
             case let .rename(_, _, beforeName, afterName):
                 beforeName != afterName
+            case let .categoryPresentationApproval(_, _, before, after):
+                before != after
             case .create, .merge, .hardDelete, .setCurrent, .lifecycle:
                 true
             }
@@ -1003,6 +1048,19 @@ public struct ClassificationItemProjection: Equatable, Sendable, Identifiable {
     public let id: String
     public let name: String
     public let colorHex: String
+    public let presentationApproval: CategoryPresentationApproval?
+
+    public init(
+        id: String,
+        name: String,
+        colorHex: String,
+        presentationApproval: CategoryPresentationApproval? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.colorHex = colorHex
+        self.presentationApproval = presentationApproval
+    }
 }
 
 public struct TaskClassificationProjection: Equatable, Sendable {
@@ -1036,6 +1094,7 @@ public struct ClassificationCatalogItemProjection: Equatable, Sendable, Identifi
     public let mergedIntoID: String?
     public let currentUsageCount: Int
     public let historicalUsageCount: Int
+    public let presentationApproval: CategoryPresentationApproval?
 
     public init(
         id: String,
@@ -1044,7 +1103,8 @@ public struct ClassificationCatalogItemProjection: Equatable, Sendable, Identifi
         lifecycle: ClassificationLifecycle,
         mergedIntoID: String? = nil,
         currentUsageCount: Int,
-        historicalUsageCount: Int
+        historicalUsageCount: Int,
+        presentationApproval: CategoryPresentationApproval? = nil
     ) {
         self.id = id
         self.name = name
@@ -1053,6 +1113,7 @@ public struct ClassificationCatalogItemProjection: Equatable, Sendable, Identifi
         self.mergedIntoID = mergedIntoID
         self.currentUsageCount = currentUsageCount
         self.historicalUsageCount = historicalUsageCount
+        self.presentationApproval = presentationApproval
     }
 }
 
@@ -1298,11 +1359,18 @@ public struct HistoricalCategoryValue: Codable, Equatable, Sendable {
     public let id: TaskCategoryID
     public let name: String
     public let colorHex: String
+    public let presentationApproval: CategoryPresentationApproval
 
-    public init(id: TaskCategoryID, name: String, colorHex: String) {
+    public init(
+        id: TaskCategoryID,
+        name: String,
+        colorHex: String,
+        presentationApproval: CategoryPresentationApproval = .userApproved
+    ) {
         self.id = id
         self.name = name
         self.colorHex = colorHex
+        self.presentationApproval = presentationApproval
     }
 }
 
@@ -1550,7 +1618,12 @@ public extension NoonmarkEngine {
             let current = classificationState.currentByChainID[chainID]
             let category = current?.categoryID.flatMap { id in
                 classificationState.categories[id].map {
-                    ClassificationItemProjection(id: id.description, name: $0.name, colorHex: $0.colorHex)
+                    ClassificationItemProjection(
+                        id: id.description,
+                        name: $0.name,
+                        colorHex: $0.colorHex,
+                        presentationApproval: $0.presentationApproval
+                    )
                 }
             }
             let labels = (current?.labelIDs ?? [])
@@ -1605,7 +1678,8 @@ public extension NoonmarkEngine {
                     },
                     historicalUsageCount: historicalEvents.count {
                         $0.category.map { historicalIDs.contains($0.id) } ?? false
-                    }
+                    },
+                    presentationApproval: category.presentationApproval
                 )
             }
             let labels = classificationState.labels.values.map { label in
@@ -1709,6 +1783,7 @@ public extension NoonmarkEngine {
                 throw NoonmarkError.notFound("task chain")
             }
         case let .renameCategory(id, _),
+             let .approveCategoryPresentation(id),
              let .archiveCategory(id),
              let .restoreCategory(id),
              let .hardDeleteCategory(id):
@@ -1961,6 +2036,8 @@ public extension NoonmarkEngine {
             try applyCurrentClassification(plan, mutation: mutation, to: &state)
         case .renameCategory, .renameLabel:
             return try applyClassificationRename(plan.intent, now: mutation.now, to: &state)
+        case let .approveCategoryPresentation(id):
+            return try approveCategoryPresentation(id, in: &state, now: mutation.now)
         case .archiveCategory, .restoreCategory, .archiveLabel, .restoreLabel:
             try applyClassificationLifecycle(plan.intent, now: mutation.now, to: &state)
         }
@@ -1981,7 +2058,13 @@ public extension NoonmarkEngine {
             guard state.categories[id] == nil, state.categoryDeletionTombstones[id] == nil else {
                 throw NoonmarkError.invalidInput("task category identity already exists")
             }
-            state.categories[id] = TaskCategory(id: id, name: name, colorHex: colorHex, now: mutation.now)
+            state.categories[id] = TaskCategory(
+                id: id,
+                name: name,
+                colorHex: colorHex,
+                presentationApproval: mutation.source.categoryPresentationApproval,
+                now: mutation.now
+            )
         case let .createLabel(name, colorHex):
             let id = TaskLabelID(rawID)
             guard state.labels[id] == nil, state.labelDeletionTombstones[id] == nil else {
@@ -2049,7 +2132,7 @@ public extension NoonmarkEngine {
             plannedID: plan.plannedCreations.categoryID,
             for: draft.chainID,
             in: &state,
-            now: mutation.now
+            mutation: mutation
         )
         let labelIDs = try Set(draft.labels.map {
             let plannedID: TaskLabelID? = if case let .new(name, _) = $0 {
@@ -2161,6 +2244,18 @@ extension NoonmarkEngine {
             ]
         case .renameCategory, .renameLabel:
             return [try renamePlanChange(for: intent)]
+        case let .approveCategoryPresentation(id):
+            guard let category = classificationState.categories[id] else {
+                throw NoonmarkError.notFound("task category")
+            }
+            return [
+                .categoryPresentationApproval(
+                    itemID: id.description,
+                    name: category.name,
+                    before: category.presentationApproval,
+                    after: .userApproved
+                )
+            ]
         case .archiveCategory, .restoreCategory, .archiveLabel, .restoreLabel:
             return [try lifecyclePlanChange(for: intent)]
         }
@@ -2446,7 +2541,12 @@ extension NoonmarkEngine {
         _ snapshot: TraceClassificationSnapshot
     ) -> TraceClassificationEventProjection {
         let category = snapshot.category.map {
-            ClassificationItemProjection(id: $0.id.description, name: $0.name, colorHex: $0.colorHex)
+            ClassificationItemProjection(
+                id: $0.id.description,
+                name: $0.name,
+                colorHex: $0.colorHex,
+                presentationApproval: $0.presentationApproval
+            )
         }
         let labels = snapshot.labels.map {
             ClassificationItemProjection(id: $0.id.description, name: $0.name, colorHex: $0.colorHex)
@@ -2501,7 +2601,7 @@ extension NoonmarkEngine {
         plannedID: TaskCategoryID?,
         for chainID: TaskChainID,
         in state: inout TaskClassificationState,
-        now: Date
+        mutation: ClassificationMutationContext
     ) throws -> TaskCategoryID? {
         guard let choice else { return nil }
         switch choice {
@@ -2533,7 +2633,13 @@ extension NoonmarkEngine {
             else {
                 throw NoonmarkError.invalidInput("task category planned identity is unavailable")
             }
-            let category = TaskCategory(id: plannedID, name: normalizedName, colorHex: colorHex, now: now)
+            let category = TaskCategory(
+                id: plannedID,
+                name: normalizedName,
+                colorHex: colorHex,
+                presentationApproval: mutation.source.categoryPresentationApproval,
+                now: mutation.now
+            )
             state.categories[category.id] = category
             return category.id
         }
@@ -2617,6 +2723,17 @@ extension NoonmarkEngine {
             return try preparedSetCurrentIntent(draft)
         case .renameCategory, .renameLabel:
             return try preparedRenameIntent(intent)
+        case let .approveCategoryPresentation(id):
+            guard let category = classificationState.categories[id] else {
+                throw NoonmarkError.notFound("task category")
+            }
+            guard category.lifecycle != .merged else {
+                throw NoonmarkError.invalidTransition("merged task category cannot be approved")
+            }
+            guard category.presentationApproval == .pendingAIReview else {
+                throw NoonmarkError.invalidTransition("task category presentation is already approved")
+            }
+            return (intent, [])
         case .archiveCategory, .restoreCategory, .archiveLabel, .restoreLabel:
             return try preparedLifecycleIntent(intent)
         }
@@ -2996,9 +3113,31 @@ extension NoonmarkEngine {
         category.name = name
         category.canonicalKey = canonicalKey
         category.canonicalKeyVersion = ClassificationNameCanonicalizer.algorithmVersion
+        category.presentationApproval = .userApproved
         category.nameVersions.append(
             ClassificationNameVersion(name: name, canonicalKey: canonicalKey, validFrom: now)
         )
+        category.updatedAt = now
+        state.categories[id] = category
+        return true
+    }
+
+    func approveCategoryPresentation(
+        _ id: TaskCategoryID,
+        in state: inout TaskClassificationState,
+        now: Date
+    ) throws -> Bool {
+        guard var category = state.categories[id] else {
+            throw NoonmarkError.notFound("task category")
+        }
+        guard category.lifecycle != .merged else {
+            throw NoonmarkError.invalidTransition("merged task category cannot be approved")
+        }
+        guard category.presentationApproval != .userApproved else { return false }
+        guard now >= category.updatedAt else {
+            throw NoonmarkError.invalidTransition("task category approval time moved backwards")
+        }
+        category.presentationApproval = .userApproved
         category.updatedAt = now
         state.categories[id] = category
         return true
@@ -3485,7 +3624,12 @@ extension NoonmarkEngine {
         let current = classificationState.currentByChainID[chainID]
         let category = current?.categoryID.flatMap { id in
             classificationState.categories[id].map {
-                HistoricalCategoryValue(id: id, name: $0.name, colorHex: $0.colorHex)
+                HistoricalCategoryValue(
+                    id: id,
+                    name: $0.name,
+                    colorHex: $0.colorHex,
+                    presentationApproval: $0.presentationApproval
+                )
             }
         }
         let labels = (current?.labelIDs ?? [])
@@ -3616,7 +3760,7 @@ private extension ClassificationPlanChange {
             return id == chainID
         case let .merge(_, _, _, _, _, _, impact):
             return impact.currentChainIDs.contains(chainID)
-        case .create, .hardDelete, .rename, .lifecycle:
+        case .create, .hardDelete, .rename, .lifecycle, .categoryPresentationApproval:
             return false
         }
     }

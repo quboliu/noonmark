@@ -270,6 +270,102 @@ struct UIEntryE2EStartGate {
     }
 }
 
+@MainActor
+enum ClassificationLabelMenuUIE2EDriver {
+    static func start(
+        chainIdentifier: String,
+        availableLabelIdentifier: String,
+        resultURL: URL,
+        keepsAppOpen: Bool
+    ) {
+        Session(
+            chainIdentifier: chainIdentifier,
+            availableLabelIdentifier: availableLabelIdentifier,
+            resultURL: resultURL,
+            keepsAppOpen: keepsAppOpen
+        ).start()
+    }
+
+    @MainActor
+    private final class Session {
+        private let chainIdentifier: String
+        private let availableLabelIdentifier: String
+        private let resultURL: URL
+        private let keepsAppOpen: Bool
+
+        init(
+            chainIdentifier: String,
+            availableLabelIdentifier: String,
+            resultURL: URL,
+            keepsAppOpen: Bool
+        ) {
+            self.chainIdentifier = chainIdentifier
+            self.availableLabelIdentifier = availableLabelIdentifier
+            self.resultURL = resultURL
+            self.keepsAppOpen = keepsAppOpen
+        }
+
+        func start() {
+            let addIdentifier = "classification.editor.add-label.\(chainIdentifier)"
+            waitFor("添加标签菜单入口") {
+                AppViewTreeE2E.click(identifier: addIdentifier)
+            } onSuccess: { [self] in
+                let itemIdentifier =
+                    "classification.editor.available-label.\(chainIdentifier).\(availableLabelIdentifier)"
+                waitFor("未选标签候选项") {
+                    AppViewTreeE2E.view(identifier: itemIdentifier) != nil
+                } onSuccess: { [self] in
+                    finish(with: "ok")
+                }
+            }
+        }
+
+        private func waitFor(
+            _ step: String,
+            attemptsRemaining: Int = 80,
+            action: @escaping @MainActor () -> Bool,
+            onSuccess: @escaping @MainActor () -> Void
+        ) {
+            if action() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: onSuccess)
+                return
+            }
+            guard attemptsRemaining > 1 else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finish(with: "failed: 等待真实 UI 超时：\(step)")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [self] in
+                waitFor(
+                    step,
+                    attemptsRemaining: attemptsRemaining - 1,
+                    action: action,
+                    onSuccess: onSuccess
+                )
+            }
+        }
+
+        private func finish(with result: String) {
+            do {
+                try FileManager.default.createDirectory(
+                    at: resultURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try result.write(to: resultURL, atomically: true, encoding: .utf8)
+            } catch {
+                NSLog(
+                    "Noonmark classification label menu UI E2E result write failed: %@",
+                    String(describing: error)
+                )
+            }
+            guard keepsAppOpen == false else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                NSApp.terminate(nil)
+            }
+        }
+    }
+}
+
 struct PoolTaskRowE2ENamespace {
     let rawValue: String
 

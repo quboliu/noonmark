@@ -132,7 +132,7 @@ enum QuickAddUIE2EDriver {
                 }
                 return
             }
-            guard AppViewTreeE2E.click(textView) else {
+            guard clickTextInput(textView) else {
                 finish(
                     failure(
                         phase: "focus",
@@ -175,6 +175,52 @@ enum QuickAddUIE2EDriver {
                 replacementRange: NSRange(location: NSNotFound, length: 0)
             )
             waitForMarkedText(textView: textView)
+        }
+
+        /// NSTextView enters editing while handling mouseDown.  Posting both
+        /// halves of a click can leave a launch automation checking focus
+        /// before AppKit drains its event queue.  Queue mouseUp first, then
+        /// synchronously deliver the genuine mouseDown, matching AppKit's
+        /// native tracking contract without bypassing hit testing or focus.
+        private func clickTextInput(_ textView: NSTextView) -> Bool {
+            guard let window = textView.window else { return false }
+            let point = textView.convert(
+                NSPoint(x: textView.bounds.midX, y: textView.bounds.midY),
+                to: nil
+            )
+            let root = window.contentView?.superview ?? window.contentView
+            guard let hitView = root?.hitTest(point),
+                  hitView === textView || hitView.isDescendant(of: textView)
+            else {
+                return false
+            }
+            let timestamp = ProcessInfo.processInfo.systemUptime
+            guard let mouseDown = NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: point,
+                modifierFlags: [],
+                timestamp: timestamp,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            ), let mouseUp = NSEvent.mouseEvent(
+                with: .leftMouseUp,
+                location: point,
+                modifierFlags: [],
+                timestamp: timestamp + 0.01,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 0
+            ) else {
+                return false
+            }
+            NSApp.postEvent(mouseUp, atStart: false)
+            window.sendEvent(mouseDown)
+            return true
         }
 
         private func waitForMarkedText(

@@ -63,8 +63,51 @@ extension NoonmarkStore {
         return engine.unfinishedPool().first { $0.chain.id == selectedUnfinishedChainID }
     }
 
+    var zhulongFeatureAvailability: ZhulongFeatureAvailability {
+        ZhulongFeatureAvailability(
+            providerEnabled: zhulongProviderDraft.enabled,
+            preferences: zhulongFeaturePreferences
+        )
+    }
+
     var isZhulongEnabled: Bool {
-        zhulongProviderDraft.enabled
+        zhulongFeatureAvailability.pageIsAvailable
+    }
+
+    var isAutomaticClassificationEnabled: Bool {
+        zhulongFeatureAvailability.shouldEnqueueAutomaticClassification
+    }
+
+    func setZhulongPageEnabled(_ enabled: Bool) {
+        guard zhulongFeaturePreferences.pageEnabled != enabled else { return }
+        zhulongFeaturePreferences.pageEnabled = enabled
+        zhulongFeaturePreferencesRepository.save(zhulongFeaturePreferences)
+        if enabled == false, page == .zhulong {
+            page = .day
+        }
+        NSLog("Noonmark Zhulong page enabled=%@", enabled.description)
+    }
+
+    func setAutomaticClassificationEnabled(_ enabled: Bool) {
+        guard zhulongFeaturePreferences.automaticClassificationEnabled != enabled else {
+            return
+        }
+        zhulongFeaturePreferences.automaticClassificationEnabled = enabled
+        zhulongFeaturePreferencesRepository.save(zhulongFeaturePreferences)
+        automaticClassificationBacklogPrompt = nil
+        automaticClassificationWorkerRestartRequested = false
+        if enabled {
+            restoreAutomaticClassificationWork()
+        } else {
+            automaticClassificationWorkerTask?.cancel()
+            automaticClassificationBacklogDecisionTask?.cancel()
+            automaticClassificationCircuitRetryTask?.cancel()
+            refreshAutomaticClassificationStatusesForFeatureChange()
+        }
+        NSLog(
+            "Noonmark automatic classification enabled=%@",
+            enabled.description
+        )
     }
 
     var hasActiveDetailSelection: Bool {

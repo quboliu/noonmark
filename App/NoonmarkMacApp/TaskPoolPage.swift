@@ -50,30 +50,49 @@ struct PoolTaskContextMenu: View {
 struct TaskPoolPage: View {
     @EnvironmentObject private var store: NoonmarkStore
     @State private var quickAddFocusRequest = 0
+    @State private var presentationPreference: TaskCollectionPresentationPreference
+    private let presentationRepository: TaskCollectionPresentationPreferenceRepository
 
-    var tasks: [PoolTask] { store.engine.taskPool() }
-    var groups: [PoolTaskGroup] {
-        Dictionary(grouping: tasks, by: {
-            store.currentClassification(for: $0.chain.id)?.category?.name ?? store.copy.ungrouped
-        })
-            .map { PoolTaskGroup(title: $0.key, tasks: $0.value.sorted { $0.definition.createdAt < $1.definition.createdAt }) }
-            .sorted {
-                if $0.title == store.copy.ungrouped { return false }
-                if $1.title == store.copy.ungrouped { return true }
-                return ClassificationNameCanonicalizer.canonicalKey($0.title)
-                    < ClassificationNameCanonicalizer.canonicalKey($1.title)
-            }
+    init(
+        presentationRepository: TaskCollectionPresentationPreferenceRepository =
+            TaskCollectionPresentationPreferenceRepository()
+    ) {
+        self.presentationRepository = presentationRepository
+        _presentationPreference = State(
+            initialValue: presentationRepository.load(for: .taskPool)
+        )
     }
 
-    var shouldShowGroups: Bool {
-        groups.count > 1 || groups.contains { $0.title != store.copy.ungrouped }
+    var tasks: [PoolTask] { store.engine.taskPool() }
+    private var tasksByID: [String: PoolTask] {
+        Dictionary(uniqueKeysWithValues: tasks.map { ($0.chain.id.description, $0) })
+    }
+
+    private var presentationSections: [TaskCollectionPresentationSection] {
+        let items = tasks.map { task in
+            TaskCollectionPresentationItem(
+                id: task.chain.id.description,
+                title: task.definition.title,
+                time: task.definition.createdAt,
+                category: store.currentClassification(for: task.chain.id)?.category?
+                    .taskCollectionCategoryPresentation
+            )
+        }
+        return TaskCollectionPresentationProjector().sections(
+            for: items,
+            preference: presentationPreference,
+            ungroupedTitle: store.copy.ungrouped
+        )
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                PageHeader(title: store.copy.navPool, subtitle: store.copy.poolSubtitle)
-                Spacer()
+            PageHeader(title: store.copy.navPool, subtitle: store.copy.poolSubtitle) {
+                TaskCollectionPresentationMenu(
+                    copy: store.copy,
+                    accessibilityIdentifier: "task-collection-view.pool",
+                    preference: $presentationPreference
+                )
             }
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
@@ -82,31 +101,25 @@ struct TaskPoolPage: View {
                         .padding(.bottom, 12)
 
                     LazyVStack(spacing: 0) {
-                        if shouldShowGroups {
-                            ForEach(groups) { group in
+                        ForEach(presentationSections, id: \.id) { section in
+                            if presentationPreference.organization == .grouped {
                                 VStack(alignment: .leading, spacing: 0) {
-                                    HStack(spacing: 8) {
-                                        Text(group.title)
-                                            .font(.noonmarkSystem(size: 12, weight: .semibold))
-                                            .foregroundStyle(Theme.text2)
-                                        Text("\(group.tasks.count)")
-                                            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                                            .foregroundStyle(Theme.text3)
-                                            .padding(.horizontal, 6)
-                                            .frame(height: 18)
-                                            .background(Capsule().fill(Theme.chip))
-                                        Spacer()
+                                    TaskCollectionSectionHeader(
+                                        section: section,
+                                        count: section.items.count
+                                    )
+                                    ForEach(section.items, id: \.id) { item in
+                                        if let task = tasksByID[item.id] {
+                                            PoolTaskRow(task: task)
+                                        }
                                     }
-                                    .padding(.top, 12)
-                                    .padding(.bottom, 4)
-                                    ForEach(group.tasks, id: \.chain.id) { task in
+                                }
+                            } else {
+                                ForEach(section.items, id: \.id) { item in
+                                    if let task = tasksByID[item.id] {
                                         PoolTaskRow(task: task)
                                     }
                                 }
-                            }
-                        } else {
-                            ForEach(tasks, id: \.chain.id) { task in
-                                PoolTaskRow(task: task)
                             }
                         }
                         if tasks.isEmpty {
@@ -126,14 +139,10 @@ struct TaskPoolPage: View {
                 .padding(.bottom, 20)
             }
         }
+        .onChange(of: presentationPreference) { _, preference in
+            presentationRepository.save(preference, for: .taskPool)
+        }
     }
-}
-
-struct PoolTaskGroup: Identifiable {
-    let title: String
-    let tasks: [PoolTask]
-
-    var id: String { title }
 }
 
 struct PoolQuickAdd: View {

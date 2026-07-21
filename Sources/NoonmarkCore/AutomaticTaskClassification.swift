@@ -427,7 +427,7 @@ private extension NoonmarkEngine {
     ) -> String {
         automaticClassificationDigest(
             CatalogDigestMaterial(
-                formatVersion: 1,
+                formatVersion: 2,
                 categories: catalog.categories.map(CatalogItemDigestMaterial.init),
                 labels: catalog.labels.map(CatalogItemDigestMaterial.init)
             )
@@ -492,12 +492,14 @@ private struct CatalogItemDigestMaterial: Encodable {
     let name: String
     let colorHex: String
     let lifecycle: ClassificationLifecycle
+    let presentationApproval: CategoryPresentationApproval?
 
     init(_ item: ClassificationCatalogItemProjection) {
         id = item.id
         name = item.name
         colorHex = item.colorHex
         lifecycle = item.lifecycle
+        presentationApproval = item.presentationApproval
     }
 }
 

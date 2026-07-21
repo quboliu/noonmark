@@ -108,6 +108,19 @@ struct TaskClassificationEditor: View {
         activeCategories.first { $0.id == selectedCategoryID }
     }
 
+    private var availableLabels: [ClassificationCatalogItemProjection] {
+        let selectedIDs = Set(selectedLabels.compactMap(\.existingID))
+        let selectedNewKeys = Set(selectedLabels.filter { $0.existingID == nil }.map {
+            ClassificationNameCanonicalizer.canonicalKey($0.name)
+        })
+        return activeLabels.filter {
+            selectedIDs.contains($0.id) == false
+                && selectedNewKeys.contains(
+                    ClassificationNameCanonicalizer.canonicalKey($0.name)
+                ) == false
+        }
+    }
+
     private var categoryMenu: some View {
         Menu {
             Button(copy.noGroupAction) { selectCategory(nil) }
@@ -150,14 +163,14 @@ struct TaskClassificationEditor: View {
     }
 
     private func categoryChip(_ category: ClassificationCatalogItemProjection) -> some View {
-        let color = classificationUIColor(category.colorHex)
+        let color = category.categoryPresentationColor
         return HStack(spacing: 5) {
             Image(systemName: "folder.fill")
                 .font(.noonmarkSystem(size: 9.5, weight: .semibold))
                 .foregroundStyle(color)
             Text(category.name)
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.text1)
+                .foregroundStyle(color)
                 .lineLimit(1)
                 .help(category.name)
             Image(systemName: "chevron.down")
@@ -169,7 +182,14 @@ struct TaskClassificationEditor: View {
             minHeight: CGFloat(MacUIAccessibilityLayout.minimumInteractiveTargetSize)
         )
         .frame(maxWidth: 92)
-        .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.09)))
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(
+                    category.usesApprovedCategoryPresentation
+                        ? color.opacity(0.09)
+                        : Theme.controlFill
+                )
+        )
         .layoutPriority(1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(copy.currentGroupAccessibilityLabel(category.name))
@@ -185,9 +205,24 @@ struct TaskClassificationEditor: View {
                     }
 
                     if isAddingLabel == false {
-                        Button {
-                            isAddingLabel = true
-                            Task { @MainActor in isLabelInputFocused = true }
+                        Menu {
+                            if availableLabels.isEmpty {
+                                Text(copy.allTagsSelected)
+                            } else {
+                                ForEach(availableLabels) { label in
+                                    Button(label.name) {
+                                        addExistingLabel(label)
+                                    }
+                                    .accessibilityIdentifier(
+                                        "classification.editor.available-label.\(chainID.description).\(label.id)"
+                                    )
+                                }
+                            }
+                            Divider()
+                            Button(copy.createTagAction, systemImage: "plus") {
+                                isAddingLabel = true
+                                Task { @MainActor in isLabelInputFocused = true }
+                            }
                         } label: {
                             Label(copy.addAction, systemImage: "plus")
                                 .font(.noonmarkSystem(size: 10.5, weight: .semibold))
@@ -203,7 +238,9 @@ struct TaskClassificationEditor: View {
                                         .fill(Theme.accentSoft.opacity(0.46))
                                 )
                         }
-                        .buttonStyle(.plain)
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
                         .accessibilityIdentifier("classification.editor.add-label.\(chainID.description)")
                     }
                 }
@@ -421,6 +458,17 @@ struct TaskClassificationEditor: View {
         }
     }
 
+    private func addExistingLabel(_ item: ClassificationCatalogItemProjection) {
+        let candidate = EditorLabel.existing(item)
+        guard selectedLabels.contains(where: { $0.matches(candidate) }) == false else {
+            labelError = copy.duplicateTagError(item.name)
+            return
+        }
+        selectedLabels.append(candidate)
+        labelError = nil
+        saveDraft(errorPlacement: .label)
+    }
+
     private func removeLabel(_ label: EditorLabel) {
         selectedLabels.removeAll { $0.id == label.id }
         labelError = nil
@@ -522,6 +570,11 @@ private extension TaskClassificationEditor {
             case let .new(id):
                 "new:\(id.uuidString)"
             }
+        }
+
+        var existingID: String? {
+            guard case let .existing(id) = reference else { return nil }
+            return id
         }
 
         var accessibilityIdentifierComponent: String {

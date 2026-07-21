@@ -1325,6 +1325,8 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
                 "create"
             case .rename:
                 "rename"
+            case .categoryPresentationApproval:
+                "categoryPresentationApproval"
             case .lifecycle:
                 "lifecycle"
             case .merge:

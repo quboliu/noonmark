@@ -28,14 +28,17 @@ extension NSWindow {
 
 enum TaskClassificationDisplay: Equatable {
     case current(TaskClassificationProjection)
-    case historical(TraceClassificationProjection)
+    case historical(
+        TraceClassificationProjection,
+        categoryPresentation: ClassificationItemProjection? = nil
+    )
 
     var category: ClassificationItemProjection? {
         switch self {
         case let .current(projection):
             projection.category
-        case let .historical(projection):
-            projection.category
+        case let .historical(projection, categoryPresentation):
+            categoryPresentation ?? projection.category
         }
     }
 
@@ -43,7 +46,7 @@ enum TaskClassificationDisplay: Equatable {
         switch self {
         case let .current(projection):
             projection.labels
-        case let .historical(projection):
+        case let .historical(projection, _):
             projection.labels
         }
     }

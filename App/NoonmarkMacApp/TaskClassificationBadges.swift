@@ -145,7 +145,7 @@ struct TaskGroupMarker: View {
     let accessibilityLabel: String
 
     private var color: Color {
-        classificationUIColor(category.colorHex)
+        category.categoryPresentationColor
     }
 
     var body: some View {
@@ -155,12 +155,19 @@ struct TaskGroupMarker: View {
                 .foregroundStyle(color)
             Text(category.name)
                 .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                .foregroundStyle(Theme.text1)
+                .foregroundStyle(color)
                 .lineLimit(1)
         }
         .padding(.horizontal, 5)
         .frame(height: 20)
-        .background(RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.09)))
+        .background(
+            RoundedRectangle(cornerRadius: 3)
+                .fill(
+                    category.usesApprovedCategoryPresentation
+                        ? color.opacity(0.09)
+                        : Theme.controlFill
+                )
+        )
         .background {
             AppE2EViewAnchor(
                 identifier: accessibilityIdentifier,

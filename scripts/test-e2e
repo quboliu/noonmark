@@ -161,6 +161,7 @@ scenarios=(
   "pool-classification-manager-labels|pool|--select first --e2e-classification-manager-labels-via-ui --e2e-classification-manager-ui-result-url $PWD/artifacts/e2e/pool-classification-manager-labels-ui.txt --e2e-ui-entry-keep-open"
   "pool-detail|pool|--select first"
   "pool-detail-classification-edit|pool|--select first --e2e-open-classification-label-editor"
+  "pool-detail-classification-label-menu|pool|--select first --e2e-classification-label-menu-via-ui --e2e-classification-label-menu-ui-result-url $PWD/artifacts/e2e/pool-classification-label-menu-ui.txt --e2e-ui-entry-keep-open"
   "future|future|"
   "future-detail|future|--select first"
   "unfinished|unfinished|"
@@ -171,9 +172,13 @@ scenarios=(
   "calendar-detail-expanded|calendar|--e2e-expand-detail-rail"
   "zhulong|zhulong|--e2e-enable-zhulong --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-title-geometry.txt"
   "zhulong-stream|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-stream-title-geometry.txt"
+  "zhulong-stream-dossier|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-stream-variant dossier"
+  "zhulong-stream-chapters|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-stream-variant chapters"
+  "zhulong-stream-weave|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-stream-variant weave"
   "zhulong-authorized|zhulong|--e2e-zhulong-sidecar-key --e2e-start-zhulong-workflow dailyReview"
   "zhulong-todo-diff-editor|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-todo-diff --e2e-open-zhulong-todo-diff-editor"
   "settings|settings|"
+  "settings-zhulong|settings|--e2e-settings-zhulong"
   "settings-groups|settings|--e2e-settings-groups"
   "settings-sync|settings|--e2e-settings-sync"
   "day-minimum-window|day|--e2e-window-size 960x720"
@@ -2205,8 +2210,8 @@ func normalized(_ value: String) -> String {
 }
 
 let expectedTitles = language == "english"
-    ? ["Settings", "Zhulong Configuration", "Write & Privacy Boundaries"]
-    : ["设置", "烛龙配置", "写入与隐私边界"]
+    ? ["Settings", "Zhulong and Automation", "Write & Privacy Boundaries"]
+    : ["设置", "烛龙与自动化", "写入与隐私边界"]
 let recognizedText = normalized(text)
 for expectedTitle in expectedTitles {
     let normalizedTitle = normalized(expectedTitle)

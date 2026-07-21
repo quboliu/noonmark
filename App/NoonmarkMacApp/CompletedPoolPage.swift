@@ -16,33 +16,70 @@ import UniformTypeIdentifiers
 
 struct CompletedPoolPage: View {
     @EnvironmentObject private var store: NoonmarkStore
+    @State private var presentationPreference: TaskCollectionPresentationPreference
+    private let presentationRepository: TaskCollectionPresentationPreferenceRepository
+
+    init(
+        presentationRepository: TaskCollectionPresentationPreferenceRepository =
+            TaskCollectionPresentationPreferenceRepository()
+    ) {
+        self.presentationRepository = presentationRepository
+        _presentationPreference = State(
+            initialValue: presentationRepository.load(for: .completed)
+        )
+    }
+
     var items: [CompletedPoolItem] { store.engine.completedPool() }
     var subtaskRecords: [CompletedSubtaskRecord] { store.engine.completedSubtaskRecords() }
 
+    private var entries: [CompletedCollectionEntry] {
+        items.map(CompletedCollectionEntry.task) + subtaskRecords.map(CompletedCollectionEntry.subtask)
+    }
+
+    private var entriesByID: [String: CompletedCollectionEntry] {
+        Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+    }
+
+    private var presentationSections: [TaskCollectionPresentationSection] {
+        let rows = entries.map { entry in
+            TaskCollectionPresentationItem(
+                id: entry.id,
+                title: entry.title,
+                time: entry.completedAt,
+                category: historicalCategory(for: entry.classificationTrace)
+            )
+        }
+        return TaskCollectionPresentationProjector().sections(
+            for: rows,
+            preference: presentationPreference,
+            ungroupedTitle: store.copy.ungrouped
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navCompleted, subtitle: store.copy.completedSubtitle)
+            PageHeader(title: store.copy.navCompleted, subtitle: store.copy.completedSubtitle) {
+                TaskCollectionPresentationMenu(
+                    copy: store.copy,
+                    accessibilityIdentifier: "task-collection-view.completed",
+                    preference: $presentationPreference
+                )
+            }
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    ForEach(groupedDates, id: \.self) { date in
-                        let dayItems = items.filter { $0.trace.date == date }
-                        let daySubtasks = subtaskRecords.filter { $0.date == date }
-                        VStack(alignment: .leading, spacing: 0) {
-                            HStack(spacing: 8) {
-                                Text(groupTitle(for: date))
-                                    .font(.noonmarkSystem(size: 13, weight: .semibold))
-                                    .foregroundStyle(Theme.text1)
-                                    .monospacedDigit()
-                            }
-                            .padding(.top, 2)
-                            .padding(.bottom, 4)
-
-                            ForEach(dayItems, id: \.trace.id) { item in
-                                CompletedRow(item: item)
-                            }
-                            ForEach(daySubtasks, id: \.subtask.id) { record in
-                                CompletedSubtaskRow(record: record)
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(presentationSections, id: \.id) { section in
+                        if presentationPreference.organization == .grouped {
+                            TaskCollectionSectionHeader(section: section, count: section.items.count)
+                        }
+                        ForEach(section.items, id: \.id) { row in
+                            if let entry = entriesByID[row.id] {
+                                switch entry {
+                                case let .task(item):
+                                    CompletedRow(item: item)
+                                case let .subtask(record):
+                                    CompletedSubtaskRow(record: record)
+                                }
                             }
                         }
                     }
@@ -56,15 +93,63 @@ struct CompletedPoolPage: View {
                 .padding(.bottom, 20)
             }
         }
+        .onChange(of: presentationPreference) { _, preference in
+            presentationRepository.save(preference, for: .completed)
+        }
     }
 
-    var groupedDates: [LocalDate] {
-        Array(Set(items.map { $0.trace.date } + subtaskRecords.map(\.date))).sorted(by: >)
+    private func historicalCategory(
+        for trace: DayTrace
+    ) -> TaskCollectionCategoryPresentation? {
+        if case let .history(projection) = try? store.engine.classification(.history(trace.id)),
+           let category = projection.category
+        {
+            let catalogCategory = store.classificationCatalog()?.categories.first {
+                $0.id == category.id
+            }
+            return TaskCollectionCategoryPresentation(
+                id: category.id,
+                name: category.name,
+                colorHex: catalogCategory?.colorHex ?? category.colorHex,
+                approval: catalogCategory?.presentationApproval == .userApproved
+                    ? .userApproved
+                    : .pendingAIReview
+            )
+        }
+        return nil
+    }
+}
+
+private enum CompletedCollectionEntry {
+    case task(CompletedPoolItem)
+    case subtask(CompletedSubtaskRecord)
+
+    var id: String {
+        switch self {
+        case let .task(item): "task:\(item.trace.id.description)"
+        case let .subtask(record): "subtask:\(record.subtask.id.description)"
+        }
     }
 
-    func groupTitle(for date: LocalDate) -> String {
-        let suffix = date == store.today ? " · \(store.copy.today)" : ""
-        return "\(store.displayDate(date)) \(store.weekday(date))\(suffix)"
+    var title: String {
+        switch self {
+        case let .task(item): item.definition.title
+        case let .subtask(record): record.subtask.title
+        }
+    }
+
+    var completedAt: Date {
+        switch self {
+        case let .task(item): item.trace.completedAt ?? item.trace.createdAt
+        case let .subtask(record): record.subtask.completedAt ?? record.subtask.updatedAt
+        }
+    }
+
+    var classificationTrace: DayTrace {
+        switch self {
+        case let .task(item): item.trace
+        case let .subtask(record): record.parentTrace
+        }
     }
 }
 

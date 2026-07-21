@@ -70,6 +70,9 @@ final class NoonmarkSettingsWindowController: NSWindowController, NSWindowDelega
     }
 
     private static var commandLineInitialPane: SettingsPane {
+        if AppLaunchArguments.contains("--e2e-settings-zhulong") {
+            return .zhulong
+        }
         if AppLaunchArguments.contains("--e2e-settings-groups") {
             return .groups
         }

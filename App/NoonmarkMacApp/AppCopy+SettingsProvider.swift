@@ -18,7 +18,38 @@ extension AppCopy {
         language == .chinese ? "iCloud Drive 不可用" : "iCloud Drive unavailable"
     }
 
-    var enableZhulong: String { language == .chinese ? "启用烛龙" : "Enable Zhulong" }
+    var enableZhulongPage: String {
+        language == .chinese ? "显示烛龙页面" : "Show Zhulong page"
+    }
+
+    var zhulongPageSwitchDescription: String {
+        language == .chinese
+            ? "只控制导航和会话入口，不影响自动归类或 Provider。"
+            : "Controls navigation and session entry only; automation and the Provider are unaffected."
+    }
+
+    var enableAutomaticClassification: String {
+        language == .chinese ? "自动生成分组与标签" : "Automatic groups and labels"
+    }
+
+    var automaticClassificationSwitchDescription: String {
+        language == .chinese
+            ? "关闭后不再为新任务入队并停止 worker；已有结果和作业记录会保留。"
+            : "Stops new jobs and the worker while preserving existing results and job history."
+    }
+
+    var enableProvider: String {
+        language == .chinese ? "启用 Provider" : "Enable Provider"
+    }
+
+    var zhulongFeaturesTitle: String {
+        language == .chinese ? "功能" : "Features"
+    }
+
+    var providerConfigurationTitle: String {
+        language == .chinese ? "Provider" : "Provider"
+    }
+
     var retainedKeychainCredentialPlaceholder: String {
         language == .chinese
             ? "Keychain 中已有凭证，留空则保留"

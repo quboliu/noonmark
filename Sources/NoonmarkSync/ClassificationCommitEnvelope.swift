@@ -483,6 +483,8 @@ private extension ClassificationCommitEnvelope {
                 state: before
             )
             return .rename(mutation.withPredecessors(from: before))
+        case .categoryPresentationApproval:
+            return .categoryPresentationApproval(mutation.withPredecessors(from: before))
         case .lifecycle:
             return .lifecycle(mutation.withPredecessors(from: before))
         case let .merge(kind, _, _, targetID, _, _, _):
@@ -1530,6 +1532,8 @@ private extension ClassificationChangeRecord {
                         || targetID == categoryID.description)
             case .setCurrent:
                 false
+            case let .categoryPresentationApproval(itemID, _, before, after):
+                itemID == categoryID.description && before != after
             }
         }
     }
@@ -1550,6 +1554,8 @@ private extension ClassificationChangeRecord {
                     && (sourceID == labelID.description
                         || targetID == labelID.description)
             case .setCurrent:
+                false
+            case .categoryPresentationApproval:
                 false
             }
         }
@@ -1676,7 +1682,8 @@ private extension TaskClassificationState {
                         sourceID: sourceID,
                         targetID: targetID
                     )
-                case .create, .rename, .lifecycle, .hardDelete, .setCurrent, .merge:
+                case .create, .rename, .lifecycle, .hardDelete, .setCurrent, .merge,
+                     .categoryPresentationApproval:
                     continue
                 }
             }
@@ -1740,6 +1747,8 @@ private extension ClassificationPlanChange {
             return kind == expectedKind && itemID == expectedItemID
                 ? [beforeName, afterName]
                 : []
+        case let .categoryPresentationApproval(itemID, name, _, _):
+            return expectedKind == .category && itemID == expectedItemID ? [name] : []
         case let .lifecycle(kind, itemID, name, _, _),
              let .hardDelete(kind, itemID, name, _, _):
             return kind == expectedKind && itemID == expectedItemID ? [name] : []
@@ -2023,6 +2032,17 @@ private extension ClassificationCommitDelta {
                 itemID: itemID,
                 beforeName: beforeName,
                 afterName: afterName,
+                changeRecord: changeRecord
+            )
+        case let (
+            .categoryPresentationApproval(mutation),
+            .categoryPresentationApproval(itemID, name, before, after)
+        ):
+            try mutation.validateCategoryPresentationApproval(
+                itemID: itemID,
+                name: name,
+                before: before,
+                after: after,
                 changeRecord: changeRecord
             )
         case let (.lifecycle(mutation), .lifecycle(kind, itemID, name, before, after)):
@@ -2377,6 +2397,39 @@ private extension ClassificationStateMutationDelta {
                     "label lifecycle delta changes unrelated item facts"
                 )
             }
+        }
+    }
+
+    func validateCategoryPresentationApproval(
+        itemID: String,
+        name: String,
+        before: CategoryPresentationApproval,
+        after: CategoryPresentationApproval,
+        changeRecord: ClassificationChangeRecord
+    ) throws {
+        try requireOnlyOneItemReplacement(kind: .category)
+        let id = try categoryID(itemID)
+        guard before == .pendingAIReview,
+              after == .userApproved,
+              let mutation = categoryMutations.first,
+              mutation.id == id,
+              let expected = mutation.expected.value,
+              let post = mutation.post.value,
+              expected.name == name,
+              expected.presentationApproval == before,
+              post.presentationApproval == after
+        else {
+            throw ClassificationCommitEnvelopeError.malformedCommit(
+                "category presentation approval delta does not match its audit"
+            )
+        }
+        var projected = expected
+        projected.presentationApproval = after
+        projected.updatedAt = changeRecord.committedAt
+        guard projected == post else {
+            throw ClassificationCommitEnvelopeError.malformedCommit(
+                "category presentation approval changes unrelated item facts"
+            )
         }
     }
 

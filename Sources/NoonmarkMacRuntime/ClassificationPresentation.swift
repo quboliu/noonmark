@@ -132,6 +132,10 @@ public struct ClassificationManagerCopy: Equatable, Sendable {
     }
 
     public var renameAction: String { localized("重命名", "Rename") }
+    public var approvePresentationAction: String {
+        localized("认可并启用颜色", "Approve & Use Color")
+    }
+
     public var archiveAction: String { localized("归档", "Archive") }
     public var restoreAction: String { localized("恢复使用", "Restore") }
 
@@ -172,6 +176,11 @@ public struct TaskClassificationEditorCopy: Equatable, Sendable {
     public var newGroupAction: String { localized("新建分组…", "New Group…") }
     public var noGroup: String { localized("无分组", "No group") }
     public var addAction: String { localized("添加", "Add") }
+    public var createTagAction: String { localized("新建标签…", "New Tag…") }
+    public var allTagsSelected: String {
+        localized("所有标签均已选择", "All tags are selected")
+    }
+
     public var tagNamePlaceholder: String { localized("输入标签名称", "Enter a tag name") }
     public var emptyGroupNameError: String { localized("请输入分组名称。", "Enter a group name.") }
     public var emptyTagNameError: String { localized("请输入标签名称。", "Enter a tag name.") }

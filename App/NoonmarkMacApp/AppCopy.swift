@@ -337,9 +337,11 @@ struct AppCopy {
             : "Scheduled export is not connected yet. Use Data to manually export a verified JSON recovery package."
     }
 
-    var providerTitle: String { language == .chinese ? "烛龙配置" : "Zhulong Configuration" }
+    var providerTitle: String { language == .chinese ? "烛龙与自动化" : "Zhulong and Automation" }
     var providerSubtitle: String {
-        language == .chinese ? "烛龙是可选 sidecar；普通清单不依赖 Provider。" : "Zhulong is optional; normal lists do not depend on a Provider."
+        language == .chinese
+            ? "页面、自动分组与标签、Provider 分别独立控制；普通清单不依赖它们。"
+            : "The page, automatic groups and labels, and Provider are independent; normal lists depend on none of them."
     }
 
     var zhulongSubtitle: String {
@@ -354,7 +356,7 @@ struct AppCopy {
 
     var providerConfigured: String { language == .chinese ? "Provider 已配置" : "Provider configured" }
     var providerIncomplete: String { language == .chinese ? "配置不完整" : "Incomplete" }
-    var providerDisabled: String { language == .chinese ? "烛龙未启用" : "Zhulong disabled" }
+    var providerDisabled: String { language == .chinese ? "Provider 未启用" : "Provider disabled" }
     var keychainStored: String { language == .chinese ? "Keychain 有凭证" : "Keychain credential" }
     var keychainMissing: String { language == .chinese ? "未保存凭证" : "No credential" }
     var providerType: String { language == .chinese ? "类型" : "Type" }

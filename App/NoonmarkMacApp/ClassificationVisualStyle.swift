@@ -27,10 +27,26 @@ extension ClassificationItemProjection {
     var color: Color {
         classificationUIColor(colorHex, fallback: Theme.navPool)
     }
+
+    var categoryPresentationColor: Color {
+        presentationApproval == .userApproved ? color : Theme.text1
+    }
+
+    var usesApprovedCategoryPresentation: Bool {
+        presentationApproval == .userApproved
+    }
 }
 
 extension ClassificationCatalogItemProjection {
     var color: Color {
         classificationUIColor(colorHex, fallback: Theme.navPool)
+    }
+
+    var categoryPresentationColor: Color {
+        presentationApproval == .userApproved ? color : Theme.text1
+    }
+
+    var usesApprovedCategoryPresentation: Bool {
+        presentationApproval == .userApproved
     }
 }

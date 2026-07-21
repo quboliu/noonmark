@@ -178,6 +178,33 @@ final class ClassificationCommitEnvelopeTests: XCTestCase {
         )
     }
 
+    func testCategoryPresentationApprovalDeltaRoundTripsAndAppliesExactFacts() throws {
+        let source = NoonmarkEngine()
+        let category = TaskCategory(
+            id: TaskCategoryID(),
+            name: "AI 待确认",
+            colorHex: "#2A6FDB",
+            presentationApproval: .pendingAIReview,
+            now: now
+        )
+        source.classificationState.categories[category.id] = category
+        let fixture = try makeDeltaFixture(
+            .approveCategoryPresentation(category.id),
+            in: source,
+            interactionID: uuid("12A00000-0000-0000-0000-000000000003"),
+            decisionID: uuid("12A00000-0000-0000-0000-000000000004"),
+            at: now.addingTimeInterval(1)
+        )
+
+        guard case .categoryPresentationApproval = fixture.envelope.delta else {
+            return XCTFail("预期 categoryPresentationApproval typed delta")
+        }
+        XCTAssertEqual(
+            ClassificationCommitEnvelopeReceiver().apply(fixture.envelope, to: fixture.before),
+            .applied(fixture.after)
+        )
+    }
+
     func testMergeDeltaRoundTripsAndAppliesCurrentRewrites() throws {
         let source = NoonmarkEngine()
         let chainID = try source.createPoolTask(title: "合并当前关系", now: now)

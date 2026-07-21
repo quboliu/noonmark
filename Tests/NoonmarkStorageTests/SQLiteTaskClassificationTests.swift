@@ -8,6 +8,55 @@ final class SQLiteTaskClassificationTests: XCTestCase {
     private let day1 = LocalDate("2026-07-05")
     private let now = Date(timeIntervalSince1970: 1_800_000_000.123_456)
 
+    func testRepositoryRoundTripPreservesPendingCategoryPresentationApproval() throws {
+        let databaseURL = makeDatabaseURL("classification-presentation-approval")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let engine = NoonmarkEngine()
+        let category = TaskCategory(
+            id: TaskCategoryID(),
+            name: "AI 待确认",
+            colorHex: "#2A6FDB",
+            presentationApproval: .pendingAIReview,
+            now: now
+        )
+        engine.classificationState.categories[category.id] = category
+
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        try repository.save(engine)
+
+        let restored = try repository.load().snapshot().classifications.categories[category.id]
+        XCTAssertEqual(restored?.presentationApproval, .pendingAIReview)
+    }
+
+    func testRepositoryRoundTripPreservesExplicitCategoryPresentationApprovalAudit() throws {
+        let databaseURL = makeDatabaseURL("classification-presentation-approval-audit")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let engine = NoonmarkEngine()
+        let category = TaskCategory(
+            id: TaskCategoryID(),
+            name: "AI 待确认",
+            colorHex: "#2A6FDB",
+            presentationApproval: .pendingAIReview,
+            now: now
+        )
+        engine.classificationState.categories[category.id] = category
+        _ = try commit(
+            .approveCategoryPresentation(category.id),
+            to: engine,
+            at: now.addingTimeInterval(1)
+        )
+
+        let expected = engine.snapshot().classifications
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        try repository.save(engine)
+
+        let restored = try repository.load().snapshot().classifications
+        XCTAssertEqual(restored, expected)
+        XCTAssertEqual(restored.categories[category.id]?.presentationApproval, .userApproved)
+    }
+
     func testRepositoryRoundTripPreservesClassificationAuditFactsAndEventStream() throws {
         let databaseURL = makeDatabaseURL("classification-audit")
         defer {
@@ -85,9 +134,11 @@ final class SQLiteTaskClassificationTests: XCTestCase {
         try executeProbeSQL(
             """
             BEGIN IMMEDIATE;
-            INSERT INTO task_categories(id, name, color_hex, created_at, updated_at)
+            INSERT INTO task_categories(
+                id, name, color_hex, presentation_approval, created_at, updated_at
+            )
             VALUES (
-                '\(categoryID.description)', '当前主分类', '#2A6FDB',
+                '\(categoryID.description)', '当前主分类', '#2A6FDB', 'userApproved',
                 '2026-07-13T10:00:00.000Z', '2026-07-13T10:00:00.000Z'
             );
             INSERT INTO classification_item_metadata(
@@ -518,8 +569,10 @@ final class SQLiteTaskClassificationTests: XCTestCase {
             try executeProbeSQL(
                 """
                 BEGIN IMMEDIATE;
-                INSERT INTO task_categories(id, name, color_hex, created_at, updated_at)
-                VALUES ('\(intruderID.uuidString)', '其他分类', '#000000', '2026-07-05T00:00:00.000Z', '2026-07-05T00:00:00.000Z');
+                INSERT INTO task_categories(
+                    id, name, color_hex, presentation_approval, created_at, updated_at
+                )
+                VALUES ('\(intruderID.uuidString)', '其他分类', '#000000', 'userApproved', '2026-07-05T00:00:00.000Z', '2026-07-05T00:00:00.000Z');
                 INSERT INTO classification_item_metadata(
                     kind, item_id, canonical_key, canonical_key_version, lifecycle
                 )

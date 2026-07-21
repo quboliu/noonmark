@@ -5,6 +5,112 @@ final class AutomaticTaskClassificationTests: XCTestCase {
     private let base = Date(timeIntervalSinceReferenceDate: 1_200_000)
     private let jobID = UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!
 
+    func testAutomaticCreatedCategoryRemainsPendingUntilUserApprovesIt() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "整理客户反馈", now: base)
+        let context = try engine.issueAutomaticClassificationContext(
+            for: chainID,
+            jobID: jobID,
+            generation: 1
+        )
+        let plan = try engine.prepareAutomaticClassification(
+            AutomaticClassificationApplicationProposal(
+                category: .new(name: "客户", colorHex: "#2A6FDB"),
+                labels: [.new(name: "跟进", colorHex: "#0E9488")]
+            ),
+            authority: context.authority,
+            interactionID: UUID(),
+            now: base.addingTimeInterval(1)
+        )
+        _ = try engine.commitAutomaticClassification(
+            plan,
+            authority: context.authority,
+            now: base.addingTimeInterval(1)
+        )
+
+        let pending = try XCTUnwrap(engine.snapshot().classifications.categories.values.first)
+        XCTAssertEqual(pending.presentationApproval, .pendingAIReview)
+        XCTAssertEqual(
+            try taskProjection(from: engine.classification(.task(chainID))).category?.presentationApproval,
+            .pendingAIReview
+        )
+        guard case let .catalog(catalog) = try engine.classification(.catalog) else {
+            return XCTFail("expected catalog projection")
+        }
+        XCTAssertEqual(catalog.categories.first?.presentationApproval, .pendingAIReview)
+
+        try commitUserIntent(
+            .approveCategoryPresentation(pending.id),
+            to: engine,
+            at: base.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(
+            engine.snapshot().classifications.categories[pending.id]?.presentationApproval,
+            .userApproved
+        )
+    }
+
+    func testRenamingAutomaticCategoryApprovesPresentationAtomically() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "准备发布", now: base)
+        let context = try engine.issueAutomaticClassificationContext(
+            for: chainID,
+            jobID: jobID,
+            generation: 1
+        )
+        let plan = try engine.prepareAutomaticClassification(
+            AutomaticClassificationApplicationProposal(
+                category: .new(name: "发布", colorHex: "#7C5CFF"),
+                labels: [.new(name: "上线", colorHex: "#0E9488")]
+            ),
+            authority: context.authority,
+            interactionID: UUID(),
+            now: base.addingTimeInterval(1)
+        )
+        _ = try engine.commitAutomaticClassification(
+            plan,
+            authority: context.authority,
+            now: base.addingTimeInterval(1)
+        )
+        let categoryID = try XCTUnwrap(
+            engine.snapshot().classifications.currentByChainID[chainID]?.categoryID
+        )
+
+        try commitUserIntent(
+            .renameCategory(categoryID, to: "产品发布"),
+            to: engine,
+            at: base.addingTimeInterval(2)
+        )
+
+        let renamed = try XCTUnwrap(engine.snapshot().classifications.categories[categoryID])
+        XCTAssertEqual(renamed.name, "产品发布")
+        XCTAssertEqual(renamed.presentationApproval, .userApproved)
+    }
+
+    func testUserCreatedCategoryStartsApprovedAndRoundTripsThroughSnapshot() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "规划旅行", now: base)
+        try commitUserClassification(
+            TaskClassificationDraft(
+                chainID: chainID,
+                category: .new(name: "旅行", colorHex: "#D87831"),
+                labels: []
+            ),
+            to: engine,
+            at: base.addingTimeInterval(1)
+        )
+
+        let snapshot = engine.snapshot()
+        let category = try XCTUnwrap(snapshot.classifications.categories.values.first)
+        XCTAssertEqual(category.presentationApproval, .userApproved)
+        let restored = try NoonmarkEngine(snapshot: snapshot)
+        XCTAssertEqual(
+            restored.snapshot().classifications.categories[category.id]?.presentationApproval,
+            .userApproved
+        )
+    }
+
     func testAutomaticClassificationCommitsOneCategoryAndLabelsWhilePreservingExplicitLabels() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(

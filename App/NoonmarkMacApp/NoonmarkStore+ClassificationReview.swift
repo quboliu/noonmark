@@ -151,7 +151,12 @@ extension NoonmarkStore {
     ) -> TaskClassificationDisplay? {
         if case let .history(projection) = try? engine.classification(.history(trace.id)) {
             if projection.category != nil || projection.labels.isEmpty == false {
-                return .historical(projection)
+                return .historical(
+                    projection,
+                    categoryPresentation: currentCategoryPresentation(
+                        for: projection.category
+                    )
+                )
             }
         }
         return displayableClassification(for: trace.chainID)
@@ -162,6 +167,24 @@ extension NoonmarkStore {
             return nil
         }
         return projection
+    }
+
+    private func currentCategoryPresentation(
+        for historicalCategory: ClassificationItemProjection?
+    ) -> ClassificationItemProjection? {
+        guard let historicalCategory,
+              let currentCategory = classificationCatalog()?.categories.first(where: {
+                  $0.id == historicalCategory.id
+              })
+        else {
+            return nil
+        }
+        return ClassificationItemProjection(
+            id: historicalCategory.id,
+            name: historicalCategory.name,
+            colorHex: currentCategory.colorHex,
+            presentationApproval: currentCategory.presentationApproval
+        )
     }
 
     @discardableResult

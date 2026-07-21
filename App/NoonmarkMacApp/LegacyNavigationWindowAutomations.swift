@@ -175,14 +175,24 @@ struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
     @MainActor
     func run(on store: NoonmarkStore) {
         do {
-            store.zhulongProviderDraft.enabled = false
+            store.setZhulongPageEnabled(false)
             store.ensureVisiblePage()
             try expect(store.visibleNavigationPages.contains(.zhulong) == false, "disabled zhulong entry remained visible")
             store.selectPage(.zhulong)
             try expect(store.page == .day, "disabled zhulong selection bypassed the visible-page guard")
 
-            store.zhulongProviderDraft.enabled = true
+            store.setZhulongPageEnabled(true)
             try expect(store.visibleNavigationPages.contains(.zhulong), "enabled zhulong was not visible")
+            store.setAutomaticClassificationEnabled(false)
+            try expect(
+                store.visibleNavigationPages.contains(.zhulong),
+                "disabling automatic classification hid the Zhulong page"
+            )
+            try expect(
+                store.zhulongProviderDraft.enabled == false,
+                "automatic classification switch changed Provider enabled state"
+            )
+            store.setAutomaticClassificationEnabled(true)
             store.selectPage(.zhulong)
             try expect(store.page == .zhulong, "enabled zhulong selection did not open the page")
             store.zhulongWorkspace.showHome()
@@ -202,9 +212,17 @@ struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
             try expect(store.zhulongWorkspace.selectedSession?.phase == .readyForProvider, "scope authorization was not persisted")
 
             store.zhulongProviderDraft.enabled = false
-            store.ensureVisiblePage()
+            try expect(
+                store.visibleNavigationPages.contains(.zhulong),
+                "disabling Provider hid the independently enabled Zhulong page"
+            )
+            store.setZhulongPageEnabled(false)
             try expect(store.visibleNavigationPages.contains(.zhulong) == false, "disabled zhulong entry remained visible")
             try expect(store.page == .day, "disabling zhulong did not leave the hidden workspace")
+            try expect(
+                store.isAutomaticClassificationEnabled,
+                "disabling the Zhulong page disabled automatic classification"
+            )
 
             if let resultURL {
                 ZhulongNavigationUIE2EDriver.start(store: store, resultURL: resultURL)
@@ -467,6 +485,7 @@ struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
         store.engine = NoonmarkEngine()
         store.setLanguage(.chinese)
         store.zhulongProviderDraft.enabled = false
+        store.setZhulongPageEnabled(false)
         var timeline = try E2EFixtureTimeline(
             store: store,
             eventCount: 26
@@ -633,7 +652,7 @@ struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
             zhulongEnabled: false
         )
 
-        store.zhulongProviderDraft.enabled = true
+        store.setZhulongPageEnabled(true)
         for page in pages {
             store.page = page
             store.clearSelection()

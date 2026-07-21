@@ -274,6 +274,7 @@ struct LaunchSelectionE2EAutomation: LaunchAutomationRunnable {
 struct UIEntryE2EAutomation: LaunchAutomationRunnable {
     private enum Mode {
         case classificationManager(selectsLabels: Bool)
+        case classificationLabelMenu
         case classificationOverflow
         case markdownEditor
         case zhulongWorkflows
@@ -292,6 +293,9 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
         let opensClassificationManagerLabels = AppLaunchArguments.contains(
             "--e2e-classification-manager-labels-via-ui"
         )
+        let opensClassificationLabelMenu = AppLaunchArguments.contains(
+            "--e2e-classification-label-menu-via-ui"
+        )
         let opensClassificationOverflow = AppLaunchArguments.contains(
             "--e2e-classification-overflow-via-ui"
         )
@@ -304,6 +308,7 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
         let selectedModeCount = [
             opensClassificationManager,
             opensClassificationManagerLabels,
+            opensClassificationLabelMenu,
             opensClassificationOverflow,
             exercisesMarkdownEditor,
             opensZhulongWorkflows
@@ -315,6 +320,9 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
         if opensClassificationManager || opensClassificationManagerLabels {
             mode = .classificationManager(selectsLabels: opensClassificationManagerLabels)
             resultArgument = "--e2e-classification-manager-ui-result-url"
+        } else if opensClassificationLabelMenu {
+            mode = .classificationLabelMenu
+            resultArgument = "--e2e-classification-label-menu-ui-result-url"
         } else if opensClassificationOverflow {
             mode = .classificationOverflow
             resultArgument = "--e2e-classification-overflow-ui-result-url"
@@ -375,6 +383,36 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
                 resultURL: resultURL,
                 keepsAppOpen: keepsAppOpen,
                 selectsLabels: selectsLabels
+            )
+        case .classificationLabelMenu:
+            guard let task = store.selectedPoolTask ?? store.engine.taskPool().first,
+                  let catalog = store.classificationCatalog()
+            else {
+                try? "failed: 当前任务池没有可用于标签菜单的 fixture".write(
+                    to: resultURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+                return
+            }
+            let selectedIDs = Set(
+                store.currentClassification(for: task.chain.id)?.labels.map(\.id) ?? []
+            )
+            guard let availableLabel = catalog.labels.first(where: {
+                $0.lifecycle == .active && selectedIDs.contains($0.id) == false
+            }) else {
+                try? "failed: fixture 没有未选标签".write(
+                    to: resultURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+                return
+            }
+            ClassificationLabelMenuUIE2EDriver.start(
+                chainIdentifier: task.chain.id.description,
+                availableLabelIdentifier: availableLabel.id,
+                resultURL: resultURL,
+                keepsAppOpen: keepsAppOpen
             )
         case .classificationOverflow:
             guard let task = store.engine.taskPool().first(where: { task in

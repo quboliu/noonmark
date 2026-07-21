@@ -1,0 +1,11 @@
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|Text("\(language == .chinese ? "视图" : "View") · \(workspace.variant.title(language: language))")
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|Text(store.engine.preferences.language == .chinese ? "\(records.count) 条" : "\(records.count) entries")
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|Text(store.engine.preferences.language == .chinese ? "你 · 决定与授权" : "You · Decisions and authority")
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|Text(store.engine.preferences.language == .chinese ? "烛龙 · 分析、选项与执行" : "Zhulong · Analysis, options and execution")
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.brief, .chinese): "活简报"
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.dailyClose, .chinese): "每日收尾"
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.decision, .chinese): "决定与授权"
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.intent, .chinese): "意图与范围"
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.lifecycle, .chinese): "会话状态"
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.planning, .chinese): "规划运行"
+App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.todo, .chinese): "Todo 应用"

@@ -14,9 +14,6 @@ extension NoonmarkStore {
             )
             zhulongProviderDraft = transition.draft
             automaticClassificationProviderConfigurationDidChange(transition)
-            if zhulongProviderDraft.enabled == false {
-                ensureVisiblePage()
-            }
             showToast(zhulongCopy.providerActionNotice(.configurationSaved))
         } catch {
             showZhulongProviderSettingsFailure(error)
@@ -28,7 +25,6 @@ extension NoonmarkStore {
             let transition = try ZhulongProviderSettingsStore.clear()
             zhulongProviderDraft = transition.draft
             automaticClassificationProviderConfigurationDidChange(transition)
-            ensureVisiblePage(preferredFallback: .day)
             showToast(zhulongCopy.providerActionNotice(.configurationCleared))
         } catch {
             showZhulongProviderSettingsFailure(error)
@@ -303,7 +299,7 @@ extension NoonmarkStore {
     }
 
     private func makeZhulongAIProviderAdapter() throws -> ZhulongAIProviderAdapter {
-        guard zhulongProviderDraft.enabled else {
+        guard zhulongFeatureAvailability.providerCanExecute else {
             throw ZhulongProviderUIError.providerDisabled
         }
         guard zhulongProviderDraft.kind == .openAICompatible else {

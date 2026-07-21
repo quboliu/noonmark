@@ -156,6 +156,7 @@ public enum ClassificationCommitDelta: Codable, Equatable, Sendable {
         case setCurrent
         case create
         case rename
+        case categoryPresentationApproval
         case lifecycle
         case merge
         case hardDelete
@@ -164,6 +165,7 @@ public enum ClassificationCommitDelta: Codable, Equatable, Sendable {
     case setCurrent(ClassificationStateMutationDelta)
     case create(ClassificationStateMutationDelta)
     case rename(ClassificationStateMutationDelta)
+    case categoryPresentationApproval(ClassificationStateMutationDelta)
     case lifecycle(ClassificationStateMutationDelta)
     case merge(ClassificationStateMutationDelta)
     case hardDelete(ClassificationStateMutationDelta)
@@ -173,6 +175,7 @@ public enum ClassificationCommitDelta: Codable, Equatable, Sendable {
         case let .setCurrent(mutation),
              let .create(mutation),
              let .rename(mutation),
+             let .categoryPresentationApproval(mutation),
              let .lifecycle(mutation),
              let .merge(mutation),
              let .hardDelete(mutation):
@@ -193,6 +196,8 @@ public enum ClassificationCommitDelta: Codable, Equatable, Sendable {
             .create(payload)
         case .rename:
             .rename(payload)
+        case .categoryPresentationApproval:
+            .categoryPresentationApproval(payload)
         case .lifecycle:
             .lifecycle(payload)
         case .merge:
@@ -211,6 +216,8 @@ public enum ClassificationCommitDelta: Codable, Equatable, Sendable {
             .create
         case .rename:
             .rename
+        case .categoryPresentationApproval:
+            .categoryPresentationApproval
         case .lifecycle:
             .lifecycle
         case .merge:

@@ -12,7 +12,7 @@ private func sqliteNonemptyInvariant(_ column: String) -> String {
 }
 
 public enum SQLiteSchema {
-    public static let version = 6
+    public static let version = 7
 
     public static let statements: [String] = [
         """
@@ -285,6 +285,9 @@ public enum SQLiteSchema {
             id TEXT PRIMARY KEY NOT NULL,
             name TEXT NOT NULL CHECK (length(trim(name)) > 0),
             color_hex TEXT NOT NULL,
+            presentation_approval TEXT NOT NULL CHECK (
+                presentation_approval IN ('userApproved', 'pendingAIReview')
+            ),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -991,7 +994,9 @@ public enum SQLiteSchema {
             record_id TEXT NOT NULL
                 REFERENCES classification_change_records(record_id),
             position INTEGER NOT NULL CHECK (position >= 0),
-            kind TEXT NOT NULL CHECK (kind IN ('setCurrent', 'rename', 'lifecycle')),
+            kind TEXT NOT NULL CHECK (
+                kind IN ('setCurrent', 'rename', 'lifecycle', 'categoryPresentationApproval')
+            ),
             chain_id TEXT,
             item_kind TEXT CHECK (item_kind IS NULL OR item_kind IN ('category', 'label')),
             item_id TEXT,
@@ -1003,6 +1008,12 @@ public enum SQLiteSchema {
             ),
             after_lifecycle TEXT CHECK (
                 after_lifecycle IS NULL OR after_lifecycle IN ('active', 'archived', 'merged')
+            ),
+            before_approval TEXT CHECK (
+                before_approval IS NULL OR before_approval IN ('userApproved', 'pendingAIReview')
+            ),
+            after_approval TEXT CHECK (
+                after_approval IS NULL OR after_approval IN ('userApproved', 'pendingAIReview')
             ),
             PRIMARY KEY(record_id, position),
             CHECK (
@@ -1016,6 +1027,8 @@ public enum SQLiteSchema {
                     AND name IS NULL
                     AND before_lifecycle IS NULL
                     AND after_lifecycle IS NULL
+                    AND before_approval IS NULL
+                    AND after_approval IS NULL
                 )
                 OR (
                     kind = 'rename'
@@ -1030,6 +1043,8 @@ public enum SQLiteSchema {
                     AND name IS NULL
                     AND before_lifecycle IS NULL
                     AND after_lifecycle IS NULL
+                    AND before_approval IS NULL
+                    AND after_approval IS NULL
                 )
                 OR (
                     kind = 'lifecycle'
@@ -1043,6 +1058,23 @@ public enum SQLiteSchema {
                     AND length(trim(name)) > 0
                     AND before_lifecycle IS NOT NULL
                     AND after_lifecycle IS NOT NULL
+                    AND before_approval IS NULL
+                    AND after_approval IS NULL
+                )
+                OR (
+                    kind = 'categoryPresentationApproval'
+                    AND chain_id IS NULL
+                    AND item_kind = 'category'
+                    AND item_id IS NOT NULL
+                    AND length(trim(item_id)) > 0
+                    AND before_name IS NULL
+                    AND after_name IS NULL
+                    AND name IS NOT NULL
+                    AND length(trim(name)) > 0
+                    AND before_lifecycle IS NULL
+                    AND after_lifecycle IS NULL
+                    AND before_approval = 'pendingAIReview'
+                    AND after_approval = 'userApproved'
                 )
             )
         )
@@ -1801,7 +1833,10 @@ public enum SQLiteSchema {
                 REFERENCES trace_classification_snapshot_events(event_id) ON DELETE CASCADE,
             category_id TEXT NOT NULL,
             name TEXT NOT NULL CHECK (length(trim(name)) > 0),
-            color_hex TEXT NOT NULL
+            color_hex TEXT NOT NULL,
+            presentation_approval TEXT NOT NULL CHECK (
+                presentation_approval IN ('userApproved', 'pendingAIReview')
+            )
         )
         """,
         """

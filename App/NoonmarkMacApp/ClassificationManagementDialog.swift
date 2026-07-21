@@ -486,9 +486,12 @@ struct ClassificationManagementDialog: View {
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
             } else {
+                let titleColor = kind == .category
+                    ? item.categoryPresentationColor
+                    : (item.lifecycle == .active ? Theme.text1 : Theme.text3)
                 Text(item.name)
                     .font(.noonmarkSystem(size: 11.5, weight: .semibold))
-                    .foregroundStyle(item.lifecycle == .active ? Theme.text1 : Theme.text3)
+                    .foregroundStyle(item.lifecycle == .active ? titleColor : Theme.text3)
                     .lineLimit(1)
                 Spacer()
                 HStack(spacing: 5) {
@@ -501,6 +504,18 @@ struct ClassificationManagementDialog: View {
                 .accessibilityIdentifier("classification.manager.references.\(item.id)")
 
                 Menu {
+                    if kind == .category,
+                       item.presentationApproval == .pendingAIReview,
+                       item.lifecycle == .active
+                    {
+                        Button(copy.approvePresentationAction, systemImage: "checkmark.seal") {
+                            approvePresentation(item)
+                        }
+                        .accessibilityIdentifier(
+                            "classification.manager.approve-presentation.\(item.id)"
+                        )
+                        Divider()
+                    }
                     Button(copy.renameAction, systemImage: "pencil") {
                         editingID = item.id
                         editingName = item.name
@@ -562,13 +577,22 @@ struct ClassificationManagementDialog: View {
 
     @ViewBuilder
     private func itemSymbol(_ item: ClassificationCatalogItemProjection) -> some View {
-        let color = classificationUIColor(item.colorHex)
+        let color = kind == .category
+            ? item.categoryPresentationColor
+            : classificationUIColor(item.colorHex)
         if kind == .category {
             Image(systemName: "folder.fill")
                 .font(.noonmarkSystem(size: 12, weight: .semibold))
                 .foregroundStyle(color)
                 .frame(width: 26, height: 26)
-                .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.09)))
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(
+                            item.usesApprovedCategoryPresentation
+                                ? color.opacity(0.09)
+                                : Theme.controlFill
+                        )
+                )
         } else {
             Text("#")
                 .font(.noonmarkSystem(size: 11, weight: .black, design: .rounded))
@@ -634,6 +658,11 @@ struct ClassificationManagementDialog: View {
     private func archive(_ item: ClassificationCatalogItemProjection) {
         guard let id = UUID(uuidString: item.id) else { return }
         mutate(kind == .category ? .archiveCategory(TaskCategoryID(id)) : .archiveLabel(TaskLabelID(id)))
+    }
+
+    private func approvePresentation(_ item: ClassificationCatalogItemProjection) {
+        guard let id = UUID(uuidString: item.id) else { return }
+        mutate(.approveCategoryPresentation(TaskCategoryID(id)))
     }
 
     private func restore(_ item: ClassificationCatalogItemProjection) {

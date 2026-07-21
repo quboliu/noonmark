@@ -404,9 +404,6 @@ struct SettingsProviderOverviewCard: View {
     @EnvironmentObject private var store: NoonmarkStore
 
     var status: (text: String, color: Color) {
-        if store.automaticClassificationCircuitPresentation != nil {
-            return (store.copy.automaticClassificationPaused, Theme.warn)
-        }
         if store.zhulongProviderDraft.isConfigured,
            store.zhulongProviderDraft.hasStoredAPIKey
         {
@@ -421,18 +418,44 @@ struct SettingsProviderOverviewCard: View {
     var body: some View {
         SettingsCard(subtitle: store.copy.providerSubtitle) {
             VStack(alignment: .leading, spacing: 12) {
+                SettingSection(title: store.copy.zhulongFeaturesTitle) {
+                    featureToggle(
+                        title: store.copy.enableZhulongPage,
+                        description: store.copy.zhulongPageSwitchDescription,
+                        isOn: Binding(
+                            get: { store.isZhulongEnabled },
+                            set: { store.setZhulongPageEnabled($0) }
+                        ),
+                        identifier: "settings.zhulong.page.enabled"
+                    )
+                    featureToggle(
+                        title: store.copy.enableAutomaticClassification,
+                        description: store.copy.automaticClassificationSwitchDescription,
+                        isOn: Binding(
+                            get: { store.isAutomaticClassificationEnabled },
+                            set: { store.setAutomaticClassificationEnabled($0) }
+                        ),
+                        identifier: "settings.zhulong.automatic-classification.enabled"
+                    )
+                }
+
+                Divider()
+                    .overlay(Theme.line)
+
+                SettingSection(title: store.copy.providerConfigurationTitle) {
                 HStack(spacing: 10) {
-                    Toggle(store.copy.enableZhulong, isOn: $store.zhulongProviderDraft.enabled)
+                    Toggle(store.copy.enableProvider, isOn: $store.zhulongProviderDraft.enabled)
                         .toggleStyle(.checkbox)
                         .font(.noonmarkSystem(size: 12.5, weight: .medium))
                         .background {
                             AppE2EViewAnchor(
-                                identifier: "settings.zhulong.enabled",
+                                identifier: "settings.zhulong.provider.enabled",
                                 verificationText: store.zhulongProviderDraft.enabled ? "enabled" : "disabled"
                             )
                         }
                     StatusPill(text: status.text, color: status.color)
                     Spacer()
+                }
                 }
 
                 SettingSection(title: store.copy.providerType) {
@@ -452,7 +475,8 @@ struct SettingsProviderOverviewCard: View {
                     )
                 }
 
-                HStack(spacing: 8) {
+                if store.isAutomaticClassificationEnabled {
+                    HStack(spacing: 8) {
                     Image(
                         systemName: store.automaticClassificationCircuitPresentation == nil
                             ? (store.zhulongProviderDraft.hasStoredAPIKey ? "key.fill" : "key")
@@ -474,9 +498,10 @@ struct SettingsProviderOverviewCard: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
                 .accessibilityElement(children: .combine)
-                .accessibilityIdentifier(
-                    "settings.zhulong.automatic-classification-circuit"
-                )
+                    .accessibilityIdentifier(
+                        "settings.zhulong.automatic-classification-circuit"
+                    )
+                }
 
                 if let prompt = store.automaticClassificationBacklogPrompt {
                     Rectangle()
@@ -525,6 +550,29 @@ struct SettingsProviderOverviewCard: View {
             circuit.waitingCount,
             failureCode: circuit.failureCode
         )
+    }
+
+    private func featureToggle(
+        title: String,
+        description: String,
+        isOn: Binding<Bool>,
+        identifier: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(title, isOn: isOn)
+                .toggleStyle(.checkbox)
+                .font(.noonmarkSystem(size: 12.5, weight: .medium))
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: identifier,
+                        verificationText: isOn.wrappedValue ? "enabled" : "disabled"
+                    )
+                }
+            Text(description)
+                .font(.noonmarkSystem(size: 11.5))
+                .foregroundStyle(Theme.text3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

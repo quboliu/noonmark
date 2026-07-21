@@ -16,16 +16,65 @@ import UniformTypeIdentifiers
 
 struct UnfinishedPoolPage: View {
     @EnvironmentObject private var store: NoonmarkStore
+    @State private var presentationPreference: TaskCollectionPresentationPreference
+    private let presentationRepository: TaskCollectionPresentationPreferenceRepository
+
+    init(
+        presentationRepository: TaskCollectionPresentationPreferenceRepository =
+            TaskCollectionPresentationPreferenceRepository()
+    ) {
+        self.presentationRepository = presentationRepository
+        _presentationPreference = State(
+            initialValue: presentationRepository.load(for: .unfinished)
+        )
+    }
+
     var items: [UnfinishedPoolItem] { store.engine.unfinishedPool() }
+    private var itemsByID: [String: UnfinishedPoolItem] {
+        Dictionary(uniqueKeysWithValues: items.map { ($0.chain.id.description, $0) })
+    }
+
+    private var presentationSections: [TaskCollectionPresentationSection] {
+        let rows = items.map { item in
+            let traceTime = (item.unfinishedTraces + (item.activeTrace.map { [$0] } ?? []))
+                .map(\.createdAt)
+                .max()
+            return TaskCollectionPresentationItem(
+                id: item.chain.id.description,
+                title: item.definition.title,
+                time: traceTime ?? item.definition.createdAt,
+                category: store.currentClassification(for: item.chain.id)?.category?
+                    .taskCollectionCategoryPresentation
+            )
+        }
+        return TaskCollectionPresentationProjector().sections(
+            for: rows,
+            preference: presentationPreference,
+            ungroupedTitle: store.copy.ungrouped
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navUnfinished, subtitle: store.copy.unfinishedSubtitle)
+            PageHeader(title: store.copy.navUnfinished, subtitle: store.copy.unfinishedSubtitle) {
+                TaskCollectionPresentationMenu(
+                    copy: store.copy,
+                    accessibilityIdentifier: "task-collection-view.unfinished",
+                    preference: $presentationPreference
+                )
+            }
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(items, id: \.chain.id) { item in
-                        UnfinishedRow(item: item)
+                    ForEach(presentationSections, id: \.id) { section in
+                        if presentationPreference.organization == .grouped {
+                            TaskCollectionSectionHeader(section: section, count: section.items.count)
+                        }
+                        ForEach(section.items, id: \.id) { row in
+                            if let item = itemsByID[row.id] {
+                                UnfinishedRow(item: item)
+                            }
+                        }
                     }
                     if items.isEmpty {
                         EmptyState(kind: .unfinishedPool, text: store.copy.emptyUnfinished)
@@ -36,6 +85,9 @@ struct UnfinishedPoolPage: View {
                 .padding(.top, 12)
                 .padding(.bottom, 20)
             }
+        }
+        .onChange(of: presentationPreference) { _, preference in
+            presentationRepository.save(preference, for: .unfinished)
         }
     }
 }

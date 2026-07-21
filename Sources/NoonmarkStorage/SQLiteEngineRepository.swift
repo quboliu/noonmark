@@ -186,6 +186,8 @@ private struct SQLiteClassificationChangeRow {
     let name: String?
     let beforeLifecycle: ClassificationLifecycle?
     let afterLifecycle: ClassificationLifecycle?
+    let beforeApproval: CategoryPresentationApproval?
+    let afterApproval: CategoryPresentationApproval?
 }
 
 private struct SQLiteClassificationManagementChangeRow {
@@ -1558,11 +1560,12 @@ private extension SQLiteEngineRepository {
             updated_at = excluded.updated_at
         """
         let categorySQL = """
-        INSERT INTO task_categories(id, name, color_hex, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO task_categories(id, name, color_hex, presentation_approval, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             color_hex = excluded.color_hex,
+            presentation_approval = excluded.presentation_approval,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at
         """
@@ -1571,8 +1574,9 @@ private extension SQLiteEngineRepository {
                 bind(category.id.rawValue, to: 1, in: statement)
                 bind(category.name, to: 2, in: statement)
                 bind(category.colorHex, to: 3, in: statement)
-                bind(category.createdAt, to: 4, in: statement)
-                bind(category.updatedAt, to: 5, in: statement)
+                bind(category.presentationApproval.rawValue, to: 4, in: statement)
+                bind(category.createdAt, to: 5, in: statement)
+                bind(category.updatedAt, to: 6, in: statement)
             }
             try run(exactTimeSQL, on: database) { statement in
                 bind(ClassificationItemKind.category.rawValue, to: 1, in: statement)
@@ -2552,8 +2556,10 @@ private extension SQLiteEngineRepository {
         VALUES (?, ?, ?, ?, ?, ?)
         """
         let categorySQL = """
-        INSERT INTO trace_classification_event_categories(event_id, category_id, name, color_hex)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO trace_classification_event_categories(
+            event_id, category_id, name, color_hex, presentation_approval
+        )
+        VALUES (?, ?, ?, ?, ?)
         """
         let labelSQL = """
         INSERT INTO trace_classification_event_labels(event_id, label_id, name, color_hex)
@@ -2600,6 +2606,7 @@ private extension SQLiteEngineRepository {
                         bind(category.id.rawValue, to: 2, in: statement)
                         bind(category.name, to: 3, in: statement)
                         bind(category.colorHex, to: 4, in: statement)
+                        bind(category.presentationApproval.rawValue, to: 5, in: statement)
                     }
                 }
                 for label in snapshot.labels.sorted(by: { $0.id.description < $1.id.description }) {
@@ -2793,9 +2800,10 @@ private extension SQLiteEngineRepository {
         let changeSQL = """
         INSERT INTO classification_change_record_changes(
             record_id, position, kind, chain_id, item_kind, item_id,
-            before_name, after_name, name, before_lifecycle, after_lifecycle
+            before_name, after_name, name, before_lifecycle, after_lifecycle,
+            before_approval, after_approval
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         for (position, change) in record.changes.enumerated() {
             switch change {
@@ -2867,7 +2875,7 @@ private extension SQLiteEngineRepository {
                     bind(position, to: 2, in: statement)
                     bind("setCurrent", to: 3, in: statement)
                     bind(chainID.rawValue.uuidString, to: 4, in: statement)
-                    for index in 5 ... 11 {
+                    for index in 5 ... 13 {
                         bind(nil as String?, to: Int32(index), in: statement)
                     }
                 }
@@ -2898,6 +2906,8 @@ private extension SQLiteEngineRepository {
                     bind(nil as String?, to: 9, in: statement)
                     bind(nil as String?, to: 10, in: statement)
                     bind(nil as String?, to: 11, in: statement)
+                    bind(nil as String?, to: 12, in: statement)
+                    bind(nil as String?, to: 13, in: statement)
                 }
             case let .lifecycle(kind, itemID, name, before, after):
                 try run(changeSQL, on: database) { statement in
@@ -2912,6 +2922,24 @@ private extension SQLiteEngineRepository {
                     bind(name, to: 9, in: statement)
                     bind(before.rawValue, to: 10, in: statement)
                     bind(after.rawValue, to: 11, in: statement)
+                    bind(nil as String?, to: 12, in: statement)
+                    bind(nil as String?, to: 13, in: statement)
+                }
+            case let .categoryPresentationApproval(itemID, name, before, after):
+                try run(changeSQL, on: database) { statement in
+                    bind(record.id, to: 1, in: statement)
+                    bind(position, to: 2, in: statement)
+                    bind("categoryPresentationApproval", to: 3, in: statement)
+                    bind(nil as String?, to: 4, in: statement)
+                    bind(ClassificationItemKind.category.rawValue, to: 5, in: statement)
+                    bind(itemID, to: 6, in: statement)
+                    bind(nil as String?, to: 7, in: statement)
+                    bind(nil as String?, to: 8, in: statement)
+                    bind(name, to: 9, in: statement)
+                    bind(nil as String?, to: 10, in: statement)
+                    bind(nil as String?, to: 11, in: statement)
+                    bind(before.rawValue, to: 12, in: statement)
+                    bind(after.rawValue, to: 13, in: statement)
                 }
             }
         }
@@ -3802,7 +3830,7 @@ private extension SQLiteEngineRepository {
     ) throws -> [TaskCategoryID: TaskCategory] {
         let categories = try query(
             """
-            SELECT id, name, color_hex, created_at, updated_at
+            SELECT id, name, color_hex, presentation_approval, created_at, updated_at
             FROM task_categories
             ORDER BY id
             """,
@@ -3826,6 +3854,7 @@ private extension SQLiteEngineRepository {
                 id: id,
                 name: name,
                 colorHex: try string(statement, 2),
+                presentationApproval: try categoryPresentationApproval(statement, 3),
                 now: createdAt
             )
             category.canonicalKey = itemMetadata.canonicalKey
@@ -4228,7 +4257,7 @@ private extension SQLiteEngineRepository {
         let finalizationsByEventID = Dictionary(uniqueKeysWithValues: finalizationRows)
         let categoryRows = try query(
             """
-            SELECT event_id, category_id, name, color_hex
+            SELECT event_id, category_id, name, color_hex, presentation_approval
             FROM trace_classification_event_categories
             ORDER BY event_id
             """,
@@ -4239,7 +4268,8 @@ private extension SQLiteEngineRepository {
                 HistoricalCategoryValue(
                     id: TaskCategoryID(try uuid(statement, 1)),
                     name: try string(statement, 2),
-                    colorHex: try string(statement, 3)
+                    colorHex: try string(statement, 3),
+                    presentationApproval: try categoryPresentationApproval(statement, 4)
                 )
             )
         }
@@ -4786,7 +4816,8 @@ private extension SQLiteEngineRepository {
             """
             SELECT
                 record_id, position, kind, chain_id, item_kind, item_id,
-                before_name, after_name, name, before_lifecycle, after_lifecycle
+                before_name, after_name, name, before_lifecycle, after_lifecycle,
+                before_approval, after_approval
             FROM classification_change_record_changes
             ORDER BY record_id, position
             """,
@@ -4803,7 +4834,9 @@ private extension SQLiteEngineRepository {
                 afterName: optionalString(statement, 7),
                 name: optionalString(statement, 8),
                 beforeLifecycle: try optionalClassificationLifecycle(optionalString(statement, 9)),
-                afterLifecycle: try optionalClassificationLifecycle(optionalString(statement, 10))
+                afterLifecycle: try optionalClassificationLifecycle(optionalString(statement, 10)),
+                beforeApproval: try optionalCategoryPresentationApproval(optionalString(statement, 11)),
+                afterApproval: try optionalCategoryPresentationApproval(optionalString(statement, 12))
             )
         }
         var rowsByRecordID: [UUID: [SQLiteClassificationChangeRow]] = [:]
@@ -4868,6 +4901,31 @@ private extension SQLiteEngineRepository {
         return value
     }
 
+    func categoryPresentationApproval(
+        _ statement: OpaquePointer?,
+        _ index: Int32
+    ) throws -> CategoryPresentationApproval {
+        let rawValue = try string(statement, index)
+        guard let value = CategoryPresentationApproval(rawValue: rawValue) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid category presentation approval"
+            )
+        }
+        return value
+    }
+
+    func optionalCategoryPresentationApproval(
+        _ rawValue: String?
+    ) throws -> CategoryPresentationApproval? {
+        guard let rawValue else { return nil }
+        guard let value = CategoryPresentationApproval(rawValue: rawValue) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid category presentation approval"
+            )
+        }
+        return value
+    }
+
     func classificationPlanChange(
         from stored: SQLiteClassificationChangeRow,
         selectionRowsByKey: [SQLiteClassificationSelectionKey: [SQLiteClassificationSelectionItemRow]],
@@ -4907,6 +4965,13 @@ private extension SQLiteEngineRepository {
                 afterKey: afterKey,
                 selectionRowsByKey: selectionRowsByKey
             )
+        case "categoryPresentationApproval":
+            return try categoryPresentationApprovalPlanChange(
+                from: stored,
+                beforeKey: beforeKey,
+                afterKey: afterKey,
+                selectionRowsByKey: selectionRowsByKey
+            )
         default:
             throw SQLiteRepositoryError.invalidStoredValue("invalid classification change kind")
         }
@@ -4925,7 +4990,9 @@ private extension SQLiteEngineRepository {
               stored.afterName == nil,
               stored.name == nil,
               stored.beforeLifecycle == nil,
-              stored.afterLifecycle == nil
+              stored.afterLifecycle == nil,
+              stored.beforeApproval == nil,
+              stored.afterApproval == nil
         else {
             throw SQLiteRepositoryError.invalidStoredValue("invalid set-current classification change")
         }
@@ -4950,6 +5017,8 @@ private extension SQLiteEngineRepository {
               stored.name == nil,
               stored.beforeLifecycle == nil,
               stored.afterLifecycle == nil,
+              stored.beforeApproval == nil,
+              stored.afterApproval == nil,
               selectionRowsByKey[beforeKey] == nil,
               selectionRowsByKey[afterKey] == nil
         else {
@@ -4977,6 +5046,8 @@ private extension SQLiteEngineRepository {
               let name = stored.name,
               let before = stored.beforeLifecycle,
               let after = stored.afterLifecycle,
+              stored.beforeApproval == nil,
+              stored.afterApproval == nil,
               selectionRowsByKey[beforeKey] == nil,
               selectionRowsByKey[afterKey] == nil
         else {
@@ -4984,6 +5055,37 @@ private extension SQLiteEngineRepository {
         }
         return .lifecycle(
             kind: itemKind,
+            itemID: itemID,
+            name: name,
+            before: before,
+            after: after
+        )
+    }
+
+    func categoryPresentationApprovalPlanChange(
+        from stored: SQLiteClassificationChangeRow,
+        beforeKey: SQLiteClassificationSelectionKey,
+        afterKey: SQLiteClassificationSelectionKey,
+        selectionRowsByKey: [SQLiteClassificationSelectionKey: [SQLiteClassificationSelectionItemRow]]
+    ) throws -> ClassificationPlanChange {
+        guard stored.chainID == nil,
+              stored.itemKind == .category,
+              let itemID = stored.itemID,
+              stored.beforeName == nil,
+              stored.afterName == nil,
+              let name = stored.name,
+              stored.beforeLifecycle == nil,
+              stored.afterLifecycle == nil,
+              let before = stored.beforeApproval,
+              let after = stored.afterApproval,
+              selectionRowsByKey[beforeKey] == nil,
+              selectionRowsByKey[afterKey] == nil
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid category presentation approval change"
+            )
+        }
+        return .categoryPresentationApproval(
             itemID: itemID,
             name: name,
             before: before,

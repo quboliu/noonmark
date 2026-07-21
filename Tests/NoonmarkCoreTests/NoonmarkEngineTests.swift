@@ -140,6 +140,20 @@ final class NoonmarkEngineTests: XCTestCase {
         let currentTrace = try XCTUnwrap(engine.traces[currentTraceID])
         XCTAssertEqual(engine.definitions[historicalTrace.definitionID]?.title, "历史标题")
         XCTAssertEqual(engine.definitions[currentTrace.definitionID]?.title, "当前\n标题")
+
+        let currentDefinitionID = currentTrace.definitionID
+        let definitionCount = engine.definitions.count
+        try engine.saveTaskTitleInput(
+            chainID: chainID,
+            title: "再次修改当前标题",
+            today: day2,
+            now: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(engine.definitions[historicalTrace.definitionID]?.title, "历史标题")
+        XCTAssertEqual(engine.traces[currentTraceID]?.definitionID, currentDefinitionID)
+        XCTAssertEqual(engine.definitions[currentDefinitionID]?.title, "再次修改当前标题")
+        XCTAssertEqual(engine.definitions.count, definitionCount)
     }
 
     func testReturnedPoolNotesKeepStableOwnershipAcrossRenameAndReschedule() throws {
@@ -239,6 +253,89 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.traces[returnedTraceID]?.status, .returnedToPool)
         XCTAssertEqual(engine.chains[returnedChainID]?.state, .abandoned)
         XCTAssertFalse(engine.taskPool().contains { $0.chain.id == returnedChainID })
+    }
+
+    func testDeletingNewCurrentDayTaskLeavesOnlyAnInternalCancellationFact() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "今日临时任务", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let deletedAt = now.addingTimeInterval(1)
+
+        try engine.deleteNewCurrentDayTask(
+            traceID: traceID,
+            today: day1,
+            now: deletedAt
+        )
+
+        let trace = try XCTUnwrap(engine.traces[traceID])
+        XCTAssertEqual(trace.status, .cancelledDraft)
+        XCTAssertEqual(trace.settledAt, deletedAt)
+        XCTAssertNotNil(trace.draftCancellationID)
+        XCTAssertEqual(trace.draftCancelledOn, day1)
+        XCTAssertEqual(engine.chains[chainID]?.state, .abandoned)
+        XCTAssertFalse(engine.getDayTodo(date: day1).traces.contains { $0.id == traceID })
+        XCTAssertFalse(engine.taskPool().contains { $0.chain.id == chainID })
+        XCTAssertFalse(engine.unfinishedPool().contains { $0.chain.id == chainID })
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+        XCTAssertEqual(
+            try NoonmarkEngine(snapshot: engine.snapshot()).snapshot(),
+            engine.snapshot()
+        )
+    }
+
+    func testDeletingNewCurrentDayTaskRejectsCompletedAndContinuedTasks() throws {
+        let engine = NoonmarkEngine()
+        let completedChainID = try engine.createPoolTask(title: "已完成任务", now: now)
+        let completedTraceID = try engine.scheduleFromPool(
+            chainID: completedChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.markCompleted(
+            traceID: completedTraceID,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertThrowsError(
+            try engine.deleteNewCurrentDayTask(
+                traceID: completedTraceID,
+                today: day1,
+                now: now.addingTimeInterval(2)
+            )
+        )
+
+        let continuedChainID = try engine.createPoolTask(
+            title: "已有历史的延续任务",
+            now: now
+        )
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: continuedChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.settleDays(upTo: day2, now: now.addingTimeInterval(1))
+        let continuedTraceID = try engine.continueTrace(
+            traceID: sourceTraceID,
+            targetDate: day2,
+            today: day2,
+            now: now.addingTimeInterval(2)
+        )
+
+        XCTAssertThrowsError(
+            try engine.deleteNewCurrentDayTask(
+                traceID: continuedTraceID,
+                today: day2,
+                now: now.addingTimeInterval(3)
+            )
+        )
     }
 
     func testCurrentCompletionCanBeUndoneButHistoryCannot() throws {

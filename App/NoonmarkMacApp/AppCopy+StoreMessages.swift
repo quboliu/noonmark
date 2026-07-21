@@ -99,6 +99,10 @@ extension AppCopy {
             : "Task chain abandoned. It can be reactivated from Unfinished."
     }
 
+    var newCurrentDayTaskDeleted: String {
+        language == .chinese ? "已删除当天新增任务" : "Deleted the task added today"
+    }
+
     var taskChainReactivated: String {
         language == .chinese ? "已取消废弃" : "Task chain reactivated"
     }

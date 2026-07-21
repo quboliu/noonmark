@@ -4,31 +4,46 @@ import NoonmarkCore
 
 /// Drives the visible task-note controls with real window mouse events.
 /// It deliberately has no reference to `NoonmarkStore`, so an E2E run cannot bypass the UI
-/// by calling the note mutation methods directly.
+/// by calling note mutation methods directly. The supplied probe is read-only
+/// evidence that the UI-driven write reached SQLite before the edit is closed.
 @MainActor
 enum TaskNoteE2EUIInteractionDriver {
     static func start(
-        state: TaskNoteE2EState,
+        editedNoteID: TaskNoteEntryID,
+        deletedNoteID: TaskNoteEntryID,
         editedBody: String,
+        hasDurablyPersistedEditedBody: @escaping @MainActor () -> Bool,
         resultURL: URL
     ) {
         InteractionSession(
-            state: state,
+            editedNoteID: editedNoteID,
+            deletedNoteID: deletedNoteID,
             editedBody: editedBody,
+            hasDurablyPersistedEditedBody: hasDurablyPersistedEditedBody,
             resultURL: resultURL
         ).start()
     }
 
     @MainActor
     private final class InteractionSession {
-        private let state: TaskNoteE2EState
+        private let editedNoteID: TaskNoteEntryID
+        private let deletedNoteID: TaskNoteEntryID
         private let editedBody: String
+        private let hasDurablyPersistedEditedBody: @MainActor () -> Bool
         private let resultURL: URL
         private var actionMenuIdentity: AppViewTreeE2E.PresentationWindowIdentity?
 
-        init(state: TaskNoteE2EState, editedBody: String, resultURL: URL) {
-            self.state = state
+        init(
+            editedNoteID: TaskNoteEntryID,
+            deletedNoteID: TaskNoteEntryID,
+            editedBody: String,
+            hasDurablyPersistedEditedBody: @escaping @MainActor () -> Bool,
+            resultURL: URL
+        ) {
+            self.editedNoteID = editedNoteID
+            self.deletedNoteID = deletedNoteID
             self.editedBody = editedBody
+            self.hasDurablyPersistedEditedBody = hasDurablyPersistedEditedBody
             self.resultURL = resultURL
         }
 
@@ -99,6 +114,47 @@ enum TaskNoteE2EUIInteractionDriver {
                     && AppViewTreeE2E.hasNoVisibleView(
                         identifier: self.deletedActionsIdentifier
                     )
+            }
+            try await clickAwayFromEditedNoteEditor(
+                textView,
+                in: window,
+                input: input
+            )
+        }
+
+        private func clickAwayFromEditedNoteEditor(
+            _ textView: NSTextView,
+            in window: NSWindow,
+            input: WindowServerInputDriver
+        ) async throws {
+            try await waitUntil("附言编辑后没有可点击的任务标题") {
+                self.element(identifier: "detail.title.input")?.window === window
+            }
+            let resolveTarget: @MainActor () throws
+                -> WindowServerInputDriver.PointerCoordinate = {
+                guard let title = self.element(identifier: "detail.title.input"),
+                      title.window === window,
+                      window.isKeyWindow,
+                      title.isHiddenOrHasHiddenAncestor == false
+                else {
+                    throw InteractionFailure.failed("点击离焦时任务标题不可用")
+                }
+                let frame = AppViewTreeE2E.frameInWindow(for: title)
+                return try input.pointerCoordinate(
+                    windowPoint: NSPoint(x: frame.midX, y: frame.midY),
+                    in: window
+                )
+            }
+            let initialTarget = try resolveTarget()
+            try await input.postClick(
+                at: initialTarget,
+                modifiers: [],
+                resolveTarget: resolveTarget
+            )
+            try await waitUntil("点击离焦后附言尚未写入 SQLite") {
+                window.firstResponder !== textView
+                    && textView.string == self.editedBody
+                    && self.hasDurablyPersistedEditedBody()
             }
         }
 
@@ -215,31 +271,31 @@ enum TaskNoteE2EUIInteractionDriver {
         }
 
         private var deletedActionsIdentifier: String {
-            "detail.note.actions.\(state.deletedNoteID.description)"
+            "detail.note.actions.\(deletedNoteID.description)"
         }
 
         private var editedEditorIdentifier: String {
-            "detail.note.editor.\(state.editedNoteID.description)"
+            "detail.note.editor.\(editedNoteID.description)"
         }
 
         private var editedEditorStateIdentifier: String {
-            "detail.note.editor.state.\(state.editedNoteID.description)"
+            "detail.note.editor.state.\(editedNoteID.description)"
         }
 
         private var editedBodyIdentifier: String {
-            "detail.note.body.\(state.editedNoteID.description)"
+            "detail.note.body.\(editedNoteID.description)"
         }
 
         private var deletedEntryStateIdentifier: String {
-            "detail.note.entry.state.\(state.deletedNoteID.description)"
+            "detail.note.entry.state.\(deletedNoteID.description)"
         }
 
         private var deletedMenuIdentifier: String {
-            "detail.note.delete.\(state.deletedNoteID.description)"
+            "detail.note.delete.\(deletedNoteID.description)"
         }
 
         private var editedSaveIdentifier: String {
-            "detail.note.save.\(state.editedNoteID.description)"
+            "detail.note.save.\(editedNoteID.description)"
         }
     }
 
@@ -254,7 +310,8 @@ enum TaskNoteE2EUIInteractionDriver {
     }
 }
 
-/// Verifies that a real failed note edit preserves the visible editor and draft.
+/// Verifies that a real failed immediate note save preserves the visible editor
+/// and draft, then allows the explicit retry control to complete the write.
 @MainActor
 enum TaskNotePersistenceFailureUIE2EDriver {
     static func start(
@@ -335,35 +392,28 @@ enum TaskNotePersistenceFailureUIE2EDriver {
                         identifier: otherActionsIdentifier
                     )
             } onSuccess: { [self] in
-                saveDraft()
+                waitForImmediateSaveFailure()
             }
         }
 
-        private func saveDraft() {
-            waitFor("保存失败目标的保存按钮") { [self] in
-                guard let button = AppViewTreeE2E.view(identifier: saveIdentifier) else {
+        private func waitForImmediateSaveFailure() {
+            waitFor("输入后保存失败的编辑器、草稿与失败反馈") { [self] in
+                guard AppViewTreeE2E.view(identifier: editorStateIdentifier) != nil,
+                      let textView = AppViewTreeE2E.view(
+                          identifier: editorIdentifier
+                      ) as? NSTextView,
+                      textView.string == editedBody,
+                      let failure = AppViewTreeE2E.view(
+                          identifier: "app.operation-failure"
+                      ),
+                      AppViewTreeE2E.verificationText(for: failure)
+                          == expectedFailureMessage
+                else {
                     return false
                 }
-                return AppViewTreeE2E.click(button)
+                return true
             } onSuccess: { [self] in
-                waitFor("保存失败后编辑器、草稿与失败反馈仍可见") { [self] in
-                    guard AppViewTreeE2E.view(identifier: editorStateIdentifier) != nil,
-                          let textView = AppViewTreeE2E.view(
-                              identifier: editorIdentifier
-                          ) as? NSTextView,
-                          textView.string == editedBody,
-                          let failure = AppViewTreeE2E.view(
-                              identifier: "app.operation-failure"
-                          ),
-                          AppViewTreeE2E.verificationText(for: failure)
-                              == expectedFailureMessage
-                    else {
-                        return false
-                    }
-                    return true
-                } onSuccess: { [self] in
-                    retrySave()
-                }
+                retrySave()
             }
         }
 

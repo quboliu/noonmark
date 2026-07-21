@@ -27,13 +27,24 @@ struct PoolDetail: View {
             })
             DetailPrimaryText {
                 EditableDetailTitleRow(task.definition.title, editable: true) {
-                    store.renamePoolTask(chainID: task.chain.id, title: $0)
+                    store.renamePoolTask(
+                        chainID: task.chain.id,
+                        title: $0,
+                        immediately: true,
+                        reportsSuccess: false
+                    )
                 }
             } description: {
                 DetailDescriptionBlock(
                     text: Binding(
                         get: { task.definition.descriptionText ?? "" },
-                        set: { store.updatePoolTaskText(chainID: task.chain.id, descriptionText: $0) }
+                        set: {
+                            store.updatePoolTaskText(
+                                chainID: task.chain.id,
+                                descriptionText: $0,
+                                immediately: true
+                            )
+                        }
                     ),
                     placeholder: store.copy.taskDescriptionPlaceholder,
                     editable: true
@@ -166,12 +177,20 @@ struct PoolNotesSection: View {
             newNoteText: $store.detailNoteText,
             onAppend: { store.appendPoolNote(chainID: chainID) },
             onEdit: { noteID, body, expectedUpdatedAt in
-                store.editPoolNote(
+                guard store.editPoolNote(
                     chainID: chainID,
                     noteID: noteID,
                     body: body,
-                    expectedUpdatedAt: expectedUpdatedAt
-                )
+                    expectedUpdatedAt: expectedUpdatedAt,
+                    immediately: true
+                ) else {
+                    return nil
+                }
+                return store.engine.taskPool().first { task in
+                    task.chain.id == chainID
+                }?.chain.activeNoteEntries.first { entry in
+                    entry.id == noteID
+                }?.updatedAt
             },
             onDelete: { noteID in
                 store.deletePoolNote(chainID: chainID, noteID: noteID)

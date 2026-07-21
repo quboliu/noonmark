@@ -75,6 +75,7 @@ struct MarkdownEditor: View {
     var commitsOnReturn = false
     var onCommit: (() -> Void)?
     var onEndEditing: (() -> Void)?
+    var onTextChange: ((String) -> Void)?
     var nativeAccessibilityIdentifier: String?
     var focusesOnAppear = false
     var focusRequest = 0
@@ -86,6 +87,7 @@ struct MarkdownEditor: View {
             commitsOnReturn: commitsOnReturn,
             onCommit: onCommit,
             onEndEditing: onEndEditing,
+            onTextChange: onTextChange,
             accessibilityLabel: placeholder,
             nativeAccessibilityIdentifier: nativeAccessibilityIdentifier,
             explicitHeight: height,
@@ -131,6 +133,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     let commitsOnReturn: Bool
     let onCommit: (() -> Void)?
     let onEndEditing: (() -> Void)?
+    let onTextChange: ((String) -> Void)?
     let accessibilityLabel: String
     let nativeAccessibilityIdentifier: String?
     let explicitHeight: CGFloat?
@@ -141,6 +144,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         Coordinator(
             text: $text,
             onEndEditing: onEndEditing,
+            onTextChange: onTextChange,
             focusRequest: focusRequest
         )
     }
@@ -181,6 +185,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             )
         }
         context.coordinator.onEndEditing = onEndEditing
+        context.coordinator.onTextChange = onTextChange
         scrollView.documentView = textView
         return scrollView
     }
@@ -210,6 +215,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         }
         context.coordinator.text = $text
         context.coordinator.onEndEditing = onEndEditing
+        context.coordinator.onTextChange = onTextChange
         if focusesOnAppear, context.coordinator.didRequestInitialFocus == false {
             context.coordinator.didRequestInitialFocus = true
             DispatchQueue.main.async { [weak scrollView, weak textView] in
@@ -267,22 +273,28 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
         var onEndEditing: (() -> Void)?
+        var onTextChange: ((String) -> Void)?
         var focusRequest: Int
         var didRequestInitialFocus = false
 
         init(
             text: Binding<String>,
             onEndEditing: (() -> Void)?,
+            onTextChange: ((String) -> Void)?,
             focusRequest: Int
         ) {
             self.text = text
             self.onEndEditing = onEndEditing
+            self.onTextChange = onTextChange
             self.focusRequest = focusRequest
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
-            text.wrappedValue = textView.string
+            let nextText = textView.string
+            guard text.wrappedValue != nextText else { return }
+            text.wrappedValue = nextText
+            onTextChange?(nextText)
         }
 
         func textDidEndEditing(_ notification: Notification) {

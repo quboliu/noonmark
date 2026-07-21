@@ -130,6 +130,7 @@ struct EditableDetailTitleRow<Trailing: View>: View {
     let onCommit: (String) -> Void
     @ViewBuilder let trailing: Trailing
     @State private var draft: String
+    @State private var pendingPersistedTitle: String?
 
     init(
         _ title: String,
@@ -154,9 +155,14 @@ struct EditableDetailTitleRow<Trailing: View>: View {
                     showsSurface: false,
                     onCommit: commitDraft,
                     onEndEditing: commitDraft,
+                    onTextChange: persistDraft,
                     nativeAccessibilityIdentifier: "detail.title"
                 )
                     .onChange(of: title) { _, newValue in
+                        if pendingPersistedTitle == newValue {
+                            pendingPersistedTitle = nil
+                            return
+                        }
                         if draft != newValue {
                             draft = newValue
                         }
@@ -177,16 +183,19 @@ struct EditableDetailTitleRow<Trailing: View>: View {
     }
 
     private func commitDraft() {
-        let nextTitle = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        persistDraft(draft)
+    }
+
+    private func persistDraft(_ value: String) {
+        let nextTitle = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard nextTitle.isEmpty == false else {
             draft = title
             return
         }
         guard nextTitle != title else {
-            draft = title
             return
         }
-        draft = nextTitle
+        pendingPersistedTitle = nextTitle
         onCommit(nextTitle)
     }
 }

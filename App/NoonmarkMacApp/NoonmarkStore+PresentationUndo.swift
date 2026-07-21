@@ -268,7 +268,11 @@ extension NoonmarkStore {
             if completionCapability == .available(.complete) {
                 actions.append(.markComplete)
             }
-            actions.append(contentsOf: [.continueTo, .changeToNewTask, .returnToPool, .abandonChain])
+            actions.append(contentsOf: [.continueTo, .changeToNewTask, .returnToPool])
+            actions.append(.abandonChain)
+            if engine.canDeleteNewCurrentDayTask(traceID: trace.id, today: today) {
+                actions.append(.deleteNewCurrentDayTask)
+            }
             return actions
         }
 

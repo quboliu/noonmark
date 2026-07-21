@@ -29,13 +29,24 @@ struct FuturePlanDetail: View {
             })
             DetailPrimaryText {
                 EditableDetailTitleRow(definition.title, editable: true) {
-                    store.renameTraceTitle(traceID: trace.id, title: $0)
+                    store.renameTraceTitle(
+                        traceID: trace.id,
+                        title: $0,
+                        immediately: true,
+                        reportsSuccess: false
+                    )
                 }
             } description: {
                 DetailDescriptionBlock(
                     text: Binding(
                         get: { trace.descriptionText ?? definition.descriptionText ?? "" },
-                        set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
+                        set: {
+                            store.updateTraceText(
+                                traceID: trace.id,
+                                descriptionText: $0,
+                                immediately: true
+                            )
+                        }
                     ),
                     placeholder: store.copy.planDescriptionPlaceholder,
                     editable: true

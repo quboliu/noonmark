@@ -902,6 +902,10 @@ struct TaskContextMenu: View {
                 Button(store.copy.reschedule) { store.showingPicker = .reschedule(trace.id) }
             case .copyAsNewTask:
                 Button(store.copy.copyAsNewTask) { store.copyAsNewTask(trace.id) }
+            case .deleteNewCurrentDayTask:
+                Button(store.copy.deleteTask, role: .destructive) {
+                    store.deleteNewCurrentDayTask(trace.id)
+                }
             case .abandonChain:
                 Button(store.copy.abandonChain, role: .destructive) { store.abandon(trace.id) }
             }

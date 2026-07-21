@@ -35,13 +35,24 @@ struct TaskDetail: View {
             })
             DetailPrimaryText {
                 EditableDetailTitleRow(definition.title, editable: canRenameTitle) {
-                    store.renameTraceTitle(traceID: trace.id, title: $0)
+                    store.renameTraceTitle(
+                        traceID: trace.id,
+                        title: $0,
+                        immediately: true,
+                        reportsSuccess: false
+                    )
                 }
             } description: {
                 DetailDescriptionBlock(
                     text: Binding(
                         get: { trace.descriptionText ?? definition.descriptionText ?? "" },
-                        set: { store.updateTraceText(traceID: trace.id, descriptionText: $0) }
+                        set: {
+                            store.updateTraceText(
+                                traceID: trace.id,
+                                descriptionText: $0,
+                                immediately: true
+                            )
+                        }
                     ),
                     placeholder: store.copy.taskDescriptionPlaceholder,
                     editable: canEditText
@@ -325,12 +336,18 @@ struct DetailNotesSection: View {
             newNoteText: $store.detailNoteText,
             onAppend: { store.appendTraceNote(traceID: traceID) },
             onEdit: { noteID, body, expectedUpdatedAt in
-                store.editTraceNote(
+                guard store.editTraceNote(
                     traceID: traceID,
                     noteID: noteID,
                     body: body,
-                    expectedUpdatedAt: expectedUpdatedAt
-                )
+                    expectedUpdatedAt: expectedUpdatedAt,
+                    immediately: true
+                ) else {
+                    return nil
+                }
+                return store.engine.traces[traceID]?.activeNoteEntries.first {
+                    $0.id == noteID
+                }?.updatedAt
             },
             onDelete: { noteID in
                 store.deleteTraceNote(traceID: traceID, noteID: noteID)
@@ -341,7 +358,9 @@ struct DetailNotesSection: View {
 
 private struct TaskNoteEditSession: Equatable {
     let noteID: TaskNoteEntryID
-    let baselineUpdatedAt: Date
+    let originalBody: String
+    var baselineUpdatedAt: Date
+    var persistedBody: String
     var draft: String
 }
 
@@ -353,7 +372,7 @@ struct TaskNoteEntriesSection: View {
     let placeholder: String
     @Binding var newNoteText: String
     let onAppend: () -> Bool
-    let onEdit: (TaskNoteEntryID, String, Date) -> Bool
+    let onEdit: (TaskNoteEntryID, String, Date) -> Date?
     let onDelete: (TaskNoteEntryID) -> Bool
 
     @State private var editSession: TaskNoteEditSession?
@@ -373,29 +392,19 @@ struct TaskNoteEntriesSection: View {
                                 guard editSession == nil else { return }
                                 editSession = TaskNoteEditSession(
                                     noteID: entry.id,
+                                    originalBody: entry.body,
                                     baselineUpdatedAt: entry.updatedAt,
+                                    persistedBody: entry.body,
                                     draft: entry.body
                                 )
                             },
                             onCancelEditing: {
-                                guard editSession?.noteID == entry.id else { return }
-                                editSession = nil
+                                cancelEditing(entry.id)
                             },
                             onSaveEditing: {
-                                guard let session = editSession,
-                                      session.noteID == entry.id
-                                else { return }
-                                let body = session.draft.trimmingCharacters(
-                                    in: .whitespacesAndNewlines
-                                )
-                                guard body.isEmpty == false else { return }
-                                guard onEdit(
-                                    entry.id,
-                                    body,
-                                    session.baselineUpdatedAt
-                                ) else { return }
-                                editSession = nil
+                                finishEditing(entry.id)
                             },
+                            onDraftChange: { _ = persistEditedDraft(entry.id, draft: $0) },
                             onDelete: {
                                 guard onDelete(entry.id) else { return }
                             }
@@ -459,13 +468,61 @@ struct TaskNoteEntriesSection: View {
                 return editSession?.draft ?? ""
             },
             set: { draft in
-                guard var session = editSession,
-                      session.noteID == noteID
-                else { return }
-                session.draft = draft
-                editSession = session
+                setEditedDraft(noteID, draft: draft)
             }
         )
+    }
+
+    private func setEditedDraft(_ noteID: TaskNoteEntryID, draft: String) {
+        guard var session = editSession, session.noteID == noteID else { return }
+        session.draft = draft
+        editSession = session
+    }
+
+    @discardableResult
+    private func persistEditedDraft(_ noteID: TaskNoteEntryID, draft: String) -> Bool {
+        guard var session = editSession, session.noteID == noteID else { return false }
+        session.draft = draft
+        editSession = session
+
+        let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard body.isEmpty == false else { return false }
+        guard body != session.persistedBody else { return true }
+        guard let updatedAt = onEdit(noteID, body, session.baselineUpdatedAt) else {
+            return false
+        }
+        session.baselineUpdatedAt = updatedAt
+        session.persistedBody = body
+        editSession = session
+        return true
+    }
+
+    private func finishEditing(_ noteID: TaskNoteEntryID) {
+        guard let session = editSession,
+              session.noteID == noteID,
+              session.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty == false
+        else {
+            return
+        }
+        guard persistEditedDraft(noteID, draft: session.draft) else { return }
+        editSession = nil
+    }
+
+    private func cancelEditing(_ noteID: TaskNoteEntryID) {
+        guard let session = editSession, session.noteID == noteID else { return }
+        guard session.persistedBody != session.originalBody else {
+            editSession = nil
+            return
+        }
+        guard onEdit(
+            noteID,
+            session.originalBody,
+            session.baselineUpdatedAt
+        ) != nil else {
+            return
+        }
+        editSession = nil
     }
 }
 
@@ -480,6 +537,7 @@ struct DetailNoteEntryRow: View {
     let onStartEditing: () -> Void
     let onCancelEditing: () -> Void
     let onSaveEditing: () -> Void
+    let onDraftChange: (String) -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -509,6 +567,7 @@ struct DetailNoteEntryRow: View {
                     warm: true,
                     showsSurface: false,
                     height: 58,
+                    onTextChange: onDraftChange,
                     nativeAccessibilityIdentifier: "detail.note.editor.\(entry.id.description)",
                     focusesOnAppear: true
                 )

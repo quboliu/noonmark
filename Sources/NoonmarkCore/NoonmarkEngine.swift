@@ -243,6 +243,40 @@ public final class NoonmarkEngine {
         today: LocalDate,
         now: Date = Date()
     ) throws {
+        try updateTaskTitle(
+            chainID: chainID,
+            title: title,
+            today: today,
+            now: now,
+            reusingEditableDefinition: false
+        )
+    }
+
+    /// Persists a character-level title input without creating redundant
+    /// definition versions after the editable task has been detached from its
+    /// historical definition.
+    public func saveTaskTitleInput(
+        chainID: TaskChainID,
+        title: String,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        try updateTaskTitle(
+            chainID: chainID,
+            title: title,
+            today: today,
+            now: now,
+            reusingEditableDefinition: true
+        )
+    }
+
+    private func updateTaskTitle(
+        chainID: TaskChainID,
+        title: String,
+        today: LocalDate,
+        now: Date,
+        reusingEditableDefinition: Bool
+    ) throws {
         let normalizedTitle = try normalizeTitle(title)
         let chain = try chain(chainID)
         guard chain.state == .active else {
@@ -266,7 +300,12 @@ public final class NoonmarkEngine {
         var currentDefinition = try currentDefinition(for: chainID)
         guard currentDefinition.title != normalizedTitle else { return }
 
-        if chainTraces.isEmpty {
+        let currentDefinitionHasHistoricalReference = chainTraces.contains {
+            $0.definitionID == currentDefinition.id && $0.status != .pending
+        }
+        let canReuseCurrentDefinition = chainTraces.isEmpty
+            || (reusingEditableDefinition && currentDefinitionHasHistoricalReference == false)
+        if canReuseCurrentDefinition {
             try currentDefinition.markContentModified(at: now)
             currentDefinition.title = normalizedTitle
             definitions[currentDefinition.id] = currentDefinition
@@ -739,6 +778,64 @@ public final class NoonmarkEngine {
         traces[trace.id] = trace
         captureClassificationSnapshot(traceID: trace.id, chainID: trace.chainID, now: now)
         try touchChain(trace.chainID, now: now)
+    }
+
+    /// Deletes a task that was first placed on the current Day Todo.
+    ///
+    /// The trace remains as an internal cancellation fact so a stale sync
+    /// record cannot restore it, but it leaves every user-facing projection.
+    public func deleteNewCurrentDayTask(
+        traceID: DayTraceID,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        var trace = try trace(traceID)
+        var chain = try chain(trace.chainID)
+        try ensureUnlockedDay(trace.date)
+        guard chain.state == .active else {
+            throw NoonmarkError.chainAbandoned
+        }
+        guard trace.date == today, trace.status == .pending else {
+            throw NoonmarkError.invalidTransition(
+                "only pending current-day tasks can be deleted"
+            )
+        }
+        guard isNewDayTrace(trace) else {
+            throw NoonmarkError.invalidTransition(
+                "only tasks newly added to the current day can be deleted"
+            )
+        }
+
+        try trace.markContentModified(at: now)
+        try chain.markContentModified(at: now)
+        trace.status = .cancelledDraft
+        trace.settledAt = now
+        trace.draftCancellationID = UUID()
+        trace.draftCancelledOn = today
+        try removeCurrentClassificationForRetiredTask(
+            chainID: trace.chainID,
+            reason: "new current-day task deleted",
+            now: now
+        )
+        chain.state = .abandoned
+        traces[trace.id] = trace
+        chains[chain.id] = chain
+    }
+
+    public func canDeleteNewCurrentDayTask(
+        traceID: DayTraceID,
+        today: LocalDate
+    ) -> Bool {
+        guard let trace = traces[traceID],
+              let chain = chains[trace.chainID],
+              chain.state == .active,
+              days[trace.date]?.lockedAt == nil,
+              trace.date == today,
+              trace.status == .pending
+        else {
+            return false
+        }
+        return isNewDayTrace(trace)
     }
 
     public func rescheduleFuturePlan(traceID: DayTraceID, targetDate: LocalDate, today: LocalDate, now: Date = Date()) throws {
@@ -2029,6 +2126,14 @@ private extension NoonmarkEngine {
             .filter { $0.chainID == chainID && $0.status == .pending }
             .sorted { $0.createdAt > $1.createdAt }
             .first
+    }
+
+    func isNewDayTrace(_ trace: DayTrace) -> Bool {
+        traces.values.allSatisfy {
+            $0.chainID != trace.chainID
+                || $0.id == trace.id
+                || $0.formsDayHistory == false
+        }
     }
 
     func isInTaskPool(_ chainID: TaskChainID) -> Bool {

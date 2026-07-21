@@ -64,6 +64,10 @@ extension AppCopy {
         language == .chinese ? "任务回池" : "Return Task to Pool"
     }
 
+    var deleteTaskAction: String {
+        language == .chinese ? "删除任务" : "Delete Task"
+    }
+
     var abandonTaskAction: String {
         language == .chinese ? "废弃任务链" : "Abandon Task Chain"
     }

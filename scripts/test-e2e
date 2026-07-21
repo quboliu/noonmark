@@ -223,6 +223,7 @@ only_mode_specs=(
   "NOONMARK_E2E_POOL_LIST_LAYOUT_ONLY:pool-list-layout"
   "NOONMARK_E2E_POOL_CONTEXT_ACTION_ONLY:pool-context-action"
   "NOONMARK_E2E_UNFINISHED_ACTION_ONLY:unfinished-action"
+  "NOONMARK_E2E_IMMEDIATE_TASK_MUTATION_ONLY:immediate-task-mutation"
   "NOONMARK_E2E_SUMMARY_SIDEBAR_ONLY:summary-sidebar"
   "NOONMARK_E2E_MARKDOWN_ONLY:markdown"
   "NOONMARK_E2E_QUICK_ADD_UI_ONLY:quick-add-ui"
@@ -2793,6 +2794,85 @@ print(text)
   echo "E2E task-note edit/delete restart and English copy: $note_db (probe=$note_sql_probe screenshot=$restart_screenshot)"
 }
 
+run_task_pool_note_persistence_probe() {
+  local note_dir="artifacts/e2e-task-pool-notes"
+  local note_db="${note_dir}/Noonmark.sqlite"
+  local note_state="${note_dir}/state.json"
+  local mutate_result="${note_dir}/mutate-result.txt"
+  local restart_result="${note_dir}/restart-result.txt"
+  local mutate_log="${note_dir}/mutate.log"
+  local restart_log="${note_dir}/task-pool-note-restart.log"
+  local note_sql_probe
+
+  rm -rf "$note_dir"
+  mkdir -p "$note_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "task-pool-note mutation" \
+    "$mutate_result" \
+    "$mutate_log" \
+    --data-url "$PWD/$note_db" \
+    --page pool \
+    --e2e-task-pool-note-mutate \
+    --e2e-task-pool-note-state-url "$PWD/$note_state" \
+    --e2e-task-pool-note-result-url "$PWD/$mutate_result"
+
+  if [[ ! -s "$note_state" ]]; then
+    echo "task-pool-note mutation state was not created: $note_state" >&2
+    exit 1
+  fi
+
+  capture_app_screenshot \
+    "$note_dir" \
+    "task-pool-note-restart" \
+    pool \
+    --data-url "$PWD/$note_db" \
+    --e2e-task-pool-note-verify \
+    --e2e-task-pool-note-state-url "$PWD/$note_state" \
+    --e2e-task-pool-note-result-url "$PWD/$restart_result"
+
+  if [[ ! -f "$restart_result" ]]; then
+    echo "task-pool-note restart result was not created: $restart_result" >&2
+    terminate_e2e_app
+    exit 1
+  fi
+  if [[ "$(<"$restart_result")" != "ok" ]]; then
+    echo "task-pool-note restart verification failed: $(<"$restart_result")" >&2
+    terminate_e2e_app
+    exit 1
+  fi
+  terminate_e2e_app
+  assert_clean_app_log "task-pool-note restart" "$restart_log"
+
+  note_sql_probe="$(sqlite3 -separator " " "$note_db" "
+    WITH target AS (
+      SELECT chain.note_entries_json AS note_entries_json
+      FROM task_chains AS chain
+      JOIN task_definitions AS definition ON definition.chain_id = chain.id
+      WHERE definition.title = 'E2E 任务池附言编辑删除'
+        AND definition.superseded_at IS NULL
+      LIMIT 1
+    )
+    SELECT
+      json_array_length(note_entries_json),
+      (SELECT count(*) FROM json_each(note_entries_json)
+       WHERE json_extract(value, '$.body') = 'POOL VISIBLE NOTE 7263'
+         AND json_type(value, '$.deletedAt') IS NULL),
+      (SELECT count(*) FROM json_each(note_entries_json)
+       WHERE json_extract(value, '$.body') = ''
+         AND json_type(value, '$.deletedAt') IN ('integer', 'real')),
+      (SELECT count(*) FROM json_each(note_entries_json)
+       WHERE json_type(value, '$.deletedAt') IS NULL)
+    FROM target;
+  ")"
+  if [[ "$note_sql_probe" != "2 1 1 1" ]]; then
+    echo "task-pool-note SQLite JSON probe failed: ${note_sql_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E task-pool note immediate edit/delete restart: $note_db (probe=$note_sql_probe)"
+}
+
 run_task_note_mutation_atomicity_probe() {
   local atomicity_dir="artifacts/e2e-task-note-atomicity"
   local atomicity_db="${atomicity_dir}/Noonmark.sqlite"
@@ -4099,6 +4179,25 @@ run_markdown_editor_ui_probe() {
     exit 1
   fi
   echo "E2E Markdown native focus, edit commands, indentation, and persistence: $markdown_db"
+}
+
+run_immediate_task_mutation_probe() {
+  local mutation_dir="artifacts/e2e-immediate-task-mutation"
+  local mutation_db="$mutation_dir/Noonmark.sqlite"
+  local mutation_result="$mutation_dir/result.txt"
+  local mutation_log="$mutation_dir/app.log"
+
+  rm -rf "$mutation_dir"
+  mkdir -p "$mutation_dir"
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "immediate task title persistence and current-day deletion" \
+    "$mutation_result" \
+    "$mutation_log" \
+    --data-url "$PWD/$mutation_db" \
+    --page day \
+    --e2e-immediate-task-mutation-result-url "$PWD/$mutation_result"
+
+  echo "E2E immediate task title persistence and current-day deletion: $mutation_db"
 }
 
 run_review_detail_ux_probe() {
@@ -8607,6 +8706,7 @@ fi
 
 if [[ "${NOONMARK_E2E_TASK_NOTE_ONLY:-0}" == "1" ]]; then
   run_task_note_persistence_probe
+  run_task_pool_note_persistence_probe
   exit 0
 fi
 
@@ -8741,6 +8841,11 @@ fi
 
 if [[ "${NOONMARK_E2E_UNFINISHED_ACTION_ONLY:-0}" == "1" ]]; then
   run_unfinished_action_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_IMMEDIATE_TASK_MUTATION_ONLY:-0}" == "1" ]]; then
+  run_immediate_task_mutation_probe
   exit 0
 fi
 
@@ -8897,6 +9002,8 @@ terminate_e2e_app
 
 run_task_note_persistence_probe
 
+run_task_pool_note_persistence_probe
+
 run_task_note_mutation_atomicity_probe
 
 run_reactivation_atomicity_probe
@@ -8916,6 +9023,8 @@ run_pool_list_layout_probe
 run_pool_context_menu_action_probe
 
 run_unfinished_action_probe
+
+run_immediate_task_mutation_probe
 
 run_markdown_editor_ui_probe
 

@@ -567,7 +567,7 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
             let currentID = try makeTrace(title: "E2E 当前待完成", date: today, today: today, store: store)
             try assertActions(
                 store.contextMenuActions(for: try trace(currentID, in: store)),
-                [.markComplete, .continueTo, .changeToNewTask, .returnToPool, .abandonChain],
+                [.markComplete, .continueTo, .changeToNewTask, .returnToPool, .abandonChain, .deleteNewCurrentDayTask],
                 "current pending"
             )
 
@@ -575,7 +575,7 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
             _ = try store.engine.addSubtask(traceID: currentWithSubtasksID, title: "子任务")
             try assertActions(
                 store.contextMenuActions(for: try trace(currentWithSubtasksID, in: store)),
-                [.continueTo, .changeToNewTask, .returnToPool, .abandonChain],
+                [.continueTo, .changeToNewTask, .returnToPool, .abandonChain, .deleteNewCurrentDayTask],
                 "current pending with subtasks"
             )
 

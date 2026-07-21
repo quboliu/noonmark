@@ -69,8 +69,16 @@ struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
             case .mutate:
                 let state = try prepareUIInteraction(on: store, stateURL: stateURL)
                 TaskNoteE2EUIInteractionDriver.start(
-                    state: state,
+                    editedNoteID: state.editedNoteID,
+                    deletedNoteID: state.deletedNoteID,
                     editedBody: Self.editedBody,
+                    hasDurablyPersistedEditedBody: {
+                        hasDurablyPersistedTraceNote(
+                            on: store,
+                            state: state,
+                            expectedBody: Self.editedBody
+                        )
+                    },
                     resultURL: resultURL
                 )
             case .verify:
@@ -206,6 +214,21 @@ struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
         try JSONDecoder().decode(TaskNoteE2EState.self, from: Data(contentsOf: url))
     }
 
+    private func hasDurablyPersistedTraceNote(
+        on store: NoonmarkStore,
+        state: TaskNoteE2EState,
+        expectedBody: String
+    ) -> Bool {
+        guard let databaseURL = store.databaseURL,
+              let restored = try? SQLiteEngineRepository(databaseURL: databaseURL).load()
+        else {
+            return false
+        }
+        return restored.traces[state.traceID]?.activeNoteEntries.first(where: {
+            $0.id == state.editedNoteID
+        })?.body == expectedBody
+    }
+
     private func writeResult(_ result: String, to url: URL?) throws {
         guard let url else { return }
         try FileManager.default.createDirectory(
@@ -213,6 +236,212 @@ struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
             withIntermediateDirectories: true
         )
         try result.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+struct TaskPoolNoteE2EState: Codable {
+    let chainID: TaskChainID
+    let definitionID: TaskDefinitionID
+    let editedNoteID: TaskNoteEntryID
+    let deletedNoteID: TaskNoteEntryID
+}
+
+struct TaskPoolNoteE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode {
+        case mutate
+        case verify
+    }
+
+    private static let title = "E2E 任务池附言编辑删除"
+    private static let editedBody = "POOL VISIBLE NOTE 7263"
+    private static let deletedBody = "POOL GHOST NOTE 9184"
+
+    private let mode: Mode?
+    let stateURL: URL?
+    let resultURL: URL?
+
+    @MainActor
+    static func fromCommandLine() -> TaskPoolNoteE2EAutomation? {
+        let shouldMutate = AppLaunchArguments.contains("--e2e-task-pool-note-mutate")
+        let shouldVerify = AppLaunchArguments.contains("--e2e-task-pool-note-verify")
+        guard shouldMutate || shouldVerify else { return nil }
+
+        let mode: Mode? = switch (shouldMutate, shouldVerify) {
+        case (true, false): .mutate
+        case (false, true): .verify
+        default: nil
+        }
+        return TaskPoolNoteE2EAutomation(
+            mode: mode,
+            stateURL: AppLaunchArguments.value(after: "--e2e-task-pool-note-state-url")
+                .map { URL(fileURLWithPath: $0) },
+            resultURL: AppLaunchArguments.value(after: "--e2e-task-pool-note-result-url")
+                .map { URL(fileURLWithPath: $0) }
+        )
+    }
+
+    @MainActor
+    func run(on store: NoonmarkStore) {
+        do {
+            guard let mode, let stateURL, let resultURL else {
+                throw TaskPoolNoteE2EAutomationError.failed(
+                    "missing task-pool note automation arguments"
+                )
+            }
+            switch mode {
+            case .mutate:
+                let state = try prepareUIInteraction(on: store, stateURL: stateURL)
+                TaskNoteE2EUIInteractionDriver.start(
+                    editedNoteID: state.editedNoteID,
+                    deletedNoteID: state.deletedNoteID,
+                    editedBody: Self.editedBody,
+                    hasDurablyPersistedEditedBody: {
+                        hasDurablyPersistedPoolNote(
+                            on: store,
+                            state: state,
+                            expectedBody: Self.editedBody
+                        )
+                    },
+                    resultURL: resultURL
+                )
+            case .verify:
+                try verify(on: store, stateURL: stateURL)
+                try writeResult("ok", to: resultURL)
+            }
+        } catch {
+            try? writeResult("failed: \(error.localizedDescription)", to: resultURL)
+            if case .mutate = mode {
+                DispatchQueue.main.async {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func prepareUIInteraction(
+        on store: NoonmarkStore,
+        stateURL: URL
+    ) throws -> TaskPoolNoteE2EState {
+        guard store.engine.chains.isEmpty,
+              store.engine.definitions.isEmpty,
+              store.engine.traces.isEmpty
+        else {
+            throw TaskPoolNoteE2EAutomationError.failed(
+                "isolated task-pool note database was not empty"
+            )
+        }
+
+        store.page = .pool
+        store.poolText = Self.title
+        store.addPoolTask()
+        guard let chainID = store.selectedPoolChainID,
+              let initialChain = store.engine.chains[chainID],
+              initialChain.activeNoteEntries.count == 1
+        else {
+            throw TaskPoolNoteE2EAutomationError.failed(
+                "task-pool note fixture was not created"
+            )
+        }
+
+        store.detailNoteText = Self.deletedBody
+        store.appendPoolNote(chainID: chainID)
+        guard let chain = store.engine.chains[chainID],
+              let definition = store.currentDefinition(for: chainID),
+              chain.activeNoteEntries.count == 2,
+              let editedNoteID = chain.activeNoteEntries.first?.id,
+              let deletedNoteID = chain.activeNoteEntries.last?.id,
+              editedNoteID != deletedNoteID
+        else {
+            throw TaskPoolNoteE2EAutomationError.failed(
+                "task-pool note fixture did not contain two stable entries"
+            )
+        }
+
+        store.selectPool(chainID)
+        store.persist()
+        let state = TaskPoolNoteE2EState(
+            chainID: chainID,
+            definitionID: definition.id,
+            editedNoteID: editedNoteID,
+            deletedNoteID: deletedNoteID
+        )
+        try writeState(state, to: stateURL)
+        return state
+    }
+
+    @MainActor
+    private func verify(on store: NoonmarkStore, stateURL: URL) throws {
+        let state = try readState(from: stateURL)
+        guard let chain = store.engine.chains[state.chainID],
+              chain.state == .active,
+              let definition = store.engine.definitions[state.definitionID],
+              definition.chainID == state.chainID,
+              store.engine.taskPool().contains(where: { $0.chain.id == state.chainID }),
+              chain.noteEntries.count == 2,
+              let editedEntry = chain.noteEntries.first(where: { $0.id == state.editedNoteID }),
+              editedEntry.body == Self.editedBody,
+              editedEntry.deletedAt == nil,
+              let deletedEntry = chain.noteEntries.first(where: { $0.id == state.deletedNoteID }),
+              deletedEntry.body.isEmpty,
+              deletedEntry.deletedAt != nil,
+              deletedEntry.updatedAt == deletedEntry.deletedAt,
+              chain.activeNoteEntries.map(\.id) == [state.editedNoteID]
+        else {
+            throw TaskPoolNoteE2EAutomationError.failed(
+                "task-pool note state did not survive restart exactly"
+            )
+        }
+        store.page = .pool
+        store.selectPool(state.chainID)
+    }
+
+    private func hasDurablyPersistedPoolNote(
+        on store: NoonmarkStore,
+        state: TaskPoolNoteE2EState,
+        expectedBody: String
+    ) -> Bool {
+        guard let databaseURL = store.databaseURL,
+              let restored = try? SQLiteEngineRepository(databaseURL: databaseURL).load()
+        else {
+            return false
+        }
+        return restored.taskPool().first(where: { $0.chain.id == state.chainID })?
+            .chain.activeNoteEntries.first(where: { $0.id == state.editedNoteID })?
+            .body == expectedBody
+    }
+
+    private func writeState(_ state: TaskPoolNoteE2EState, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(state).write(to: url, options: .atomic)
+    }
+
+    private func readState(from url: URL) throws -> TaskPoolNoteE2EState {
+        try JSONDecoder().decode(TaskPoolNoteE2EState.self, from: Data(contentsOf: url))
+    }
+
+    private func writeResult(_ result: String, to url: URL?) throws {
+        guard let url else { return }
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try result.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+private enum TaskPoolNoteE2EAutomationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .failed(message): message
+        }
     }
 }
 

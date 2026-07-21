@@ -122,6 +122,7 @@ final class NoonmarkStore: ObservableObject {
         static let updateSubtask = Self { $0.updateSubtaskAction }
         static let continueTask = Self { $0.continueTaskAction }
         static let returnTaskToPool = Self { $0.returnTaskToPoolAction }
+        static let deleteTask = Self { $0.deleteTaskAction }
         static let abandonTask = Self { $0.abandonTaskAction }
         static let reactivateTask = Self { $0.reactivateTaskAction }
         static let rescheduleTask = Self { $0.rescheduleTaskAction }
@@ -369,6 +370,7 @@ final class NoonmarkStore: ObservableObject {
         case returnToPool
         case reschedule
         case copyAsNewTask
+        case deleteNewCurrentDayTask
         case abandonChain
     }
 

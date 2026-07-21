@@ -348,6 +348,37 @@ extension NoonmarkStore {
         }
     }
 
+    func deleteNewCurrentDayTask(_ traceID: DayTraceID) {
+        guard let trace = engine.traces[traceID],
+              engine.canDeleteNewCurrentDayTask(traceID: traceID, today: today)
+        else {
+            return
+        }
+        do {
+            try commitEngineMutation(
+                undoPolicy: .snapshotIfAllowed(
+                    on: trace.date,
+                    action: .deleteTask
+                ),
+                automaticClassificationPolicy: .taskBecameIneligible(
+                    trace.chainID
+                )
+            ) { candidate, moment in
+                try candidate.deleteNewCurrentDayTask(
+                    traceID: traceID,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            if selectedTraceID == traceID {
+                clearSelection()
+            }
+            showToast(copy.newCurrentDayTaskDeleted)
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
     func abandon(_ traceID: DayTraceID) {
         guard let trace = engine.traces[traceID] else { return }
         let undoPolicy: EngineMutationUndoPolicy = trace.date >= today
@@ -607,14 +638,20 @@ extension NoonmarkStore {
         return movingTrace.date
     }
 
-    func updateTraceText(traceID: DayTraceID, descriptionText: String) {
+    func updateTraceText(
+        traceID: DayTraceID,
+        descriptionText: String,
+        immediately: Bool = false
+    ) {
         guard let trace = engine.traces[traceID] else { return }
         do {
             try commitEngineMutation(
-                undoPolicy: .snapshotIfAllowed(
-                    on: trace.date,
-                    action: .editTaskText
-                )
+                undoPolicy: immediately
+                    ? .preserve
+                    : .snapshotIfAllowed(
+                        on: trace.date,
+                        action: .editTaskText
+                    )
             ) { candidate, moment in
                 try candidate.updateTraceText(
                     traceID: traceID,
@@ -628,59 +665,94 @@ extension NoonmarkStore {
         }
     }
 
-    func renameTraceTitle(traceID: DayTraceID, title: String) {
+    func renameTraceTitle(
+        traceID: DayTraceID,
+        title: String,
+        immediately: Bool = false,
+        reportsSuccess: Bool = true
+    ) {
         guard let trace = engine.traces[traceID] else { return }
         let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard nextTitle.isEmpty == false else { return }
         do {
             try commitEngineMutation(
-                undoPolicy: .snapshotIfAllowed(
-                    on: trace.date,
-                    action: .renameTask
-                ),
+                undoPolicy: immediately
+                    ? .preserve
+                    : .snapshotIfAllowed(on: trace.date, action: .renameTask),
                 automaticClassificationPolicy: .taskDefinitionChanged(
                     trace.chainID
                 )
             ) { candidate, moment in
-                try candidate.renameTaskTitle(
-                    chainID: trace.chainID,
-                    title: nextTitle,
-                    today: moment.today,
-                    now: moment.instant
-                )
+                if immediately {
+                    try candidate.saveTaskTitleInput(
+                        chainID: trace.chainID,
+                        title: nextTitle,
+                        today: moment.today,
+                        now: moment.instant
+                    )
+                } else {
+                    try candidate.renameTaskTitle(
+                        chainID: trace.chainID,
+                        title: nextTitle,
+                        today: moment.today,
+                        now: moment.instant
+                    )
+                }
             }
-            showToast(copy.taskTitleUpdated)
+            if reportsSuccess {
+                showToast(copy.taskTitleUpdated)
+            }
         } catch {
             showOperationFailure(.taskMutation, error: error)
         }
     }
 
-    func renamePoolTask(chainID: TaskChainID, title: String) {
+    func renamePoolTask(
+        chainID: TaskChainID,
+        title: String,
+        immediately: Bool = false,
+        reportsSuccess: Bool = true
+    ) {
         let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard nextTitle.isEmpty == false else { return }
         do {
             try commitEngineMutation(
-                undoPolicy: .snapshot(.renameTask),
+                undoPolicy: immediately ? .preserve : .snapshot(.renameTask),
                 automaticClassificationPolicy: .taskDefinitionChanged(chainID)
             ) { candidate, moment in
-                try candidate.renameTaskTitle(
-                    chainID: chainID,
-                    title: nextTitle,
-                    today: moment.today,
-                    now: moment.instant
-                )
+                if immediately {
+                    try candidate.saveTaskTitleInput(
+                        chainID: chainID,
+                        title: nextTitle,
+                        today: moment.today,
+                        now: moment.instant
+                    )
+                } else {
+                    try candidate.renameTaskTitle(
+                        chainID: chainID,
+                        title: nextTitle,
+                        today: moment.today,
+                        now: moment.instant
+                    )
+                }
             }
-            showToast(copy.taskTitleUpdated)
+            if reportsSuccess {
+                showToast(copy.taskTitleUpdated)
+            }
         } catch {
             showOperationFailure(.taskMutation, error: error)
         }
     }
 
-    func updatePoolTaskText(chainID: TaskChainID, descriptionText: String) {
+    func updatePoolTaskText(
+        chainID: TaskChainID,
+        descriptionText: String,
+        immediately: Bool = false
+    ) {
         guard let definition = currentDefinition(for: chainID) else { return }
         do {
             try commitEngineMutation(
-                undoPolicy: .snapshot(.editTaskText),
+                undoPolicy: immediately ? .preserve : .snapshot(.editTaskText),
                 automaticClassificationPolicy: .taskDefinitionChanged(chainID)
             ) { candidate, moment in
                 try candidate.updatePoolTask(
@@ -778,7 +850,8 @@ extension NoonmarkStore {
         traceID: DayTraceID,
         noteID: TaskNoteEntryID,
         body: String,
-        expectedUpdatedAt: Date? = nil
+        expectedUpdatedAt: Date? = nil,
+        immediately: Bool = false
     ) -> Bool {
         guard let trace = engine.traces[traceID],
               let previousEntry = trace.activeNoteEntries.first(where: {
@@ -791,7 +864,7 @@ extension NoonmarkStore {
             return rejectNoteMutation(.changedSinceEditing)
         }
         do {
-            try commitEngineMutation { candidate, moment in
+            try commitEngineMutation(undoPolicy: .preserve) { candidate, moment in
                 try candidate.editTraceNote(
                     traceID: traceID,
                     noteID: noteID,
@@ -800,13 +873,15 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
-            pushUndoEntry(
-                with: .traceNoteEdit(
-                    traceID: traceID,
-                    noteID: noteID,
-                    previousBody: previousEntry.body
+            if immediately == false {
+                pushUndoEntry(
+                    with: .traceNoteEdit(
+                        traceID: traceID,
+                        noteID: noteID,
+                        previousBody: previousEntry.body
+                    )
                 )
-            )
+            }
             resolveOperationFailure(.noteMutation)
             return true
         } catch {
@@ -854,7 +929,8 @@ extension NoonmarkStore {
         chainID: TaskChainID,
         noteID: TaskNoteEntryID,
         body: String,
-        expectedUpdatedAt: Date? = nil
+        expectedUpdatedAt: Date? = nil,
+        immediately: Bool = false
     ) -> Bool {
         guard let previousEntry = engine.taskPool().first(where: {
             $0.chain.id == chainID
@@ -867,7 +943,7 @@ extension NoonmarkStore {
             return rejectNoteMutation(.changedSinceEditing)
         }
         do {
-            try commitEngineMutation { candidate, moment in
+            try commitEngineMutation(undoPolicy: .preserve) { candidate, moment in
                 try candidate.editPoolNote(
                     chainID: chainID,
                     noteID: noteID,
@@ -875,13 +951,15 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
-            pushUndoEntry(
-                with: .poolNoteEdit(
-                    chainID: chainID,
-                    noteID: noteID,
-                    previousBody: previousEntry.body
+            if immediately == false {
+                pushUndoEntry(
+                    with: .poolNoteEdit(
+                        chainID: chainID,
+                        noteID: noteID,
+                        previousBody: previousEntry.body
+                    )
                 )
-            )
+            }
             resolveOperationFailure(.noteMutation)
             return true
         } catch {

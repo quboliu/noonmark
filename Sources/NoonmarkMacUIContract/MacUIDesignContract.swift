@@ -80,8 +80,8 @@ public enum MacUISettingsWindowLayout {
     public static let initialContentWidth = 860.0
     public static let initialContentHeight = 660.0
     public static let sidebarMinimumWidth = 220.0
-    public static let sidebarIdealWidth = 260.0
-    public static let sidebarMaximumWidth = 300.0
+    public static let sidebarIdealWidth = 230.0
+    public static let sidebarMaximumWidth = 240.0
 }
 
 public enum MacUIShellLayout {

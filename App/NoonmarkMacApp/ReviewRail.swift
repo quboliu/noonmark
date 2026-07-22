@@ -157,8 +157,6 @@ struct ReviewStatsCard: View {
                 legend(store.copy.traceStatusLabel(.completed), stats.completed, Theme.ok)
                 legend(store.copy.traceStatusLabel(.unfinished), stats.unfinished, Theme.warn)
                 legend(store.copy.traceStatusLabel(.continued), stats.continued, Theme.text2)
-                legend(store.copy.traceStatusLabel(.changed), stats.changed, Theme.text2)
-                legend(store.copy.traceStatusLabel(.returnedToPool), stats.returnedToPool, Theme.text2)
                 legend(store.copy.traceStatusLabel(.abandoned), stats.abandoned, Theme.text2)
             }
         }
@@ -180,8 +178,6 @@ struct ReviewStatsCard: View {
                 - stats.completed
                 - stats.unfinished
                 - stats.continued
-                - stats.changed
-                - stats.returnedToPool
                 - stats.abandoned
         )
     }

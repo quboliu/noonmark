@@ -4214,6 +4214,7 @@ run_immediate_task_mutation_probe() {
   local mutation_db="$mutation_dir/Noonmark.sqlite"
   local mutation_result="$mutation_dir/result.txt"
   local mutation_log="$mutation_dir/app.log"
+  local mutation_screenshot="$mutation_dir/day-return-reschedule.png"
 
   rm -rf "$mutation_dir"
   mkdir -p "$mutation_dir"
@@ -4223,9 +4224,14 @@ run_immediate_task_mutation_probe() {
     "$mutation_log" \
     --data-url "$PWD/$mutation_db" \
     --page day \
-    --e2e-immediate-task-mutation-result-url "$PWD/$mutation_result"
+    --e2e-immediate-task-mutation-result-url "$PWD/$mutation_result" \
+    --e2e-immediate-task-mutation-screenshot-url "$PWD/$mutation_screenshot"
 
-  echo "E2E immediate task title persistence and current-day deletion: $mutation_db"
+  if [[ ! -s "$mutation_screenshot" ]]; then
+    echo "immediate task mutation screenshot was not created" >&2
+    exit 1
+  fi
+  echo "E2E immediate task persistence, deletion, and return/reschedule: $mutation_db"
 }
 
 run_review_detail_ux_probe() {

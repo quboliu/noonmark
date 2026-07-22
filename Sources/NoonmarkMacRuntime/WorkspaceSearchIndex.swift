@@ -74,7 +74,7 @@ public struct WorkspaceSearchIndex: Sendable {
         }
 
         for trace in engine.traces.values {
-            guard trace.formsDayHistory else { continue }
+            guard trace.status.isVisibleInDayTodo else { continue }
             guard let definition = engine.definitions[trace.definitionID] else { continue }
             let actualSubtasks = engine.subtasks.values
                 .filter {

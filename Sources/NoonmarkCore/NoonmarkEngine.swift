@@ -583,7 +583,7 @@ public final class NoonmarkEngine {
 
     public func getDayTodo(date: LocalDate, sort: ViewSort = .priority) -> DayTodoView {
         let items = traces.values.filter {
-            $0.date == date && $0.formsDayHistory
+            $0.date == date && $0.status.isVisibleInDayTodo
         }
         return DayTodoView(day: days[date], traces: sorted(items, by: sort))
     }
@@ -598,6 +598,68 @@ public final class NoonmarkEngine {
                 return PoolTask(chain: chain, definition: definition)
             }
             .sorted { $0.definition.createdAt < $1.definition.createdAt }
+    }
+
+    public func taskTrail(chainID: TaskChainID) throws -> [TaskTrailEntry] {
+        let chain = try chain(chainID)
+        let changedSource = traces.values.first { source in
+            guard let targetID = source.changedToTraceID,
+                  let target = traces[targetID]
+            else { return false }
+            return target.chainID == chainID
+        }
+        let creationKind: TaskTrailEntryKind = changedSource == nil
+            ? .createdInPool
+            : .createdFromChange
+        var entries = [
+            TaskTrailEntry(
+                id: "\(chain.id.description).created",
+                chainID: chain.id,
+                traceID: nil,
+                relatedTraceID: changedSource?.id,
+                kind: creationKind,
+                date: nil,
+                occurredAt: chain.createdAt
+            )
+        ]
+
+        for trace in traces.values where trace.chainID == chainID {
+            entries.append(
+                TaskTrailEntry(
+                    id: "\(trace.id.description).scheduled",
+                    chainID: chainID,
+                    traceID: trace.id,
+                    kind: .scheduled,
+                    date: trace.date,
+                    occurredAt: trace.createdAt
+                )
+            )
+
+            guard let outcome = taskTrailOutcome(for: trace) else { continue }
+            entries.append(
+                TaskTrailEntry(
+                    id: "\(trace.id.description).\(outcome.kind.rawValue)",
+                    chainID: chainID,
+                    traceID: trace.id,
+                    relatedTraceID: outcome.relatedTraceID,
+                    kind: outcome.kind,
+                    date: trace.date,
+                    occurredAt: outcome.occurredAt
+                )
+            )
+        }
+
+        return entries.sorted { lhs, rhs in
+            if lhs.occurredAt != rhs.occurredAt {
+                return lhs.occurredAt < rhs.occurredAt
+            }
+            let lhsOrder = taskTrailSortOrder(lhs.kind)
+            let rhsOrder = taskTrailSortOrder(rhs.kind)
+            if lhsOrder != rhsOrder {
+                return lhsOrder < rhsOrder
+            }
+            return lhs.id < rhs.id
+        }
     }
 
     public func futurePlans(today: LocalDate) -> [FuturePlanItem] {
@@ -1296,7 +1358,7 @@ public final class NoonmarkEngine {
 
     public func calendarSummary(for date: LocalDate) -> CalendarDaySummary {
         let items = traces.values.filter {
-            $0.date == date && $0.formsDayHistory
+            $0.date == date && $0.status.isVisibleInDayTodo
         }
         let completed = items.filter { $0.status == .completed }.count
         return CalendarDaySummary(
@@ -1462,7 +1524,7 @@ public final class NoonmarkEngine {
 
     public func dailyReviewStats(date: LocalDate) -> DailyReviewStats {
         let items = traces.values.filter {
-            $0.date == date && $0.formsDayHistory
+            $0.date == date && $0.status.isVisibleInDayTodo
         }
         return DailyReviewStats(
             total: items.count,
@@ -1587,6 +1649,42 @@ private struct SnapshotUndoCurrentFacts {
 }
 
 private extension NoonmarkEngine {
+    func taskTrailOutcome(
+        for trace: DayTrace
+    ) -> (kind: TaskTrailEntryKind, occurredAt: Date, relatedTraceID: DayTraceID?)? {
+        switch trace.status {
+        case .pending:
+            nil
+        case .completed:
+            (.completed, trace.completedAt ?? trace.contentUpdatedAt, nil)
+        case .unfinished:
+            (.unfinished, trace.settledAt ?? trace.contentUpdatedAt, nil)
+        case .continued:
+            (
+                .continued,
+                trace.contentUpdatedAt,
+                traces.values.first { $0.continuedFromTraceID == trace.id }?.id
+            )
+        case .changed:
+            (.changed, trace.settledAt ?? trace.contentUpdatedAt, trace.changedToTraceID)
+        case .returnedToPool, .cancelledDraft:
+            (.returnedToPool, trace.settledAt ?? trace.contentUpdatedAt, nil)
+        case .abandoned:
+            (.abandoned, trace.settledAt ?? trace.contentUpdatedAt, nil)
+        }
+    }
+
+    func taskTrailSortOrder(_ kind: TaskTrailEntryKind) -> Int {
+        switch kind {
+        case .createdInPool, .createdFromChange:
+            0
+        case .scheduled:
+            1
+        case .completed, .unfinished, .continued, .changed, .returnedToPool, .abandoned:
+            2
+        }
+    }
+
     func snapshotUndoOutcome(
         from current: SnapshotUndoCurrentFacts
     ) -> SnapshotUndoOutcome {

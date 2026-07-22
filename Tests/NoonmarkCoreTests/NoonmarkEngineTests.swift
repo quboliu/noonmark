@@ -436,7 +436,11 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.traces[oldTraceID]?.changedToTraceID, newTraceID)
         XCTAssertEqual(engine.traces[newTraceID]?.status, .pending)
         XCTAssertNotEqual(engine.traces[newTraceID]?.chainID, chainID)
-        XCTAssertEqual(engine.getDayTodo(date: day1).traces.count, 2)
+        XCTAssertEqual(engine.getDayTodo(date: day1).traces.map(\.id), [newTraceID])
+        XCTAssertEqual(
+            try engine.taskTrail(chainID: chainID).map(\.kind),
+            [.createdInPool, .scheduled, .changed]
+        )
 
         let newDefinitionID = try XCTUnwrap(engine.traces[newTraceID]?.definitionID)
         XCTAssertEqual(engine.definitions[newDefinitionID]?.title, "写调研并输出架构")
@@ -482,7 +486,7 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.traces[replacementTraceID]?.priority, 4)
         XCTAssertEqual(
             engine.getDayTodo(date: day1).traces.map(\.priority),
-            [1, 2, 3, 4]
+            [2, 3, 4]
         )
     }
 
@@ -499,6 +503,167 @@ final class NoonmarkEngineTests: XCTestCase {
         let rescheduledID = try engine.scheduleFromPool(chainID: chainID, date: day2, today: day1, now: now)
         XCTAssertEqual(engine.traces[rescheduledID]?.status, .pending)
         XCTAssertTrue(engine.taskPool().isEmpty)
+    }
+
+    func testReturningAndReschedulingOnCurrentDayProjectsOnlyTheReplacementTrace() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "同日回池再排期", now: now)
+        let returnedTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+
+        try engine.returnToPool(
+            traceID: returnedTraceID,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let replacementTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(engine.traces[returnedTraceID]?.status, .returnedToPool)
+        XCTAssertEqual(engine.traces[replacementTraceID]?.status, .pending)
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.id),
+            [replacementTraceID]
+        )
+    }
+
+    func testTaskTrailProjectsCreationSchedulingReturnAndReschedulingAtExactInstants() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "任务轨迹", now: now)
+        let returnedTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.returnToPool(
+            traceID: returnedTraceID,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+        let replacementTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+
+        let trail = try engine.taskTrail(chainID: chainID)
+        XCTAssertEqual(
+            trail.map(\.kind),
+            [.createdInPool, .scheduled, .returnedToPool, .scheduled]
+        )
+        XCTAssertEqual(
+            trail.map(\.occurredAt),
+            [
+                now,
+                now.addingTimeInterval(1),
+                now.addingTimeInterval(2),
+                now.addingTimeInterval(3)
+            ]
+        )
+        XCTAssertEqual(
+            trail.map(\.traceID),
+            [nil, returnedTraceID, returnedTraceID, replacementTraceID]
+        )
+    }
+
+    func testTaskTrailShowsAnUnscheduledTaskPoolCreation() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "尚未排期", now: now)
+
+        let trail = try engine.taskTrail(chainID: chainID)
+        XCTAssertEqual(trail.map(\.kind), [.createdInPool])
+        XCTAssertEqual(trail.map(\.occurredAt), [now])
+    }
+
+    func testTaskTrailLinksBothSidesOfAnExplicitTaskChange() throws {
+        let engine = NoonmarkEngine()
+        let sourceChainID = try engine.createPoolTask(title: "旧任务", now: now)
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: sourceChainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let replacementTraceID = try engine.changeTrace(
+            traceID: sourceTraceID,
+            newTitle: "新任务",
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+        let replacementChainID = try XCTUnwrap(engine.traces[replacementTraceID]?.chainID)
+
+        let sourceTrail = try engine.taskTrail(chainID: sourceChainID)
+        XCTAssertEqual(sourceTrail.map(\.kind), [.createdInPool, .scheduled, .changed])
+        XCTAssertEqual(sourceTrail.last?.relatedTraceID, replacementTraceID)
+
+        let replacementTrail = try engine.taskTrail(chainID: replacementChainID)
+        XCTAssertEqual(replacementTrail.map(\.kind), [.createdFromChange, .scheduled])
+        XCTAssertEqual(replacementTrail.first?.relatedTraceID, sourceTraceID)
+    }
+
+    func testMovementSourcesDoNotInflateDayTodoReviewOrCalendarCounts() throws {
+        let engine = NoonmarkEngine()
+        let returnedChainID = try engine.createPoolTask(title: "回池再排期", now: now)
+        let returnedTraceID = try engine.scheduleFromPool(
+            chainID: returnedChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.returnToPool(
+            traceID: returnedTraceID,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let rescheduledTraceID = try engine.scheduleFromPool(
+            chainID: returnedChainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+
+        let changedChainID = try engine.createPoolTask(
+            title: "旧任务",
+            now: now.addingTimeInterval(3)
+        )
+        let changedTraceID = try engine.scheduleFromPool(
+            chainID: changedChainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+        let replacementTraceID = try engine.changeTrace(
+            traceID: changedTraceID,
+            newTitle: "新任务",
+            today: day1,
+            now: now.addingTimeInterval(4)
+        )
+
+        XCTAssertTrue(engine.traces[returnedTraceID]?.formsDayHistory == true)
+        XCTAssertTrue(engine.traces[changedTraceID]?.formsDayHistory == true)
+        XCTAssertEqual(
+            Set(engine.getDayTodo(date: day1).traces.map(\.id)),
+            Set([rescheduledTraceID, replacementTraceID])
+        )
+
+        let review = engine.dailyReviewStats(date: day1)
+        XCTAssertEqual(review.total, 2)
+        XCTAssertEqual(review.returnedToPool, 0)
+        XCTAssertEqual(review.changed, 0)
+
+        let calendar = engine.calendarSummary(for: day1)
+        XCTAssertEqual(calendar.total, 2)
+        XCTAssertEqual(calendar.pending, 2)
     }
 
     func testFuturePlanCanMoveAndReturnToPoolButCannotComplete() throws {

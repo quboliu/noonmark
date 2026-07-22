@@ -306,7 +306,8 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertEqual(restored.taskPool().count, 0)
         XCTAssertEqual(restored.unfinishedPool().count, 1)
         XCTAssertEqual(restored.completedPool().count, 1)
-        XCTAssertEqual(restored.getDayTodo(date: day2).traces.count, 4)
+        XCTAssertEqual(restored.getDayTodo(date: day2).traces.count, 3)
+        XCTAssertEqual(restored.traces[changedTraceID]?.status, .changed)
         XCTAssertEqual(restored.engineReviewSummary(for: day1), "已完成 schema 与 repository 第一版。")
         XCTAssertEqual(restored.preferences.theme, .warmPaper)
         XCTAssertEqual(restored.preferences.language, .english)
@@ -685,6 +686,59 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertEqual(
             try integerScalar(
                 "SELECT COUNT(*) FROM task_pool_view WHERE chain_id = '\(chainID.rawValue.uuidString)'",
+                at: databaseURL
+            ),
+            1
+        )
+    }
+
+    func testDayTodoViewExcludesReturnedSourceAfterSameDayReschedule() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let today = LocalDate("2026-07-05")
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noonmark-day-todo-projection-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "同日回池再排期", now: now)
+        let returnedTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.returnToPool(
+            traceID: returnedTraceID,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        let replacementTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(3)
+        )
+        try repository.save(engine)
+
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM day_todo_view WHERE chain_id = '\(chainID.rawValue.uuidString)'",
+                at: databaseURL
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM day_todo_view WHERE id = '\(returnedTraceID.rawValue.uuidString)'",
+                at: databaseURL
+            ),
+            0
+        )
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM day_todo_view WHERE id = '\(replacementTraceID.rawValue.uuidString)'",
                 at: databaseURL
             ),
             1

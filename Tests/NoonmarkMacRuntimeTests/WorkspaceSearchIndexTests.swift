@@ -88,6 +88,35 @@ final class WorkspaceSearchIndexTests: XCTestCase {
         XCTAssertTrue(index.search("Hidden cancelled subtask").isEmpty)
     }
 
+    func testSameDayReturnAndRescheduleIndexesOnlyTheCurrentTrace() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "同日回池再排期", now: start)
+        let returnedTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: start.addingTimeInterval(1)
+        )
+        try engine.returnToPool(
+            traceID: returnedTraceID,
+            today: today,
+            now: start.addingTimeInterval(2)
+        )
+        let replacementTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: start.addingTimeInterval(3)
+        )
+
+        let results = WorkspaceSearchIndex(engine: engine).search("同日回池再排期")
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(
+            results.first?.destination,
+            .trace(id: replacementTraceID, date: today, status: .pending)
+        )
+    }
+
     func testSnapshotUndoCancelledSubtaskIsNotSearchableUnderVisibleTrace() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(

@@ -24,6 +24,18 @@ public enum TraceStatus: String, Codable, Hashable, Sendable {
     public var isUserPresentable: Bool {
         formsDayHistory
     }
+
+    /// A Day Todo row represents work that still belongs to that date, or a
+    /// real outcome for that date. Movement source facts remain available to
+    /// the task trail without occupying another task row.
+    public var isVisibleInDayTodo: Bool {
+        switch self {
+        case .pending, .completed, .unfinished, .continued, .abandoned:
+            true
+        case .changed, .returnedToPool, .cancelledDraft:
+            false
+        }
+    }
 }
 
 public enum DayTraceCompletionAction: Equatable, Sendable {
@@ -901,6 +913,49 @@ public struct SubtaskTrajectory: Equatable, Sendable {
 public struct PoolTask: Equatable, Sendable {
     public let chain: TaskChain
     public let definition: TaskDefinition
+}
+
+public enum TaskTrailEntryKind: String, Equatable, Hashable, Sendable {
+    case createdInPool
+    case createdFromChange
+    case scheduled
+    case completed
+    case unfinished
+    case continued
+    case changed
+    case returnedToPool
+    case abandoned
+}
+
+/// A user-facing lifecycle projection. One trace can contribute both its
+/// scheduling event and a later outcome, while the stored trace remains the
+/// single stable identity used by persistence and sync.
+public struct TaskTrailEntry: Equatable, Identifiable, Sendable {
+    public let id: String
+    public let chainID: TaskChainID
+    public let traceID: DayTraceID?
+    public let relatedTraceID: DayTraceID?
+    public let kind: TaskTrailEntryKind
+    public let date: LocalDate?
+    public let occurredAt: Date
+
+    public init(
+        id: String,
+        chainID: TaskChainID,
+        traceID: DayTraceID?,
+        relatedTraceID: DayTraceID? = nil,
+        kind: TaskTrailEntryKind,
+        date: LocalDate?,
+        occurredAt: Date
+    ) {
+        self.id = id
+        self.chainID = chainID
+        self.traceID = traceID
+        self.relatedTraceID = relatedTraceID
+        self.kind = kind
+        self.date = date
+        self.occurredAt = occurredAt
+    }
 }
 
 public struct DayTodoView: Equatable, Sendable {

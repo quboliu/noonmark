@@ -679,65 +679,74 @@ struct TraceContextCard: View {
 
 struct Timeline: View {
     @EnvironmentObject private var store: NoonmarkStore
-    let trace: DayTrace
+    let chainID: TaskChainID
+    let currentTraceID: DayTraceID?
+
+    init(trace: DayTrace) {
+        chainID = trace.chainID
+        currentTraceID = trace.id
+    }
+
+    init(chainID: TaskChainID, currentTraceID: DayTraceID? = nil) {
+        self.chainID = chainID
+        self.currentTraceID = currentTraceID
+    }
+
+    var entries: [TaskTrailEntry] {
+        (try? store.engine.taskTrail(chainID: chainID)) ?? []
+    }
+
+    var currentEntryID: String? {
+        guard let currentTraceID else { return nil }
+        return entries.last { $0.traceID == currentTraceID }?.id
+    }
 
     var body: some View {
-        let chainTraces = store.engine.traces.values
-            .filter {
-                $0.chainID == trace.chainID && $0.formsDayHistory
-            }
-            .sorted { $0.date < $1.date }
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(chainTraces.enumerated()), id: \.element.id) { index, item in
-                let isCurrent = item.id == trace.id
-                let isLast = index == chainTraces.count - 1
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                let isCurrent = entry.id == currentEntryID
+                let isLast = index == entries.count - 1
                 let nodeStyle = TimelineNodeStyle(
-                    status: item.status,
+                    kind: entry.kind,
                     isCurrent: isCurrent,
-                    label: store.copy.traceStatusLabel(item.status)
+                    label: store.copy.taskTrailEntryLabel(entry.kind)
                 )
                 HStack(alignment: .top, spacing: 8) {
-                    VStack(spacing: 0) {
-                        TimelineNodeGlyph(style: nodeStyle)
-                        if !isLast {
-                            Rectangle()
-                                .fill(Theme.line2)
-                                .frame(width: 1.5, height: 28)
-                                .padding(.top, 1)
-                        }
-                    }
+                    TimelineNodeGlyph(style: nodeStyle)
                     .frame(width: 14)
                     .padding(.top, 1)
 
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(nodeStyle.label)
-                                .font(.noonmarkSystem(size: 11.5, weight: .semibold))
-                                .foregroundStyle(nodeStyle.labelColor)
-                            if isCurrent {
-                                TimelineCurrentBadge()
-                            }
-                            Spacer(minLength: 0)
-                            Text("#\(item.continuationSeq + 1)")
-                                .font(.noonmarkSystem(size: 10))
+                    VStack(alignment: .leading, spacing: 2) {
+                        TimelineEventHeader(
+                            style: nodeStyle,
+                            occurredAt: entry.occurredAt,
+                            isCurrent: isCurrent
+                        )
+                        if entry.kind == .scheduled, let date = entry.date {
+                            Text(store.copy.taskTrailScheduledFor(store.displayFullDate(date)))
+                                .font(.noonmarkSystem(size: 9.5))
                                 .foregroundStyle(Theme.text3)
-                                .monospacedDigit()
+                                .lineLimit(1)
                         }
-                        Text("\(store.displayDate(item.date)) \(store.weekday(item.date))")
-                            .font(.noonmarkSystem(size: 10.5))
-                            .foregroundStyle(Theme.text3)
-                        if let changedTarget = store.changedTarget(for: item) {
+                        if entry.kind == .changed,
+                           let traceID = entry.traceID,
+                           let trace = store.engine.traces[traceID],
+                           let changedTarget = store.changedTarget(for: trace)
+                        {
                             ChangedTargetButton(
                                 title: changedTarget.definition.title,
                                 compact: true
                             ) {
-                                store.openChangedTarget(from: item)
+                                store.openChangedTarget(from: trace)
                             }
                             .padding(.top, 2)
                         }
                     }
                     .padding(.top, 1)
-                    .padding(.bottom, isLast ? 0 : 12)
+                    .padding(
+                        .bottom,
+                        isLast ? 0 : 6
+                    )
                     .padding(.leading, 4)
                     .padding(.trailing, isCurrent ? 8 : 0)
                     .background(
@@ -746,14 +755,87 @@ struct Timeline: View {
                     )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .topLeading) {
+                    if !isLast {
+                        GeometryReader { proxy in
+                            Rectangle()
+                                .fill(Theme.line2)
+                                .frame(
+                                    width: 1.5,
+                                    height: max(0, proxy.size.height - 15)
+                                )
+                                .offset(x: 6.25, y: 15)
+                        }
+                        .allowsHitTesting(false)
+                    }
+                }
                 .background {
-                    AppE2EViewAnchor(
-                        identifier: "timeline.trace.\(item.id.description)",
-                        verificationText: "\(item.status.rawValue)|\(nodeStyle.glyph)|\(nodeStyle.label)"
-                    )
+                    ZStack {
+                        AppE2EViewAnchor(
+                            identifier: "timeline.event.\(entry.id)",
+                            verificationText: "\(entry.kind.rawValue)|\(nodeStyle.glyph)|\(nodeStyle.label)|\(store.displayExactDateTime(entry.occurredAt))"
+                        )
+                        if let traceID = entry.traceID,
+                           entries.last(where: { $0.traceID == traceID })?.id == entry.id,
+                           let trace = store.engine.traces[traceID],
+                           trace.formsDayHistory
+                        {
+                            AppE2EViewAnchor(
+                                identifier: "timeline.trace.\(trace.id.description)",
+                                verificationText: "\(trace.status.rawValue)|\(trace.status.uiStyle.glyph)|\(store.copy.traceStatusLabel(trace.status))"
+                            )
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+struct TimelineEventHeader: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let style: TimelineNodeStyle
+    let occurredAt: Date
+    let isCurrent: Bool
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                title
+                Spacer(minLength: 2)
+                timestamp
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    title
+                    Spacer(minLength: 0)
+                }
+                timestamp
+            }
+        }
+    }
+
+    private var title: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(style.label)
+                .font(.noonmarkSystem(size: 11.5, weight: .semibold))
+                .foregroundStyle(style.labelColor)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            if isCurrent {
+                TimelineCurrentBadge()
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var timestamp: some View {
+        Text(store.displayExactDateTime(occurredAt))
+            .font(.noonmarkSystem(size: 9.5))
+            .foregroundStyle(Theme.text3)
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -765,16 +847,43 @@ struct TimelineNodeStyle {
     let glyphBackground: Color
     let glyphBorder: Color
 
-    init(status: TraceStatus, isCurrent: Bool, label: String) {
+    init(kind: TaskTrailEntryKind, isCurrent: Bool, label: String) {
         self.label = label
-        let style = status.uiStyle
-        glyph = style.glyph
-        labelColor = style.foreground
-        glyphForeground = style.glyphForeground
-        glyphBackground = style.glyphBackground
-        glyphBorder = status == .pending && isCurrent
-            ? Theme.accent
-            : style.glyphBorder
+        let status: TraceStatus? = switch kind {
+        case .createdInPool, .createdFromChange, .scheduled:
+            nil
+        case .completed:
+            .completed
+        case .unfinished:
+            .unfinished
+        case .continued:
+            .continued
+        case .changed:
+            .changed
+        case .returnedToPool:
+            .returnedToPool
+        case .abandoned:
+            .abandoned
+        }
+        if let status {
+            let style = status.uiStyle
+            glyph = style.glyph
+            labelColor = style.foreground
+            glyphForeground = style.glyphForeground
+            glyphBackground = style.glyphBackground
+            glyphBorder = style.glyphBorder
+        } else {
+            glyph = switch kind {
+            case .createdInPool: "+"
+            case .createdFromChange: "↗"
+            case .scheduled: "→"
+            default: preconditionFailure("Outcome entries use trace status styling")
+            }
+            labelColor = kind == .scheduled ? Theme.accent : Theme.text2
+            glyphForeground = kind == .scheduled ? Theme.accent : Theme.text2
+            glyphBackground = kind == .scheduled ? Theme.accentSoft : Theme.panel2
+            glyphBorder = kind == .scheduled && isCurrent ? Theme.accent : Theme.line2
+        }
     }
 }
 
@@ -798,6 +907,8 @@ struct TimelineCurrentBadge: View {
         Text(store.copy.currentLocation)
             .font(.noonmarkSystem(size: 9, weight: .medium))
             .foregroundStyle(Theme.accent)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .overlay(Capsule().stroke(Theme.accent, lineWidth: 1))

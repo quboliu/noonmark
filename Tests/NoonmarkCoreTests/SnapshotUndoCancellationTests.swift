@@ -404,13 +404,10 @@ final class SnapshotUndoCancellationTests: XCTestCase {
             .active
         )
         XCTAssertEqual(
-            redone.getDayTodo(date: today).traces.map(\.id).sorted {
-                $0.description < $1.description
-            },
-            [originalTraceID, replacementTraceID].sorted {
-                $0.description < $1.description
-            }
+            redone.getDayTodo(date: today).traces.map(\.id),
+            [replacementTraceID]
         )
+        XCTAssertEqual(redone.traces[originalTraceID]?.status, .changed)
         XCTAssertNoThrow(try redone.snapshot().validateIntegrity())
     }
 }

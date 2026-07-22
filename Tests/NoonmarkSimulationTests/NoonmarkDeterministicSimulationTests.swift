@@ -208,7 +208,7 @@ final class NoonmarkDeterministicSimulationTests: XCTestCase {
         for date in Set(engine.traces.values.map(\.date)) {
             let summary = engine.calendarSummary(for: date)
             let traces = engine.traces.values.filter {
-                $0.date == date && $0.formsDayHistory
+                $0.date == date && $0.status.isVisibleInDayTodo
             }
             XCTAssertEqual(summary.total, traces.count)
             XCTAssertEqual(summary.completed, traces.filter { $0.status == .completed }.count)

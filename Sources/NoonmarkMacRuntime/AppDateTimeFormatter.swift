@@ -13,6 +13,7 @@ public enum AppDateTextStyle: Sendable {
 public enum AppTimeTextStyle: Sendable {
     case shortTime
     case dateAndTime
+    case exactDateAndTime
 }
 
 public enum AppDateTimeFormattingError: Error, Equatable, Sendable {
@@ -62,6 +63,10 @@ public struct AppDateTimeFormatter {
                 formatter.dateStyle = .medium
                 formatter.timeStyle = .short
             }
+        case .exactDateAndTime:
+            formatter.dateFormat = language == .chinese
+                ? "yyyy-MM-dd HH:mm:ss"
+                : "d MMM yyyy, HH:mm:ss"
         }
         return formatter.string(from: instant)
     }

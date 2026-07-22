@@ -16,16 +16,23 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
     private static let poolSavedDescription = "E2E Pool description saved immediately"
     private static let poolSiblingTitle = "E2E Pool click-away target"
     private static let deletedTitle = "E2E Day delete immediately"
+    private static let returnedTitle = "E2E Day return and reschedule"
 
     let resultURL: URL
+    let screenshotURL: URL
 
     static func fromCommandLine() -> Self? {
         guard let resultPath = AppLaunchArguments.value(
             after: "--e2e-immediate-task-mutation-result-url"
+        ), let screenshotPath = AppLaunchArguments.value(
+            after: "--e2e-immediate-task-mutation-screenshot-url"
         ) else {
             return nil
         }
-        return Self(resultURL: URL(fileURLWithPath: resultPath))
+        return Self(
+            resultURL: URL(fileURLWithPath: resultPath),
+            screenshotURL: URL(fileURLWithPath: screenshotPath)
+        )
     }
 
     func run(on store: NoonmarkStore) {
@@ -132,13 +139,14 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                     $0.chain.id == fixture.deletedChainID
                 }) == false
         }
+        try await exerciseReturnAndReschedule(fixture, store: store, input: input)
         try assertPersisted(fixture, store: store)
     }
 
     private func installFixture(on store: NoonmarkStore) throws -> Fixture {
         store.engine = NoonmarkEngine()
         store.setLanguage(.english)
-        var timeline = try E2EFixtureTimeline(store: store, eventCount: 8)
+        var timeline = try E2EFixtureTimeline(store: store, eventCount: 10)
         let today = timeline.today
 
         let dayChainID = try store.engine.createPoolTask(
@@ -179,6 +187,16 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             today: today,
             now: try timeline.nextInstant()
         )
+        let returnedChainID = try store.engine.createPoolTask(
+            title: Self.returnedTitle,
+            now: try timeline.nextInstant()
+        )
+        let returnedTraceID = try store.engine.scheduleFromPool(
+            chainID: returnedChainID,
+            date: today,
+            today: today,
+            now: try timeline.nextInstant()
+        )
         let latestMutationAt = try timeline.finish()
 
         guard store.engine.canDeleteNewCurrentDayTask(
@@ -207,8 +225,139 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             poolSiblingChainID: poolSiblingChainID,
             deletedChainID: deletedChainID,
             deletedTraceID: deletedTraceID,
+            returnedChainID: returnedChainID,
+            returnedTraceID: returnedTraceID,
             latestMutationAt: latestMutationAt
         )
+    }
+
+    private func exerciseReturnAndReschedule(
+        _ fixture: Fixture,
+        store: NoonmarkStore,
+        input: WindowServerInputDriver
+    ) async throws {
+        store.page = .day
+        store.selectedDate = fixture.today
+        store.selectedCalendarDate = fixture.today
+        let returnedTrace = try requiredTrace(fixture.returnedTraceID, in: store)
+        guard let returnIndex = store.contextMenuActions(for: returnedTrace)
+            .firstIndex(of: .returnToPool)
+        else {
+            throw Failure.failed("current-day task did not expose return-to-pool")
+        }
+
+        try await chooseMenuItem(
+            from: dayIdentifier(fixture.returnedTraceID),
+            downArrowCount: returnIndex + 1,
+            input: input
+        )
+        try await waitUntil("returned task did not leave Day Todo immediately") {
+            store.page == .pool
+                && store.engine.traces[fixture.returnedTraceID]?.status == .returnedToPool
+                && store.engine.getDayTodo(date: fixture.today).traces.allSatisfy {
+                    $0.id != fixture.returnedTraceID
+                }
+                && store.engine.taskPool().contains {
+                    $0.chain.id == fixture.returnedChainID
+                }
+        }
+
+        try await click(
+            identifier: poolIdentifier(fixture.returnedChainID),
+            modifiers: [],
+            input: input
+        )
+        try await waitUntil("returned task pool detail did not open") {
+            store.selectedPoolChainID == fixture.returnedChainID
+        }
+        try await assertTrail(
+            chainID: fixture.returnedChainID,
+            expectedKinds: [.createdInPool, .scheduled, .returnedToPool],
+            store: store
+        )
+
+        try await chooseMenuItem(
+            from: poolIdentifier(fixture.returnedChainID),
+            downArrowCount: 1,
+            input: input
+        )
+        var replacementTraceID: DayTraceID?
+        try await waitUntil("returned task was not rescheduled to today") {
+            replacementTraceID = store.engine.traces.values.first {
+                $0.chainID == fixture.returnedChainID
+                    && $0.id != fixture.returnedTraceID
+                    && $0.status == .pending
+                    && $0.date == fixture.today
+            }?.id
+            return store.page == .day
+                && store.selectedTraceID == replacementTraceID
+        }
+        guard let replacementTraceID else {
+            throw Failure.failed("rescheduled trace identity was unavailable")
+        }
+
+        try await waitUntil("Day Todo still rendered the returned source row") {
+            let visible = store.engine.getDayTodo(date: fixture.today).traces.filter {
+                $0.chainID == fixture.returnedChainID
+            }
+            return visible.map(\.id) == [replacementTraceID]
+                && AppViewTreeE2E.view(
+                    identifier: self.dayIdentifier(fixture.returnedTraceID)
+                ) == nil
+                && AppViewTreeE2E.view(
+                    identifier: self.dayIdentifier(replacementTraceID)
+                ) != nil
+        }
+        try await assertTrail(
+            chainID: fixture.returnedChainID,
+            expectedKinds: [.createdInPool, .scheduled, .returnedToPool, .scheduled],
+            store: store
+        )
+        try captureMainWindow()
+    }
+
+    private func assertTrail(
+        chainID: TaskChainID,
+        expectedKinds: [TaskTrailEntryKind],
+        store: NoonmarkStore
+    ) async throws {
+        let trail = try store.engine.taskTrail(chainID: chainID)
+        guard trail.map(\.kind) == expectedKinds else {
+            throw Failure.failed("task trail lifecycle projection was incomplete")
+        }
+        for entry in trail {
+            let identifier = "timeline.event.\(entry.id)"
+            let timestamp = store.displayExactDateTime(entry.occurredAt)
+            try await waitUntil("task trail omitted exact timestamp: \(entry.id)") {
+                guard let anchor = AppViewTreeE2E.view(identifier: identifier),
+                      let verification = AppViewTreeE2E.verificationText(for: anchor)
+                else { return false }
+                return verification.contains(timestamp)
+                    && timestamp.range(
+                        of: #"\d{2}:\d{2}:\d{2}$"#,
+                        options: .regularExpression
+                    ) != nil
+            }
+        }
+    }
+
+    private func captureMainWindow() throws {
+        guard let window = NSApp.keyWindow,
+              let contentView = window.contentView,
+              contentView.bounds.width > 0,
+              contentView.bounds.height > 0,
+              let bitmap = contentView.bitmapImageRepForCachingDisplay(
+                  in: contentView.bounds
+              )
+        else {
+            throw Failure.failed("Day Todo screenshot buffer was unavailable")
+        }
+        window.displayIfNeeded()
+        contentView.cacheDisplay(in: contentView.bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+            throw Failure.failed("Day Todo screenshot encoding failed")
+        }
+        try data.write(to: screenshotURL, options: .atomic)
     }
 
     private func editTitle(
@@ -245,15 +394,25 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         from identifier: String,
         input: WindowServerInputDriver
     ) async throws {
+        try await chooseMenuItem(
+            from: identifier,
+            downArrowCount: 6,
+            input: input
+        )
+    }
+
+    private func chooseMenuItem(
+        from identifier: String,
+        downArrowCount: Int,
+        input: WindowServerInputDriver
+    ) async throws {
         let probe = MenuTrackingProbe()
         defer { probe.stop() }
         try await click(identifier: identifier, modifiers: [.control], input: input)
-        try await waitUntil("new current-day task menu did not begin tracking") {
+        try await waitUntil("task context menu did not begin tracking") {
             probe.didBeginTracking
         }
-        // Newly added current-day tasks retain the existing abandon action;
-        // deletion is the sixth, destructive menu item.
-        for _ in 0 ..< 6 {
+        for _ in 0 ..< downArrowCount {
             try input.postKey(keyCode: 125)
         }
         try input.postKey(keyCode: 36)
@@ -378,10 +537,19 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
               }) == false,
               restored.taskPool().contains(where: {
                   $0.chain.id == fixture.deletedChainID
-              }) == false
+              }) == false,
+              restored.traces[fixture.returnedTraceID]?.status == .returnedToPool,
+              restored.getDayTodo(date: fixture.today).traces.filter({
+                  $0.chainID == fixture.returnedChainID
+              }).count == 1,
+              restored.getDayTodo(date: fixture.today).traces.first(where: {
+                  $0.chainID == fixture.returnedChainID
+              })?.status == .pending,
+              try restored.taskTrail(chainID: fixture.returnedChainID).map(\.kind)
+                  == [.createdInPool, .scheduled, .returnedToPool, .scheduled]
         else {
             throw Failure.failed(
-                "immediate title changes or current-day deletion did not persist exactly"
+                "immediate mutations or return/reschedule projection did not persist exactly"
             )
         }
     }
@@ -435,6 +603,8 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         let poolSiblingChainID: TaskChainID
         let deletedChainID: TaskChainID
         let deletedTraceID: DayTraceID
+        let returnedChainID: TaskChainID
+        let returnedTraceID: DayTraceID
         let latestMutationAt: Date
     }
 

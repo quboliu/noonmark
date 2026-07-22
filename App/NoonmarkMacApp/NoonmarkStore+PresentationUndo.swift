@@ -894,6 +894,10 @@ extension NoonmarkStore {
         dateTimeFormatter.string(from: date, style: .dateAndTime)
     }
 
+    func displayExactDateTime(_ date: Date) -> String {
+        dateTimeFormatter.string(from: date, style: .exactDateAndTime)
+    }
+
     func weekday(_ date: LocalDate) -> String {
         (try? dateTimeFormatter.string(from: date, style: .weekday))
             ?? date.description

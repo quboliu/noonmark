@@ -42,8 +42,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUISettingsWindowLayout.initialContentWidth, 860)
         XCTAssertEqual(MacUISettingsWindowLayout.initialContentHeight, 660)
         XCTAssertEqual(MacUISettingsWindowLayout.sidebarMinimumWidth, 220)
-        XCTAssertEqual(MacUISettingsWindowLayout.sidebarIdealWidth, 260)
-        XCTAssertEqual(MacUISettingsWindowLayout.sidebarMaximumWidth, 300)
+        XCTAssertEqual(MacUISettingsWindowLayout.sidebarIdealWidth, 230)
+        XCTAssertEqual(MacUISettingsWindowLayout.sidebarMaximumWidth, 240)
         XCTAssertLessThanOrEqual(
             MacUISettingsWindowLayout.sidebarMinimumWidth,
             MacUISettingsWindowLayout.sidebarIdealWidth

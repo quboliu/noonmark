@@ -217,6 +217,33 @@ extension AppCopy {
         return copy.resolved(for: language)
     }
 
+    func taskTrailEntryLabel(_ kind: TaskTrailEntryKind) -> String {
+        switch (language, kind) {
+        case (.chinese, .createdInPool): "创建于任务池"
+        case (.chinese, .createdFromChange): "由任务变更创建"
+        case (.chinese, .scheduled): "已排期"
+        case (.chinese, .completed): "已完成"
+        case (.chinese, .unfinished): "未完成"
+        case (.chinese, .continued): "已延续"
+        case (.chinese, .changed): "已变更"
+        case (.chinese, .returnedToPool): "已回池"
+        case (.chinese, .abandoned): "已废弃"
+        case (.english, .createdInPool): "Created in Task Pool"
+        case (.english, .createdFromChange): "Created from change"
+        case (.english, .scheduled): "Scheduled"
+        case (.english, .completed): "Completed"
+        case (.english, .unfinished): "Unfinished"
+        case (.english, .continued): "Continued"
+        case (.english, .changed): "Changed"
+        case (.english, .returnedToPool): "Returned to pool"
+        case (.english, .abandoned): "Dropped"
+        }
+    }
+
+    func taskTrailScheduledFor(_ dateLabel: String) -> String {
+        language == .chinese ? "排期至 \(dateLabel)" : "Scheduled for \(dateLabel)"
+    }
+
     func traceEndLabel(_ status: TraceStatus) -> String {
         guard status.isUserPresentable else {
             preconditionFailure("Internal trace status cannot be presented")

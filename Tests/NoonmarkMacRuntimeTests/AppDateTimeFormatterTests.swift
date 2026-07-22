@@ -79,6 +79,7 @@ final class AppDateTimeFormatterTests: XCTestCase {
         components.day = 15
         components.hour = 20
         components.minute = 5
+        components.second = 9
         let instant = try XCTUnwrap(components.date)
 
         let chinese = AppDateTimeFormatter(language: .chinese, timeZone: timeZone)
@@ -90,9 +91,17 @@ final class AppDateTimeFormatterTests: XCTestCase {
             chinese.string(from: instant, style: .dateAndTime),
             "2026-07-15 20:05"
         )
+        XCTAssertEqual(
+            chinese.string(from: instant, style: .exactDateAndTime),
+            "2026-07-15 20:05:09"
+        )
         let englishDateTime = english.string(from: instant, style: .dateAndTime)
         XCTAssertTrue(englishDateTime.contains("2026"))
         XCTAssertFalse(englishDateTime.range(of: "[\\p{Han}]", options: .regularExpression) != nil)
+        let englishExactDateTime = english.string(from: instant, style: .exactDateAndTime)
+        XCTAssertTrue(englishExactDateTime.contains("2026"))
+        XCTAssertTrue(englishExactDateTime.contains("20:05:09"))
+        XCTAssertFalse(englishExactDateTime.range(of: "[\\p{Han}]", options: .regularExpression) != nil)
     }
 
     func testPickerDateConversionRoundTripsAtLocalNoonAcrossTimeZones() throws {

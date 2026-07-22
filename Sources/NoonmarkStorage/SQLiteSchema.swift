@@ -2621,7 +2621,7 @@ public enum SQLiteSchema {
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         JOIN task_chains c ON c.id = t.chain_id
-        WHERE t.status != 'cancelledDraft'
+        WHERE t.status IN ('pending', 'completed', 'unfinished', 'continued', 'abandoned')
         """
     ]
 }

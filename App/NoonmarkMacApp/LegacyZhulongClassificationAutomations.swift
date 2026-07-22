@@ -323,19 +323,8 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
               Set(modifiedIDs) == [editedID, removedID, splitID]
         else { return "failed: revision audit mismatch" }
 
-        guard let sessionFrontier = store.zhulongWorkspace
-            .selectedSession?.events.last?.occurredAt
-        else { return "failed: missing preauthorization frontier" }
-        store.zhulongWorkspace.authorizeCurrentTodoDiff(
-            against: store.engine,
-            today: store.today,
-            now: Date(
-                timeIntervalSinceReferenceDate:
-                sessionFrontier.timeIntervalSinceReferenceDate.nextUp
-            )
-        )
-        guard store.zhulongWorkspace.hasActiveTodoAuthorization else {
-            return "failed: explicit preauthorization was not retained"
+        guard store.zhulongWorkspace.hasActiveTodoAuthorization == false else {
+            return "failed: Todo diff was unexpectedly preauthorized"
         }
         guard store.currentZhulongSessionNeedsScopeAuthorization == false else {
             return "failed: Todo diff fixture Provider identity diverged from its session"

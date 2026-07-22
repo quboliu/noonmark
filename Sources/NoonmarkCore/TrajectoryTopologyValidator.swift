@@ -228,7 +228,7 @@ public enum TrajectoryTopologyValidator {
             let linkIsValid = source.id != target.id
                 && source.chainID == target.chainID
                 && sequenceIsValid
-                && target.date >= source.date
+                && target.date > source.date
                 && target.createdAt >= source.createdAt
                 && source.status != .cancelledDraft
                 && (source.status == .continued || targetIsCancelledUndo)

@@ -95,7 +95,8 @@ struct TaskDetail: View {
                             placeholder: store.copy.addSubtaskPlaceholder,
                             style: .compact,
                             commitsOnReturn: true,
-                            onCommit: { store.addDetailSubtask(traceID: trace.id) }
+                            onCommit: { store.addDetailSubtask(traceID: trace.id) },
+                            nativeAccessibilityIdentifier: "day.subtask.\(trace.id.description).new"
                         )
                             .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                             .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
@@ -640,6 +641,13 @@ struct TraceContextCard: View {
                     store.openChangedTarget(from: trace)
                 }
             }
+            if let changedSource = store.changedSource(for: trace) {
+                Text("·")
+                    .foregroundStyle(Theme.text3)
+                ChangedSourceButton(title: changedSource.definition.title) {
+                    store.openChangedSource(from: trace)
+                }
+            }
             if trace.status == .returnedToPool {
                 Text("·")
                     .foregroundStyle(Theme.text3)
@@ -738,6 +746,19 @@ struct Timeline: View {
                                 compact: true
                             ) {
                                 store.openChangedTarget(from: trace)
+                            }
+                            .padding(.top, 2)
+                        }
+                        if entry.kind == .createdFromChange,
+                           let sourceTraceID = entry.relatedTraceID,
+                           let sourceTrace = store.engine.traces[sourceTraceID],
+                           let sourceDefinition = store.definition(for: sourceTrace)
+                        {
+                            ChangedSourceButton(
+                                title: sourceDefinition.title,
+                                compact: true
+                            ) {
+                                store.openTaskTrailTrace(sourceTrace)
                             }
                             .padding(.top, 2)
                         }

@@ -533,6 +533,14 @@ struct TaskRow: View {
                             store.openChangedTarget(from: trace)
                         }
                         .padding(.top, 3)
+                    } else if let changedSource = store.changedSource(for: trace) {
+                        ChangedSourceButton(
+                            title: changedSource.definition.title,
+                            compact: true
+                        ) {
+                            store.openChangedSource(from: trace)
+                        }
+                        .padding(.top, 3)
                     }
                 }
                 .layoutPriority(1)
@@ -793,12 +801,47 @@ struct ChangedTargetButton: View {
     }
 }
 
+struct ChangedSourceButton: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let title: String
+    var compact = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.left")
+                    .font(.noonmarkSystem(size: compact ? 8.5 : 9.5, weight: .bold))
+                Text(store.copy.changedFromPrefix)
+                    .foregroundStyle(Theme.text3)
+                MarkdownInlineText(title)
+                    .lineLimit(1)
+            }
+            .font(.noonmarkSystem(size: compact ? 10.5 : 11, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, compact ? 0 : 7)
+            .frame(height: compact ? nil : 22)
+            .background {
+                if !compact {
+                    Capsule().fill(Theme.accentSoft)
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct SubtaskRow: View {
     @EnvironmentObject private var store: NoonmarkStore
     let subtask: Subtask
 
-    var canMutate: Bool {
-        store.canMutateSubtask(subtask)
+    var canToggle: Bool {
+        store.canToggleSubtask(subtask)
+    }
+
+    var canEdit: Bool {
+        store.canEditSubtask(subtask)
     }
 
     var body: some View {
@@ -825,16 +868,25 @@ struct SubtaskRow: View {
             .accessibilityIdentifier(
                 "day.subtask.\(subtask.id.description).completion"
             )
-            .disabled(canMutate == false)
+            .disabled(canToggle == false)
 
-            MarkdownInlineText(subtask.title)
-                .font(.noonmarkSystem(size: 12))
-                .foregroundStyle(subtask.status == .completed ? Theme.text3 : Theme.text1)
-                .strikethrough(subtask.status == .completed)
+            EditableSubtaskTitle(
+                title: subtask.title,
+                editable: canEdit,
+                accessibilityIdentifier: "day.subtask.\(subtask.id.description).title"
+            ) {
+                store.renameSubtask(
+                    subtask.id,
+                    title: $0,
+                    immediately: true
+                )
+            }
+            .foregroundStyle(subtask.status == .completed ? Theme.text3 : Theme.text1)
+            .strikethrough(subtask.status == .completed)
 
             Spacer()
 
-            if subtask.completedAt != nil && canMutate == false {
+            if subtask.completedAt != nil && canEdit == false {
                 Image(systemName: "lock.fill")
                     .font(.noonmarkSystem(size: 9))
                     .foregroundStyle(Theme.text3)
@@ -867,12 +919,108 @@ struct SubtaskRow: View {
                 .overlay(Capsule().stroke(Theme.line2))
             }
             .buttonStyle(.plain)
-            .help(store.copy.subtaskDifficultyHelp(canMutate: canMutate))
+            .disabled(canEdit == false)
+            .help(store.copy.subtaskDifficultyHelp(canMutate: canEdit))
+
+            if canEdit {
+                Button {
+                    store.deleteSubtask(subtask.id)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.noonmarkSystem(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.text3)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(store.copy.removeSubtaskAction)
+                .accessibilityIdentifier(
+                    "day.subtask.\(subtask.id.description).delete.ax"
+                )
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "day.subtask.\(subtask.id.description).delete"
+                    )
+                }
+                .help(store.copy.removeSubtaskAction)
+            }
         }
     }
 
     private func difficultyMenuTitle(_ difficulty: SubtaskDifficulty) -> String {
         store.copy.subtaskDifficulty(difficulty)
+    }
+}
+
+struct EditableSubtaskTitle: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let title: String
+    let editable: Bool
+    let accessibilityIdentifier: String
+    let onChange: (String) -> Void
+
+    @State private var draft: String
+    @State private var pendingPersistedTitle: String?
+
+    init(
+        title: String,
+        editable: Bool,
+        accessibilityIdentifier: String,
+        onChange: @escaping (String) -> Void
+    ) {
+        self.title = title
+        self.editable = editable
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.onChange = onChange
+        _draft = State(initialValue: title)
+    }
+
+    var body: some View {
+        if editable {
+            MarkdownEditor(
+                text: $draft,
+                placeholder: store.copy.subtask,
+                style: .compact,
+                showsSurface: false,
+                height: 28,
+                commitsOnReturn: true,
+                onCommit: finishEditing,
+                onEndEditing: finishEditing,
+                onTextChange: persistNonemptyDraft,
+                nativeAccessibilityIdentifier: accessibilityIdentifier
+            )
+            .onChange(of: title) { _, newValue in
+                if pendingPersistedTitle == newValue {
+                    pendingPersistedTitle = nil
+                    return
+                }
+                if draft != newValue {
+                    draft = newValue
+                }
+            }
+            .font(.noonmarkSystem(size: 12))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            MarkdownInlineText(title)
+                .font(.noonmarkSystem(size: 12))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func persistNonemptyDraft(_ value: String) {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.isEmpty == false, normalized != title else { return }
+        pendingPersistedTitle = normalized
+        onChange(normalized)
+    }
+
+    private func finishEditing() {
+        let normalized = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.isEmpty == false else {
+            draft = title
+            return
+        }
+        persistNonemptyDraft(normalized)
     }
 }
 

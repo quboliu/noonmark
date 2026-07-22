@@ -8,8 +8,6 @@ app_path="dist/${bundle_name}.app"
 app_executable="$app_path/Contents/MacOS/$executable_name"
 bootstrap_log="artifacts/interactive-provider-bootstrap.log"
 readiness_result="artifacts/interactive-provider-readiness.txt"
-interactive_page="zhulong"
-
 source scripts/load-ai-provider-config
 noonmark_load_ai_provider_config
 
@@ -37,11 +35,11 @@ if [[ ! -f "$readiness_result" || "$(<"$readiness_result")" != "ready" ]]; then
   exit 1
 fi
 
-open -n "$app_path" --args --page "$interactive_page"
+open -n "$app_path"
 
 target_pid=""
 for _ in {1..50}; do
-  candidate_pid="$(pgrep -f -x "$PWD/$app_executable --page $interactive_page" || true)"
+  candidate_pid="$(pgrep -f -x "$PWD/$app_executable" || true)"
   if [[ -n "$candidate_pid" ]]; then
     target_pid="$candidate_pid"
     break

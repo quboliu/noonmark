@@ -54,6 +54,7 @@ extension AppCopy {
     var untitledTask: String { language == .chinese ? "未命名任务" : "Untitled task" }
     var ungrouped: String { language == .chinese ? "未分组" : "Ungrouped" }
     var changedToPrefix: String { language == .chinese ? "被变更为：" : "Changed to:" }
+    var changedFromPrefix: String { language == .chinese ? "由此任务变更：" : "Changed from:" }
     var returnedToPoolOnDay: String { language == .chinese ? "当天已回池" : "Returned to pool that day" }
     var viewDetails: String { language == .chinese ? "查看详情" : "View details" }
     var abandoned: String { language == .chinese ? "已废弃" : "Dropped" }

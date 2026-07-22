@@ -88,7 +88,8 @@ struct PoolPlannedSubtasksSection: View {
                 placeholder: store.copy.addSubtaskPlaceholder,
                 style: .compact,
                 commitsOnReturn: true,
-                onCommit: { store.addPoolPlannedSubtask(chainID: task.chain.id) }
+                onCommit: { store.addPoolPlannedSubtask(chainID: task.chain.id) },
+                nativeAccessibilityIdentifier: "pool.subtask.\(task.chain.id.description).new"
             )
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
@@ -108,10 +109,20 @@ struct PlannedSubtaskRow: View {
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.line2, lineWidth: 1.5))
                 .frame(width: 15, height: 15)
 
-            MarkdownInlineText(plannedSubtask.title)
-                .font(.noonmarkSystem(size: 12))
-                .foregroundStyle(Theme.text1)
-                .lineLimit(1)
+            EditableSubtaskTitle(
+                title: plannedSubtask.title,
+                editable: true,
+                accessibilityIdentifier: "pool.subtask.\(plannedSubtask.id.description).title"
+            ) {
+                store.renamePoolPlannedSubtask(
+                    chainID: chainID,
+                    plannedSubtaskID: plannedSubtask.id,
+                    title: $0,
+                    immediately: true
+                )
+            }
+            .foregroundStyle(Theme.text1)
+            .lineLimit(1)
 
             Spacer()
 
@@ -158,6 +169,14 @@ struct PlannedSubtaskRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(store.copy.removeSubtaskAction)
+            .accessibilityIdentifier(
+                "pool.subtask.\(plannedSubtask.id.description).delete.ax"
+            )
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "pool.subtask.\(plannedSubtask.id.description).delete"
+                )
+            }
             .help(store.copy.removeSubtaskAction)
         }
     }

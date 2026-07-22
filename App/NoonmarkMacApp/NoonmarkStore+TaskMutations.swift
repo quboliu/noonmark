@@ -206,7 +206,7 @@ extension NoonmarkStore {
     func toggleSubtask(_ subtaskID: SubtaskID) {
         guard let subtask = engine.subtasks[subtaskID] else { return }
         guard let trace = engine.traces[subtask.traceID] else { return }
-        guard canMutateSubtask(subtask) else {
+        guard canToggleSubtask(subtask) else {
             showToast(subtaskMutationUnavailableMessage(for: trace))
             return
         }
@@ -247,9 +247,21 @@ extension NoonmarkStore {
     }
 
     func canMutateSubtask(_ subtask: Subtask) -> Bool {
+        canToggleSubtask(subtask)
+    }
+
+    func canToggleSubtask(_ subtask: Subtask) -> Bool {
         guard let trace = engine.traces[subtask.traceID] else { return false }
         return subtask.isUserPresentable
             && trace.date == today
+            && trace.status == .pending
+            && engine.days[trace.date]?.lockedAt == nil
+    }
+
+    func canEditSubtask(_ subtask: Subtask) -> Bool {
+        guard let trace = engine.traces[subtask.traceID] else { return false }
+        return subtask.isUserPresentable
+            && trace.date >= today
             && trace.status == .pending
             && engine.days[trace.date]?.lockedAt == nil
     }
@@ -277,7 +289,7 @@ extension NoonmarkStore {
     func setSubtaskDifficulty(_ subtaskID: SubtaskID, difficulty: SubtaskDifficulty) {
         guard let subtask = engine.subtasks[subtaskID] else { return }
         guard let trace = engine.traces[subtask.traceID] else { return }
-        guard canMutateSubtask(subtask) else {
+        guard canEditSubtask(subtask) else {
             showToast(subtaskMutationUnavailableMessage(for: trace))
             return
         }
@@ -296,6 +308,59 @@ extension NoonmarkStore {
                 )
             }
             showToast(copy.subtaskDifficultyUpdated)
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
+    func renameSubtask(
+        _ subtaskID: SubtaskID,
+        title: String,
+        immediately: Bool = false
+    ) {
+        guard let subtask = engine.subtasks[subtaskID],
+              let trace = engine.traces[subtask.traceID],
+              canEditSubtask(subtask)
+        else { return }
+        let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard nextTitle.isEmpty == false else { return }
+        do {
+            try commitEngineMutation(
+                undoPolicy: immediately
+                    ? .preserve
+                    : .snapshotIfAllowed(on: trace.date, action: .updateSubtask)
+            ) { candidate, moment in
+                try candidate.updateSubtaskTitle(
+                    subtaskID,
+                    title: nextTitle,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
+    func deleteSubtask(_ subtaskID: SubtaskID) {
+        guard let subtask = engine.subtasks[subtaskID],
+              let trace = engine.traces[subtask.traceID],
+              canEditSubtask(subtask)
+        else { return }
+        do {
+            try commitEngineMutation(
+                undoPolicy: .snapshotIfAllowed(
+                    on: trace.date,
+                    action: .removeSubtask
+                )
+            ) { candidate, moment in
+                try candidate.deleteSubtask(
+                    subtaskID,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            showToast(copy.subtaskUpdated)
         } catch {
             showOperationFailure(.taskMutation, error: error)
         }
@@ -1083,6 +1148,30 @@ extension NoonmarkStore {
                 )
             }
             showToast(copy.subtaskUpdated)
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
+    func renamePoolPlannedSubtask(
+        chainID: TaskChainID,
+        plannedSubtaskID: PlannedSubtaskID,
+        title: String,
+        immediately: Bool = false
+    ) {
+        let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard nextTitle.isEmpty == false else { return }
+        do {
+            try commitEngineMutation(
+                undoPolicy: immediately ? .preserve : .snapshot(.updateSubtask)
+            ) { candidate, moment in
+                try candidate.updatePlannedSubtaskTitle(
+                    chainID: chainID,
+                    plannedSubtaskID: plannedSubtaskID,
+                    title: nextTitle,
+                    now: moment.instant
+                )
+            }
         } catch {
             showOperationFailure(.taskMutation, error: error)
         }

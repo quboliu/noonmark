@@ -164,10 +164,8 @@ public final class NoonmarkEngine {
     ) throws {
         let normalizedTitle = try normalizeTitle(title)
         var definition = try currentDefinition(for: chainID)
-        guard traces.values.contains(where: {
-            $0.chainID == chainID && $0.formsDayHistory
-        }) == false else {
-            throw NoonmarkError.invalidTransition("task definitions with traces cannot be overwritten")
+        guard isInTaskPool(chainID) else {
+            throw NoonmarkError.invalidTransition("only task-pool tasks can be edited")
         }
 
         let nextPlannedSubtasks = plannedSubtasks?
@@ -353,10 +351,8 @@ public final class NoonmarkEngine {
     ) throws -> PlannedSubtaskID {
         let normalizedTitle = try normalizeTitle(title)
         var definition = try currentDefinition(for: chainID)
-        guard traces.values.contains(where: {
-            $0.chainID == chainID && $0.formsDayHistory
-        }) == false else {
-            throw NoonmarkError.invalidTransition("planned subtasks can only be edited before scheduling")
+        guard isInTaskPool(chainID) else {
+            throw NoonmarkError.invalidTransition("planned subtasks can only be edited in the task pool")
         }
 
         let plannedSubtask = PlannedSubtask(
@@ -378,10 +374,8 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws {
         var definition = try currentDefinition(for: chainID)
-        guard traces.values.contains(where: {
-            $0.chainID == chainID && $0.formsDayHistory
-        }) == false else {
-            throw NoonmarkError.invalidTransition("planned subtasks can only be edited before scheduling")
+        guard isInTaskPool(chainID) else {
+            throw NoonmarkError.invalidTransition("planned subtasks can only be edited in the task pool")
         }
         guard definition.plannedSubtasks.contains(where: { $0.id == plannedSubtaskID }) else {
             throw NoonmarkError.notFound("planned subtask")
@@ -401,6 +395,32 @@ public final class NoonmarkEngine {
         try touchChain(chainID, now: now)
     }
 
+    public func updatePlannedSubtaskTitle(
+        chainID: TaskChainID,
+        plannedSubtaskID: PlannedSubtaskID,
+        title: String,
+        now: Date = Date()
+    ) throws {
+        let normalizedTitle = try normalizeTitle(title)
+        var definition = try currentDefinition(for: chainID)
+        guard isInTaskPool(chainID) else {
+            throw NoonmarkError.invalidTransition("planned subtasks can only be edited in the task pool")
+        }
+        guard let index = definition.plannedSubtasks.firstIndex(where: {
+            $0.id == plannedSubtaskID
+        }) else {
+            throw NoonmarkError.notFound("planned subtask")
+        }
+        guard definition.plannedSubtasks[index].title != normalizedTitle else {
+            return
+        }
+
+        try definition.markContentModified(at: now)
+        definition.plannedSubtasks[index].title = normalizedTitle
+        definitions[definition.id] = definition
+        try touchChain(chainID, now: now)
+    }
+
     public func updatePlannedSubtaskDifficulty(
         chainID: TaskChainID,
         plannedSubtaskID: PlannedSubtaskID,
@@ -408,10 +428,8 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws {
         var definition = try currentDefinition(for: chainID)
-        guard traces.values.contains(where: {
-            $0.chainID == chainID && $0.formsDayHistory
-        }) == false else {
-            throw NoonmarkError.invalidTransition("planned subtasks can only be edited before scheduling")
+        guard isInTaskPool(chainID) else {
+            throw NoonmarkError.invalidTransition("planned subtasks can only be edited in the task pool")
         }
         guard let index = definition.plannedSubtasks.firstIndex(where: { $0.id == plannedSubtaskID }) else {
             throw NoonmarkError.notFound("planned subtask")
@@ -817,6 +835,7 @@ public final class NoonmarkEngine {
                     "only pending future plans can return to pool"
                 )
             }
+            try materializePoolDraft(from: trace, now: now)
             try trace.markContentModified(at: now)
             trace.status = .cancelledDraft
             trace.settledAt = now
@@ -834,6 +853,7 @@ public final class NoonmarkEngine {
             throw NoonmarkError.invalidTransition("only pending current-day traces can return to pool")
         }
 
+        try materializePoolDraft(from: trace, now: now)
         try trace.markContentModified(at: now)
         trace.status = .returnedToPool
         trace.settledAt = now
@@ -931,8 +951,19 @@ public final class NoonmarkEngine {
         guard targetDate >= today else {
             throw NoonmarkError.invalidTransition("continuation target cannot be in the past")
         }
+        guard targetDate > source.date else {
+            throw NoonmarkError.invalidTransition("continuation target must be later than its source")
+        }
         guard source.status == .unfinished || (source.status == .pending && source.date == today) else {
             throw NoonmarkError.invalidTransition("only historical unfinished or current pending traces can continue")
+        }
+
+        let frontier = traces.values
+            .filter { $0.chainID == source.chainID && $0.formsDayHistory }
+            .sorted(by: traceChronology)
+            .last
+        guard frontier?.id == source.id else {
+            throw NoonmarkError.invalidTransition("only the latest task-chain frontier can continue")
         }
 
         if let active = activeTrace(for: source.chainID), active.id != source.id {
@@ -977,8 +1008,6 @@ public final class NoonmarkEngine {
         now: Date = Date()
     ) throws -> DayTraceID {
         let normalizedTitle = try normalizeTitle(newTitle)
-        let noteEntries = try normalizedOptionalText(initialNoteBody)
-            .map { [try TaskNoteEntry(body: $0, now: now)] } ?? []
         var oldTrace = try trace(traceID)
         try ensureActiveChain(oldTrace.chainID)
         try ensureUnlockedDay(oldTrace.date)
@@ -986,12 +1015,19 @@ public final class NoonmarkEngine {
             throw NoonmarkError.invalidTransition("only pending current-day traces can change definition")
         }
 
+        var noteBodies = oldTrace.activeNoteEntries.map(\.body)
+        if let initialNote = normalizedOptionalText(initialNoteBody) {
+            noteBodies.append(initialNote)
+        }
+        let noteEntries = try noteBodies.map {
+            try TaskNoteEntry(body: $0, now: now)
+        }
         let newChain = TaskChain(noteEntries: noteEntries, now: now)
         let newDefinition = TaskDefinition(
             chainID: newChain.id,
             sequence: 1,
             title: normalizedTitle,
-            descriptionText: newDescriptionText,
+            descriptionText: newDescriptionText ?? oldTrace.descriptionText,
             now: now
         )
 
@@ -1014,6 +1050,7 @@ public final class NoonmarkEngine {
         definitions[newDefinition.id] = newDefinition
         traces[oldTrace.id] = oldTrace
         traces[newTrace.id] = newTrace
+        copyOpenSubtasksToChangedTask(from: oldTrace.id, to: newTrace.id, now: now)
         captureClassificationSnapshot(traceID: oldTrace.id, chainID: oldTrace.chainID, now: now)
         try inheritCurrentClassification(from: oldTrace.chainID, to: newChain.id, now: now)
         try touchChain(oldTrace.chainID, now: now)
@@ -1203,7 +1240,7 @@ public final class NoonmarkEngine {
         }
         let trace = try trace(subtask.traceID)
         try ensureUnlockedDay(trace.date)
-        guard trace.date == today, trace.status == .pending else {
+        guard trace.date >= today, trace.status == .pending else {
             throw NoonmarkError.immutableHistory
         }
         guard subtask.status != .cancelledDraft else {
@@ -1213,6 +1250,56 @@ public final class NoonmarkEngine {
         guard subtask.difficulty != difficulty else { return }
         try subtask.markContentModified(at: now)
         subtask.difficulty = difficulty
+        subtasks[subtask.id] = subtask
+    }
+
+    public func updateSubtaskTitle(
+        _ subtaskID: SubtaskID,
+        title: String,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        let normalizedTitle = try normalizeTitle(title)
+        guard var subtask = subtasks[subtaskID] else {
+            throw NoonmarkError.notFound("subtask")
+        }
+        let trace = try trace(subtask.traceID)
+        try ensureUnlockedDay(trace.date)
+        guard trace.date >= today, trace.status == .pending else {
+            throw NoonmarkError.immutableHistory
+        }
+        guard subtask.isUserPresentable else {
+            throw NoonmarkError.notFound("subtask")
+        }
+        guard subtask.title != normalizedTitle else { return }
+
+        try subtask.markContentModified(at: now)
+        subtask.title = normalizedTitle
+        subtasks[subtask.id] = subtask
+    }
+
+    public func deleteSubtask(
+        _ subtaskID: SubtaskID,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        guard var subtask = subtasks[subtaskID] else {
+            throw NoonmarkError.notFound("subtask")
+        }
+        let trace = try trace(subtask.traceID)
+        try ensureUnlockedDay(trace.date)
+        guard trace.date >= today, trace.status == .pending else {
+            throw NoonmarkError.immutableHistory
+        }
+        guard subtask.isUserPresentable else {
+            throw NoonmarkError.notFound("subtask")
+        }
+
+        try subtask.markContentModified(at: now)
+        subtask.status = .cancelledDraft
+        subtask.completedAt = nil
+        subtask.settledAt = now
+        subtask.draftCancellationID = UUID()
         subtasks[subtask.id] = subtask
     }
 
@@ -2465,6 +2552,73 @@ private extension NoonmarkEngine {
             )
             subtasks[newSubtask.id] = newSubtask
         }
+    }
+
+    func copyOpenSubtasksToChangedTask(
+        from sourceTraceID: DayTraceID,
+        to targetTraceID: DayTraceID,
+        now: Date
+    ) {
+        let openSubtasks = subtasks.values
+            .filter {
+                $0.traceID == sourceTraceID
+                    && ($0.status == .pending || $0.status == .unfinished)
+            }
+            .sorted { $0.position < $1.position }
+
+        for (index, oldSubtask) in openSubtasks.enumerated() {
+            let copiedSubtask = Subtask(
+                traceID: targetTraceID,
+                title: oldSubtask.title,
+                difficulty: oldSubtask.difficulty,
+                position: index + 1,
+                now: now
+            )
+            subtasks[copiedSubtask.id] = copiedSubtask
+        }
+    }
+
+    func materializePoolDraft(from trace: DayTrace, now: Date) throws {
+        var chain = try chain(trace.chainID)
+        var currentDefinition = try currentDefinition(for: trace.chainID)
+        let nextSequence = (definitions.values
+            .filter { $0.chainID == trace.chainID }
+            .map(\.sequence)
+            .max() ?? currentDefinition.sequence) + 1
+        let plannedSubtasks = subtasks.values
+            .filter {
+                $0.traceID == trace.id
+                    && ($0.status == .pending || $0.status == .unfinished)
+            }
+            .sorted { $0.position < $1.position }
+            .enumerated()
+            .map { index, subtask in
+                PlannedSubtask(
+                    lineageID: subtask.lineageID,
+                    title: subtask.title,
+                    difficulty: subtask.difficulty,
+                    position: index + 1,
+                    now: now
+                )
+            }
+        let returnedDefinition = TaskDefinition(
+            chainID: trace.chainID,
+            sequence: nextSequence,
+            title: currentDefinition.title,
+            descriptionText: trace.descriptionText,
+            plannedSubtasks: plannedSubtasks,
+            now: now
+        )
+
+        try currentDefinition.markContentModified(at: now)
+        currentDefinition.supersededAt = now
+        currentDefinition.supersededByDefinitionID = returnedDefinition.id
+        try chain.markContentModified(at: now)
+        chain.noteEntries = trace.noteEntries
+
+        definitions[currentDefinition.id] = currentDefinition
+        definitions[returnedDefinition.id] = returnedDefinition
+        chains[chain.id] = chain
     }
 
     func copyPlannedSubtasks(from definition: TaskDefinition, to traceID: DayTraceID, now: Date) {

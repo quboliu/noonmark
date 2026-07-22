@@ -60,12 +60,37 @@ extension NoonmarkStore {
         return (targetTrace, targetDefinition)
     }
 
+    func changedSource(for trace: DayTrace) -> (trace: DayTrace, definition: TaskDefinition)? {
+        guard let sourceTrace = engine.traces.values.first(where: {
+            $0.changedToTraceID == trace.id
+        }),
+        let sourceDefinition = engine.definitions[sourceTrace.definitionID]
+        else {
+            return nil
+        }
+        return (sourceTrace, sourceDefinition)
+    }
+
     func openChangedTarget(from trace: DayTrace) {
         guard let target = changedTarget(for: trace) else { return }
         page = .day
         selectedDate = target.trace.date
         selectedCalendarDate = target.trace.date
         selectTrace(target.trace.id)
+    }
+
+    func openChangedSource(from trace: DayTrace) {
+        guard let source = changedSource(for: trace) else { return }
+        openTaskTrailTrace(source.trace)
+    }
+
+    func openTaskTrailTrace(_ trace: DayTrace) {
+        page = .day
+        selectedDate = trace.date
+        selectedCalendarDate = trace.date
+        clearSelection()
+        selectedTraceID = trace.id
+        isDetailRailExpanded = true
     }
 
     func selectPool(_ chainID: TaskChainID) {

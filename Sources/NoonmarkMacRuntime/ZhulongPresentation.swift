@@ -660,6 +660,17 @@ public struct ZhulongCopy: Sendable {
         )
     }
 
+    public func todoDiffAppliedReceipt(count: Int) -> String {
+        localized(
+            chinese: "已写入 \(count) 项 Todo 变更",
+            english: "Wrote \(count) Todo change\(count == 1 ? "" : "s")"
+        )
+    }
+
+    public var openTaskPool: String {
+        localized(chinese: "查看任务池", english: "View Task Pool")
+    }
+
     public func planningStageNote(stageTitle: String) -> String {
         localized(chinese: "来自规划阶段：\(stageTitle)", english: "From planning stage: \(stageTitle)")
     }

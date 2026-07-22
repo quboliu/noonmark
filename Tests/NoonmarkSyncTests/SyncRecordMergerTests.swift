@@ -2269,6 +2269,7 @@ final class SyncRecordMergerTests: XCTestCase {
     }
 
     func testDayTraceDependencyGraphIsStableAcrossEveryInputPermutation() throws {
+        let priorDay = LocalDate("2026-07-04")
         let baseEngine = NoonmarkEngine()
         let chainID = try baseEngine.createPoolTask(title: "轨迹 DAG", now: now)
         let replacementChainID = try baseEngine.createPoolTask(
@@ -2287,7 +2288,7 @@ final class SyncRecordMergerTests: XCTestCase {
             id: DayTraceID(uuid("73000000-0000-0000-0000-000000000001")),
             chainID: chainID,
             definitionID: definitionID,
-            date: today,
+            date: priorDay,
             status: .continued,
             priority: 0,
             continuationSeq: 0,
@@ -2301,7 +2302,7 @@ final class SyncRecordMergerTests: XCTestCase {
             definitionID: definitionID,
             date: today,
             status: .changed,
-            priority: 1,
+            priority: 0,
             continuationSeq: 1,
             continuedFromTraceID: old.id,
             now: now.addingTimeInterval(2)
@@ -2313,7 +2314,7 @@ final class SyncRecordMergerTests: XCTestCase {
             chainID: replacementChainID,
             definitionID: replacementDefinitionID,
             date: today,
-            priority: 2,
+            priority: 1,
             continuationSeq: 0,
             now: now.addingTimeInterval(3)
         )
@@ -2333,6 +2334,7 @@ final class SyncRecordMergerTests: XCTestCase {
             [records[2], records[1], records[0]]
         ]
         var baseSnapshot = baseEngine.snapshot()
+        baseSnapshot.days.append(Day(date: priorDay, now: now))
         baseSnapshot.days.append(Day(date: today, now: now))
 
         for permutation in permutations {

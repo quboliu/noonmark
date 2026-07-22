@@ -7,7 +7,6 @@ cd "$repo_root"
 
 app_path="$repo_root/dist/Noonmark.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacApp"
-interactive_page="zhulong"
 launched_pid=""
 minimum_lifetime_ticks="${NOONMARK_INTERACTIVE_LAUNCH_MINIMUM_TICKS:-20}"
 
@@ -38,7 +37,7 @@ if [[ ! -f artifacts/interactive-provider-readiness.txt \
 fi
 
 for _ in {1..50}; do
-  candidate_pid="$(pgrep -f -x "$app_executable --page $interactive_page" || true)"
+  candidate_pid="$(pgrep -f -x "$app_executable" || true)"
   if [[ -n "$candidate_pid" ]]; then
     launched_pid="$candidate_pid"
     break

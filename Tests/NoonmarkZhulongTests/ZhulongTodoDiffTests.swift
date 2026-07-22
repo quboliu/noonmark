@@ -256,6 +256,70 @@ final class ZhulongTodoDiffTests: XCTestCase {
         XCTAssertEqual(authorization.status, .active)
     }
 
+    func testClassificationChangesDoNotInvalidateTodoWriteFacts() throws {
+        var engine = NoonmarkEngine()
+        let existingChainID = try engine.createPoolTask(
+            title: "已有任务",
+            now: now
+        )
+        let draft = try makeDraft(
+            snapshot: engine.snapshot(),
+            items: [
+                ZhulongTodoDiffItem(
+                    operation: .createTask(
+                        title: "规划新增任务",
+                        descriptionText: nil,
+                        initialNoteBody: nil,
+                        plannedSubtasks: [],
+                        targetDate: nil
+                    )
+                )
+            ]
+        )
+        let classificationPlan = try engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: existingChainID,
+                    category: .new(name: "研究", colorHex: "#2A6FDB"),
+                    labels: []
+                )
+            ),
+            source: .userDirect,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(1)
+        )
+        _ = try engine.commitClassification(
+            classificationPlan,
+            confirmation: .user(decisionID: UUID()),
+            now: now.addingTimeInterval(1)
+        )
+
+        var authorization = try ZhulongTodoDiffApplier().authorize(
+            draft,
+            against: engine,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        let receipt = try ZhulongTodoDiffApplier().apply(
+            draft,
+            authorization: &authorization,
+            to: &engine,
+            today: today,
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(receipt.items.count, 1)
+        XCTAssertTrue(engine.taskPool().contains {
+            $0.definition.title == "规划新增任务"
+        })
+        guard case let .task(classification) = try engine.classification(
+            .task(existingChainID)
+        ) else {
+            return XCTFail("missing task classification")
+        }
+        XCTAssertEqual(classification.category?.name, "研究")
+    }
+
     func testUserRevisionRequiresParentAndExplicitModifiedItems() throws {
         let engine = NoonmarkEngine()
         let item = ZhulongTodoDiffItem(

@@ -8,6 +8,8 @@ enum ZhulongProviderLaunchBootstrap {
     private static let modelEnvironmentKey = "NOONMARK_AI_MODEL"
     private static let apiKeyEnvironmentKey = "NOONMARK_AI_API_KEY"
     private static let readinessResultPathEnvironmentKey = "NOONMARK_PROVIDER_READINESS_RESULT_PATH"
+    private static let openConversationOnNextLaunchKey =
+        "developer.providerBootstrap.openConversationOnNextLaunch"
 
     /// Imports an explicitly supplied developer Provider configuration before the
     /// interactive app is shown. The API key is handed directly to the Keychain
@@ -38,6 +40,20 @@ enum ZhulongProviderLaunchBootstrap {
         draft.enabled = true
 
         _ = try ZhulongProviderSettingsStore.save(draft)
+        UserDefaults.standard.set(true, forKey: openConversationOnNextLaunchKey)
+        UserDefaults.standard.synchronize()
+        return true
+    }
+
+    /// Consumes the one-shot navigation request created by the developer
+    /// bootstrap. Production launch arguments remain filtered by
+    /// `InternalLaunchArgumentPolicy`; the interactive launcher therefore does
+    /// not need to weaken that boundary just to reveal the configured chat.
+    static func consumeOpenConversationRequest() -> Bool {
+        guard UserDefaults.standard.bool(
+            forKey: openConversationOnNextLaunchKey
+        ) else { return false }
+        UserDefaults.standard.removeObject(forKey: openConversationOnNextLaunchKey)
         UserDefaults.standard.synchronize()
         return true
     }

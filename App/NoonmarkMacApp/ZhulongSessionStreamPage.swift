@@ -758,6 +758,9 @@ struct ZhulongSessionStreamPage: View {
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
             }
             if let diff = session.currentTodoDiff {
+                let appliedReceipt = session.todoApplyReceipts.last {
+                    $0.draftID == diff.id
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     Text(copy.todoDiffTitle(version: diff.version, count: diff.items.count))
                         .font(.noonmarkSystem(size: 11.5, weight: .semibold))
@@ -768,21 +771,38 @@ struct ZhulongSessionStreamPage: View {
                             .foregroundStyle(Theme.text2)
                     }
                 }
-                HStack(spacing: 8) {
-                    SmallActionButton(copy.reviewAndRevise) {
-                        todoDiffBeingEdited = diff
-                    }
-                    .disabled(workspace.hasActiveTodoAuthorization)
-                    .accessibilityIdentifier("zhulong-edit-todo-diff")
-                    SmallActionButton(copy.confirmAndApplyAtomically, tone: .accent) {
-                        store.confirmAndApplyCurrentZhulongTodoDiff()
-                    }
-                    .accessibilityIdentifier("zhulong-confirm-apply-todo-diff")
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: "zhulong-confirm-apply-todo-diff",
-                            verificationText: copy.confirmAndApplyAtomically
+                if let appliedReceipt {
+                    HStack(spacing: 8) {
+                        Label(
+                            copy.todoDiffAppliedReceipt(
+                                count: appliedReceipt.items.count
+                            ),
+                            systemImage: "checkmark.circle.fill"
                         )
+                        .font(.noonmarkSystem(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.ok)
+                        SmallActionButton(copy.openTaskPool) {
+                            store.selectPage(.pool)
+                        }
+                        .accessibilityIdentifier("zhulong-open-applied-todo-pool")
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        SmallActionButton(copy.reviewAndRevise) {
+                            todoDiffBeingEdited = diff
+                        }
+                        .disabled(workspace.hasActiveTodoAuthorization)
+                        .accessibilityIdentifier("zhulong-edit-todo-diff")
+                        SmallActionButton(copy.confirmAndApplyAtomically, tone: .accent) {
+                            store.confirmAndApplyCurrentZhulongTodoDiff()
+                        }
+                        .accessibilityIdentifier("zhulong-confirm-apply-todo-diff")
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "zhulong-confirm-apply-todo-diff",
+                                verificationText: copy.confirmAndApplyAtomically
+                            )
+                        }
                     }
                 }
             } else {

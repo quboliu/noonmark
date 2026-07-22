@@ -627,13 +627,15 @@ enum ZhulongTodoDigest {
     }
 }
 
+/// Facts whose mutation can change the legality or meaning of a Todo diff.
+/// Classification is intentionally excluded: it is orthogonal to task state,
+/// and background classification must not revoke a user's reviewed Todo write.
 private struct ZhulongTodoFactSnapshot: Encodable {
     let days: [Day]
     let chains: [TaskChain]
     let definitions: [TaskDefinition]
     let traces: [DayTrace]
     let subtasks: [Subtask]
-    let classifications: TaskClassificationState
 
     init(_ snapshot: NoonmarkSnapshot) {
         days = snapshot.days
@@ -641,6 +643,5 @@ private struct ZhulongTodoFactSnapshot: Encodable {
         definitions = snapshot.definitions
         traces = snapshot.traces
         subtasks = snapshot.subtasks
-        classifications = snapshot.classifications
     }
 }

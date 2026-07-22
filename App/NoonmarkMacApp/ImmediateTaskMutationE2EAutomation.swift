@@ -17,6 +17,13 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
     private static let poolSiblingTitle = "E2E Pool click-away target"
     private static let deletedTitle = "E2E Day delete immediately"
     private static let returnedTitle = "E2E Day return and reschedule"
+    private static let returnedInitialDescription = "E2E returned source description"
+    private static let returnedSavedDescription = "E2E returned pool description saved"
+    private static let returnedSubtaskInitialTitle = "E2E returned subtask original"
+    private static let returnedSubtaskSavedTitle = "E2E returned subtask saved immediately"
+    private static let deletedDaySubtaskTitle = "E2E delete subtask in Day Todo"
+    private static let deletedPoolSubtaskTitle = "E2E delete subtask in Task Pool"
+    private static let addedPoolSubtaskTitle = "E2E add subtask after return"
 
     let resultURL: URL
     let screenshotURL: URL
@@ -124,6 +131,37 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         store.page = .day
         store.selectedDate = fixture.today
         store.selectedCalendarDate = fixture.today
+        store.selectTrace(fixture.returnedTraceID)
+        try await editInlineSubtaskTitle(
+            subtaskID: fixture.returnedSubtaskID,
+            initialTitle: Self.returnedSubtaskInitialTitle,
+            savedTitle: Self.returnedSubtaskSavedTitle,
+            clickAwayIdentifier: dayIdentifier(fixture.daySiblingTraceID),
+            selectedAfterClick: {
+                store.selectedTraceID == fixture.daySiblingTraceID
+            },
+            readback: {
+                store.engine.subtasks[fixture.returnedSubtaskID]?.title
+            },
+            input: input
+        )
+        store.selectTrace(fixture.returnedTraceID)
+        try await click(
+            identifier: "day.subtask.\(fixture.deletedDaySubtaskID.description).delete",
+            modifiers: [],
+            input: input
+        )
+        try await waitUntil("Day Todo subtask delete did not commit") {
+            store.engine.subtasks[fixture.deletedDaySubtaskID]?.status
+                == .cancelledDraft
+                && store.subtasks(for: fixture.returnedTraceID).allSatisfy {
+                    $0.id != fixture.deletedDaySubtaskID
+                }
+        }
+
+        store.page = .day
+        store.selectedDate = fixture.today
+        store.selectedCalendarDate = fixture.today
         store.clearSelection()
         try await chooseDeleteMenuItem(
             from: dayIdentifier(fixture.deletedTraceID),
@@ -146,7 +184,7 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
     private func installFixture(on store: NoonmarkStore) throws -> Fixture {
         store.engine = NoonmarkEngine()
         store.setLanguage(.english)
-        var timeline = try E2EFixtureTimeline(store: store, eventCount: 10)
+        var timeline = try E2EFixtureTimeline(store: store, eventCount: 13)
         let today = timeline.today
 
         let dayChainID = try store.engine.createPoolTask(
@@ -189,12 +227,29 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         )
         let returnedChainID = try store.engine.createPoolTask(
             title: Self.returnedTitle,
+            descriptionText: Self.returnedInitialDescription,
             now: try timeline.nextInstant()
         )
         let returnedTraceID = try store.engine.scheduleFromPool(
             chainID: returnedChainID,
             date: today,
             today: today,
+            now: try timeline.nextInstant()
+        )
+        let returnedSubtaskID = try store.engine.addSubtask(
+            traceID: returnedTraceID,
+            title: Self.returnedSubtaskInitialTitle,
+            difficulty: .hard,
+            now: try timeline.nextInstant()
+        )
+        let deletedDaySubtaskID = try store.engine.addSubtask(
+            traceID: returnedTraceID,
+            title: Self.deletedDaySubtaskTitle,
+            now: try timeline.nextInstant()
+        )
+        let deletedPoolSubtaskID = try store.engine.addSubtask(
+            traceID: returnedTraceID,
+            title: Self.deletedPoolSubtaskTitle,
             now: try timeline.nextInstant()
         )
         let latestMutationAt = try timeline.finish()
@@ -227,6 +282,9 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             deletedTraceID: deletedTraceID,
             returnedChainID: returnedChainID,
             returnedTraceID: returnedTraceID,
+            returnedSubtaskID: returnedSubtaskID,
+            deletedDaySubtaskID: deletedDaySubtaskID,
+            deletedPoolSubtaskID: deletedPoolSubtaskID,
             latestMutationAt: latestMutationAt
         )
     }
@@ -276,6 +334,65 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             store: store
         )
 
+        guard store.currentDefinition(for: fixture.returnedChainID)?
+            .plannedSubtasks.map(\.title) == [
+                Self.returnedSubtaskSavedTitle,
+                Self.deletedPoolSubtaskTitle
+            ]
+        else {
+            throw Failure.failed(
+                "return-to-pool did not materialize the current open subtasks"
+            )
+        }
+        try await editDescription(
+            TextEdit(
+                initialText: Self.returnedInitialDescription,
+                savedText: Self.returnedSavedDescription,
+                clickAwayIdentifier: poolIdentifier(fixture.poolSiblingChainID),
+                selectedAfterClick: {
+                    store.selectedPoolChainID == fixture.poolSiblingChainID
+                },
+                readback: {
+                    store.currentDefinition(for: fixture.returnedChainID)?
+                        .descriptionText
+                },
+                failureContext: {
+                    store.operationFailureNotice?.message ?? "none"
+                }
+            ),
+            input: input
+        )
+        try await click(
+            identifier: poolIdentifier(fixture.returnedChainID),
+            modifiers: [],
+            input: input
+        )
+        let plannedDeleteID = try requiredPlannedSubtaskID(
+            lineageID: try requiredSubtask(
+                fixture.deletedPoolSubtaskID,
+                in: store
+            ).lineageID,
+            chainID: fixture.returnedChainID,
+            store: store
+        )
+        try await click(
+            identifier: "pool.subtask.\(plannedDeleteID.description).delete",
+            modifiers: [],
+            input: input
+        )
+        try await waitUntil("Task Pool subtask delete did not commit") {
+            store.currentDefinition(for: fixture.returnedChainID)?
+                .plannedSubtasks.contains(where: {
+                    $0.id == plannedDeleteID
+                }) == false
+        }
+        try await addPoolSubtask(
+            chainID: fixture.returnedChainID,
+            title: Self.addedPoolSubtaskTitle,
+            store: store,
+            input: input
+        )
+
         try await chooseMenuItem(
             from: poolIdentifier(fixture.returnedChainID),
             downArrowCount: 1,
@@ -294,6 +411,17 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         }
         guard let replacementTraceID else {
             throw Failure.failed("rescheduled trace identity was unavailable")
+        }
+        guard store.engine.traces[replacementTraceID]?.descriptionText
+            == Self.returnedSavedDescription,
+            store.subtasks(for: replacementTraceID).map(\.title) == [
+                Self.returnedSubtaskSavedTitle,
+                Self.addedPoolSubtaskTitle
+            ]
+        else {
+            throw Failure.failed(
+                "rescheduled task did not keep the edited pool draft"
+            )
         }
 
         try await waitUntil("Day Todo still rendered the returned source row") {
@@ -387,6 +515,68 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         try await click(identifier: edit.clickAwayIdentifier, modifiers: [], input: input)
         try await waitUntil("clicking away did not keep the saved title") {
             edit.selectedAfterClick() && edit.readback() == edit.savedTitle
+        }
+    }
+
+    private func editInlineSubtaskTitle(
+        subtaskID: SubtaskID,
+        initialTitle: String,
+        savedTitle: String,
+        clickAwayIdentifier: String,
+        selectedAfterClick: @escaping @MainActor () -> Bool,
+        readback: @escaping @MainActor () -> String?,
+        input: WindowServerInputDriver
+    ) async throws {
+        let identifier = "day.subtask.\(subtaskID.description).title.input"
+        var editor: NSTextView?
+        try await waitUntil("native subtask title editor was not ready") {
+            editor = AppViewTreeE2E.view(identifier: identifier) as? NSTextView
+            return editor?.string == initialTitle
+        }
+        guard let editor else {
+            throw Failure.failed("native subtask title editor disappeared")
+        }
+
+        // The NSTextView document can be taller than its clipped compact row.
+        // Click the visible NSScrollView surface so the event cannot land on
+        // the neighbouring subtask editor through an offscreen midpoint.
+        try await click(
+            identifier: String(identifier.dropLast(".input".count)),
+            modifiers: [],
+            input: input
+        )
+        try await waitUntil("native subtask title editor did not focus") {
+            editor.window?.firstResponder === editor
+        }
+        try input.postKey(keyCode: 0, modifiers: .command)
+        try input.typeUnicode(savedTitle)
+        try await waitUntil("typed subtask title was not saved immediately") {
+            editor.string == savedTitle && readback() == savedTitle
+        }
+        try await click(
+            identifier: clickAwayIdentifier,
+            modifiers: [],
+            input: input
+        )
+        try await waitUntil("clicking away lost the subtask title") {
+            selectedAfterClick() && readback() == savedTitle
+        }
+    }
+
+    private func addPoolSubtask(
+        chainID: TaskChainID,
+        title: String,
+        store: NoonmarkStore,
+        input: WindowServerInputDriver
+    ) async throws {
+        let identifier = "pool.subtask.\(chainID.description).new.input"
+        try await click(identifier: identifier, modifiers: [], input: input)
+        try input.typeUnicode(title)
+        try input.postKey(keyCode: 36)
+        try await waitUntil("Task Pool subtask add did not commit") {
+            store.currentDefinition(for: chainID)?.plannedSubtasks.contains {
+                $0.title == title
+            } == true
         }
     }
 
@@ -518,6 +708,22 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             )
         }
         let restored = try SQLiteEngineRepository(databaseURL: databaseURL).load()
+        guard let replacementTrace = restored.getDayTodo(date: fixture.today)
+            .traces.first(where: {
+                $0.chainID == fixture.returnedChainID
+            })
+        else {
+            throw Failure.failed("rescheduled trace did not persist")
+        }
+        let replacementSubtaskTitles = restored.subtasks.values
+            .filter {
+                $0.traceID == replacementTrace.id && $0.isUserPresentable
+            }
+            .sorted { $0.position < $1.position }
+            .map(\.title)
+        let returnedTrailKinds = try restored.taskTrail(
+            chainID: fixture.returnedChainID
+        ).map(\.kind)
         guard let dayTrace = restored.traces[fixture.dayTraceID],
               restored.definitions[dayTrace.definitionID]?.title == Self.daySavedTitle,
               dayTrace.descriptionText == Self.daySavedDescription,
@@ -539,13 +745,18 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                   $0.chain.id == fixture.deletedChainID
               }) == false,
               restored.traces[fixture.returnedTraceID]?.status == .returnedToPool,
+              restored.subtasks[fixture.deletedDaySubtaskID]?.status
+                  == .cancelledDraft,
               restored.getDayTodo(date: fixture.today).traces.filter({
                   $0.chainID == fixture.returnedChainID
               }).count == 1,
-              restored.getDayTodo(date: fixture.today).traces.first(where: {
-                  $0.chainID == fixture.returnedChainID
-              })?.status == .pending,
-              try restored.taskTrail(chainID: fixture.returnedChainID).map(\.kind)
+              replacementTrace.status == .pending,
+              replacementTrace.descriptionText == Self.returnedSavedDescription,
+              replacementSubtaskTitles == [
+                  Self.returnedSubtaskSavedTitle,
+                  Self.addedPoolSubtaskTitle
+              ],
+              returnedTrailKinds
                   == [.createdInPool, .scheduled, .returnedToPool, .scheduled]
         else {
             throw Failure.failed(
@@ -562,6 +773,31 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("fixture trace was missing")
         }
         return trace
+    }
+
+    private func requiredSubtask(
+        _ subtaskID: SubtaskID,
+        in store: NoonmarkStore
+    ) throws -> Subtask {
+        guard let subtask = store.engine.subtasks[subtaskID] else {
+            throw Failure.failed("fixture subtask was missing")
+        }
+        return subtask
+    }
+
+    private func requiredPlannedSubtaskID(
+        lineageID: SubtaskLineageID,
+        chainID: TaskChainID,
+        store: NoonmarkStore
+    ) throws -> PlannedSubtaskID {
+        guard let plannedSubtaskID = store.currentDefinition(for: chainID)?
+            .plannedSubtasks.first(where: {
+                $0.lineageID == lineageID
+            })?.id
+        else {
+            throw Failure.failed("returned planned subtask lineage was missing")
+        }
+        return plannedSubtaskID
     }
 
     private func dayIdentifier(_ traceID: DayTraceID) -> String {
@@ -605,6 +841,9 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         let deletedTraceID: DayTraceID
         let returnedChainID: TaskChainID
         let returnedTraceID: DayTraceID
+        let returnedSubtaskID: SubtaskID
+        let deletedDaySubtaskID: SubtaskID
+        let deletedPoolSubtaskID: SubtaskID
         let latestMutationAt: Date
     }
 

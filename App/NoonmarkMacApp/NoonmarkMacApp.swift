@@ -129,6 +129,8 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         let requestedPageName = AppLaunchArguments.value(after: "--page")
         if let requestedPageName, let page = NoonmarkStore.Page(commandLineValue: requestedPageName) {
             delegate.store.page = page
+        } else if ZhulongProviderLaunchBootstrap.consumeOpenConversationRequest() {
+            delegate.store.page = .zhulong
         }
         retainedDelegate = delegate
         app.delegate = delegate

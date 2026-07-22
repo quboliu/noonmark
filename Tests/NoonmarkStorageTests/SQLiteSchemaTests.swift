@@ -784,25 +784,38 @@ final class SQLiteSchemaTests: XCTestCase {
             today: completedDate,
             now: now.addingTimeInterval(4)
         )
+        let carriedSubtaskID = try XCTUnwrap(
+            engine.subtasks.values.first(where: {
+                $0.traceID == completedTraceID
+                    && $0.lineageID
+                    == engine.subtasks[cancelledSubtaskID]?.lineageID
+            })?.id
+        )
         let completedSubtaskID = try engine.addSubtask(
             traceID: completedTraceID,
             title: "可见完成子任务",
             now: now.addingTimeInterval(5)
         )
         try engine.completeSubtask(
-            completedSubtaskID,
+            carriedSubtaskID,
             today: completedDate,
             now: now.addingTimeInterval(6)
+        )
+        try engine.completeSubtask(
+            completedSubtaskID,
+            today: completedDate,
+            now: now.addingTimeInterval(7)
         )
         try engine.markCompleted(
             traceID: completedTraceID,
             today: completedDate,
-            now: now.addingTimeInterval(7)
+            now: now.addingTimeInterval(8)
         )
         try repository.save(engine)
 
         let completedTraceUUID = completedTraceID.rawValue.uuidString
         let cancelledTraceUUID = cancelledTraceID.rawValue.uuidString
+        let carriedSubtaskUUID = carriedSubtaskID.rawValue.uuidString
         let completedSubtaskUUID = completedSubtaskID.rawValue.uuidString
         let cancelledSubtaskUUID = cancelledSubtaskID.rawValue.uuidString
         let chainUUID = chainID.rawValue.uuidString
@@ -848,6 +861,18 @@ final class SQLiteSchemaTests: XCTestCase {
                 SELECT COUNT(*)
                 FROM completed_subtask_trajectory_detail_view
                 WHERE completed_trace_id = '\(completedTraceUUID)'
+                  AND subtask_id = '\(carriedSubtaskUUID)'
+                """,
+                at: databaseURL
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try integerScalar(
+                """
+                SELECT COUNT(*)
+                FROM completed_subtask_trajectory_detail_view
+                WHERE completed_trace_id = '\(completedTraceUUID)'
                   AND subtask_id = '\(completedSubtaskUUID)'
                 """,
                 at: databaseURL
@@ -872,6 +897,18 @@ final class SQLiteSchemaTests: XCTestCase {
                 SELECT COUNT(*)
                 FROM completed_subtask_record_view
                 WHERE parent_chain_id = '\(chainUUID)'
+                  AND subtask_id = '\(carriedSubtaskUUID)'
+                """,
+                at: databaseURL
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try integerScalar(
+                """
+                SELECT COUNT(*)
+                FROM completed_subtask_record_view
+                WHERE parent_chain_id = '\(chainUUID)'
                   AND subtask_id = '\(completedSubtaskUUID)'
                 """,
                 at: databaseURL
@@ -887,7 +924,6 @@ final class SQLiteSchemaTests: XCTestCase {
                   AND (
                     subtask_id = '\(cancelledSubtaskUUID)'
                     OR trace_id = '\(cancelledTraceUUID)'
-                    OR title = '隐藏取消草稿子任务'
                   )
                 """,
                 at: databaseURL

@@ -58,7 +58,7 @@ final class WorkspaceSearchIndexTests: XCTestCase {
         XCTAssertTrue(index.search("launch", limit: 0).isEmpty)
     }
 
-    func testCancelledFutureDraftAndItsSubtasksAreNotSearchable() throws {
+    func testCancelledFutureFactsStayHiddenWhileReturnedPoolDraftIsSearchable() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(
             title: "Hidden cancelled plan",
@@ -70,7 +70,7 @@ final class WorkspaceSearchIndexTests: XCTestCase {
             today: today,
             now: start.addingTimeInterval(1)
         )
-        _ = try engine.addSubtask(
+        let cancelledSubtaskID = try engine.addSubtask(
             traceID: traceID,
             title: "Hidden cancelled subtask",
             now: start.addingTimeInterval(2)
@@ -85,7 +85,17 @@ final class WorkspaceSearchIndexTests: XCTestCase {
         XCTAssertTrue(index.search("Hidden cancelled plan").allSatisfy {
             $0.destination == .pool(chainID: chainID)
         })
-        XCTAssertTrue(index.search("Hidden cancelled subtask").isEmpty)
+        let subtaskResults = index.search("Hidden cancelled subtask")
+        XCTAssertEqual(
+            subtaskResults.map(\.destination),
+            [.pool(chainID: chainID)]
+        )
+        XCTAssertFalse(subtaskResults.contains {
+            guard case let .subtask(id, _, _, _) = $0.destination else {
+                return false
+            }
+            return id == cancelledSubtaskID
+        })
     }
 
     func testSameDayReturnAndRescheduleIndexesOnlyTheCurrentTrace() throws {

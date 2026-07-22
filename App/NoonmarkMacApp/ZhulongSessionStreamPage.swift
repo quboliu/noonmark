@@ -35,9 +35,9 @@ struct ZhulongSessionStreamPage: View {
             PageHeader(
                 title: copy.name,
                 subtitle: copy.homeSubtitle,
-                titlePlacement: .centeredInMainSurface,
-                centerSubtitleWithTitle: true,
-                titleAnchorIdentifier: "zhulong.session.title"
+                titlePlacement: MacUIZhulongHomeLayout.titlePlacement,
+                titleAnchorIdentifier: "zhulong.session.title",
+                subtitleAnchorIdentifier: "zhulong.session.subtitle"
             ) {
                 HStack(spacing: 7) {
                     HeaderButton(copy.allSessionsAction) { workspace.showHome() }
@@ -60,6 +60,8 @@ struct ZhulongSessionStreamPage: View {
                     }
                 }
             }
+            .frame(maxWidth: CGFloat(MacUIZhulongConversationLayout.headerOuterMaxWidth))
+            .frame(maxWidth: .infinity)
 
             ScrollViewReader { proxy in
                 ScrollView {

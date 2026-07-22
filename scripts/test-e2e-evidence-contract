@@ -303,8 +303,14 @@ require_literal \
   App/NoonmarkMacApp/ZhulongConvergedHome.swift \
   'titleAnchorIdentifier: "zhulong.home.title"'
 require_literal \
+  App/NoonmarkMacApp/ZhulongConvergedHome.swift \
+  'subtitleAnchorIdentifier: "zhulong.home.subtitle"'
+require_literal \
   App/NoonmarkMacApp/ZhulongSessionStreamPage.swift \
   'titleAnchorIdentifier: "zhulong.session.title"'
+require_literal \
+  App/NoonmarkMacApp/ZhulongSessionStreamPage.swift \
+  'subtitleAnchorIdentifier: "zhulong.session.subtitle"'
 require_literal \
   App/NoonmarkMacApp/LegacyLaunchAutomations.swift \
   "append(ZhulongTitleGeometryE2EAutomation.fromCommandLine(), to: &actions)"
@@ -313,7 +319,13 @@ require_literal \
   'AppViewTreeE2E.view(identifier: "shell.middle-pane")'
 require_literal \
   App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
-  "let delta = abs(titleFrame.midX - middleFrame.midX)"
+  "let expectedMinX = middleFrame.midX - (contentWidth / 2)"
+require_literal \
+  App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
+  "let titleDelta = abs(titleFrame.minX - expectedMinX)"
+require_literal \
+  App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
+  "let subtitleDelta = abs(subtitleFrame.minX - expectedMinX)"
 require_literal \
   App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
   "guard delta <= 1"

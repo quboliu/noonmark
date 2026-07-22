@@ -534,6 +534,11 @@ final class MacUIDesignContractTests: XCTestCase {
 
     func testZhulongConversationUsesOneReadableChatAxis() {
         XCTAssertEqual(MacUIZhulongConversationLayout.contentMaxWidth, 840)
+        XCTAssertEqual(MacUIZhulongConversationLayout.headerOuterMaxWidth, 880)
+        XCTAssertEqual(
+            MacUIZhulongConversationLayout.headerOuterMaxWidth,
+            MacUIZhulongConversationLayout.contentMaxWidth + (MacUIShellLayout.pageHorizontalPadding * 2)
+        )
         XCTAssertEqual(MacUIZhulongConversationLayout.messageSpacing, 32)
         XCTAssertEqual(MacUIZhulongConversationLayout.assistantBodyPointSize, 15.5)
         XCTAssertEqual(MacUIZhulongConversationLayout.userBodyPointSize, 14.5)
@@ -548,15 +553,15 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(MacUIZhulongConversationLayout.sharesComposerAcrossProjections)
     }
 
-    func testZhulongTitleCentersWithoutChangingSharedPageHeaderDefault() {
+    func testZhulongPageHeaderSharesTheReadableContentAxis() {
         XCTAssertEqual(MacUIPageHeaderLayout.defaultTitlePlacement, .leading)
         XCTAssertEqual(
             MacUIZhulongHomeLayout.titlePlacement,
-            .centeredInMainSurface
+            .leading
         )
         XCTAssertTrue(
             MacUIDesignContract.current.zhulongHomeElements.contains(
-                .centeredPageTitle
+                .contentAlignedPageHeader
             )
         )
     }

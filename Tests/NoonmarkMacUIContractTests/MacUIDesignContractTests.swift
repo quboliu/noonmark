@@ -446,8 +446,11 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUIDetailEditorLayout.titleDescriptionSpacing, 6)
         XCTAssertEqual(MacUIDetailEditorLayout.titleHeight, 22 ... 72)
         XCTAssertEqual(MacUIDetailEditorLayout.descriptionHeight, 32 ... 132)
-        XCTAssertEqual(MacUIDetailEditorLayout.textInset, 3)
+        XCTAssertEqual(MacUIDetailEditorLayout.horizontalTextInset, 0)
+        XCTAssertEqual(MacUIDetailEditorLayout.verticalTextInset, 3)
+        XCTAssertEqual(MacUIDetailEditorLayout.lineFragmentPadding, 0)
         XCTAssertTrue(contract.detailElements.contains(.compactTitleDescriptionLayout))
+        XCTAssertTrue(contract.detailElements.contains(.primaryTextSharesDetailAxis))
         XCTAssertTrue(contract.detailElements.contains(.borderlessDescriptionEditor))
         XCTAssertTrue(contract.detailElements.contains(.markdownDescriptionEditing))
         XCTAssertTrue(contract.detailElements.contains(.nativeDescriptionEditingCommands))
@@ -534,11 +537,6 @@ final class MacUIDesignContractTests: XCTestCase {
 
     func testZhulongConversationUsesOneReadableChatAxis() {
         XCTAssertEqual(MacUIZhulongConversationLayout.contentMaxWidth, 840)
-        XCTAssertEqual(MacUIZhulongConversationLayout.headerOuterMaxWidth, 880)
-        XCTAssertEqual(
-            MacUIZhulongConversationLayout.headerOuterMaxWidth,
-            MacUIZhulongConversationLayout.contentMaxWidth + (MacUIShellLayout.pageHorizontalPadding * 2)
-        )
         XCTAssertEqual(MacUIZhulongConversationLayout.messageSpacing, 32)
         XCTAssertEqual(MacUIZhulongConversationLayout.assistantBodyPointSize, 15.5)
         XCTAssertEqual(MacUIZhulongConversationLayout.userBodyPointSize, 14.5)
@@ -553,15 +551,15 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(MacUIZhulongConversationLayout.sharesComposerAcrossProjections)
     }
 
-    func testZhulongPageHeaderSharesTheReadableContentAxis() {
+    func testZhulongTitleCentersWithoutChangingSharedPageHeaderDefault() {
         XCTAssertEqual(MacUIPageHeaderLayout.defaultTitlePlacement, .leading)
         XCTAssertEqual(
             MacUIZhulongHomeLayout.titlePlacement,
-            .leading
+            .centeredInMainSurface
         )
         XCTAssertTrue(
             MacUIDesignContract.current.zhulongHomeElements.contains(
-                .contentAlignedPageHeader
+                .centeredPageTitle
             )
         )
     }

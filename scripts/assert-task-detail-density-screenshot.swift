@@ -27,6 +27,25 @@ let requiredFragmentsByScreenshot: [String: [String]] = [
     "completed-detail.png": ["100%", "生活", "任务轨迹"]
 ]
 
+private struct DetailTextAlignmentFixture {
+    let titlePrefix: String
+    let descriptionPrefix: String
+    let axisPrefix: String
+}
+
+private let alignmentFixtures: [String: DetailTextAlignmentFixture] = [
+    "day-detail.png": DetailTextAlignmentFixture(
+        titlePrefix: "整理 Q3 OKR 草案",
+        descriptionPrefix: "汇总三条产品线",
+        axisPrefix: "分组"
+    ),
+    "pool-detail.png": DetailTextAlignmentFixture(
+        titlePrefix: "读《卡片笔记写作法》第三章",
+        descriptionPrefix: "任务池样例任务。",
+        axisPrefix: "分组"
+    )
+]
+
 // Vision must segment the detail rail itself. Segmenting the full 2400×1536
 // window first and filtering observations afterwards can merge or truncate
 // small Chinese labels before the rail filter ever sees them.
@@ -52,7 +71,8 @@ for path in screenshotPaths {
         exit(2)
     }
 
-    let rightRailLabels = (request.results ?? []).compactMap { observation in
+    let rightRailObservations = request.results ?? []
+    let rightRailLabels = rightRailObservations.compactMap { observation in
         observation.topCandidates(1).first?.string
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -87,6 +107,40 @@ for path in screenshotPaths {
             stderr
         )
         exit(6)
+    }
+    if let fixture = alignmentFixtures[screenshotName] {
+        func observation(withPrefix prefix: String) -> VNRecognizedTextObservation? {
+            rightRailObservations.first { observation in
+                observation.topCandidates(1).first?.string.hasPrefix(prefix) == true
+            }
+        }
+        guard let title = observation(withPrefix: fixture.titlePrefix),
+              let description = observation(withPrefix: fixture.descriptionPrefix),
+              let axis = observation(withPrefix: fixture.axisPrefix)
+        else {
+            fputs("task detail alignment fixture was not recognized in \(path)\n", stderr)
+            exit(7)
+        }
+        let railWidthInPoints = 1_200.0 * rightRailRegion.width
+        let titleDelta = abs(title.boundingBox.minX - axis.boundingBox.minX)
+            * railWidthInPoints
+        let descriptionDelta = abs(description.boundingBox.minX - axis.boundingBox.minX)
+            * railWidthInPoints
+        let tolerance = 2.0
+        guard max(titleDelta, descriptionDelta) <= tolerance else {
+            fputs(
+                String(
+                    format: "task detail primary text is not left aligned in %@: "
+                        + "title_delta=%.2fpt description_delta=%.2fpt tolerance=%.2fpt\n",
+                    path,
+                    titleDelta,
+                    descriptionDelta,
+                    tolerance
+                ),
+                stderr
+            )
+            exit(8)
+        }
     }
     print("task_detail_density=ok path=\(path) right_rail_labels=\(rightRailLabels.count)")
 }

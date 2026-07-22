@@ -279,6 +279,12 @@ require_literal \
   "requiredFragmentsByScreenshot"
 require_literal \
   scripts/assert-task-detail-density-screenshot.swift \
+  "alignmentFixtures"
+require_literal \
+  scripts/assert-task-detail-density-screenshot.swift \
+  "max(titleDelta, descriptionDelta) <= tolerance"
+require_literal \
+  scripts/assert-task-detail-density-screenshot.swift \
   "request.regionOfInterest = rightRailRegion"
 require_order \
   scripts/assert-task-detail-density-screenshot.swift \
@@ -303,14 +309,8 @@ require_literal \
   App/NoonmarkMacApp/ZhulongConvergedHome.swift \
   'titleAnchorIdentifier: "zhulong.home.title"'
 require_literal \
-  App/NoonmarkMacApp/ZhulongConvergedHome.swift \
-  'subtitleAnchorIdentifier: "zhulong.home.subtitle"'
-require_literal \
   App/NoonmarkMacApp/ZhulongSessionStreamPage.swift \
   'titleAnchorIdentifier: "zhulong.session.title"'
-require_literal \
-  App/NoonmarkMacApp/ZhulongSessionStreamPage.swift \
-  'subtitleAnchorIdentifier: "zhulong.session.subtitle"'
 require_literal \
   App/NoonmarkMacApp/LegacyLaunchAutomations.swift \
   "append(ZhulongTitleGeometryE2EAutomation.fromCommandLine(), to: &actions)"
@@ -319,13 +319,7 @@ require_literal \
   'AppViewTreeE2E.view(identifier: "shell.middle-pane")'
 require_literal \
   App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
-  "let expectedMinX = middleFrame.midX - (contentWidth / 2)"
-require_literal \
-  App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
-  "let titleDelta = abs(titleFrame.minX - expectedMinX)"
-require_literal \
-  App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
-  "let subtitleDelta = abs(subtitleFrame.minX - expectedMinX)"
+  "let delta = abs(titleFrame.midX - middleFrame.midX)"
 require_literal \
   App/NoonmarkMacApp/ZhulongTitleGeometryE2EAutomation.swift \
   "guard delta <= 1"

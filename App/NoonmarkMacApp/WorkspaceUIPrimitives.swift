@@ -87,7 +87,6 @@ struct PageHeader<Trailing: View>: View {
     let titlePlacement: MacUIPageHeaderTitlePlacement
     let centerSubtitleWithTitle: Bool
     let titleAnchorIdentifier: String?
-    let subtitleAnchorIdentifier: String?
     let trailing: Trailing
 
     init(
@@ -98,7 +97,6 @@ struct PageHeader<Trailing: View>: View {
         titlePlacement: MacUIPageHeaderTitlePlacement = MacUIPageHeaderLayout.defaultTitlePlacement,
         centerSubtitleWithTitle: Bool = false,
         titleAnchorIdentifier: String? = nil,
-        subtitleAnchorIdentifier: String? = nil,
         @ViewBuilder trailing: () -> Trailing = { EmptyView() }
     ) {
         self.title = title
@@ -108,7 +106,6 @@ struct PageHeader<Trailing: View>: View {
         self.titlePlacement = titlePlacement
         self.centerSubtitleWithTitle = centerSubtitleWithTitle
         self.titleAnchorIdentifier = titleAnchorIdentifier
-        self.subtitleAnchorIdentifier = subtitleAnchorIdentifier
         self.trailing = trailing()
     }
 
@@ -129,11 +126,11 @@ struct PageHeader<Trailing: View>: View {
                 }
                 if let subtitle {
                     if centerSubtitleWithTitle, titlePlacement == .centeredInMainSurface {
-                        subtitleLabel(subtitle, exposesE2EAnchor: false)
+                        subtitleLabel(subtitle)
                             .hidden()
                             .accessibilityHidden(true)
                     } else {
-                        subtitleLabel(subtitle, exposesE2EAnchor: true)
+                        subtitleLabel(subtitle)
                     }
                 }
             }
@@ -154,7 +151,7 @@ struct PageHeader<Trailing: View>: View {
                 VStack(spacing: 2) {
                     titleLabel(exposesE2EAnchor: true)
                     if centerSubtitleWithTitle, let subtitle {
-                        subtitleLabel(subtitle, exposesE2EAnchor: true)
+                        subtitleLabel(subtitle)
                             .multilineTextAlignment(.center)
                     }
                 }
@@ -179,18 +176,10 @@ struct PageHeader<Trailing: View>: View {
             }
     }
 
-    private func subtitleLabel(_ subtitle: String, exposesE2EAnchor: Bool) -> some View {
+    private func subtitleLabel(_ subtitle: String) -> some View {
         Text(subtitle)
             .font(.noonmarkSystem(size: 12))
             .foregroundStyle(Theme.text3)
-            .background {
-                if exposesE2EAnchor, let subtitleAnchorIdentifier {
-                    AppE2EViewAnchor(
-                        identifier: subtitleAnchorIdentifier,
-                        verificationText: subtitle
-                    )
-                }
-            }
     }
 }
 

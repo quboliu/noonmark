@@ -56,7 +56,15 @@ enum NoonmarkVisualMetrics {
     static let detailDescriptionMaximumHeight = CGFloat(
         MacUIDetailEditorLayout.descriptionHeight.upperBound
     )
-    static let detailTextInset = CGFloat(MacUIDetailEditorLayout.textInset)
+    static let detailHorizontalTextInset = CGFloat(
+        MacUIDetailEditorLayout.horizontalTextInset
+    )
+    static let detailVerticalTextInset = CGFloat(
+        MacUIDetailEditorLayout.verticalTextInset
+    )
+    static let detailLineFragmentPadding = CGFloat(
+        MacUIDetailEditorLayout.lineFragmentPadding
+    )
 
     static let paneToggleChevronSize = CGFloat(MacUIIconMetrics.paneToggleChevronSize)
     static let navigationIconSize = CGFloat(MacUIIconMetrics.navigationSize)

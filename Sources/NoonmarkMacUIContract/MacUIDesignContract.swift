@@ -269,7 +269,7 @@ public enum MacUIPage: String, CaseIterable, Sendable {
 public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
     case freeformIntentComposer
     case verticallyCenteredHomeContent
-    case contentAlignedPageHeader
+    case centeredPageTitle
     case singleVisualAxis
     case roundedRectIntentComposer
     case flatWorkflowList
@@ -431,6 +431,7 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case descriptionImmediatelyUnderTitle
     case descriptionWithoutSectionTitle
     case compactTitleDescriptionLayout
+    case primaryTextSharesDetailAxis
     case borderlessDescriptionEditor
     case markdownDescriptionEditing
     case nativeDescriptionEditingCommands
@@ -455,7 +456,9 @@ public enum MacUIDetailEditorLayout {
     public static let titleDescriptionSpacing = 6.0
     public static let titleHeight: ClosedRange<Double> = 22 ... 72
     public static let descriptionHeight: ClosedRange<Double> = 32 ... 132
-    public static let textInset = 3.0
+    public static let horizontalTextInset = 0.0
+    public static let verticalTextInset = 3.0
+    public static let lineFragmentPadding = 0.0
 }
 
 public enum MacUIMarkdownEditingCommand: String, CaseIterable, Sendable {
@@ -622,7 +625,7 @@ public enum MacUIZhulongHomeLayout {
     public static let composerActionCount = 1
     public static let collapsesEmptyPendingSection = true
     public static let collapsesHomeDetailRail = true
-    public static let titlePlacement = MacUIPageHeaderTitlePlacement.leading
+    public static let titlePlacement = MacUIPageHeaderTitlePlacement.centeredInMainSurface
 
     public static func contentPlacement(hasPendingSessions: Bool) -> MacUIZhulongHomeContentPlacement {
         hasPendingSessions ? .topAligned : .centered
@@ -631,7 +634,6 @@ public enum MacUIZhulongHomeLayout {
 
 public enum MacUIZhulongConversationLayout {
     public static let contentMaxWidth = 840.0
-    public static let headerOuterMaxWidth = contentMaxWidth + (MacUIShellLayout.pageHorizontalPadding * 2)
     public static let messageSpacing = 32.0
     public static let assistantBodyPointSize = 15.5
     public static let userBodyPointSize = 14.5

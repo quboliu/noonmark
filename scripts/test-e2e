@@ -2001,33 +2001,29 @@ assert_zhulong_title_geometry_result() {
   local expected_surface="$2"
   local expected_identifier="$3"
   local expected_text="$4"
-  local min_x_delta
+  local mid_x_delta
 
   if [[ ! -f "$result" || "$(head -n 1 "$result")" != "ok" ]]; then
     echo "Zhulong title geometry manifest is missing or failed: $result" >&2
     [[ -f "$result" ]] && cat "$result" >&2
     exit 1
   fi
-  min_x_delta="$(awk -F= '$1 == "min_x_delta" { print $2 }' "$result")"
+  mid_x_delta="$(awk -F= '$1 == "mid_x_delta" { print $2 }' "$result")"
   if ! grep -Fqx "surface=$expected_surface" "$result" ||
     ! grep -Fqx "identifier=$expected_identifier" "$result" ||
     ! grep -Fqx "expected_text=$expected_text" "$result" ||
     ! grep -Fq "title_frame=x:" "$result" ||
-    ! grep -Fq "subtitle_frame=x:" "$result" ||
     ! grep -Fq "middle_frame=x:" "$result" ||
-    ! grep -Fq "title_min_x=" "$result" ||
-    ! grep -Fq "subtitle_min_x=" "$result" ||
-    ! grep -Fq "expected_content_min_x=" "$result" ||
-    ! grep -Fq "title_min_x_delta=" "$result" ||
-    ! grep -Fq "subtitle_min_x_delta=" "$result" ||
+    ! grep -Fq "title_mid_x=" "$result" ||
+    ! grep -Fq "middle_mid_x=" "$result" ||
     ! grep -Fqx "tolerance=1.000" "$result" ||
-    [[ ! "$min_x_delta" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
-    ! awk -v delta="$min_x_delta" 'BEGIN { exit !(delta <= 1) }'; then
-    echo "Zhulong title geometry manifest lost its exact content-axis evidence: $result" >&2
+    [[ ! "$mid_x_delta" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+    ! awk -v delta="$mid_x_delta" 'BEGIN { exit !(delta <= 1) }'; then
+    echo "Zhulong title geometry manifest lost its exact centering evidence: $result" >&2
     cat "$result" >&2
     exit 1
   fi
-  echo "E2E Zhulong ${expected_surface} title geometry: $result (delta=${min_x_delta}pt)"
+  echo "E2E Zhulong ${expected_surface} title geometry: $result (delta=${mid_x_delta}pt)"
 }
 
 record_english_scenario_evidence() {
@@ -2475,8 +2471,8 @@ let railObservations = observations.filter { $0.boundingBox.minX > 0.70 }
 func observation(_ expected: String) -> VNRecognizedTextObservation? {
     railObservations.first { $0.topCandidates(1).first?.string == expected }
 }
-guard let title = observation("预约年度体检"),
-      let description = observation("预约年度体检时间。")
+guard let title = observation("读《卡片笔记写作法》第三章"),
+      let description = observation("任务池样例任务。")
 else {
     print("missing deterministic pool-detail title or description")
     exit(2)

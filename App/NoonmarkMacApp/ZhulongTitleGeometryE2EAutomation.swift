@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import NoonmarkMacUIContract
 
 struct ZhulongTitleGeometryE2EAutomation: LaunchAutomationRunnable {
     let resultURL: URL
@@ -40,24 +39,6 @@ private enum ZhulongTitleGeometryE2EDriver {
                 "zhulong.home.title"
             case .session:
                 "zhulong.session.title"
-            }
-        }
-
-        var subtitleIdentifier: String {
-            switch self {
-            case .home:
-                "zhulong.home.subtitle"
-            case .session:
-                "zhulong.session.subtitle"
-            }
-        }
-
-        var contentMaxWidth: CGFloat {
-            switch self {
-            case .home:
-                CGFloat(MacUIZhulongHomeLayout.contentMaxWidth)
-            case .session:
-                CGFloat(MacUIZhulongConversationLayout.contentMaxWidth)
             }
         }
     }
@@ -110,14 +91,6 @@ private enum ZhulongTitleGeometryE2EDriver {
             }
 
             let title = visibleTitles[0].view
-            guard let subtitle = AppViewTreeE2E.view(
-                identifier: expectedSurface.subtitleIdentifier
-            ) else {
-                retry(attemptsRemaining) {
-                    "visible \(expectedSurface.rawValue) subtitle geometry anchor was unavailable"
-                }
-                return
-            }
             let expectedText = store.copy.navZhulong
             guard AppViewTreeE2E.verificationText(for: title) == expectedText else {
                 finishFailure(
@@ -131,20 +104,15 @@ private enum ZhulongTitleGeometryE2EDriver {
                 )
                 return
             }
-            guard title.window === middle.window,
-                  subtitle.window === middle.window
-            else {
-                finishFailure("title, subtitle and middle pane belonged to different windows")
+            guard title.window === middle.window else {
+                finishFailure("title and middle pane belonged to different windows")
                 return
             }
 
             let titleFrame = AppViewTreeE2E.frameInWindow(for: title)
-            let subtitleFrame = AppViewTreeE2E.frameInWindow(for: subtitle)
             let middleFrame = AppViewTreeE2E.frameInWindow(for: middle)
             guard titleFrame.width > 0,
                   titleFrame.height > 0,
-                  subtitleFrame.width > 0,
-                  subtitleFrame.height > 0,
                   middleFrame.width > 0,
                   middleFrame.height > 0
             else {
@@ -154,31 +122,21 @@ private enum ZhulongTitleGeometryE2EDriver {
                 return
             }
 
-            let horizontalPadding = CGFloat(MacUIShellLayout.pageHorizontalPadding)
-            let availableContentWidth = max(0, middleFrame.width - (horizontalPadding * 2))
-            let contentWidth = min(expectedSurface.contentMaxWidth, availableContentWidth)
-            let expectedMinX = middleFrame.midX - (contentWidth / 2)
-            let titleDelta = abs(titleFrame.minX - expectedMinX)
-            let subtitleDelta = abs(subtitleFrame.minX - expectedMinX)
-            let delta = max(titleDelta, subtitleDelta)
+            let delta = abs(titleFrame.midX - middleFrame.midX)
             let evidence = [
                 "surface=\(expectedSurface.rawValue)",
                 "identifier=\(expectedSurface.titleIdentifier)",
                 "expected_text=\(expectedText)",
                 "title_frame=\(frameDescription(titleFrame))",
-                "subtitle_frame=\(frameDescription(subtitleFrame))",
                 "middle_frame=\(frameDescription(middleFrame))",
-                "title_min_x=\(number(titleFrame.minX))",
-                "subtitle_min_x=\(number(subtitleFrame.minX))",
-                "expected_content_min_x=\(number(expectedMinX))",
-                "title_min_x_delta=\(number(titleDelta))",
-                "subtitle_min_x_delta=\(number(subtitleDelta))",
-                "min_x_delta=\(number(delta))",
+                "title_mid_x=\(number(titleFrame.midX))",
+                "middle_mid_x=\(number(middleFrame.midX))",
+                "mid_x_delta=\(number(delta))",
                 "tolerance=1.000"
             ]
             guard delta <= 1 else {
                 finishFailure(
-                    "Zhulong title was not aligned with the readable content axis",
+                    "Zhulong title was not centered in the main surface",
                     evidence: evidence
                 )
                 return

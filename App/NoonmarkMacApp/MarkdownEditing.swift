@@ -58,8 +58,8 @@ enum MarkdownEditorStyle {
         switch self {
         case .title, .detailBody:
             NSSize(
-                width: NoonmarkVisualMetrics.detailTextInset,
-                height: NoonmarkVisualMetrics.detailTextInset
+                width: NoonmarkVisualMetrics.detailHorizontalTextInset,
+                height: NoonmarkVisualMetrics.detailVerticalTextInset
             )
         case .body:
             NSSize(width: 5, height: 6)
@@ -73,6 +73,15 @@ enum MarkdownEditorStyle {
                 width: NoonmarkVisualMetrics.zhulongConversationComposerHorizontalInset - 5,
                 height: NoonmarkVisualMetrics.zhulongConversationComposerVerticalInset
             )
+        }
+    }
+
+    var lineFragmentPadding: CGFloat {
+        switch self {
+        case .title, .detailBody:
+            NoonmarkVisualMetrics.detailLineFragmentPadding
+        case .body, .compact, .conversation:
+            5
         }
     }
 }
@@ -180,6 +189,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.allowsUndo = true
         textView.textContainerInset = style.textContainerInset
+        textView.textContainer?.lineFragmentPadding = style.lineFragmentPadding
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -213,6 +223,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         }
         textView.font = style.font
         textView.textContainerInset = style.textContainerInset
+        textView.textContainer?.lineFragmentPadding = style.lineFragmentPadding
         textView.commitsOnReturn = commitsOnReturn
         textView.commitAction = onCommit
         scrollView.setAccessibilityLabel(accessibilityLabel)

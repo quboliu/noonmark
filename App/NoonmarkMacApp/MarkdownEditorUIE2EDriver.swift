@@ -64,9 +64,11 @@ enum MarkdownEditorUIE2EDriver {
                   scrollView.drawsBackground == false,
                   textView.drawsBackground == false,
                   textView.textContainerInset == NSSize(
-                      width: NoonmarkVisualMetrics.detailTextInset,
-                      height: NoonmarkVisualMetrics.detailTextInset
-                  )
+                      width: NoonmarkVisualMetrics.detailHorizontalTextInset,
+                      height: NoonmarkVisualMetrics.detailVerticalTextInset
+                  ),
+                  textView.textContainer?.lineFragmentPadding
+                      == NoonmarkVisualMetrics.detailLineFragmentPadding
             else {
                 finish("failed: 真实描述编辑器仍有 surface 或 inset 不符合当前契约")
                 return

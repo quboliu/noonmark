@@ -60,6 +60,10 @@ extension AppCopy {
         language == .chinese ? "延续任务" : "Continue Task"
     }
 
+    var deferTaskAction: String {
+        language == .chinese ? "延期任务" : "Defer Task"
+    }
+
     var returnTaskToPoolAction: String {
         language == .chinese ? "任务回池" : "Return Task to Pool"
     }

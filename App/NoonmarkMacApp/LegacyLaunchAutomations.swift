@@ -119,6 +119,10 @@ struct LaunchAutomation {
         append(CopyUndoPersistenceE2EAutomation.fromCommandLine(), to: &actions)
         append(DateStripE2EAutomation.fromCommandLine(), to: &actions)
         append(KeyboardDateNavigationE2EAutomation.fromCommandLine(), to: &actions)
+        append(
+            HorizontalPageNavigationE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
         append(DetailRailLayoutE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongNavigationE2EAutomation.fromCommandLine(), to: &actions)
         append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)

@@ -115,11 +115,11 @@ final class NoonmarkSnapshotTrajectoryTopologyTests: XCTestCase {
         )
 
         var selfLink = fixture.snapshot
-        selfLink.subtasks[targetIndex].continuedFromSubtaskID =
+        selfLink.subtasks[targetIndex].carriedFromSubtaskID =
             fixture.targetSubtaskID
 
         var cycle = fixture.snapshot
-        cycle.subtasks[sourceIndex].continuedFromSubtaskID =
+        cycle.subtasks[sourceIndex].carriedFromSubtaskID =
             fixture.targetSubtaskID
 
         var fork = fixture.snapshot
@@ -170,7 +170,7 @@ final class NoonmarkSnapshotTrajectoryTopologyTests: XCTestCase {
             now: base.addingTimeInterval(2)
         )
         let before = current.snapshot()
-        let targetTraceID = try current.continueTrace(
+        let targetTraceID = try current.deferCurrentTrace(
             traceID: sourceTraceID,
             targetDate: tomorrow,
             today: today,
@@ -189,12 +189,12 @@ final class NoonmarkSnapshotTrajectoryTopologyTests: XCTestCase {
 
         XCTAssertEqual(
             validCancelledTarget.traces.first { $0.id == targetTraceID }?
-                .continuedFromTraceID,
+                .carriedFromTraceID,
             sourceTraceID
         )
         XCTAssertEqual(
             validCancelledTarget.subtasks.first { $0.id == targetSubtaskID }?
-                .continuedFromSubtaskID,
+                .carriedFromSubtaskID,
             sourceSubtaskID
         )
         XCTAssertNoThrow(try validCancelledTarget.validateIntegrity())
@@ -319,7 +319,7 @@ final class NoonmarkSnapshotTrajectoryTopologyTests: XCTestCase {
         } else {
             nil
         }
-        let targetTraceID = try engine.continueTrace(
+        let targetTraceID = try engine.deferCurrentTrace(
             traceID: sourceTraceID,
             targetDate: tomorrow,
             today: today,

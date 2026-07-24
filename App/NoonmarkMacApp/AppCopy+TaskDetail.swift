@@ -20,7 +20,7 @@ extension AppCopy {
         .pending: .init(chinese: "待完成", english: "Pending"),
         .completed: .init(chinese: "已完成", english: "Completed"),
         .unfinished: .init(chinese: "未完成", english: "Unfinished"),
-        .continued: .init(chinese: "已延续", english: "Continued"),
+        .deferred: .init(chinese: "已延期", english: "Deferred"),
         .changed: .init(chinese: "已变更", english: "Changed"),
         .returnedToPool: .init(chinese: "已回池", english: "Returned to pool"),
         .abandoned: .init(chinese: "已废弃", english: "Dropped")
@@ -51,7 +51,7 @@ extension AppCopy {
 
     // MARK: - Task details
 
-    var untitledTask: String { language == .chinese ? "未命名任务" : "Untitled task" }
+    var untitledTask: String { language == .chinese ? "无标题" : "No title" }
     var ungrouped: String { language == .chinese ? "未分组" : "Ungrouped" }
     var changedToPrefix: String { language == .chinese ? "被变更为：" : "Changed to:" }
     var changedFromPrefix: String { language == .chinese ? "由此任务变更：" : "Changed from:" }
@@ -64,7 +64,7 @@ extension AppCopy {
     var belongsToTaskPrefix: String { language == .chinese ? "属于" : "Part of" }
     var currentLocation: String { language == .chinese ? "当前所在" : "Current" }
     var firstEntry: String { language == .chinese ? "首次进入" : "First entry" }
-    var taskTitlePlaceholder: String { language == .chinese ? "任务标题" : "Task title" }
+    var taskTitlePlaceholder: String { untitledTask }
     var taskDescriptionPlaceholder: String {
         language == .chinese
             ? "补充这个任务的背景、目标或范围…"
@@ -113,7 +113,17 @@ extension AppCopy {
     }
 
     func taskAccessibilityLabel(_ title: String) -> String {
-        language == .chinese ? "任务「\(title)」" : "Task “\(title)”"
+        let displayTitle = displayTaskTitle(title)
+        return language == .chinese ? "任务「\(displayTitle)」" : "Task “\(displayTitle)”"
+    }
+
+    func displayTaskTitle(_ title: String?) -> String {
+        guard let title,
+              title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        else {
+            return untitledTask
+        }
+        return title
     }
 
     func subtaskCount(_ count: Int) -> String {
@@ -200,8 +210,28 @@ extension AppCopy {
             : "Continued to \(dateLabel); open current task →"
     }
 
+    var openCurrentTaskPool: String {
+        language == .chinese
+            ? "当前在任务池 跳转 →"
+            : "Currently in Task Pool; open →"
+    }
+
     func continuedToLink(_ dateLabel: String) -> String {
         language == .chinese ? "已延续到 \(dateLabel) →" : "Continued to \(dateLabel) →"
+    }
+
+    func deferredToLink(_ dateLabel: String) -> String {
+        language == .chinese ? "已延期至 \(dateLabel) →" : "Deferred to \(dateLabel) →"
+    }
+
+    func deferredFromLink(_ dateLabel: String) -> String {
+        language == .chinese ? "由 \(dateLabel) 延期 →" : "Deferred from \(dateLabel) →"
+    }
+
+    func continuedFromUnfinishedLink(_ dateLabel: String) -> String {
+        language == .chinese
+            ? "由 \(dateLabel) 未完成延续 →"
+            : "Continued from unfinished on \(dateLabel) →"
     }
 
     func belongsToTask(_ title: String) -> String {
@@ -225,6 +255,7 @@ extension AppCopy {
         case (.chinese, .scheduled): "已排期"
         case (.chinese, .completed): "已完成"
         case (.chinese, .unfinished): "未完成"
+        case (.chinese, .deferred): "已延期"
         case (.chinese, .continued): "已延续"
         case (.chinese, .changed): "已变更"
         case (.chinese, .returnedToPool): "已回池"
@@ -234,6 +265,7 @@ extension AppCopy {
         case (.english, .scheduled): "Scheduled"
         case (.english, .completed): "Completed"
         case (.english, .unfinished): "Unfinished"
+        case (.english, .deferred): "Deferred"
         case (.english, .continued): "Continued"
         case (.english, .changed): "Changed"
         case (.english, .returnedToPool): "Returned to pool"

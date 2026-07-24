@@ -78,7 +78,7 @@ struct FuturePlanRow: View {
         HStack(spacing: 10) {
             PlanningGlyph(systemName: "calendar.badge.clock", color: Theme.navFuture)
             VStack(alignment: .leading, spacing: 0) {
-                MarkdownInlineText(item.definition.title)
+                MarkdownInlineText(store.copy.displayTaskTitle(item.definition.title))
                     .font(.noonmarkSystem(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                     .lineLimit(1)
@@ -100,6 +100,20 @@ struct FuturePlanRow: View {
                     accessibilityInstanceID: item.trace.id.description
                 )
                 .padding(.top, 3)
+                if let source = store.carryoverSource(for: item.trace) {
+                    Text(
+                        store.engine.carryoverKind(for: item.trace.id) == .deferral
+                            ? store.copy.deferredFromLink(
+                                store.displayDate(source.date)
+                            )
+                            : store.copy.continuedFromUnfinishedLink(
+                                store.displayDate(source.date)
+                            )
+                    )
+                    .font(.noonmarkSystem(size: 10.5, weight: .medium))
+                    .foregroundStyle(Theme.text3)
+                    .padding(.top, 3)
+                }
             }
             Spacer()
             if selected {

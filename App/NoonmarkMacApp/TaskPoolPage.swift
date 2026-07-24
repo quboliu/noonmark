@@ -72,7 +72,7 @@ struct TaskPoolPage: View {
         let items = tasks.map { task in
             TaskCollectionPresentationItem(
                 id: task.chain.id.description,
-                title: task.definition.title,
+                title: store.copy.displayTaskTitle(task.definition.title),
                 time: task.definition.createdAt,
                 category: store.currentClassification(for: task.chain.id)?.category?
                     .taskCollectionCategoryPresentation
@@ -172,7 +172,7 @@ struct PoolTaskRow: View {
         )
         HStack(spacing: 10) {
             PoolTaskPlaceholderGlyph()
-            MarkdownInlineText(task.definition.title)
+            MarkdownInlineText(store.copy.displayTaskTitle(task.definition.title))
                 .font(.noonmarkSystem(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.text1)
                 .lineLimit(1)
@@ -180,7 +180,9 @@ struct PoolTaskRow: View {
                 .background {
                     AppE2EViewAnchor(
                         identifier: e2eNamespace.titleIdentifier,
-                        verificationText: task.definition.title
+                        verificationText: store.copy.displayTaskTitle(
+                            task.definition.title
+                        )
                     )
                 }
             if let classification = store.currentClassification(for: task.chain.id) {

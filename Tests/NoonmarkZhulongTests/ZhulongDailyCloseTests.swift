@@ -77,7 +77,7 @@ final class ZhulongDailyCloseTests: XCTestCase {
         XCTAssertEqual(snapshot.counts.total, 0)
         XCTAssertEqual(snapshot.counts.completed, 0)
         XCTAssertEqual(snapshot.counts.unfinished, 0)
-        XCTAssertEqual(snapshot.counts.continued, 0)
+        XCTAssertEqual(snapshot.counts.deferred, 0)
         XCTAssertEqual(snapshot.counts.changed, 0)
         XCTAssertEqual(snapshot.counts.returnedToPool, 0)
         XCTAssertEqual(snapshot.counts.abandoned, 0)
@@ -305,7 +305,7 @@ final class ZhulongDailyCloseTests: XCTestCase {
             total: 1,
             completed: 0,
             unfinished: 0,
-            continued: 0,
+            deferred: 0,
             changed: 0,
             returnedToPool: 0,
             abandoned: 0,
@@ -341,7 +341,7 @@ final class ZhulongDailyCloseTests: XCTestCase {
             total: 2,
             completed: 0,
             unfinished: 0,
-            continued: 0,
+            deferred: 0,
             changed: 0,
             returnedToPool: 0,
             abandoned: 0,
@@ -409,7 +409,7 @@ final class ZhulongDailyCloseTests: XCTestCase {
     private func statusCountSum(_ counts: ZhulongDailyCloseCounts) -> Int {
         counts.completed +
             counts.unfinished +
-            counts.continued +
+            counts.deferred +
             counts.changed +
             counts.returnedToPool +
             counts.abandoned +

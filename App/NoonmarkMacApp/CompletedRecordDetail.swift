@@ -26,7 +26,7 @@ struct CompletedRecordDetail: View {
                 })
             })
             DetailPrimaryText {
-                DetailTitleRow(item.definition.title)
+                DetailTitleRow(store.copy.displayTaskTitle(item.definition.title))
             } description: {
                 DetailDescriptionBlock(
                     text: Binding(
@@ -177,7 +177,11 @@ struct CompletedSubtaskDetail: View {
             }
 
             CompletionSummaryCard(items: [
-                CompletionSummaryItem(label: store.copy.parentTaskTitle, value: record.parentDefinition.title, color: Theme.text2),
+                CompletionSummaryItem(
+                    label: store.copy.parentTaskTitle,
+                    value: store.copy.displayTaskTitle(record.parentDefinition.title),
+                    color: Theme.text2
+                ),
                 CompletionSummaryItem(
                     label: store.copy.difficultyTitle,
                     value: store.copy.subtaskDifficulty(record.subtask.difficulty),
@@ -197,7 +201,9 @@ struct CompletedSubtaskDetail: View {
 
             DetailSection(store.copy.parentTaskTitle) {
                 VStack(alignment: .leading, spacing: 7) {
-                    MarkdownInlineText(record.parentDefinition.title)
+                    MarkdownInlineText(
+                        store.copy.displayTaskTitle(record.parentDefinition.title)
+                    )
                         .font(.noonmarkSystem(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.text1)
                         .lineLimit(2)

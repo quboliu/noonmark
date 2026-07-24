@@ -63,6 +63,25 @@ struct FuturePlanDetail: View {
             .foregroundStyle(Theme.text3)
             .lineLimit(1)
 
+            if let source = store.carryoverSource(for: trace) {
+                Button {
+                    store.openCarryoverSource(from: trace)
+                } label: {
+                    Text(
+                        store.engine.carryoverKind(for: trace.id) == .deferral
+                            ? store.copy.deferredFromLink(
+                                store.displayDate(source.date)
+                            )
+                            : store.copy.continuedFromUnfinishedLink(
+                                store.displayDate(source.date)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+                .font(.noonmarkSystem(size: 11, weight: .medium))
+                .foregroundStyle(Theme.accent)
+            }
+
             Notice(text: store.copy.futurePlanNotice, tone: .locked)
 
             TaskClassificationDetailSection(

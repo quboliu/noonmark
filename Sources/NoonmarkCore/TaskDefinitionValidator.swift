@@ -42,8 +42,7 @@ public enum TaskDefinitionValidator {
         let normalizedTitle = definition.title.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
-        guard normalizedTitle.isEmpty == false,
-              normalizedTitle == definition.title
+        guard normalizedTitle == definition.title
         else {
             return .invalidTitle(definition.id)
         }

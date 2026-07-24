@@ -122,7 +122,7 @@ final class NoonmarkEngineTests: XCTestCase {
             now: now
         )
         try engine.settleDays(upTo: day2, now: now)
-        let currentTraceID = try engine.continueTrace(
+        let currentTraceID = try engine.continueUnfinishedTrace(
             traceID: historicalTraceID,
             targetDate: day2,
             today: day2,
@@ -154,6 +154,34 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.traces[currentTraceID]?.definitionID, currentDefinitionID)
         XCTAssertEqual(engine.definitions[currentDefinitionID]?.title, "再次修改当前标题")
         XCTAssertEqual(engine.definitions.count, definitionCount)
+    }
+
+    func testExistingTaskTitleCanBeClearedButAnUntitledTaskCannotBeCreated() throws {
+        let engine = NoonmarkEngine()
+
+        XCTAssertThrowsError(
+            try engine.createPoolTask(title: " \n ", now: now)
+        ) { error in
+            XCTAssertEqual(error as? NoonmarkError, .invalidTitle)
+        }
+
+        let chainID = try engine.createPoolTask(title: "可清空标题", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.saveTaskTitleInput(
+            chainID: chainID,
+            title: "",
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+
+        let trace = try XCTUnwrap(engine.traces[traceID])
+        XCTAssertEqual(engine.definitions[trace.definitionID]?.title, "")
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
     }
 
     func testReturnedPoolNotesKeepStableOwnershipAcrossRenameAndReschedule() throws {
@@ -322,7 +350,7 @@ final class NoonmarkEngineTests: XCTestCase {
             now: now
         )
         try engine.settleDays(upTo: day2, now: now.addingTimeInterval(1))
-        let continuedTraceID = try engine.continueTrace(
+        let continuedTraceID = try engine.continueUnfinishedTrace(
             traceID: sourceTraceID,
             targetDate: day2,
             today: day2,
@@ -371,33 +399,347 @@ final class NoonmarkEngineTests: XCTestCase {
         let chainID = try engine.createPoolTask(title: "延续测试", now: now)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
         try engine.settleDays(upTo: day2, now: now)
+        let historicalSource = try XCTUnwrap(engine.traces[traceID])
 
-        let continuedID = try engine.continueTrace(traceID: traceID, targetDate: day2, today: day2, now: now)
+        let continuedID = try engine.continueUnfinishedTrace(
+            traceID: traceID,
+            targetDate: day2,
+            today: day2,
+            now: now.addingTimeInterval(1)
+        )
 
-        XCTAssertEqual(engine.traces[traceID]?.status, .continued)
+        XCTAssertEqual(engine.traces[traceID], historicalSource)
         XCTAssertEqual(engine.traces[continuedID]?.status, .pending)
         XCTAssertEqual(engine.traces[continuedID]?.continuationSeq, 1)
-        XCTAssertEqual(engine.traces[continuedID]?.continuedFromTraceID, traceID)
+        XCTAssertEqual(engine.traces[continuedID]?.carriedFromTraceID, traceID)
 
         let poolItem = try XCTUnwrap(engine.unfinishedPool().first)
         XCTAssertEqual(poolItem.unfinishedTraces.map(\.id), [traceID])
         XCTAssertEqual(poolItem.activeTrace?.id, continuedID)
         XCTAssertTrue(poolItem.isContinuedPending)
 
-        XCTAssertThrowsError(try engine.continueTrace(traceID: traceID, targetDate: day3, today: day2, now: now))
+        XCTAssertThrowsError(
+            try engine.continueUnfinishedTrace(
+                traceID: traceID,
+                targetDate: day3,
+                today: day2,
+                now: now.addingTimeInterval(2)
+            )
+        )
     }
 
-    func testCurrentPendingContinuationDoesNotEnterUnfinishedPool() throws {
+    func testContinuedFutureTargetCanReturnToPoolWithAnExplicitPoolLocation() throws {
         let engine = NoonmarkEngine()
-        let chainID = try engine.createPoolTask(title: "主动延续当前任务", now: now)
+        let chainID = try engine.createPoolTask(title: "延续后回池", now: now)
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.settleDays(
+            upTo: day2,
+            now: now.addingTimeInterval(2)
+        )
+        let targetTraceID = try engine.continueUnfinishedTrace(
+            traceID: sourceTraceID,
+            targetDate: day3,
+            today: day2,
+            now: now.addingTimeInterval(3)
+        )
+
+        try engine.returnToPool(
+            traceID: targetTraceID,
+            today: day2,
+            now: now.addingTimeInterval(4)
+        )
+
+        XCTAssertEqual(engine.traces[sourceTraceID]?.status, .unfinished)
+        XCTAssertEqual(engine.traces[targetTraceID]?.status, .cancelledDraft)
+        XCTAssertEqual(
+            engine.traces[targetTraceID]?.carriedFromTraceID,
+            sourceTraceID
+        )
+        XCTAssertEqual(engine.taskPool().map(\.chain.id), [chainID])
+        let unfinished = try XCTUnwrap(engine.unfinishedPool().first)
+        XCTAssertTrue(unfinished.isInTaskPool)
+        XCTAssertNil(unfinished.activeTrace)
+        XCTAssertEqual(
+            unfinished.actionPlan,
+            [
+                .openTaskPool(chainID),
+                .abandonPooledChain(chainID),
+            ]
+        )
+        XCTAssertThrowsError(
+            try engine.continueUnfinishedTrace(
+                traceID: sourceTraceID,
+                targetDate: day3,
+                today: day2,
+                now: now.addingTimeInterval(5)
+            )
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testCurrentPendingDeferralIsDistinctFromContinuation() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "主动延期当前任务", now: now)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
 
-        let continuedID = try engine.continueTrace(traceID: traceID, targetDate: day2, today: day1, now: now)
+        let deferredID = try engine.deferCurrentTrace(
+            traceID: traceID,
+            targetDate: day2,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
 
-        XCTAssertEqual(engine.traces[traceID]?.status, .continued)
-        XCTAssertNil(engine.traces[traceID]?.settledAt)
-        XCTAssertEqual(engine.traces[continuedID]?.status, .pending)
+        XCTAssertEqual(engine.traces[traceID]?.status, .deferred)
+        XCTAssertEqual(
+            engine.traces[traceID]?.settledAt,
+            now.addingTimeInterval(1)
+        )
+        XCTAssertEqual(engine.traces[deferredID]?.status, .pending)
+        XCTAssertEqual(engine.traces[deferredID]?.continuationSeq, 0)
+        XCTAssertEqual(engine.traces[deferredID]?.carriedFromTraceID, traceID)
         XCTAssertTrue(engine.unfinishedPool().isEmpty)
+    }
+
+    func testDeferredFutureTargetCanReturnToPoolWithoutRewritingSourceHistory() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "延期后回池",
+            descriptionText: "来源描述",
+            now: now
+        )
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let sourceSubtaskID = try engine.addSubtask(
+            traceID: sourceTraceID,
+            title: "来源子任务",
+            now: now.addingTimeInterval(2)
+        )
+        let targetTraceID = try engine.deferCurrentTrace(
+            traceID: sourceTraceID,
+            targetDate: day3,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+        let targetSubtaskID = try XCTUnwrap(
+            engine.subtasks.values.first {
+                $0.traceID == targetTraceID
+                    && $0.carriedFromSubtaskID == sourceSubtaskID
+            }?.id
+        )
+        try engine.updateTraceText(
+            traceID: targetTraceID,
+            descriptionText: "未来目标的最新描述",
+            today: day1,
+            now: now.addingTimeInterval(4)
+        )
+        try engine.updateSubtaskTitle(
+            targetSubtaskID,
+            title: "未来目标的最新子任务",
+            today: day1,
+            now: now.addingTimeInterval(5)
+        )
+
+        try engine.returnToPool(
+            traceID: targetTraceID,
+            today: day1,
+            now: now.addingTimeInterval(6)
+        )
+
+        XCTAssertEqual(engine.traces[sourceTraceID]?.status, .deferred)
+        XCTAssertEqual(engine.traces[targetTraceID]?.status, .cancelledDraft)
+        XCTAssertEqual(
+            engine.traces[targetTraceID]?.carriedFromTraceID,
+            sourceTraceID
+        )
+        XCTAssertEqual(engine.traces[targetTraceID]?.draftCancelledOn, day1)
+        XCTAssertFalse(
+            engine.canWithdrawDeferral(
+                sourceTraceID: sourceTraceID,
+                today: day1
+            )
+        )
+        XCTAssertTrue(engine.futurePlans(today: day1).isEmpty)
+        XCTAssertEqual(engine.taskPool().map(\.chain.id), [chainID])
+        let returnedDefinition = try XCTUnwrap(engine.taskPool().first?.definition)
+        XCTAssertEqual(returnedDefinition.descriptionText, "未来目标的最新描述")
+        XCTAssertEqual(
+            returnedDefinition.plannedSubtasks.map(\.title),
+            ["未来目标的最新子任务"]
+        )
+        XCTAssertEqual(
+            try engine.taskTrail(chainID: chainID).map(\.kind),
+            [
+                .createdInPool,
+                .scheduled,
+                .scheduled,
+                .deferred,
+                .returnedToPool,
+            ]
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+
+        let rescheduledTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day2,
+            today: day1,
+            now: now.addingTimeInterval(7)
+        )
+        XCTAssertEqual(engine.traces[rescheduledTraceID]?.status, .pending)
+        XCTAssertEqual(
+            engine.subtasks.values
+                .filter { $0.traceID == rescheduledTraceID }
+                .map(\.title),
+            ["未来目标的最新子任务"]
+        )
+    }
+
+    func testCurrentDayDeferralCanBeWithdrawnWithoutLosingTargetEdits() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "可撤回延期", now: now)
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let sourceSubtaskID = try engine.addSubtask(
+            traceID: sourceTraceID,
+            title: "原子任务",
+            now: now.addingTimeInterval(2)
+        )
+        let targetTraceID = try engine.deferCurrentTrace(
+            traceID: sourceTraceID,
+            targetDate: day2,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+        let carriedTargetSubtaskID = try XCTUnwrap(
+            engine.subtasks.values.first {
+                $0.traceID == targetTraceID
+                    && $0.carriedFromSubtaskID == sourceSubtaskID
+            }?.id
+        )
+        try engine.updateSubtaskTitle(
+            carriedTargetSubtaskID,
+            title: "目标日已改名",
+            today: day1,
+            now: now.addingTimeInterval(4)
+        )
+        let newTargetSubtaskID = try engine.addSubtask(
+            traceID: targetTraceID,
+            title: "目标日新增",
+            now: now.addingTimeInterval(5)
+        )
+
+        try engine.withdrawDeferral(
+            sourceTraceID: sourceTraceID,
+            today: day1,
+            now: now.addingTimeInterval(6)
+        )
+
+        XCTAssertEqual(engine.traces[sourceTraceID]?.status, .pending)
+        XCTAssertNil(engine.traces[sourceTraceID]?.settledAt)
+        XCTAssertNil(engine.traces[sourceTraceID]?.pinOrder)
+        XCTAssertEqual(engine.traces[targetTraceID]?.status, .cancelledDraft)
+        XCTAssertEqual(engine.subtasks[sourceSubtaskID]?.status, .pending)
+        XCTAssertEqual(engine.subtasks[sourceSubtaskID]?.title, "目标日已改名")
+        XCTAssertEqual(engine.subtasks[carriedTargetSubtaskID]?.status, .pending)
+        XCTAssertEqual(engine.subtasks[carriedTargetSubtaskID]?.traceID, targetTraceID)
+        XCTAssertEqual(engine.subtasks[newTargetSubtaskID]?.traceID, sourceTraceID)
+        XCTAssertEqual(engine.subtasks[newTargetSubtaskID]?.status, .pending)
+        XCTAssertTrue(engine.futurePlans(today: day1).isEmpty)
+        XCTAssertEqual(engine.getDayTodo(date: day1).traces.map(\.id), [sourceTraceID])
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testDeferralCannotBeWithdrawnAfterSourceDayEnds() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "过期延期", now: now)
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        _ = try engine.deferCurrentTrace(
+            traceID: sourceTraceID,
+            targetDate: day2,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.settleDays(upTo: day2, now: now.addingTimeInterval(2))
+
+        XCTAssertThrowsError(
+            try engine.withdrawDeferral(
+                sourceTraceID: sourceTraceID,
+                today: day2,
+                now: now.addingTimeInterval(3)
+            )
+        )
+    }
+
+    func testDayTodoPinQueuePrecedesNormalOrderAndTerminalResultsSink() throws {
+        let engine = NoonmarkEngine()
+        let firstChain = try engine.createPoolTask(title: "第一项", now: now)
+        let secondChain = try engine.createPoolTask(title: "第二项", now: now)
+        let thirdChain = try engine.createPoolTask(title: "第三项", now: now)
+        let first = try engine.scheduleFromPool(
+            chainID: firstChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let second = try engine.scheduleFromPool(
+            chainID: secondChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        let third = try engine.scheduleFromPool(
+            chainID: thirdChain,
+            date: day1,
+            today: day1,
+            now: now
+        )
+
+        try engine.pinDayTrace(second, today: day1, now: now.addingTimeInterval(1))
+        try engine.pinDayTrace(first, today: day1, now: now.addingTimeInterval(2))
+
+        XCTAssertEqual(engine.traces[second]?.pinOrder, 1)
+        XCTAssertEqual(engine.traces[first]?.pinOrder, 2)
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1, sort: .title).traces.map(\.id),
+            [second, first, third]
+        )
+
+        try engine.markCompleted(
+            traceID: second,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertNil(engine.traces[second]?.pinOrder)
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1, sort: .title).traces.map(\.id),
+            [first, third, second]
+        )
+
+        try engine.unpinDayTrace(first, today: day1, now: now.addingTimeInterval(4))
+        try engine.pinDayTrace(third, today: day1, now: now.addingTimeInterval(5))
+        XCTAssertEqual(engine.traces[third]?.pinOrder, 1)
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1, sort: .title).traces.map(\.id),
+            [third, first, second]
+        )
     }
 
     func testCompletedContinuationRemovesChainFromUnfinishedPoolAndShowsTrajectory() throws {
@@ -405,9 +747,9 @@ final class NoonmarkEngineTests: XCTestCase {
         let chainID = try engine.createPoolTask(title: "完成后移出未完成池", now: now)
         let traceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
         try engine.settleDays(upTo: day2, now: now)
-        let day2TraceID = try engine.continueTrace(traceID: traceID, targetDate: day2, today: day2, now: now)
+        let day2TraceID = try engine.continueUnfinishedTrace(traceID: traceID, targetDate: day2, today: day2, now: now)
         try engine.settleDays(upTo: day3, now: now)
-        let completedTraceID = try engine.continueTrace(traceID: day2TraceID, targetDate: day3, today: day3, now: now)
+        let completedTraceID = try engine.continueUnfinishedTrace(traceID: day2TraceID, targetDate: day3, today: day3, now: now)
 
         try engine.markCompleted(traceID: completedTraceID, today: day3, now: now)
 
@@ -926,7 +1268,7 @@ final class NoonmarkEngineTests: XCTestCase {
             .pending,
             .completed,
             .unfinished,
-            .continued,
+            .deferred,
             .changed,
             .returnedToPool,
             .abandoned
@@ -1052,7 +1394,7 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.subtasks[openSubtaskID]?.status, .unfinished)
         XCTAssertEqual(engine.subtasks[openSubtaskID]?.updatedAt, settledAt)
 
-        let continuedID = try engine.continueTrace(
+        let continuedID = try engine.continueUnfinishedTrace(
             traceID: traceID,
             targetDate: day2,
             today: day2,
@@ -1061,9 +1403,10 @@ final class NoonmarkEngineTests: XCTestCase {
         let copied = engine.subtasks.values.filter { $0.traceID == continuedID }
 
         XCTAssertEqual(copied.map(\.title), ["未完成子任务"])
-        XCTAssertEqual(engine.subtasks[openSubtaskID]?.status, .continued)
-        XCTAssertEqual(engine.subtasks[openSubtaskID]?.updatedAt, continuedAt)
+        XCTAssertEqual(engine.subtasks[openSubtaskID]?.status, .unfinished)
+        XCTAssertEqual(engine.subtasks[openSubtaskID]?.updatedAt, settledAt)
         XCTAssertEqual(copied.map(\.updatedAt), [continuedAt])
+        XCTAssertEqual(copied.map(\.carriedFromSubtaskID), [openSubtaskID])
     }
 
     func testContinuationRejectsSameDayAndNonFrontierSources() throws {
@@ -1077,7 +1420,7 @@ final class NoonmarkEngineTests: XCTestCase {
         )
 
         XCTAssertThrowsError(
-            try engine.continueTrace(
+            try engine.continueUnfinishedTrace(
                 traceID: day1TraceID,
                 targetDate: day1,
                 today: day1,
@@ -1086,7 +1429,7 @@ final class NoonmarkEngineTests: XCTestCase {
         )
 
         try engine.settleDays(upTo: day2, now: now.addingTimeInterval(2))
-        let day2TraceID = try engine.continueTrace(
+        let day2TraceID = try engine.continueUnfinishedTrace(
             traceID: day1TraceID,
             targetDate: day2,
             today: day2,
@@ -1095,7 +1438,7 @@ final class NoonmarkEngineTests: XCTestCase {
         try engine.settleDays(upTo: day3, now: now.addingTimeInterval(4))
 
         XCTAssertThrowsError(
-            try engine.continueTrace(
+            try engine.continueUnfinishedTrace(
                 traceID: day1TraceID,
                 targetDate: day3,
                 today: day3,
@@ -1236,15 +1579,15 @@ final class NoonmarkEngineTests: XCTestCase {
 
         try engine.completeSubtask(designSubtaskID, today: day1, now: now)
         try engine.settleDays(upTo: day2, now: now)
-        let day2TraceID = try engine.continueTrace(traceID: day1TraceID, targetDate: day2, today: day2, now: now)
+        let day2TraceID = try engine.continueUnfinishedTrace(traceID: day1TraceID, targetDate: day2, today: day2, now: now)
         let copiedSSO = try XCTUnwrap(engine.subtasks.values.first { $0.traceID == day2TraceID })
 
         try engine.completeSubtask(copiedSSO.id, today: day2, now: now)
         try engine.markCompleted(traceID: day2TraceID, today: day2, now: now)
 
-        XCTAssertEqual(engine.subtasks[ssoSubtaskID]?.status, .continued)
+        XCTAssertEqual(engine.subtasks[ssoSubtaskID]?.status, .unfinished)
         XCTAssertEqual(copiedSSO.lineageID, engine.subtasks[ssoSubtaskID]?.lineageID)
-        XCTAssertEqual(copiedSSO.continuedFromSubtaskID, ssoSubtaskID)
+        XCTAssertEqual(copiedSSO.carriedFromSubtaskID, ssoSubtaskID)
 
         let completedItem = try XCTUnwrap(engine.completedPool().first)
         let subtaskTrajectories = completedItem.trajectory.subtaskTrajectories
@@ -1298,7 +1641,7 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.chains[chainID]?.state, .active)
         XCTAssertEqual(reenabledTraceID, traceID)
         XCTAssertEqual(engine.traces[traceID]?.status, .unfinished)
-        XCTAssertNil(engine.traces[traceID]?.continuedFromTraceID)
+        XCTAssertNil(engine.traces[traceID]?.carriedFromTraceID)
         XCTAssertEqual(engine.traces.count, 1)
         XCTAssertEqual(engine.subtasks[subtaskID]?.status, .pending)
         XCTAssertNil(engine.unfinishedPool().first?.activeTrace)
@@ -1328,7 +1671,7 @@ final class NoonmarkEngineTests: XCTestCase {
                 .abandonChain(historicalTraceID)
             ]
         )
-        let activeTraceID = try engine.continueTrace(
+        let activeTraceID = try engine.continueUnfinishedTrace(
             traceID: historicalTraceID,
             targetDate: day2,
             today: day2,
@@ -1345,7 +1688,7 @@ final class NoonmarkEngineTests: XCTestCase {
         )
 
         XCTAssertEqual(engine.chains[chainID]?.state, .abandoned)
-        XCTAssertEqual(engine.traces[historicalTraceID]?.status, .continued)
+        XCTAssertEqual(engine.traces[historicalTraceID]?.status, .unfinished)
         XCTAssertEqual(engine.traces[activeTraceID]?.status, .abandoned)
         XCTAssertNil(engine.unfinishedPool().first?.activeTrace)
         XCTAssertEqual(
@@ -1365,7 +1708,7 @@ final class NoonmarkEngineTests: XCTestCase {
 
         XCTAssertEqual(reactivatedTraceID, activeTraceID)
         XCTAssertEqual(engine.chains[chainID]?.state, .active)
-        XCTAssertEqual(engine.traces[historicalTraceID]?.status, .continued)
+        XCTAssertEqual(engine.traces[historicalTraceID]?.status, .unfinished)
         XCTAssertEqual(engine.traces[activeTraceID]?.status, .pending)
         XCTAssertEqual(engine.traces.count, 2)
         XCTAssertEqual(engine.unfinishedPool().first?.activeTrace?.id, activeTraceID)
@@ -1898,7 +2241,7 @@ final class NoonmarkEngineTests: XCTestCase {
                 settledAt: terminalAt
             ),
             snapshot(
-                status: .continued,
+                status: .deferred,
                 completedAt: nil,
                 settledAt: terminalAt
             ),
@@ -1946,7 +2289,7 @@ final class NoonmarkEngineTests: XCTestCase {
                 settledAt: nil
             ),
             snapshot(
-                status: .continued,
+                status: .deferred,
                 completedAt: terminalAt,
                 settledAt: terminalAt
             ),
@@ -2014,7 +2357,7 @@ final class NoonmarkEngineTests: XCTestCase {
         missingTraceDefinition.traces[0].definitionID = TaskDefinitionID()
 
         var missingContinuedFromTrace = baseline
-        missingContinuedFromTrace.traces[0].continuedFromTraceID = DayTraceID()
+        missingContinuedFromTrace.traces[0].carriedFromTraceID = DayTraceID()
 
         var missingTraceDay = baseline
         missingTraceDay.traces[0].date = day2
@@ -2055,7 +2398,7 @@ final class NoonmarkEngineTests: XCTestCase {
             duplicatePosition.subtasks[0].position
 
         var missingContinuationSource = baseline
-        missingContinuationSource.subtasks[0].continuedFromSubtaskID =
+        missingContinuationSource.subtasks[0].carriedFromSubtaskID =
             SubtaskID()
 
         for candidate in [
@@ -2433,7 +2776,7 @@ final class NoonmarkEngineTests: XCTestCase {
 
         try engine.setManualProgress(traceID: day1TraceID, percent: 35, today: day1, now: now)
         try engine.settleDays(upTo: day2, now: now)
-        let day2TraceID = try engine.continueTrace(traceID: day1TraceID, targetDate: day2, today: day2, now: now)
+        let day2TraceID = try engine.continueUnfinishedTrace(traceID: day1TraceID, targetDate: day2, today: day2, now: now)
 
         XCTAssertEqual(engine.traceProgress(for: day2TraceID).floorPercent, 35)
         XCTAssertEqual(engine.traceProgress(for: day2TraceID).percent, 35)
@@ -2993,7 +3336,7 @@ final class NoonmarkEngineTests: XCTestCase {
             today: day1,
             now: now
         )
-        let currentTraceID = try engine.continueTrace(
+        let currentTraceID = try engine.deferCurrentTrace(
             traceID: firstTraceID,
             targetDate: day2,
             today: day1,
@@ -3111,7 +3454,7 @@ final class NoonmarkEngineTests: XCTestCase {
         )
     }
 
-    func testPendingDayTraceReorderPreservesTerminalPriorityFact() throws {
+    func testPendingDayTraceReorderPreservesTerminalPriorityFactAndKeepsResultAtBottom() throws {
         let engine = NoonmarkEngine()
         let firstChain = try engine.createPoolTask(title: "第一项", now: now)
         let completedChain = try engine.createPoolTask(title: "完成项", now: now)
@@ -3150,11 +3493,11 @@ final class NoonmarkEngineTests: XCTestCase {
 
         XCTAssertEqual(
             engine.getDayTodo(date: day1).traces.map(\.id),
-            [third, completed, first]
+            [third, first, completed]
         )
         XCTAssertEqual(
             engine.getDayTodo(date: day1).traces.map(\.priority),
-            [1, 2, 3]
+            [1, 3, 2]
         )
         XCTAssertEqual(engine.traces[completed], completedFact)
 
@@ -3167,11 +3510,11 @@ final class NoonmarkEngineTests: XCTestCase {
 
         XCTAssertEqual(
             engine.getDayTodo(date: day1).traces.map(\.id),
-            [first, completed, third]
+            [first, third, completed]
         )
         XCTAssertEqual(
             engine.getDayTodo(date: day1).traces.map(\.priority),
-            [1, 2, 3]
+            [1, 3, 2]
         )
         XCTAssertEqual(engine.traces[completed], completedFact)
     }
@@ -3378,14 +3721,14 @@ final class NoonmarkEngineTests: XCTestCase {
         )
         try engine.settleDays(upTo: day2, now: now.addingTimeInterval(1))
 
-        let continuedID = try engine.continueTrace(
+        let continuedID = try engine.continueUnfinishedTrace(
             traceID: traceID,
             targetDate: day2,
             today: day1,
             now: now.addingTimeInterval(2)
         )
 
-        XCTAssertEqual(engine.traces[traceID]?.status, .continued)
+        XCTAssertEqual(engine.traces[traceID]?.status, .unfinished)
         XCTAssertEqual(engine.traces[continuedID]?.date, day2)
         XCTAssertEqual(engine.traces[continuedID]?.status, .pending)
     }

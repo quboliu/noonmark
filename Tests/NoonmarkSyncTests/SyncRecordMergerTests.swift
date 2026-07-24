@@ -2289,7 +2289,7 @@ final class SyncRecordMergerTests: XCTestCase {
             chainID: chainID,
             definitionID: definitionID,
             date: priorDay,
-            status: .continued,
+            status: .deferred,
             priority: 0,
             continuationSeq: 0,
             now: now,
@@ -2304,7 +2304,7 @@ final class SyncRecordMergerTests: XCTestCase {
             status: .changed,
             priority: 0,
             continuationSeq: 1,
-            continuedFromTraceID: old.id,
+            carriedFromTraceID: old.id,
             now: now.addingTimeInterval(2)
         )
         unrelated.changedToTraceID = targetID
@@ -2361,7 +2361,7 @@ final class SyncRecordMergerTests: XCTestCase {
             definitionID: definitionID,
             date: today,
             priority: 0,
-            continuedFromTraceID: secondID,
+            carriedFromTraceID: secondID,
             now: now
         )
         let second = DayTrace(
@@ -2370,7 +2370,7 @@ final class SyncRecordMergerTests: XCTestCase {
             definitionID: definitionID,
             date: today,
             priority: 1,
-            continuedFromTraceID: firstID,
+            carriedFromTraceID: firstID,
             now: now.addingTimeInterval(1)
         )
         let mapper = SyncRecordMapper()
@@ -2406,7 +2406,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let first = try traceClassificationEventEnvelope(
             id: "F5000000-0000-0000-0000-000000000001",
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             revision: 1,
             predecessorEventID: nil
         )
@@ -2455,7 +2455,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let first = try traceClassificationEventEnvelope(
             id: "77000000-0000-0000-0000-000000000002",
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             revision: 1,
             predecessorEventID: nil
         )
@@ -2521,7 +2521,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let envelope = try traceClassificationEventEnvelope(
             id: "78000000-0000-0000-0000-000000000001",
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             revision: 3,
             predecessorEventID: nil
         )
@@ -2555,7 +2555,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let first = try traceClassificationEventEnvelope(
             id: "79000000-0000-0000-0000-000000000001",
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             revision: 1,
             predecessorEventID: nil
         )
@@ -2598,7 +2598,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let rejectedParent = try traceClassificationEventEnvelope(
             id: "79100000-0000-0000-0000-000000000001",
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             revision: 1,
             predecessorEventID: nil
         )
@@ -2650,7 +2650,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let collisionA = try traceClassificationEventEnvelope(
             id: collisionID,
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             revision: 1,
             predecessorEventID: nil
         )
@@ -2681,7 +2681,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let first = try traceClassificationEventEnvelope(
             id: firstID.uuidString,
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             revision: 1,
             predecessorEventID: secondID
         )
@@ -2739,7 +2739,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let event = TraceClassificationSnapshot(
             id: uuid("7A000000-0000-0000-0000-000000000005"),
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             category: HistoricalCategoryValue(
                 id: category.id,
                 name: category.name,
@@ -2801,7 +2801,7 @@ final class SyncRecordMergerTests: XCTestCase {
         let event = TraceClassificationSnapshot(
             id: uuid("7B000000-0000-0000-0000-000000000005"),
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             category: nil,
             labels: [
                 HistoricalLabelValue(

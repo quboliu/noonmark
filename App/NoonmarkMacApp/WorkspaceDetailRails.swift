@@ -160,7 +160,9 @@ struct SidebarAnalysisModel {
                 signals: [
                     store.copy.recentPlanSignal(
                         date: plans.first.map { store.displayDate($0.trace.date) },
-                        title: plans.first?.definition.title
+                        title: plans.first.map {
+                            store.copy.displayTaskTitle($0.definition.title)
+                        }
                     ),
                     store.copy.futureDensitySignal(isDense: maxDayLoad >= 4)
                 ],
@@ -215,7 +217,9 @@ struct SidebarAnalysisModel {
                 signals: [
                     store.copy.recentCompletionSignal(
                         date: completed.first.map { store.displayDate($0.trace.date) },
-                        title: completed.first?.definition.title
+                        title: completed.first.map {
+                            store.copy.displayTaskTitle($0.definition.title)
+                        }
                     ),
                     store.copy.continuedCompletionSignal(continuedCompletions)
                 ],

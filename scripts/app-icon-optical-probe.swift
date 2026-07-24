@@ -226,6 +226,37 @@ private func validateSmall(path: String, expectedSize: Int) throws {
     )
 }
 
+private func validateLarge(path: String, expectedSize: Int) throws {
+    let image = try PixelImage(path: path)
+    try require(
+        image.width == expectedSize && image.height == expectedSize,
+        "large app icon has invalid dimensions: \(path)"
+    )
+
+    let result = metrics(for: image)
+    let canvasArea = Double(expectedSize * expectedSize)
+    let motifWidthRatio = Double(result.motifBounds.width) / Double(expectedSize)
+    let motifHeightRatio = Double(result.motifBounds.height) / Double(expectedSize)
+    let motifPixelRatio = Double(result.darkCount + result.orangeCount) / canvasArea
+
+    try require(result.motifBounds.isEmpty == false, "large app icon has no mark: \(path)")
+    try require(
+        (0.56...0.64).contains(motifWidthRatio)
+            && (0.58...0.65).contains(motifHeightRatio),
+        "large app icon mark occupancy is out of bounds: \(path)"
+    )
+    try require(
+        (0.09...0.13).contains(motifPixelRatio),
+        "large app icon mark is too light or too dense: \(path)"
+    )
+
+    let name = URL(fileURLWithPath: path).lastPathComponent
+    print(
+        "Large probe \(name): dark=\(result.darkCount) "
+            + "orange=\(result.orangeCount) motif=\(result.motifBounds)"
+    )
+}
+
 private func validateDistinct(leftPath: String, rightPath: String) throws {
     let left = try PixelImage(path: leftPath)
     let right = try PixelImage(path: rightPath)
@@ -295,6 +326,14 @@ do {
     while index < arguments.count {
         let flag = arguments[index]
         switch flag {
+        case "--large":
+            guard index + 2 < arguments.count,
+                  let size = Int(arguments[index + 2])
+            else {
+                throw ProbeError.invalidArguments("--large requires PATH SIZE")
+            }
+            try validateLarge(path: arguments[index + 1], expectedSize: size)
+            index += 3
         case "--small":
             guard index + 2 < arguments.count,
                   let size = Int(arguments[index + 2])

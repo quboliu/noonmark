@@ -531,7 +531,7 @@ struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
             upTo: today,
             now: try timeline.nextInstant()
         )
-        let activeTraceID = try store.engine.continueTrace(
+        let activeTraceID = try store.engine.continueUnfinishedTrace(
             traceID: historicalTraceID,
             targetDate: today,
             today: today,

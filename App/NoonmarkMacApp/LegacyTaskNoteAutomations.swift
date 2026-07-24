@@ -30,6 +30,7 @@ struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
     }
 
     private static let title = "E2E 附言编辑删除"
+    private static let originalEditedBody = "EDIT NOTE 7263"
     private static let editedBody = "VISIBLE NOTE 7263"
     private static let deletedBody = "GHOST NOTE 9184"
 
@@ -123,11 +124,13 @@ struct TaskNoteE2EAutomation: LaunchAutomationRunnable {
         store.addPoolTask()
         guard let chainID = store.selectedPoolChainID,
               let initialChain = store.engine.chains[chainID],
-              initialChain.activeNoteEntries.count == 1
+              initialChain.activeNoteEntries.isEmpty
         else {
             throw TaskNoteE2EAutomationError.failed("task-note fixture was not created in the task pool")
         }
 
+        store.detailNoteText = Self.originalEditedBody
+        store.appendPoolNote(chainID: chainID)
         store.detailNoteText = Self.deletedBody
         store.appendPoolNote(chainID: chainID)
         guard let chain = store.engine.chains[chainID],
@@ -253,6 +256,7 @@ struct TaskPoolNoteE2EAutomation: LaunchAutomationRunnable {
     }
 
     private static let title = "E2E 任务池附言编辑删除"
+    private static let originalEditedBody = "POOL EDIT NOTE 7263"
     private static let editedBody = "POOL VISIBLE NOTE 7263"
     private static let deletedBody = "POOL GHOST NOTE 9184"
 
@@ -337,13 +341,15 @@ struct TaskPoolNoteE2EAutomation: LaunchAutomationRunnable {
         store.addPoolTask()
         guard let chainID = store.selectedPoolChainID,
               let initialChain = store.engine.chains[chainID],
-              initialChain.activeNoteEntries.count == 1
+              initialChain.activeNoteEntries.isEmpty
         else {
             throw TaskPoolNoteE2EAutomationError.failed(
                 "task-pool note fixture was not created"
             )
         }
 
+        store.detailNoteText = Self.originalEditedBody
+        store.appendPoolNote(chainID: chainID)
         store.detailNoteText = Self.deletedBody
         store.appendPoolNote(chainID: chainID)
         guard let chain = store.engine.chains[chainID],

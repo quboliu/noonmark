@@ -31,7 +31,6 @@ enum TaskNoteE2EUIInteractionDriver {
         private let editedBody: String
         private let hasDurablyPersistedEditedBody: @MainActor () -> Bool
         private let resultURL: URL
-        private var actionMenuIdentity: AppViewTreeE2E.PresentationWindowIdentity?
 
         init(
             editedNoteID: TaskNoteEntryID,
@@ -172,33 +171,72 @@ enum TaskNoteE2EUIInteractionDriver {
         }
 
         private func openDeleteMenu() {
-            waitFor("删除目标的附言操作按钮") { [self] in
-                guard let button = element(identifier: deletedActionsIdentifier) else { return false }
-                return click(button)
-            } onSuccess: { [self] in
-                selectDeleteMenuItem()
+            Task { @MainActor [self] in
+                do {
+                    try await clearDeletedNoteThroughWindowServer()
+                    finish(with: "ok")
+                } catch {
+                    fail(error.localizedDescription)
+                }
             }
         }
 
-        private func selectDeleteMenuItem() {
-            waitFor("删除附言菜单项") { [self] in
-                guard let item = element(identifier: deletedMenuIdentifier),
-                      let identity = AppViewTreeE2E.mappedPresentationWindow(
-                          identifier: deletedMenuIdentifier
-                      )
-                else { return false }
-                actionMenuIdentity = identity
-                return click(item)
-            } onSuccess: { [self] in
-                waitFor("删除后的附言行消失") { [self] in
-                    guard let actionMenuIdentity else { return false }
-                    return AppViewTreeE2E.hasNoVisibleView(
-                        identifier: deletedEntryStateIdentifier
-                    )
-                        && AppViewTreeE2E.isPresentationWindowOpen(actionMenuIdentity) == false
-                } onSuccess: { [self] in
-                    finish(with: "ok")
+        private func clearDeletedNoteThroughWindowServer() async throws {
+            var body: NSView?
+            try await waitUntil("待清空的附言正文") {
+                body = self.element(identifier: self.deletedBodyIdentifier)
+                return body != nil
+            }
+            guard let body, let window = body.window else {
+                throw InteractionFailure.failed("待清空附言正文没有窗口坐标")
+            }
+            let input = try WindowServerInputDriver()
+            let resolveTarget: @MainActor () throws
+                -> WindowServerInputDriver.PointerCoordinate = {
+                guard let currentBody = self.element(
+                    identifier: self.deletedBodyIdentifier
+                ), currentBody === body,
+                currentBody.window === window,
+                window.isKeyWindow
+                else {
+                    throw InteractionFailure.failed("待清空附言在 mouseDown 前变化")
                 }
+                let frame = AppViewTreeE2E.frameInWindow(for: currentBody)
+                return try input.pointerCoordinate(
+                    windowPoint: NSPoint(x: frame.midX, y: frame.midY),
+                    in: window
+                )
+            }
+            try await input.postDoubleClick(
+                at: try resolveTarget(),
+                modifiers: [],
+                resolveTarget: resolveTarget
+            )
+
+            var textView: NSTextView?
+            try await waitUntil("待清空附言编辑器没有出现并聚焦") {
+                textView = self.element(
+                    identifier: self.deletedEditorIdentifier
+                ) as? NSTextView
+                return textView.map { window.firstResponder === $0 } == true
+            }
+            guard let textView else {
+                throw InteractionFailure.failed("待清空附言缺少原生 NSTextView")
+            }
+            try input.postKey(keyCode: 0, modifiers: .command)
+            try input.postKey(keyCode: 51)
+            try await waitUntil("Cmd+A Delete 没有清空附言编辑器") {
+                textView.string.isEmpty
+            }
+            guard let save = element(identifier: deletedSaveIdentifier),
+                  click(save)
+            else {
+                throw InteractionFailure.failed("空附言无法通过保存动作删除")
+            }
+            try await waitUntil("清空保存后的附言行没有消失") {
+                AppViewTreeE2E.hasNoVisibleView(
+                    identifier: self.deletedEntryStateIdentifier
+                )
             }
         }
 
@@ -290,8 +328,16 @@ enum TaskNoteE2EUIInteractionDriver {
             "detail.note.entry.state.\(deletedNoteID.description)"
         }
 
-        private var deletedMenuIdentifier: String {
-            "detail.note.delete.\(deletedNoteID.description)"
+        private var deletedBodyIdentifier: String {
+            "detail.note.body.\(deletedNoteID.description)"
+        }
+
+        private var deletedEditorIdentifier: String {
+            "detail.note.editor.\(deletedNoteID.description).input"
+        }
+
+        private var deletedSaveIdentifier: String {
+            "detail.note.save.\(deletedNoteID.description)"
         }
 
         private var editedSaveIdentifier: String {

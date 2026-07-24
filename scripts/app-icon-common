@@ -1,7 +1,7 @@
 # Shared manifest and renderer for the canonical Noonmark app icon assets.
 
 app_icon_resources_dir="App/NoonmarkMacApp/Resources"
-app_icon_source_png="${app_icon_resources_dir}/AppIcon-source.png"
+app_icon_source_svg="${app_icon_resources_dir}/AppIcon-source.svg"
 app_icon_master_png="${app_icon_resources_dir}/AppIcon-master.png"
 app_icon_iconset_dir="${app_icon_resources_dir}/AppIcon.iconset"
 app_icon_icns_path="${app_icon_resources_dir}/AppIcon.icns"
@@ -21,7 +21,7 @@ app_icon_representations=(
 )
 
 readonly app_icon_resources_dir
-readonly app_icon_source_png
+readonly app_icon_source_svg
 readonly app_icon_master_png
 readonly app_icon_iconset_dir
 readonly app_icon_icns_path
@@ -35,7 +35,7 @@ app_icon_render_optical_png() {
   local destination="$3"
   local raw_destination
 
-  raw_destination="${destination}.unprofiled.$$"
+  raw_destination="${destination}.unprofiled.$$.png"
   NOONMARK_APP_ICON_OPTICAL_SIZE="$optical_size" \
     NOONMARK_APP_ICON_SIZE="$size" \
     NOONMARK_APP_ICON_OUTPUT="$raw_destination" \
@@ -78,113 +78,12 @@ app_icon_render_png() {
   local destination="$2"
   local raw_destination
 
-  raw_destination="${destination}.unprofiled.$$"
-  NOONMARK_APP_ICON_SOURCE="$app_icon_source_png" \
-    NOONMARK_APP_ICON_SIZE="$size" \
-    NOONMARK_APP_ICON_OUTPUT="$raw_destination" \
-    swift - <<'SWIFT'
-import AppKit
-import CoreGraphics
-import Foundation
-
-enum RenderError: Error, CustomStringConvertible {
-  case missingEnvironment(String)
-  case invalidSize(String)
-  case unreadableSource(String)
-  case missingCGImage(String)
-  case missingContext
-  case missingOutputImage
-  case missingPNGData
-
-  var description: String {
-    switch self {
-    case .missingEnvironment(let name):
-      return "missing environment variable: \(name)"
-    case .invalidSize(let value):
-      return "invalid app icon render size: \(value)"
-    case .unreadableSource(let path):
-      return "unreadable app icon source: \(path)"
-    case .missingCGImage(let path):
-      return "app icon source has no CGImage representation: \(path)"
-    case .missingContext:
-      return "failed to create app icon bitmap context"
-    case .missingOutputImage:
-      return "failed to create app icon output image"
-    case .missingPNGData:
-      return "failed to encode app icon PNG"
-    }
-  }
-}
-
-func environment(_ name: String) throws -> String {
-  guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
-    throw RenderError.missingEnvironment(name)
-  }
-  return value
-}
-
-do {
-  let sourcePath = try environment("NOONMARK_APP_ICON_SOURCE")
-  let outputPath = try environment("NOONMARK_APP_ICON_OUTPUT")
-  let sizeValue = try environment("NOONMARK_APP_ICON_SIZE")
-  guard let pixels = Int(sizeValue), pixels > 0 else {
-    throw RenderError.invalidSize(sizeValue)
-  }
-  guard let image = NSImage(contentsOfFile: sourcePath) else {
-    throw RenderError.unreadableSource(sourcePath)
-  }
-  var proposedRect = CGRect(origin: .zero, size: image.size)
-  guard let source = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
-    throw RenderError.missingCGImage(sourcePath)
-  }
-
-  let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-  guard let context = CGContext(
-    data: nil,
-    width: pixels,
-    height: pixels,
-    bitsPerComponent: 8,
-    bytesPerRow: pixels * 4,
-    space: colorSpace,
-    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-  ) else {
-    throw RenderError.missingContext
-  }
-
-  let canvas = CGFloat(pixels)
-  let scale = canvas / 1024
-  let tileRect = CGRect(x: 100 * scale, y: 100 * scale, width: 824 * scale, height: 824 * scale)
-  let cornerRadius = 188 * scale
-  let tilePath = CGPath(roundedRect: tileRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
-
-  context.clear(CGRect(x: 0, y: 0, width: canvas, height: canvas))
-  context.interpolationQuality = .high
-  context.addPath(tilePath)
-  context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-  context.fillPath()
-  context.saveGState()
-  context.addPath(tilePath)
-  context.clip()
-  context.draw(source, in: tileRect)
-  context.restoreGState()
-  context.addPath(tilePath)
-  context.setStrokeColor(CGColor(red: 0.88, green: 0.86, blue: 0.82, alpha: 1))
-  context.setLineWidth(max(1, scale))
-  context.strokePath()
-
-  guard let output = context.makeImage() else {
-    throw RenderError.missingOutputImage
-  }
-  let representation = NSBitmapImageRep(cgImage: output)
-  guard let data = representation.representation(using: NSBitmapImageRep.FileType.png, properties: [:]) else {
-    throw RenderError.missingPNGData
-  }
-  try data.write(to: URL(fileURLWithPath: outputPath))
-} catch {
-  FileHandle.standardError.write("\(error)\n".data(using: .utf8)!)
-  exit(1)
-}
-SWIFT
+  raw_destination="${destination}.unprofiled.$$.png"
+  sips \
+    -s format png \
+    -z "$size" "$size" \
+    "$app_icon_source_svg" \
+    --out "$raw_destination" >/dev/null
 
   sips \
     -s format png \

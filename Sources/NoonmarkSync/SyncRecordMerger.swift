@@ -788,7 +788,7 @@ public struct SyncRecordMerger: Sendable {
             .day(trace.date),
             .dayTrace(trace.id)
         ]
-        if let sourceID = trace.continuedFromTraceID {
+        if let sourceID = trace.carriedFromTraceID {
             tokens.insert(.dayTrace(sourceID))
         }
         if let targetID = trace.changedToTraceID {
@@ -813,7 +813,7 @@ public struct SyncRecordMerger: Sendable {
             .dayTrace(subtask.traceID),
             .subtask(subtask.id)
         ]
-        if let sourceID = subtask.continuedFromSubtaskID {
+        if let sourceID = subtask.carriedFromSubtaskID {
             tokens.insert(.subtask(sourceID))
         }
         if let cancellationID = subtask.draftCancellationID {
@@ -1792,7 +1792,7 @@ public struct SyncRecordMerger: Sendable {
         var edges: Set<RecordDependencyEdge> = []
         for successor in records.indices {
             guard let trace = traces[successor] else { continue }
-            let dependencyIDs = [trace.continuedFromTraceID, trace.changedToTraceID]
+            let dependencyIDs = [trace.carriedFromTraceID, trace.changedToTraceID]
                 .compactMap { $0 }
             for dependencyID in dependencyIDs {
                 for predecessor in indicesByTraceID[dependencyID] ?? [] {
@@ -2234,7 +2234,7 @@ public struct SyncRecordMerger: Sendable {
         if snapshot.definitions[trace.definitionID] == nil {
             dependencies.append(.taskDefinition(trace.definitionID))
         }
-        if let sourceID = trace.continuedFromTraceID {
+        if let sourceID = trace.carriedFromTraceID {
             if snapshot.traces[sourceID] == nil {
                 dependencies.append(.dayTrace(sourceID))
             }
@@ -2344,7 +2344,7 @@ public struct SyncRecordMerger: Sendable {
             && pending.continuationSeq == historical.continuationSeq
             && pending.descriptionText == historical.descriptionText
             && pending.manualProgressPercent == historical.manualProgressPercent
-            && pending.continuedFromTraceID == historical.continuedFromTraceID
+            && pending.carriedFromTraceID == historical.carriedFromTraceID
             && pending.changedToTraceID == historical.changedToTraceID
             && pending.createdAt == historical.createdAt
     }
@@ -2389,7 +2389,7 @@ public struct SyncRecordMerger: Sendable {
             let isFutureDraftCancellation =
                 trace.date > draftCancelledOn
                     && trace.manualProgressPercent == nil
-                    && trace.continuedFromTraceID == nil
+                    && trace.carriedFromTraceID == nil
             return (isSnapshotUndoCancellation
                 || isFutureDraftCancellation)
                 && trace.completedAt == nil
@@ -2479,7 +2479,7 @@ public struct SyncRecordMerger: Sendable {
             && lhs.descriptionText == rhs.descriptionText
             && lhs.noteEntries == rhs.noteEntries
             && lhs.manualProgressPercent == rhs.manualProgressPercent
-            && lhs.continuedFromTraceID == rhs.continuedFromTraceID
+            && lhs.carriedFromTraceID == rhs.carriedFromTraceID
             && lhs.changedToTraceID == rhs.changedToTraceID
             && lhs.createdAt == rhs.createdAt
             && lhs.completedAt == rhs.completedAt
@@ -2594,7 +2594,7 @@ public struct SyncRecordMerger: Sendable {
         for subtask: Subtask,
         in snapshot: SnapshotIndex
     ) -> SubtaskID? {
-        guard let sourceID = subtask.continuedFromSubtaskID else {
+        guard let sourceID = subtask.carriedFromSubtaskID else {
             return nil
         }
         return snapshot.subtasks[sourceID] == nil ? sourceID : nil

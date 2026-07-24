@@ -567,7 +567,15 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
             let currentID = try makeTrace(title: "E2E 当前待完成", date: today, today: today, store: store)
             try assertActions(
                 store.contextMenuActions(for: try trace(currentID, in: store)),
-                [.markComplete, .continueTo, .changeToNewTask, .returnToPool, .abandonChain, .deleteNewCurrentDayTask],
+                [
+                    .markComplete,
+                    .pinToTop,
+                    .deferTo,
+                    .changeToNewTask,
+                    .returnToPool,
+                    .abandonChain,
+                    .deleteNewCurrentDayTask,
+                ],
                 "current pending"
             )
 
@@ -575,7 +583,14 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
             _ = try store.engine.addSubtask(traceID: currentWithSubtasksID, title: "子任务")
             try assertActions(
                 store.contextMenuActions(for: try trace(currentWithSubtasksID, in: store)),
-                [.continueTo, .changeToNewTask, .returnToPool, .abandonChain, .deleteNewCurrentDayTask],
+                [
+                    .pinToTop,
+                    .deferTo,
+                    .changeToNewTask,
+                    .returnToPool,
+                    .abandonChain,
+                    .deleteNewCurrentDayTask,
+                ],
                 "current pending with subtasks"
             )
 
@@ -610,7 +625,8 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
                 ),
                 [
                     .markComplete,
-                    .continueTo,
+                    .pinToTop,
+                    .deferTo,
                     .changeToNewTask,
                     .returnToPool,
                     .abandonChain,
@@ -641,6 +657,25 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
                 "current completed"
             )
 
+            let deferredSourceID = try makeTrace(
+                title: "E2E 当前已延期",
+                date: today,
+                today: today,
+                store: store
+            )
+            _ = try store.engine.deferCurrentTrace(
+                traceID: deferredSourceID,
+                targetDate: future,
+                today: today
+            )
+            try assertActions(
+                store.contextMenuActions(
+                    for: try trace(deferredSourceID, in: store)
+                ),
+                [.withdrawDeferral],
+                "current deferred"
+            )
+
             let historicalUnfinishedID = try makeTrace(title: "E2E 历史未完成", date: past, today: past, store: store)
             let historicalCompletedID = try makeTrace(title: "E2E 历史已完成", date: past, today: past, store: store)
             try store.engine.markCompleted(traceID: historicalCompletedID, today: past)
@@ -659,7 +694,7 @@ struct ContextMenuActionsE2EAutomation: LaunchAutomationRunnable {
             let futureID = try makeTrace(title: "E2E 未来待完成", date: future, today: today, store: store)
             try assertActions(
                 store.contextMenuActions(for: try trace(futureID, in: store)),
-                [.reschedule, .returnToPool],
+                [.pinToTop, .reschedule, .returnToPool],
                 "future pending"
             )
 

@@ -128,6 +128,18 @@ enum Theme {
     static var text1: Color { palette.text1 }
     static var text2: Color { palette.text2 }
     static var text3: Color { palette.text3 }
+    static var placeholderText: Color {
+        if accessibilityPolicy.usesEnhancedBoundaries {
+            return palette.text3
+        }
+        return switch activeTheme {
+        case .coolGray:
+            color(MacUIAccessibleColorMetrics.coolGrayPlaceholderText)
+        case .warmPaper:
+            color(MacUIAccessibleColorMetrics.warmPaperPlaceholderText)
+        }
+    }
+
     static var chip: Color { palette.chip }
     static var sidebar: Color { palette.sidebar }
     static var controlFill: Color { palette.controlFill }

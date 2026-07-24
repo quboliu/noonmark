@@ -156,7 +156,7 @@ struct ReviewStatsCard: View {
                 legend(store.copy.traceStatusLabel(.pending), pendingCount, Theme.accent)
                 legend(store.copy.traceStatusLabel(.completed), stats.completed, Theme.ok)
                 legend(store.copy.traceStatusLabel(.unfinished), stats.unfinished, Theme.warn)
-                legend(store.copy.traceStatusLabel(.continued), stats.continued, Theme.text2)
+                legend(store.copy.traceStatusLabel(.deferred), stats.deferred, Theme.text2)
                 legend(store.copy.traceStatusLabel(.abandoned), stats.abandoned, Theme.text2)
             }
         }
@@ -177,7 +177,7 @@ struct ReviewStatsCard: View {
             stats.total
                 - stats.completed
                 - stats.unfinished
-                - stats.continued
+                - stats.deferred
                 - stats.abandoned
         )
     }

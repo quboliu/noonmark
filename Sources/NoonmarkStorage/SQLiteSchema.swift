@@ -12,7 +12,7 @@ private func sqliteNonemptyInvariant(_ column: String) -> String {
 }
 
 public enum SQLiteSchema {
-    public static let version = 7
+    public static let version = 11
 
     public static let statements: [String] = [
         """
@@ -1692,7 +1692,7 @@ public enum SQLiteSchema {
             id TEXT PRIMARY KEY NOT NULL,
             chain_id TEXT NOT NULL REFERENCES task_chains(id),
             sequence INTEGER NOT NULL,
-            title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+            title TEXT NOT NULL,
             description_text TEXT,
             planned_subtasks_json TEXT,
             created_at TEXT NOT NULL,
@@ -1726,7 +1726,7 @@ public enum SQLiteSchema {
                     'pending',
                     'completed',
                     'unfinished',
-                    'continued',
+                    'deferred',
                     'changed',
                     'returnedToPool',
                     'cancelledDraft',
@@ -1734,6 +1734,14 @@ public enum SQLiteSchema {
                 )
             ),
             priority INTEGER NOT NULL,
+            pin_order INTEGER CHECK (
+                pin_order IS NULL
+                OR (
+                    typeof(pin_order) = 'integer'
+                    AND pin_order > 0
+                    AND status = 'pending'
+                )
+            ),
             continuation_seq INTEGER NOT NULL DEFAULT 0,
             description_text TEXT,
             note_entries_json TEXT NOT NULL CHECK (
@@ -1744,7 +1752,7 @@ public enum SQLiteSchema {
                 manual_progress_percent IS NULL
                 OR (manual_progress_percent >= 0 AND manual_progress_percent <= 100)
             ),
-            continued_from_trace_id TEXT REFERENCES day_traces(id),
+            carried_from_trace_id TEXT REFERENCES day_traces(id),
             changed_to_trace_id TEXT REFERENCES day_traces(id),
             created_at TEXT NOT NULL,
             created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
@@ -1773,13 +1781,6 @@ public enum SQLiteSchema {
                     AND completed_at IS NULL
                     AND settled_at IS NOT NULL
                     AND changed_to_trace_id IS NULL
-                    AND (
-                        date = draft_cancelled_on
-                        OR (
-                            manual_progress_percent IS NULL
-                            AND continued_from_trace_id IS NULL
-                        )
-                    )
                 )
                 OR (
                     status <> 'cancelledDraft'
@@ -1812,7 +1813,7 @@ public enum SQLiteSchema {
                     'pending',
                     'completed',
                     'unfinished',
-                    'continued',
+                    'deferred',
                     'changed',
                     'returnedToPool',
                     'abandoned'
@@ -2137,14 +2138,14 @@ public enum SQLiteSchema {
                     'pending',
                     'completed',
                     'unfinished',
-                    'continued',
+                    'deferred',
                     'abandoned',
                     'cancelledDraft'
                 )
             ),
             difficulty INTEGER NOT NULL DEFAULT 1 CHECK (difficulty IN (1, 2, 3)),
             position INTEGER NOT NULL,
-            continued_from_subtask_id TEXT REFERENCES subtasks(id),
+            carried_from_subtask_id TEXT REFERENCES subtasks(id),
             created_at TEXT NOT NULL,
             created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
             updated_at TEXT NOT NULL,
@@ -2172,7 +2173,7 @@ public enum SQLiteSchema {
                     AND settled_at IS NULL
                 )
                 OR (
-                    status IN ('unfinished', 'continued', 'abandoned')
+                    status IN ('unfinished', 'deferred', 'abandoned')
                     AND completed_at IS NULL
                     AND settled_at IS NOT NULL
                 )
@@ -2448,7 +2449,34 @@ public enum SQLiteSchema {
           AND NOT EXISTS (
               SELECT 1 FROM day_traces t
               WHERE t.chain_id = c.id
-                AND t.status NOT IN ('returnedToPool', 'cancelledDraft')
+                AND t.status = 'pending'
+          )
+          AND (
+              NOT EXISTS (
+                  SELECT 1 FROM day_traces t
+                  WHERE t.chain_id = c.id
+              )
+              OR EXISTS (
+                  SELECT 1 FROM day_traces latest
+                  WHERE latest.chain_id = c.id
+                    AND latest.status IN ('returnedToPool', 'cancelledDraft')
+                    AND NOT EXISTS (
+                        SELECT 1 FROM day_traces newer
+                        WHERE newer.chain_id = c.id
+                          AND (
+                              newer.content_updated_at > latest.content_updated_at
+                              OR (
+                                  newer.content_updated_at = latest.content_updated_at
+                                  AND newer.created_at > latest.created_at
+                              )
+                              OR (
+                                  newer.content_updated_at = latest.content_updated_at
+                                  AND newer.created_at = latest.created_at
+                                  AND newer.id > latest.id
+                              )
+                          )
+                    )
+              )
           )
         """,
         """
@@ -2473,7 +2501,7 @@ public enum SQLiteSchema {
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         JOIN task_chains c ON c.id = t.chain_id
-        WHERE t.status IN ('unfinished', 'continued', 'abandoned')
+        WHERE t.status IN ('unfinished', 'deferred', 'abandoned')
         """,
         """
         CREATE VIEW IF NOT EXISTS unfinished_pool_view AS
@@ -2490,7 +2518,7 @@ public enum SQLiteSchema {
             active.date AS active_trace_date
         FROM task_chains c
         JOIN task_definitions d ON d.chain_id = c.id AND d.superseded_at IS NULL
-        JOIN day_traces u ON u.chain_id = c.id AND u.status IN ('unfinished', 'continued', 'abandoned')
+        JOIN day_traces u ON u.chain_id = c.id AND u.status IN ('unfinished', 'deferred', 'abandoned')
         LEFT JOIN day_traces active ON active.chain_id = c.id AND active.status = 'pending'
         WHERE c.state IN ('active', 'abandoned')
           AND NOT EXISTS (
@@ -2532,7 +2560,7 @@ public enum SQLiteSchema {
             history.status,
             history.priority,
             history.continuation_seq,
-            history.continued_from_trace_id,
+            history.carried_from_trace_id,
             history.changed_to_trace_id,
             history.created_at,
             history.completed_at,
@@ -2555,7 +2583,7 @@ public enum SQLiteSchema {
             s.status,
             s.difficulty,
             s.position,
-            s.continued_from_subtask_id,
+            s.carried_from_subtask_id,
             s.created_at,
             s.completed_at,
             s.settled_at
@@ -2577,7 +2605,7 @@ public enum SQLiteSchema {
             s.status,
             s.difficulty,
             s.position,
-            s.continued_from_subtask_id,
+            s.carried_from_subtask_id,
             s.created_at,
             s.completed_at,
             s.settled_at,
@@ -2621,7 +2649,7 @@ public enum SQLiteSchema {
         FROM day_traces t
         JOIN task_definitions d ON d.id = t.definition_id
         JOIN task_chains c ON c.id = t.chain_id
-        WHERE t.status IN ('pending', 'completed', 'unfinished', 'continued', 'abandoned')
+        WHERE t.status IN ('pending', 'completed', 'unfinished', 'deferred', 'abandoned')
         """
     ]
 }

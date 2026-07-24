@@ -162,7 +162,7 @@ public final class NoonmarkEngine {
         plannedSubtasks: [PlannedSubtask]? = nil,
         now: Date = Date()
     ) throws {
-        let normalizedTitle = try normalizeTitle(title)
+        let normalizedTitle = try normalizeTitle(title, allowsEmpty: true)
         var definition = try currentDefinition(for: chainID)
         guard isInTaskPool(chainID) else {
             throw NoonmarkError.invalidTransition("only task-pool tasks can be edited")
@@ -275,7 +275,7 @@ public final class NoonmarkEngine {
         now: Date,
         reusingEditableDefinition: Bool
     ) throws {
-        let normalizedTitle = try normalizeTitle(title)
+        let normalizedTitle = try normalizeTitle(title, allowsEmpty: true)
         let chain = try chain(chainID)
         guard chain.state == .active else {
             throw NoonmarkError.chainAbandoned
@@ -515,12 +515,6 @@ public final class NoonmarkEngine {
         }
 
         let chainTraces = traces.values.filter { $0.chainID == chainID }
-        guard chainTraces.allSatisfy({
-            $0.status == .returnedToPool || $0.status == .cancelledDraft
-        }) else {
-            throw NoonmarkError.invalidTransition("completed and unfinished task facts cannot be deleted")
-        }
-
         guard chainTraces.isEmpty == false else {
             return try deleteUnscheduledTask(chainID: chainID, now: now)
         }
@@ -652,6 +646,22 @@ public final class NoonmarkEngine {
                     occurredAt: trace.createdAt
                 )
             )
+            if carryoverKind(for: trace.id) == .continuation,
+               let sourceID = trace.carriedFromTraceID,
+               let source = traces[sourceID]
+            {
+                entries.append(
+                    TaskTrailEntry(
+                        id: "\(trace.id.description).continued",
+                        chainID: chainID,
+                        traceID: source.id,
+                        relatedTraceID: trace.id,
+                        kind: .continued,
+                        date: source.date,
+                        occurredAt: trace.createdAt
+                    )
+                )
+            }
 
             guard let outcome = taskTrailOutcome(for: trace) else { continue }
             entries.append(
@@ -696,17 +706,14 @@ public final class NoonmarkEngine {
     }
 
     public func unfinishedPool() -> [UnfinishedPoolItem] {
-        let unresolvedStatuses: Set<TraceStatus> = [.unfinished, .continued, .abandoned]
+        let unresolvedStatuses: Set<TraceStatus> = [.unfinished, .abandoned]
         let unresolvedCandidatesByChain = Dictionary(grouping: traces.values.filter { unresolvedStatuses.contains($0.status) }) {
             $0.chainID
         }
 
         return unresolvedCandidatesByChain.compactMap { chainID, candidateTraces in
-            let continuedCount = candidateTraces.filter { $0.status == .continued }.count
-            let unfinishedTraces = candidateTraces.filter { trace in
-                trace.status == .unfinished
-                    || trace.status == .abandoned
-                    || (trace.status == .continued && (trace.settledAt != nil || continuedCount > 1))
+            let unfinishedTraces = candidateTraces.filter {
+                $0.status == .unfinished || $0.status == .abandoned
             }
 
             guard
@@ -725,7 +732,8 @@ public final class NoonmarkEngine {
                 chain: chain,
                 definition: definition,
                 unfinishedTraces: unfinishedTraces.sorted { $0.date < $1.date },
-                activeTrace: activeTrace
+                activeTrace: activeTrace,
+                isInTaskPool: isInTaskPool(chainID)
             )
         }
         .sorted { lhs, rhs in
@@ -803,6 +811,7 @@ public final class NoonmarkEngine {
 
         try trace.markContentModified(at: now)
         trace.status = .completed
+        trace.pinOrder = nil
         trace.completedAt = now
         traces[trace.id] = trace
         try touchChain(trace.chainID, now: now)
@@ -817,6 +826,7 @@ public final class NoonmarkEngine {
 
         try trace.markContentModified(at: now)
         trace.status = .pending
+        trace.pinOrder = nil
         trace.completedAt = nil
         traces[trace.id] = trace
         try touchChain(trace.chainID, now: now)
@@ -827,17 +837,19 @@ public final class NoonmarkEngine {
         try ensureUnlockedDay(trace.date)
 
         if trace.date > today {
-            guard trace.continuedFromTraceID == nil else {
-                throw NoonmarkError.invalidTransition("continued future traces cannot return to pool without a trace")
-            }
             guard trace.status == .pending else {
                 throw NoonmarkError.invalidTransition(
                     "only pending future plans can return to pool"
                 )
             }
             try materializePoolDraft(from: trace, now: now)
+            try prepareSubtasksForHiddenTrace(
+                traceID: trace.id,
+                now: now
+            )
             try trace.markContentModified(at: now)
             trace.status = .cancelledDraft
+            trace.pinOrder = nil
             trace.settledAt = now
             trace.draftCancellationID = UUID()
             trace.draftCancelledOn = today
@@ -856,6 +868,7 @@ public final class NoonmarkEngine {
         try materializePoolDraft(from: trace, now: now)
         try trace.markContentModified(at: now)
         trace.status = .returnedToPool
+        trace.pinOrder = nil
         trace.settledAt = now
         traces[trace.id] = trace
         captureClassificationSnapshot(traceID: trace.id, chainID: trace.chainID, now: now)
@@ -891,6 +904,7 @@ public final class NoonmarkEngine {
         try trace.markContentModified(at: now)
         try chain.markContentModified(at: now)
         trace.status = .cancelledDraft
+        trace.pinOrder = nil
         trace.settledAt = now
         trace.draftCancellationID = UUID()
         trace.draftCancelledOn = today
@@ -934,12 +948,13 @@ public final class NoonmarkEngine {
         try trace.markContentModified(at: now)
         trace.date = targetDate
         trace.priority = nextPriority(on: targetDate)
+        trace.pinOrder = nil
         traces[trace.id] = trace
         ensureDay(targetDate, now: now)
     }
 
     @discardableResult
-    public func continueTrace(
+    public func deferCurrentTrace(
         traceID: DayTraceID,
         targetDate: LocalDate,
         today: LocalDate,
@@ -947,17 +962,76 @@ public final class NoonmarkEngine {
     ) throws -> DayTraceID {
         var source = try trace(traceID)
         try ensureActiveChain(source.chainID)
+        try ensureUnlockedDay(source.date)
         try ensureUnlockedDay(targetDate)
-        guard targetDate >= today else {
-            throw NoonmarkError.invalidTransition("continuation target cannot be in the past")
+        guard source.status == .pending, source.date == today else {
+            throw NoonmarkError.invalidTransition("only a current pending trace can be deferred")
         }
-        guard targetDate > source.date else {
-            throw NoonmarkError.invalidTransition("continuation target must be later than its source")
+        guard targetDate > today else {
+            throw NoonmarkError.invalidTransition("deferral target must be after today")
         }
-        guard source.status == .unfinished || (source.status == .pending && source.date == today) else {
-            throw NoonmarkError.invalidTransition("only historical unfinished or current pending traces can continue")
+        let frontier = traces.values
+            .filter { $0.chainID == source.chainID && $0.formsDayHistory }
+            .sorted(by: traceChronology)
+            .last
+        guard frontier?.id == source.id else {
+            throw NoonmarkError.invalidTransition("only the latest task-chain frontier can be deferred")
+        }
+        if let active = activeTrace(for: source.chainID), active.id != source.id {
+            throw NoonmarkError.activeTraceAlreadyExists
         }
 
+        let definition = try currentDefinition(for: source.chainID)
+        let nextTrace = DayTrace(
+            chainID: source.chainID,
+            definitionID: definition.id,
+            date: targetDate,
+            priority: nextPriority(on: targetDate),
+            continuationSeq: source.continuationSeq,
+            descriptionText: source.descriptionText,
+            noteEntries: source.activeNoteEntries,
+            manualProgressPercent: traceProgress(for: source.id).percent,
+            carriedFromTraceID: source.id,
+            now: now
+        )
+
+        try source.markContentModified(at: now)
+        source.status = .deferred
+        source.pinOrder = nil
+        source.settledAt = now
+        traces[source.id] = source
+        traces[nextTrace.id] = nextTrace
+        captureClassificationSnapshot(traceID: source.id, chainID: source.chainID, now: now)
+
+        try copyOpenSubtasks(
+            from: source.id,
+            to: nextTrace.id,
+            kind: .deferral,
+            now: now
+        )
+        ensureDay(targetDate, now: now)
+        try touchChain(source.chainID, now: now)
+        return nextTrace.id
+    }
+
+    @discardableResult
+    public func continueUnfinishedTrace(
+        traceID: DayTraceID,
+        targetDate: LocalDate,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> DayTraceID {
+        let source = try trace(traceID)
+        try ensureActiveChain(source.chainID)
+        try ensureUnlockedDay(targetDate)
+        guard source.status == .unfinished,
+              source.date < today || days[source.date]?.lockedAt != nil
+        else {
+            throw NoonmarkError.invalidTransition("only a locked unfinished trace can continue")
+        }
+        guard targetDate >= today, targetDate > source.date else {
+            throw NoonmarkError.invalidTransition("continuation target must follow its source and cannot be in the past")
+        }
         let frontier = traces.values
             .filter { $0.chainID == source.chainID && $0.formsDayHistory }
             .sorted(by: traceChronology)
@@ -965,9 +1039,13 @@ public final class NoonmarkEngine {
         guard frontier?.id == source.id else {
             throw NoonmarkError.invalidTransition("only the latest task-chain frontier can continue")
         }
-
-        if let active = activeTrace(for: source.chainID), active.id != source.id {
+        guard activeTrace(for: source.chainID) == nil else {
             throw NoonmarkError.activeTraceAlreadyExists
+        }
+        guard isInTaskPool(source.chainID) == false else {
+            throw NoonmarkError.invalidTransition(
+                "task-pool tasks must be scheduled from the task pool"
+            )
         }
 
         let definition = try currentDefinition(for: source.chainID)
@@ -980,22 +1058,201 @@ public final class NoonmarkEngine {
             descriptionText: source.descriptionText,
             noteEntries: source.activeNoteEntries,
             manualProgressPercent: traceProgress(for: source.id).percent,
-            continuedFromTraceID: source.id,
+            carriedFromTraceID: source.id,
             now: now
         )
-
-        let sourceWasUnfinished = source.status == .unfinished
-        try source.markContentModified(at: now)
-        source.status = .continued
-        source.settledAt = sourceWasUnfinished ? (source.settledAt ?? now) : nil
-        traces[source.id] = source
         traces[nextTrace.id] = nextTrace
-        captureClassificationSnapshot(traceID: source.id, chainID: source.chainID, now: now)
-
-        try copyOpenSubtasks(from: source.id, to: nextTrace.id, now: now)
+        try copyOpenSubtasks(
+            from: source.id,
+            to: nextTrace.id,
+            kind: .continuation,
+            now: now
+        )
         ensureDay(targetDate, now: now)
         try touchChain(source.chainID, now: now)
         return nextTrace.id
+    }
+
+    public func carryoverKind(for traceID: DayTraceID) -> TraceCarryoverKind? {
+        guard let sourceID = traces[traceID]?.carriedFromTraceID,
+              let source = traces[sourceID]
+        else {
+            return nil
+        }
+        return switch source.status {
+        case .deferred:
+            .deferral
+        case .unfinished:
+            .continuation
+        case .pending, .completed, .changed, .returnedToPool, .cancelledDraft, .abandoned:
+            nil
+        }
+    }
+
+    public func carryoverTarget(for sourceTraceID: DayTraceID) -> DayTrace? {
+        traces.values.first { $0.carriedFromTraceID == sourceTraceID }
+    }
+
+    public func canWithdrawDeferral(
+        sourceTraceID: DayTraceID,
+        today: LocalDate
+    ) -> Bool {
+        guard let source = traces[sourceTraceID],
+              source.status == .deferred,
+              source.date == today,
+              days[source.date]?.lockedAt == nil,
+              chains[source.chainID]?.state == .active
+        else {
+            return false
+        }
+        let targets = traces.values.filter {
+            $0.carriedFromTraceID == source.id
+        }
+        guard targets.count == 1, let target = targets.first else {
+            return false
+        }
+        return target.status == .pending
+            && target.date > today
+            && days[target.date]?.lockedAt == nil
+            && activeTrace(for: source.chainID)?.id == target.id
+            && carryoverKind(for: target.id) == .deferral
+    }
+
+    public func withdrawDeferral(
+        sourceTraceID: DayTraceID,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        guard canWithdrawDeferral(
+            sourceTraceID: sourceTraceID,
+            today: today
+        ) else {
+            throw NoonmarkError.invalidTransition(
+                "only a current-day deferral with an active future target can be withdrawn"
+            )
+        }
+        var source = try trace(sourceTraceID)
+        guard var target = traces.values.first(where: {
+            $0.carriedFromTraceID == source.id && $0.status == .pending
+        }) else {
+            throw NoonmarkError.notFound("deferral target")
+        }
+
+        try source.markContentModified(at: now)
+        try target.markContentModified(at: now)
+        source.definitionID = target.definitionID
+        source.descriptionText = target.descriptionText
+        source.noteEntries = target.noteEntries
+        source.manualProgressPercent = target.manualProgressPercent
+        source.status = .pending
+        source.pinOrder = nil
+        source.completedAt = nil
+        source.settledAt = nil
+
+        let targetSubtasks = subtasks.values
+            .filter { $0.traceID == target.id }
+            .sorted { lhs, rhs in
+                if lhs.position != rhs.position {
+                    return lhs.position < rhs.position
+                }
+                return lhs.id.description < rhs.id.description
+            }
+        for targetSubtaskValue in targetSubtasks {
+            var targetSubtask = targetSubtaskValue
+            if let sourceSubtaskID = targetSubtask.carriedFromSubtaskID,
+               var sourceSubtask = subtasks[sourceSubtaskID]
+            {
+                try sourceSubtask.markContentModified(at: now)
+                if targetSubtask.isUserPresentable {
+                    sourceSubtask.title = targetSubtask.title
+                    sourceSubtask.difficulty = targetSubtask.difficulty
+                    sourceSubtask.position = targetSubtask.position
+                    sourceSubtask.status = .pending
+                    sourceSubtask.completedAt = nil
+                    sourceSubtask.settledAt = nil
+                    sourceSubtask.draftCancellationID = nil
+                } else {
+                    sourceSubtask.status = .cancelledDraft
+                    sourceSubtask.completedAt = nil
+                    sourceSubtask.settledAt = now
+                    sourceSubtask.draftCancellationID = UUID()
+                }
+                subtasks[sourceSubtask.id] = sourceSubtask
+
+                if targetSubtask.status == .cancelledDraft {
+                    try targetSubtask.markContentModified(at: now)
+                    targetSubtask.status = .pending
+                    targetSubtask.completedAt = nil
+                    targetSubtask.settledAt = nil
+                    targetSubtask.draftCancellationID = nil
+                    targetSubtask.carriedFromSubtaskID = nil
+                    subtasks[targetSubtask.id] = targetSubtask
+                }
+            } else if targetSubtask.isUserPresentable {
+                try targetSubtask.markContentModified(at: now)
+                targetSubtask.traceID = source.id
+                targetSubtask.carriedFromSubtaskID = nil
+                subtasks[targetSubtask.id] = targetSubtask
+            }
+        }
+
+        target.status = .cancelledDraft
+        target.pinOrder = nil
+        target.completedAt = nil
+        target.settledAt = now
+        target.draftCancellationID = UUID()
+        target.draftCancelledOn = target.date
+        traces[source.id] = source
+        traces[target.id] = target
+        try touchChain(source.chainID, now: now)
+    }
+
+    public func pinDayTrace(
+        _ traceID: DayTraceID,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
+        guard trace.date >= today, trace.status == .pending else {
+            throw NoonmarkError.invalidTransition(
+                "only current or future pending day traces can be pinned"
+            )
+        }
+        guard trace.pinOrder == nil else { return }
+        let nextPinOrder = (
+            traces.values
+                .filter {
+                    $0.date == trace.date
+                        && $0.status == .pending
+                }
+                .compactMap(\.pinOrder)
+                .max() ?? 0
+        ) + 1
+        guard nextPinOrder > 0 else {
+            throw NoonmarkError.invalidInput("day trace pin queue is exhausted")
+        }
+        try trace.markContentModified(at: now)
+        trace.pinOrder = nextPinOrder
+        traces[trace.id] = trace
+    }
+
+    public func unpinDayTrace(
+        _ traceID: DayTraceID,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        var trace = try trace(traceID)
+        try ensureUnlockedDay(trace.date)
+        guard trace.date >= today, trace.status == .pending else {
+            throw NoonmarkError.invalidTransition(
+                "only current or future pending day traces can be unpinned"
+            )
+        }
+        guard trace.pinOrder != nil else { return }
+        try trace.markContentModified(at: now)
+        trace.pinOrder = nil
+        traces[trace.id] = trace
     }
 
     @discardableResult
@@ -1043,6 +1300,7 @@ public final class NoonmarkEngine {
 
         try oldTrace.markContentModified(at: now)
         oldTrace.status = .changed
+        oldTrace.pinOrder = nil
         oldTrace.changedToTraceID = newTrace.id
         oldTrace.settledAt = now
 
@@ -1071,6 +1329,7 @@ public final class NoonmarkEngine {
         try trace.markContentModified(at: now)
         try chain.markContentModified(at: now)
         trace.status = .abandoned
+        trace.pinOrder = nil
         trace.settledAt = now
         chain.state = .abandoned
 
@@ -1106,6 +1365,7 @@ public final class NoonmarkEngine {
             source.status = .unfinished
             source.settledAt = source.settledAt ?? now
         }
+        source.pinOrder = nil
         chain.state = .active
 
         traces[source.id] = source
@@ -1417,7 +1677,7 @@ public final class NoonmarkEngine {
             completed: items.filter { $0.status == .completed }.count,
             pending: items.filter { $0.status == .pending }.count,
             unfinished: items.filter { $0.status == .unfinished }.count,
-            continued: items.filter { $0.status == .continued }.count,
+            deferred: items.filter { $0.status == .deferred }.count,
             abandoned: items.filter { $0.status == .abandoned }.count
         )
     }
@@ -1589,6 +1849,7 @@ public final class NoonmarkEngine {
                 var settled = trace
                 try settled.markContentModified(at: now)
                 settled.status = .unfinished
+                settled.pinOrder = nil
                 settled.settledAt = now
                 traces[settled.id] = settled
                 traceIDsNeedingClassificationSnapshot.insert(settled.id)
@@ -1617,7 +1878,7 @@ public final class NoonmarkEngine {
             total: items.count,
             completed: items.filter { $0.status == .completed }.count,
             unfinished: items.filter { $0.status == .unfinished }.count,
-            continued: items.filter { $0.status == .continued }.count,
+            deferred: items.filter { $0.status == .deferred }.count,
             changed: items.filter { $0.status == .changed }.count,
             returnedToPool: items.filter { $0.status == .returnedToPool }.count,
             abandoned: items.filter { $0.status == .abandoned }.count
@@ -1746,11 +2007,11 @@ private extension NoonmarkEngine {
             (.completed, trace.completedAt ?? trace.contentUpdatedAt, nil)
         case .unfinished:
             (.unfinished, trace.settledAt ?? trace.contentUpdatedAt, nil)
-        case .continued:
+        case .deferred:
             (
-                .continued,
+                .deferred,
                 trace.contentUpdatedAt,
-                traces.values.first { $0.continuedFromTraceID == trace.id }?.id
+                carryoverTarget(for: trace.id)?.id
             )
         case .changed:
             (.changed, trace.settledAt ?? trace.contentUpdatedAt, trace.changedToTraceID)
@@ -1767,7 +2028,7 @@ private extension NoonmarkEngine {
             0
         case .scheduled:
             1
-        case .completed, .unfinished, .continued, .changed, .returnedToPool, .abandoned:
+        case .completed, .unfinished, .deferred, .continued, .changed, .returnedToPool, .abandoned:
             2
         }
     }
@@ -1867,6 +2128,7 @@ private extension NoonmarkEngine {
         for id in currentOnlyTraceIDs {
             guard var hidden = currentTraces[id] else { continue }
             hidden.status = .cancelledDraft
+            hidden.pinOrder = nil
             hidden.completedAt = nil
             hidden.settledAt = now
             hidden.draftCancellationID = hidden.draftCancellationID ?? UUID()
@@ -2073,7 +2335,7 @@ private extension NoonmarkEngine {
             && lhs.status == rhs.status
             && lhs.difficulty == rhs.difficulty
             && lhs.position == rhs.position
-            && lhs.continuedFromSubtaskID == rhs.continuedFromSubtaskID
+            && lhs.carriedFromSubtaskID == rhs.carriedFromSubtaskID
             && lhs.createdAt == rhs.createdAt
             && lhs.completedAt == rhs.completedAt
             && lhs.settledAt == rhs.settledAt
@@ -2090,7 +2352,7 @@ private extension NoonmarkEngine {
             && lhs.continuationSeq == rhs.continuationSeq
             && lhs.descriptionText == rhs.descriptionText
             && lhs.manualProgressPercent == rhs.manualProgressPercent
-            && lhs.continuedFromTraceID == rhs.continuedFromTraceID
+            && lhs.carriedFromTraceID == rhs.carriedFromTraceID
             && lhs.changedToTraceID == rhs.changedToTraceID
             && lhs.createdAt == rhs.createdAt
             && lhs.completedAt == rhs.completedAt
@@ -2099,12 +2361,15 @@ private extension NoonmarkEngine {
             && lhs.draftCancelledOn == rhs.draftCancelledOn
     }
 
-    func normalizeTitle(_ title: String) throws -> String {
+    func normalizeTitle(
+        _ title: String,
+        allowsEmpty: Bool = false
+    ) throws -> String {
         let normalized = title
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.isEmpty == false else {
+        guard allowsEmpty || normalized.isEmpty == false else {
             throw NoonmarkError.invalidTitle
         }
         return normalized
@@ -2149,27 +2414,48 @@ private extension NoonmarkEngine {
     }
 
     func sorted(_ traces: [DayTrace], by sort: ViewSort) -> [DayTrace] {
-        switch sort {
-        case .priority:
-            return traces.sorted(by: tracePriorityOrder)
-        case .createdAt:
-            return traces.sorted {
-                if $0.createdAt != $1.createdAt {
-                    return $0.createdAt < $1.createdAt
-                }
-                return $0.id.description < $1.id.description
+        traces.sorted { lhs, rhs in
+            let lhsLifecycleRank = lhs.status == .pending ? 0 : 1
+            let rhsLifecycleRank = rhs.status == .pending ? 0 : 1
+            if lhsLifecycleRank != rhsLifecycleRank {
+                return lhsLifecycleRank < rhsLifecycleRank
             }
-        case .title:
-            return traces.sorted {
-                let lhs = definitions[$0.definitionID]?.title ?? ""
-                let rhs = definitions[$1.definitionID]?.title ?? ""
-                let comparison = lhs.localizedStandardCompare(rhs)
-                if comparison != .orderedSame {
-                    return comparison == .orderedAscending
+
+            let lhsIsPinned = lhs.status == .pending && lhs.pinOrder != nil
+            let rhsIsPinned = rhs.status == .pending && rhs.pinOrder != nil
+            if lhsIsPinned != rhsIsPinned {
+                return lhsIsPinned
+            }
+            if let lhsPinOrder = lhs.pinOrder,
+               let rhsPinOrder = rhs.pinOrder,
+               lhsPinOrder != rhsPinOrder
+            {
+                return lhsPinOrder < rhsPinOrder
+            }
+
+            return switch sort {
+            case .priority:
+                tracePriorityOrder(lhs, rhs)
+            case .createdAt:
+                if lhs.createdAt != rhs.createdAt {
+                    lhs.createdAt < rhs.createdAt
+                } else {
+                    lhs.id.description < rhs.id.description
                 }
-                return $0.id.description < $1.id.description
+            case .title:
+                traceTitleOrder(lhs, rhs)
             }
         }
+    }
+
+    func traceTitleOrder(_ lhs: DayTrace, _ rhs: DayTrace) -> Bool {
+        let lhsTitle = definitions[lhs.definitionID]?.title ?? ""
+        let rhsTitle = definitions[rhs.definitionID]?.title ?? ""
+        let comparison = lhsTitle.localizedStandardCompare(rhsTitle)
+        if comparison != .orderedSame {
+            return comparison == .orderedAscending
+        }
+        return lhs.id.description < rhs.id.description
     }
 
     func tracePriorityOrder(_ lhs: DayTrace, _ rhs: DayTrace) -> Bool {
@@ -2223,7 +2509,7 @@ private extension NoonmarkEngine {
                 : .unavailable(.openSubtasks)
         case .completed:
             return .available(.undo)
-        case .unfinished, .continued, .changed, .returnedToPool, .cancelledDraft, .abandoned:
+        case .unfinished, .deferred, .changed, .returnedToPool, .cancelledDraft, .abandoned:
             return .unavailable(.unsupportedStatus(trace.status))
         }
     }
@@ -2338,9 +2624,23 @@ private extension NoonmarkEngine {
         }
 
         let chainTraces = traces.values.filter { $0.chainID == chainID }
-        return chainTraces.isEmpty || chainTraces.allSatisfy {
-            $0.status == .returnedToPool || $0.status == .cancelledDraft
+        guard chainTraces.isEmpty == false else {
+            return true
         }
+        guard activeTrace(for: chainID) == nil else {
+            return false
+        }
+        let latest = chainTraces.max { lhs, rhs in
+            if lhs.contentUpdatedAt != rhs.contentUpdatedAt {
+                return lhs.contentUpdatedAt < rhs.contentUpdatedAt
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt < rhs.createdAt
+            }
+            return lhs.id.description < rhs.id.description
+        }
+        return latest?.status == .returnedToPool
+            || latest?.status == .cancelledDraft
     }
 
     func hasCompletedTrace(_ chainID: TaskChainID) -> Bool {
@@ -2441,7 +2741,7 @@ private extension NoonmarkEngine {
             startDate: chainTraces.first?.date ?? completedTrace.date,
             continuedDates: uniqueDates(
                 chainTraces
-                    .filter { $0.continuationSeq > 0 }
+                    .filter { carryoverKind(for: $0.id) == .continuation }
                     .map(\.date)
             ),
             completedDate: completedTrace.date,
@@ -2473,7 +2773,11 @@ private extension NoonmarkEngine {
                 startDate: records.first?.date ?? LocalDate("0001-01-01"),
                 continuedDates: uniqueDates(
                     records
-                        .filter { $0.subtask.continuedFromSubtaskID != nil }
+                        .filter {
+                            carryoverKind(for: $0.subtask.traceID)
+                                == .continuation
+                                && $0.subtask.carriedFromSubtaskID != nil
+                        }
                         .map(\.date)
                 ),
                 completedDate: records.first(where: { $0.subtask.status == .completed })?.date,
@@ -2528,6 +2832,7 @@ private extension NoonmarkEngine {
     func copyOpenSubtasks(
         from sourceTraceID: DayTraceID,
         to targetTraceID: DayTraceID,
+        kind: TraceCarryoverKind,
         now: Date
     ) throws {
         let openSubtasks = subtasks.values
@@ -2535,11 +2840,13 @@ private extension NoonmarkEngine {
             .sorted { $0.position < $1.position }
 
         for (index, oldSubtask) in openSubtasks.enumerated() {
-            var continuedSubtask = oldSubtask
-            try continuedSubtask.markContentModified(at: now)
-            continuedSubtask.status = .continued
-            continuedSubtask.settledAt = now
-            subtasks[continuedSubtask.id] = continuedSubtask
+            if kind == .deferral {
+                var deferredSubtask = oldSubtask
+                try deferredSubtask.markContentModified(at: now)
+                deferredSubtask.status = .deferred
+                deferredSubtask.settledAt = now
+                subtasks[deferredSubtask.id] = deferredSubtask
+            }
 
             let newSubtask = Subtask(
                 lineageID: oldSubtask.lineageID,
@@ -2547,7 +2854,7 @@ private extension NoonmarkEngine {
                 title: oldSubtask.title,
                 difficulty: oldSubtask.difficulty,
                 position: index + 1,
-                continuedFromSubtaskID: oldSubtask.id,
+                carriedFromSubtaskID: oldSubtask.id,
                 now: now
             )
             subtasks[newSubtask.id] = newSubtask
@@ -2619,6 +2926,22 @@ private extension NoonmarkEngine {
         definitions[currentDefinition.id] = currentDefinition
         definitions[returnedDefinition.id] = returnedDefinition
         chains[chain.id] = chain
+    }
+
+    func prepareSubtasksForHiddenTrace(
+        traceID: DayTraceID,
+        now: Date
+    ) throws {
+        for subtaskValue in subtasks.values where subtaskValue.traceID == traceID {
+            guard subtaskValue.status == .cancelledDraft else { continue }
+            var subtask = subtaskValue
+            try subtask.markContentModified(at: now)
+            subtask.status = .pending
+            subtask.completedAt = nil
+            subtask.settledAt = nil
+            subtask.draftCancellationID = nil
+            subtasks[subtask.id] = subtask
+        }
     }
 
     func copyPlannedSubtasks(from definition: TaskDefinition, to traceID: DayTraceID, now: Date) {

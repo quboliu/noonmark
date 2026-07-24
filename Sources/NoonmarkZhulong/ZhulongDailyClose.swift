@@ -53,7 +53,7 @@ public struct ZhulongDailyCloseCounts: Codable, Equatable, Sendable {
     public let total: Int
     public let completed: Int
     public let unfinished: Int
-    public let continued: Int
+    public let deferred: Int
     public let changed: Int
     public let returnedToPool: Int
     public let abandoned: Int
@@ -117,7 +117,7 @@ public struct ZhulongDailyCloseSnapshot: Codable, Equatable, Sendable {
             total: stats.total,
             completed: stats.completed,
             unfinished: stats.unfinished,
-            continued: stats.continued,
+            deferred: stats.deferred,
             changed: stats.changed,
             returnedToPool: stats.returnedToPool,
             abandoned: stats.abandoned,
@@ -439,7 +439,7 @@ extension ZhulongDailyCloseSnapshot {
             .pending,
             .completed,
             .unfinished,
-            .continued,
+            .deferred,
             .changed,
             .returnedToPool,
             .abandoned
@@ -447,7 +447,7 @@ extension ZhulongDailyCloseSnapshot {
         let statusCountSum = [
             counts.completed,
             counts.unfinished,
-            counts.continued,
+            counts.deferred,
             counts.changed,
             counts.returnedToPool,
             counts.abandoned,
@@ -469,7 +469,7 @@ extension ZhulongDailyCloseSnapshot {
               counts.total == statusCountSum.value,
               counts.completed == traces.filter({ $0.status == .completed }).count,
               counts.unfinished == traces.filter({ $0.status == .unfinished }).count,
-              counts.continued == traces.filter({ $0.status == .continued }).count,
+              counts.deferred == traces.filter({ $0.status == .deferred }).count,
               counts.changed == traces.filter({ $0.status == .changed }).count,
               counts.returnedToPool == traces.filter({ $0.status == .returnedToPool }).count,
               counts.abandoned == traces.filter({ $0.status == .abandoned }).count,

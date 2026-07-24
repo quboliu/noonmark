@@ -215,8 +215,10 @@ public enum MacUIAccessibleColorMetrics {
     public static let minimumSmallTextContrast = 4.5
     public static let success = MacUISRGBColor(red: 0.04, green: 0.45, blue: 0.30)
     public static let coolGrayTertiaryText = MacUISRGBColor(red: 0.455, green: 0.455, blue: 0.495)
+    public static let coolGrayPlaceholderText = MacUISRGBColor(red: 0.60, green: 0.60, blue: 0.64)
     public static let coolGrayBackground = MacUISRGBColor(red: 0.994, green: 0.993, blue: 0.991)
     public static let warmPaperTertiaryText = MacUISRGBColor(red: 0.47, green: 0.405, blue: 0.335)
+    public static let warmPaperPlaceholderText = MacUISRGBColor(red: 0.62, green: 0.57, blue: 0.50)
     public static let warmPaperBackground = MacUISRGBColor(red: 0.997, green: 0.992, blue: 0.982)
 }
 

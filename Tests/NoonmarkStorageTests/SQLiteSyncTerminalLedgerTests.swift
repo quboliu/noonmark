@@ -96,7 +96,7 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         let rejectedParent = try traceEvent(
             id: uuid("B2000000-0000-0000-0000-000000000001"),
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             revision: 1,
             predecessorID: nil
         )
@@ -462,7 +462,7 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
                 event: TraceClassificationSnapshot(
                     id: id,
                     traceID: traceID,
-                    status: .continued,
+                    status: .deferred,
                     category: HistoricalCategoryValue(
                         id: category.id,
                         name: category.name,

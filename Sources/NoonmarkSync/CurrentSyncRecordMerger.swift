@@ -849,7 +849,7 @@ struct CurrentSyncRecordMerger {
         guard existingTrace.chainID == incomingTrace.chainID,
               existingTrace.createdAt == incomingTrace.createdAt,
               existingTrace.continuationSeq == incomingTrace.continuationSeq,
-              existingTrace.continuedFromTraceID == incomingTrace.continuedFromTraceID
+              existingTrace.carriedFromTraceID == incomingTrace.carriedFromTraceID
         else {
             throw CurrentSyncRecordMergeError.dayTraceIdentityCollision
         }
@@ -910,8 +910,8 @@ struct CurrentSyncRecordMerger {
               existingSubtask.traceID == incomingSubtask.traceID,
               existingSubtask.title == incomingSubtask.title,
               existingSubtask.position == incomingSubtask.position,
-              existingSubtask.continuedFromSubtaskID
-              == incomingSubtask.continuedFromSubtaskID,
+              existingSubtask.carriedFromSubtaskID
+              == incomingSubtask.carriedFromSubtaskID,
               existingSubtask.createdAt == incomingSubtask.createdAt
         else {
             throw CurrentSyncRecordMergeError.invalidContentClock
@@ -960,8 +960,8 @@ struct CurrentSyncRecordMerger {
             && restored.title == cancelled.title
             && restored.difficulty == cancelled.difficulty
             && restored.position == cancelled.position
-            && restored.continuedFromSubtaskID
-            == cancelled.continuedFromSubtaskID
+            && restored.carriedFromSubtaskID
+            == cancelled.carriedFromSubtaskID
             && restored.createdAt == cancelled.createdAt
     }
 
@@ -1069,7 +1069,7 @@ struct CurrentSyncRecordMerger {
             && lhs.descriptionText == rhs.descriptionText
             && lhs.noteEntries == rhs.noteEntries
             && lhs.manualProgressPercent == rhs.manualProgressPercent
-            && lhs.continuedFromTraceID == rhs.continuedFromTraceID
+            && lhs.carriedFromTraceID == rhs.carriedFromTraceID
             && lhs.changedToTraceID == rhs.changedToTraceID
             && lhs.createdAt == rhs.createdAt
             && (exceptions.completedAt || lhs.completedAt == rhs.completedAt)

@@ -13,7 +13,7 @@ public struct DataPackageWriteReceipt: Equatable, Sendable {
 }
 
 public enum NoonmarkDataPackage {
-    private static let currentFormatVersion = 2
+    private static let currentFormatVersion = 4
 
     public static func encode(_ snapshot: NoonmarkSnapshot) throws -> Data {
         try validate(snapshot)
@@ -36,7 +36,7 @@ public enum NoonmarkDataPackage {
               try jsonShape(of: inputJSON.object) == jsonShape(of: encodedJSON.object)
         else {
             throw DataPackageError.malformedDataPackage(
-                "数据包不符合 current v2 的 canonical 结构与编码"
+                "数据包不符合 current v4 的 canonical 结构与编码"
             )
         }
         return snapshot
@@ -277,8 +277,8 @@ private extension NoonmarkDataPackage {
         for trace in snapshot.traces {
             try require(chainIDs.contains(trace.chainID), "trace references missing chain")
             try require(definitionIDs.contains(trace.definitionID), "trace references missing definition")
-            if let continuedFromTraceID = trace.continuedFromTraceID {
-                try require(traceIDs.contains(continuedFromTraceID), "trace references missing continued-from trace")
+            if let carriedFromTraceID = trace.carriedFromTraceID {
+                try require(traceIDs.contains(carriedFromTraceID), "trace references missing continued-from trace")
             }
             if let changedToTraceID = trace.changedToTraceID {
                 try require(traceIDs.contains(changedToTraceID), "trace references missing changed-to trace")
@@ -286,8 +286,8 @@ private extension NoonmarkDataPackage {
         }
         for subtask in snapshot.subtasks {
             try require(traceIDs.contains(subtask.traceID), "subtask references missing trace")
-            if let continuedFromSubtaskID = subtask.continuedFromSubtaskID {
-                try require(subtaskIDs.contains(continuedFromSubtaskID), "subtask references missing continued-from subtask")
+            if let carriedFromSubtaskID = subtask.carriedFromSubtaskID {
+                try require(subtaskIDs.contains(carriedFromSubtaskID), "subtask references missing continued-from subtask")
             }
         }
     }

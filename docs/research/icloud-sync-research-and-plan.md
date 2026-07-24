@@ -219,13 +219,13 @@ Agenda 对外强调支持 iCloud 和 Dropbox，且数据保存在用户个人云
 
 - `DayTraceRecord`
   - recordName：`trace:<uuid>`。
-  - 字段：chainID、definitionID、date、status、priority、continuationSeq、continuedFromTraceID、changedToTraceID、manualProgressPercent、progressMode、descriptionText、noteEntriesPayload、createdAt、contentUpdatedAt、completedAt、settledAt、modifiedDeviceID。
+  - 字段：chainID、definitionID、date、status、priority、continuationSeq、carriedFromTraceID、changedToTraceID、manualProgressPercent、progressMode、descriptionText、noteEntriesPayload、createdAt、contentUpdatedAt、completedAt、settledAt、modifiedDeviceID。
 
 `noteEntriesPayload` 是 `TaskNoteEntry` 数组的结构化序列化，每条包含稳定 `id`、`body`、`createdAt`、`updatedAt` 和可选 `deletedAt`；这是同步协议唯一接受的附言形态。
 
 - `SubtaskRecord`
   - recordName：`subtask:<uuid>`。
-  - 字段：traceID、lineageID、title、status、difficulty、position、continuedFromSubtaskID、createdAt、updatedAt、completedAt、settledAt、modifiedDeviceID。
+  - 字段：traceID、lineageID、title、status、difficulty、position、carriedFromSubtaskID、createdAt、updatedAt、completedAt、settledAt、modifiedDeviceID。
 
 - `AppPreferencesRecord`
   - recordName：`preferences:default`。

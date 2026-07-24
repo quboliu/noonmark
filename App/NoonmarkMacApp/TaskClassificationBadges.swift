@@ -53,6 +53,10 @@ struct TaskClassificationBadges: View {
         ).taskClassificationBadges
     }
 
+    private var accessibilityTaskTitle: String {
+        store.copy.displayTaskTitle(taskTitle)
+    }
+
     var body: some View {
         if hasClassification {
             ViewThatFits(in: .horizontal) {
@@ -68,7 +72,7 @@ struct TaskClassificationBadges: View {
             .accessibilityIdentifier(accessibilityNamespace.containerIdentifier(isHistorical: display.isHistorical))
             .accessibilityLabel(
                 copy.containerAccessibilityLabel(
-                    taskTitle: taskTitle,
+                    taskTitle: accessibilityTaskTitle,
                     isHistorical: display.isHistorical
                 )
             )
@@ -91,7 +95,7 @@ struct TaskClassificationBadges: View {
                     category: category,
                     accessibilityIdentifier: accessibilityNamespace.categoryIdentifier,
                     accessibilityLabel: copy.taskGroupAccessibilityLabel(
-                        taskTitle: taskTitle,
+                        taskTitle: accessibilityTaskTitle,
                         groupName: category.name
                     )
                 )
@@ -102,7 +106,7 @@ struct TaskClassificationBadges: View {
                     label: label,
                     accessibilityIdentifier: accessibilityNamespace.labelIdentifier(label.id),
                     accessibilityLabel: copy.taskTagAccessibilityLabel(
-                        taskTitle: taskTitle,
+                        taskTitle: accessibilityTaskTitle,
                         tagName: label.name
                     )
                 )
@@ -113,7 +117,7 @@ struct TaskClassificationBadges: View {
                     hiddenCount: overflowCount,
                     accessibilityIdentifier: accessibilityNamespace.overflowIdentifier,
                     accessibilityLabel: copy.overflowAccessibilityLabel(
-                        taskTitle: taskTitle,
+                        taskTitle: accessibilityTaskTitle,
                         totalCount: display.labels.count,
                         hiddenCount: overflowCount
                     )
@@ -129,7 +133,7 @@ struct TaskClassificationBadges: View {
                 .popover(isPresented: $isShowingAllLabels, arrowEdge: .bottom) {
                     ClassificationLabelsPopover(
                         labels: display.labels,
-                        taskTitle: taskTitle,
+                        taskTitle: accessibilityTaskTitle,
                         accessibilityNamespace: accessibilityNamespace
                     )
                 }

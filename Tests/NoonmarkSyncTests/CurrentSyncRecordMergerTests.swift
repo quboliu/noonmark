@@ -563,7 +563,7 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
                 uuidString: "A1000000-0000-0000-0000-000000000003"
             )!,
             traceID: traceID,
-            status: .continued,
+            status: .deferred,
             category: nil,
             labels: [],
             capturedAt: now,

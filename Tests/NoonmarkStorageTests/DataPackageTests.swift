@@ -15,7 +15,7 @@ final class DataPackageTests: XCTestCase {
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
         XCTAssertEqual(Set(object.keys), ["formatVersion", "snapshot"])
-        XCTAssertEqual(object["formatVersion"] as? Int, 2)
+        XCTAssertEqual(object["formatVersion"] as? Int, 4)
         let snapshotObject = try XCTUnwrap(
             object["snapshot"] as? [String: Any]
         )
@@ -184,17 +184,17 @@ final class DataPackageTests: XCTestCase {
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
                 error as? DataPackageError,
-                .malformedDataPackage("数据包不符合 current v2 的 canonical 结构与编码")
+                .malformedDataPackage("数据包不符合 current v4 的 canonical 结构与编码")
             )
         }
     }
 
     func testJSONDataPackageRejectsUnsupportedFormatVersionBeforePayloadDecode() {
-        let data = Data(#"{"formatVersion":3,"snapshot":{}}"#.utf8)
+        let data = Data(#"{"formatVersion":5,"snapshot":{}}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
-            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(3))
-            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 3。")
+            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(4))
+            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 4。")
         }
     }
 
@@ -227,7 +227,7 @@ final class DataPackageTests: XCTestCase {
     }
 
     func testJSONDataPackageRejectsCurrentEnvelopeWithoutSnapshot() {
-        let data = Data(#"{"formatVersion":2}"#.utf8)
+        let data = Data(#"{"formatVersion":4}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
@@ -597,7 +597,7 @@ final class DataPackageTests: XCTestCase {
             var container = encoder.singleValueContainer()
             try container.encode(date.timeIntervalSinceReferenceDate.bitPattern)
         }
-        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 2, snapshot: snapshot))
+        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 4, snapshot: snapshot))
     }
 
     private func canonicalJSON(_ data: Data) throws -> Data {

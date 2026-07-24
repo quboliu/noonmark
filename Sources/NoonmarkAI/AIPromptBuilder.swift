@@ -124,7 +124,7 @@ public struct AIPromptBuilder: Sendable {
             guardrail.sanitizeUserText(dayTodo.day?.reviewTomorrowNote).map { "明日备注：\($0)" }
         ].compactMap { $0 }
 
-        let header = "\(dayTodo.date) 统计：总数 \(dayTodo.stats.total)，完成 \(dayTodo.stats.completed)，未完成 \(dayTodo.stats.unfinished)，延续 \(dayTodo.stats.continued)，变更 \(dayTodo.stats.changed)，回池 \(dayTodo.stats.returnedToPool)，废弃 \(dayTodo.stats.abandoned)。"
+        let header = "\(dayTodo.date) 统计：总数 \(dayTodo.stats.total)，完成 \(dayTodo.stats.completed)，未完成 \(dayTodo.stats.unfinished)，延期 \(dayTodo.stats.deferred)，变更 \(dayTodo.stats.changed)，回池 \(dayTodo.stats.returnedToPool)，废弃 \(dayTodo.stats.abandoned)。"
         let traces = dayTodo.traces
             .filter { $0.trace.formsDayHistory }
             .map(renderTrace)

@@ -130,10 +130,7 @@ struct MarkdownEditor: View {
                 if text.isEmpty {
                     Text(placeholder)
                         .font(style.swiftUIFont)
-                        .foregroundStyle(Theme.text3)
-                        .padding(.horizontal, style.textContainerInset.width)
-                        .padding(.vertical, style.textContainerInset.height)
-                        .allowsHitTesting(false)
+                        .foregroundStyle(Theme.placeholderText)
                         .background {
                             if let nativeAccessibilityIdentifier {
                                 AppE2EViewAnchor(
@@ -142,6 +139,12 @@ struct MarkdownEditor: View {
                                 )
                             }
                         }
+                        .padding(
+                            .horizontal,
+                            style.textContainerInset.width + style.lineFragmentPadding
+                        )
+                        .padding(.vertical, style.textContainerInset.height)
+                        .allowsHitTesting(false)
                 }
             }
             .accessibilityLabel(placeholder)
@@ -171,7 +174,8 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = MarkdownEditorScrollView()
+        scrollView.requestsInitialFocus = focusesOnAppear
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = style != .compact
         scrollView.autohidesScrollers = true
@@ -209,6 +213,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         context.coordinator.onEndEditing = onEndEditing
         context.coordinator.onTextChange = onTextChange
         scrollView.documentView = textView
+        scrollView.requestInitialFocusIfPossible()
         return scrollView
     }
 
@@ -239,12 +244,9 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         context.coordinator.text = $text
         context.coordinator.onEndEditing = onEndEditing
         context.coordinator.onTextChange = onTextChange
-        if focusesOnAppear, context.coordinator.didRequestInitialFocus == false {
-            context.coordinator.didRequestInitialFocus = true
-            DispatchQueue.main.async { [weak scrollView, weak textView] in
-                guard let scrollView, let textView else { return }
-                scrollView.window?.makeFirstResponder(textView)
-            }
+        if let editorScrollView = scrollView as? MarkdownEditorScrollView {
+            editorScrollView.requestsInitialFocus = focusesOnAppear
+            editorScrollView.requestInitialFocusIfPossible()
         }
         if context.coordinator.focusRequest != focusRequest {
             context.coordinator.focusRequest = focusRequest
@@ -298,7 +300,6 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         var onEndEditing: (() -> Void)?
         var onTextChange: ((String) -> Void)?
         var focusRequest: Int
-        var didRequestInitialFocus = false
 
         init(
             text: Binding<String>,
@@ -322,6 +323,37 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
 
         func textDidEndEditing(_ notification: Notification) {
             onEndEditing?()
+        }
+    }
+}
+
+private final class MarkdownEditorScrollView: NSScrollView {
+    var requestsInitialFocus = false
+    private var didRequestInitialFocus = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        requestInitialFocusIfPossible()
+    }
+
+    func requestInitialFocusIfPossible() {
+        guard requestsInitialFocus,
+              didRequestInitialFocus == false,
+              let window,
+              let textView = documentView as? NSTextView
+        else {
+            return
+        }
+        didRequestInitialFocus = true
+        DispatchQueue.main.async { [weak self, weak window, weak textView] in
+            guard let self,
+                  let window,
+                  let textView,
+                  self.window === window
+            else {
+                return
+            }
+            window.makeFirstResponder(textView)
         }
     }
 }

@@ -191,13 +191,13 @@ struct UnfinishedActionE2EAutomation: LaunchAutomationRunnable {
             upTo: today,
             now: try timeline.nextInstant()
         )
-        let rowActiveTraceID = try store.engine.continueTrace(
+        let rowActiveTraceID = try store.engine.continueUnfinishedTrace(
             traceID: rowHistoricalTraceID,
             targetDate: today,
             today: today,
             now: try timeline.nextInstant()
         )
-        let detailActiveTraceID = try store.engine.continueTrace(
+        let detailActiveTraceID = try store.engine.continueUnfinishedTrace(
             traceID: detailHistoricalTraceID,
             targetDate: today,
             today: today,
@@ -316,7 +316,7 @@ struct UnfinishedActionE2EAutomation: LaunchAutomationRunnable {
             return item.chain.state == .abandoned
                 && item.activeTrace == nil
                 && store.engine.traces[fixture.historicalTraceID]?.status
-                == .continued
+                == .unfinished
                 && store.engine.traces[fixture.activeTraceID]?.status
                 == .abandoned
                 && item.actionPlan == [
@@ -341,7 +341,7 @@ struct UnfinishedActionE2EAutomation: LaunchAutomationRunnable {
         for chain in [fixture.row, fixture.detail] {
             guard restored.chains[chain.chainID]?.state == .abandoned,
                   restored.traces[chain.historicalTraceID]?.status
-                  == .continued,
+                  == .unfinished,
                   restored.traces[chain.activeTraceID]?.status
                   == .abandoned,
                   restored.unfinishedPool()

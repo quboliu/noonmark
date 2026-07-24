@@ -320,8 +320,6 @@ public extension NoonmarkSnapshot {
                     trace.date == draftCancelledOn
                 let isFutureDraftCancellation =
                     trace.date > draftCancelledOn
-                        && trace.manualProgressPercent == nil
-                        && trace.continuedFromTraceID == nil
                 return (isSnapshotUndoCancellation
                     || isFutureDraftCancellation)
                     && trace.completedAt == nil
@@ -343,11 +341,11 @@ public extension NoonmarkSnapshot {
                 && $0.completedAt == nil
                 && $0.settledAt == nil
         }), subtasks.allSatisfy({
-            $0.continuedFromSubtaskID.map {
+            $0.carriedFromSubtaskID.map {
                 cancelledDraftSubtaskIDs.contains($0) == false
             } ?? true
         }), traces.allSatisfy({
-            $0.continuedFromTraceID.map {
+            $0.carriedFromTraceID.map {
                 cancelledDraftTraceIDs.contains($0) == false
             } ?? true
         }), traces.allSatisfy({
@@ -369,7 +367,7 @@ public extension NoonmarkSnapshot {
         guard Set(subtaskCancellationIDs).count
                 == subtaskCancellationIDs.count,
               subtasks.allSatisfy({
-                  $0.continuedFromSubtaskID.map {
+                  $0.carriedFromSubtaskID.map {
                       cancelledSubtaskIDs.contains($0) == false
                   } ?? true
               })
@@ -568,7 +566,7 @@ public extension Subtask {
             completedAt == nil && settledAt == nil
         case .completed:
             completedAt != nil && settledAt == nil
-        case .unfinished, .continued, .abandoned:
+        case .unfinished, .deferred, .abandoned:
             completedAt == nil && settledAt != nil
         case .cancelledDraft:
             completedAt == nil

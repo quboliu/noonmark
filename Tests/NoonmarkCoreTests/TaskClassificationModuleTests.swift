@@ -1441,7 +1441,7 @@ final class TaskClassificationModuleTests: XCTestCase {
         )
         let sourceTraceID = try engine.scheduleFromPool(chainID: chainID, date: day1, today: day1, now: now)
 
-        _ = try engine.continueTrace(
+        _ = try engine.deferCurrentTrace(
             traceID: sourceTraceID,
             targetDate: day2,
             today: day1,

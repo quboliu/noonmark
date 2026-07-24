@@ -7,18 +7,6 @@ extension AppCopy {
             : "Quickly captured from Day Todo."
     }
 
-    var unscheduledPoolTaskDescription: String {
-        language == .chinese
-            ? "任务池中的待排期任务。"
-            : "An unscheduled task in the Task Pool."
-    }
-
-    var unscheduledPoolTaskInitialNote: String {
-        language == .chinese
-            ? "可以排期到今天、明天或指定日期。"
-            : "Schedule it for today, tomorrow, or a specific date."
-    }
-
     var zhulongDailyReviewIntent: String {
         language == .chinese
             ? "结束今天并形成下一次可信承诺"
@@ -85,6 +73,22 @@ extension AppCopy {
 
     func continuedTo(_ date: String) -> String {
         language == .chinese ? "已延续到 \(date)" : "Continued to \(date)"
+    }
+
+    func deferredTo(_ date: String) -> String {
+        language == .chinese ? "已延期到 \(date)" : "Deferred to \(date)"
+    }
+
+    var deferralWithdrawn: String {
+        language == .chinese ? "已撤回延期，任务已回到今天" : "Deferral withdrawn; task restored to today"
+    }
+
+    var taskPinned: String {
+        language == .chinese ? "已加入置顶队列" : "Added to the pinned queue"
+    }
+
+    var taskUnpinned: String {
+        language == .chinese ? "已取消置顶" : "Removed from the pinned queue"
     }
 
     var returnedToPool: String {

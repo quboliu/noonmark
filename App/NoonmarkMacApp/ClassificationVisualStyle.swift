@@ -1,4 +1,5 @@
 import NoonmarkCore
+import NoonmarkMacRuntime
 import SwiftUI
 
 func classificationUIColor(
@@ -24,29 +25,49 @@ extension TaskClassificationProjection {
 }
 
 extension ClassificationItemProjection {
+    private var categoryVisualStyle: TaskCategoryVisualStyle {
+        TaskCategoryVisualStyle(
+            colorHex: colorHex,
+            isUserApproved: presentationApproval == .userApproved
+        )
+    }
+
     var color: Color {
         classificationUIColor(colorHex, fallback: Theme.navPool)
     }
 
     var categoryPresentationColor: Color {
-        presentationApproval == .userApproved ? color : Theme.text1
+        guard let foregroundColorHex = categoryVisualStyle.foregroundColorHex else {
+            return Theme.text1
+        }
+        return classificationUIColor(foregroundColorHex, fallback: Theme.text1)
     }
 
     var usesApprovedCategoryPresentation: Bool {
-        presentationApproval == .userApproved
+        categoryVisualStyle.usesTintedBackground
     }
 }
 
 extension ClassificationCatalogItemProjection {
+    private var categoryVisualStyle: TaskCategoryVisualStyle {
+        TaskCategoryVisualStyle(
+            colorHex: colorHex,
+            isUserApproved: presentationApproval == .userApproved
+        )
+    }
+
     var color: Color {
         classificationUIColor(colorHex, fallback: Theme.navPool)
     }
 
     var categoryPresentationColor: Color {
-        presentationApproval == .userApproved ? color : Theme.text1
+        guard let foregroundColorHex = categoryVisualStyle.foregroundColorHex else {
+            return Theme.text1
+        }
+        return classificationUIColor(foregroundColorHex, fallback: Theme.text1)
     }
 
     var usesApprovedCategoryPresentation: Bool {
-        presentationApproval == .userApproved
+        categoryVisualStyle.usesTintedBackground
     }
 }

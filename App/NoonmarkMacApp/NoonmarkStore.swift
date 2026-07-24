@@ -121,6 +121,7 @@ final class NoonmarkStore: ObservableObject {
         static let completeTask = Self { $0.completeTaskAction }
         static let updateSubtask = Self { $0.updateSubtaskAction }
         static let continueTask = Self { $0.continueTaskAction }
+        static let deferTask = Self { $0.deferTaskAction }
         static let returnTaskToPool = Self { $0.returnTaskToPoolAction }
         static let deleteTask = Self { $0.deleteTaskAction }
         static let abandonTask = Self { $0.abandonTaskAction }
@@ -365,6 +366,10 @@ final class NoonmarkStore: ObservableObject {
     enum TraceContextAction: String, Equatable {
         case markComplete
         case undoComplete
+        case pinToTop
+        case unpin
+        case deferTo
+        case withdrawDeferral
         case continueTo
         case changeToNewTask
         case returnToPool
@@ -461,6 +466,7 @@ final class NoonmarkStore: ObservableObject {
     enum DatePickerPurpose: Identifiable {
         case gotoDay
         case schedulePool(TaskChainID)
+        case deferTrace(DayTraceID)
         case continueTrace(DayTraceID)
         case reschedule(DayTraceID)
 
@@ -470,6 +476,8 @@ final class NoonmarkStore: ObservableObject {
                 "goto-day"
             case let .schedulePool(chainID):
                 "schedule-pool-\(chainID.description)"
+            case let .deferTrace(traceID):
+                "defer-trace-\(traceID.description)"
             case let .continueTrace(traceID):
                 "continue-trace-\(traceID.description)"
             case let .reschedule(traceID):
@@ -483,6 +491,8 @@ final class NoonmarkStore: ObservableObject {
                 return copy.jumpToDateTitle
             case .schedulePool:
                 return copy.scheduleDateTitle
+            case .deferTrace:
+                return copy.deferDateTitle
             case .continueTrace:
                 return copy.continueDateTitle
             case .reschedule:
@@ -496,8 +506,12 @@ final class NoonmarkStore: ObservableObject {
         }
 
         var futureOnly: Bool {
-            if case .reschedule = self { return true }
-            return false
+            switch self {
+            case .deferTrace, .reschedule:
+                true
+            case .gotoDay, .schedulePool, .continueTrace:
+                false
+            }
         }
 
         func rangeHint(copy: AppCopy) -> String {
@@ -506,7 +520,7 @@ final class NoonmarkStore: ObservableObject {
                 return copy.anyDateHint
             case .schedulePool, .continueTrace:
                 return copy.todayOrFutureDateHint
-            case .reschedule:
+            case .deferTrace, .reschedule:
                 return copy.futureDateHint
             }
         }
@@ -537,6 +551,8 @@ final class NoonmarkStore: ObservableObject {
                 copy.jumpToDateAction
             case .schedulePool:
                 copy.scheduleDateAction
+            case .deferTrace:
+                copy.deferDateAction
             case .continueTrace:
                 copy.continueDateAction
             case .reschedule:

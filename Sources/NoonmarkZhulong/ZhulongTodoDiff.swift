@@ -444,7 +444,7 @@ public struct ZhulongTodoDiffApplier: Sendable {
             )
         case let .continueTrace(traceID, targetDate):
             return try .continued(
-                engine.continueTrace(
+                engine.continueUnfinishedTrace(
                     traceID: traceID,
                     targetDate: targetDate,
                     today: today,

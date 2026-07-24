@@ -224,6 +224,7 @@ only_mode_specs=(
   "NOONMARK_E2E_DATA_IMPORT_UI_ONLY:data-import-ui"
   "NOONMARK_E2E_DATA_IMPORT_INTEGRITY_ONLY:data-import-integrity"
   "NOONMARK_E2E_DATE_PICKER_ONLY:date-picker"
+  "NOONMARK_E2E_HORIZONTAL_PAGE_NAVIGATION_ONLY:horizontal-page-navigation"
   "NOONMARK_E2E_POOL_LIST_LAYOUT_ONLY:pool-list-layout"
   "NOONMARK_E2E_POOL_CONTEXT_ACTION_ONLY:pool-context-action"
   "NOONMARK_E2E_UNFINISHED_ACTION_ONLY:unfinished-action"
@@ -2333,13 +2334,13 @@ run_english_menu_probe() {
   fi
   if [[ "$(sqlite3 -noheader -separator '|' "$database_path" "
     SELECT
-      definition.description_text,
-      instr(chain.note_entries_json, 'Schedule it for today, tomorrow, or a specific date.') > 0
+      coalesce(definition.description_text, ''),
+      json_array_length(chain.note_entries_json)
     FROM task_definitions AS definition
     JOIN task_chains AS chain ON chain.id = definition.chain_id
     WHERE definition.title = '$pool_title';
-  ")" != "An unscheduled task in the Task Pool.|1" ]]; then
-    echo "English Task Pool quick-add persisted non-localized defaults" >&2
+  ")" != "|0" ]]; then
+    echo "English Task Pool quick-add polluted user-authored fields" >&2
     exit 1
   fi
   echo "E2E native menus and persisted Quick Entry/Task Pool defaults validated in English"
@@ -4157,7 +4158,11 @@ run_quick_add_ui_probe() {
     --e2e-quick-add-ui-result-url "$PWD/$pool_result"
 
   pool_persisted="$(sqlite3 -noheader -separator '|' "$pool_db" "
-    SELECT count(*), count(DISTINCT job.id)
+    SELECT
+      count(*),
+      count(DISTINCT job.id),
+      sum(task_definitions.description_text IS NULL),
+      sum(json_array_length(task_chains.note_entries_json))
     FROM task_chains
     JOIN task_definitions ON task_definitions.chain_id = task_chains.id
     JOIN automatic_classification_jobs AS job
@@ -4170,7 +4175,7 @@ run_quick_add_ui_probe() {
         SELECT 1 FROM day_traces WHERE day_traces.chain_id = task_chains.id
       );
   ")"
-  if [[ "$pool_persisted" != "1|1" ]]; then
+  if [[ "$pool_persisted" != "1|1|1|0" ]]; then
     echo "task-pool quick-add task/job persistence failed: ${pool_persisted:-missing}" >&2
     exit 1
   fi
@@ -4872,6 +4877,24 @@ run_lifecycle_persistence_probe() {
       (SELECT count(*)
        FROM day_traces
        JOIN task_definitions ON task_definitions.id = day_traces.definition_id
+       WHERE task_definitions.title = 'E2E 延期目标回池'
+         AND day_traces.date = '2026-07-05'
+         AND day_traces.status = 'deferred'),
+      (SELECT count(*)
+       FROM day_traces target
+       JOIN task_definitions ON task_definitions.id = target.definition_id
+       JOIN day_traces source ON source.id = target.carried_from_trace_id
+       WHERE task_definitions.title = 'E2E 延期目标回池'
+         AND target.date = '2026-07-06'
+         AND target.status = 'cancelledDraft'
+         AND target.draft_cancelled_on = '2026-07-05'
+         AND source.status = 'deferred'),
+      (SELECT count(*)
+       FROM task_pool_view
+       WHERE title = 'E2E 延期目标回池'),
+      (SELECT count(*)
+       FROM day_traces
+       JOIN task_definitions ON task_definitions.id = day_traces.definition_id
        JOIN task_chains ON task_chains.id = day_traces.chain_id
        WHERE task_definitions.title = 'E2E 废弃任务'
          AND day_traces.date = '2026-07-05'
@@ -4904,7 +4927,7 @@ run_lifecycle_persistence_probe() {
          AND record_payload IS NOT NULL
          AND length(record_payload) > 0);
   ")"
-  if [[ "$lifecycle_probe" != "1 1 1 1 0 1 1" ]]; then
+  if [[ "$lifecycle_probe" != "1 1 1 1 1 1 1 0 1 1" ]]; then
     echo "lifecycle E2E SQLite/restart probe failed: ${lifecycle_probe:-missing}" >&2
     exit 1
   fi
@@ -8170,6 +8193,29 @@ run_date_picker_probe() {
   echo "E2E custom date picker geometry, input, purpose, and screenshot contract: $picker_result"
 }
 
+run_horizontal_page_navigation_probe() {
+  local navigation_dir="artifacts/e2e-horizontal-page-navigation"
+  local navigation_result="${navigation_dir}/result.txt"
+  local navigation_log="${navigation_dir}/app.log"
+
+  rm -rf "$navigation_dir"
+  mkdir -p "$navigation_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "horizontal page navigation" \
+    "$navigation_result" \
+    "$navigation_log" \
+    --ephemeral \
+    --page day \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-reset-selection \
+    --e2e-horizontal-page-navigation-result-url "$PWD/$navigation_result"
+
+  echo "E2E Day Todo day swipe and Calendar month swipe: $navigation_result"
+}
+
 parse_native_command_help_ready() {
   local ready_path="$1"
   local expected_token="$2"
@@ -8934,6 +8980,11 @@ if [[ "${NOONMARK_E2E_DATE_PICKER_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_HORIZONTAL_PAGE_NAVIGATION_ONLY:-0}" == "1" ]]; then
+  run_horizontal_page_navigation_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_POOL_LIST_LAYOUT_ONLY:-0}" == "1" ]]; then
   run_pool_list_layout_probe
   exit 0
@@ -9135,6 +9186,8 @@ run_ui_entry_probes
 run_quick_add_ui_probe
 
 run_date_picker_probe
+
+run_horizontal_page_navigation_probe
 
 run_seed_clock_probe
 

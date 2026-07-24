@@ -21,6 +21,36 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertNoThrow(try SQLiteEngineRepository(databaseURL: databaseURL).load())
     }
 
+    func testClearedTaskTitleRoundTripsThroughCurrentSQLiteSchema() throws {
+        let databaseURL = makeDatabaseURL()
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "持久化前标题", now: now)
+        _ = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now
+        )
+        try engine.saveTaskTitleInput(
+            chainID: chainID,
+            title: "",
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+
+        try repository.save(engine.snapshot())
+        let restored = try repository.load()
+
+        XCTAssertEqual(restored.taskPool().count, 0)
+        XCTAssertEqual(
+            restored.definitions.values.first(where: {
+                $0.chainID == chainID && $0.supersededAt == nil
+            })?.title,
+            ""
+        )
+    }
+
     func testSyncRepositoryRejectsANonemptyUnversionedStoreWithoutChangingIt() throws {
         let databaseURL = makeDatabaseURL()
         try executeProbeSQL(

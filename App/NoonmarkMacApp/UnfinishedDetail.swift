@@ -39,7 +39,7 @@ struct UnfinishedDetail: View {
                     }
                 })
                 DetailPrimaryText {
-                    DetailTitleRow(item.definition.title)
+                    DetailTitleRow(store.copy.displayTaskTitle(item.definition.title))
                 } description: {
                     DetailDescriptionBlock(
                         text: .constant(trace.descriptionText ?? item.definition.descriptionText ?? ""),

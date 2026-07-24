@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import NoonmarkMacE2ESupport
+import NoonmarkMacRuntime
 
 /// Posts E2E-only input through WindowServer so native AppKit and SwiftUI
 /// interaction machinery observes the same event stream as real hardware.
@@ -295,6 +296,75 @@ final class WindowServerInputDriver {
             clickCount: 2,
             resolveTarget: resolveTarget
         )
+    }
+
+    func postHorizontalTrackpadSwipe(
+        at initialCoordinate: PointerCoordinate,
+        toward direction: HorizontalPageNavigationDirection,
+        resolveTarget: () throws -> PointerCoordinate
+    ) async throws {
+        try Task.checkCancellation()
+        try requireResolvedTarget(
+            initialCoordinate,
+            matching: initialCoordinate,
+            expectedButtonState: .up
+        )
+        let settledCoordinate = try await positionPointer(
+            initialCoordinate: initialCoordinate,
+            expectedCoordinate: initialCoordinate,
+            gestureNumber: nextMouseGestureNumber(),
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
+        let sign: Int32 = direction == .next ? 1 : -1
+        let samples: [(delta: Int32, phase: Int64)] = [
+            (8 * sign, 1),
+            (22 * sign, 2),
+            (24 * sign, 2),
+            (0, 4)
+        ]
+
+        for sample in samples {
+            try Task.checkCancellation()
+            let resolvedCoordinate = try resolveTarget()
+            try requireResolvedTarget(
+                resolvedCoordinate,
+                matching: settledCoordinate,
+                expectedButtonState: .up
+            )
+            guard let event = CGEvent(
+                scrollWheelEvent2Source: source,
+                units: .pixel,
+                wheelCount: 2,
+                wheel1: 0,
+                wheel2: sample.delta,
+                wheel3: 0
+            ) else {
+                throw Failure.eventConstructionFailed(
+                    "horizontal trackpad scroll event"
+                )
+            }
+            event.location = resolvedCoordinate.quartzPoint
+            event.flags = []
+            event.setIntegerValueField(
+                .eventSourceUserData,
+                value: userData
+            )
+            event.setIntegerValueField(
+                .scrollWheelEventIsContinuous,
+                value: 1
+            )
+            event.setIntegerValueField(
+                .scrollWheelEventScrollPhase,
+                value: sample.phase
+            )
+            event.setIntegerValueField(
+                .scrollWheelEventMomentumPhase,
+                value: 0
+            )
+            event.post(tap: .cghidEventTap)
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 
     private func postClickGesture(

@@ -166,6 +166,32 @@ enum QuickAddUIE2EDriver {
                 return
             }
             textView.setSelectedRange(NSRange(location: 0, length: 0))
+            guard let placeholder = currentPlaceholderView,
+                  let geometry = geometrySnapshot(for: textView),
+                  let window = placeholder.window
+            else {
+                finish(
+                    failure(
+                        phase: "placeholder-geometry",
+                        message: "无法取得真实 placeholder 与 caret 几何",
+                        geometry: geometrySnapshot(for: textView)
+                    )
+                )
+                return
+            }
+            let placeholderRect = window.convertToScreen(
+                placeholder.convert(placeholder.bounds, to: nil)
+            )
+            guard abs(placeholderRect.minX - geometry.caretRect.minX) <= 0.75 else {
+                finish(
+                    failure(
+                        phase: "placeholder-geometry",
+                        message: "placeholder 首字与 caret 未对齐 placeholderX=\(rounded(placeholderRect.minX)) caretX=\(rounded(geometry.caretRect.minX))",
+                        geometry: geometry
+                    )
+                )
+                return
+            }
             textView.setMarkedText(
                 Self.markedTextFixture,
                 selectedRange: NSRange(
@@ -413,6 +439,13 @@ enum QuickAddUIE2EDriver {
 
         private var currentTextView: NSTextView? {
             AppViewTreeE2E.view(identifier: inputIdentifier) as? NSTextView
+        }
+
+        private var currentPlaceholderView: NSView? {
+            let baseIdentifier = inputIdentifier.hasSuffix(".input")
+                ? String(inputIdentifier.dropLast(".input".count))
+                : inputIdentifier
+            return AppViewTreeE2E.view(identifier: "\(baseIdentifier).placeholder")
         }
 
         private func sendTitleThroughWindow(textView: NSTextView) -> Bool {

@@ -47,7 +47,8 @@ struct AppCopy {
         _ status: String,
         taskTitle: String
     ) -> String {
-        switch language {
+        let taskTitle = displayTaskTitle(taskTitle)
+        return switch language {
         case .chinese: "任务“\(taskTitle)”：\(status)"
         case .english: "Task “\(taskTitle)”: \(status)"
         }
@@ -85,6 +86,10 @@ struct AppCopy {
     var scheduleToday: String { language == .chinese ? "排期到今天" : "Schedule today" }
     var scheduleTomorrow: String { language == .chinese ? "排期到明天" : "Schedule tomorrow" }
     var continueTo: String { language == .chinese ? "延续到…" : "Continue to…" }
+    var deferTo: String { language == .chinese ? "延期到…" : "Defer to…" }
+    var withdrawDeferral: String { language == .chinese ? "撤回延期" : "Withdraw deferral" }
+    var pinToTop: String { language == .chinese ? "置顶" : "Pin to top" }
+    var unpin: String { language == .chinese ? "取消置顶" : "Unpin" }
     var abandonChain: String { language == .chinese ? "废弃任务链" : "Drop chain" }
     var markComplete: String { language == .chinese ? "标记完成" : "Mark complete" }
     var undoComplete: String { language == .chinese ? "撤销完成" : "Undo complete" }
@@ -119,8 +124,8 @@ struct AppCopy {
 
     var futureDayNotice: String {
         language == .chinese
-            ? "未来日：可排期与调整顺序，不能提前完成或生成复盘。"
-            : "Future day: schedule and reorder only. Completion and review are not available yet."
+            ? "未来日：可排期、置顶和选择查看方式，不能提前完成或生成复盘。"
+            : "Future day: schedule, pin, and change the view. Completion and review are not available yet."
     }
 
     var emptyDay: String { language == .chinese ? "这一天没有留下任务。" : "No tasks on this day." }

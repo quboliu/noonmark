@@ -37,6 +37,10 @@ struct TaskClassificationEditor: View {
         presentation.taskClassificationEditor
     }
 
+    private var accessibilityTaskTitle: String {
+        store.copy.displayTaskTitle(taskTitle)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             categorySection
@@ -48,7 +52,7 @@ struct TaskClassificationEditor: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("classification.editor.\(chainID.description)")
-        .accessibilityLabel(copy.editorAccessibilityLabel(taskTitle: taskTitle))
+        .accessibilityLabel(copy.editorAccessibilityLabel(taskTitle: accessibilityTaskTitle))
         .onAppear(perform: loadDraft)
         .onChange(of: chainID) { _, _ in
             resetTransientEditorState()
@@ -153,7 +157,9 @@ struct TaskClassificationEditor: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .accessibilityLabel(copy.taskGroupAccessibilityLabel(taskTitle: taskTitle))
+        .accessibilityLabel(
+            copy.taskGroupAccessibilityLabel(taskTitle: accessibilityTaskTitle)
+        )
         .background {
             AppE2EViewAnchor(
                 identifier: "classification.editor.category.\(chainID.description)",
@@ -264,7 +270,9 @@ struct TaskClassificationEditor: View {
                         .focused($isLabelInputFocused)
                         .onSubmit(addLabelFromInput)
                         .accessibilityIdentifier("classification.editor.label-input.\(chainID.description)")
-                        .accessibilityLabel(copy.addTagAccessibilityLabel(taskTitle: taskTitle))
+                        .accessibilityLabel(
+                            copy.addTagAccessibilityLabel(taskTitle: accessibilityTaskTitle)
+                        )
                     Button(copy.cancelAction) {
                         labelInput = ""
                         labelError = nil
@@ -297,7 +305,9 @@ struct TaskClassificationEditor: View {
             .foregroundStyle(Theme.ok)
             .frame(width: 14, height: 24)
             .accessibilityIdentifier("classification.editor.save-status.\(chainID.description)")
-            .accessibilityLabel(copy.savedAccessibilityLabel(taskTitle: taskTitle))
+            .accessibilityLabel(
+                copy.savedAccessibilityLabel(taskTitle: accessibilityTaskTitle)
+            )
     }
 
     private func editorFieldLabel(_ text: String) -> some View {
@@ -374,7 +384,7 @@ struct TaskClassificationEditor: View {
             )
             .accessibilityLabel(
                 copy.removeTagAccessibilityLabel(
-                    taskTitle: taskTitle,
+                    taskTitle: accessibilityTaskTitle,
                     tagName: label.name
                 )
             )
@@ -397,7 +407,7 @@ struct TaskClassificationEditor: View {
         )
         .accessibilityLabel(
             copy.taskTagAccessibilityLabel(
-                taskTitle: taskTitle,
+                taskTitle: accessibilityTaskTitle,
                 tagName: label.name
             )
         )

@@ -37,7 +37,7 @@ public struct LocalInsightAnalyzer: Sendable {
 
         if traces.isEmpty == false {
             let maxContinuationSeq = traces.map(\.trace.continuationSeq).max() ?? 0
-            let continuedTraces = traces.filter { $0.trace.continuationSeq > 0 || $0.trace.status == .continued }
+            let continuedTraces = traces.filter { $0.trace.continuationSeq > 0 }
             if maxContinuationSeq > 0 || continuedTraces.isEmpty == false {
                 let dates = uniqueDates(continuedTraces.map(\.trace.date))
                 let fact = "范围内有 \(continuedTraces.count) 条日轨迹涉及延续，最高延续次数为 \(maxContinuationSeq)。"
@@ -53,7 +53,7 @@ public struct LocalInsightAnalyzer: Sendable {
                 facts.append(fact)
             }
 
-            let terminalTraces = traces.filter { [.completed, .unfinished, .continued, .abandoned].contains($0.trace.status) }
+            let terminalTraces = traces.filter { [.completed, .unfinished, .deferred, .abandoned].contains($0.trace.status) }
             if terminalTraces.isEmpty == false {
                 let completedCount = terminalTraces.filter { $0.trace.status == .completed }.count
                 let completionRate = Double(completedCount) / Double(terminalTraces.count)
@@ -168,7 +168,7 @@ public struct LocalInsightAnalyzer: Sendable {
     }
 
     private var emptyProgress: SubtaskProgress {
-        SubtaskProgress(total: 0, completed: 0, pending: 0, unfinished: 0, continued: 0, abandoned: 0)
+        SubtaskProgress(total: 0, completed: 0, pending: 0, unfinished: 0, deferred: 0, abandoned: 0)
     }
 
     private func uniqueDates(_ dates: [LocalDate]) -> [LocalDate] {

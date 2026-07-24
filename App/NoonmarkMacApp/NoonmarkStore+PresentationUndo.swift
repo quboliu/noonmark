@@ -257,6 +257,28 @@ extension NoonmarkStore {
             .sorted { $0.position < $1.position }
     }
 
+    func dayTodoPresentationSections(
+        date: LocalDate,
+        preference: TaskCollectionPresentationPreference
+    ) -> [TaskCollectionPresentationSection] {
+        let items = engine.getDayTodo(date: date).traces.map { trace in
+            TaskCollectionPresentationItem(
+                id: trace.id.description,
+                title: copy.displayTaskTitle(definition(for: trace)?.title),
+                time: trace.createdAt,
+                category: displayableClassification(for: trace)?
+                    .category?.taskCollectionCategoryPresentation,
+                precedence: trace.status == .pending ? 0 : 1,
+                fixedOrder: trace.status == .pending ? trace.pinOrder : nil
+            )
+        }
+        return TaskCollectionPresentationProjector().sections(
+            for: items,
+            preference: preference,
+            ungroupedTitle: copy.ungrouped
+        )
+    }
+
     func contextMenuActions(for trace: DayTrace) -> [TraceContextAction] {
         let isLocked = engine.days[trace.date]?.lockedAt != nil
         let completionCapability = try? engine.completionCapability(
@@ -268,12 +290,20 @@ extension NoonmarkStore {
             if completionCapability == .available(.complete) {
                 actions.append(.markComplete)
             }
-            actions.append(contentsOf: [.continueTo, .changeToNewTask, .returnToPool])
+            actions.append(trace.pinOrder == nil ? .pinToTop : .unpin)
+            actions.append(contentsOf: [.deferTo, .changeToNewTask, .returnToPool])
             actions.append(.abandonChain)
             if engine.canDeleteNewCurrentDayTask(traceID: trace.id, today: today) {
                 actions.append(.deleteNewCurrentDayTask)
             }
             return actions
+        }
+
+        if engine.canWithdrawDeferral(
+            sourceTraceID: trace.id,
+            today: today
+        ) {
+            return [.withdrawDeferral]
         }
 
         if isLocked == false, trace.date == today, trace.status == .completed {
@@ -293,7 +323,11 @@ extension NoonmarkStore {
         }
 
         if trace.date > today, trace.status == .pending {
-            return [.reschedule, .returnToPool]
+            return [
+                trace.pinOrder == nil ? .pinToTop : .unpin,
+                .reschedule,
+                .returnToPool
+            ]
         }
 
         return []
@@ -326,13 +360,34 @@ extension NoonmarkStore {
         dateStripDates().firstIndex(of: selectedDate)
     }
 
-    func moveSelectedDate(_ direction: MoveCommandDirection) {
-        guard showingPicker == nil,
-              showingFromPoolPicker == false,
-              showingChangeDialog == false
-        else {
+    var canNavigateDatePage: Bool {
+        showingPicker == nil
+            && showingFromPoolPicker == false
+            && showingChangeDialog == false
+            && showingClassificationManager == false
+            && preparedDataImport == nil
+    }
+
+    func moveSelectedPage(
+        _ direction: HorizontalPageNavigationDirection
+    ) {
+        guard canNavigateDatePage else { return }
+        let offset = direction == .next ? 1 : -1
+        switch page {
+        case .day:
+            selectedDate = Self.offset(selectedDate, by: offset)
+        case .calendar:
+            selectedCalendarDate = Self.shiftedMonth(
+                from: selectedCalendarDate,
+                by: offset
+            )
+        case .pool, .future, .unfinished, .completed, .zhulong, .settings:
             return
         }
+    }
+
+    func moveSelectedDate(_ direction: MoveCommandDirection) {
+        guard canNavigateDatePage else { return }
 
         let days: Int
         switch direction {
@@ -381,8 +436,10 @@ extension NoonmarkStore {
             page = .day
         case let .schedulePool(chainID):
             schedulePoolTask(chainID, date: date)
+        case let .deferTrace(traceID):
+            deferTrace(traceID, to: date)
         case let .continueTrace(traceID):
-            continueTrace(traceID, to: date)
+            continueUnfinishedTrace(traceID, to: date)
         case let .reschedule(traceID):
             reschedule(traceID, to: date)
         }

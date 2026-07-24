@@ -208,12 +208,16 @@ private struct NoonmarkSearchResultRow: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(result.title)
+                Text(store.copy.displayTaskTitle(result.title))
                     .font(.noonmarkSystem(size: 13, weight: .medium))
                     .foregroundStyle(Theme.text1)
                     .lineLimit(1)
                 if let context = result.context {
-                    Text(context)
+                    Text(
+                        result.kind == .subtask
+                            ? store.copy.displayTaskTitle(context)
+                            : context
+                    )
                         .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(2)

@@ -59,7 +59,7 @@ final class SQLiteSchemaTests: XCTestCase {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
 
-        XCTAssertEqual(SQLiteSchema.version, 7)
+        XCTAssertEqual(SQLiteSchema.version, 11)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_canonical_name_ownership"))
@@ -78,6 +78,12 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_events"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_event_finalizations"))
         XCTAssertTrue(taskChainTable.contains("note_entries_json TEXT NOT NULL"))
+        XCTAssertFalse(
+            taskDefinitionTable.contains("CHECK (length(trim(title)) > 0)")
+        )
+        XCTAssertTrue(
+            subtaskTable.contains("CHECK (length(trim(title)) > 0)")
+        )
         XCTAssertTrue(taskChainTable.contains("json_type(note_entries_json) = 'array'"))
         XCTAssertTrue(taskChainTable.contains("state TEXT NOT NULL"))
         XCTAssertTrue(taskChainTable.contains("created_at TEXT NOT NULL"))
@@ -97,6 +103,7 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertTrue(dayTraceTable.contains("content_updated_at_bits INTEGER NOT NULL"))
         XCTAssertTrue(dayTraceTable.contains("completed_at_bits INTEGER"))
         XCTAssertTrue(dayTraceTable.contains("settled_at_bits INTEGER"))
+        XCTAssertTrue(dayTraceTable.contains("pin_order INTEGER"))
         XCTAssertTrue(subtaskTable.contains("created_at_bits INTEGER NOT NULL"))
         XCTAssertTrue(subtaskTable.contains("updated_at TEXT NOT NULL"))
         XCTAssertTrue(subtaskTable.contains("updated_at_bits INTEGER NOT NULL"))
@@ -105,7 +112,7 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertTrue(subtaskTable.contains("status = 'pending'"))
         XCTAssertTrue(subtaskTable.contains("status = 'completed'"))
         XCTAssertTrue(subtaskTable.contains(
-            "status IN ('unfinished', 'continued', 'abandoned')"
+            "status IN ('unfinished', 'deferred', 'abandoned')"
         ))
         XCTAssertTrue(subtaskTable.contains("status = 'cancelledDraft'"))
         XCTAssertTrue(subtaskTable.contains("draft_cancellation_id TEXT"))
@@ -117,7 +124,10 @@ final class SQLiteSchemaTests: XCTestCase {
         ))
         XCTAssertTrue(schema.contains("status = 'cancelledDraft'"))
         XCTAssertTrue(schema.contains("date >= draft_cancelled_on"))
-        XCTAssertTrue(schema.contains("date = draft_cancelled_on"))
+        XCTAssertFalse(dayTraceTable.contains(
+            "manual_progress_percent IS NULL"
+                + "\n                            AND carried_from_trace_id IS NULL"
+        ))
         XCTAssertTrue(schema.contains("chain_note_entries_json"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_device_identity"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_metadata"))
@@ -199,8 +209,9 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertFalse(automaticClassificationProviderCircuitTable.contains("hash"))
         XCTAssertTrue(schema.contains("CREATE VIEW IF NOT EXISTS completed_subtask_record_view"))
         XCTAssertTrue(schema.contains("CREATE VIEW IF NOT EXISTS sync_endpoint_options_view"))
+        XCTAssertTrue(schema.contains("t.status = 'pending'"))
         XCTAssertTrue(schema.contains(
-            "t.status NOT IN ('returnedToPool', 'cancelledDraft')"
+            "latest.status IN ('returnedToPool', 'cancelledDraft')"
         ))
     }
 
@@ -238,7 +249,7 @@ final class SQLiteSchemaTests: XCTestCase {
         let subtaskID = try engine.addSubtask(traceID: traceID, title: "写 round-trip 测试", difficulty: .hard, now: now)
         try engine.completeSubtask(subtaskID, today: day1, now: now)
         try engine.settleDays(upTo: day2, now: now)
-        let continuedTraceID = try engine.continueTrace(
+        let continuedTraceID = try engine.continueUnfinishedTrace(
             traceID: traceID,
             targetDate: day2,
             today: day2,
@@ -690,6 +701,126 @@ final class SQLiteSchemaTests: XCTestCase {
             ),
             1
         )
+    }
+
+    func testDeferredFutureTargetReturnUsesTheSameTaskPoolProjectionAfterRestart() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let today = LocalDate("2026-07-05")
+        let futureDate = LocalDate("2026-07-06")
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noonmark-deferred-return-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "延期目标持久化回池",
+            now: now
+        )
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let targetTraceID = try engine.deferCurrentTrace(
+            traceID: sourceTraceID,
+            targetDate: futureDate,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        try engine.returnToPool(
+            traceID: targetTraceID,
+            today: today,
+            now: now.addingTimeInterval(3)
+        )
+        try repository.save(engine)
+
+        let restored = try repository.load()
+        XCTAssertEqual(restored.snapshot(), engine.snapshot())
+        XCTAssertEqual(restored.traces[sourceTraceID]?.status, .deferred)
+        XCTAssertEqual(restored.traces[targetTraceID]?.status, .cancelledDraft)
+        XCTAssertEqual(
+            restored.traces[targetTraceID]?.carriedFromTraceID,
+            sourceTraceID
+        )
+        XCTAssertEqual(restored.taskPool().map(\.chain.id), [chainID])
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM task_pool_view "
+                    + "WHERE chain_id = '\(chainID.rawValue.uuidString)'",
+                at: databaseURL
+            ),
+            1
+        )
+    }
+
+    func testPinQueueAndWithdrawnDeferralSurviveRepositoryRoundTrip() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let today = LocalDate("2026-07-05")
+        let tomorrow = LocalDate("2026-07-06")
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noonmark-pin-withdraw-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        let pinnedChainID = try engine.createPoolTask(
+            title: "持久化置顶",
+            now: now
+        )
+        let pinnedTraceID = try engine.scheduleFromPool(
+            chainID: pinnedChainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.pinDayTrace(
+            pinnedTraceID,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+
+        let deferredChainID = try engine.createPoolTask(
+            title: "持久化撤回延期",
+            now: now.addingTimeInterval(3)
+        )
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: deferredChainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(4)
+        )
+        let targetTraceID = try engine.deferCurrentTrace(
+            traceID: sourceTraceID,
+            targetDate: tomorrow,
+            today: today,
+            now: now.addingTimeInterval(5)
+        )
+        try engine.withdrawDeferral(
+            sourceTraceID: sourceTraceID,
+            today: today,
+            now: now.addingTimeInterval(6)
+        )
+
+        try repository.save(engine)
+        let restored = try repository.load()
+
+        XCTAssertEqual(restored.snapshot(), engine.snapshot())
+        XCTAssertEqual(restored.traces[pinnedTraceID]?.pinOrder, 1)
+        XCTAssertEqual(restored.traces[sourceTraceID]?.status, .pending)
+        XCTAssertEqual(restored.traces[targetTraceID]?.status, .cancelledDraft)
+        XCTAssertTrue(restored.futurePlans(today: today).isEmpty)
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT pin_order FROM day_traces WHERE id = '\(pinnedTraceID.rawValue.uuidString)'",
+                at: databaseURL
+            ),
+            1
+        )
+        XCTAssertNoThrow(try restored.snapshot().validateIntegrity())
     }
 
     func testDayTodoViewExcludesReturnedSourceAfterSameDayReschedule() throws {

@@ -260,7 +260,7 @@ final class SnapshotUndoCancellationTests: XCTestCase {
             now: base.addingTimeInterval(2)
         )
         let before = current.snapshot()
-        let targetTraceID = try current.continueTrace(
+        let targetTraceID = try current.deferCurrentTrace(
             traceID: sourceTraceID,
             targetDate: tomorrow,
             today: today,
@@ -301,11 +301,11 @@ final class SnapshotUndoCancellationTests: XCTestCase {
             base.addingTimeInterval(4)
         )
         XCTAssertEqual(
-            undone.traces[targetTraceID]?.continuedFromTraceID,
+            undone.traces[targetTraceID]?.carriedFromTraceID,
             sourceTraceID
         )
         XCTAssertEqual(
-            undone.subtasks[targetSubtaskID]?.continuedFromSubtaskID,
+            undone.subtasks[targetSubtaskID]?.carriedFromSubtaskID,
             sourceSubtaskID
         )
         XCTAssertEqual(
@@ -325,10 +325,10 @@ final class SnapshotUndoCancellationTests: XCTestCase {
             now: base.addingTimeInterval(5)
         )
 
-        XCTAssertEqual(redone.traces[sourceTraceID]?.status, .continued)
+        XCTAssertEqual(redone.traces[sourceTraceID]?.status, .deferred)
         XCTAssertEqual(redone.traces[targetTraceID]?.status, .pending)
         XCTAssertEqual(
-            redone.subtasks[targetSubtaskID]?.continuedFromSubtaskID,
+            redone.subtasks[targetSubtaskID]?.carriedFromSubtaskID,
             sourceSubtaskID
         )
         XCTAssertEqual(

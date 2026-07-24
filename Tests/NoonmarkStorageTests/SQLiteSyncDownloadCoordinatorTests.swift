@@ -1230,7 +1230,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
             traceID: DayTraceID(
                 UUID(uuidString: "45000000-0000-0000-0000-000000000002")!
             ),
-            status: .continued,
+            status: .deferred,
             category: nil,
             labels: [],
             capturedAt: now.addingTimeInterval(1),

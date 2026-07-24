@@ -160,7 +160,7 @@ final class NoonmarkDeterministicSimulationTests: XCTestCase {
 
     private func continueTrace(_ context: inout SimulationContext) throws {
         if let item = context.engine.unfinishedPool().first, let trace = item.unfinishedTraces.last {
-            _ = try context.engine.continueTrace(
+            _ = try context.engine.continueUnfinishedTrace(
                 traceID: trace.id,
                 targetDate: offset(context.today, by: context.rng.nextInt(2)),
                 today: context.today,

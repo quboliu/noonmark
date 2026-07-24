@@ -80,6 +80,38 @@ struct LifecycleE2EAutomation: LaunchAutomationRunnable {
             on: store
         )
         store.returnToPool(traceID)
+
+        let (deferredChainID, deferredSourceID) = try createScheduledTask(
+            title: "E2E 延期目标回池",
+            descriptionText: "E2E 延期目标回池路径。",
+            on: store
+        )
+        let futureDate = NoonmarkStore.offset(store.today, by: 1)
+        store.deferTrace(deferredSourceID, to: futureDate)
+        guard let deferredTarget = store.engine.traces.values.first(where: {
+            $0.carriedFromTraceID == deferredSourceID
+                && $0.status == .pending
+        }) else {
+            throw LifecycleE2EAutomationError.failed(
+                "deferred future target was not created"
+            )
+        }
+        store.returnToPool(deferredTarget.id)
+        guard store.engine.traces[deferredSourceID]?.status == .deferred,
+              store.engine.traces[deferredTarget.id]?.status == .cancelledDraft,
+              store.engine.traces[deferredTarget.id]?.carriedFromTraceID
+              == deferredSourceID,
+              store.engine.taskPool().contains(where: {
+                  $0.chain.id == deferredChainID
+              }),
+              store.page == .day,
+              store.selectedDate == futureDate,
+              store.operationFailureNotice == nil
+        else {
+            throw LifecycleE2EAutomationError.failed(
+                "deferred future target did not return to pool in place"
+            )
+        }
     }
 
     @MainActor
@@ -496,7 +528,7 @@ struct WorkflowE2EAutomation: LaunchAutomationRunnable {
                 throw WorkflowE2EAutomationError.missing("scheduled trace")
             }
 
-            store.continueTrace(todayTraceID, to: tomorrow)
+            store.deferTrace(todayTraceID, to: tomorrow)
             guard store.selectedTraceID != todayTraceID else {
                 throw WorkflowE2EAutomationError.missing("continued trace")
             }

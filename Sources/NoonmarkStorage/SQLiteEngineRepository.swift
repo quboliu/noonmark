@@ -1409,24 +1409,25 @@ private extension SQLiteEngineRepository {
         }
         let sql = """
         INSERT INTO day_traces(
-            id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note_entries_json,
-            manual_progress_percent, continued_from_trace_id, changed_to_trace_id,
+            id, chain_id, definition_id, date, status, priority, pin_order, continuation_seq, description_text, note_entries_json,
+            manual_progress_percent, carried_from_trace_id, changed_to_trace_id,
             created_at, created_at_bits, content_updated_at, content_updated_at_bits,
             completed_at, completed_at_bits, settled_at, settled_at_bits,
             draft_cancellation_id, draft_cancelled_on
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             chain_id = excluded.chain_id,
             definition_id = excluded.definition_id,
             date = excluded.date,
             status = excluded.status,
             priority = excluded.priority,
+            pin_order = excluded.pin_order,
             continuation_seq = excluded.continuation_seq,
             description_text = excluded.description_text,
             note_entries_json = excluded.note_entries_json,
             manual_progress_percent = excluded.manual_progress_percent,
-            continued_from_trace_id = excluded.continued_from_trace_id,
+            carried_from_trace_id = excluded.carried_from_trace_id,
             changed_to_trace_id = excluded.changed_to_trace_id,
             created_at = excluded.created_at,
             created_at_bits = excluded.created_at_bits,
@@ -1447,22 +1448,23 @@ private extension SQLiteEngineRepository {
                 bind(trace.date, to: 4, in: statement)
                 bind(trace.status.rawValue, to: 5, in: statement)
                 bind(trace.priority, to: 6, in: statement)
-                bind(trace.continuationSeq, to: 7, in: statement)
-                bind(trace.descriptionText, to: 8, in: statement)
-                bind(try noteEntriesJSON(trace.noteEntries), to: 9, in: statement)
-                bind(trace.manualProgressPercent, to: 10, in: statement)
-                bind(trace.continuedFromTraceID?.rawValue.uuidString, to: 11, in: statement)
-                bind(nil as String?, to: 12, in: statement)
-                bind(trace.createdAt, to: 13, in: statement)
-                try bindExactDate(trace.createdAt, to: 14, in: statement)
-                bind(trace.contentUpdatedAt, to: 15, in: statement)
-                try bindExactDate(trace.contentUpdatedAt, to: 16, in: statement)
-                bind(trace.completedAt, to: 17, in: statement)
-                try bindExactDate(trace.completedAt, to: 18, in: statement)
-                bind(trace.settledAt, to: 19, in: statement)
-                try bindExactDate(trace.settledAt, to: 20, in: statement)
-                bind(trace.draftCancellationID?.uuidString, to: 21, in: statement)
-                bind(trace.draftCancelledOn?.description, to: 22, in: statement)
+                bind(trace.pinOrder, to: 7, in: statement)
+                bind(trace.continuationSeq, to: 8, in: statement)
+                bind(trace.descriptionText, to: 9, in: statement)
+                bind(try noteEntriesJSON(trace.noteEntries), to: 10, in: statement)
+                bind(trace.manualProgressPercent, to: 11, in: statement)
+                bind(trace.carriedFromTraceID?.rawValue.uuidString, to: 12, in: statement)
+                bind(nil as String?, to: 13, in: statement)
+                bind(trace.createdAt, to: 14, in: statement)
+                try bindExactDate(trace.createdAt, to: 15, in: statement)
+                bind(trace.contentUpdatedAt, to: 16, in: statement)
+                try bindExactDate(trace.contentUpdatedAt, to: 17, in: statement)
+                bind(trace.completedAt, to: 18, in: statement)
+                try bindExactDate(trace.completedAt, to: 19, in: statement)
+                bind(trace.settledAt, to: 20, in: statement)
+                try bindExactDate(trace.settledAt, to: 21, in: statement)
+                bind(trace.draftCancellationID?.uuidString, to: 22, in: statement)
+                bind(trace.draftCancelledOn?.description, to: 23, in: statement)
             }
         }
 
@@ -1483,7 +1485,7 @@ private extension SQLiteEngineRepository {
         let sql = """
         INSERT INTO subtasks(
             id, lineage_id, trace_id, title, status, difficulty, position,
-            continued_from_subtask_id,
+            carried_from_subtask_id,
             created_at, created_at_bits,
             updated_at, updated_at_bits,
             completed_at, completed_at_bits,
@@ -1498,7 +1500,7 @@ private extension SQLiteEngineRepository {
             status = excluded.status,
             difficulty = excluded.difficulty,
             position = excluded.position,
-            continued_from_subtask_id = excluded.continued_from_subtask_id,
+            carried_from_subtask_id = excluded.carried_from_subtask_id,
             created_at = excluded.created_at,
             created_at_bits = excluded.created_at_bits,
             updated_at = excluded.updated_at,
@@ -1537,12 +1539,12 @@ private extension SQLiteEngineRepository {
 
         let relationSQL = """
         UPDATE subtasks
-        SET continued_from_subtask_id = ?
+        SET carried_from_subtask_id = ?
         WHERE id = ?
         """
         for subtask in subtasks {
             try run(relationSQL, on: database) { statement in
-                bind(subtask.continuedFromSubtaskID?.rawValue.uuidString, to: 1, in: statement)
+                bind(subtask.carriedFromSubtaskID?.rawValue.uuidString, to: 1, in: statement)
                 bind(subtask.id.rawValue, to: 2, in: statement)
             }
         }
@@ -3500,8 +3502,8 @@ private extension SQLiteEngineRepository {
     func loadTraces(from database: Database?) throws -> [DayTrace] {
         try query(
             """
-            SELECT id, chain_id, definition_id, date, status, priority, continuation_seq, description_text, note_entries_json,
-                   manual_progress_percent, continued_from_trace_id, changed_to_trace_id,
+            SELECT id, chain_id, definition_id, date, status, priority, pin_order, continuation_seq, description_text, note_entries_json,
+                   manual_progress_percent, carried_from_trace_id, changed_to_trace_id,
                    created_at, created_at_bits, content_updated_at, content_updated_at_bits,
                    completed_at, completed_at_bits, settled_at, settled_at_bits,
                    draft_cancellation_id, draft_cancelled_on
@@ -3520,35 +3522,36 @@ private extension SQLiteEngineRepository {
                 date: LocalDate(try string(statement, 3)),
                 status: status,
                 priority: int(statement, 5),
-                continuationSeq: int(statement, 6),
-                descriptionText: optionalString(statement, 7),
-                noteEntries: try noteEntries(from: string(statement, 8)),
-                manualProgressPercent: optionalInt(statement, 9),
-                continuedFromTraceID: try optionalUUID(statement, 10).map(DayTraceID.init),
+                pinOrder: optionalInt(statement, 6),
+                continuationSeq: int(statement, 7),
+                descriptionText: optionalString(statement, 8),
+                noteEntries: try noteEntries(from: string(statement, 9)),
+                manualProgressPercent: optionalInt(statement, 10),
+                carriedFromTraceID: try optionalUUID(statement, 11).map(DayTraceID.init),
                 now: try validatedExactDate(
                     statement,
-                    textIndex: 12,
-                    bitsIndex: 13
+                    textIndex: 13,
+                    bitsIndex: 14
                 ),
                 contentUpdatedAt: try validatedExactDate(
                     statement,
-                    textIndex: 14,
-                    bitsIndex: 15
+                    textIndex: 15,
+                    bitsIndex: 16
                 )
             )
-            trace.changedToTraceID = try optionalUUID(statement, 11).map(DayTraceID.init)
+            trace.changedToTraceID = try optionalUUID(statement, 12).map(DayTraceID.init)
             trace.completedAt = try optionalExactDate(
                 statement,
-                textIndex: 16,
-                bitsIndex: 17
+                textIndex: 17,
+                bitsIndex: 18
             )
             trace.settledAt = try optionalExactDate(
                 statement,
-                textIndex: 18,
-                bitsIndex: 19
+                textIndex: 19,
+                bitsIndex: 20
             )
-            trace.draftCancellationID = try optionalUUID(statement, 20)
-            trace.draftCancelledOn = optionalString(statement, 21)
+            trace.draftCancellationID = try optionalUUID(statement, 21)
+            trace.draftCancelledOn = optionalString(statement, 22)
                 .map(LocalDate.init)
             return trace
         }
@@ -3558,7 +3561,7 @@ private extension SQLiteEngineRepository {
         try query(
             """
             SELECT id, lineage_id, trace_id, title, status, difficulty, position,
-                   continued_from_subtask_id,
+                   carried_from_subtask_id,
                    created_at, created_at_bits,
                    updated_at, updated_at_bits,
                    completed_at, completed_at_bits,
@@ -3583,7 +3586,7 @@ private extension SQLiteEngineRepository {
                 status: status,
                 difficulty: difficulty,
                 position: int(statement, 6),
-                continuedFromSubtaskID: try optionalUUID(statement, 7).map(SubtaskID.init),
+                carriedFromSubtaskID: try optionalUUID(statement, 7).map(SubtaskID.init),
                 now: try validatedExactDate(
                     statement,
                     textIndex: 8,

@@ -9,7 +9,7 @@ public enum TraceStatus: String, Codable, Hashable, Sendable {
     case pending
     case completed
     case unfinished
-    case continued
+    case deferred
     case changed
     case returnedToPool
     case cancelledDraft
@@ -30,7 +30,7 @@ public enum TraceStatus: String, Codable, Hashable, Sendable {
     /// the task trail without occupying another task row.
     public var isVisibleInDayTodo: Bool {
         switch self {
-        case .pending, .completed, .unfinished, .continued, .abandoned:
+        case .pending, .completed, .unfinished, .deferred, .abandoned:
             true
         case .changed, .returnedToPool, .cancelledDraft:
             false
@@ -60,7 +60,7 @@ public enum SubtaskStatus: String, Codable, Hashable, Sendable {
     case pending
     case completed
     case unfinished
-    case continued
+    case deferred
     case abandoned
     case cancelledDraft
 
@@ -69,6 +69,11 @@ public enum SubtaskStatus: String, Codable, Hashable, Sendable {
     public var isUserPresentable: Bool {
         self != .cancelledDraft
     }
+}
+
+public enum TraceCarryoverKind: String, Codable, Equatable, Hashable, Sendable {
+    case deferral
+    case continuation
 }
 
 public enum SubtaskDifficulty: Int, Codable, Hashable, Sendable, CaseIterable {
@@ -701,11 +706,12 @@ public struct DayTrace: Codable, Equatable, Sendable {
     public var date: LocalDate
     public var status: TraceStatus
     public var priority: Int
+    public var pinOrder: Int?
     public var continuationSeq: Int
     public var descriptionText: String?
     public var noteEntries: [TaskNoteEntry]
     public var manualProgressPercent: Int?
-    public var continuedFromTraceID: DayTraceID?
+    public var carriedFromTraceID: DayTraceID?
     public var changedToTraceID: DayTraceID?
     public var createdAt: Date
     public private(set) var contentUpdatedAt: Date
@@ -731,11 +737,12 @@ public struct DayTrace: Codable, Equatable, Sendable {
         date: LocalDate,
         status: TraceStatus = .pending,
         priority: Int,
+        pinOrder: Int? = nil,
         continuationSeq: Int = 0,
         descriptionText: String? = nil,
         noteEntries: [TaskNoteEntry] = [],
         manualProgressPercent: Int? = nil,
-        continuedFromTraceID: DayTraceID? = nil,
+        carriedFromTraceID: DayTraceID? = nil,
         draftCancellationID: UUID? = nil,
         draftCancelledOn: LocalDate? = nil,
         now: Date,
@@ -747,11 +754,12 @@ public struct DayTrace: Codable, Equatable, Sendable {
         self.date = date
         self.status = status
         self.priority = priority
+        self.pinOrder = pinOrder
         self.continuationSeq = continuationSeq
         self.descriptionText = descriptionText
         self.noteEntries = noteEntries
         self.manualProgressPercent = manualProgressPercent
-        self.continuedFromTraceID = continuedFromTraceID
+        self.carriedFromTraceID = carriedFromTraceID
         self.changedToTraceID = nil
         self.createdAt = now
         self.contentUpdatedAt = contentUpdatedAt ?? now
@@ -788,7 +796,7 @@ public struct Subtask: Codable, Equatable, Sendable {
     public var status: SubtaskStatus
     public var difficulty: SubtaskDifficulty
     public var position: Int
-    public var continuedFromSubtaskID: SubtaskID?
+    public var carriedFromSubtaskID: SubtaskID?
     public var createdAt: Date
     public var updatedAt: Date
     public var completedAt: Date?
@@ -811,7 +819,7 @@ public struct Subtask: Codable, Equatable, Sendable {
         status: SubtaskStatus = .pending,
         difficulty: SubtaskDifficulty = .simple,
         position: Int,
-        continuedFromSubtaskID: SubtaskID? = nil,
+        carriedFromSubtaskID: SubtaskID? = nil,
         draftCancellationID: UUID? = nil,
         now: Date
     ) {
@@ -822,7 +830,7 @@ public struct Subtask: Codable, Equatable, Sendable {
         self.status = status
         self.difficulty = difficulty
         self.position = position
-        self.continuedFromSubtaskID = continuedFromSubtaskID
+        self.carriedFromSubtaskID = carriedFromSubtaskID
         self.createdAt = now
         self.updatedAt = now
         self.completedAt = nil
@@ -840,15 +848,15 @@ public struct SubtaskProgress: Equatable, Sendable {
     public let completed: Int
     public let pending: Int
     public let unfinished: Int
-    public let continued: Int
+    public let deferred: Int
     public let abandoned: Int
 
-    public init(total: Int, completed: Int, pending: Int, unfinished: Int, continued: Int, abandoned: Int) {
+    public init(total: Int, completed: Int, pending: Int, unfinished: Int, deferred: Int, abandoned: Int) {
         self.total = total
         self.completed = completed
         self.pending = pending
         self.unfinished = unfinished
-        self.continued = continued
+        self.deferred = deferred
         self.abandoned = abandoned
     }
 
@@ -921,6 +929,7 @@ public enum TaskTrailEntryKind: String, Equatable, Hashable, Sendable {
     case scheduled
     case completed
     case unfinished
+    case deferred
     case continued
     case changed
     case returnedToPool
@@ -973,6 +982,21 @@ public struct UnfinishedPoolItem: Equatable, Sendable {
     public let definition: TaskDefinition
     public let unfinishedTraces: [DayTrace]
     public let activeTrace: DayTrace?
+    public let isInTaskPool: Bool
+
+    public init(
+        chain: TaskChain,
+        definition: TaskDefinition,
+        unfinishedTraces: [DayTrace],
+        activeTrace: DayTrace?,
+        isInTaskPool: Bool = false
+    ) {
+        self.chain = chain
+        self.definition = definition
+        self.unfinishedTraces = unfinishedTraces
+        self.activeTrace = activeTrace
+        self.isInTaskPool = isInTaskPool
+    }
 
     public var isContinuedPending: Bool {
         activeTrace?.status == .pending
@@ -990,6 +1014,12 @@ public struct UnfinishedPoolItem: Equatable, Sendable {
         if let activeTrace {
             return [.abandonChain(activeTrace.id)]
         }
+        if isInTaskPool {
+            return [
+                .openTaskPool(chain.id),
+                .abandonPooledChain(chain.id),
+            ]
+        }
         guard let source = unfinishedTraces.last(where: {
             $0.status == .unfinished
         }) else {
@@ -1006,6 +1036,8 @@ public enum UnfinishedPoolAction: Equatable, Hashable, Sendable {
     case continueTrace(DayTraceID)
     case abandonChain(DayTraceID)
     case reactivateChain(DayTraceID)
+    case openTaskPool(TaskChainID)
+    case abandonPooledChain(TaskChainID)
 }
 
 public struct CompletedTaskTrajectory: Equatable, Sendable {
@@ -1033,7 +1065,7 @@ public struct DailyReviewStats: Equatable, Sendable {
     public var total: Int
     public var completed: Int
     public var unfinished: Int
-    public var continued: Int
+    public var deferred: Int
     public var changed: Int
     public var returnedToPool: Int
     public var abandoned: Int

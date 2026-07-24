@@ -8,7 +8,7 @@ public enum SyncRecordMapperError: Error, Equatable, Sendable {
 }
 
 public struct SyncRecordMapper: Sendable {
-    public static let currentOrdinaryPayloadFormatVersion = 3
+    public static let currentOrdinaryPayloadFormatVersion = 5
 
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder

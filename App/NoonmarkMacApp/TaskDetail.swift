@@ -492,11 +492,10 @@ struct TaskNoteEntriesSection: View {
     }
 
     private func finishEditing(_ noteID: TaskNoteEntryID) {
-        guard let session = editSession,
-              session.noteID == noteID,
-              session.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty == false
-        else {
+        guard let session = editSession, session.noteID == noteID else { return }
+        if session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard onDelete(noteID) else { return }
+            editSession = nil
             return
         }
         guard persistEditedDraft(noteID, draft: session.draft) else { return }
@@ -587,7 +586,6 @@ struct DetailNoteEntryRow: View {
                         title: store.copy.save,
                         identifier: "detail.note.save.\(entry.id.description)",
                         emphasis: .accent,
-                        isEnabled: editDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
                         action: onSaveEditing
                     )
                 }
@@ -652,6 +650,39 @@ struct TraceContextCard: View {
                 Text("·")
                     .foregroundStyle(Theme.text3)
                 Text(store.copy.returnedToPoolOnDay)
+            }
+            if let target = store.carryoverTarget(for: trace) {
+                Text("·")
+                    .foregroundStyle(Theme.text3)
+                Button(
+                    trace.status == .deferred
+                        ? store.copy.deferredToLink(
+                            store.displayDate(target.date)
+                        )
+                        : store.copy.continuedToLink(
+                            store.displayDate(target.date)
+                        )
+                ) {
+                    store.openCarryoverTarget(from: trace)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.accent)
+            } else if let source = store.carryoverSource(for: trace) {
+                Text("·")
+                    .foregroundStyle(Theme.text3)
+                Button(
+                    store.engine.carryoverKind(for: trace.id) == .deferral
+                        ? store.copy.deferredFromLink(
+                            store.displayDate(source.date)
+                        )
+                        : store.copy.continuedFromUnfinishedLink(
+                            store.displayDate(source.date)
+                        )
+                ) {
+                    store.openCarryoverSource(from: trace)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.accent)
             }
             Spacer(minLength: 0)
         }
@@ -877,8 +908,8 @@ struct TimelineNodeStyle {
             .completed
         case .unfinished:
             .unfinished
-        case .continued:
-            .continued
+        case .deferred, .continued:
+            .deferred
         case .changed:
             .changed
         case .returnedToPool:

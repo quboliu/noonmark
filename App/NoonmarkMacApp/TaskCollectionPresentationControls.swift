@@ -37,8 +37,7 @@ struct TaskCollectionSectionHeader: View {
     let count: Int
 
     private var foreground: Color {
-        guard section.category?.approval == .userApproved,
-              let colorHex = section.category?.colorHex
+        guard let colorHex = section.category?.visualStyle.foregroundColorHex
         else { return Theme.text1 }
         return classificationUIColor(colorHex, fallback: Theme.text1)
     }

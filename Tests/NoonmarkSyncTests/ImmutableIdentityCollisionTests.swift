@@ -270,7 +270,7 @@ final class ImmutableIdentityCollisionTests: XCTestCase {
                 event: TraceClassificationSnapshot(
                     id: id,
                     traceID: traceID,
-                    status: .continued,
+                    status: .deferred,
                     category: HistoricalCategoryValue(
                         id: category.id,
                         name: category.name,

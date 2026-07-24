@@ -188,10 +188,6 @@ struct EditableDetailTitleRow<Trailing: View>: View {
 
     private func persistDraft(_ value: String) {
         let nextTitle = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard nextTitle.isEmpty == false else {
-            draft = title
-            return
-        }
         guard nextTitle != title else {
             return
         }

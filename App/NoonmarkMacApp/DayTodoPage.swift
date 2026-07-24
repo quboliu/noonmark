@@ -17,14 +17,41 @@ import UniformTypeIdentifiers
 struct DayTodoPage: View {
     @EnvironmentObject private var store: NoonmarkStore
     @State private var quickAddFocusRequest = 0
+    @State private var presentationPreference: TaskCollectionPresentationPreference
+    private let presentationRepository: TaskCollectionPresentationPreferenceRepository
+
+    init(
+        presentationRepository: TaskCollectionPresentationPreferenceRepository =
+            TaskCollectionPresentationPreferenceRepository()
+    ) {
+        self.presentationRepository = presentationRepository
+        _presentationPreference = State(
+            initialValue: presentationRepository.load(for: .dayTodo)
+        )
+    }
 
     var traces: [DayTrace] {
         store.engine.getDayTodo(date: store.selectedDate).traces
     }
 
+    private var tracesByID: [String: DayTrace] {
+        Dictionary(uniqueKeysWithValues: traces.map { ($0.id.description, $0) })
+    }
+
+    private var presentationSections: [TaskCollectionPresentationSection] {
+        store.dayTodoPresentationSections(
+            date: store.selectedDate,
+            preference: presentationPreference
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            DayTodoHeader(dayBadge: dayBadge, badgeColor: badgeColor)
+            DayTodoHeader(
+                dayBadge: dayBadge,
+                badgeColor: badgeColor,
+                presentationPreference: $presentationPreference
+            )
 
             DateStrip()
                 .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
@@ -48,8 +75,18 @@ struct DayTodoPage: View {
                     }
 
                     LazyVStack(spacing: 0) {
-                        ForEach(traces, id: \.id) { trace in
-                            TaskRow(trace: trace)
+                        ForEach(presentationSections, id: \.id) { section in
+                            if presentationPreference.organization == .grouped, section.title != nil {
+                                TaskCollectionSectionHeader(
+                                    section: section,
+                                    count: section.items.count
+                                )
+                            }
+                            ForEach(section.items, id: \.id) { item in
+                                if let trace = tracesByID[item.id] {
+                                    TaskRow(trace: trace)
+                                }
+                            }
                         }
 
                         if traces.isEmpty {
@@ -74,6 +111,15 @@ struct DayTodoPage: View {
                 .padding(.bottom, 20)
             }
         }
+        .onChange(of: presentationPreference) { _, preference in
+            presentationRepository.save(preference, for: .dayTodo)
+        }
+        .background {
+            HorizontalPageNavigationBridge(
+                isEnabled: { store.page == .day && store.canNavigateDatePage },
+                onNavigate: { store.moveSelectedPage($0) }
+            )
+        }
     }
 
     private var dayBadge: String {
@@ -93,6 +139,7 @@ struct DayTodoHeader: View {
     @EnvironmentObject private var store: NoonmarkStore
     let dayBadge: String
     let badgeColor: Color
+    @Binding var presentationPreference: TaskCollectionPresentationPreference
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -107,6 +154,7 @@ struct DayTodoHeader: View {
         HStack(alignment: .center, spacing: 10) {
             identity
             Spacer(minLength: 8)
+            presentationMenu
             navigationActions
         }
     }
@@ -114,9 +162,20 @@ struct DayTodoHeader: View {
     private var compactHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             identity
-            navigationActions
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            HStack(spacing: 10) {
+                Spacer(minLength: 0)
+                presentationMenu
+                navigationActions
+            }
         }
+    }
+
+    private var presentationMenu: some View {
+        TaskCollectionPresentationMenu(
+            copy: store.copy,
+            accessibilityIdentifier: "task-collection-view.day-todo",
+            preference: $presentationPreference
+        )
     }
 
     private var identity: some View {
@@ -166,10 +225,7 @@ struct DayTodoHeader: View {
                 accessibilityLabel: store.copy.previousDay,
                 identifier: "day.header.previous-action"
             ) {
-                store.selectedDate = NoonmarkStore.offset(
-                    store.selectedDate,
-                    by: -1
-                )
+                store.moveSelectedPage(.previous)
             }
             if store.selectedDate != store.today {
                 navigationButton(
@@ -184,10 +240,7 @@ struct DayTodoHeader: View {
                 accessibilityLabel: store.copy.nextDay,
                 identifier: "day.header.next-action"
             ) {
-                store.selectedDate = NoonmarkStore.offset(
-                    store.selectedDate,
-                    by: 1
-                )
+                store.moveSelectedPage(.next)
             }
             navigationButton(
                 store.copy.chooseDate,
@@ -472,8 +525,10 @@ struct TaskRow: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: NoonmarkVisualMetrics.taskRowAccessorySpacing) {
+                completionControl
+
                 VStack(alignment: .leading, spacing: 0) {
-                    MarkdownInlineText(definition?.title ?? store.copy.untitledTask)
+                    MarkdownInlineText(store.copy.displayTaskTitle(definition?.title))
                         .font(.noonmarkSystem(size: 13, weight: .medium))
                         .foregroundStyle(trace.status.uiStyle.titleColor)
                         .strikethrough(trace.status.uiStyle.strikethrough)
@@ -525,6 +580,14 @@ struct TaskRow: View {
                             .padding(.top, 2)
                     }
 
+                    if let relationLabel {
+                        Button(relationLabel.title, action: relationLabel.action)
+                            .buttonStyle(.plain)
+                            .font(.noonmarkSystem(size: 11, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                            .padding(.top, 2)
+                    }
+
                     if let changedTarget = store.changedTarget(for: trace) {
                         ChangedTargetButton(
                             title: changedTarget.definition.title,
@@ -546,6 +609,14 @@ struct TaskRow: View {
                 .layoutPriority(1)
 
                 HStack(spacing: NoonmarkVisualMetrics.taskRowAccessorySpacing) {
+                    if trace.pinOrder != nil {
+                        Image(systemName: "pin.fill")
+                            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .accessibilityLabel(store.copy.pinToTop)
+                            .help(store.copy.pinToTop)
+                    }
+
                     if subtasks.isEmpty == false {
                         Button {
                             if expanded {
@@ -558,21 +629,10 @@ struct TaskRow: View {
                         }
                         .buttonStyle(.plain)
                     }
-
-                    if canReorder, selected {
-                        PriorityStepper(
-                            canMoveUp: canMoveUp,
-                            canMoveDown: canMoveDown,
-                            moveUp: { store.movePriority(trace.id, delta: -1) },
-                            moveDown: { store.movePriority(trace.id, delta: 1) }
-                        )
-                    }
                 }
                 .fixedSize(horizontal: true, vertical: false)
 
                 Spacer(minLength: 0)
-
-                completionControl
             }
             .padding(.horizontal, 12)
             .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
@@ -592,12 +652,6 @@ struct TaskRow: View {
         .listRowSurface(selected: selected, tint: Theme.accent, separatorLeadingInset: 44)
         .contentShape(Rectangle())
         .workspaceSelectable(.dayTrace(trace.id))
-        .modifier(
-            DayTracePriorityReorderingModifier(
-                trace: trace,
-                isEnabled: canReorder
-            )
-        )
         .onTapGesture { store.userSelectTrace(trace.id) }
         .contextMenu {
             TaskContextMenu(trace: trace)
@@ -670,80 +724,33 @@ struct TaskRow: View {
         return parts.joined(separator: " · ")
     }
 
+    var relationLabel: (title: String, action: () -> Void)? {
+        if let target = store.carryoverTarget(for: trace) {
+            let title = trace.status == .deferred
+                ? store.copy.deferredToLink(store.displayDate(target.date))
+                : store.copy.continuedToLink(store.displayDate(target.date))
+            return (title, { store.openCarryoverTarget(from: trace) })
+        }
+        guard let source = store.carryoverSource(for: trace) else {
+            return nil
+        }
+        let title = store.engine.carryoverKind(for: trace.id) == .deferral
+            ? store.copy.deferredFromLink(store.displayDate(source.date))
+            : store.copy.continuedFromUnfinishedLink(
+                store.displayDate(source.date)
+            )
+        return (title, { store.openCarryoverSource(from: trace) })
+    }
+
     var showsProgress: Bool {
         guard progress.percent > 0, progress.percent < 100 else { return false }
         switch trace.status {
-        case .pending, .continued, .unfinished:
+        case .pending, .deferred, .unfinished:
             return true
         case .completed, .changed, .returnedToPool, .abandoned:
             return false
         case .cancelledDraft:
             preconditionFailure("Internal trace status cannot appear in Day Todo")
-        }
-    }
-
-    var canReorder: Bool {
-        trace.status == .pending && (store.selectedDate == store.today || store.selectedDate > store.today)
-    }
-
-    var canMoveUp: Bool {
-        canReorder && store.canMovePriority(trace.id, delta: -1)
-    }
-
-    var canMoveDown: Bool {
-        canReorder && store.canMovePriority(trace.id, delta: 1)
-    }
-}
-
-private struct DayTracePriorityReorderingModifier: ViewModifier {
-    @EnvironmentObject private var store: NoonmarkStore
-
-    let trace: DayTrace
-    let isEnabled: Bool
-
-    func body(content: Content) -> some View {
-        if isEnabled {
-            content
-                .draggable(TaskPriorityDragItem(traceID: trace.id, date: trace.date))
-                .dropDestination(
-                    for: TaskPriorityDragItem.self,
-                    action: { items, _ in
-                        guard let moving = items.first, moving.date == trace.date else {
-                            WorkspaceDragE2EDiagnostics.recordDrop(
-                                targetTraceID: trace.id,
-                                items: items,
-                                accepted: false
-                            )
-                            return false
-                        }
-                        let accepted = store.enqueueTraceReorder(
-                            moving.traceID,
-                            before: trace.id
-                        ) { committed in
-                            WorkspaceDragE2EDiagnostics.recordDrop(
-                                targetTraceID: trace.id,
-                                items: items,
-                                accepted: committed
-                            )
-                        }
-                        if accepted == false {
-                            WorkspaceDragE2EDiagnostics.recordDrop(
-                                targetTraceID: trace.id,
-                                items: items,
-                                accepted: false
-                            )
-                        }
-                        return accepted
-                    },
-                    isTargeted: { isTargeted in
-                        WorkspaceDragE2EDiagnostics.recordTarget(
-                            traceID: trace.id,
-                            isTargeted: isTargeted
-                        )
-                    }
-                )
-        } else {
-            content
         }
     }
 }
@@ -781,7 +788,7 @@ struct ChangedTargetButton: View {
             HStack(spacing: 4) {
                 Text(store.copy.changedToPrefix)
                     .foregroundStyle(Theme.text3)
-                MarkdownInlineText(title)
+                MarkdownInlineText(store.copy.displayTaskTitle(title))
                     .lineLimit(1)
                 Image(systemName: "arrow.right")
                     .font(.noonmarkSystem(size: compact ? 8.5 : 9.5, weight: .bold))
@@ -814,7 +821,7 @@ struct ChangedSourceButton: View {
                     .font(.noonmarkSystem(size: compact ? 8.5 : 9.5, weight: .bold))
                 Text(store.copy.changedFromPrefix)
                     .foregroundStyle(Theme.text3)
-                MarkdownInlineText(title)
+                MarkdownInlineText(store.copy.displayTaskTitle(title))
                     .lineLimit(1)
             }
             .font(.noonmarkSystem(size: compact ? 10.5 : 11, weight: .semibold))
@@ -1036,6 +1043,22 @@ struct TaskContextMenu: View {
                 Button(store.copy.markComplete) { store.toggleComplete(trace.id) }
             case .undoComplete:
                 Button(store.copy.undoComplete) { store.toggleComplete(trace.id) }
+            case .pinToTop:
+                Button(store.copy.pinToTop) {
+                    store.setTracePinned(trace.id, pinned: true)
+                }
+            case .unpin:
+                Button(store.copy.unpin) {
+                    store.setTracePinned(trace.id, pinned: false)
+                }
+            case .deferTo:
+                Button(store.copy.deferTo) {
+                    store.showingPicker = .deferTrace(trace.id)
+                }
+            case .withdrawDeferral:
+                Button(store.copy.withdrawDeferral) {
+                    store.withdrawDeferral(trace.id)
+                }
             case .continueTo:
                 Button(store.copy.continueTo) { store.showingPicker = .continueTrace(trace.id) }
             case .changeToNewTask:

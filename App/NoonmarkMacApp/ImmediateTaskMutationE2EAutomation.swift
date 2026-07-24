@@ -83,6 +83,18 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             ),
             input: input
         )
+        store.selectTrace(fixture.dayTraceID)
+        try await clearTitleAndRestore(
+            restoredTitle: Self.daySavedTitle,
+            readback: {
+                guard let trace = store.engine.traces[fixture.dayTraceID] else {
+                    return nil
+                }
+                return store.engine.definitions[trace.definitionID]?.title
+            },
+            placeholder: store.copy.taskTitlePlaceholder,
+            input: input
+        )
 
         store.selectTrace(fixture.dayTraceID)
         try await editDescription(
@@ -163,8 +175,11 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         store.selectedDate = fixture.today
         store.selectedCalendarDate = fixture.today
         store.clearSelection()
-        try await chooseDeleteMenuItem(
+        try await chooseMenuAction(
+            .deleteNewCurrentDayTask,
+            for: fixture.deletedTraceID,
             from: dayIdentifier(fixture.deletedTraceID),
+            store: store,
             input: input
         )
         try await waitUntil("today's newly added task was not deleted through its menu") {
@@ -297,20 +312,16 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         store.page = .day
         store.selectedDate = fixture.today
         store.selectedCalendarDate = fixture.today
-        let returnedTrace = try requiredTrace(fixture.returnedTraceID, in: store)
-        guard let returnIndex = store.contextMenuActions(for: returnedTrace)
-            .firstIndex(of: .returnToPool)
-        else {
-            throw Failure.failed("current-day task did not expose return-to-pool")
-        }
-
-        try await chooseMenuItem(
+        try await chooseMenuAction(
+            .returnToPool,
+            for: fixture.returnedTraceID,
             from: dayIdentifier(fixture.returnedTraceID),
-            downArrowCount: returnIndex + 1,
+            store: store,
             input: input
         )
         try await waitUntil("returned task did not leave Day Todo immediately") {
-            store.page == .pool
+            store.page == .day
+                && store.selectedDate == fixture.today
                 && store.engine.traces[fixture.returnedTraceID]?.status == .returnedToPool
                 && store.engine.getDayTodo(date: fixture.today).traces.allSatisfy {
                     $0.id != fixture.returnedTraceID
@@ -320,6 +331,14 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                 }
         }
 
+        try await click(
+            identifier: "sidebar.nav.pool",
+            modifiers: [],
+            input: input
+        )
+        try await waitUntil("Task Pool navigation did not complete after return") {
+            store.page == .pool
+        }
         try await click(
             identifier: poolIdentifier(fixture.returnedChainID),
             modifiers: [],
@@ -518,6 +537,42 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
+    private func clearTitleAndRestore(
+        restoredTitle: String,
+        readback: @escaping @MainActor () -> String?,
+        placeholder: String,
+        input: WindowServerInputDriver
+    ) async throws {
+        var titleEditor: NSTextView?
+        try await waitUntil("native title editor was not ready for clear") {
+            titleEditor = AppViewTreeE2E.view(identifier: "detail.title.input")
+                as? NSTextView
+            return titleEditor?.string == restoredTitle
+        }
+        guard let titleEditor else {
+            throw Failure.failed("native title editor disappeared before clear")
+        }
+
+        try await click(identifier: "detail.title.input", modifiers: [], input: input)
+        try await waitUntil("native title editor did not focus before clear") {
+            titleEditor.window?.firstResponder === titleEditor
+        }
+        try input.postKey(keyCode: 0, modifiers: .command)
+        try input.postKey(keyCode: 51)
+        try await waitUntil("Cmd+A Delete could not clear the task title") {
+            titleEditor.string.isEmpty
+                && readback() == ""
+                && AppViewTreeE2E.view(
+                    identifier: "detail.title.placeholder"
+                ).flatMap(AppViewTreeE2E.verificationText) == placeholder
+        }
+
+        try input.typeUnicode(restoredTitle)
+        try await waitUntil("cleared task title could not be restored") {
+            titleEditor.string == restoredTitle && readback() == restoredTitle
+        }
+    }
+
     private func editInlineSubtaskTitle(
         subtaskID: SubtaskID,
         initialTitle: String,
@@ -580,13 +635,22 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
-    private func chooseDeleteMenuItem(
+    private func chooseMenuAction(
+        _ action: NoonmarkStore.TraceContextAction,
+        for traceID: DayTraceID,
         from identifier: String,
+        store: NoonmarkStore,
         input: WindowServerInputDriver
     ) async throws {
+        let trace = try requiredTrace(traceID, in: store)
+        guard let actionIndex = store.contextMenuActions(for: trace)
+            .firstIndex(of: action)
+        else {
+            throw Failure.failed("task context menu did not expose \(action)")
+        }
         try await chooseMenuItem(
             from: identifier,
-            downArrowCount: 6,
+            downArrowCount: actionIndex + 1,
             input: input
         )
     }

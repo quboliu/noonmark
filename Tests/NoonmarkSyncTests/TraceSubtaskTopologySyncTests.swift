@@ -85,7 +85,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
         let missingTraceID = DayTraceID(
             UUID(uuidString: "B1000000-0000-0000-0000-000000000001")!
         )
-        missingTraceTarget.continuedFromTraceID = missingTraceID
+        missingTraceTarget.carriedFromTraceID = missingTraceID
         let traceRecord = try record(missingTraceTarget)
 
         let traceResult = try SyncRecordMerger(mapper: mapper).merge(
@@ -113,7 +113,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
             traceID: fixture.target.id,
             title: "等待 source",
             position: 1,
-            continuedFromSubtaskID: missingSubtaskID,
+            carriedFromSubtaskID: missingSubtaskID,
             now: base.addingTimeInterval(4)
         )
         let subtaskRecord = try record(subtask)
@@ -156,7 +156,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
             lineageID: sourceLineageID,
             traceID: fixture.source.id,
             title: "source",
-            status: .continued,
+            status: .deferred,
             position: 1,
             now: base.addingTimeInterval(2)
         )
@@ -170,7 +170,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
             traceID: fixture.target.id,
             title: "target",
             position: 1,
-            continuedFromSubtaskID: sourceID,
+            carriedFromSubtaskID: sourceID,
             now: base.addingTimeInterval(3)
         )
         let records = try [source, target].map(record)
@@ -207,7 +207,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
             traceID: fixture.target.id,
             title: "self",
             position: 1,
-            continuedFromSubtaskID: firstID,
+            carriedFromSubtaskID: firstID,
             now: base.addingTimeInterval(3)
         )
         let selfRecord = try record(selfLinked)
@@ -220,17 +220,17 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
         XCTAssertTrue(selfResult.waitingRecords.isEmpty)
         XCTAssertEqual(selfResult.conflicts.map(\.remoteRecordID), [selfRecord.id])
 
-        selfLinked.status = .continued
+        selfLinked.status = .deferred
         selfLinked.updatedAt = base.addingTimeInterval(4)
         selfLinked.settledAt = base.addingTimeInterval(4)
-        selfLinked.continuedFromSubtaskID = secondID
+        selfLinked.carriedFromSubtaskID = secondID
         var second = Subtask(
             id: secondID,
             traceID: fixture.source.id,
             title: "cycle",
-            status: .continued,
+            status: .deferred,
             position: 1,
-            continuedFromSubtaskID: firstID,
+            carriedFromSubtaskID: firstID,
             now: base.addingTimeInterval(3)
         )
         second.updatedAt = base.addingTimeInterval(4)
@@ -401,7 +401,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
         let fixture = try traceFixture()
         var snapshot = fixture.baseSnapshot
         var parent = fixture.target
-        parent.continuedFromTraceID = nil
+        parent.carriedFromTraceID = nil
         parent.continuationSeq = 0
         snapshot.traces = [parent]
         let cancellationID = UUID(
@@ -459,7 +459,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
     func testRejectedTraceParentMakesSubtaskConflictInsteadOfWaitForever() throws {
         let fixture = try traceFixture()
         var invalidTrace = fixture.target
-        invalidTrace.continuedFromTraceID = nil
+        invalidTrace.carriedFromTraceID = nil
         invalidTrace.continuationSeq = 0
         invalidTrace.completedAt = invalidTrace.contentUpdatedAt
         let child = Subtask(
@@ -571,7 +571,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
             chainID: chainID,
             definitionID: definitionID,
             date: today,
-            status: .continued,
+            status: .deferred,
             priority: 1,
             now: base.addingTimeInterval(1),
             contentUpdatedAt: base.addingTimeInterval(3)
@@ -585,7 +585,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
             date: tomorrow,
             priority: 1,
             continuationSeq: 1,
-            continuedFromTraceID: source.id,
+            carriedFromTraceID: source.id,
             now: base.addingTimeInterval(3)
         )
         return (

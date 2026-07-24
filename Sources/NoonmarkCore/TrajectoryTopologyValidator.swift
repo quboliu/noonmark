@@ -52,6 +52,11 @@ public enum TrajectoryTopologyValidator {
         else {
             return .invalidTraceProgress(trace.id)
         }
+        guard trace.pinOrder.map({
+            $0 > 0 && trace.status == .pending
+        }) ?? true else {
+            return .invalidTraceStatusFacts(trace.id)
+        }
 
         let statusFactsAreValid: Bool = switch trace.status {
         case .pending:
@@ -64,13 +69,9 @@ public enum TrajectoryTopologyValidator {
                 && trace.settledAt == nil
                 && trace.changedToTraceID == nil
                 && trace.draftCancelledOn == nil
-        case .unfinished, .returnedToPool, .abandoned:
+        case .unfinished, .deferred, .returnedToPool, .abandoned:
             trace.completedAt == nil
                 && trace.settledAt != nil
-                && trace.changedToTraceID == nil
-                && trace.draftCancelledOn == nil
-        case .continued:
-            trace.completedAt == nil
                 && trace.changedToTraceID == nil
                 && trace.draftCancelledOn == nil
         case .changed:
@@ -134,8 +135,6 @@ public enum TrajectoryTopologyValidator {
         }
         let isSnapshotUndoCancellation = trace.date == draftCancelledOn
         let isFutureDraftCancellation = trace.date > draftCancelledOn
-            && trace.manualProgressPercent == nil
-            && trace.continuedFromTraceID == nil
         return (isSnapshotUndoCancellation || isFutureDraftCancellation)
             && trace.completedAt == nil
             && trace.settledAt != nil
@@ -195,7 +194,7 @@ public enum TrajectoryTopologyValidator {
         var issues: [TrajectoryTopologyValidationIssue] = []
         let continuationTargets = Dictionary(
             grouping: traces.compactMap { trace -> TraceLink? in
-                trace.continuedFromTraceID.map {
+                trace.carriedFromTraceID.map {
                     TraceLink(source: $0, target: trace.id)
                 }
             },
@@ -207,12 +206,12 @@ public enum TrajectoryTopologyValidator {
         }
 
         for target in traces {
-            let isUnlinkedNonRoot = target.continuedFromTraceID == nil
+            let isUnlinkedNonRoot = target.carriedFromTraceID == nil
                 && target.continuationSeq != 0
             if isUnlinkedNonRoot {
                 issues.append(.invalidTraceSequence(target.id))
             }
-            guard let sourceID = target.continuedFromTraceID else {
+            guard let sourceID = target.carriedFromTraceID else {
                 continue
             }
             guard let source = tracesByID[sourceID] else {
@@ -223,21 +222,32 @@ public enum TrajectoryTopologyValidator {
             }
             let targetIsCancelledUndo = target.status == .cancelledDraft
                 && source.status.isUserPresentable
-            let sequenceIsValid = source.continuationSeq < Int.max
-                && target.continuationSeq == source.continuationSeq + 1
+            let sequenceIsValid = switch source.status {
+            case .deferred, .pending:
+                target.continuationSeq == source.continuationSeq
+            case .unfinished:
+                source.continuationSeq < Int.max
+                    && target.continuationSeq == source.continuationSeq + 1
+            case .completed, .changed, .returnedToPool, .cancelledDraft, .abandoned:
+                false
+            }
             let linkIsValid = source.id != target.id
                 && source.chainID == target.chainID
                 && sequenceIsValid
                 && target.date > source.date
                 && target.createdAt >= source.createdAt
                 && source.status != .cancelledDraft
-                && (source.status == .continued || targetIsCancelledUndo)
+                && (
+                    source.status == .deferred
+                        || source.status == .unfinished
+                        || targetIsCancelledUndo
+                )
             if linkIsValid == false {
                 issues.append(.invalidTraceContinuation(target.id))
             }
         }
         for source in traces {
-            let targetIsMissing = source.status == .continued
+            let targetIsMissing = source.status == .deferred
                 && continuationTargets[source.id, default: []].isEmpty
             if targetIsMissing {
                 issues.append(.missingTraceContinuationTarget(source.id))
@@ -276,7 +286,7 @@ public enum TrajectoryTopologyValidator {
                 && source.chainID != target.chainID
                 && source.date == target.date
                 && target.continuationSeq == 0
-                && target.continuedFromTraceID == nil
+                && target.carriedFromTraceID == nil
                 && target.status != .cancelledDraft
                 && target.createdAt >= source.createdAt
             if linkIsValid == false {
@@ -323,7 +333,7 @@ public enum TrajectoryTopologyValidator {
         var issues: [TrajectoryTopologyValidationIssue] = []
         let targetsBySource = Dictionary(
             grouping: subtasks.compactMap { subtask -> SubtaskLink? in
-                subtask.continuedFromSubtaskID.map {
+                subtask.carriedFromSubtaskID.map {
                     SubtaskLink(source: $0, target: subtask.id)
                 }
             },
@@ -339,7 +349,7 @@ public enum TrajectoryTopologyValidator {
                 issues.append(.missingSubtaskParent(target.id, target.traceID))
                 continue
             }
-            guard let sourceID = target.continuedFromSubtaskID else {
+            guard let sourceID = target.carriedFromSubtaskID else {
                 continue
             }
             guard let source = subtasksByID[sourceID] else {
@@ -359,16 +369,20 @@ public enum TrajectoryTopologyValidator {
             let linkIsValid = source.id != target.id
                 && source.lineageID == target.lineageID
                 && sourceTrace.chainID == targetTrace.chainID
-                && targetTrace.continuedFromTraceID == sourceTrace.id
+                && targetTrace.carriedFromTraceID == sourceTrace.id
                 && target.createdAt >= source.createdAt
                 && source.status != .cancelledDraft
-                && (source.status == .continued || targetIsCancelledUndo)
+                && (
+                    source.status == .deferred
+                        || source.status == .unfinished
+                        || targetIsCancelledUndo
+                )
             if linkIsValid == false {
                 issues.append(.invalidSubtaskContinuation(target.id))
             }
         }
 
-        for source in subtasks where source.status == .continued {
+        for source in subtasks where source.status == .deferred {
             if targetsBySource[source.id, default: []].isEmpty {
                 issues.append(.missingSubtaskContinuationTarget(source.id))
             }
@@ -400,7 +414,7 @@ public enum TrajectoryTopologyValidator {
     ) -> DayTraceID? {
         let continuationTargets = Dictionary(
             grouping: tracesByID.values.compactMap { trace -> TraceLink? in
-                trace.continuedFromTraceID.map {
+                trace.carriedFromTraceID.map {
                     TraceLink(source: $0, target: trace.id)
                 }
             },
@@ -453,7 +467,7 @@ public enum TrajectoryTopologyValidator {
                 break
             }
             state[id] = .visiting
-            if let sourceID = subtasksByID[id]?.continuedFromSubtaskID {
+            if let sourceID = subtasksByID[id]?.carriedFromSubtaskID {
                 if subtasksByID[sourceID] != nil {
                     if let cycle = visit(sourceID) {
                         return cycle

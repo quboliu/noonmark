@@ -47,7 +47,7 @@ struct CalendarPage: View {
                     accessibilityLabel: store.copy.previousMonth,
                     identifier: "calendar.header.previous-action"
                 ) {
-                    store.selectedCalendarDate = NoonmarkStore.shiftedMonth(from: store.selectedCalendarDate, by: -1)
+                    store.moveSelectedPage(.previous)
                 }
                 HeaderButton(store.copy.today) { store.selectedCalendarDate = store.today }
                 calendarNavigationButton(
@@ -55,7 +55,7 @@ struct CalendarPage: View {
                     accessibilityLabel: store.copy.nextMonth,
                     identifier: "calendar.header.next-action"
                 ) {
-                    store.selectedCalendarDate = NoonmarkStore.shiftedMonth(from: store.selectedCalendarDate, by: 1)
+                    store.moveSelectedPage(.next)
                 }
                 if store.hasDetailRailContent && store.isDetailRailExpanded == false {
                     PaneBoundaryToggle(
@@ -138,11 +138,20 @@ struct CalendarPage: View {
         .padding(.horizontal, 18)
         .padding(.bottom, 18)
         .background {
-            DateNavigationKeyboardFocusBridge(
-                focusRequest: focusRequest,
-                onMoveCommand: { store.moveSelectedDate($0) },
-                onFocusChange: { _ in }
-            )
+            ZStack {
+                DateNavigationKeyboardFocusBridge(
+                    focusRequest: focusRequest,
+                    onMoveCommand: { store.moveSelectedDate($0) },
+                    onFocusChange: { _ in }
+                )
+                HorizontalPageNavigationBridge(
+                    isEnabled: {
+                        store.page == .calendar
+                            && store.canNavigateDatePage
+                    },
+                    onNavigate: { store.moveSelectedPage($0) }
+                )
+            }
         }
     }
 
@@ -222,7 +231,11 @@ struct CalendarCell: View {
                                         verificationText: trace.status.rawValue
                                     )
                                 }
-                            MarkdownInlineText(store.definition(for: trace)?.title ?? "")
+                            MarkdownInlineText(
+                                store.copy.displayTaskTitle(
+                                    store.definition(for: trace)?.title
+                                )
+                            )
                                 .font(.noonmarkSystem(size: 9.5))
                                 .foregroundStyle(titleColor(for: trace.status))
                                 .strikethrough(trace.status == .completed || trace.status == .abandoned)
@@ -355,15 +368,16 @@ struct CalendarDayInsight {
         let traces = store.engine.getDayTodo(date: date).traces
         let stats = store.engine.dailyReviewStats(date: date)
         let completionRate = stats.total == 0 ? 0 : Int((Double(stats.completed) / Double(stats.total) * 100).rounded())
-        let continuedBySeq = traces.filter { $0.continuationSeq > 0 }.count
-        let continuationCount = max(stats.continued, continuedBySeq)
+        let continuationCount = traces.filter {
+            store.engine.carryoverKind(for: $0.id) == .continuation
+        }.count
         let changedTargets = traces.filter { $0.changedToTraceID != nil }.count
         let pending = max(
             0,
             stats.total
                 - stats.completed
                 - stats.unfinished
-                - stats.continued
+                - stats.deferred
                 - stats.changed
                 - stats.returnedToPool
                 - stats.abandoned
@@ -622,7 +636,7 @@ struct CalendarDetailRow: View {
     }
 
     var title: String {
-        store.definition(for: trace)?.title ?? ""
+        store.copy.displayTaskTitle(store.definition(for: trace)?.title)
     }
 
     var titleColor: Color {

@@ -261,7 +261,7 @@ final class SyncRecordMapperTests: XCTestCase {
             JSONSerialization.jsonObject(with: record.payload) as? [String: Any]
         )
         XCTAssertEqual(Set(object.keys), ["formatVersion", "payload"])
-        XCTAssertEqual(object["formatVersion"] as? Int, 3)
+        XCTAssertEqual(object["formatVersion"] as? Int, 5)
 
         let restored = try mapper.decodeTaskChain(record)
         XCTAssertEqual(
@@ -272,6 +272,66 @@ final class SyncRecordMapperTests: XCTestCase {
             restored.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
             exactNow.timeIntervalSinceReferenceDate.bitPattern
         )
+    }
+
+    func testDayTracePinQueueRoundTripsThroughCurrentSyncPayload() throws {
+        let mapper = SyncRecordMapper()
+        let trace = DayTrace(
+            chainID: TaskChainID(),
+            definitionID: TaskDefinitionID(),
+            date: today,
+            priority: 3,
+            pinOrder: 2,
+            now: now
+        )
+
+        let record = try mapper.record(
+            for: trace,
+            modifiedBy: SyncDeviceID("mac-pin")
+        )
+        let restored = try mapper.decodeDayTrace(record)
+
+        XCTAssertEqual(restored, trace)
+        XCTAssertEqual(restored.pinOrder, 2)
+    }
+
+    func testCancelledDeferredTargetKeepsItsSourceThroughCurrentSyncPayload() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "同步延期目标回池",
+            now: now
+        )
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let futureDate = LocalDate("2026-07-06")
+        let targetTraceID = try engine.deferCurrentTrace(
+            traceID: sourceTraceID,
+            targetDate: futureDate,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        try engine.returnToPool(
+            traceID: targetTraceID,
+            today: today,
+            now: now.addingTimeInterval(3)
+        )
+        let target = try XCTUnwrap(engine.traces[targetTraceID])
+
+        let mapper = SyncRecordMapper()
+        let record = try mapper.record(
+            for: target,
+            modifiedBy: SyncDeviceID("mac-return")
+        )
+        let restored = try mapper.decodeDayTrace(record)
+
+        XCTAssertEqual(restored, target)
+        XCTAssertEqual(restored.status, .cancelledDraft)
+        XCTAssertEqual(restored.carriedFromTraceID, sourceTraceID)
+        XCTAssertEqual(restored.draftCancelledOn, today)
     }
 
     func testOrdinaryPayloadRejectsUnknownVersionShapeAndNoncanonicalBytes() throws {
@@ -466,7 +526,7 @@ final class SyncRecordMapperTests: XCTestCase {
             traceID: DayTraceID(
                 UUID(uuidString: "75000000-0000-0000-0000-000000000002")!
             ),
-            status: .continued,
+            status: .deferred,
             category: nil,
             labels: [],
             capturedAt: Date(

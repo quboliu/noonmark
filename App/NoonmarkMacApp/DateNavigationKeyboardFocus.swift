@@ -1,4 +1,5 @@
 import AppKit
+import NoonmarkMacRuntime
 import SwiftUI
 
 enum DateNavigationKey: UInt16, CaseIterable {
@@ -112,5 +113,109 @@ final class DateNavigationKeyboardFocusView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
+    }
+}
+
+struct HorizontalPageNavigationBridge: NSViewRepresentable {
+    let isEnabled: () -> Bool
+    let onNavigate: (HorizontalPageNavigationDirection) -> Void
+
+    func makeNSView(context: Context) -> HorizontalPageNavigationView {
+        let view = HorizontalPageNavigationView(frame: .zero)
+        configure(view)
+        return view
+    }
+
+    func updateNSView(
+        _ view: HorizontalPageNavigationView,
+        context: Context
+    ) {
+        configure(view)
+    }
+
+    static func dismantleNSView(
+        _ view: HorizontalPageNavigationView,
+        coordinator: ()
+    ) {
+        view.stopMonitoring()
+        view.isEnabled = nil
+        view.onNavigate = nil
+    }
+
+    private func configure(_ view: HorizontalPageNavigationView) {
+        view.isEnabled = isEnabled
+        view.onNavigate = onNavigate
+    }
+}
+
+final class HorizontalPageNavigationView: NSView {
+    var isEnabled: (() -> Bool)?
+    var onNavigate: ((HorizontalPageNavigationDirection) -> Void)?
+
+    private var recognizer = HorizontalPageNavigationRecognizer()
+    private var scrollMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopMonitoring()
+        guard window != nil else { return }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: .scrollWheel
+        ) { [weak self] event in
+            MainActor.assumeIsolated {
+                self?.handle(event)
+            }
+            return event
+        }
+    }
+
+    func stopMonitoring() {
+        guard let scrollMonitor else { return }
+        NSEvent.removeMonitor(scrollMonitor)
+        self.scrollMonitor = nil
+        recognizer.reset()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    private func handle(_ event: NSEvent) {
+        guard let window,
+              event.windowNumber == window.windowNumber,
+              bounds.contains(convert(event.locationInWindow, from: nil)),
+              window.attachedSheet == nil,
+              NSApp.modalWindow == nil,
+              window.firstResponder is NSTextView == false,
+              isEnabled?() == true,
+              event.modifierFlags.isDisjoint(
+                  with: [.command, .control, .option]
+              )
+        else {
+            recognizer.reset()
+            return
+        }
+
+        let sample = HorizontalPageNavigationSample(
+            deltaX: event.scrollingDeltaX,
+            deltaY: event.scrollingDeltaY,
+            phase: Self.navigationPhase(for: event.phase),
+            isMomentum: event.momentumPhase.isEmpty == false,
+            isPrecise: event.hasPreciseScrollingDeltas
+        )
+        if let direction = recognizer.consume(sample) {
+            onNavigate?(direction)
+        }
+    }
+
+    private static func navigationPhase(
+        for phase: NSEvent.Phase
+    ) -> HorizontalPageNavigationPhase {
+        if phase.contains(.cancelled) { return .cancelled }
+        if phase.contains(.ended) { return .ended }
+        if phase.contains(.began) { return .began }
+        if phase.contains(.changed) { return .changed }
+        if phase.contains(.mayBegin) { return .mayBegin }
+        return .none
     }
 }

@@ -11,7 +11,7 @@ cleanup() {
 trap cleanup EXIT
 
 required_files=(
-  "$app_icon_source_png"
+  "$app_icon_source_svg"
   "$app_icon_master_png"
   "$app_icon_icns_path"
   "scripts/app-icon-optical-renderer.swift"
@@ -27,6 +27,19 @@ for file in "${required_files[@]}"; do
     exit 1
   fi
 done
+
+if ! grep -Eq '<svg[^>]+viewBox="0 0 1024 1024"' "$app_icon_source_svg"; then
+  echo "canonical app icon SVG must use a 0 0 1024 1024 viewBox: $app_icon_source_svg" >&2
+  exit 1
+fi
+if grep -Eq '<image([[:space:]>])' "$app_icon_source_svg"; then
+  echo "canonical app icon SVG must not embed raster images: $app_icon_source_svg" >&2
+  exit 1
+fi
+if [[ -e "${app_icon_resources_dir}/AppIcon-source.png" ]]; then
+  echo "legacy raster app icon source must be removed in favor of SVG" >&2
+  exit 1
+fi
 
 assert_png() {
   local path="$1"
@@ -70,7 +83,7 @@ assert_matches_source() {
   app_icon_render_png "$expected_size" "$rendered"
 
   if ! cmp -s "$path" "$rendered"; then
-    echo "app icon asset is stale relative to AppIcon-source.png: $path" >&2
+    echo "app icon asset is stale relative to AppIcon-source.svg: $path" >&2
     exit 1
   fi
 }
@@ -190,14 +203,6 @@ do {
 SWIFT
 }
 
-source_width="$(sips -g pixelWidth "$app_icon_source_png" | awk '/pixelWidth/ {print $2}')"
-source_height="$(sips -g pixelHeight "$app_icon_source_png" | awk '/pixelHeight/ {print $2}')"
-source_format="$(sips -g format "$app_icon_source_png" | awk '/format/ {print $2}')"
-if [[ "$source_width" != "$source_height" || "$source_format" != "png" ]]; then
-  echo "canonical app icon source must be a square png: $app_icon_source_png" >&2
-  exit 1
-fi
-
 assert_png "$app_icon_master_png" 1024
 assert_matches_source "$app_icon_master_png" 1024
 assert_master_mac_icon_bounds
@@ -226,6 +231,7 @@ for representation in "${app_icon_representations[@]}"; do
 done
 
 probe_arguments=(
+  --large "$app_icon_master_png" 1024
   --small "${app_icon_iconset_dir}/icon_16x16.png" 16
   --small "${app_icon_iconset_dir}/icon_16x16@2x.png" 32
   --small "${app_icon_iconset_dir}/icon_32x32.png" 32

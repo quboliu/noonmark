@@ -810,7 +810,7 @@ extension TraceStatus {
                 titleColor: Theme.text2,
                 strikethrough: false
             )
-        case .continued:
+        case .deferred:
             TraceStatusStyle(
                 glyph: "→",
                 foreground: Theme.text2,

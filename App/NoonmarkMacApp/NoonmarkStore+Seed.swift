@@ -245,13 +245,13 @@ extension NoonmarkStore {
                 upTo: day1,
                 now: seedNow(at: eventTime(day1, hour: 0, minute: 1))
             )
-            let okrDay1 = try engine.continueTrace(
+            let okrDay1 = try engine.continueUnfinishedTrace(
                 traceID: okrDay0,
                 targetDate: day1,
                 today: day1,
                 now: seedNow(at: eventTime(day1, hour: 8, minute: 0))
             )
-            let okrToday = try engine.continueTrace(
+            let okrToday = try engine.deferCurrentTrace(
                 traceID: okrDay1,
                 targetDate: day3,
                 today: day1,
@@ -297,13 +297,13 @@ extension NoonmarkStore {
                 today: day1,
                 now: seedNow(at: eventTime(day1, hour: 15, minute: 20))
             )
-            let weeklyDay2 = try engine.continueTrace(
+            let weeklyDay2 = try engine.deferCurrentTrace(
                 traceID: weeklyDay1,
                 targetDate: day2,
                 today: day1,
                 now: seedNow(at: eventTime(day1, hour: 18, minute: 0))
             )
-            let visualDay2 = try engine.continueTrace(
+            let visualDay2 = try engine.deferCurrentTrace(
                 traceID: visualDay1,
                 targetDate: day2,
                 today: day1,
@@ -354,13 +354,13 @@ extension NoonmarkStore {
                 today: day2,
                 now: seedNow(at: eventTime(day2, hour: 17, minute: 45))
             )
-            let iconToday = try engine.continueTrace(
+            let iconToday = try engine.deferCurrentTrace(
                 traceID: iconDay2,
                 targetDate: day3,
                 today: day2,
                 now: seedNow(at: eventTime(day2, hour: 18, minute: 0))
             )
-            let visualToday = try engine.continueTrace(
+            let visualToday = try engine.deferCurrentTrace(
                 traceID: visualDay2,
                 targetDate: day3,
                 today: day2,

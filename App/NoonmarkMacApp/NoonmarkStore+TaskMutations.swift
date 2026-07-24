@@ -75,8 +75,6 @@ extension NoonmarkStore {
     func addPoolTask() {
         let draft = parsedTaskDraft(poolText)
         guard draft.title.isEmpty == false else { return }
-        let description = copy.unscheduledPoolTaskDescription
-        let initialNote = copy.unscheduledPoolTaskInitialNote
         do {
             let chainID = try commitEngineMutation(
                 undoPolicy: .snapshot(.addPoolTask),
@@ -84,8 +82,6 @@ extension NoonmarkStore {
             ) { candidate, moment in
                 let chainID = try candidate.createPoolTask(
                     title: draft.title,
-                    descriptionText: description,
-                    initialNoteBody: initialNote,
                     now: moment.instant
                 )
                 _ = try applyTaskDraftLabels(
@@ -366,17 +362,36 @@ extension NoonmarkStore {
         }
     }
 
-    func continueTrace(_ traceID: DayTraceID, to date: LocalDate) {
-        guard let trace = engine.traces[traceID] else { return }
-        let undoPolicy: EngineMutationUndoPolicy = trace.date >= today
-            && engine.days[trace.date]?.lockedAt == nil
-            ? .snapshotIfAllowed(on: trace.date, action: .continueTask)
-            : .invalidate
+    func deferTrace(_ traceID: DayTraceID, to date: LocalDate) {
         do {
             let nextID = try commitEngineMutation(
-                undoPolicy: undoPolicy
+                undoPolicy: .snapshotIfAllowed(
+                    on: today,
+                    action: .deferTask
+                )
             ) { candidate, moment in
-                try candidate.continueTrace(
+                try candidate.deferCurrentTrace(
+                    traceID: traceID,
+                    targetDate: date,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            selectedDate = date
+            page = .day
+            selectTrace(nextID)
+            showToast(copy.deferredTo(displayDate(date)))
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
+    func continueUnfinishedTrace(_ traceID: DayTraceID, to date: LocalDate) {
+        do {
+            let nextID = try commitEngineMutation(
+                undoPolicy: .invalidate
+            ) { candidate, moment in
+                try candidate.continueUnfinishedTrace(
                     traceID: traceID,
                     targetDate: date,
                     today: moment.today,
@@ -405,9 +420,49 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
-            page = .pool
             clearSelection()
             showToast(copy.returnedToPool)
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
+    func withdrawDeferral(_ sourceTraceID: DayTraceID) {
+        do {
+            try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
+                try candidate.withdrawDeferral(
+                    sourceTraceID: sourceTraceID,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            page = .day
+            selectedDate = today
+            selectTrace(sourceTraceID)
+            showToast(copy.deferralWithdrawn)
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
+    func setTracePinned(_ traceID: DayTraceID, pinned: Bool) {
+        do {
+            try commitEngineMutation(undoPolicy: .preserve) { candidate, moment in
+                if pinned {
+                    try candidate.pinDayTrace(
+                        traceID,
+                        today: moment.today,
+                        now: moment.instant
+                    )
+                } else {
+                    try candidate.unpinDayTrace(
+                        traceID,
+                        today: moment.today,
+                        now: moment.instant
+                    )
+                }
+            }
+            showToast(pinned ? copy.taskPinned : copy.taskUnpinned)
         } catch {
             showOperationFailure(.taskMutation, error: error)
         }
@@ -738,15 +793,16 @@ extension NoonmarkStore {
     ) {
         guard let trace = engine.traces[traceID] else { return }
         let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard nextTitle.isEmpty == false else { return }
+        let classificationPolicy = automaticClassificationPolicyForTitleEdit(
+            chainID: trace.chainID,
+            nextTitle: nextTitle
+        )
         do {
             try commitEngineMutation(
                 undoPolicy: immediately
                     ? .preserve
                     : .snapshotIfAllowed(on: trace.date, action: .renameTask),
-                automaticClassificationPolicy: .taskDefinitionChanged(
-                    trace.chainID
-                )
+                automaticClassificationPolicy: classificationPolicy
             ) { candidate, moment in
                 if immediately {
                     try candidate.saveTaskTitleInput(
@@ -779,11 +835,14 @@ extension NoonmarkStore {
         reportsSuccess: Bool = true
     ) {
         let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard nextTitle.isEmpty == false else { return }
+        let classificationPolicy = automaticClassificationPolicyForTitleEdit(
+            chainID: chainID,
+            nextTitle: nextTitle
+        )
         do {
             try commitEngineMutation(
                 undoPolicy: immediately ? .preserve : .snapshot(.renameTask),
-                automaticClassificationPolicy: .taskDefinitionChanged(chainID)
+                automaticClassificationPolicy: classificationPolicy
             ) { candidate, moment in
                 if immediately {
                     try candidate.saveTaskTitleInput(
@@ -807,6 +866,19 @@ extension NoonmarkStore {
         } catch {
             showOperationFailure(.taskMutation, error: error)
         }
+    }
+
+    private func automaticClassificationPolicyForTitleEdit(
+        chainID: TaskChainID,
+        nextTitle: String
+    ) -> EngineMutationAutomaticClassificationPolicy {
+        if nextTitle.isEmpty {
+            return .taskBecameIneligible(chainID)
+        }
+        if currentDefinition(for: chainID)?.title.isEmpty == true {
+            return .taskBecameEligible(chainID)
+        }
+        return .taskDefinitionChanged(chainID)
     }
 
     func updatePoolTaskText(

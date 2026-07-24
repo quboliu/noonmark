@@ -42,9 +42,15 @@ struct CompletedPoolPage: View {
 
     private var presentationSections: [TaskCollectionPresentationSection] {
         let rows = entries.map { entry in
-            TaskCollectionPresentationItem(
+            let title = switch entry {
+            case let .task(item):
+                store.copy.displayTaskTitle(item.definition.title)
+            case .subtask:
+                entry.title
+            }
+            return TaskCollectionPresentationItem(
                 id: entry.id,
-                title: entry.title,
+                title: title,
                 time: entry.completedAt,
                 category: historicalCategory(for: entry.classificationTrace)
             )
@@ -163,7 +169,7 @@ struct CompletedRow: View {
             HStack(spacing: 10) {
                 StatusGlyph(status: .completed)
                 VStack(alignment: .leading, spacing: 0) {
-                    MarkdownInlineText(item.definition.title)
+                    MarkdownInlineText(store.copy.displayTaskTitle(item.definition.title))
                         .font(.noonmarkSystem(size: 13, weight: .medium))
                         .lineLimit(1)
                     if let classification = store.displayableClassification(for: item.trace) {
@@ -216,7 +222,11 @@ struct CompletedSubtaskRow: View {
                     MarkdownInlineText(record.subtask.title)
                         .font(.noonmarkSystem(size: 13, weight: .medium))
                         .lineLimit(1)
-                    Text(store.copy.belongsToTask(record.parentDefinition.title))
+                    Text(
+                        store.copy.belongsToTask(
+                            store.copy.displayTaskTitle(record.parentDefinition.title)
+                        )
+                    )
                         .font(.noonmarkSystem(size: 10.5))
                         .foregroundStyle(Theme.text3)
                         .lineLimit(1)

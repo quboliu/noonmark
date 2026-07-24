@@ -603,10 +603,10 @@ struct CopyUndoPersistenceE2EAutomation: LaunchAutomationRunnable {
         }
 
         store.clearUndoHistory()
-        store.continueTrace(source.id, to: targetDate)
+        store.deferTrace(source.id, to: targetDate)
         let target = try unwrap(
             store.engine.futurePlans(today: store.today).first {
-                $0.trace.continuedFromTraceID == source.id
+                $0.trace.carriedFromTraceID == source.id
             }?.trace,
             "persisted continuation target"
         )
@@ -920,7 +920,7 @@ struct CopyUndoPersistenceE2EAutomation: LaunchAutomationRunnable {
               target.definitionID == definitionID,
               target.date == targetDate,
               target.status == .cancelledDraft,
-              target.continuedFromTraceID == sourceTraceID,
+              target.carriedFromTraceID == sourceTraceID,
               target.draftCancellationID == evidence.cancellationID,
               target.draftCancelledOn == targetDate,
               exactBits(chain.createdAt) == evidence.sourceCreationBits,
@@ -1458,10 +1458,10 @@ struct UndoE2EAutomation: LaunchAutomationRunnable {
         )
         store.clearUndoHistory()
         let tomorrow = NoonmarkStore.offset(store.today, by: 1)
-        store.continueTrace(traceID, to: tomorrow)
+        store.deferTrace(traceID, to: tomorrow)
         let targetTraceID = try unwrap(
             store.engine.futurePlans(today: store.today).first {
-                $0.trace.continuedFromTraceID == traceID
+                $0.trace.carriedFromTraceID == traceID
             }?.trace.id,
             "continuation target"
         )

@@ -84,6 +84,24 @@ extension NoonmarkStore {
         openTaskTrailTrace(source.trace)
     }
 
+    func carryoverSource(for trace: DayTrace) -> DayTrace? {
+        trace.carriedFromTraceID.flatMap { engine.traces[$0] }
+    }
+
+    func carryoverTarget(for trace: DayTrace) -> DayTrace? {
+        engine.carryoverTarget(for: trace.id)
+    }
+
+    func openCarryoverSource(from trace: DayTrace) {
+        guard let source = carryoverSource(for: trace) else { return }
+        openTaskTrailTrace(source)
+    }
+
+    func openCarryoverTarget(from trace: DayTrace) {
+        guard let target = carryoverTarget(for: trace) else { return }
+        openTaskTrailTrace(target)
+    }
+
     func openTaskTrailTrace(_ trace: DayTrace) {
         page = .day
         selectedDate = trace.date
@@ -332,8 +350,18 @@ extension NoonmarkStore {
     private var orderedWorkspaceSelectionItems: [WorkspaceSelectionItem] {
         switch page {
         case .day:
-            return engine.getDayTodo(date: selectedDate).traces.map {
-                .dayTrace($0.id)
+            let preference = TaskCollectionPresentationPreferenceRepository()
+                .load(for: .dayTodo)
+            let tracesByDescription = Dictionary(
+                uniqueKeysWithValues: engine.traces.values.map {
+                    ($0.id.description, $0.id)
+                }
+            )
+            return dayTodoPresentationSections(
+                date: selectedDate,
+                preference: preference
+            ).flatMap(\.items).compactMap {
+                tracesByDescription[$0.id].map(WorkspaceSelectionItem.dayTrace)
             }
         case .pool:
             return engine.taskPool().map { .poolTask($0.chain.id) }

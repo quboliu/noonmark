@@ -149,6 +149,10 @@ extension AppCopy {
         language == .chinese ? "延续到哪一天？" : "When should this continue?"
     }
 
+    var deferDateTitle: String {
+        language == .chinese ? "延期到哪一天？" : "When should this be deferred?"
+    }
+
     var rescheduleDateTitle: String {
         language == .chinese ? "改到哪个未来日期？" : "Choose a new future date"
     }
@@ -163,6 +167,10 @@ extension AppCopy {
 
     var continueDateAction: String {
         language == .chinese ? "延续" : "Continue"
+    }
+
+    var deferDateAction: String {
+        language == .chinese ? "延期" : "Defer"
     }
 
     var rescheduleDateAction: String {

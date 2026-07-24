@@ -1,6 +1,7 @@
 import Foundation
 
 public enum TaskCollectionPage: String, CaseIterable, Codable, Equatable, Sendable {
+    case dayTodo
     case taskPool
     case unfinished
     case completed
@@ -38,6 +39,8 @@ public struct TaskCollectionPresentationPreference: Codable, Equatable, Sendable
 
     public static func defaultValue(for page: TaskCollectionPage) -> Self {
         switch page {
+        case .dayTodo:
+            Self(organization: .flat, sortKey: .time, direction: .ascending)
         case .taskPool:
             Self(organization: .grouped, sortKey: .time, direction: .ascending)
         case .unfinished, .completed:
@@ -49,6 +52,19 @@ public struct TaskCollectionPresentationPreference: Codable, Equatable, Sendable
 public enum TaskCollectionCategoryApproval: String, Codable, Equatable, Sendable {
     case userApproved
     case pendingAIReview
+}
+
+public struct TaskCategoryVisualStyle: Equatable, Sendable {
+    public let foregroundColorHex: String?
+    public let usesTintedBackground: Bool
+
+    public init(
+        colorHex: String?,
+        isUserApproved: Bool
+    ) {
+        foregroundColorHex = colorHex
+        usesTintedBackground = isUserApproved
+    }
 }
 
 /// A presentation-only category seam. It lets collection pages consume the
@@ -70,6 +86,13 @@ public struct TaskCollectionCategoryPresentation: Equatable, Sendable {
         self.colorHex = colorHex
         self.approval = approval
     }
+
+    public var visualStyle: TaskCategoryVisualStyle {
+        TaskCategoryVisualStyle(
+            colorHex: colorHex,
+            isUserApproved: approval == .userApproved
+        )
+    }
 }
 
 public struct TaskCollectionPresentationItem: Equatable, Sendable {
@@ -77,17 +100,23 @@ public struct TaskCollectionPresentationItem: Equatable, Sendable {
     public let title: String
     public let time: Date
     public let category: TaskCollectionCategoryPresentation?
+    public let precedence: Int
+    public let fixedOrder: Int?
 
     public init(
         id: String,
         title: String,
         time: Date,
-        category: TaskCollectionCategoryPresentation?
+        category: TaskCollectionCategoryPresentation?,
+        precedence: Int = 0,
+        fixedOrder: Int? = nil
     ) {
         self.id = id
         self.title = title
         self.time = time
         self.category = category
+        self.precedence = precedence
+        self.fixedOrder = fixedOrder
     }
 }
 
@@ -96,6 +125,7 @@ public struct TaskCollectionPresentationSection: Equatable, Sendable {
     public let title: String?
     public let category: TaskCollectionCategoryPresentation?
     public let items: [TaskCollectionPresentationItem]
+    public let precedence: Int
 }
 
 public struct TaskCollectionPresentationProjector: Sendable {
@@ -106,27 +136,73 @@ public struct TaskCollectionPresentationProjector: Sendable {
         preference: TaskCollectionPresentationPreference,
         ungroupedTitle: String
     ) -> [TaskCollectionPresentationSection] {
+        let fixedItems = items.filter { $0.fixedOrder != nil }.sorted {
+            if $0.fixedOrder != $1.fixedOrder {
+                return ($0.fixedOrder ?? .max) < ($1.fixedOrder ?? .max)
+            }
+            return $0.id < $1.id
+        }
+        let flexibleItems = items.filter { $0.fixedOrder == nil }
+
         guard preference.organization == .grouped else {
-            return [
-                TaskCollectionPresentationSection(
-                    id: "flat",
-                    title: nil,
-                    category: nil,
-                    items: sorted(items, by: preference)
-                ),
-            ]
+            var sections: [TaskCollectionPresentationSection] = []
+            if fixedItems.isEmpty == false {
+                sections.append(
+                    TaskCollectionPresentationSection(
+                        id: "fixed",
+                        title: nil,
+                        category: nil,
+                        items: fixedItems,
+                        precedence: .min
+                    )
+                )
+            }
+            if flexibleItems.isEmpty == false || sections.isEmpty {
+                sections.append(
+                    TaskCollectionPresentationSection(
+                        id: "flat",
+                        title: nil,
+                        category: nil,
+                        items: sorted(flexibleItems, by: preference),
+                        precedence: 0
+                    )
+                )
+            }
+            return sections
         }
 
-        let grouped = Dictionary(grouping: items, by: { $0.category?.id })
-        return grouped.map { categoryID, groupItems in
+        var sections: [TaskCollectionPresentationSection] = []
+        if fixedItems.isEmpty == false {
+            sections.append(
+                TaskCollectionPresentationSection(
+                    id: "fixed",
+                    title: nil,
+                    category: nil,
+                    items: fixedItems,
+                    precedence: .min
+                )
+            )
+        }
+
+        let grouped = Dictionary(grouping: flexibleItems) {
+            SectionKey(
+                precedence: $0.precedence,
+                categoryID: $0.category?.id
+            )
+        }
+        sections.append(contentsOf: grouped.map { key, groupItems in
             let category = groupItems.compactMap(\.category).first
             return TaskCollectionPresentationSection(
-                id: categoryID ?? "ungrouped",
+                id: key.precedence == 0
+                    ? (key.categoryID ?? "ungrouped")
+                    : "\(key.precedence):\(key.categoryID ?? "ungrouped")",
                 title: category?.name ?? ungroupedTitle,
                 category: category,
-                items: sorted(groupItems, by: preference)
+                items: sorted(groupItems, by: preference),
+                precedence: key.precedence
             )
-        }.sorted(by: sectionPrecedes)
+        }.sorted(by: sectionPrecedes))
+        return sections
     }
 
     private func sorted(
@@ -134,6 +210,9 @@ public struct TaskCollectionPresentationProjector: Sendable {
         by preference: TaskCollectionPresentationPreference
     ) -> [TaskCollectionPresentationItem] {
         items.sorted { lhs, rhs in
+            if lhs.precedence != rhs.precedence {
+                return lhs.precedence < rhs.precedence
+            }
             let comparison: ComparisonResult = switch preference.sortKey {
             case .time:
                 if lhs.time == rhs.time {
@@ -161,11 +240,19 @@ public struct TaskCollectionPresentationProjector: Sendable {
         _ lhs: TaskCollectionPresentationSection,
         _ rhs: TaskCollectionPresentationSection
     ) -> Bool {
+        if lhs.precedence != rhs.precedence {
+            return lhs.precedence < rhs.precedence
+        }
         if lhs.category == nil { return false }
         if rhs.category == nil { return true }
         let comparison = (lhs.title ?? "").localizedStandardCompare(rhs.title ?? "")
         if comparison == .orderedSame { return lhs.id < rhs.id }
         return comparison == .orderedAscending
+    }
+
+    private struct SectionKey: Hashable {
+        let precedence: Int
+        let categoryID: String?
     }
 }
 

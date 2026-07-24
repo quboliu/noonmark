@@ -41,7 +41,7 @@ struct UnfinishedPoolPage: View {
                 .max()
             return TaskCollectionPresentationItem(
                 id: item.chain.id.description,
-                title: item.definition.title,
+                title: store.copy.displayTaskTitle(item.definition.title),
                 time: traceTime ?? item.definition.createdAt,
                 category: store.currentClassification(for: item.chain.id)?.category?
                     .taskCollectionCategoryPresentation
@@ -128,6 +128,15 @@ struct UnfinishedTaskContextMenu: View {
                 Button(store.copy.reactivateChain) {
                     store.reactivateAbandonedChain(from: traceID)
                 }
+            case let .openTaskPool(chainID):
+                Button(store.copy.openCurrentTaskPool) {
+                    store.page = .pool
+                    store.selectPool(chainID)
+                }
+            case let .abandonPooledChain(chainID):
+                Button(store.copy.abandonChain, role: .destructive) {
+                    store.deletePoolTask(chainID)
+                }
             }
         }
     }
@@ -149,7 +158,7 @@ struct UnfinishedRow: View {
             HStack(alignment: .top, spacing: 10) {
                 StatusGlyph(status: item.isAbandoned ? .abandoned : .unfinished)
                 VStack(alignment: .leading, spacing: 0) {
-                    MarkdownInlineText(item.definition.title)
+                    MarkdownInlineText(store.copy.displayTaskTitle(item.definition.title))
                         .font(.noonmarkSystem(size: 13, weight: .semibold))
                         .foregroundStyle(item.isAbandoned ? Theme.text2 : Theme.text1)
                         .lineLimit(1)
@@ -209,6 +218,17 @@ struct UnfinishedRow: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 1)
                     .background(Capsule().fill(Theme.accentSoft))
+                } else if item.isInTaskPool {
+                    Button(store.copy.openCurrentTaskPool) {
+                        store.page = .pool
+                        store.selectPool(item.chain.id)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.noonmarkSystem(size: 10.5, weight: .medium))
+                    .foregroundStyle(Theme.navPool)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Theme.navPool.opacity(0.10)))
                 }
                 Spacer()
                 Button(expanded ? store.copy.detailExpanded : store.copy.detailCollapsed) {
@@ -274,7 +294,7 @@ struct UnfinishedInlineTrace: View {
 
     var statusLabel: String {
         switch trace.status {
-        case .continued, .abandoned:
+        case .abandoned:
             store.copy.traceStatusLabel(trace.status)
         default:
             store.copy.traceStatusLabel(.unfinished)
@@ -283,7 +303,7 @@ struct UnfinishedInlineTrace: View {
 
     var statusColor: Color {
         switch trace.status {
-        case .continued, .abandoned:
+        case .abandoned:
             return Theme.text2
         default:
             return Theme.warn

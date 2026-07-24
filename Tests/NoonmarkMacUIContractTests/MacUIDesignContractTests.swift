@@ -192,6 +192,14 @@ final class MacUIDesignContractTests: XCTestCase {
             ),
             MacUIAccessibleColorMetrics.minimumSmallTextContrast
         )
+        XCTAssertGreaterThan(
+            MacUIAccessibleColorMetrics.coolGrayPlaceholderText.red,
+            MacUIAccessibleColorMetrics.coolGrayTertiaryText.red
+        )
+        XCTAssertGreaterThan(
+            MacUIAccessibleColorMetrics.warmPaperPlaceholderText.red,
+            MacUIAccessibleColorMetrics.warmPaperTertiaryText.red
+        )
     }
 
     func testCurrentContractCoversAllTopLevelPages() {

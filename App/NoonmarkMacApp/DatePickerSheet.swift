@@ -18,7 +18,7 @@ struct DatePickerSheet: View {
         switch purpose {
         case .gotoDay:
             store.selectedDate
-        case .reschedule:
+        case .deferTrace, .reschedule:
             NoonmarkStore.offset(store.today, by: 1)
         case .schedulePool, .continueTrace:
             store.today

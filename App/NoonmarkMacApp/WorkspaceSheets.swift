@@ -115,7 +115,9 @@ struct FromPoolSheet: View {
                                 store.showingFromPoolPicker = false
                             } label: {
                                 HStack {
-                                    MarkdownInlineText(task.definition.title)
+                                    MarkdownInlineText(
+                                        store.copy.displayTaskTitle(task.definition.title)
+                                    )
                                     Spacer()
                                     Text(store.copy.schedule)
                                         .foregroundStyle(Theme.accent)
@@ -157,7 +159,7 @@ struct ChangeTaskSheet: View {
 
     var oldTitle: String {
         guard let trace = store.selectedTrace else { return "" }
-        return store.definition(for: trace)?.title ?? ""
+        return store.copy.displayTaskTitle(store.definition(for: trace)?.title)
     }
 
     var body: some View {

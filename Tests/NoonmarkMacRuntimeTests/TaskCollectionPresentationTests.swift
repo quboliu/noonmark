@@ -6,6 +6,14 @@ import XCTest
 final class TaskCollectionPresentationTests: XCTestCase {
     func testDefaultsPreserveEachPageCurrentPresentation() {
         XCTAssertEqual(
+            TaskCollectionPresentationPreference.defaultValue(for: .dayTodo),
+            TaskCollectionPresentationPreference(
+                organization: .flat,
+                sortKey: .time,
+                direction: .ascending
+            )
+        )
+        XCTAssertEqual(
             TaskCollectionPresentationPreference.defaultValue(for: .taskPool),
             TaskCollectionPresentationPreference(
                 organization: .grouped,
@@ -29,6 +37,22 @@ final class TaskCollectionPresentationTests: XCTestCase {
                 direction: .descending
             )
         )
+    }
+
+    func testCategoryVisualStyleKeepsItsForegroundColorBeforeUserApproval() {
+        let approved = TaskCategoryVisualStyle(
+            colorHex: "#D1477A",
+            isUserApproved: true
+        )
+        let pendingReview = TaskCategoryVisualStyle(
+            colorHex: "#2A6FDB",
+            isUserApproved: false
+        )
+
+        XCTAssertEqual(approved.foregroundColorHex, "#D1477A")
+        XCTAssertEqual(pendingReview.foregroundColorHex, "#2A6FDB")
+        XCTAssertTrue(approved.usesTintedBackground)
+        XCTAssertFalse(pendingReview.usesTintedBackground)
     }
 
     func testRepositoryPersistsEachPageIndependentlyAndFailsClosed() {
@@ -113,6 +137,79 @@ final class TaskCollectionPresentationTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testFixedQueueAndPrecedenceOverrideGroupingAndViewSort() {
+        let firstCategory = TaskCollectionCategoryPresentation(
+            id: "category-b",
+            name: "Beta",
+            colorHex: nil,
+            approval: .userApproved
+        )
+        let secondCategory = TaskCollectionCategoryPresentation(
+            id: "category-a",
+            name: "Alpha",
+            colorHex: nil,
+            approval: .userApproved
+        )
+        let base = Date(timeIntervalSince1970: 1000)
+        let items = [
+            TaskCollectionPresentationItem(
+                id: "settled-a",
+                title: "A settled",
+                time: base,
+                category: secondCategory,
+                precedence: 1
+            ),
+            TaskCollectionPresentationItem(
+                id: "normal-b",
+                title: "B normal",
+                time: base.addingTimeInterval(20),
+                category: firstCategory
+            ),
+            TaskCollectionPresentationItem(
+                id: "pinned-second",
+                title: "Z pinned",
+                time: base,
+                category: firstCategory,
+                fixedOrder: 2
+            ),
+            TaskCollectionPresentationItem(
+                id: "pinned-first",
+                title: "A pinned",
+                time: base.addingTimeInterval(30),
+                category: secondCategory,
+                fixedOrder: 1
+            ),
+            TaskCollectionPresentationItem(
+                id: "normal-a",
+                title: "A normal",
+                time: base.addingTimeInterval(10),
+                category: secondCategory
+            ),
+        ]
+
+        let sections = TaskCollectionPresentationProjector().sections(
+            for: items,
+            preference: TaskCollectionPresentationPreference(
+                organization: .grouped,
+                sortKey: .title,
+                direction: .descending
+            ),
+            ungroupedTitle: "Ungrouped"
+        )
+
+        XCTAssertEqual(
+            sections.flatMap(\.items).map(\.id),
+            [
+                "pinned-first",
+                "pinned-second",
+                "normal-a",
+                "normal-b",
+                "settled-a",
+            ]
+        )
+        XCTAssertNil(sections.first?.title)
     }
 
     private func expectedOrder(

@@ -241,7 +241,7 @@ struct ChainReactivationEnvelope: Codable, Equatable {
             && abandoned.descriptionText == restored.descriptionText
             && abandoned.noteEntries == restored.noteEntries
             && abandoned.manualProgressPercent == restored.manualProgressPercent
-            && abandoned.continuedFromTraceID == restored.continuedFromTraceID
+            && abandoned.carriedFromTraceID == restored.carriedFromTraceID
             && abandoned.changedToTraceID == restored.changedToTraceID
             && abandoned.createdAt == restored.createdAt
             && abandoned.completedAt == restored.completedAt
@@ -256,7 +256,7 @@ struct ChainReactivationEnvelope: Codable, Equatable {
         current.id == restored.id
             && current.chainID == restored.chainID
             && current.continuationSeq == restored.continuationSeq
-            && current.continuedFromTraceID == restored.continuedFromTraceID
+            && current.carriedFromTraceID == restored.carriedFromTraceID
             && current.createdAt == restored.createdAt
     }
 
@@ -268,8 +268,8 @@ struct ChainReactivationEnvelope: Codable, Equatable {
         case .pending:
             current != .abandoned
         case .unfinished:
-            current == .unfinished || current == .continued
-        case .completed, .continued, .changed, .returnedToPool,
+            current == .unfinished
+        case .completed, .deferred, .changed, .returnedToPool,
              .cancelledDraft, .abandoned:
             false
         }
@@ -289,8 +289,8 @@ struct ChainReactivationEnvelope: Codable, Equatable {
             && cancelled.noteEntries == restored.noteEntries
             && cancelled.manualProgressPercent
             == restored.manualProgressPercent
-            && cancelled.continuedFromTraceID
-            == restored.continuedFromTraceID
+            && cancelled.carriedFromTraceID
+            == restored.carriedFromTraceID
             && cancelled.changedToTraceID == restored.changedToTraceID
             && cancelled.createdAt == restored.createdAt
             && cancelled.completedAt == restored.completedAt

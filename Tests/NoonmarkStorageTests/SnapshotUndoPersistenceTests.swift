@@ -113,7 +113,7 @@ final class SnapshotUndoPersistenceTests: XCTestCase {
             now: base
         )
         let before = current.snapshot()
-        let targetTraceID = try current.continueTrace(
+        let targetTraceID = try current.deferCurrentTrace(
             traceID: sourceTraceID,
             targetDate: tomorrow,
             today: today,

@@ -254,7 +254,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
         )
         let oldSnapshot = engine.snapshot()
         let tomorrow = LocalDate("2026-07-06")
-        _ = try engine.continueTrace(
+        _ = try engine.deferCurrentTrace(
             traceID: sourceTraceID,
             targetDate: tomorrow,
             today: today,
@@ -277,7 +277,7 @@ final class SyncSnapshotDifferTests: XCTestCase {
             in: newSnapshot
         )
         let trace = try SyncRecordMapper().decodeDayTrace(sourceRecord)
-        XCTAssertEqual(trace.status, .continued)
+        XCTAssertEqual(trace.status, .deferred)
         let tracePayload = try XCTUnwrap(
             JSONSerialization.jsonObject(with: sourceRecord.payload) as? [String: Any]
         )

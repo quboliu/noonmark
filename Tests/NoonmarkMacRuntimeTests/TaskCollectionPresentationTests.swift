@@ -205,11 +205,47 @@ final class TaskCollectionPresentationTests: XCTestCase {
                 "pinned-first",
                 "pinned-second",
                 "normal-a",
-                "normal-b",
                 "settled-a",
+                "normal-b",
             ]
         )
         XCTAssertNil(sections.first?.title)
+    }
+
+    func testGroupingKeepsPendingAndSettledItemsInOneCategorySection() {
+        let base = Date(timeIntervalSince1970: 1000)
+        let sections = TaskCollectionPresentationProjector().sections(
+            for: [
+                TaskCollectionPresentationItem(
+                    id: "settled",
+                    title: "Settled",
+                    time: base,
+                    category: nil,
+                    precedence: 1
+                ),
+                TaskCollectionPresentationItem(
+                    id: "pending",
+                    title: "Pending",
+                    time: base.addingTimeInterval(1),
+                    category: nil
+                ),
+            ],
+            preference: TaskCollectionPresentationPreference(
+                organization: .grouped,
+                sortKey: .time,
+                direction: .descending
+            ),
+            ungroupedTitle: "Ungrouped"
+        )
+
+        XCTAssertEqual(
+            sections.map(\.title),
+            ["Ungrouped"]
+        )
+        XCTAssertEqual(
+            sections.flatMap(\.items).map(\.id),
+            ["pending", "settled"]
+        )
     }
 
     private func expectedOrder(

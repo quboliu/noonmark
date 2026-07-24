@@ -642,6 +642,44 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let reviewReceipts = sessions.flatMap(
             \.dailyReviewReceipts
         ).count
+        let groupedDayTodoSections = store.dayTodoPresentationSections(
+            date: fixture.anchorDate,
+            preference: TaskCollectionPresentationPreference(
+                organization: .grouped,
+                sortKey: .time,
+                direction: .ascending
+            )
+        ).filter { $0.title != nil }
+        let currentTracesByID = Dictionary(
+            uniqueKeysWithValues: engine.getDayTodo(
+                date: fixture.anchorDate
+            ).traces.map { ($0.id.description, $0) }
+        )
+        let groupedTitles = groupedDayTodoSections.compactMap(\.title)
+        let mixedStatusSectionCount = groupedDayTodoSections.count { section in
+            let statuses = section.items.compactMap {
+                currentTracesByID[$0.id]?.status
+            }
+            return statuses.contains(.pending)
+                && statuses.contains { $0 != .pending }
+        }
+        let statusSinkingVerified = groupedDayTodoSections.allSatisfy { section in
+            var encounteredSettledItem = false
+            return section.items.allSatisfy { item in
+                guard let status = currentTracesByID[item.id]?.status else {
+                    return false
+                }
+                if status == .pending {
+                    return encounteredSettledItem == false
+                }
+                encounteredSettledItem = true
+                return true
+            }
+        }
+        let dayTodoGroupingPresentationVerified =
+            Set(groupedTitles).count == groupedTitles.count
+                && mixedStatusSectionCount > 0
+                && statusSinkingVerified
         guard var editableSession = sessions.first(where: {
             $0.currentTodoDiff != nil
                 && $0.todoApplyReceipts.isEmpty
@@ -668,6 +706,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               editableArtifacts > 0,
               reviewReceipts > 0,
               store.zhulongWorkspace.sessions.count == sessions.count,
+              dayTodoGroupingPresentationVerified,
               engine.getDayTodo(date: fixture.anchorDate).traces
               .isEmpty == false
         else {
@@ -687,6 +726,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             submittedTodoArtifactCount: submittedArtifacts,
             editableTodoArtifactCount: editableArtifacts,
             dailyReviewReceiptCount: reviewReceipts,
+            dayTodoMixedStatusSectionCount: mixedStatusSectionCount,
+            dayTodoGroupingPresentationVerified:
+            dayTodoGroupingPresentationVerified,
             visibleScopeReauthorizationCardCount:
             visibleScopeReauthorizationCardCount,
             scopeAuthorizationUIVerified:
@@ -736,6 +778,8 @@ private struct InteractiveDemoManifest: Codable {
     let submittedTodoArtifactCount: Int
     let editableTodoArtifactCount: Int
     let dailyReviewReceiptCount: Int
+    let dayTodoMixedStatusSectionCount: Int
+    let dayTodoGroupingPresentationVerified: Bool
     let visibleScopeReauthorizationCardCount: Int
     let scopeAuthorizationUIVerified: Bool
     let persistedDatabasePath: String

@@ -186,20 +186,17 @@ public struct TaskCollectionPresentationProjector: Sendable {
 
         let grouped = Dictionary(grouping: flexibleItems) {
             SectionKey(
-                precedence: $0.precedence,
                 categoryID: $0.category?.id
             )
         }
         sections.append(contentsOf: grouped.map { key, groupItems in
             let category = groupItems.compactMap(\.category).first
             return TaskCollectionPresentationSection(
-                id: key.precedence == 0
-                    ? (key.categoryID ?? "ungrouped")
-                    : "\(key.precedence):\(key.categoryID ?? "ungrouped")",
+                id: key.categoryID ?? "ungrouped",
                 title: category?.name ?? ungroupedTitle,
                 category: category,
                 items: sorted(groupItems, by: preference),
-                precedence: key.precedence
+                precedence: 0
             )
         }.sorted(by: sectionPrecedes))
         return sections
@@ -251,7 +248,6 @@ public struct TaskCollectionPresentationProjector: Sendable {
     }
 
     private struct SectionKey: Hashable {
-        let precedence: Int
         let categoryID: String?
     }
 }

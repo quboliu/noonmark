@@ -2,6 +2,7 @@ import Foundation
 import NoonmarkCore
 import NoonmarkDemoSupport
 import NoonmarkMacRuntime
+import NoonmarkMacUIContract
 import NoonmarkStorage
 import NoonmarkZhulong
 
@@ -680,6 +681,23 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             Set(groupedTitles).count == groupedTitles.count
                 && mixedStatusSectionCount > 0
                 && statusSinkingVerified
+        let completedItems = engine.completedPool()
+        let singleDayCompletedTaskCount = completedItems.count {
+            $0.trajectory.traces.count == 1
+        }
+        let multiDayCompletedTaskCount = completedItems.count {
+            $0.trajectory.traces.count
+                >= MacUICompletedPoolRowLayout.minimumVisibleTrajectoryNodeCount
+        }
+        let completedPoolRowHierarchyVerified =
+            singleDayCompletedTaskCount > 0
+                && multiDayCompletedTaskCount > 0
+                && MacUICompletedPoolRowLayout
+                .strongStatusRepresentationCount == 1
+                && MacUICompletedPoolRowLayout
+                .trajectoryUsesStrongStatusGlyphs == false
+                && MacUICompletedPoolRowLayout
+                .completionMomentIncludesDate
         guard var editableSession = sessions.first(where: {
             $0.currentTodoDiff != nil
                 && $0.todoApplyReceipts.isEmpty
@@ -707,6 +725,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               reviewReceipts > 0,
               store.zhulongWorkspace.sessions.count == sessions.count,
               dayTodoGroupingPresentationVerified,
+              completedPoolRowHierarchyVerified,
               engine.getDayTodo(date: fixture.anchorDate).traces
               .isEmpty == false
         else {
@@ -729,6 +748,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             dayTodoMixedStatusSectionCount: mixedStatusSectionCount,
             dayTodoGroupingPresentationVerified:
             dayTodoGroupingPresentationVerified,
+            singleDayCompletedTaskCount: singleDayCompletedTaskCount,
+            multiDayCompletedTaskCount: multiDayCompletedTaskCount,
+            completedPoolRowHierarchyVerified:
+            completedPoolRowHierarchyVerified,
             visibleScopeReauthorizationCardCount:
             visibleScopeReauthorizationCardCount,
             scopeAuthorizationUIVerified:
@@ -780,6 +803,9 @@ private struct InteractiveDemoManifest: Codable {
     let dailyReviewReceiptCount: Int
     let dayTodoMixedStatusSectionCount: Int
     let dayTodoGroupingPresentationVerified: Bool
+    let singleDayCompletedTaskCount: Int
+    let multiDayCompletedTaskCount: Int
+    let completedPoolRowHierarchyVerified: Bool
     let visibleScopeReauthorizationCardCount: Int
     let scopeAuthorizationUIVerified: Bool
     let persistedDatabasePath: String

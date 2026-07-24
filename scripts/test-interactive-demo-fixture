@@ -63,6 +63,9 @@ for expected in \
   '"dailyReviewReceiptCount" : 1' \
   '"dayTodoMixedStatusSectionCount" : 1' \
   '"dayTodoGroupingPresentationVerified" : true' \
+  '"singleDayCompletedTaskCount" : 5' \
+  '"multiDayCompletedTaskCount" : 2' \
+  '"completedPoolRowHierarchyVerified" : true' \
   '"visibleScopeReauthorizationCardCount" : 0' \
   '"scopeAuthorizationUIVerified" : true'; do
   if ! grep -Fq "$expected" "$result_path"; then

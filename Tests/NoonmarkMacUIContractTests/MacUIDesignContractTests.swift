@@ -97,6 +97,23 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(MacUITaskRowLayout.flexibleSpaceFollowsAccessories)
     }
 
+    func testCompletedPoolRowHasOnePrimaryStatusAndOnlyShowsMeaningfulTrails() {
+        XCTAssertEqual(
+            MacUICompletedPoolRowLayout.strongStatusRepresentationCount,
+            1
+        )
+        XCTAssertEqual(
+            MacUICompletedPoolRowLayout.minimumVisibleTrajectoryNodeCount,
+            2
+        )
+        XCTAssertFalse(
+            MacUICompletedPoolRowLayout.trajectoryUsesStrongStatusGlyphs
+        )
+        XCTAssertTrue(
+            MacUICompletedPoolRowLayout.completionMomentIncludesDate
+        )
+    }
+
     func testCalendarRailRowsKeepOneReadableStatusAndExposeFullTitles() {
         XCTAssertEqual(MacUICalendarDetailRowLayout.titlePointSize, 12.5)
         XCTAssertEqual(MacUICalendarDetailRowLayout.titleLineLimit, 2)

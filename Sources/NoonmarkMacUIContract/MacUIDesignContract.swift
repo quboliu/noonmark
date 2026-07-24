@@ -141,6 +141,13 @@ public enum MacUITaskRowLayout {
     public static let flexibleSpaceFollowsAccessories = true
 }
 
+public enum MacUICompletedPoolRowLayout {
+    public static let strongStatusRepresentationCount = 1
+    public static let minimumVisibleTrajectoryNodeCount = 2
+    public static let trajectoryUsesStrongStatusGlyphs = false
+    public static let completionMomentIncludesDate = true
+}
+
 public enum MacUICalendarDetailRowLayout {
     public static let titlePointSize = 12.5
     public static let titleLineLimit = 2

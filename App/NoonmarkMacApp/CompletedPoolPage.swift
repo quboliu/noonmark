@@ -165,6 +165,9 @@ struct CompletedRow: View {
 
     var body: some View {
         let isSelected = store.isWorkspaceItemSelected(.completedTrace(item.trace.id))
+        let trajectoryNodes = item.trajectory.traces.map(
+            CompletedTrajectoryNode.init(trace:)
+        )
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 StatusGlyph(status: .completed)
@@ -192,10 +195,15 @@ struct CompletedRow: View {
                     .padding(.top, 3)
                 }
                 Spacer()
-                CompletionTimeText(time: store.displayTime(item.trace.completedAt))
+                CompletionMomentText(
+                    date: store.displayDate(item.trace.date),
+                    time: store.displayTime(item.trace.completedAt)
+                )
             }
-            CompletedTrajectoryNodes(nodes: item.trajectory.traces.map(CompletedTrajectoryNode.init(trace:)))
-                .padding(.leading, 28)
+            if trajectoryNodes.count >= MacUICompletedPoolRowLayout.minimumVisibleTrajectoryNodeCount {
+                CompletedTrajectoryNodes(nodes: trajectoryNodes)
+                    .padding(.leading, 28)
+            }
         }
         .frame(minHeight: 52, alignment: .center)
         .padding(.horizontal, 12)
@@ -250,10 +258,17 @@ struct CompletedSubtaskRow: View {
                     .padding(.top, 3)
                 }
                 Spacer()
-                CompletionKindPill(text: store.copy.subtask, color: Theme.accent)
+                VStack(alignment: .trailing, spacing: 4) {
+                    CompletionKindPill(
+                        text: store.copy.subtask,
+                        color: Theme.accent
+                    )
+                    CompletionMomentText(
+                        date: store.displayDate(record.date),
+                        time: store.displayTime(record.subtask.completedAt)
+                    )
+                }
             }
-            CompletedTrajectoryNodes(nodes: [CompletedTrajectoryNode(subtask: record.subtask, date: record.date)])
-                .padding(.leading, 28)
         }
         .frame(minHeight: 66, alignment: .center)
         .padding(.horizontal, 12)
@@ -313,40 +328,39 @@ struct CompletionKindPill: View {
     }
 }
 
-struct CompletionTimeText: View {
+struct CompletionMomentText: View {
+    let date: String
     let time: String?
 
     var body: some View {
-        if let time {
-            Text(time)
-                .font(.noonmarkSystem(size: 11))
-                .foregroundStyle(Theme.text3)
-                .monospacedDigit()
+        HStack(spacing: 4) {
+            Text(date)
+            if let time {
+                Text(time)
+            }
         }
+        .font(.noonmarkSystem(size: 11))
+        .foregroundStyle(Theme.text3)
+        .monospacedDigit()
+        .lineLimit(1)
     }
 }
 
 struct CompletedTrajectoryNode: Identifiable {
     let id: String
     let date: LocalDate
-    let glyph: String
-    let foreground: Color
-    let background: Color
+    let status: TraceStatus
 
     init(trace: DayTrace) {
         id = trace.id.rawValue.uuidString
         date = trace.date
-        glyph = trace.status.uiStyle.glyph.isEmpty ? "•" : trace.status.uiStyle.glyph
-        foreground = trace.status == .completed ? .white : trace.status.uiStyle.glyphForeground
-        background = trace.status == .completed ? Theme.ok : trace.status.uiStyle.glyphBackground
+        status = trace.status
     }
 
     init(subtask: Subtask, date: LocalDate) {
         id = subtask.id.rawValue.uuidString
         self.date = date
-        glyph = "✓"
-        foreground = .white
-        background = Theme.ok
+        status = .completed
     }
 }
 
@@ -358,20 +372,20 @@ struct CompletedTrajectoryNodes: View {
         HStack(spacing: 0) {
             ForEach(Array(nodes.enumerated()), id: \.element.id) { index, node in
                 if index > 0 {
-                    Rectangle()
-                        .fill(Theme.line2)
-                        .frame(width: 14, height: 1.5)
+                    Image(systemName: "chevron.right")
+                        .font(.noonmarkSystem(size: 7, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                        .frame(width: 14)
                 }
                 HStack(spacing: 4) {
-                    Text(node.glyph)
-                        .font(.noonmarkSystem(size: 9, weight: .bold))
-                        .foregroundStyle(node.foreground)
-                        .frame(width: 16, height: 16)
-                        .background(Circle().fill(node.background))
+                    StatusDot(status: node.status, size: 4)
                     Text(store.displayDate(node.date))
                         .font(.noonmarkSystem(size: 10.5))
                         .foregroundStyle(Theme.text3)
                         .monospacedDigit()
+                    Text(store.copy.traceStatusLabel(node.status))
+                        .font(.noonmarkSystem(size: 10.5, weight: .medium))
+                        .foregroundStyle(node.status.uiStyle.foreground)
                 }
                 .padding(.trailing, 2)
             }

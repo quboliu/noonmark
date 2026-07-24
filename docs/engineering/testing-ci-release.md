@@ -168,7 +168,7 @@ Nightly：
 
 ## 后续缺口
 
-- E2E 已覆盖主要页面、关键详情栏选中态、默认汇总侧栏、日历本地分析、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、Day Todo 复盘区烛龙分析入口、右键菜单动作矩阵、有限撤销、父／子任务 completion control、当天子任务完成撤回和难度修改、日期 strip 选中映射、方向键日期导航、变更、回池、废弃、事务性导入／导出、失败导入退出、原生 Help、辅助窗口最小尺寸、divider 恢复、严格 WindowServer 输入、烛龙导航 gating、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
+- E2E 已覆盖主要页面、关键详情栏选中态、默认汇总侧栏、日历本地分析、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、Day Todo 复盘区烛龙分析入口、右键菜单动作矩阵、有限撤销、父／子任务 completion control、任务池与 Day Todo 多行子任务的自适应行高及 frame 不相交、当天子任务完成撤回和难度修改、日期 strip 选中映射、方向键日期导航、变更、回池、废弃、事务性导入／导出、失败导入退出、原生 Help、辅助窗口最小尺寸、divider 恢复、严格 WindowServer 输入、烛龙导航 gating、烛龙草稿确认、Provider 配置 round-trip 和 DMG 安装后启动。
 - iCloud 发布前仍需取得 CloudKit entitlement／provisioning profile、Production environment 与两台物理设备 live 所需资产，并完成到达、离线并发与恢复验收；本机已有 Apple Development 身份，当前已通过的 live 证据只覆盖本机 App 到 Apple CloudDocs 服务的上传与同仓库合并。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
 - 公开发行仍需 Apple Developer Program 下的 Developer ID Application 证书与公证凭证；当前本地／CI DMG 使用稳定 Apple Development 签名，只能证明代码签名、可生成、校验和、真实复制安装、交互和持久化路径，不能作为对外下载产物。

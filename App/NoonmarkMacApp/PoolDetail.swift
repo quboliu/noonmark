@@ -103,11 +103,12 @@ struct PlannedSubtaskRow: View {
     let plannedSubtask: PlannedSubtask
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             RoundedRectangle(cornerRadius: 5)
                 .fill(Theme.panel)
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.line2, lineWidth: 1.5))
                 .frame(width: 15, height: 15)
+                .frame(width: 28, height: 28)
 
             EditableSubtaskTitle(
                 title: plannedSubtask.title,
@@ -178,6 +179,11 @@ struct PlannedSubtaskRow: View {
                 )
             }
             .help(store.copy.removeSubtaskAction)
+        }
+        .background {
+            AppE2EViewAnchor(
+                identifier: "pool.subtask.\(plannedSubtask.id.description).row"
+            )
         }
     }
 

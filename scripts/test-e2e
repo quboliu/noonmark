@@ -122,6 +122,7 @@ e2e_owned_artifact_roots=(
   artifacts/e2e-runtime
   artifacts/e2e-seed-clock
   artifacts/e2e-subtask-clock
+  artifacts/e2e-subtask-layout
   artifacts/e2e-summary-sidebar
   artifacts/e2e-task-note-atomicity
   artifacts/e2e-task-notes
@@ -214,6 +215,7 @@ only_mode_specs=(
   "NOONMARK_E2E_MUTATION_CLOCK_ONLY:mutation-clock"
   "NOONMARK_E2E_PREFERENCES_CLOCK_ONLY:preferences-clock"
   "NOONMARK_E2E_SUBTASK_CLOCK_ONLY:subtask-clock"
+  "NOONMARK_E2E_SUBTASK_LAYOUT_ONLY:subtask-layout"
   "NOONMARK_E2E_WINDOW_RESIZE_ONLY:window-resize"
   "NOONMARK_E2E_COMPLETION_SEQUENCE_ONLY:completion-sequence"
   "NOONMARK_E2E_WINDOW_STATE_ONLY:window-state"
@@ -3919,6 +3921,27 @@ run_pool_list_layout_probe() {
     --e2e-pool-list-layout-result-url "$PWD/$minimum_result"
 
   echo "E2E pool list layout: $default_result $minimum_result"
+}
+
+run_subtask_layout_probe() {
+  local layout_dir="artifacts/e2e-subtask-layout"
+  local layout_result="$layout_dir/result.txt"
+  local layout_screenshot="$layout_dir/pool-detail.png"
+  local layout_log="$layout_dir/app.log"
+
+  rm -rf "$layout_dir"
+  mkdir -p "$layout_dir"
+
+  run_terminating_ui_probe \
+    "pool and Day Todo multiline subtask layout" \
+    "$layout_result" \
+    "$layout_log" \
+    --ephemeral \
+    --page pool \
+    --e2e-subtask-layout-result-url "$PWD/$layout_result" \
+    --e2e-subtask-layout-screenshot-url "$PWD/$layout_screenshot"
+
+  echo "E2E multiline subtask layout: $layout_result $layout_screenshot"
 }
 
 run_pool_context_menu_action_probe() {
@@ -8904,6 +8927,11 @@ if [[ "${NOONMARK_E2E_SUBTASK_CLOCK_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_SUBTASK_LAYOUT_ONLY:-0}" == "1" ]]; then
+  run_subtask_layout_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_WINDOW_RESIZE_ONLY:-0}" == "1" ]]; then
   run_window_resize_probe
   exit 0
@@ -9199,6 +9227,8 @@ run_horizontal_page_navigation_probe
 run_seed_clock_probe
 
 run_pool_list_layout_probe
+
+run_subtask_layout_probe
 
 run_pool_context_menu_action_probe
 

@@ -7,13 +7,14 @@ enum MarkdownEditorStyle {
     case body
     case detailBody
     case compact
+    case subtask
     case conversation
 
     var font: NSFont {
         switch self {
         case .title: .noonmarkSystemFont(ofSize: 14, weight: .semibold)
         case .body, .detailBody: .noonmarkSystemFont(ofSize: 12)
-        case .compact:
+        case .compact, .subtask:
             .systemFont(ofSize: NoonmarkVisualMetrics.compactEditorPointSize, weight: .medium)
         case .conversation:
             .noonmarkSystemFont(ofSize: NoonmarkVisualMetrics.zhulongConversationComposerBodyPointSize)
@@ -24,7 +25,7 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: .noonmarkSystem(size: 14, weight: .semibold)
         case .body, .detailBody: .noonmarkSystem(size: 12)
-        case .compact:
+        case .compact, .subtask:
             .noonmarkRenderedSystem(
                 size: NoonmarkVisualMetrics.compactEditorPointSize,
                 weight: .medium
@@ -39,7 +40,7 @@ enum MarkdownEditorStyle {
         case .title: NoonmarkVisualMetrics.detailTitleMinimumHeight
         case .body: 54
         case .detailBody: NoonmarkVisualMetrics.detailDescriptionMinimumHeight
-        case .compact: 32
+        case .compact, .subtask: 32
         case .conversation: NoonmarkVisualMetrics.zhulongConversationComposerEditorHeight
         }
     }
@@ -50,6 +51,7 @@ enum MarkdownEditorStyle {
         case .detailBody: NoonmarkVisualMetrics.detailDescriptionMaximumHeight
         case .body: 132
         case .compact: 32
+        case .subtask: 120
         case .conversation: 168
         }
     }
@@ -63,10 +65,9 @@ enum MarkdownEditorStyle {
             )
         case .body:
             NSSize(width: 5, height: 6)
-        case .compact:
-            // A 15 pt insertion caret inside the fixed 32 pt compact field
-            // leaves 17 pt of vertical whitespace. Split that evenly so the
-            // text system does not scroll a 35 pt document inside the viewport.
+        case .compact, .subtask:
+            // Keep the first 15 pt insertion caret centred in a 32 pt line.
+            // Subtask editors reuse this first-line rhythm as they grow.
             NSSize(width: 5, height: NoonmarkVisualMetrics.compactEditorVerticalInset)
         case .conversation:
             NSSize(
@@ -80,7 +81,7 @@ enum MarkdownEditorStyle {
         switch self {
         case .title, .detailBody:
             NoonmarkVisualMetrics.detailLineFragmentPadding
-        case .body, .compact, .conversation:
+        case .body, .compact, .subtask, .conversation:
             5
         }
     }
@@ -267,7 +268,10 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         else {
             return nil
         }
-        let horizontalInsets = textView.textContainerInset.width * 2
+        let horizontalInsets = (
+            textView.textContainerInset.width
+                + (textView.textContainer?.lineFragmentPadding ?? 0)
+        ) * 2
         let verticalInsets = textView.textContainerInset.height * 2
         let availableWidth = max(1, width - horizontalInsets)
         let source = textView.string.isEmpty ? " " : textView.string

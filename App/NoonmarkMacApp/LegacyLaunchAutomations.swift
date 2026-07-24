@@ -130,6 +130,7 @@ struct LaunchAutomation {
         append(DetailRailLayoutE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongNavigationE2EAutomation.fromCommandLine(), to: &actions)
         append(SubtaskMutationE2EAutomation.fromCommandLine(), to: &actions)
+        append(SubtaskLayoutE2EAutomation.fromCommandLine(), to: &actions)
         append(SummarySidebarE2EAutomation.fromCommandLine(), to: &actions)
         append(UnfinishedActionE2EAutomation.fromCommandLine(), to: &actions)
         append(ImmediateTaskMutationE2EAutomation.fromCommandLine(), to: &actions)

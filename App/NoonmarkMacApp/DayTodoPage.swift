@@ -852,7 +852,7 @@ struct SubtaskRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             Button {
                 store.toggleSubtask(subtask.id)
             } label: {
@@ -952,6 +952,11 @@ struct SubtaskRow: View {
                 .help(store.copy.removeSubtaskAction)
             }
         }
+        .background {
+            AppE2EViewAnchor(
+                identifier: "day.subtask.\(subtask.id.description).row"
+            )
+        }
     }
 
     private func difficultyMenuTitle(_ difficulty: SubtaskDifficulty) -> String {
@@ -987,9 +992,8 @@ struct EditableSubtaskTitle: View {
             MarkdownEditor(
                 text: $draft,
                 placeholder: store.copy.subtask,
-                style: .compact,
+                style: .subtask,
                 showsSurface: false,
-                height: 28,
                 commitsOnReturn: true,
                 onCommit: finishEditing,
                 onEndEditing: finishEditing,

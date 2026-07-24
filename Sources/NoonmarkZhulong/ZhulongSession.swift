@@ -126,8 +126,10 @@ public enum ZhulongSessionEventKind: String, Codable, Equatable, Sendable {
     case sessionCreated
     case scopeAuthorized
     case providerRunStarted
+    case providerRunStopped
     case providerRunFailed
     case draftReady
+    case analysisReportReady
     case sessionCorrected
     case sessionDecisionRecorded
     case planningBriefPublished
@@ -187,6 +189,7 @@ public enum ZhulongSessionError: Error, Equatable, Sendable {
     case scopeDoesNotMatchProposal
     case providerIdentityMismatch
     case providerPayloadScopeMismatch
+    case providerPayloadResponseContractMismatch
     case providerRunMismatch
     case noInterruptedProviderRun
     case invalidDraftVersion
@@ -211,6 +214,7 @@ public enum ZhulongSessionPurpose: String, Codable, Equatable, Sendable {
     case dailyClose
     case schedulingAssistance
     case classificationAssistance
+    case taskPoolAnalysis
     case habitInsight
     case theoryAnalysis
 }
@@ -484,6 +488,12 @@ public struct ZhulongSession: Equatable, Sendable {
         guard payload.scopes.isSubset(of: authorization.scopes) else {
             throw ZhulongSessionError.providerPayloadScopeMismatch
         }
+        guard responseContractMatchesSessionPurpose(
+            payload.responseContract
+        ) else {
+            throw ZhulongSessionError
+                .providerPayloadResponseContractMismatch
+        }
         try validateEventTime(now)
         return startProviderRun(
             payload: payload,
@@ -516,7 +526,8 @@ public struct ZhulongSession: Equatable, Sendable {
         guard authorization.providerIdentity.dataRecipient
             == delegation.providerIdentity.dataRecipient,
               delegation.dataScopes.isSubset(of: authorization.scopes),
-              payload.scopes == delegation.dataScopes
+              payload.scopes == delegation.dataScopes,
+              payload.responseContract == .generalConversation
         else {
             throw ZhulongSessionError.providerPayloadScopeMismatch
         }
@@ -615,11 +626,30 @@ public struct ZhulongSession: Equatable, Sendable {
         guard case .conversation = providerSends[sendIndex].purpose else {
             throw ZhulongSessionError.invalidProviderResponse
         }
-        guard let responseDraftVersion = response.draftVersion,
-              responseDraftVersion > 0,
-              response.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        else {
+        let responseContract = providerSends[sendIndex]
+            .payload.responseContract
+        guard response.content.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty == false else {
             throw ZhulongSessionError.invalidProviderResponse
+        }
+        do {
+            try responseContract.validate(response)
+        } catch {
+            throw ZhulongSessionError.invalidProviderResponse
+        }
+        switch responseContract {
+        case .generalConversation:
+            guard let responseDraftVersion =
+                response.draftVersion,
+                responseDraftVersion > 0
+            else {
+                throw ZhulongSessionError.invalidProviderResponse
+            }
+        case .taskPoolAnalysis:
+            guard response.draftVersion == nil else {
+                throw ZhulongSessionError.invalidProviderResponse
+            }
         }
         try validateEventTime(now)
 
@@ -632,14 +662,41 @@ public struct ZhulongSession: Equatable, Sendable {
             createdAt: now,
             correctsEntryID: nil
         ))
-        draftVersion = responseDraftVersion
-        phase = .draftReview
-        appendEvent(
-            .draftReady,
-            summary: "Provider 已返回可审查草稿",
-            reference: .providerRun(runID),
-            now: now
-        )
+        switch responseContract {
+        case .generalConversation:
+            draftVersion = response.draftVersion
+            phase = .draftReview
+            appendEvent(
+                .draftReady,
+                summary: "Provider 已返回可审查草稿",
+                reference: .providerRun(runID),
+                now: now
+            )
+        case .taskPoolAnalysis:
+            draftVersion = nil
+            phase = .readyForProvider
+            appendEvent(
+                .analysisReportReady,
+                summary: "Provider 已返回只读任务池分析报告",
+                reference: .providerRun(runID),
+                now: now
+            )
+        }
+    }
+
+    private func responseContractMatchesSessionPurpose(
+        _ responseContract: ZhulongProviderResponseContract
+    ) -> Bool {
+        switch (purpose, responseContract) {
+        case (.taskPoolAnalysis, .taskPoolAnalysis):
+            true
+        case (.taskPoolAnalysis, .generalConversation):
+            false
+        case (_, .generalConversation):
+            true
+        case (_, .taskPoolAnalysis):
+            false
+        }
     }
 
     public mutating func recordPlanningProviderResponse(
@@ -813,6 +870,49 @@ public struct ZhulongSession: Equatable, Sendable {
         appendEvent(
             .providerRunFailed,
             summary: "Provider 请求失败",
+            reference: .providerRun(runID),
+            now: now
+        )
+    }
+
+    public mutating func recordProviderStop(
+        partialResponse: ZhulongProviderResponse,
+        runID: ZhulongProviderRunID,
+        now: Date = Date()
+    ) throws {
+        guard phase == .providerRunning else {
+            throw ZhulongSessionError.invalidTransition(
+                from: phase,
+                to: .readyForProvider
+            )
+        }
+        try validateEventTime(now)
+        let sendIndex = try activeSendIndex(runID: runID)
+        guard case .conversation = providerSends[sendIndex].purpose else {
+            throw ZhulongSessionError.invalidProviderResponse
+        }
+
+        providerSends[sendIndex] = providerSends[sendIndex].stopping(
+            with: partialResponse,
+            at: now
+        )
+        let content = partialResponse.content.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        if content.isEmpty == false {
+            entries.append(ZhulongSessionEntry(
+                id: ZhulongSessionEntryID(),
+                author: .zhulong,
+                kind: .statement,
+                content: content,
+                createdAt: now,
+                correctsEntryID: nil
+            ))
+        }
+        phase = .readyForProvider
+        appendEvent(
+            .providerRunStopped,
+            summary: "用户已停止 Provider 输出",
             reference: .providerRun(runID),
             now: now
         )

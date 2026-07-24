@@ -59,30 +59,7 @@ struct ZhulongSessionStreamPage: View {
 
     private var pageSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(
-                title: copy.name,
-                subtitle: copy.homeSubtitle,
-                titlePlacement: .centeredInMainSurface,
-                centerSubtitleWithTitle: true,
-                titleAnchorIdentifier: "zhulong.session.title"
-            ) {
-                HStack(spacing: 7) {
-                    HeaderButton(copy.allSessionsAction) {
-                        guard persistCurrentArtifactEdits() else {
-                            return
-                        }
-                        workspace.showHome()
-                    }
-                        .accessibilityIdentifier("zhulong-session-show-home")
-                        .background {
-                            AppE2EViewAnchor(
-                                identifier: "zhulong-session-show-home",
-                                verificationText: copy.allSessionsAction
-                            )
-                        }
-                    variantMenu(accessibilityIdentifier: "zhulong-stream-variant-menu")
-                }
-            }
+            sessionHeader
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -315,7 +292,93 @@ struct ZhulongSessionStreamPage: View {
         }
     }
 
-    private func variantMenu(accessibilityIdentifier: String) -> some View {
+    private var sessionHeader: some View {
+        GeometryReader { geometry in
+            let mode =
+                MacUIZhulongConversationLayout.headerNavigationMode(
+                    availableWidth: geometry.size.width
+                )
+            ZStack {
+                HStack(spacing: 8) {
+                    showSessionHistoryButton(mode: mode)
+                    Spacer(minLength: 0)
+                    variantMenu(
+                        mode: mode,
+                        accessibilityIdentifier:
+                        "zhulong-stream-variant-menu"
+                    )
+                    if store.hasDetailRailContent,
+                       store.isDetailRailExpanded == false
+                    {
+                        PaneBoundaryToggle(
+                            direction: .left,
+                            accessibilityLabel:
+                            store.copy.expandDetailRail,
+                            identifier: "shell.detail-rail.toggle"
+                        ) {
+                            store.toggleDetailRail()
+                        }
+                    }
+                }
+
+                Text(copy.name)
+                    .font(.noonmarkSystem(size: 21, weight: .bold))
+                    .allowsHitTesting(false)
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "zhulong.session.title",
+                            verificationText: copy.name
+                        )
+                    }
+            }
+            .padding(
+                .horizontal,
+                NoonmarkVisualMetrics.pageHorizontalPadding
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(height: 56)
+    }
+
+    private func showSessionHistoryButton(
+        mode: MacUIZhulongHeaderNavigationMode
+    ) -> some View {
+        Button {
+            guard persistCurrentArtifactEdits() else {
+                return
+            }
+            workspace.showHome()
+        } label: {
+            switch mode {
+            case .compact:
+                Image(systemName: "chevron.left")
+                    .font(.noonmarkSystem(size: 12, weight: .semibold))
+                    .frame(width: 32, height: 32)
+            case .labelled:
+                Label(
+                    copy.allSessionsAction,
+                    systemImage: "chevron.left"
+                )
+                .font(.noonmarkSystem(size: 11.5, weight: .medium))
+                .frame(height: 32)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Theme.text2)
+        .accessibilityLabel(copy.allSessionsAction)
+        .accessibilityIdentifier("zhulong-session-show-home")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "zhulong-session-show-home",
+                verificationText: copy.allSessionsAction
+            )
+        }
+    }
+
+    private func variantMenu(
+        mode: MacUIZhulongHeaderNavigationMode,
+        accessibilityIdentifier: String
+    ) -> some View {
         let language = store.engine.preferences.language
         return Menu {
             ForEach(ZhulongStreamView.allCases) { variant in
@@ -328,11 +391,34 @@ struct ZhulongSessionStreamPage: View {
                     )
                 }
             }
+            if let session = workspace.selectedSession,
+               session.phase != .providerRunning
+            {
+                Divider()
+                if session.workspaceStatus == .paused {
+                    Button(copy.continueAction) {
+                        workspace.resumeCurrentSession()
+                    }
+                } else if session.workspaceStatus == .active {
+                    Button(copy.pauseAction) {
+                        workspace.pauseCurrentSession()
+                    }
+                }
+            }
         } label: {
-            HStack(spacing: 5) {
-                Text("\(language == .chinese ? "视图" : "View") · \(workspace.variant.title(language: language))")
-                Image(systemName: "chevron.down")
-                    .font(.noonmarkSystem(size: 8, weight: .bold))
+            switch mode {
+            case .compact:
+                Image(systemName: "text.justify")
+                    .font(.noonmarkSystem(size: 12, weight: .semibold))
+                    .frame(width: 32, height: 32)
+            case .labelled:
+                HStack(spacing: 5) {
+                    Text(
+                        "\(language == .chinese ? "视图" : "View") · \(workspace.variant.title(language: language))"
+                    )
+                    Image(systemName: "chevron.down")
+                        .font(.noonmarkSystem(size: 8, weight: .bold))
+                }
             }
         }
         .menuStyle(.borderlessButton)
@@ -552,11 +638,7 @@ struct ZhulongSessionStreamPage: View {
                 )
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
                 HStack(spacing: 10) {
-                    Text(
-                        store.engine.preferences.language == .chinese
-                            ? "可以直接编辑，也可以说“提交”保存当前版本。"
-                            : "Edit directly, or say “commit” to save this version."
-                    )
+                    Text(copy.zhulongDailyReviewEditableHint)
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
                     Spacer()
@@ -608,46 +690,23 @@ struct ZhulongSessionStreamPage: View {
         ZhulongChatComposer(
             text: $entryText,
             placeholder: copy.messageComposerPlaceholder,
-            keyboardHint: composerHint,
             sendAccessibilityLabel: copy.sendMessageAccessibilityLabel,
-            canSubmit: canSubmitEntry,
-            sessionControlTitle: composerSessionControl?.title,
-            sessionControlSystemImage:
-            composerSessionControl?.systemImage ?? "pause.fill",
-            sessionControlAccessibilityIdentifier:
-            composerSessionControl?.identifier,
-            onSessionControl: composerSessionControl?.action,
-            onSend: sendMessage
+            stopAccessibilityLabel: copy.stopGeneratingAction,
+            primaryAction: composerPrimaryAction,
+            onSend: sendMessage,
+            onStop: store.stopCurrentZhulongProviderResponse
         )
     }
 
-    private var composerSessionControl: (
-        title: String,
-        systemImage: String,
-        identifier: String,
-        action: () -> Void
-    )? {
-        guard let session = workspace.selectedSession,
-              session.phase != .providerRunning
-        else {
-            return nil
-        }
-        if session.workspaceStatus == .paused {
-            return (
-                copy.continueAction,
-                "play.fill",
-                "zhulong-session-resume",
-                { workspace.resumeCurrentSession() }
-            )
-        }
-        guard session.workspaceStatus == .active else {
-            return nil
-        }
-        return (
-            copy.pauseAction,
-            "pause.fill",
-            "zhulong-session-pause",
-            { workspace.pauseCurrentSession() }
+    private var composerPrimaryAction: ZhulongComposerPrimaryAction {
+        ZhulongComposerPrimaryAction(
+            providerIsRunning:
+            workspace.selectedSession?.phase == .providerRunning,
+            canSubmit: canSubmitEntry,
+            hasMessage:
+            entryText.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty == false
         )
     }
 
@@ -661,31 +720,6 @@ struct ZhulongSessionStreamPage: View {
             store.currentZhulongSessionAccessIsDenied == false &&
             needsScopeAuthorization == false &&
             (session.phase == .readyForProvider || session.phase == .draftReview)
-    }
-
-    private var composerHint: String {
-        guard let session = workspace.selectedSession else {
-            return copy.messageComposerKeyboardHint
-        }
-        if store.currentZhulongSessionAccessIsDenied {
-            return copy.composerDataAccessDeniedHint
-        }
-        if needsScopeAuthorization {
-            return copy.composerScopeAuthorizationHint
-        }
-        if session.workspaceStatus == .paused {
-            return copy.composerPausedHint
-        }
-        switch session.phase {
-        case .providerRunning:
-            return copy.composerProviderRunningHint
-        case .decisionGate:
-            return copy.composerDecisionGateHint
-        case .scopeReview:
-            return copy.composerScopeAuthorizationHint
-        case .readyForProvider, .draftReview:
-            return copy.messageComposerKeyboardHint
-        }
     }
 
     private var hasCurrentAction: Bool {
@@ -903,9 +937,7 @@ struct ZhulongSessionStreamPage: View {
             )
             if reportValidationError {
                 workspace.reportUIError(
-                    store.engine.preferences.language == .chinese
-                        ? "请补全任务标题、子任务标题和有效日期。"
-                        : "Complete every title and use a valid date."
+                    copy.zhulongTaskDraftValidationError
                 )
             }
             return .failed

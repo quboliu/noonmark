@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import NoonmarkAI
 import NoonmarkCore
 import NoonmarkDemoSupport
 import NoonmarkMacRuntime
@@ -172,8 +174,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             identifier: "zhulong-session-composer"
         ) != nil,
         AppViewTreeE2E.view(
+            identifier: "zhulong-session-send"
+        ) != nil,
+        AppViewTreeE2E.hasNoVisibleView(
+            identifier: "zhulong-session-stop"
+        ),
+        AppViewTreeE2E.hasNoVisibleView(
             identifier: "zhulong-session-pause"
-        ) != nil
+        )
         else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 verifyZhulongHeaderPresentation(
@@ -220,6 +228,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let analysisVisible = AppViewTreeE2E.view(
             identifier: "\(prefix).analysis"
         ) != nil
+        let reportVisible = AppViewTreeE2E.view(
+            identifier: "\(prefix).analysis.report"
+        ) != nil
+        let analysisReportContractVerified =
+            taskPoolAnalysisReportContractIsValid(
+                sessions: sessions,
+                store: store
+            )
         guard AppViewTreeE2E.activateMainWindow(),
               AppViewTreeE2E.view(identifier: prefix) != nil,
               AppViewTreeE2E.view(
@@ -234,7 +250,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               AppViewTreeE2E.hasNoVisibleView(
                   identifier: "\(prefix).zhulong-hint"
               ),
-              analysisVisible == store.isZhulongProviderReady
+              analysisVisible == store.isZhulongProviderReady,
+              reportVisible == store.isZhulongProviderReady,
+              analysisReportContractVerified
         else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 verifyTaskPoolPresentation(
@@ -254,10 +272,15 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 engine: engine,
                 sessions: sessions,
                 store: store,
-                scopeAuthorizationUIVerified: true,
-                taskPoolStatisticsPresentationVerified: true,
-                taskPoolProviderBoundaryVerified: true,
-                zhulongHeaderComposerHierarchyVerified: true
+                presentationVerification:
+                InteractiveDemoPresentationVerification(
+                    scopeAuthorizationUIVerified: true,
+                    taskPoolStatisticsPresentationVerified: true,
+                    taskPoolProviderBoundaryVerified: true,
+                    taskPoolProviderReportPresentationVerified:
+                    analysisReportContractVerified,
+                    zhulongHeaderComposerHierarchyVerified: true
+                )
             )
             store.page = .day
             store.selectedDate = fixture.anchorDate
@@ -265,6 +288,31 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         } catch {
             finishWithFailure(error, on: store)
         }
+    }
+
+    @MainActor
+    private func taskPoolAnalysisReportContractIsValid(
+        sessions: [ZhulongSession],
+        store: NoonmarkStore
+    ) -> Bool {
+        guard let session = sessions.first(where: {
+            $0.purpose == .taskPoolAnalysis
+        }),
+        let send = session.providerSends.last,
+        send.status == .succeeded,
+        send.payload.contextVersion
+            == store.currentTaskPoolAnalysisContextVersion(),
+        let response = send.response,
+        (try? send.payload.responseContract.validate(response))
+            != nil,
+        case let .some(.taskPoolAnalysis(report)) =
+            response.artifacts.first,
+        report.findings.count
+            <= MacUITaskPoolHomeRailLayout.maximumAnalysisFindingCount
+        else {
+            return false
+        }
+        return true
     }
 
     @MainActor
@@ -396,7 +444,105 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             today: today,
             providerIdentity: providerIdentity
         )
-        return [review, activeDraft, submitted, insight]
+        let poolAnalysis = try makeTaskPoolAnalysisSession(
+            engine: engine,
+            today: today,
+            providerIdentity: providerIdentity
+        )
+        return [review, activeDraft, submitted, poolAnalysis, insight]
+    }
+
+    private func makeTaskPoolAnalysisSession(
+        engine: NoonmarkEngine,
+        today: LocalDate,
+        providerIdentity: ZhulongProviderConfigurationIdentity
+    ) throws -> ZhulongSession {
+        let start = DemoFixtureClock.timestamp(
+            today,
+            hour: 16,
+            minute: 30
+        )
+        let scope = AIScopeSnapshot.pools(
+            from: engine,
+            includeTaskPool: true,
+            includeUnfinishedPool: false,
+            includeCompletedPool: false,
+            requestedAt: start
+        )
+        let requestContent = AIPromptBuilder().buildRequest(
+            task: .taskPoolAnalysis,
+            scope: scope,
+            report: LocalInsightAnalyzer().analyze(scope)
+        ).userPrompt
+        guard let evidenceTask = scope.taskPool.first else {
+            throw InteractiveDemoFixtureError.invalidZhulongFixture
+        }
+        let guardrail = PromptInjectionGuard()
+        let evidenceTitle = guardrail.taskPoolEvidenceTitle(
+            evidenceTask.definition.title
+        )
+        let evidenceReference = evidenceTitle ?? "该任务"
+        let finding = try ZhulongTaskPoolAnalysisFinding(
+            kind: .clarity,
+            conclusion:
+            "「\(evidenceReference)」的完成边界仍可更具体。",
+            evidence: [
+                try ZhulongTaskPoolAnalysisEvidence(
+                    taskID: evidenceTask.chain.id.description,
+                    title: evidenceTitle
+                )
+            ],
+            confidence: .medium,
+            uncertainty: "当前判断只依据任务池里已有的标题、说明、附言与计划子任务。",
+            recommendation: "补充可观察的交付物或完成标准，再决定是否安排日期。"
+        )
+        let report = try ZhulongTaskPoolAnalysisReport(
+            findings: [finding]
+        )
+        let authorisedEvidence = try scope.taskPool.map {
+            try ZhulongTaskPoolAnalysisEvidence(
+                taskID: $0.chain.id.description,
+                title: guardrail.taskPoolEvidenceTitle(
+                    $0.definition.title
+                )
+            )
+        }
+        var session = try ZhulongSession(
+            primaryIntent: "分析当前任务池，找出需要澄清或安排的任务。",
+            purpose: .taskPoolAnalysis,
+            proposedScopes: [.taskPool],
+            now: start
+        )
+        try session.authorizeScope(
+            [.taskPool],
+            providerIdentity: providerIdentity,
+            now: start.addingTimeInterval(1)
+        )
+        let digest = SHA256.hash(data: Data(requestContent.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let providerRun = try session.beginProviderRun(
+            payload: try ZhulongProviderPayload(
+                systemPrompt: "这是晷迹交互式演示中的任务池分析。",
+                userPrompt: session.primaryIntent,
+                contextVersion: "sha256:\(digest)",
+                scopeContent: [.taskPool: requestContent],
+                responseContract: .taskPoolAnalysis(
+                    evidence: authorisedEvidence
+                )
+            ),
+            providerIdentity: providerIdentity,
+            now: start.addingTimeInterval(2)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(
+                content: "我找到一项值得先明确完成边界的任务。",
+                artifacts: [.taskPoolAnalysis(report)]
+            ),
+            runID: providerRun.runID,
+            now: start.addingTimeInterval(3)
+        )
+        return session
     }
 
     private func makeSubmittedPlanningSession(
@@ -743,10 +889,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         engine: NoonmarkEngine,
         sessions: [ZhulongSession],
         store: NoonmarkStore,
-        scopeAuthorizationUIVerified: Bool,
-        taskPoolStatisticsPresentationVerified: Bool,
-        taskPoolProviderBoundaryVerified: Bool,
-        zhulongHeaderComposerHierarchyVerified: Bool
+        presentationVerification:
+        InteractiveDemoPresentationVerification
     ) throws -> InteractiveDemoManifest {
         let currentProviderIdentity = try store.zhulongProviderIdentity()
         let visibleScopeReauthorizationCardCount = sessions.filter {
@@ -846,9 +990,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               store.zhulongWorkspace.sessions.count == sessions.count,
               dayTodoGroupingPresentationVerified,
               completedPoolRowHierarchyVerified,
-              taskPoolStatisticsPresentationVerified,
-              taskPoolProviderBoundaryVerified,
-              zhulongHeaderComposerHierarchyVerified,
+              presentationVerification
+              .taskPoolStatisticsPresentationVerified,
+              presentationVerification
+              .taskPoolProviderBoundaryVerified,
+              presentationVerification
+              .taskPoolProviderReportPresentationVerified,
+              presentationVerification
+              .zhulongHeaderComposerHierarchyVerified,
               engine.getDayTodo(date: fixture.anchorDate).traces
               .isEmpty == false
         else {
@@ -878,13 +1027,19 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             visibleScopeReauthorizationCardCount:
             visibleScopeReauthorizationCardCount,
             scopeAuthorizationUIVerified:
-            scopeAuthorizationUIVerified,
+            presentationVerification.scopeAuthorizationUIVerified,
             taskPoolStatisticsPresentationVerified:
-            taskPoolStatisticsPresentationVerified,
+            presentationVerification
+                .taskPoolStatisticsPresentationVerified,
             taskPoolProviderBoundaryVerified:
-            taskPoolProviderBoundaryVerified,
+            presentationVerification
+                .taskPoolProviderBoundaryVerified,
+            taskPoolProviderReportPresentationVerified:
+            presentationVerification
+                .taskPoolProviderReportPresentationVerified,
             zhulongHeaderComposerHierarchyVerified:
-            zhulongHeaderComposerHierarchyVerified,
+            presentationVerification
+                .zhulongHeaderComposerHierarchyVerified,
             persistedDatabasePath: store.databaseURL?.path ?? ""
         )
     }
@@ -921,6 +1076,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     }
 }
 
+private struct InteractiveDemoPresentationVerification {
+    let scopeAuthorizationUIVerified: Bool
+    let taskPoolStatisticsPresentationVerified: Bool
+    let taskPoolProviderBoundaryVerified: Bool
+    let taskPoolProviderReportPresentationVerified: Bool
+    let zhulongHeaderComposerHierarchyVerified: Bool
+}
+
 private struct InteractiveDemoManifest: Codable {
     let status: String
     let anchorDate: String
@@ -939,6 +1102,7 @@ private struct InteractiveDemoManifest: Codable {
     let scopeAuthorizationUIVerified: Bool
     let taskPoolStatisticsPresentationVerified: Bool
     let taskPoolProviderBoundaryVerified: Bool
+    let taskPoolProviderReportPresentationVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool
     let persistedDatabasePath: String
 }

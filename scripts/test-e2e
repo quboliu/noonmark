@@ -176,6 +176,7 @@ scenarios=(
   "calendar-detail-expanded|calendar|--e2e-expand-detail-rail"
   "zhulong|zhulong|--e2e-enable-zhulong --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-title-geometry.txt"
   "zhulong-stream|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-stream-title-geometry.txt"
+  "zhulong-stream-detail-expanded|zhulong|--e2e-expand-detail-rail --e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-stream-detail-expanded-title-geometry.txt"
   "zhulong-stream-dossier|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-stream-variant dossier"
   "zhulong-stream-chapters|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-stream-variant chapters"
   "zhulong-stream-weave|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-stream-variant weave"
@@ -2007,6 +2008,8 @@ assert_zhulong_title_geometry_result() {
   local expected_identifier="$3"
   local expected_text="$4"
   local mid_x_delta
+  local leading_title_gap
+  local trailing_title_gap
 
   if [[ ! -f "$result" || "$(head -n 1 "$result")" != "ok" ]]; then
     echo "Zhulong title geometry manifest is missing or failed: $result" >&2
@@ -2027,6 +2030,25 @@ assert_zhulong_title_geometry_result() {
     echo "Zhulong title geometry manifest lost its exact centering evidence: $result" >&2
     cat "$result" >&2
     exit 1
+  fi
+  if [[ "$expected_surface" == "session" ]]; then
+    leading_title_gap="$(
+      awk -F= '$1 == "leading_title_gap" { print $2 }' "$result"
+    )"
+    trailing_title_gap="$(
+      awk -F= '$1 == "trailing_title_gap" { print $2 }' "$result"
+    )"
+    if ! grep -Eq '^detail_expanded=(true|false)$' "$result" ||
+      ! grep -Fq "history_frame=x:" "$result" ||
+      ! grep -Fq "variant_frame=x:" "$result" ||
+      [[ ! "$leading_title_gap" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+      [[ ! "$trailing_title_gap" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+      ! awk -v gap="$leading_title_gap" 'BEGIN { exit !(gap >= 8) }' ||
+      ! awk -v gap="$trailing_title_gap" 'BEGIN { exit !(gap >= 8) }'; then
+      echo "Zhulong session-header geometry lost its non-overlap evidence: $result" >&2
+      cat "$result" >&2
+      exit 1
+    fi
   fi
   echo "E2E Zhulong ${expected_surface} title geometry: $result (delta=${mid_x_delta}pt)"
 }
@@ -9195,6 +9217,13 @@ for scenario in "${scenarios[@]}"; do
     zhulong-stream)
       assert_zhulong_title_geometry_result \
         "artifacts/e2e/zhulong-stream-title-geometry.txt" \
+        session \
+        zhulong.session.title \
+        烛龙
+      ;;
+    zhulong-stream-detail-expanded)
+      assert_zhulong_title_geometry_result \
+        "artifacts/e2e/zhulong-stream-detail-expanded-title-geometry.txt" \
         session \
         zhulong.session.title \
         烛龙

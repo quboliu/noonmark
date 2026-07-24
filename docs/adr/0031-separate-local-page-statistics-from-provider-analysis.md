@@ -4,6 +4,8 @@
 **Date**: 2026-07-24
 **Risk**: A 级——跨 Runtime、Mac UI、Provider readiness 与真实 App 演示契约
 
+> 2026-07-24：分析报告与 Provider 停止能力由 ADR 0032 接续。本 ADR 中“首版仅入口”“不新增取消能力”与 Composer 暂停位置的决定由 ADR 0032 取代；统计／分析边界继续有效。
+
 ## Context
 
 任务池右栏原先由一个 `SidebarAnalysisModel` 同时产生数量指标、本地信号、确定性建议、烛龙提示和会话入口。这个 Interface 把领域事实、产品解释与 Provider 能力混成同一层，导致三个问题：

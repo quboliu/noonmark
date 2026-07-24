@@ -632,6 +632,7 @@ public enum MacUIZhulongHomeLayout {
     public static let workflowRowHeight = 62.0
     public static let workflowListCount = 1
     public static let composerActionCount = 1
+    public static let showsFreeformDataUseDisclosure = false
     public static let collapsesEmptyPendingSection = true
     public static let collapsesHomeDetailRail = true
     public static let titlePlacement = MacUIPageHeaderTitlePlacement.centeredInMainSurface
@@ -641,6 +642,11 @@ public enum MacUIZhulongHomeLayout {
     }
 }
 
+public enum MacUIZhulongHeaderNavigationMode: Equatable, Sendable {
+    case compact
+    case labelled
+}
+
 public enum MacUIZhulongConversationLayout {
     public static let contentMaxWidth = 840.0
     public static let messageSpacing = 32.0
@@ -648,8 +654,8 @@ public enum MacUIZhulongConversationLayout {
     public static let userBodyPointSize = 14.5
     public static let userBubbleMaxWidth = 570.0
     public static let userBubbleCornerRadius = 20.0
-    public static let composerMinimumHeight = 106.0
-    public static let composerEditorHeight = 62.0
+    public static let composerMinimumHeight = 84.0
+    public static let composerEditorHeight = 54.0
     public static let composerCornerRadius = 20.0
     public static let composerBodyPointSize = 14.5
     public static let composerHorizontalInset = 16.0
@@ -659,8 +665,20 @@ public enum MacUIZhulongConversationLayout {
     public static let showsMessageTimestamps = false
     public static let sharesComposerAcrossProjections = true
     public static let persistentHeaderActionCount = 2
-    public static let placesSessionRunControlInComposer = true
+    public static let composerPrimaryActionCount = 1
+    public static let providerRunControlReplacesSend = true
+    public static let showsKeyboardHint = false
+    public static let showsSessionSubtitle = false
     public static let preservesCenteredTitleAxis = true
+    public static let labelledHeaderMinimumWidth = 720.0
+
+    public static func headerNavigationMode(
+        availableWidth: Double
+    ) -> MacUIZhulongHeaderNavigationMode {
+        availableWidth < labelledHeaderMinimumWidth
+            ? .compact
+            : .labelled
+    }
 }
 
 public enum MacUITaskPoolHomeRailLayout {
@@ -669,6 +687,13 @@ public enum MacUITaskPoolHomeRailLayout {
     public static let statisticsDependOnProvider = false
     public static let analysisVisibleWithoutReadyProvider = false
     public static let includesLocalInterpretiveSuggestions = false
+    public static let maximumAnalysisFindingCount = 3
+    public static let analysisRequiresGroundedEvidence = true
+    public static let analysisShowsConfidence = true
+    public static let analysisShowsUncertainty = true
+    public static let analysisShowsRecommendation = true
+    public static let analysisMarksOutdatedReports = true
+    public static let wrapsEachFindingInACard = false
 }
 
 public enum MacUIClassificationAccessibility {

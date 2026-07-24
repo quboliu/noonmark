@@ -25,7 +25,7 @@ final class NoonmarkSnapshotTrajectoryTopologyTests: XCTestCase {
 
         var invalidSequence = fixture.snapshot
         invalidSequence.traces[targetIndex].continuationSeq =
-            invalidSequence.traces[sourceIndex].continuationSeq
+            invalidSequence.traces[sourceIndex].continuationSeq + 1
 
         var invalidDate = fixture.snapshot
         invalidDate.days.append(Day(date: yesterday, now: base))
@@ -138,7 +138,7 @@ final class NoonmarkSnapshotTrajectoryTopologyTests: XCTestCase {
             fixture.sourceTraceID
 
         var wrongSourceStatus = fixture.snapshot
-        wrongSourceStatus.subtasks[sourceIndex].status = .unfinished
+        wrongSourceStatus.subtasks[sourceIndex].status = .pending
 
         for candidate in [
             selfLink,

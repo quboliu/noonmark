@@ -59,7 +59,7 @@ view_tree_path="${result_path%.json}.view-tree.txt"
 for expected in \
   '"status" : "ready"' \
   '"anchorDate" : "2026-07-24"' \
-  '"zhulongSessionCount" : 4' \
+  '"zhulongSessionCount" : 5' \
   '"submittedTodoArtifactCount" : 1' \
   '"editableTodoArtifactCount" : 1' \
   '"dailyReviewReceiptCount" : 1' \
@@ -72,6 +72,7 @@ for expected in \
   '"scopeAuthorizationUIVerified" : true' \
   '"taskPoolStatisticsPresentationVerified" : true' \
   '"taskPoolProviderBoundaryVerified" : true' \
+  '"taskPoolProviderReportPresentationVerified" : true' \
   '"zhulongHeaderComposerHierarchyVerified" : true'; do
   if ! grep -Fq "$expected" "$result_path"; then
     echo "demo fixture manifest is missing: $expected" >&2
@@ -93,8 +94,8 @@ sidecar_count="$(
     | wc -l \
     | tr -d ' '
 )"
-if [[ "$sidecar_count" != "4" ]]; then
-  echo "expected 4 encrypted Zhulong sessions, found $sidecar_count" >&2
+if [[ "$sidecar_count" != "5" ]]; then
+  echo "expected 5 encrypted Zhulong sessions, found $sidecar_count" >&2
   exit 1
 fi
 

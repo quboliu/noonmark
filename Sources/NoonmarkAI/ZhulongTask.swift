@@ -4,5 +4,6 @@ public enum ZhulongTask: String, Codable, Hashable, Sendable {
     case taskDecomposition
     case scheduling
     case classification
+    case taskPoolAnalysis
     case theoryAnalysis
 }

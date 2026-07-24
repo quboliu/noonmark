@@ -47,6 +47,7 @@ public actor ZhulongProviderOrchestrator {
             provider: provider,
             authority: .conversation,
             timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt),
+            onStarted: nil,
             onDelta: nil
         )
     }
@@ -55,6 +56,7 @@ public actor ZhulongProviderOrchestrator {
         sessionID: ZhulongSessionID,
         payload: ZhulongProviderPayload,
         provider: any ZhulongProvider,
+        onStarted: (@Sendable (ZhulongSession) async -> Void)? = nil,
         onDelta: @escaping @Sendable (String) async -> Void,
         startedAt: Date = Date(),
         completedAt: @escaping @Sendable () -> Date = Date.init
@@ -65,6 +67,7 @@ public actor ZhulongProviderOrchestrator {
             provider: provider,
             authority: .conversation,
             timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt),
+            onStarted: onStarted,
             onDelta: onDelta
         )
     }
@@ -83,6 +86,7 @@ public actor ZhulongProviderOrchestrator {
             provider: provider,
             authority: .planning(delegationID),
             timing: ZhulongProviderRunTiming(startedAt: startedAt, completedAt: completedAt),
+            onStarted: nil,
             onDelta: nil
         )
     }
@@ -93,6 +97,7 @@ public actor ZhulongProviderOrchestrator {
         provider: any ZhulongProvider,
         authority: ZhulongProviderRunAuthority,
         timing: ZhulongProviderRunTiming,
+        onStarted: (@Sendable (ZhulongSession) async -> Void)?,
         onDelta: (@Sendable (String) async -> Void)?
     ) async throws -> ZhulongSession {
         guard activeSessionIDs.contains(sessionID) == false else {
@@ -116,6 +121,7 @@ public actor ZhulongProviderOrchestrator {
         try repository.save(session, replacing: sessionBeforeRun)
         activeSessionIDs.insert(sessionID)
         defer { activeSessionIDs.remove(sessionID) }
+        await onStarted?(session)
 
         let result = await providerResult(
             for: request,
@@ -166,6 +172,22 @@ public actor ZhulongProviderOrchestrator {
                 replacing: sessionBeforeResponse
             )
             return session
+        case let .stopped(partialResponse):
+            guard case .conversation = authority else {
+                throw ZhulongProviderOrchestrationError.providerFailed(
+                    "provider_stream_cancelled"
+                )
+            }
+            try session.recordProviderStop(
+                partialResponse: partialResponse,
+                runID: request.runID,
+                now: resultDate
+            )
+            try repository.save(
+                session,
+                replacing: sessionBeforeResponse
+            )
+            return session
         case let .failure(failure):
             let recordedFailure = validatedFailure(failure)
             try session.recordProviderFailure(
@@ -191,34 +213,42 @@ public actor ZhulongProviderOrchestrator {
               let onDelta,
               let streamingProvider = provider as? any ZhulongStreamingProvider
         else {
-            return await provider.complete(request)
+            let result = await provider.complete(request)
+            return Task.isCancelled
+                ? stoppedProviderResult(content: "")
+                : result
         }
 
+        var partialContent = ""
         for await event in streamingProvider.stream(request) {
             if Task.isCancelled {
-                return cancelledProviderResult()
+                return stoppedProviderResult(content: partialContent)
             }
             switch event {
             case let .delta(delta):
                 guard delta.isEmpty == false else { continue }
+                partialContent += delta
                 await onDelta(delta)
             case let .finished(result):
                 return result
             }
         }
         return Task.isCancelled
-            ? cancelledProviderResult()
+            ? stoppedProviderResult(content: partialContent)
             : .failure(ZhulongProviderFailure(
                 code: "stream_ended_without_terminal_result",
                 message: "Provider 流式响应未完成"
             ))
     }
 
-    private func cancelledProviderResult() -> ZhulongProviderResult {
-        .failure(ZhulongProviderFailure(
-            code: "provider_stream_cancelled",
-            message: "Provider 流式响应已取消"
-        ))
+    private func stoppedProviderResult(
+        content: String
+    ) -> ZhulongProviderResult {
+        let visibleContent = ZhulongConversationTurnParser
+            .visibleMessage(in: content)
+        return .stopped(
+            ZhulongProviderResponse(content: visibleContent)
+        )
     }
 
     public func correctPlanningSource(

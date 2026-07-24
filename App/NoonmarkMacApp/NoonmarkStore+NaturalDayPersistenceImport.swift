@@ -25,6 +25,7 @@ extension NoonmarkStore {
         automaticClassificationBacklogDecisionTask?.cancel()
         automaticClassificationCircuitRetryTask?.cancel()
         cloudKitAccountCheckTask?.cancel()
+        zhulongProviderTask?.cancel()
         naturalDayObservation?.cancel()
         accessibilityDisplayObservation?.cancel()
     }

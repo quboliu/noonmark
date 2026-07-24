@@ -40,6 +40,48 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         XCTAssertEqual(permissions & 0o777, 0o600)
     }
 
+    func testEncryptedRepositoryRoundTripsReadOnlyTaskPoolAnalysisContract() throws {
+        let repository = makeRepository(key: key)
+        let evidence = try ZhulongTaskPoolAnalysisEvidence(
+            taskID: "pool-chain",
+            title: "准备发布"
+        )
+        let session = try makeTaskPoolAnalysisSession()
+
+        try repository.save(session)
+
+        let restored = try repository.load(session.id)
+        XCTAssertEqual(restored, session)
+        XCTAssertEqual(restored.phase, .readyForProvider)
+        XCTAssertNil(restored.draftVersion)
+        XCTAssertEqual(
+            restored.providerSends.last?.payload.responseContract,
+            .taskPoolAnalysis(evidence: [evidence])
+        )
+    }
+
+    func testEncryptedRepositoryRejectsNoncanonicalTaskPoolReport()
+        throws
+    {
+        let repository = makeRepository(key: key)
+        let session = try makeTaskPoolAnalysisSession()
+
+        try repository.saveCurrentSessionForTesting(
+            session,
+            replacingPlaintext:
+            #""recommendation":"补充可观察交付物。""#,
+            with: #""recommendation":"   ""#
+        )
+
+        XCTAssertThrowsError(try repository.load(session.id)) {
+            error in
+            XCTAssertEqual(
+                error as? ZhulongConversationArtifactError,
+                .invalidArtifact
+            )
+        }
+    }
+
     func testCompareAndSwapReplacesExactExpectedSession() throws {
         let repository = makeRepository(key: key)
         let expected = try ZhulongSession(
@@ -397,7 +439,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [0, 1, 8, 255]
+            replacementVersions: [0, 1, 2, 8, 255]
         )
     }
 
@@ -1141,6 +1183,62 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         )
         try session.recordProviderResponse(
             ZhulongProviderResponse(content: "{}", draftVersion: 1),
+            runID: request.runID,
+            now: now.addingTimeInterval(3)
+        )
+        return session
+    }
+
+    private func makeTaskPoolAnalysisSession() throws
+        -> ZhulongSession
+    {
+        let identity = try makeProviderIdentity()
+        let evidence = try ZhulongTaskPoolAnalysisEvidence(
+            taskID: "pool-chain",
+            title: "准备发布"
+        )
+        var session = try ZhulongSession(
+            primaryIntent: "分析当前任务池",
+            purpose: .taskPoolAnalysis,
+            proposedScopes: [.taskPool],
+            now: now
+        )
+        try session.authorizeScope(
+            [.taskPool],
+            providerIdentity: identity,
+            now: now.addingTimeInterval(1)
+        )
+        let request = try session.beginProviderRun(
+            payload: try ZhulongProviderPayload(
+                systemPrompt: "只输出任务池分析。",
+                userPrompt: session.primaryIntent,
+                contextVersion: "task-pool-v1",
+                scopeContent: [
+                    .taskPool:
+                    "- taskID pool-chain；标题：准备发布"
+                ],
+                responseContract: .taskPoolAnalysis(
+                    evidence: [evidence]
+                )
+            ),
+            providerIdentity: identity,
+            now: now.addingTimeInterval(2)
+        )
+        let report = try ZhulongTaskPoolAnalysisReport(findings: [
+            try ZhulongTaskPoolAnalysisFinding(
+                kind: .clarity,
+                conclusion: "准备发布还缺少完成标准。",
+                evidence: [evidence],
+                confidence: .medium,
+                uncertainty: "目前只有标题。",
+                recommendation: "补充可观察交付物。"
+            )
+        ])
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(
+                content: "我找到一项需要澄清的任务。",
+                artifacts: [.taskPoolAnalysis(report)]
+            ),
             runID: request.runID,
             now: now.addingTimeInterval(3)
         )

@@ -40,7 +40,8 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
         wrongSourceStatus.status = .pending
 
         var wrongSequence = fixture.target
-        wrongSequence.continuationSeq = fixture.source.continuationSeq
+        wrongSequence.continuationSeq =
+            fixture.source.continuationSeq + 1
 
         var wrongDate = fixture.target
         wrongDate.date = yesterday
@@ -564,7 +565,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
         let otherDefinitionID = try XCTUnwrap(
             baseSnapshot.definitions.first { $0.chainID == otherChainID }?.id
         )
-        let source = DayTrace(
+        var source = DayTrace(
             id: DayTraceID(
                 UUID(uuidString: "B0000000-0000-0000-0000-000000000001")!
             ),
@@ -576,6 +577,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
             now: base.addingTimeInterval(1),
             contentUpdatedAt: base.addingTimeInterval(3)
         )
+        source.settledAt = source.contentUpdatedAt
         let target = DayTrace(
             id: DayTraceID(
                 UUID(uuidString: "B0000000-0000-0000-0000-000000000002")!
@@ -584,7 +586,7 @@ final class TraceSubtaskTopologySyncTests: XCTestCase {
             definitionID: definitionID,
             date: tomorrow,
             priority: 1,
-            continuationSeq: 1,
+            continuationSeq: 0,
             carriedFromTraceID: source.id,
             now: base.addingTimeInterval(3)
         )

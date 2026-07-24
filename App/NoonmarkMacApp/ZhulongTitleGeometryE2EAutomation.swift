@@ -123,7 +123,7 @@ private enum ZhulongTitleGeometryE2EDriver {
             }
 
             let delta = abs(titleFrame.midX - middleFrame.midX)
-            let evidence = [
+            var evidence = [
                 "surface=\(expectedSurface.rawValue)",
                 "identifier=\(expectedSurface.titleIdentifier)",
                 "expected_text=\(expectedText)",
@@ -140,6 +140,52 @@ private enum ZhulongTitleGeometryE2EDriver {
                     evidence: evidence
                 )
                 return
+            }
+            if expectedSurface == .session {
+                guard let history = AppViewTreeE2E.view(
+                    identifier: "zhulong-session-show-home"
+                ),
+                let variant = AppViewTreeE2E.view(
+                    identifier: "zhulong-stream-variant-menu"
+                )
+                else {
+                    retry(attemptsRemaining) {
+                        "responsive session-header controls were unavailable"
+                    }
+                    return
+                }
+                let historyFrame = AppViewTreeE2E.frameInWindow(
+                    for: history
+                )
+                let variantFrame = AppViewTreeE2E.frameInWindow(
+                    for: variant
+                )
+                let leadingGap = titleFrame.minX
+                    - historyFrame.maxX
+                let trailingGap = variantFrame.minX
+                    - titleFrame.maxX
+                evidence.append(
+                    "detail_expanded=\(store.isDetailRailExpanded)"
+                )
+                evidence.append(
+                    "history_frame=\(frameDescription(historyFrame))"
+                )
+                evidence.append(
+                    "variant_frame=\(frameDescription(variantFrame))"
+                )
+                evidence.append(
+                    "leading_title_gap=\(number(leadingGap))"
+                )
+                evidence.append(
+                    "trailing_title_gap=\(number(trailingGap))"
+                )
+                guard leadingGap >= 8, trailingGap >= 8 else {
+                    finishFailure(
+                        "responsive session-header controls overlapped the centered title",
+                        evidence: evidence
+                    )
+                    return
+                }
             }
             finish(["ok"] + evidence)
         }

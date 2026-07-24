@@ -220,17 +220,6 @@ private struct ZhulongWorkspaceHome: View {
                 y: 8
             )
 
-            Text(freeformDataUseDisclosure)
-                .font(.noonmarkSystem(size: 10.8))
-                .foregroundStyle(Theme.text3)
-                .fixedSize(horizontal: false, vertical: true)
-                .background {
-                    AppE2EViewAnchor(
-                        identifier: "zhulong-home-data-disclosure",
-                        verificationText: freeformDataUseDisclosure
-                    )
-                }
-
             if conversationAccessIsDenied {
                 Text(copy.homeDataAccessDeniedHint)
                     .font(.noonmarkSystem(size: 10.8))
@@ -368,26 +357,6 @@ private struct ZhulongWorkspaceHome: View {
 
     private var conversationAccessIsDenied: Bool {
         store.zhulongConversationPermissionDecision == .deny
-    }
-
-    private var freeformDataUseDisclosure: String {
-        copy.homeDataUseDisclosure(
-            scopes: scopeList([.currentDayTodo]),
-            recipient: currentProviderDisclosure
-        )
-    }
-
-    private var currentProviderDisclosure: String {
-        guard store.zhulongProviderDraft.isConfigured else {
-            return copy.providerExecutionUnavailable
-        }
-        guard let identity = try? store.zhulongProviderIdentity() else {
-            return copy.noProviderIdentity
-        }
-        return ZhulongProviderDisclosureFormatter.disclosure(
-            for: identity,
-            copy: copy
-        )
     }
 
     private func scopeList(

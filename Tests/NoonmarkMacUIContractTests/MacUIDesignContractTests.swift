@@ -548,6 +548,9 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUIZhulongHomeLayout.workflowRowHeight, 62)
         XCTAssertEqual(MacUIZhulongHomeLayout.workflowListCount, 1)
         XCTAssertEqual(MacUIZhulongHomeLayout.composerActionCount, 1)
+        XCTAssertFalse(
+            MacUIZhulongHomeLayout.showsFreeformDataUseDisclosure
+        )
         XCTAssertTrue(MacUIZhulongHomeLayout.collapsesEmptyPendingSection)
         XCTAssertTrue(MacUIZhulongHomeLayout.collapsesHomeDetailRail)
         XCTAssertEqual(
@@ -567,16 +570,31 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUIZhulongConversationLayout.userBodyPointSize, 14.5)
         XCTAssertEqual(MacUIZhulongConversationLayout.userBubbleMaxWidth, 570)
         XCTAssertEqual(MacUIZhulongConversationLayout.userBubbleCornerRadius, 20)
-        XCTAssertEqual(MacUIZhulongConversationLayout.composerMinimumHeight, 106)
-        XCTAssertEqual(MacUIZhulongConversationLayout.composerEditorHeight, 62)
+        XCTAssertEqual(MacUIZhulongConversationLayout.composerMinimumHeight, 84)
+        XCTAssertEqual(MacUIZhulongConversationLayout.composerEditorHeight, 54)
         XCTAssertEqual(MacUIZhulongConversationLayout.composerCornerRadius, 20)
         XCTAssertTrue(MacUIZhulongConversationLayout.hasPersistentBottomComposer)
         XCTAssertFalse(MacUIZhulongConversationLayout.showsAssistantAvatar)
         XCTAssertFalse(MacUIZhulongConversationLayout.showsMessageTimestamps)
         XCTAssertTrue(MacUIZhulongConversationLayout.sharesComposerAcrossProjections)
         XCTAssertEqual(MacUIZhulongConversationLayout.persistentHeaderActionCount, 2)
-        XCTAssertTrue(MacUIZhulongConversationLayout.placesSessionRunControlInComposer)
+        XCTAssertEqual(MacUIZhulongConversationLayout.composerPrimaryActionCount, 1)
+        XCTAssertTrue(MacUIZhulongConversationLayout.providerRunControlReplacesSend)
+        XCTAssertFalse(MacUIZhulongConversationLayout.showsKeyboardHint)
+        XCTAssertFalse(MacUIZhulongConversationLayout.showsSessionSubtitle)
         XCTAssertTrue(MacUIZhulongConversationLayout.preservesCenteredTitleAxis)
+        XCTAssertEqual(
+            MacUIZhulongConversationLayout.headerNavigationMode(
+                availableWidth: 620
+            ),
+            .compact
+        )
+        XCTAssertEqual(
+            MacUIZhulongConversationLayout.headerNavigationMode(
+                availableWidth: 900
+            ),
+            .labelled
+        )
     }
 
     func testTaskPoolRailSeparatesLocalStatisticsFromProviderAnalysis() {
@@ -585,6 +603,13 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertFalse(MacUITaskPoolHomeRailLayout.statisticsDependOnProvider)
         XCTAssertFalse(MacUITaskPoolHomeRailLayout.analysisVisibleWithoutReadyProvider)
         XCTAssertFalse(MacUITaskPoolHomeRailLayout.includesLocalInterpretiveSuggestions)
+        XCTAssertEqual(MacUITaskPoolHomeRailLayout.maximumAnalysisFindingCount, 3)
+        XCTAssertTrue(MacUITaskPoolHomeRailLayout.analysisRequiresGroundedEvidence)
+        XCTAssertTrue(MacUITaskPoolHomeRailLayout.analysisShowsConfidence)
+        XCTAssertTrue(MacUITaskPoolHomeRailLayout.analysisShowsUncertainty)
+        XCTAssertTrue(MacUITaskPoolHomeRailLayout.analysisShowsRecommendation)
+        XCTAssertTrue(MacUITaskPoolHomeRailLayout.analysisMarksOutdatedReports)
+        XCTAssertFalse(MacUITaskPoolHomeRailLayout.wrapsEachFindingInACard)
     }
 
     func testZhulongTitleCentersWithoutChangingSharedPageHeaderDefault() {

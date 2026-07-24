@@ -23,6 +23,7 @@ public struct ZhulongConversationTurn: Equatable, Sendable {
 public enum ZhulongConversationArtifactProposal: Codable, Equatable, Sendable {
     case taskPlan(ZhulongConversationTaskPlan)
     case dailyReview(ZhulongConversationDailyReview)
+    case taskPoolAnalysis(ZhulongTaskPoolAnalysisReport)
 }
 
 public struct ZhulongConversationTaskPlan: Codable, Equatable, Sendable {
@@ -113,6 +114,191 @@ public struct ZhulongConversationDailyReview: Codable, Equatable, Sendable {
         }
         self.summary = summary
         self.tomorrowNote = tomorrowNote
+    }
+}
+
+public enum ZhulongTaskPoolAnalysisFindingKind:
+    String,
+    Codable,
+    Equatable,
+    Sendable
+{
+    case overlap
+    case clarity
+    case scheduling
+}
+
+public enum ZhulongTaskPoolAnalysisConfidence:
+    String,
+    Codable,
+    Equatable,
+    Sendable
+{
+    case low
+    case medium
+    case high
+}
+
+public struct ZhulongTaskPoolAnalysisEvidence:
+    Codable,
+    Hashable,
+    Sendable
+{
+    public let taskID: String
+    public let title: String?
+
+    public init(taskID: String, title: String?) throws {
+        self.taskID = try normalizedRequiredArtifactText(taskID)
+        self.title = try normalizedOptionalArtifactText(title)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskID
+        case title
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(
+            keyedBy: CodingKeys.self
+        )
+        guard container.contains(.title) else {
+            throw ZhulongConversationArtifactError.invalidArtifact
+        }
+        try self.init(
+            taskID: container.decode(
+                String.self,
+                forKey: .taskID
+            ),
+            title: container.decodeIfPresent(
+                String.self,
+                forKey: .title
+            )
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(
+            keyedBy: CodingKeys.self
+        )
+        try container.encode(taskID, forKey: .taskID)
+        try container.encode(title, forKey: .title)
+    }
+}
+
+public struct ZhulongTaskPoolAnalysisFinding:
+    Codable,
+    Equatable,
+    Sendable
+{
+    public let kind: ZhulongTaskPoolAnalysisFindingKind
+    public let conclusion: String
+    public let evidence: [ZhulongTaskPoolAnalysisEvidence]
+    public let confidence: ZhulongTaskPoolAnalysisConfidence
+    public let uncertainty: String
+    public let recommendation: String
+
+    public init(
+        kind: ZhulongTaskPoolAnalysisFindingKind,
+        conclusion: String,
+        evidence: [ZhulongTaskPoolAnalysisEvidence],
+        confidence: ZhulongTaskPoolAnalysisConfidence,
+        uncertainty: String,
+        recommendation: String
+    ) throws {
+        guard evidence.isEmpty == false else {
+            throw ZhulongConversationArtifactError.invalidArtifact
+        }
+        self.kind = kind
+        self.conclusion = try normalizedRequiredArtifactText(conclusion)
+        self.evidence = evidence
+        self.confidence = confidence
+        self.uncertainty = try normalizedRequiredArtifactText(uncertainty)
+        self.recommendation = try normalizedRequiredArtifactText(
+            recommendation
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case conclusion
+        case evidence
+        case confidence
+        case uncertainty
+        case recommendation
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(
+            keyedBy: CodingKeys.self
+        )
+        try self.init(
+            kind: container.decode(
+                ZhulongTaskPoolAnalysisFindingKind.self,
+                forKey: .kind
+            ),
+            conclusion: container.decode(
+                String.self,
+                forKey: .conclusion
+            ),
+            evidence: container.decode(
+                [ZhulongTaskPoolAnalysisEvidence].self,
+                forKey: .evidence
+            ),
+            confidence: container.decode(
+                ZhulongTaskPoolAnalysisConfidence.self,
+                forKey: .confidence
+            ),
+            uncertainty: container.decode(
+                String.self,
+                forKey: .uncertainty
+            ),
+            recommendation: container.decode(
+                String.self,
+                forKey: .recommendation
+            )
+        )
+    }
+}
+
+public struct ZhulongTaskPoolAnalysisReport:
+    Codable,
+    Equatable,
+    Sendable
+{
+    public static let maximumFindingCount = 3
+
+    public let findings: [ZhulongTaskPoolAnalysisFinding]
+
+    public init(findings: [ZhulongTaskPoolAnalysisFinding]) throws {
+        guard findings.count <= Self.maximumFindingCount else {
+            throw ZhulongConversationArtifactError.invalidArtifact
+        }
+        self.findings = findings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case findings
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(
+            keyedBy: CodingKeys.self
+        )
+        try self.init(
+            findings: container.decode(
+                [ZhulongTaskPoolAnalysisFinding].self,
+                forKey: .findings
+            )
+        )
+    }
+
+    public func isGrounded(
+        in authorisedEvidence: [ZhulongTaskPoolAnalysisEvidence]
+    ) -> Bool {
+        let authorised = Set(authorisedEvidence)
+        return findings.allSatisfy { finding in
+            finding.evidence.allSatisfy(authorised.contains)
+        }
     }
 }
 
@@ -222,6 +408,10 @@ public struct ZhulongConversationTurnParser: Sendable {
         case "dailyReview":
             return .dailyReview(
                 try parseDailyReview(object)
+            )
+        case "taskPoolAnalysis":
+            return .taskPoolAnalysis(
+                try parseTaskPoolAnalysis(object)
             )
         default:
             throw ZhulongConversationArtifactError.unsupportedArtifact
@@ -340,6 +530,69 @@ public struct ZhulongConversationTurnParser: Sendable {
                 in: object,
                 key: "tomorrowNote"
             )
+        )
+    }
+
+    private func parseTaskPoolAnalysis(
+        _ object: [String: Any]
+    ) throws -> ZhulongTaskPoolAnalysisReport {
+        guard Set(object.keys) == ["kind", "findings"],
+              let findings = object["findings"] as? [[String: Any]]
+        else {
+            throw ZhulongConversationArtifactError.invalidArtifact
+        }
+        return try ZhulongTaskPoolAnalysisReport(
+            findings: findings.map(parseTaskPoolAnalysisFinding)
+        )
+    }
+
+    private func parseTaskPoolAnalysisFinding(
+        _ object: [String: Any]
+    ) throws -> ZhulongTaskPoolAnalysisFinding {
+        guard Set(object.keys) == [
+            "kind",
+            "conclusion",
+            "evidence",
+            "confidence",
+            "uncertainty",
+            "recommendation"
+        ],
+        let rawKind = object["kind"] as? String,
+        let kind = ZhulongTaskPoolAnalysisFindingKind(
+            rawValue: rawKind
+        ),
+        let conclusion = object["conclusion"] as? String,
+        let evidence = object["evidence"] as? [[String: Any]],
+        let rawConfidence = object["confidence"] as? String,
+        let confidence = ZhulongTaskPoolAnalysisConfidence(
+            rawValue: rawConfidence
+        ),
+        let uncertainty = object["uncertainty"] as? String,
+        let recommendation = object["recommendation"] as? String
+        else {
+            throw ZhulongConversationArtifactError.invalidArtifact
+        }
+        return try ZhulongTaskPoolAnalysisFinding(
+            kind: kind,
+            conclusion: conclusion,
+            evidence: evidence.map(parseTaskPoolAnalysisEvidence),
+            confidence: confidence,
+            uncertainty: uncertainty,
+            recommendation: recommendation
+        )
+    }
+
+    private func parseTaskPoolAnalysisEvidence(
+        _ object: [String: Any]
+    ) throws -> ZhulongTaskPoolAnalysisEvidence {
+        guard Set(object.keys) == ["taskID", "title"],
+              let taskID = object["taskID"] as? String
+        else {
+            throw ZhulongConversationArtifactError.invalidArtifact
+        }
+        return try ZhulongTaskPoolAnalysisEvidence(
+            taskID: taskID,
+            title: optionalString(in: object, key: "title")
         )
     }
 

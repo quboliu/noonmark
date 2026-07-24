@@ -941,7 +941,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
             systemPrompt: payload.systemPrompt,
             userPrompt: payload.userPrompt,
             contextVersion: payload.contextVersion,
-            scopeContent: payload.scopeContent
+            scopeContent: payload.scopeContent,
+            responseContract: payload.responseContract
         ) else {
             return false
         }
@@ -957,13 +958,36 @@ struct ZhulongSessionRecord: Codable, Equatable {
             return validCompletionTime(completedAt, after: send.startedAt) &&
                 (response.draftVersion.map { $0 > 0 } ?? true) &&
                 response.content.isEmpty == false &&
-                response.content == response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                response.content == response.content.trimmingCharacters(in: .whitespacesAndNewlines) &&
+                responseMatchesContract(response, send: send)
+        case let .stopped(completedAt, response):
+            return validCompletionTime(completedAt, after: send.startedAt) &&
+                response.draftVersion == nil &&
+                response.artifacts.isEmpty &&
+                response.content == response.content.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
         case let .failed(completedAt, failure):
             return validCompletionTime(completedAt, after: send.startedAt) &&
                 failure.code.isEmpty == false &&
                 failure.message.isEmpty == false &&
                 failure.code == failure.code.trimmingCharacters(in: .whitespacesAndNewlines) &&
                 failure.message == failure.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    private func responseMatchesContract(
+        _ response: ZhulongProviderResponse,
+        send: ZhulongProviderSendRecord
+    ) -> Bool {
+        switch send.purpose {
+        case .delegatedPlanning:
+            return send.payload.responseContract
+                == .generalConversation
+        case .conversation:
+            return (try? send.payload.responseContract.validate(
+                response
+            )) != nil
         }
     }
 
@@ -1108,7 +1132,9 @@ struct ZhulongSessionRecord: Codable, Equatable {
             try consumeAuthorization(event, state: &state, authorizations: authorizations)
         case .providerRunStarted:
             try consumeProviderStart(event, state: &state)
-        case .providerRunFailed, .draftReady, .planningDecisionGateOpened:
+        case .providerRunStopped, .providerRunFailed, .draftReady,
+             .analysisReportReady,
+             .planningDecisionGateOpened:
             try consumeProviderResult(event, state: &state)
         case .sessionCorrected:
             try consumeCorrection(event, state: &state, corrections: corrections)
@@ -1199,7 +1225,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
         switch send.result {
         case .running:
             throw ZhulongSessionRestorationError.invalidEventsForPhase
-        case .failed:
+        case .stopped, .failed:
             guard event == resultEvent(send, sequence: event.sequence) else {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
@@ -1243,7 +1269,12 @@ struct ZhulongSessionRecord: Codable, Equatable {
             guard event == resultEvent(send, sequence: event.sequence) else {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
-            state.phase = .draftReview
+            switch send.payload.responseContract {
+            case .generalConversation:
+                state.phase = .draftReview
+            case .taskPoolAnalysis:
+                state.phase = .readyForProvider
+            }
         }
     }
 
@@ -1310,9 +1341,35 @@ struct ZhulongSessionRecord: Codable, Equatable {
     ) -> Bool {
         switch send.purpose {
         case .conversation:
-            phase == .readyForProvider || phase == .draftReview
+            guard responseContractMatchesSessionPurpose(
+                send.payload.responseContract
+            ) else {
+                return false
+            }
+            return phase == .readyForProvider
+                || phase == .draftReview
         case .delegatedPlanning:
-            phase == .readyForProvider || phase == .draftReview
+            return send.payload.responseContract
+                == .generalConversation
+                && (
+                    phase == .readyForProvider
+                        || phase == .draftReview
+                )
+        }
+    }
+
+    private func responseContractMatchesSessionPurpose(
+        _ responseContract: ZhulongProviderResponseContract
+    ) -> Bool {
+        switch (purpose, responseContract) {
+        case (.taskPoolAnalysis, .taskPoolAnalysis):
+            true
+        case (.taskPoolAnalysis, .generalConversation):
+            false
+        case (_, .generalConversation):
+            true
+        case (_, .taskPoolAnalysis):
+            false
         }
     }
 
@@ -1754,11 +1811,29 @@ struct ZhulongSessionRecord: Codable, Equatable {
         case .running:
             return nil
         case let .succeeded(completedAt, _):
+            let kind: ZhulongSessionEventKind
+            let summary: String
+            switch send.payload.responseContract {
+            case .generalConversation:
+                kind = .draftReady
+                summary = "Provider 已返回可审查草稿"
+            case .taskPoolAnalysis:
+                kind = .analysisReportReady
+                summary = "Provider 已返回只读任务池分析报告"
+            }
             return ZhulongSessionEventRecord(
                 sequence: sequence,
-                kind: .draftReady,
+                kind: kind,
                 occurredAt: completedAt,
-                summary: "Provider 已返回可审查草稿",
+                summary: summary,
+                reference: .providerRun(send.runID)
+            )
+        case let .stopped(completedAt, _):
+            return ZhulongSessionEventRecord(
+                sequence: sequence,
+                kind: .providerRunStopped,
+                occurredAt: completedAt,
+                summary: "用户已停止 Provider 输出",
                 reference: .providerRun(send.runID)
             )
         case let .failed(completedAt, _):

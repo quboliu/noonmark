@@ -1,4 +1,100 @@
+import NoonmarkMacRuntime
+
 extension AppCopy {
+    // MARK: - Inline task draft
+
+    var zhulongTaskDraftTitle: String {
+        language == .chinese ? "任务草稿" : "Task draft"
+    }
+
+    var zhulongTaskDraftCommittedStatus: String {
+        language == .chinese ? "已提交" : "Committed"
+    }
+
+    var zhulongTaskDraftUpdatingStatus: String {
+        language == .chinese ? "烛龙正在更新" : "Zhulong is updating"
+    }
+
+    var zhulongTaskDraftEditableStatus: String {
+        language == .chinese ? "可直接编辑" : "Editable"
+    }
+
+    func zhulongTaskDraftTaskCount(_ count: Int) -> String {
+        language == .chinese ? "\(count) 个任务" : "\(count) tasks"
+    }
+
+    var addZhulongTaskDraftTask: String {
+        language == .chinese ? "增加任务" : "Add task"
+    }
+
+    var zhulongTaskDraftRevisionHint: String {
+        language == .chinese
+            ? "继续对话可以调整方案；说“提交”也会执行当前可见版本。"
+            : "Keep chatting to revise, or say “commit” to apply this visible version."
+    }
+
+    var commitZhulongTaskDraft: String {
+        language == .chinese ? "提交任务" : "Commit tasks"
+    }
+
+    var zhulongTaskDraftAppliedNotice: String {
+        language == .chinese
+            ? "这些任务已经写入对应的任务池、Day Todo 或未来计划。"
+            : "These tasks were written to their selected destinations."
+    }
+
+    var zhulongTaskDraftUpdatingNotice: String {
+        language == .chinese
+            ? "当前可见版本已保存；烛龙返回修订前暂不可编辑。"
+            : "This visible version is saved and locked until Zhulong returns the revision."
+    }
+
+    var zhulongTaskTitlePlaceholder: String {
+        language == .chinese ? "任务标题" : "Task title"
+    }
+
+    var zhulongTaskDescriptionPlaceholder: String {
+        language == .chinese
+            ? "补充目标或完成标准（可选）"
+            : "Goal or completion criteria (optional)"
+    }
+
+    var zhulongTaskNotePlaceholder: String {
+        language == .chinese ? "附言（可选）" : "Note (optional)"
+    }
+
+    var zhulongTaskPoolDestination: String {
+        language == .chinese ? "任务池" : "Task Pool"
+    }
+
+    var zhulongTaskTodayDestination: String {
+        language == .chinese ? "今天" : "Today"
+    }
+
+    var zhulongTaskFutureDestination: String {
+        language == .chinese ? "未来日期" : "Future"
+    }
+
+    var addZhulongSubtask: String {
+        language == .chinese ? "增加子任务" : "Add subtask"
+    }
+
+    var zhulongSubtaskPlaceholder: String {
+        language == .chinese ? "子任务" : "Subtask"
+    }
+
+    var zhulongSimpleDifficultyAbbreviation: String {
+        language == .chinese ? "简" : "S"
+    }
+
+    var zhulongMediumDifficultyAbbreviation: String {
+        language == .chinese ? "中" : "M"
+    }
+
+    var zhulongHardDifficultyAbbreviation: String {
+        language == .chinese ? "难" : "H"
+    }
+
     // MARK: - Context rails
 
     var unscheduled: String { language == .chinese ? "未排期" : "Unscheduled" }
@@ -48,12 +144,6 @@ extension AppCopy {
             : "Generate reviewable findings from task content and authorized trails."
     }
 
-    var poolAnalysisActionSubtitle: String {
-        language == .chinese
-            ? "使用已接入的 Provider；发送前仍会确认本次任务池范围。"
-            : "Use the connected Provider and confirm this Task Pool scope before sending."
-    }
-
     var poolAnalysisIntent: String {
         language == .chinese
             ? "分析当前任务池，指出需要澄清、拆分或安排的任务"
@@ -64,8 +154,65 @@ extension AppCopy {
         language == .chinese ? "分析任务池" : "Analyze Task Pool"
     }
 
-    var continueTaskPoolAnalysis: String {
-        language == .chinese ? "继续任务池分析" : "Continue Task Pool analysis"
+    var poolAnalysisGenerating: String {
+        language == .chinese ? "正在分析任务池……" : "Analyzing the Task Pool…"
+    }
+
+    var poolAnalysisOutdated: String {
+        language == .chinese
+            ? "任务池已变化，这份分析基于较早内容。"
+            : "The Task Pool has changed since this analysis."
+    }
+
+    var poolAnalysisNoFindings: String {
+        language == .chinese
+            ? "当前授权资料不足以形成可靠发现。"
+            : "The authorized context does not support a reliable finding yet."
+    }
+
+    var poolAnalysisFailed: String {
+        language == .chinese
+            ? "本次分析没有完成，统计区不受影响。"
+            : "This analysis did not finish. Statistics remain available."
+    }
+
+    var refreshTaskPoolAnalysis: String {
+        language == .chinese ? "重新分析" : "Analyze again"
+    }
+
+    var retryTaskPoolAnalysis: String {
+        language == .chinese ? "重试分析" : "Retry analysis"
+    }
+
+    var viewTaskPoolAnalysisSession: String {
+        language == .chinese ? "查看会话" : "View session"
+    }
+
+    func poolAnalysisEvidence(_ titles: [String?]) -> String {
+        let separator = language == .chinese ? "、" : ", "
+        let joined = titles.map {
+            $0 ?? untitledTask
+        }.joined(separator: separator)
+        return language == .chinese
+            ? "证据：\(joined)"
+            : "Evidence: \(joined)"
+    }
+
+    func poolAnalysisConfidence(
+        _ confidence: TaskPoolAnalysisConfidence,
+        uncertainty: String
+    ) -> String {
+        let confidenceText = switch (language, confidence) {
+        case (.chinese, .low): "低"
+        case (.chinese, .medium): "中"
+        case (.chinese, .high): "高"
+        case (.english, .low): "Low"
+        case (.english, .medium): "Medium"
+        case (.english, .high): "High"
+        }
+        return language == .chinese
+            ? "置信度：\(confidenceText) · 不确定性：\(uncertainty)"
+            : "Confidence: \(confidenceText) · Uncertainty: \(uncertainty)"
     }
 
     var futureReschedulingTitle: String { language == .chinese ? "未来改期" : "Upcoming rescheduling" }

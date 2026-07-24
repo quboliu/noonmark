@@ -219,20 +219,14 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
         on store: NoonmarkStore
     ) async throws {
         var textView: NSTextView?
-        try await waitForHome("首页没有在发送前披露范围与接收方") {
-            guard let disclosure = AppViewTreeE2E.view(
-                identifier: "zhulong-home-data-disclosure"
-            ), let text = AppViewTreeE2E.verificationText(
-                for: disclosure
-            )
-            else { return false }
+        try await waitForHome("烛龙首页没有按精简契约显示输入框") {
             textView = AppViewTreeE2E.view(
                 identifier: "zhulong-home-intent.input"
             ) as? NSTextView
             return textView != nil
-                && text.contains("Day Todo")
-                && text.contains("https://e2e.provider.example/v1")
-                && text.contains("e2e-conversation-v1")
+                && AppViewTreeE2E.hasNoVisibleView(
+                    identifier: "zhulong-home-data-disclosure"
+                )
         }
         guard let textView, let window = textView.window else {
             throw ZhulongChatE2EError.missing("真实烛龙首页输入框窗口")
@@ -350,16 +344,30 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
                         && AppViewTreeE2E.view(
                             identifier: "zhulong-live-assistant-message"
                         ) != nil
+                        && AppViewTreeE2E.view(
+                            identifier: "zhulong-session-stop"
+                        ) != nil
                 },
-                hasInitialReply: {
-                store.zhulongWorkspace.selectedSession?.purpose == .freeform
-                    && store.zhulongWorkspace.selectedSession?.entries.contains(where: {
-                        $0.author == .zhulong && $0.content == ZhulongChatE2EFixture.initialReply
-                    }) == true
-                    && store.zhulongWorkspace.selectedSession?.phase == .draftReview
-                    && AppViewTreeE2E.hasNoVisibleView(
-                        identifier: "zhulong-stream-conversation-current-action"
-                    )
+                hasStoppedInitialReply: {
+                    let session = store.zhulongWorkspace.selectedSession
+                    return session?.purpose == .freeform
+                        && session?.entries.contains(where: {
+                            $0.author == .zhulong
+                                && $0.content
+                                == ZhulongChatE2EFixture.initialReplyStreamingFragment
+                        }) == true
+                        && session?.entries.contains(where: {
+                            $0.author == .zhulong
+                                && $0.content == ZhulongChatE2EFixture.initialReply
+                        }) == false
+                        && session?.providerSends.first?.status == .stopped
+                        && session?.phase == .readyForProvider
+                        && AppViewTreeE2E.hasNoVisibleView(
+                            identifier: "zhulong-session-stop"
+                        )
+                        && AppViewTreeE2E.view(
+                            identifier: "zhulong-session-send"
+                        ) != nil
                 },
                 hasPersistedConversation: {
                     let entries = store.zhulongWorkspace.selectedSession?.entries ?? []
@@ -430,6 +438,10 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
         store.zhulongWorkspace.selectSession(session.id)
         let entries = store.zhulongWorkspace.selectedSession?.entries ?? []
         let persisted = entries.contains(where: {
+            $0.author == .zhulong
+                && $0.content == ZhulongChatE2EFixture.initialReplyStreamingFragment
+        }) && session.providerSends.first?.status == .stopped
+            && entries.contains(where: {
             $0.author == .user && $0.content == ZhulongChatE2EFixture.submittedEntry
         }) && entries.contains(where: {
             $0.author == .zhulong && $0.content == ZhulongChatE2EFixture.continuedReply
@@ -463,7 +475,7 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
 enum ZhulongChatE2EUIInteractionDriver {
     struct Interaction {
         let hasInitialLiveDelta: @MainActor () -> Bool
-        let hasInitialReply: @MainActor () -> Bool
+        let hasStoppedInitialReply: @MainActor () -> Bool
         let hasPersistedConversation: @MainActor () -> Bool
         let beginReauthorization: @MainActor () -> Void
         let hasReauthorizationRequired: @MainActor () -> Bool
@@ -500,11 +512,11 @@ enum ZhulongChatE2EUIInteractionDriver {
             try await waitUntil("烛龙首条回复没有逐段落屏") {
                 self.interaction.hasInitialLiveDelta()
             }
-            try await waitUntil("烛龙对话输入框与初始回复") {
+            try await waitUntil("烛龙对话输入框没有出现") {
                 textView = AppViewTreeE2E.view(
                     identifier: "zhulong-session-entry.input"
                 ) as? NSTextView
-                return textView != nil && self.interaction.hasInitialReply()
+                return textView != nil
             }
             guard let textView, let window = textView.window else {
                 throw ZhulongChatE2EError.missing("真实烛龙输入框窗口")
@@ -518,6 +530,16 @@ enum ZhulongChatE2EUIInteractionDriver {
             }
 
             let input = try WindowServerInputDriver()
+            try await clickAction(
+                identifier: "zhulong-session-stop",
+                missingMessage: "烛龙停止生成按钮在点击前变化",
+                input: input,
+                in: window
+            )
+            try await waitUntil("停止生成没有保留已落屏内容") {
+                self.interaction.hasStoppedInitialReply()
+            }
+
             let target: @MainActor () throws -> WindowServerInputDriver.PointerCoordinate = {
                 guard let current = AppViewTreeE2E.view(
                     identifier: "zhulong-session-entry.input"
@@ -576,6 +598,36 @@ enum ZhulongChatE2EUIInteractionDriver {
             try await waitUntil("重新授权后 Enter 没有继续对话") {
                 textView.string.isEmpty && self.interaction.hasReauthorizedConversation()
             }
+        }
+
+        private func clickAction(
+            identifier: String,
+            missingMessage: String,
+            input: WindowServerInputDriver,
+            in window: NSWindow
+        ) async throws {
+            let target: @MainActor () throws
+                -> WindowServerInputDriver.PointerCoordinate = {
+                guard let action = AppViewTreeE2E.view(
+                    identifier: identifier
+                ), action.window === window, action.isHidden == false
+                else {
+                    throw ZhulongChatE2EError.missing(missingMessage)
+                }
+                let frame = AppViewTreeE2E.frameInWindow(for: action)
+                return try input.pointerCoordinate(
+                    windowPoint: NSPoint(
+                        x: frame.midX,
+                        y: frame.midY
+                    ),
+                    in: window
+                )
+            }
+            try await input.postClick(
+                at: try target(),
+                modifiers: [],
+                resolveTarget: target
+            )
         }
 
         private func authorizeScope(

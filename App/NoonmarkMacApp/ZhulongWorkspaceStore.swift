@@ -86,9 +86,9 @@ struct ZhulongStreamRecord: Identifiable, Equatable {
     let content: Content
 }
 
-/// Text currently arriving from an authorized Provider. This exists only in
-/// memory; a completed Provider response remains the sole source of a durable
-/// Zhulong conversation record.
+/// Text currently arriving from an authorized Provider. It stays in memory
+/// until the response completes or the user stops generation; a stopped run
+/// can persist only the visible text that had already arrived.
 struct ZhulongLiveResponse: Equatable {
     var rawContent: String
 
@@ -883,6 +883,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
                 sessionID: selectedSessionID,
                 payload: payload,
                 provider: provider,
+                onStarted: { [weak self] session in
+                    await self?.replaceLoadedSession(session)
+                },
                 onDelta: { [weak self] delta in
                     await self?.appendLiveResponse(
                         delta,
@@ -934,6 +937,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
     ) throws -> ZhulongSession {
         guard let send = providerSession.providerSends.last,
               case .conversation = send.purpose,
+              send.payload.responseContract
+              == .generalConversation,
               let response = send.response,
               response.artifacts.isEmpty == false
         else {
@@ -1450,7 +1455,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
         _ event: ZhulongSessionEvent,
         in session: ZhulongSession
     ) -> Bool {
-        guard event.kind == .draftReady,
+        guard event.kind == .draftReady
+            || event.kind == .analysisReportReady,
               let runID = event.providerRunID,
               let send = session.providerSends.last(where: { $0.runID == runID })
         else { return false }
@@ -1493,7 +1499,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
              .planningDecisionGateResolved, .todoDiffRevised, .todoWriteAuthorized,
              .unfinishedCauseResolved, .dailyReviewAuthorized:
             .user
-        case .draftReady, .planningBriefPublished, .planningDecisionGateOpened,
+        case .draftReady, .analysisReportReady,
+             .planningBriefPublished, .planningDecisionGateOpened,
              .todoDiffPublished, .unfinishedCauseProposed, .dailyReviewDraftPublished:
             .zhulong
         default:
@@ -1505,7 +1512,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
         switch kind {
         case .sessionCreated, .scopeAuthorized: .intent
         case .planningBriefPublished, .planningBriefReviewed, .planningBriefInvalidated: .brief
-        case .providerRunStarted, .providerRunFailed, .draftReady, .planningDelegationGranted,
+        case .providerRunStarted, .providerRunStopped, .providerRunFailed,
+             .draftReady, .analysisReportReady,
+             .planningDelegationGranted,
              .planningDelegationConsumed, .planningDelegationInvalidated, .planningRunInvalidated:
             .planning
         case .sessionDecisionRecorded, .planningDecisionGateOpened, .planningDecisionGateResolved:
@@ -1564,6 +1573,10 @@ final class ZhulongWorkspaceStore: ObservableObject {
             case .delegatedPlanning:
                 return copy.delegatedPlanningSuccessDetail
             }
+        case let .stopped(_, response):
+            return response.content.isEmpty
+                ? detail(for: event.kind, copy: copy)
+                : response.content
         case let .failed(_, failure):
             return copy.providerFailureDetail(code: failure.code)
         case .running: return detail(for: event.kind, copy: copy)

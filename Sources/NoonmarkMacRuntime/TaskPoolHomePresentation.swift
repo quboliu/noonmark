@@ -54,3 +54,105 @@ public enum TaskPoolAnalysisAvailability: Equatable, Sendable {
         self == .ready
     }
 }
+
+public enum TaskPoolAnalysisConfidence:
+    String,
+    Equatable,
+    Sendable
+{
+    case low
+    case medium
+    case high
+}
+
+public struct TaskPoolAnalysisFindingPresentation:
+    Equatable,
+    Sendable
+{
+    public let conclusion: String
+    public let evidenceTitles: [String?]
+    public let confidence: TaskPoolAnalysisConfidence
+    public let uncertainty: String
+    public let recommendation: String
+
+    public init(
+        conclusion: String,
+        evidenceTitles: [String?],
+        confidence: TaskPoolAnalysisConfidence,
+        uncertainty: String,
+        recommendation: String
+    ) {
+        self.conclusion = conclusion
+        self.evidenceTitles = evidenceTitles
+        self.confidence = confidence
+        self.uncertainty = uncertainty
+        self.recommendation = recommendation
+    }
+}
+
+public struct TaskPoolAnalysisReportPresentation:
+    Equatable,
+    Sendable
+{
+    public let generatedAt: Date
+    public let findings: [TaskPoolAnalysisFindingPresentation]
+
+    public init(
+        generatedAt: Date,
+        findings: [TaskPoolAnalysisFindingPresentation]
+    ) {
+        self.generatedAt = generatedAt
+        self.findings = findings
+    }
+}
+
+public enum TaskPoolAnalysisRunSnapshot: Equatable, Sendable {
+    case running
+    case succeeded(
+        contextVersion: String,
+        report: TaskPoolAnalysisReportPresentation
+    )
+    case stopped
+    case failed
+}
+
+public enum TaskPoolAnalysisFreshness: Equatable, Sendable {
+    case current
+    case outdated
+}
+
+public enum TaskPoolAnalysisState: Equatable, Sendable {
+    case notGenerated
+    case generating
+    case report(
+        TaskPoolAnalysisReportPresentation,
+        freshness: TaskPoolAnalysisFreshness
+    )
+    case failed
+}
+
+public enum TaskPoolAnalysisProjection {
+    public static func state(
+        availability: TaskPoolAnalysisAvailability,
+        run: TaskPoolAnalysisRunSnapshot?,
+        currentContextVersion: String
+    ) -> TaskPoolAnalysisState? {
+        guard availability.isVisible else { return nil }
+        guard let run else { return .notGenerated }
+        switch run {
+        case .running:
+            return .generating
+        case let .succeeded(contextVersion, report):
+            return .report(
+                report,
+                freshness: contextVersion == currentContextVersion
+                    ? .current
+                    : .outdated
+            )
+        case .stopped:
+            return .notGenerated
+        case .failed:
+            return .failed
+        }
+    }
+}

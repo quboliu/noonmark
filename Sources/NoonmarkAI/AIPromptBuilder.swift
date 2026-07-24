@@ -14,6 +14,11 @@ public struct PromptInjectionGuard: Sendable {
         return String(String.UnicodeScalarView(scalars))
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    public func taskPoolEvidenceTitle(_ text: String) -> String? {
+        let sanitized = sanitizeUserText(text) ?? ""
+        return sanitized.isEmpty ? nil : sanitized
+    }
 }
 
 public struct AIPromptBuilder: Sendable {
@@ -26,7 +31,11 @@ public struct AIPromptBuilder: Sendable {
     public func buildRequest(task: ZhulongTask, scope: AIScopeSnapshot, report: LocalInsightReport) -> AIRequest {
         AIRequest(
             systemPrompt: systemPrompt(for: task),
-            userPrompt: userPrompt(scope: scope, report: report),
+            userPrompt: userPrompt(
+                task: task,
+                scope: scope,
+                report: report
+            ),
             responseSchemaName: "noonmark.zhulong.authorized-context",
             metadata: [
                 "task": task.rawValue,
@@ -46,7 +55,11 @@ public struct AIPromptBuilder: Sendable {
         """
     }
 
-    private func userPrompt(scope: AIScopeSnapshot, report: LocalInsightReport) -> String {
+    private func userPrompt(
+        task: ZhulongTask,
+        scope: AIScopeSnapshot,
+        report: LocalInsightReport
+    ) -> String {
         var sections: [String] = []
         sections.append("授权范围：\(scope.ranges.map(describeRange).joined(separator: "；"))")
 
@@ -59,7 +72,17 @@ public struct AIPromptBuilder: Sendable {
         }
 
         if scope.taskPool.isEmpty == false {
-            sections.append("任务池：\n" + scope.taskPool.map(renderPoolTask).joined(separator: "\n"))
+            sections.append(
+                "任务池：\n"
+                    + scope.taskPool.map {
+                        renderPoolTask(
+                            $0,
+                            includesAnalysisEvidence:
+                            task == .taskPoolAnalysis
+                        )
+                    }
+                    .joined(separator: "\n")
+            )
         }
 
         let visibleUnfinishedPool = scope.unfinishedPool.filter { item in
@@ -166,15 +189,37 @@ public struct AIPromptBuilder: Sendable {
         return parts.joined(separator: "；")
     }
 
-    private func renderPoolTask(_ task: PoolTask) -> String {
-        let title = guardrail.sanitizeUserText(task.definition.title) ?? ""
-        var parts = ["- \(title)"]
+    private func renderPoolTask(
+        _ task: PoolTask,
+        includesAnalysisEvidence: Bool
+    ) -> String {
+        let title = includesAnalysisEvidence
+            ? guardrail.taskPoolEvidenceTitle(
+                task.definition.title
+            ) ?? "null"
+            : guardrail.sanitizeUserText(
+                task.definition.title
+            ) ?? ""
+        var parts = includesAnalysisEvidence
+            ? [
+                "- taskID \(task.chain.id)",
+                "标题：\(title)"
+            ]
+            : ["- \(title)"]
         if let descriptionText = guardrail.sanitizeUserText(task.definition.descriptionText), descriptionText.isEmpty == false {
             parts.append("描述：\(descriptionText)")
         }
         let noteBodies = task.chain.activeNoteEntries.compactMap { guardrail.sanitizeUserText($0.body) }
         if noteBodies.isEmpty == false {
             parts.append("附言：\(noteBodies.joined(separator: "；"))")
+        }
+        if includesAnalysisEvidence,
+           task.definition.plannedSubtasks.isEmpty == false
+        {
+            let subtasks = task.definition.plannedSubtasks.map {
+                "\(guardrail.sanitizeUserText($0.title) ?? "")[\($0.difficulty.label)]"
+            }
+            parts.append("计划子任务：\(subtasks.joined(separator: "；"))")
         }
         return parts.joined(separator: "；")
     }

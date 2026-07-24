@@ -136,6 +136,8 @@ private extension ZhulongTask {
             "重新安排任务池与未完成任务"
         case .classification:
             "整理任务的分组与标签"
+        case .taskPoolAnalysis:
+            "分析当前任务池"
         case .theoryAnalysis:
             "分析当前任务背后的理论与方法"
         }

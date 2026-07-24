@@ -38,8 +38,10 @@ public enum ZhulongEventCopyKey: String, CaseIterable, Sendable {
     case sessionCreated
     case scopeAuthorized
     case providerRunStarted
+    case providerRunStopped
     case providerRunFailed
     case draftReady
+    case analysisReportReady
     case sessionCorrected
     case sessionDecisionRecorded
     case planningBriefPublished
@@ -237,6 +239,21 @@ public enum ZhulongProviderSettingsFailure: Sendable {
     case unexpected
 }
 
+public enum ZhulongComposerPrimaryAction: Equatable, Sendable {
+    case send(isEnabled: Bool)
+    case stop
+
+    public init(
+        providerIsRunning: Bool,
+        canSubmit: Bool,
+        hasMessage: Bool
+    ) {
+        self = providerIsRunning
+            ? .stop
+            : .send(isEnabled: canSubmit && hasMessage)
+    }
+}
+
 public enum ZhulongProviderActionNotice: CaseIterable, Hashable, Sendable {
     case configurationSaved
     case saveFailed
@@ -255,8 +272,11 @@ public struct ZhulongCopy: Sendable {
         .sessionCreated: "Zhulong session created",
         .scopeAuthorized: "Data scope authorised",
         .providerRunStarted: "Authorised content sent to the Provider",
+        .providerRunStopped: "User stopped Provider output",
         .providerRunFailed: "Provider request failed",
         .draftReady: "Provider returned a draft for review",
+        .analysisReportReady:
+        "Provider returned a read-only task-pool analysis report",
         .sessionCorrected: "Session correction appended",
         .sessionDecisionRecorded: "User decision recorded",
         .planningBriefPublished: "Planning brief published",
@@ -319,11 +339,15 @@ public struct ZhulongCopy: Sendable {
 
     public var suggestionMode: String { localized(chinese: "建议模式", english: "Suggestion mode") }
     public var pendingDecisionsTitle: String {
-        localized(chinese: "待你决定", english: "Needs your decision")
+        localized(chinese: "历史记录", english: "History")
     }
 
     public var continueAction: String { localized(chinese: "继续", english: "Continue") }
     public var pauseAction: String { localized(chinese: "暂停", english: "Pause") }
+    public var stopGeneratingAction: String {
+        localized(chinese: "停止生成", english: "Stop generating")
+    }
+
     public var allSessionsAction: String { localized(chinese: "全部会话", english: "All sessions") }
     public var sessionNextStep: String {
         localized(
@@ -565,6 +589,20 @@ public struct ZhulongCopy: Sendable {
 
     public var confirmAndSaveReview: String {
         localized(chinese: "确认并保存复盘", english: "Confirm and save review")
+    }
+
+    public var zhulongDailyReviewEditableHint: String {
+        localized(
+            chinese: "可以直接编辑，也可以说“提交”保存当前版本。",
+            english: "Edit directly, or say “commit” to save this version."
+        )
+    }
+
+    public var zhulongTaskDraftValidationError: String {
+        localized(
+            chinese: "请补全任务标题、子任务标题和有效日期。",
+            english: "Complete every title and use a valid date."
+        )
     }
 
     public var reviewBoundaryNotice: String {

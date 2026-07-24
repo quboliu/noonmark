@@ -1,4 +1,3 @@
-App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|Text("\(language == .chinese ? "视图" : "View") · \(workspace.variant.title(language: language))")
 App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.brief, .chinese): "活简报"
 App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.dailyClose, .chinese): "每日收尾"
 App/NoonmarkMacApp/ZhulongSessionStreamPage.swift|case (.decision, .chinese): "决定与授权"

@@ -1,16 +1,66 @@
 import Foundation
 
+public enum ZhulongProviderResponseContract:
+    Codable,
+    Equatable,
+    Sendable
+{
+    case generalConversation
+    case taskPoolAnalysis(
+        evidence: [ZhulongTaskPoolAnalysisEvidence]
+    )
+
+    public func validate(
+        _ response: ZhulongProviderResponse
+    ) throws {
+        switch self {
+        case .generalConversation:
+            guard response.artifacts.allSatisfy({
+                if case .taskPoolAnalysis = $0 {
+                    return false
+                }
+                return true
+            }) else {
+                throw ZhulongProviderResponseContractError
+                    .unexpectedArtifact
+            }
+        case let .taskPoolAnalysis(evidence):
+            guard response.draftVersion == nil,
+                  response.artifacts.count == 1,
+                  case let .taskPoolAnalysis(report) =
+                  response.artifacts[0],
+                  report.isGrounded(in: evidence)
+            else {
+                throw ZhulongProviderResponseContractError
+                    .invalidTaskPoolAnalysis
+            }
+        }
+    }
+}
+
+public enum ZhulongProviderResponseContractError:
+    Error,
+    Equatable,
+    Sendable
+{
+    case unexpectedArtifact
+    case invalidTaskPoolAnalysis
+}
+
 public struct ZhulongProviderPayload: Codable, Equatable, Sendable {
     public let systemPrompt: String
     public let userPrompt: String
     public let contextVersion: String
     public let scopeContent: [ZhulongDataScope: String]
+    public let responseContract: ZhulongProviderResponseContract
 
     public init(
         systemPrompt: String,
         userPrompt: String,
         contextVersion: String,
-        scopeContent: [ZhulongDataScope: String]
+        scopeContent: [ZhulongDataScope: String],
+        responseContract: ZhulongProviderResponseContract =
+            .generalConversation
     ) throws {
         let normalizedSystemPrompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedUserPrompt = userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -25,6 +75,24 @@ public struct ZhulongProviderPayload: Codable, Equatable, Sendable {
         else {
             throw ZhulongProviderPayloadError.emptyRequiredContent
         }
+        switch responseContract {
+        case .generalConversation:
+            break
+        case let .taskPoolAnalysis(evidence):
+            let rebuiltEvidence = try evidence.map {
+                try ZhulongTaskPoolAnalysisEvidence(
+                    taskID: $0.taskID,
+                    title: $0.title
+                )
+            }
+            guard rebuiltEvidence == evidence,
+                  Set(evidence.map(\.taskID)).count == evidence.count,
+                  Set(scopeContent.keys) == [.taskPool]
+            else {
+                throw ZhulongProviderPayloadError
+                    .invalidResponseContract
+            }
+        }
 
         self.systemPrompt = normalizedSystemPrompt
         self.userPrompt = normalizedUserPrompt
@@ -32,6 +100,7 @@ public struct ZhulongProviderPayload: Codable, Equatable, Sendable {
         self.scopeContent = scopeContent.mapValues {
             $0.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        self.responseContract = responseContract
     }
 
     public var scopes: Set<ZhulongDataScope> {
@@ -41,6 +110,7 @@ public struct ZhulongProviderPayload: Codable, Equatable, Sendable {
 
 public enum ZhulongProviderPayloadError: Error, Equatable, Sendable {
     case emptyRequiredContent
+    case invalidResponseContract
 }
 
 public struct ZhulongProviderRunID: Codable, Hashable, Sendable, CustomStringConvertible {
@@ -112,6 +182,7 @@ public struct ZhulongProviderFailure: Codable, Equatable, Sendable {
 
 public enum ZhulongProviderResult: Equatable, Sendable {
     case success(ZhulongProviderResponse)
+    case stopped(ZhulongProviderResponse)
     case failure(ZhulongProviderFailure)
 }
 
@@ -137,12 +208,14 @@ public protocol ZhulongStreamingProvider: ZhulongProvider {
 public enum ZhulongProviderSendStatus: String, Codable, Equatable, Sendable {
     case running
     case succeeded
+    case stopped
     case failed
 }
 
 public enum ZhulongProviderSendResult: Codable, Equatable, Sendable {
     case running
     case succeeded(completedAt: Date, response: ZhulongProviderResponse)
+    case stopped(completedAt: Date, response: ZhulongProviderResponse)
     case failed(completedAt: Date, failure: ZhulongProviderFailure)
 }
 
@@ -174,6 +247,7 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
         switch result {
         case .running: .running
         case .succeeded: .succeeded
+        case .stopped: .stopped
         case .failed: .failed
         }
     }
@@ -181,13 +255,20 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
     public var completedAt: Date? {
         switch result {
         case .running: nil
-        case let .succeeded(completedAt, _), let .failed(completedAt, _): completedAt
+        case let .succeeded(completedAt, _),
+             let .stopped(completedAt, _),
+             let .failed(completedAt, _):
+            completedAt
         }
     }
 
     public var response: ZhulongProviderResponse? {
-        guard case let .succeeded(_, response) = result else { return nil }
-        return response
+        switch result {
+        case let .succeeded(_, response), let .stopped(_, response):
+            response
+        case .running, .failed:
+            nil
+        }
     }
 
     public var failure: ZhulongProviderFailure? {
@@ -214,6 +295,17 @@ public struct ZhulongProviderSendRecord: Codable, Equatable, Sendable {
             purpose: purpose,
             startedAt: startedAt,
             result: .failed(completedAt: date, failure: failure)
+        )
+    }
+
+    func stopping(with response: ZhulongProviderResponse, at date: Date) -> Self {
+        Self(
+            runID: runID,
+            providerIdentity: providerIdentity,
+            payload: payload,
+            purpose: purpose,
+            startedAt: startedAt,
+            result: .stopped(completedAt: date, response: response)
         )
     }
 

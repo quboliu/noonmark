@@ -310,7 +310,7 @@ require_literal \
   'titleAnchorIdentifier: "zhulong.home.title"'
 require_literal \
   App/NoonmarkMacApp/ZhulongSessionStreamPage.swift \
-  'titleAnchorIdentifier: "zhulong.session.title"'
+  'identifier: "zhulong.session.title"'
 require_literal \
   App/NoonmarkMacApp/LegacyLaunchAutomations.swift \
   "append(ZhulongTitleGeometryE2EAutomation.fromCommandLine(), to: &actions)"

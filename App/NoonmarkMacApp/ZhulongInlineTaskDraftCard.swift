@@ -193,32 +193,28 @@ struct ZhulongInlineTaskDraftCard: View {
     let isUpdating: Bool
     let onSubmit: () -> Void
 
-    private var isChinese: Bool {
-        language == .chinese
+    private var copy: AppCopy {
+        AppCopy(language: language)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(isChinese ? "任务草稿" : "Task draft")
+                Text(copy.zhulongTaskDraftTitle)
                     .font(.noonmarkSystem(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                 Text(
                     isApplied
-                        ? (isChinese ? "已提交" : "Committed")
+                        ? copy.zhulongTaskDraftCommittedStatus
                         : isUpdating
-                        ? (isChinese
-                            ? "烛龙正在更新"
-                            : "Zhulong is updating")
-                        : (isChinese ? "可直接编辑" : "Editable")
+                        ? copy.zhulongTaskDraftUpdatingStatus
+                        : copy.zhulongTaskDraftEditableStatus
                 )
                 .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 .foregroundStyle(isApplied ? Theme.ok : Theme.accent)
                 Spacer()
                 Text(
-                    isChinese
-                        ? "\(state.tasks.count) 个任务"
-                        : "\(state.tasks.count) tasks"
+                    copy.zhulongTaskDraftTaskCount(state.tasks.count)
                 )
                 .font(.noonmarkSystem(size: 10.5))
                 .foregroundStyle(Theme.text3)
@@ -239,7 +235,7 @@ struct ZhulongInlineTaskDraftCard: View {
                     state.addTask()
                 } label: {
                     Label(
-                        isChinese ? "增加任务" : "Add task",
+                        copy.addZhulongTaskDraftTask,
                         systemImage: "plus"
                     )
                 }
@@ -250,15 +246,13 @@ struct ZhulongInlineTaskDraftCard: View {
 
                 HStack(spacing: 12) {
                     Text(
-                        isChinese
-                            ? "继续对话可以调整方案；说“提交”也会执行当前可见版本。"
-                            : "Keep chatting to revise, or say “commit” to apply this visible version."
+                        copy.zhulongTaskDraftRevisionHint
                     )
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
                     Spacer()
                     Button(
-                        isChinese ? "提交任务" : "Commit tasks",
+                        copy.commitZhulongTaskDraft,
                         action: onSubmit
                     )
                     .buttonStyle(.borderedProminent)
@@ -271,16 +265,14 @@ struct ZhulongInlineTaskDraftCard: View {
                             identifier:
                             "zhulong-inline-task-draft-submit-anchor-\(artifactIdentifier)",
                             verificationText:
-                            isChinese ? "提交任务" : "Commit tasks"
+                            copy.commitZhulongTaskDraft
                         )
                     }
                 }
                 .padding(.top, 16)
             } else if isApplied {
                 Label(
-                    isChinese
-                        ? "这些任务已经写入对应的任务池、Day Todo 或未来计划。"
-                        : "These tasks were written to their selected destinations.",
+                    copy.zhulongTaskDraftAppliedNotice,
                     systemImage: "checkmark.circle.fill"
                 )
                 .font(.noonmarkSystem(size: 11.5, weight: .medium))
@@ -288,9 +280,7 @@ struct ZhulongInlineTaskDraftCard: View {
                 .padding(.top, 16)
             } else {
                 Label(
-                    isChinese
-                        ? "当前可见版本已保存；烛龙返回修订前暂不可编辑。"
-                        : "This visible version is saved and locked until Zhulong returns the revision.",
+                    copy.zhulongTaskDraftUpdatingNotice,
                     systemImage: "arrow.triangle.2.circlepath"
                 )
                 .font(.noonmarkSystem(size: 11.5, weight: .medium))
@@ -320,7 +310,7 @@ struct ZhulongInlineTaskDraftCard: View {
                 identifier:
                 "zhulong-inline-task-draft-anchor-\(artifactIdentifier)",
                 verificationText:
-                isChinese ? "任务草稿" : "Task draft"
+                copy.zhulongTaskDraftTitle
             )
         }
     }
@@ -335,7 +325,7 @@ struct ZhulongInlineTaskDraftCard: View {
                     .foregroundStyle(Theme.accent)
 
                 TextField(
-                    isChinese ? "任务标题" : "Task title",
+                    copy.zhulongTaskTitlePlaceholder,
                     text: task.title
                 )
                 .textFieldStyle(.plain)
@@ -356,7 +346,7 @@ struct ZhulongInlineTaskDraftCard: View {
             }
 
             TextField(
-                isChinese ? "补充目标或完成标准（可选）" : "Goal or completion criteria (optional)",
+                copy.zhulongTaskDescriptionPlaceholder,
                 text: task.descriptionText
             )
             .textFieldStyle(.plain)
@@ -365,7 +355,7 @@ struct ZhulongInlineTaskDraftCard: View {
             .padding(.leading, 22)
 
             TextField(
-                isChinese ? "附言（可选）" : "Note (optional)",
+                copy.zhulongTaskNotePlaceholder,
                 text: task.note
             )
             .textFieldStyle(.plain)
@@ -378,17 +368,17 @@ struct ZhulongInlineTaskDraftCard: View {
                     "",
                     selection: task.destination
                 ) {
-                    Text(isChinese ? "任务池" : "Task Pool")
+                    Text(copy.zhulongTaskPoolDestination)
                         .tag(
                             ZhulongInlineTaskDraftState.Task
                                 .Destination.taskPool
                         )
-                    Text(isChinese ? "今天" : "Today")
+                    Text(copy.zhulongTaskTodayDestination)
                         .tag(
                             ZhulongInlineTaskDraftState.Task
                                 .Destination.today
                         )
-                    Text(isChinese ? "未来日期" : "Future")
+                    Text(copy.zhulongTaskFutureDestination)
                         .tag(
                             ZhulongInlineTaskDraftState.Task
                                 .Destination.future
@@ -432,7 +422,7 @@ struct ZhulongInlineTaskDraftCard: View {
                 )
             } label: {
                 Label(
-                    isChinese ? "增加子任务" : "Add subtask",
+                    copy.addZhulongSubtask,
                     systemImage: "plus"
                 )
             }
@@ -452,18 +442,18 @@ struct ZhulongInlineTaskDraftCard: View {
                 .font(.noonmarkSystem(size: 9))
                 .foregroundStyle(Theme.text3)
             TextField(
-                isChinese ? "子任务" : "Subtask",
+                copy.zhulongSubtaskPlaceholder,
                 text: subtask.title
             )
             .textFieldStyle(.plain)
             .font(.noonmarkSystem(size: 11.5))
             .foregroundStyle(Theme.text2)
             Picker("", selection: subtask.difficulty) {
-                Text(isChinese ? "简" : "S")
+                Text(copy.zhulongSimpleDifficultyAbbreviation)
                     .tag(SubtaskDifficulty.simple)
-                Text(isChinese ? "中" : "M")
+                Text(copy.zhulongMediumDifficultyAbbreviation)
                     .tag(SubtaskDifficulty.medium)
-                Text(isChinese ? "难" : "H")
+                Text(copy.zhulongHardDifficultyAbbreviation)
                     .tag(SubtaskDifficulty.hard)
             }
             .labelsHidden()

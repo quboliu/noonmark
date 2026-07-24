@@ -17,7 +17,7 @@ public enum ZhulongSidecarRepositoryError: Error, Equatable {
 
 public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @unchecked Sendable {
     private static let magic = Data("NOONMARK-ZHULONG-SIDECAR".utf8)
-    private static let formatVersion: UInt8 = 2
+    private static let formatVersion: UInt8 = 3
 
     public let directoryURL: URL
     private let keySource: any ZhulongSidecarKeySource
@@ -140,6 +140,25 @@ public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @
 
     func saveCurrentSessionWithoutDailyLedgerForTesting(_ session: ZhulongSession) throws {
         try saveCurrentSessionForTesting(session, removingField: "dailyCloseSnapshots")
+    }
+
+    func saveCurrentSessionForTesting(
+        _ session: ZhulongSession,
+        replacingPlaintext source: String,
+        with replacement: String
+    ) throws {
+        let data = try encoder.encode(ZhulongSessionRecord(session))
+        guard var plaintext = String(data: data, encoding: .utf8),
+              let range = plaintext.range(of: source),
+              plaintext[range.upperBound...].contains(source) == false
+        else {
+            throw ZhulongSidecarRepositoryError.invalidCiphertext
+        }
+        plaintext.replaceSubrange(range, with: replacement)
+        try savePlaintext(
+            Data(plaintext.utf8),
+            id: session.id
+        )
     }
 
     private func saveCurrentSessionForTesting(

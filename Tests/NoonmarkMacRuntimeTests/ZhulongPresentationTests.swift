@@ -28,8 +28,8 @@ final class ZhulongPresentationTests: XCTestCase {
         XCTAssertEqual(english.homeSubtitle, "Clarify what is vague and keep what is underway moving.")
         XCTAssertEqual(chinese.intentPlaceholder, "说说你现在想推进什么……")
         XCTAssertEqual(english.intentPlaceholder, "What would you like to move forward?")
-        XCTAssertEqual(chinese.pendingDecisionsTitle, "待你决定")
-        XCTAssertEqual(english.pendingDecisionsTitle, "Needs your decision")
+        XCTAssertEqual(chinese.pendingDecisionsTitle, "历史记录")
+        XCTAssertEqual(english.pendingDecisionsTitle, "History")
         XCTAssertEqual(chinese.itemCount(2), "2 项")
         XCTAssertEqual(english.itemCount(1), "1 item")
         XCTAssertEqual(english.itemCount(2), "2 items")
@@ -90,6 +90,33 @@ final class ZhulongPresentationTests: XCTestCase {
             "绑定当前数据范围与实际接收方，不按时间过期；Todo 写入仍需另行确认。"
         )
         XCTAssertFalse(containsHan(english.scopeAuthorizationDetail))
+    }
+
+    func testComposerUsesOnePrimaryActionThatStopsOnlyWhileProviderIsRunning() {
+        XCTAssertEqual(
+            ZhulongComposerPrimaryAction(
+                providerIsRunning: true,
+                canSubmit: false,
+                hasMessage: false
+            ),
+            .stop
+        )
+        XCTAssertEqual(
+            ZhulongComposerPrimaryAction(
+                providerIsRunning: false,
+                canSubmit: true,
+                hasMessage: true
+            ),
+            .send(isEnabled: true)
+        )
+        XCTAssertEqual(
+            ZhulongComposerPrimaryAction(
+                providerIsRunning: false,
+                canSubmit: true,
+                hasMessage: false
+            ),
+            .send(isEnabled: false)
+        )
     }
 
     func testEveryEventKeyHasAnEnglishPresentationWithoutReplacingChineseAuditDetail() {

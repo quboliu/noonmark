@@ -193,8 +193,8 @@ final class DataPackageTests: XCTestCase {
         let data = Data(#"{"formatVersion":5,"snapshot":{}}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
-            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(4))
-            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 4。")
+            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(5))
+            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 5。")
         }
     }
 

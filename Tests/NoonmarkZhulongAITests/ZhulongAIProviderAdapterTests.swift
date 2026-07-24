@@ -305,6 +305,196 @@ final class ZhulongAIProviderAdapterTests: XCTestCase {
         XCTAssertEqual(completionCallCount, 1)
     }
 
+    func testTaskPoolAnalysisRepairUsesReadOnlyReportSchema() async throws {
+        let probe = ArtifactRepairInvocationProbe()
+        let identity = try makeIdentity()
+        let adapter = ZhulongAIProviderAdapter(
+            configurationIdentity: identity,
+            upstream: ArtifactRepairAIProvider(
+                probe: probe,
+                streamText: """
+                当前资料不足以形成可靠发现。<noonmark-artifacts>
+                {"artifacts":[{"kind":"taskPoolAnalysis"}]}
+                </noonmark-artifacts>
+                """,
+                repairText: """
+                {
+                  "message": "当前资料不足以形成可靠发现。",
+                  "artifacts": [
+                    {
+                      "kind": "taskPoolAnalysis",
+                      "findings": []
+                    }
+                  ]
+                }
+                """
+            )
+        )
+        let request = try makeTaskPoolAnalysisRequest(
+            identity: identity
+        )
+
+        var terminalResult: ZhulongProviderResult?
+        for await event in adapter.stream(request) {
+            if case let .finished(result) = event {
+                terminalResult = result
+            }
+        }
+
+        guard case let .success(response) = terminalResult else {
+            return XCTFail("Expected task-pool report repair to succeed")
+        }
+        XCTAssertNil(response.draftVersion)
+        guard case .taskPoolAnalysis =
+            try XCTUnwrap(response.artifacts.first)
+        else {
+            return XCTFail("Expected a task-pool analysis report")
+        }
+        let recordedRepairRequest = await probe.repairRequest
+        let repairRequest = try XCTUnwrap(recordedRepairRequest)
+        XCTAssertTrue(
+            repairRequest.systemPrompt.contains(
+                #"taskPoolAnalysis 只能是 {"kind":"taskPoolAnalysis","findings":[...]}"#
+            )
+        )
+        XCTAssertFalse(repairRequest.systemPrompt.contains("taskPlan 只能是"))
+    }
+
+    func testTaskPoolAnalysisContractViolationsDoNotTriggerRepair()
+        async throws
+    {
+        let identity = try makeIdentity()
+        let contractViolations = [
+            """
+            我整理成一个可编辑任务。<noonmark-artifacts>
+            {
+              "artifacts": [
+                {
+                  "kind": "taskPlan",
+                  "tasks": [
+                    {
+                      "title": "不应写入",
+                      "description": null,
+                      "note": null,
+                      "destination": { "kind": "pool" },
+                      "subtasks": []
+                    }
+                  ]
+                }
+              ]
+            }
+            </noonmark-artifacts>
+            """,
+            """
+            发现一个问题。<noonmark-artifacts>
+            {
+              "artifacts": [
+                {
+                  "kind": "taskPoolAnalysis",
+                  "findings": [
+                    {
+                      "kind": "clarity",
+                      "conclusion": "伪造结论",
+                      "evidence": [
+                        {
+                          "taskID": "forged-task",
+                          "title": "未授权任务"
+                        }
+                      ],
+                      "confidence": "high",
+                      "uncertainty": "无",
+                      "recommendation": "不应采纳"
+                    }
+                  ]
+                }
+              ]
+            }
+            </noonmark-artifacts>
+            """
+        ]
+
+        for streamText in contractViolations {
+            let probe = ArtifactRepairInvocationProbe()
+            let adapter = ZhulongAIProviderAdapter(
+                configurationIdentity: identity,
+                upstream: ArtifactRepairAIProvider(
+                    probe: probe,
+                    streamText: streamText
+                )
+            )
+            let request = try makeTaskPoolAnalysisRequest(
+                identity: identity
+            )
+
+            var terminalResult: ZhulongProviderResult?
+            for await event in adapter.stream(request) {
+                if case let .finished(result) = event {
+                    terminalResult = result
+                }
+            }
+
+            guard case let .failure(failure) = terminalResult else {
+                return XCTFail(
+                    "Expected task-pool contract violation to fail"
+                )
+            }
+            XCTAssertEqual(
+                failure.code,
+                "invalid_provider_response_contract"
+            )
+            let streamCallCount = await probe.streamCallCount
+            let completionCallCount = await probe.completionCallCount
+            XCTAssertEqual(streamCallCount, 1)
+            XCTAssertEqual(completionCallCount, 0)
+        }
+    }
+
+    func testMalformedMixedTaskPoolArtifactsDoNotTriggerRepair()
+        async throws
+    {
+        let identity = try makeIdentity()
+        let probe = ArtifactRepairInvocationProbe()
+        let adapter = ZhulongAIProviderAdapter(
+            configurationIdentity: identity,
+            upstream: ArtifactRepairAIProvider(
+                probe: probe,
+                streamText: """
+                混合产物不允许修复。<noonmark-artifacts>
+                {
+                  "artifacts": [
+                    { "kind": "taskPoolAnalysis" },
+                    { "kind": "taskPlan" }
+                  ]
+                }
+                </noonmark-artifacts>
+                """
+            )
+        )
+
+        var terminalResult: ZhulongProviderResult?
+        for await event in adapter.stream(
+            try makeTaskPoolAnalysisRequest(identity: identity)
+        ) {
+            if case let .finished(result) = event {
+                terminalResult = result
+            }
+        }
+
+        guard case let .failure(failure) = terminalResult else {
+            return XCTFail(
+                "Expected malformed mixed artifacts to fail"
+            )
+        }
+        XCTAssertEqual(
+            failure.code,
+            "invalid_conversation_artifact"
+        )
+        let streamCallCount = await probe.streamCallCount
+        let completionCallCount = await probe.completionCallCount
+        XCTAssertEqual(streamCallCount, 1)
+        XCTAssertEqual(completionCallCount, 0)
+    }
+
     private func makeConversationRequest(
         identity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongProviderRequest {
@@ -324,6 +514,35 @@ final class ZhulongAIProviderAdapterTests: XCTestCase {
             userPrompt: "会话记录：\n用户：结束今天",
             contextVersion: "scope-v1",
             scopeContent: [.currentDayTodo: "仅包含今天的任务事实"]
+        )
+        return try session.beginProviderRun(
+            payload: payload,
+            providerIdentity: identity,
+            now: now.addingTimeInterval(2)
+        )
+    }
+
+    private func makeTaskPoolAnalysisRequest(
+        identity: ZhulongProviderConfigurationIdentity
+    ) throws -> ZhulongProviderRequest {
+        let now = Date(timeIntervalSince1970: 1000)
+        var session = try ZhulongSession(
+            primaryIntent: "分析任务池",
+            purpose: .taskPoolAnalysis,
+            proposedScopes: [.taskPool],
+            now: now
+        )
+        try session.authorizeScope(
+            [.taskPool],
+            providerIdentity: identity,
+            now: now.addingTimeInterval(1)
+        )
+        let payload = try ZhulongProviderPayload(
+            systemPrompt: "系统边界",
+            userPrompt: "分析任务池",
+            contextVersion: "scope-v1",
+            scopeContent: [.taskPool: "任务池为空"],
+            responseContract: .taskPoolAnalysis(evidence: [])
         )
         return try session.beginProviderRun(
             payload: payload,
@@ -491,13 +710,16 @@ private struct ArtifactRepairAIProvider: AIProvider, AIProviderStreaming {
         capabilities: AIProviderCapabilities(supportsStreaming: true)
     )
     let probe: ArtifactRepairInvocationProbe
+    let streamText: String
     let repairText: String
 
     init(
         probe: ArtifactRepairInvocationProbe,
+        streamText: String = Self.malformedTaskPlanText,
         repairText: String = Self.validRepairText
     ) {
         self.probe = probe
+        self.streamText = streamText
         self.repairText = repairText
     }
 
@@ -511,12 +733,7 @@ private struct ArtifactRepairAIProvider: AIProvider, AIProviderStreaming {
     ) async throws -> AsyncThrowingStream<String, Error> {
         await probe.recordStreamCall()
         return AsyncThrowingStream { continuation in
-            continuation.yield(
-                "我整理成一个可编辑任务。<noonmark-artifacts>"
-            )
-            continuation.yield(
-                #"{"artifacts":[{"kind":"taskPlan"}]}"#
-            )
+            continuation.yield(streamText)
             continuation.finish()
         }
     }
@@ -524,6 +741,11 @@ private struct ArtifactRepairAIProvider: AIProvider, AIProviderStreaming {
     func healthCheck() async -> AIProviderHealth {
         AIProviderHealth(status: .healthy)
     }
+
+    private static let malformedTaskPlanText = """
+    我整理成一个可编辑任务。<noonmark-artifacts>\
+    {"artifacts":[{"kind":"taskPlan"}]}
+    """
 
     private static let validRepairText = """
     {

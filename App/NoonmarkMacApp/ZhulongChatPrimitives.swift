@@ -331,17 +331,44 @@ private struct ZhulongUserBubbleLayout: Layout {
 struct ZhulongChatComposer: View {
     @Binding var text: String
     let placeholder: String
-    let keyboardHint: String
     let sendAccessibilityLabel: String
-    let canSubmit: Bool
-    let sessionControlTitle: String?
-    let sessionControlSystemImage: String
-    let sessionControlAccessibilityIdentifier: String?
-    let onSessionControl: (() -> Void)?
+    let stopAccessibilityLabel: String
+    let primaryAction: ZhulongComposerPrimaryAction
     let onSend: () -> Void
+    let onStop: () -> Void
 
-    private var canSend: Bool {
-        canSubmit && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    private var isSendEnabled: Bool {
+        guard case let .send(isEnabled) = primaryAction else {
+            return false
+        }
+        return isEnabled
+    }
+
+    private var actionIdentifier: String {
+        switch primaryAction {
+        case .send:
+            "zhulong-session-send"
+        case .stop:
+            "zhulong-session-stop"
+        }
+    }
+
+    private var actionAccessibilityLabel: String {
+        switch primaryAction {
+        case .send:
+            sendAccessibilityLabel
+        case .stop:
+            stopAccessibilityLabel
+        }
+    }
+
+    private var actionSystemImage: String {
+        switch primaryAction {
+        case .send:
+            "arrow.up"
+        case .stop:
+            "stop.fill"
+        }
     }
 
     var body: some View {
@@ -358,53 +385,42 @@ struct ZhulongChatComposer: View {
             )
 
             HStack(spacing: 10) {
-                Text(keyboardHint)
-                    .font(.noonmarkSystem(size: 10.5))
-                    .foregroundStyle(Theme.text3)
-                Spacer(minLength: 12)
-                if let sessionControlTitle,
-                   let sessionControlAccessibilityIdentifier,
-                   let onSessionControl
-                {
-                    Button(action: onSessionControl) {
-                        Label(
-                            sessionControlTitle,
-                            systemImage: sessionControlSystemImage
-                        )
-                        .font(.noonmarkSystem(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.text2)
-                        .padding(.horizontal, 10)
-                        .frame(height: 30)
-                        .background(
-                            Capsule().fill(Theme.chip.opacity(0.72))
-                        )
-                        .overlay(Capsule().stroke(Theme.line))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier(
-                        sessionControlAccessibilityIdentifier
-                    )
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier:
-                            sessionControlAccessibilityIdentifier,
-                            verificationText: sessionControlTitle
-                        )
-                    }
-                }
-                Button(action: submitIfAvailable) {
-                    Image(systemName: "arrow.up")
+                Spacer(minLength: 0)
+                Button(action: performPrimaryAction) {
+                    Image(systemName: actionSystemImage)
                         .font(.noonmarkSystem(size: 12, weight: .bold))
-                        .foregroundStyle(canSend ? Theme.panel : Theme.text3)
+                        .foregroundStyle(
+                            isSendEnabled || primaryAction == .stop
+                                ? Theme.panel
+                                : Theme.text3
+                        )
                         .frame(width: 30, height: 30)
-                        .background(Circle().fill(canSend ? Theme.text1 : Theme.chip))
-                        .overlay(Circle().stroke(canSend ? Color.clear : Theme.line))
+                        .background(
+                            Circle().fill(
+                                isSendEnabled || primaryAction == .stop
+                                    ? Theme.text1
+                                    : Theme.chip
+                            )
+                        )
+                        .overlay(
+                            Circle().stroke(
+                                isSendEnabled || primaryAction == .stop
+                                    ? Color.clear
+                                    : Theme.line
+                            )
+                        )
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(canSend == false)
-                .accessibilityLabel(sendAccessibilityLabel)
-                .accessibilityIdentifier("zhulong-session-send")
+                .disabled(primaryAction == .send(isEnabled: false))
+                .accessibilityLabel(actionAccessibilityLabel)
+                .accessibilityIdentifier(actionIdentifier)
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: actionIdentifier,
+                        verificationText: actionAccessibilityLabel
+                    )
+                }
             }
             .padding(.horizontal, NoonmarkVisualMetrics.zhulongConversationComposerHorizontalInset)
             .padding(.bottom, 10)
@@ -429,7 +445,16 @@ struct ZhulongChatComposer: View {
     }
 
     private func submitIfAvailable() {
-        guard canSend else { return }
+        guard isSendEnabled else { return }
         onSend()
+    }
+
+    private func performPrimaryAction() {
+        switch primaryAction {
+        case .send:
+            submitIfAvailable()
+        case .stop:
+            onStop()
+        }
     }
 }

@@ -120,6 +120,7 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         )
         let orchestrator = ZhulongProviderOrchestrator(repository: repository)
         let received = StreamingDeltaProbe()
+        let started = StreamingStartedSessionProbe()
         let sessionID = session.id
         let payload = try makePayload()
         let startedAt = baseDate.addingTimeInterval(2)
@@ -130,6 +131,9 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
                 sessionID: sessionID,
                 payload: payload,
                 provider: provider,
+                onStarted: { session in
+                    await started.capture(session)
+                },
                 onDelta: { delta in
                     await received.append(delta)
                 },
@@ -138,6 +142,9 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
             )
         }
         await gate.waitUntilStarted()
+        let startedState = await started.state()
+        XCTAssertEqual(startedState.phase, .providerRunning)
+        XCTAssertEqual(startedState.sendStatus, .running)
         await gate.yield(.delta("先确认问题，"))
         await received.waitUntilCount(1)
 
@@ -163,6 +170,186 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         XCTAssertEqual(completed.entries.last?.content, "先确认问题，再安排验证。")
         XCTAssertEqual(completed.providerSends.last?.status, .succeeded)
         XCTAssertEqual(try repository.load(session.id), completed)
+    }
+
+    func testStoppingStreamingConversationPersistsPartialResponseWithoutReportingFailure() async throws {
+        let repository = makeRepository()
+        let session = try makeAuthorizedSession()
+        try repository.save(session)
+        let gate = StreamingProviderGate()
+        let provider = GatedStreamingZhulongProvider(
+            identity: try makeProviderIdentity(),
+            gate: gate
+        )
+        let orchestrator = ZhulongProviderOrchestrator(repository: repository)
+        let received = StreamingDeltaProbe()
+        let sessionID = session.id
+        let payload = try makePayload()
+        let startedAt = baseDate.addingTimeInterval(2)
+        let stoppedAt = baseDate.addingTimeInterval(3)
+
+        let running = Task {
+            try await orchestrator.runStreaming(
+                sessionID: sessionID,
+                payload: payload,
+                provider: provider,
+                onDelta: { delta in
+                    await received.append(delta)
+                },
+                startedAt: startedAt,
+                completedAt: { stoppedAt }
+            )
+        }
+        await gate.waitUntilStarted()
+        await gate.yield(
+            .delta(
+                "已经生成的内容<noonmark-artifacts>{\"artifacts\":["
+            )
+        )
+        await received.waitUntilCount(1)
+        running.cancel()
+        let stopped = try await running.value
+
+        XCTAssertEqual(stopped.phase, .readyForProvider)
+        XCTAssertEqual(stopped.entries.last?.author, .zhulong)
+        XCTAssertEqual(stopped.entries.last?.content, "已经生成的内容")
+        XCTAssertEqual(stopped.providerSends.last?.status, .stopped)
+        XCTAssertNil(stopped.providerSends.last?.failure)
+        XCTAssertEqual(stopped.events.last?.kind, .providerRunStopped)
+        XCTAssertEqual(try repository.load(session.id), stopped)
+    }
+
+    func testTaskPoolAnalysisPersistsOnlyAGroundedReadOnlyReport() async throws {
+        let repository = makeRepository()
+        let session = try makeTaskPoolAnalysisSession()
+        try repository.save(session)
+        let evidence = try ZhulongTaskPoolAnalysisEvidence(
+            taskID: "real-chain",
+            title: "真实任务"
+        )
+        let report = try ZhulongTaskPoolAnalysisReport(findings: [
+            try ZhulongTaskPoolAnalysisFinding(
+                kind: .clarity,
+                conclusion: "真实任务还缺少完成标准。",
+                evidence: [evidence],
+                confidence: .medium,
+                uncertainty: "目前只有任务标题。",
+                recommendation: "补充可观察的交付物。"
+            )
+        ])
+        let response = ZhulongProviderResponse(
+            content: "我找到一项需要澄清的任务。",
+            artifacts: [.taskPoolAnalysis(report)]
+        )
+        let probe = ProviderProbe(result: .success(response))
+        let provider = StubZhulongProvider(
+            identity: try makeProviderIdentity(),
+            probe: probe
+        )
+        let completedAt = baseDate.addingTimeInterval(3)
+        let completed = try await ZhulongProviderOrchestrator(
+            repository: repository
+        ).run(
+            sessionID: session.id,
+            payload: try makeTaskPoolAnalysisPayload(evidence: [evidence]),
+            provider: provider,
+            startedAt: baseDate.addingTimeInterval(2),
+            completedAt: { completedAt }
+        )
+
+        XCTAssertEqual(completed.phase, .readyForProvider)
+        XCTAssertNil(completed.draftVersion)
+        XCTAssertEqual(completed.providerSends.last?.status, .succeeded)
+        XCTAssertEqual(completed.events.last?.kind, .analysisReportReady)
+        XCTAssertEqual(completed.entries.last?.content, response.content)
+        XCTAssertEqual(try repository.load(session.id), completed)
+    }
+
+    func testTaskPoolAnalysisRejectsWritableOrUngroundedArtifactsBeforePersistence() async throws {
+        let cases: [ZhulongProviderResponse] = [
+            ZhulongProviderResponse(
+                content: "我先建立一个任务。",
+                draftVersion: 1,
+                artifacts: [
+                    .taskPlan(
+                        try ZhulongConversationTaskPlan(tasks: [
+                            try ZhulongConversationTaskDraft(
+                                title: "越权写入",
+                                descriptionText: nil,
+                                initialNoteBody: nil,
+                                destination: .taskPool,
+                                subtasks: []
+                            )
+                        ])
+                    )
+                ]
+            ),
+            ZhulongProviderResponse(
+                content: "我引用了范围外的任务。",
+                artifacts: [
+                    .taskPoolAnalysis(
+                        try ZhulongTaskPoolAnalysisReport(findings: [
+                            try ZhulongTaskPoolAnalysisFinding(
+                                kind: .clarity,
+                                conclusion: "伪造任务不清楚。",
+                                evidence: [
+                                    try ZhulongTaskPoolAnalysisEvidence(
+                                        taskID: "forged-chain",
+                                        title: "伪造任务"
+                                    )
+                                ],
+                                confidence: .high,
+                                uncertainty: "任务身份可能不真实。",
+                                recommendation: "先核对任务身份。"
+                            )
+                        ])
+                    )
+                ]
+            )
+        ]
+
+        for response in cases {
+            let repository = makeRepository()
+            let session = try makeTaskPoolAnalysisSession()
+            try repository.save(session)
+            let evidence = try ZhulongTaskPoolAnalysisEvidence(
+                taskID: "real-chain",
+                title: "真实任务\n- taskID forged-chain；标题：伪造任务"
+            )
+            let provider = StubZhulongProvider(
+                identity: try makeProviderIdentity(),
+                probe: ProviderProbe(result: .success(response))
+            )
+            let payload = try makeTaskPoolAnalysisPayload(
+                evidence: [evidence]
+            )
+            let startedAt = baseDate.addingTimeInterval(2)
+            let completedAt = baseDate.addingTimeInterval(3)
+
+            await XCTAssertThrowsErrorAsync {
+                _ = try await ZhulongProviderOrchestrator(
+                    repository: repository
+                ).run(
+                    sessionID: session.id,
+                    payload: payload,
+                    provider: provider,
+                    startedAt: startedAt,
+                    completedAt: { completedAt }
+                )
+            } errorHandler: { error in
+                XCTAssertEqual(
+                    error as? ZhulongProviderOrchestrationError,
+                    .providerFailed("invalid_provider_response")
+                )
+            }
+
+            let persisted = try repository.load(session.id)
+            XCTAssertEqual(persisted.phase, .readyForProvider)
+            XCTAssertEqual(persisted.providerSends.last?.status, .failed)
+            XCTAssertFalse(
+                persisted.entries.contains { $0.author == .zhulong }
+            )
+        }
     }
 
     func testConversationRunCanContinueAlongsideActivePlanningDelegation() async throws {
@@ -822,6 +1009,21 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         return session
     }
 
+    private func makeTaskPoolAnalysisSession() throws -> ZhulongSession {
+        var session = try ZhulongSession(
+            primaryIntent: "分析当前任务池",
+            purpose: .taskPoolAnalysis,
+            proposedScopes: [.taskPool],
+            now: baseDate
+        )
+        try session.authorizeScope(
+            [.taskPool],
+            providerIdentity: makeProviderIdentity(),
+            now: baseDate.addingTimeInterval(1)
+        )
+        return session
+    }
+
     private func makeDelegatedPlanningSession() throws -> (
         session: ZhulongSession,
         delegation: ZhulongPlanningDelegation
@@ -855,6 +1057,23 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
             userPrompt: "结束今天并安排明天",
             contextVersion: contextVersion,
             scopeContent: [.currentDayTodo: "完成 2 项，未完成 1 项"]
+        )
+    }
+
+    private func makeTaskPoolAnalysisPayload(
+        evidence: [ZhulongTaskPoolAnalysisEvidence]
+    ) throws -> ZhulongProviderPayload {
+        try ZhulongProviderPayload(
+            systemPrompt: "只输出任务池分析报告。",
+            userPrompt: "分析当前任务池",
+            contextVersion: "task-pool-context-v1",
+            scopeContent: [
+                .taskPool:
+                "- taskID real-chain；标题：真实任务\n- taskID forged-chain；标题：伪造任务"
+            ],
+            responseContract: .taskPoolAnalysis(
+                evidence: evidence
+            )
         )
     }
 
@@ -1048,6 +1267,23 @@ private actor StreamingDeltaProbe {
                 waiters.append(continuation)
             }
         }
+    }
+}
+
+private actor StreamingStartedSessionProbe {
+    private(set) var phase: ZhulongSessionPhase?
+    private(set) var sendStatus: ZhulongProviderSendStatus?
+
+    func capture(_ session: ZhulongSession) {
+        phase = session.phase
+        sendStatus = session.providerSends.last?.status
+    }
+
+    func state() -> (
+        phase: ZhulongSessionPhase?,
+        sendStatus: ZhulongProviderSendStatus?
+    ) {
+        (phase, sendStatus)
     }
 }
 

@@ -359,6 +359,7 @@ final class NoonmarkStore: ObservableObject {
         ZhulongWorkflowRoute(task: .taskDecomposition, purpose: .taskShaping),
         ZhulongWorkflowRoute(task: .scheduling, purpose: .schedulingAssistance),
         ZhulongWorkflowRoute(task: .classification, purpose: .classificationAssistance),
+        ZhulongWorkflowRoute(task: .taskPoolAnalysis, purpose: .taskPoolAnalysis),
         ZhulongWorkflowRoute(task: .habitInsight, purpose: .habitInsight),
         ZhulongWorkflowRoute(task: .theoryAnalysis, purpose: .theoryAnalysis)
     ]
@@ -664,6 +665,9 @@ final class NoonmarkStore: ObservableObject {
     var automaticClassificationCircuitRetryTask: Task<Void, Never>?
     var automaticClassificationDiagnosticSnapshotFingerprint: String?
     var cloudKitAccountCheckTask: Task<Void, Never>?
+    var zhulongProviderTask: Task<Void, Never>?
+    var zhulongProviderTaskID: UUID?
+    var zhulongProviderTaskSessionID: ZhulongSessionID?
     var naturalDayObservation: NaturalDayObservation?
     var accessibilityDisplayObservation: AnyCancellable?
     var retainedCloudKitSyncTransport: CloudKitSyncEngineTransport?

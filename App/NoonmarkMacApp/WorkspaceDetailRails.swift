@@ -24,11 +24,13 @@ struct ZhulongRail: View {
 
 struct TaskPoolHomeRailModel {
     let statistics: TaskPoolStatisticsSnapshot
-    let analysisAvailability: TaskPoolAnalysisAvailability
+    let analysisState: TaskPoolAnalysisState?
+    let analysisSessionID: ZhulongSessionID?
 
     @MainActor
     static func make(store: NoonmarkStore) -> TaskPoolHomeRailModel {
-        let items = store.engine.taskPool().map { task in
+        let pool = store.engine.taskPool()
+        let items = pool.map { task in
             let classification = store.currentClassification(
                 for: task.chain.id
             )
@@ -48,13 +50,75 @@ struct TaskPoolHomeRailModel {
                 hasReturnedToPool: hasReturnedToPool
             )
         }
+        let availability = TaskPoolAnalysisAvailability(
+            providerConfigurationIsReady:
+            store.isZhulongProviderReady
+        )
+        let session = store.recentZhulongSession(
+            purpose: .taskPoolAnalysis
+        )
+        let run = analysisRunSnapshot(
+            session: session
+        )
         return TaskPoolHomeRailModel(
             statistics: TaskPoolStatisticsSnapshot(items: items),
-            analysisAvailability: TaskPoolAnalysisAvailability(
-                providerConfigurationIsReady:
-                store.isZhulongProviderReady
-            )
+            analysisState: TaskPoolAnalysisProjection.state(
+                availability: availability,
+                run: run,
+                currentContextVersion:
+                store.currentTaskPoolAnalysisContextVersion()
+            ),
+            analysisSessionID: session?.id
         )
+    }
+
+    private static func analysisRunSnapshot(
+        session: ZhulongSession?
+    ) -> TaskPoolAnalysisRunSnapshot? {
+        guard let session else { return nil }
+        if session.phase == .providerRunning {
+            return .running
+        }
+        guard let send = session.providerSends.last else {
+            return nil
+        }
+        switch send.result {
+        case .running:
+            return .running
+        case .stopped:
+            return .stopped
+        case .failed:
+            return .failed
+        case let .succeeded(completedAt, response):
+            guard case .taskPoolAnalysis =
+                send.payload.responseContract,
+                (try? send.payload.responseContract.validate(
+                    response
+                )) != nil,
+                case let .some(.taskPoolAnalysis(report)) =
+                response.artifacts.first
+            else {
+                return .failed
+            }
+            return .succeeded(
+                contextVersion: send.payload.contextVersion,
+                report: TaskPoolAnalysisReportPresentation(
+                    generatedAt: completedAt,
+                    findings: report.findings.map {
+                        TaskPoolAnalysisFindingPresentation(
+                            conclusion: $0.conclusion,
+                            evidenceTitles: $0.evidence.map(\.title),
+                            confidence:
+                            TaskPoolAnalysisConfidence(
+                                rawValue: $0.confidence.rawValue
+                            ) ?? .low,
+                            uncertainty: $0.uncertainty,
+                            recommendation: $0.recommendation
+                        )
+                    }
+                )
+            )
+        }
     }
 }
 
@@ -66,7 +130,11 @@ struct TaskPoolHomeRail: View {
     }
 
     @EnvironmentObject private var store: NoonmarkStore
-    let model: TaskPoolHomeRailModel
+    @ObservedObject var workspace: ZhulongWorkspaceStore
+
+    private var model: TaskPoolHomeRailModel {
+        TaskPoolHomeRailModel.make(store: store)
+    }
 
     private var secondaryStatistics: [Statistic] {
         [
@@ -107,9 +175,9 @@ struct TaskPoolHomeRail: View {
         VStack(alignment: .leading, spacing: 20) {
             statisticsSection
 
-            if model.analysisAvailability.isVisible {
+            if let analysisState = model.analysisState {
                 Divider()
-                analysisSection
+                analysisSection(analysisState)
             }
         }
         .background {
@@ -191,7 +259,9 @@ struct TaskPoolHomeRail: View {
         }
     }
 
-    private var analysisSection: some View {
+    private func analysisSection(
+        _ state: TaskPoolAnalysisState
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(store.copy.poolAnalysisTitle)
@@ -203,16 +273,7 @@ struct TaskPoolHomeRail: View {
                     .foregroundStyle(Theme.text2)
                     .lineSpacing(3)
             }
-            ZhulongAnalysisEntry(
-                page: .pool,
-                intent: store.copy.poolAnalysisIntent,
-                scopes: [.taskPool],
-                newSessionTitle: store.copy.analyzeTaskPool,
-                recentSessionTitle:
-                store.copy.continueTaskPoolAnalysis,
-                newSessionSubtitle:
-                store.copy.poolAnalysisActionSubtitle
-            )
+            analysisContent(state)
         }
         .background {
             AppE2EViewAnchor(
@@ -220,6 +281,149 @@ struct TaskPoolHomeRail: View {
                 verificationText: store.copy.poolAnalysisTitle
             )
         }
+    }
+
+    @ViewBuilder
+    private func analysisContent(
+        _ state: TaskPoolAnalysisState
+    ) -> some View {
+        switch state {
+        case .notGenerated:
+            analysisActionButton(
+                title: store.copy.analyzeTaskPool,
+                systemImage: "sparkles",
+                action: store.requestTaskPoolAnalysis
+            )
+        case .generating:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(store.copy.poolAnalysisGenerating)
+                    .font(.noonmarkSystem(size: 11.5))
+                    .foregroundStyle(Theme.text2)
+                Spacer(minLength: 0)
+                analysisSessionButton
+            }
+        case let .report(report, freshness):
+            VStack(alignment: .leading, spacing: 0) {
+                Text(
+                    AppPresentation(
+                        language: store.engine.preferences.language
+                    ).zhulong.eventTimestamp(report.generatedAt)
+                )
+                .font(.noonmarkSystem(size: 10.3))
+                .foregroundStyle(Theme.text3)
+                .padding(.bottom, 8)
+                if freshness == .outdated {
+                    Text(store.copy.poolAnalysisOutdated)
+                        .font(.noonmarkSystem(size: 10.5, weight: .medium))
+                        .foregroundStyle(Theme.warn)
+                        .padding(.bottom, 8)
+                }
+                if report.findings.isEmpty {
+                    Text(store.copy.poolAnalysisNoFindings)
+                        .font(.noonmarkSystem(size: 11.5))
+                        .foregroundStyle(Theme.text2)
+                }
+                ForEach(
+                    Array(report.findings.enumerated()),
+                    id: \.offset
+                ) { index, finding in
+                    if index > 0 {
+                        Divider().padding(.vertical, 10)
+                    }
+                    analysisFinding(finding)
+                }
+                HStack(spacing: 12) {
+                    Button(store.copy.refreshTaskPoolAnalysis) {
+                        store.requestTaskPoolAnalysis()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    analysisSessionButton
+                }
+                .padding(.top, 12)
+            }
+            .background {
+                AppE2EViewAnchor(
+                    identifier:
+                    "detail.summary.pool.analysis.report",
+                    verificationText:
+                    "\(report.findings.count),\(freshness)"
+                )
+            }
+        case .failed:
+            VStack(alignment: .leading, spacing: 8) {
+                Text(store.copy.poolAnalysisFailed)
+                    .font(.noonmarkSystem(size: 11.5))
+                    .foregroundStyle(Theme.warn)
+                analysisActionButton(
+                    title: store.copy.retryTaskPoolAnalysis,
+                    systemImage: "arrow.clockwise",
+                    action: store.requestTaskPoolAnalysis
+                )
+            }
+        }
+    }
+
+    private func analysisFinding(
+        _ finding: TaskPoolAnalysisFindingPresentation
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(finding.conclusion)
+                .font(.noonmarkSystem(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.text1)
+            Text(
+                store.copy.poolAnalysisEvidence(
+                    finding.evidenceTitles
+                )
+            )
+            .font(.noonmarkSystem(size: 10.8))
+            .foregroundStyle(Theme.text2)
+            Text(
+                store.copy.poolAnalysisConfidence(
+                    finding.confidence,
+                    uncertainty: finding.uncertainty
+                )
+            )
+            .font(.noonmarkSystem(size: 10.5))
+            .foregroundStyle(Theme.text3)
+            Text(finding.recommendation)
+                .font(.noonmarkSystem(size: 11))
+                .foregroundStyle(Theme.accent)
+        }
+    }
+
+    private var analysisSessionButton: some View {
+        Button(store.copy.viewTaskPoolAnalysisSession) {
+            guard let sessionID = model.analysisSessionID else {
+                return
+            }
+            store.page = .zhulong
+            workspace.selectSession(sessionID)
+        }
+        .buttonStyle(.plain)
+        .font(.noonmarkSystem(size: 10.5, weight: .medium))
+        .foregroundStyle(Theme.text3)
+    }
+
+    private func analysisActionButton(
+        title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.noonmarkSystem(size: 11.5, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(
+            "detail.summary.pool.zhulong-action"
+        )
     }
 }
 
@@ -667,7 +871,7 @@ struct DetailRail: View {
         case let .pageSummary(page):
             if page == .pool {
                 TaskPoolHomeRail(
-                    model: TaskPoolHomeRailModel.make(store: store)
+                    workspace: store.zhulongWorkspace
                 )
             } else if let model = SidebarAnalysisModel.make(for: page, store: store) {
                 SidebarAnalysisRail(model: model)

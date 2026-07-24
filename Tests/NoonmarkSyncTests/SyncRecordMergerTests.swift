@@ -2303,7 +2303,7 @@ final class SyncRecordMergerTests: XCTestCase {
             date: today,
             status: .changed,
             priority: 0,
-            continuationSeq: 1,
+            continuationSeq: 0,
             carriedFromTraceID: old.id,
             now: now.addingTimeInterval(2)
         )

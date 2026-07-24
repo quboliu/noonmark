@@ -23,6 +23,13 @@ case "$profile" in
     bundle_short_name="Noonmark E2E"
     bundle_name="NoonmarkMacAppE2E"
     ;;
+  demo)
+    executable_name="NoonmarkMacAppDemo"
+    bundle_identifier="app.noonmark.mac.e2e"
+    bundle_display_name="晷迹 · 演示"
+    bundle_short_name="Noonmark Demo"
+    bundle_name="NoonmarkDemo"
+    ;;
   *)
     echo "unknown fixed app profile: $profile" >&2
     exit 1

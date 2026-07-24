@@ -31,9 +31,10 @@ Neon 的可借鉴点：
 - IT：跨模块集成测试，当前入口为 `scripts/test-integration`，覆盖 Storage schema、Core 类型契约和 SQLite repository 核心状态 round-trip；结构化附言必须验证稳定身份、编辑时间、删除墓碑及 `note_entries_json` 读写一致。
 - 数据包测试：随 Storage IT 运行，覆盖完整 snapshot round-trip、canonical bytes、写后回读与 SHA-256 回执、重复键拒绝和断裂引用拒绝。
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
-- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，默认会先按开发 clean-cut 规则终止旧开发 App 并清除默认本地数据，再打包和打开隔离测试副本 `dist/NoonmarkMacAppE2E.app`；在同一次套件内，每次切换场景前等待测试副本完全退出，以避免 macOS WindowServer 竞态。套件同时保存 unified log、DiagnosticReports 差分与运行 manifest，任何新增崩溃、持久化、布局或辅助功能错误均 fail-closed。测试结束后如需手动体验，统一通过 `scripts/run-mac-app` 重新清理、构建并启动当前版本；该入口会先 fail-closed 地写入本地 Provider 配置，再直接打开烛龙对话页。
+- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，默认会先按开发 clean-cut 规则终止旧开发 App 并清除默认本地数据，再打包和打开隔离测试副本 `dist/NoonmarkMacAppE2E.app`；在同一次套件内，每次切换场景前等待测试副本完全退出，以避免 macOS WindowServer 竞态。套件同时保存 unified log、DiagnosticReports 差分与运行 manifest，任何新增崩溃、持久化、布局或辅助功能错误均 fail-closed。测试结束后如需体验普通用户中段状态，统一通过 `scripts/run-demo-app` 重建并打开十天演示基线；只有验证新用户空库或默认数据根时才使用 `scripts/run-mac-app`。
   截图场景以 `scripts/test-e2e` 内的 `scenarios` 清单为唯一事实源，覆盖所有顶层页面、主要详情态、分类管理与任务详情分类编辑展开态、烛龙工作流和设置分区；其中 `pool-detail-classification-edit` 验证标签输入只在请求后展开。完整 E2E 还包含默认汇总侧栏 / 日历分析、当天子任务完成撤回和难度修改、附言逐条编辑 / 删除后重启、SQLite JSON 墓碑对账、废弃任务链留在未完成池、重新启用只取消废弃标记、烛龙导航随设置隐藏 / 显示等真实 App 探针。UI 调试时可用 `NOONMARK_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `NOONMARK_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。测试副本固定为当前唯一的 `NoonmarkMacAppE2E` 身份，不接受 executable 或 bundle ID override。
 - UI 视觉证据：当前只以真实 `.app` 的 E2E 截图、交互断言、Accessibility 标识、日志和持久化探针作为自动化证据。归档 HTML 原型已经不代表当前产品，不得作为视觉 oracle，也不得通过上调阈值吸收结构差异。`scripts/test-visual-regression` 只提供显式的两图比较能力；只有用户确认过的真实 App 截图才能传入 `NOONMARK_VISUAL_REFERENCE` 建立 reference，当前尚未固化默认 reference，因此该入口不进入 CI 或 release 门禁。
+- 交互式演示 fixture：功能快速迭代的默认人工入口为 `make run-demo-app`，自动探针为 `make test-demo-fixture`。它与局部截图 seed 分离，通过真实领域接口重放固定十天用户故事，并对 SQLite、加密烛龙 sidecar、已提交／未提交任务产物和复盘回执 fail-closed 对账。覆盖契约与维护规则见 `docs/engineering/interactive-demo-fixture.md`。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
 - Live AI Provider Smoke：只验证真实 DeepSeek provider，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，优先读取被 Git 忽略且权限为 `0600` 的 `config/ai-provider.local.json`，格式参考 `config/ai-provider.local.example.json`；也可显式提供 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`。它同时验证结构化归类、至少两个 SSE 文本片段、真实烛龙对话产物经过流式 adapter／Provider run／任务 diff／加密 sidecar 保存恢复的完整链，以及真实 App 自动归类；诊断烛龙链时可对底层 executable 显式设置 `NOONMARK_AI_ZHULONG_ONLY=1`，跳过无关归类请求。一旦手动启用，缺少 key、配置并非 DeepSeek、provider 不可达、流式传输不可用、烛龙产物无法形成可恢复任务 diff，或 EXIT 清理后 E2E Keychain／UserDefaults 仍有测试凭证都必须失败。
 - Live iCloud Sync：真实 Apple Account / iCloud Drive 手动测试，入口为 `scripts/test-icloud-sync-live`，不进入默认 `make check`；覆盖双 SQLite record merge、真实 `.app` 同步、SQLite status、仓库 ref 与 `brctl` 上传完成信号。
@@ -55,6 +56,8 @@ make test-integration
 make test-system
 make test-deterministic-sim
 make test-e2e
+make test-demo-fixture
+make run-demo-app
 make test-ai-provider-live
 scripts/test-icloud-sync-live
 make test-cloudkit-sync-live
@@ -162,7 +165,8 @@ Nightly：
 - 2026-07-06：`scripts/test-dmg-install dist/Noonmark.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
 - 2026-07-16：最新 release `dist/Noonmark.dmg` 重新打包成功；checksum、挂载内容、canonical icon、optical variant、exported drag UTI 和 strict `codesign` 均通过，签名 TeamIdentifier 为 `7436PPJ79X`。最新 `scripts/test-dmg-install dist/Noonmark.dmg` exit 0：生产 App 忽略内部 E2E 参数，通过真实 WindowServer 输入打开 Settings／Quick Entry、建立任务、退出并重启；AX、截图、ledger、unified log、Diagnostic Reports 与 SQLite joined row 对账全部通过。`spctl` 因 Apple Development／未公证而拒绝是公开发行门禁的正确结果，不是安装 E2E 失败。
 - 2026-07-16：原 release workflow 会把 Apple Development 签名、未公证产物直接发布到 GitHub Release，已改为仅限 `main` 手动触发的开发签名发行验收：权限降为只读、移除 tag 与 `gh release` 路径、artifact 明确标记 `not-for-distribution`。正式发行在 Developer ID、Hardened Runtime、secure timestamp、公证、staple 和 Gatekeeper 验收齐备前保持 fail-closed。
-- 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，新用户空库只初始化并写入 1 条 preferences，不自动灌入演示任务；演示数据只在 `--ephemeral` 测试 / 截图路径使用。
+- 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，新用户空库只初始化并写入 1 条 preferences，不自动灌入演示任务；局部截图数据只在 `--ephemeral` 测试路径使用，交互式演示另由 2026-07-24 建立的隔离十天 fixture 提供。
+- 2026-07-24：固化 `NoonmarkDemoSupport`、`make test-demo-fixture` 与 `make run-demo-app`。真实 Demo App 探针已验证固定十天任务状态、SQLite 完整 snapshot、四份加密烛龙会话、已提交和可编辑任务产物，以及日终复盘回执。
 - 2026-07-06：设置页导出 / 导入已接入 `NoonmarkDataPackage` JSON 数据包；`swift test --filter NoonmarkStorageTests` 通过 5 个 Storage 测试。
 - 2026-07-20：`NoonmarkAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 DeepSeek 验证入口为 `scripts/test-ai-provider-live`，缺少本地配置或显式环境凭证时 fail-closed。
 

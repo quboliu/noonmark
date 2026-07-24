@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+configuration="${1:-debug}"
+app_path="dist/NoonmarkDemo.app"
+executable_name="NoonmarkMacAppDemo"
+app_executable="$app_path/Contents/MacOS/NoonmarkMacAppDemo"
+demo_root="$PWD/artifacts/interactive-demo"
+database_path="$demo_root/Noonmark.sqlite"
+result_path="$demo_root/fixture-manifest.json"
+bootstrap_log="$demo_root/provider-bootstrap.log"
+readiness_result="$demo_root/provider-readiness.txt"
+
+case "$demo_root" in
+  "$PWD"/artifacts/interactive-demo) ;;
+  *)
+    echo "unsafe interactive demo root: $demo_root" >&2
+    exit 1
+    ;;
+esac
+
+source scripts/load-ai-provider-config
+noonmark_load_ai_provider_config
+scripts/build-mac-app "$configuration" demo >/dev/null
+
+if [[ ! -x "$app_executable" ]]; then
+  echo "missing built demo app executable: $app_executable" >&2
+  exit 1
+fi
+
+rm -rf "$demo_root"
+mkdir -p "$demo_root"
+
+NOONMARK_BOOTSTRAP_PROVIDER=1 \
+NOONMARK_BOOTSTRAP_PROVIDER_ONLY=1 \
+NOONMARK_AI_BASE_URL="$NOONMARK_AI_BASE_URL" \
+NOONMARK_AI_MODEL="$NOONMARK_AI_MODEL" \
+NOONMARK_AI_API_KEY="$NOONMARK_AI_API_KEY" \
+"$app_executable" \
+  --data-url "$database_path" \
+  >"$bootstrap_log" 2>&1
+
+NOONMARK_PROVIDER_READINESS_RESULT_PATH="$readiness_result" \
+  "$app_executable" \
+  --data-url "$database_path" \
+  >>"$bootstrap_log" 2>&1
+
+if [[ ! -f "$readiness_result" \
+      || "$(<"$readiness_result")" != "ready" ]]; then
+  echo "Provider bootstrap did not leave a ready demo configuration" >&2
+  exit 1
+fi
+
+open -n "$app_path" --args \
+  --data-url "$database_path" \
+  --e2e-fixed-instant 2026-07-24T22:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-fixed-locale zh_Hans_SG \
+  --e2e-zhulong-sidecar-key \
+  --interactive-demo-fixture \
+  --interactive-demo-result-url "$result_path" \
+  --page day
+
+target_pid=""
+for _ in {1..100}; do
+  candidate_pid="$(pgrep -x "$executable_name" || true)"
+  if [[ -n "$candidate_pid" ]]; then
+    target_pid="$candidate_pid"
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ -z "$target_pid" ]]; then
+  echo "failed to launch interactive demo app: $app_path" >&2
+  exit 1
+fi
+
+for _ in {1..200}; do
+  if [[ -f "$result_path" ]]; then
+    break
+  fi
+  if ! kill -0 "$target_pid" >/dev/null 2>&1; then
+    echo "interactive demo app exited before fixture became ready" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
+if [[ ! -f "$result_path" ]] \
+  || ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' \
+    "$result_path"; then
+  echo "interactive demo fixture did not become ready" >&2
+  [[ ! -f "$result_path" ]] || sed -n '1,120p' "$result_path" >&2
+  exit 1
+fi
+
+for _ in {1..20}; do
+  if ! kill -0 "$target_pid" >/dev/null 2>&1; then
+    echo "interactive demo app exited after fixture installation" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
+echo "$app_path"
+echo "$result_path"

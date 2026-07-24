@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+configuration="${1:-debug}"
+app_path="dist/NoonmarkDemo.app"
+app_executable="$app_path/Contents/MacOS/NoonmarkMacAppDemo"
+
+scripts/build-mac-app "$configuration" demo >/dev/null
+mkdir -p "$PWD/artifacts"
+test_root="$(mktemp -d "$PWD/artifacts/demo-fixture-test.XXXXXX")"
+database_path="$test_root/Noonmark.sqlite"
+result_path="$test_root/fixture-manifest.json"
+app_log="$test_root/app.log"
+
+cleanup() {
+  rm -rf "$test_root"
+}
+trap cleanup EXIT
+
+"$app_executable" \
+  --data-url "$database_path" \
+  --e2e-fixed-instant 2026-07-24T22:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-fixed-locale zh_Hans_SG \
+  --e2e-zhulong-sidecar-key \
+  --interactive-demo-fixture \
+  --interactive-demo-result-url "$result_path" \
+  --page day \
+  --e2e-quit-after-automation \
+  >"$app_log" 2>&1 &
+app_pid=$!
+
+for _ in {1..200}; do
+  if [[ -f "$result_path" ]]; then
+    break
+  fi
+  if ! kill -0 "$app_pid" >/dev/null 2>&1; then
+    wait "$app_pid" || true
+    echo "demo fixture app exited before producing a manifest" >&2
+    sed -n '1,160p' "$app_log" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
+wait "$app_pid"
+
+if [[ ! -f "$result_path" ]]; then
+  echo "demo fixture manifest is missing" >&2
+  sed -n '1,160p' "$app_log" >&2
+  exit 1
+fi
+
+for expected in \
+  '"status" : "ready"' \
+  '"anchorDate" : "2026-07-24"' \
+  '"zhulongSessionCount" : 4' \
+  '"submittedTodoArtifactCount" : 1' \
+  '"editableTodoArtifactCount" : 1' \
+  '"dailyReviewReceiptCount" : 1'; do
+  if ! grep -Fq "$expected" "$result_path"; then
+    echo "demo fixture manifest is missing: $expected" >&2
+    sed -n '1,200p' "$result_path" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -s "$database_path" ]]; then
+  echo "demo fixture SQLite database was not persisted" >&2
+  exit 1
+fi
+
+sidecar_count="$(
+  find "$test_root/ZhulongSidecar" -type f -name '*.zhs' \
+    | wc -l \
+    | tr -d ' '
+)"
+if [[ "$sidecar_count" != "4" ]]; then
+  echo "expected 4 encrypted Zhulong sessions, found $sidecar_count" >&2
+  exit 1
+fi
+
+echo "interactive demo fixture: ok"

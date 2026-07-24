@@ -22,7 +22,12 @@ if [[ "$canonical_home" != /* || "$canonical_home" == "/" \
   exit 1
 fi
 
-process_names=(NoonmarkMacApp NoonmarkMacAppE2E NoonmarkMacAppAudit)
+process_names=(
+  NoonmarkMacApp
+  NoonmarkMacAppE2E
+  NoonmarkMacAppDemo
+  NoonmarkMacAppAudit
+)
 bundle_identifiers=(app.noonmark.mac app.noonmark.mac.e2e app.noonmark.mac.audit)
 data_root="$canonical_home/Library/Application Support/noonmark"
 icloud_sync_root="$canonical_home/Library/Mobile Documents/com~apple~CloudDocs/Noonmark/SyncRepository"

@@ -5,6 +5,7 @@ import Darwin
 import NoonmarkAI
 @_spi(ClassificationUserDecision) import NoonmarkCore
 import NoonmarkDayContext
+import NoonmarkDemoSupport
 import NoonmarkMacRuntime
 import NoonmarkMacUIContract
 import NoonmarkStorage
@@ -41,6 +42,7 @@ struct LaunchAutomation {
         }
 
         append(ProviderE2EAutomation.fromCommandLine(), to: &actions)
+        append(InteractiveDemoFixtureAutomation.fromCommandLine(), to: &actions)
         append(DataRootProcessLeaseE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongStreamE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongChatE2EAutomation.fromCommandLine(), to: &actions)

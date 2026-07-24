@@ -20,6 +20,7 @@ let package = Package(
         .library(name: "NoonmarkCore", targets: ["NoonmarkCore"]),
         .library(name: "NoonmarkDayContext", targets: ["NoonmarkDayContext"]),
         .library(name: "NoonmarkMacRuntime", targets: ["NoonmarkMacRuntime"]),
+        .library(name: "NoonmarkDemoSupport", targets: ["NoonmarkDemoSupport"]),
         .library(name: "NoonmarkAI", targets: ["NoonmarkAI"]),
         .library(name: "NoonmarkZhulong", targets: ["NoonmarkZhulong"]),
         .library(name: "NoonmarkZhulongAI", targets: ["NoonmarkZhulongAI"]),
@@ -32,7 +33,7 @@ let package = Package(
             name: "NoonmarkMacApp",
             dependencies: [
                 "NoonmarkCore", "NoonmarkDayContext", "NoonmarkMacRuntime", "NoonmarkAI", "NoonmarkZhulong", "NoonmarkZhulongAI", "NoonmarkMacUIContract",
-                "NoonmarkMacE2ESupport", "NoonmarkStorage", "NoonmarkSync"
+                "NoonmarkMacE2ESupport", "NoonmarkDemoSupport", "NoonmarkStorage", "NoonmarkSync"
             ],
             path: "App/NoonmarkMacApp",
             exclude: ["Resources"]
@@ -59,6 +60,10 @@ let package = Package(
         .target(
             name: "NoonmarkMacRuntime",
             dependencies: ["NoonmarkCore", "NoonmarkDayContext"]
+        ),
+        .target(
+            name: "NoonmarkDemoSupport",
+            dependencies: ["NoonmarkCore"]
         ),
         .target(
             name: "NoonmarkAI",
@@ -129,6 +134,10 @@ let package = Package(
         .testTarget(
             name: "NoonmarkMacE2ESupportTests",
             dependencies: ["NoonmarkMacE2ESupport"]
+        ),
+        .testTarget(
+            name: "NoonmarkDemoSupportTests",
+            dependencies: ["NoonmarkDemoSupport", "NoonmarkCore"]
         ),
         .testTarget(
             name: "NoonmarkStorageTests",

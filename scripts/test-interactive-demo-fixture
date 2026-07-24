@@ -13,10 +13,16 @@ result_path="$test_root/fixture-manifest.json"
 app_log="$test_root/app.log"
 
 cleanup() {
+  if [[ -n "${app_pid:-}" ]] \
+      && kill -0 "$app_pid" >/dev/null 2>&1; then
+    kill -TERM "$app_pid" >/dev/null 2>&1 || true
+    wait "$app_pid" 2>/dev/null || true
+  fi
   rm -rf "$test_root"
 }
 trap cleanup EXIT
 
+app_pid=""
 "$app_executable" \
   --data-url "$database_path" \
   --e2e-fixed-instant 2026-07-24T22:00:00Z \
@@ -26,7 +32,6 @@ trap cleanup EXIT
   --interactive-demo-fixture \
   --interactive-demo-result-url "$result_path" \
   --page day \
-  --e2e-quit-after-automation \
   >"$app_log" 2>&1 &
 app_pid=$!
 
@@ -43,8 +48,6 @@ for _ in {1..200}; do
   sleep 0.1
 done
 
-wait "$app_pid"
-
 if [[ ! -f "$result_path" ]]; then
   echo "demo fixture manifest is missing" >&2
   sed -n '1,160p' "$app_log" >&2
@@ -57,7 +60,9 @@ for expected in \
   '"zhulongSessionCount" : 4' \
   '"submittedTodoArtifactCount" : 1' \
   '"editableTodoArtifactCount" : 1' \
-  '"dailyReviewReceiptCount" : 1'; do
+  '"dailyReviewReceiptCount" : 1' \
+  '"visibleScopeReauthorizationCardCount" : 0' \
+  '"scopeAuthorizationUIVerified" : true'; do
   if ! grep -Fq "$expected" "$result_path"; then
     echo "demo fixture manifest is missing: $expected" >&2
     sed -n '1,200p' "$result_path" >&2

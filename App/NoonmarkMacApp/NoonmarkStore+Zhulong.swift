@@ -701,7 +701,7 @@ extension NoonmarkStore {
         }
     }
 
-    private func zhulongProviderIdentity() throws -> ZhulongProviderConfigurationIdentity {
+    func zhulongProviderIdentity() throws -> ZhulongProviderConfigurationIdentity {
         guard zhulongProviderDraft.enabled else {
             return try ZhulongProviderConfigurationIdentity(
                 providerID: "noonmark-local-evidence",

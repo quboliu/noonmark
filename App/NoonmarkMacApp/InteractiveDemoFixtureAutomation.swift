@@ -31,9 +31,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             var candidate = try NoonmarkEngine(
                 snapshot: fixture.engine.snapshot()
             )
+            let providerIdentity = try store.zhulongProviderIdentity()
             let sessions = try makeZhulongSessions(
                 engine: &candidate,
-                today: store.today
+                today: store.today,
+                providerIdentity: providerIdentity
             )
             try install(
                 engine: candidate,
@@ -41,13 +43,12 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 fixture: fixture,
                 on: store
             )
-            try write(
-                manifest(
-                    fixture: fixture,
-                    engine: candidate,
-                    sessions: sessions,
-                    store: store
-                )
+            verifyScopeAuthorizationPresentation(
+                fixture: fixture,
+                engine: candidate,
+                sessions: sessions,
+                store: store,
+                remainingAttempts: 100
             )
         } catch {
             writeFailure(error)
@@ -56,6 +57,108 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 error: error
             )
         }
+    }
+
+    @MainActor
+    private func verifyScopeAuthorizationPresentation(
+        fixture: NoonmarkDemoFixture,
+        engine: NoonmarkEngine,
+        sessions: [ZhulongSession],
+        store: NoonmarkStore,
+        remainingAttempts: Int
+    ) {
+        guard let insightSession = sessions.first(where: {
+            $0.purpose == .habitInsight
+        }) else {
+            finishWithFailure(
+                InteractiveDemoFixtureError.incompleteZhulongCoverage,
+                on: store
+            )
+            return
+        }
+        store.zhulongWorkspace.selectSession(insightSession.id)
+        store.page = .zhulong
+
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError
+                    .scopeAuthorizationPresentationFailed,
+                on: store
+            )
+            return
+        }
+        guard AppViewTreeE2E.activateMainWindow(),
+              AppViewTreeE2E.view(
+                  identifier: "zhulong-session-stream"
+              ) != nil
+        else {
+            retryScopeAuthorizationPresentation(
+                fixture: fixture,
+                engine: engine,
+                sessions: sessions,
+                store: store,
+                remainingAttempts: remainingAttempts - 1
+            )
+            return
+        }
+        guard AppViewTreeE2E.hasNoVisibleView(
+            identifier: "zhulong-authorize-scope"
+        ) else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError
+                    .scopeAuthorizationPresentationFailed,
+                on: store
+            )
+            return
+        }
+
+        do {
+            let result = try manifest(
+                fixture: fixture,
+                engine: engine,
+                sessions: sessions,
+                store: store,
+                scopeAuthorizationUIVerified: true
+            )
+            store.page = .day
+            store.selectedDate = fixture.anchorDate
+            try write(result)
+        } catch {
+            finishWithFailure(error, on: store)
+        }
+    }
+
+    @MainActor
+    private func retryScopeAuthorizationPresentation(
+        fixture: NoonmarkDemoFixture,
+        engine: NoonmarkEngine,
+        sessions: [ZhulongSession],
+        store: NoonmarkStore,
+        remainingAttempts: Int
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            verifyScopeAuthorizationPresentation(
+                fixture: fixture,
+                engine: engine,
+                sessions: sessions,
+                store: store,
+                remainingAttempts: remainingAttempts
+            )
+        }
+    }
+
+    @MainActor
+    private func finishWithFailure(
+        _ error: Error,
+        on store: NoonmarkStore
+    ) {
+        writeFailure(error)
+        store.showOperationFailure(
+            .persistence,
+            error: error
+        )
     }
 
     @MainActor
@@ -153,27 +256,35 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
     private func makeZhulongSessions(
         engine: inout NoonmarkEngine,
-        today: LocalDate
+        today: LocalDate,
+        providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> [ZhulongSession] {
         let submitted = try makeSubmittedPlanningSession(
             engine: &engine,
-            today: today
+            today: today,
+            providerIdentity: providerIdentity
         )
-        let insight = try makeInsightSession(today: today)
+        let insight = try makeInsightSession(
+            today: today,
+            providerIdentity: providerIdentity
+        )
         let review = try makeDailyReviewSession(
             engine: &engine,
-            today: today
+            today: today,
+            providerIdentity: providerIdentity
         )
         let activeDraft = try makeActivePlanningSession(
             engine: engine,
-            today: today
+            today: today,
+            providerIdentity: providerIdentity
         )
         return [review, activeDraft, submitted, insight]
     }
 
     private func makeSubmittedPlanningSession(
         engine: inout NoonmarkEngine,
-        today: LocalDate
+        today: LocalDate,
+        providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongSession {
         let start = DemoFixtureClock.timestamp(
             today,
@@ -190,10 +301,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             proposedScopes: scopes,
             now: start
         )
-        let identity = try providerIdentity()
         try session.authorizeScope(
             scopes,
-            providerIdentity: identity,
+            providerIdentity: providerIdentity,
             expiresAt: start.addingTimeInterval(60 * 60 * 24 * 30),
             now: start.addingTimeInterval(1)
         )
@@ -242,7 +352,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 scopes: scopes,
                 prompt: "形成可编辑的发布演示任务计划。"
             ),
-            providerIdentity: identity,
+            providerIdentity: providerIdentity,
             now: start.addingTimeInterval(2)
         )
         try session.recordProviderResponse(
@@ -312,7 +422,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
     private func makeActivePlanningSession(
         engine: NoonmarkEngine,
-        today: LocalDate
+        today: LocalDate,
+        providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongSession {
         let start = DemoFixtureClock.timestamp(
             today,
@@ -329,10 +440,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             proposedScopes: scopes,
             now: start
         )
-        let identity = try providerIdentity()
         try session.authorizeScope(
             scopes,
-            providerIdentity: identity,
+            providerIdentity: providerIdentity,
             expiresAt: start.addingTimeInterval(60 * 60 * 24 * 30),
             now: start.addingTimeInterval(1)
         )
@@ -373,7 +483,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 scopes: scopes,
                 prompt: "把 PostgreSQL 索引学习目标拆成可编辑任务。"
             ),
-            providerIdentity: identity,
+            providerIdentity: providerIdentity,
             now: start.addingTimeInterval(2)
         )
         try session.recordProviderResponse(
@@ -401,7 +511,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     }
 
     private func makeInsightSession(
-        today: LocalDate
+        today: LocalDate,
+        providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongSession {
         let start = DemoFixtureClock.timestamp(
             DemoFixtureClock.offset(today, by: -2),
@@ -418,10 +529,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             proposedScopes: scopes,
             now: start
         )
-        let identity = try providerIdentity()
         try session.authorizeScope(
             scopes,
-            providerIdentity: identity,
+            providerIdentity: providerIdentity,
             expiresAt: start.addingTimeInterval(60 * 60 * 24 * 30),
             now: start.addingTimeInterval(1)
         )
@@ -430,7 +540,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 scopes: scopes,
                 prompt: "根据轨迹总结延期模式，不创建任务。"
             ),
-            providerIdentity: identity,
+            providerIdentity: providerIdentity,
             now: start.addingTimeInterval(2)
         )
         try session.recordProviderResponse(
@@ -446,7 +556,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
     private func makeDailyReviewSession(
         engine: inout NoonmarkEngine,
-        today: LocalDate
+        today: LocalDate,
+        providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongSession {
         let start = DemoFixtureClock.timestamp(
             today,
@@ -458,6 +569,12 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             purpose: .dailyClose,
             proposedScopes: [.currentDayTodo],
             now: start
+        )
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: providerIdentity,
+            expiresAt: start.addingTimeInterval(60 * 60 * 24 * 30),
+            now: start.addingTimeInterval(0.25)
         )
         _ = try session.appendEntry(
             author: .zhulong,
@@ -490,24 +607,6 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         return session
     }
 
-    private func providerIdentity()
-        throws -> ZhulongProviderConfigurationIdentity
-    {
-        try ZhulongProviderConfigurationIdentity(
-            providerID: "noonmark-demo-provider",
-            kind: .localModel,
-            baseURL: nil,
-            location: .local,
-            model: "demo-history-v1",
-            dataCapabilities: [
-                .structuredOutput,
-                .taskContext,
-                .sessionSummary,
-                .memoryContext
-            ]
-        )
-    }
-
     private func providerPayload(
         scopes: Set<ZhulongDataScope>,
         prompt: String
@@ -529,8 +628,20 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         fixture: NoonmarkDemoFixture,
         engine: NoonmarkEngine,
         sessions: [ZhulongSession],
-        store: NoonmarkStore
+        store: NoonmarkStore,
+        scopeAuthorizationUIVerified: Bool
     ) throws -> InteractiveDemoManifest {
+        let currentProviderIdentity = try store.zhulongProviderIdentity()
+        let visibleScopeReauthorizationCardCount = sessions.filter {
+            $0.requiresScopeAuthorization(
+                for: currentProviderIdentity,
+                at: DemoFixtureClock.timestamp(
+                    fixture.anchorDate,
+                    hour: 18,
+                    minute: 0
+                )
+            )
+        }.count
         let submittedArtifacts = sessions.flatMap(
             \.conversationTodoArtifacts
         ).filter { $0.receipt != nil }.count
@@ -556,6 +667,12 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 minute: 30
             )
         )
+        guard visibleScopeReauthorizationCardCount == 0 else {
+            throw InteractiveDemoFixtureError
+                .unexpectedScopeReauthorization(
+                    count: visibleScopeReauthorizationCardCount
+                )
+        }
         guard submittedArtifacts > 0,
               editableArtifacts > 0,
               reviewReceipts > 0,
@@ -579,6 +696,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             submittedTodoArtifactCount: submittedArtifacts,
             editableTodoArtifactCount: editableArtifacts,
             dailyReviewReceiptCount: reviewReceipts,
+            visibleScopeReauthorizationCardCount:
+            visibleScopeReauthorizationCardCount,
+            scopeAuthorizationUIVerified:
+            scopeAuthorizationUIVerified,
             persistedDatabasePath: store.databaseURL?.path ?? ""
         )
     }
@@ -624,6 +745,8 @@ private struct InteractiveDemoManifest: Codable {
     let submittedTodoArtifactCount: Int
     let editableTodoArtifactCount: Int
     let dailyReviewReceiptCount: Int
+    let visibleScopeReauthorizationCardCount: Int
+    let scopeAuthorizationUIVerified: Bool
     let persistedDatabasePath: String
 }
 
@@ -637,6 +760,8 @@ private enum InteractiveDemoFixtureError: LocalizedError {
     case persistenceVerificationFailed
     case invalidZhulongFixture
     case incompleteZhulongCoverage
+    case unexpectedScopeReauthorization(count: Int)
+    case scopeAuthorizationPresentationFailed
 
     var errorDescription: String? {
         switch self {
@@ -648,6 +773,10 @@ private enum InteractiveDemoFixtureError: LocalizedError {
             "演示 fixture 的烛龙任务产物不符合预期结构。"
         case .incompleteZhulongCoverage:
             "演示 fixture 未覆盖烛龙草稿、提交回执和日终复盘。"
+        case let .unexpectedScopeReauthorization(count):
+            "演示 fixture 出现 \(count) 张非预期的烛龙阅读范围确认卡。"
+        case .scopeAuthorizationPresentationFailed:
+            "演示 App 的烛龙历史会话仍然显示阅读范围确认卡。"
         }
     }
 }

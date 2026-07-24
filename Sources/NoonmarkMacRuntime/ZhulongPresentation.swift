@@ -435,8 +435,16 @@ public struct ZhulongCopy: Sendable {
         localized(chinese: "会话轨迹", english: "Session trail")
     }
 
-    public var confirmScopeTitle: String {
-        localized(chinese: "重新确认本次阅读范围", english: "Reconfirm this reading scope")
+    public var confirmInitialDataUseTitle: String {
+        localized(chinese: "确认本次数据使用", english: "Confirm data use")
+    }
+
+    public var confirmChangedDataScopeTitle: String {
+        localized(chinese: "确认扩大的数据范围", english: "Confirm expanded data scope")
+    }
+
+    public var confirmChangedRecipientTitle: String {
+        localized(chinese: "确认新的数据接收方", english: "Confirm the new data recipient")
     }
 
     public var sharedDecisionTitle: String {
@@ -444,15 +452,33 @@ public struct ZhulongCopy: Sendable {
     }
 
     public var waitingForYou: String { localized(chinese: "需要你的确认", english: "Needs your confirmation") }
-    public var scopeDisclosure: String {
+    public var initialDataUseDisclosure: String {
         localized(
-            chinese: "烛龙只读取下列范围形成可审查结果；规划委托、Todo 写入和长期记忆仍分别确认。",
-            english: "Zhulong reads only the scopes below to produce a reviewable result. Planning, Todo writes, and long-term memory each require separate confirmation."
+            chinese: "你的权限设置为“每次询问”。继续后，烛龙只在本会话使用下列任务范围。",
+            english: "Your permission is set to Ask. Continuing lets Zhulong use only the task scopes below in this session."
         )
     }
 
-    public var useThisSessionOnly: String {
-        localized(chinese: "仅在本次会话使用", english: "Use for this session only")
+    public var changedDataScopeDisclosure: String {
+        localized(
+            chinese: "本会话需要使用比上次更多的数据。确认前不会读取或发送新增范围。",
+            english: "This session needs more data than before. No added scope is read or sent before confirmation."
+        )
+    }
+
+    public var changedRecipientDisclosure: String {
+        localized(
+            chinese: "数据接收方已经改变。确认前不会向新的接收方发送任务数据。",
+            english: "The data recipient changed. No task data is sent to the new recipient before confirmation."
+        )
+    }
+
+    public var continueCurrentSession: String {
+        localized(chinese: "继续本次会话", english: "Continue this session")
+    }
+
+    public var notNow: String {
+        localized(chinese: "暂不使用", english: "Not now")
     }
 
     public func scopeConfirmed(providerEnabled: Bool) -> String {
@@ -714,6 +740,20 @@ public struct ZhulongCopy: Sendable {
         )
     }
 
+    public var composerDataAccessDeniedHint: String {
+        localized(
+            chinese: "烛龙数据访问已在设置中禁止",
+            english: "Zhulong data access is denied in Settings"
+        )
+    }
+
+    public var homeDataAccessDeniedHint: String {
+        localized(
+            chinese: "任务数据读取或远程发送已被禁止；修改设置后才能开始新会话。",
+            english: "Task data reading or remote sending is denied. Change Settings to start a new session."
+        )
+    }
+
     public var composerProviderRunningHint: String {
         localized(
             chinese: "烛龙正在回应…",
@@ -786,6 +826,16 @@ public struct ZhulongCopy: Sendable {
         localized(chinese: "远程发送 · \(model)", english: "Sent remotely · \(model)")
     }
 
+    public func remoteRecipient(
+        endpoint: String,
+        model: String
+    ) -> String {
+        localized(
+            chinese: "远程发送 · \(endpoint) · \(model)",
+            english: "Sent remotely · \(endpoint) · \(model)"
+        )
+    }
+
     public var noProviderIdentity: String {
         localized(
             chinese: "尚未授权任何 Provider 配置身份",
@@ -795,8 +845,8 @@ public struct ZhulongCopy: Sendable {
 
     public var providerReauthorizationNotice: String {
         localized(
-            chinese: "切换身份或扩大范围时必须重新确认。",
-            english: "Changing identity or expanding scope requires confirmation again."
+            chinese: "只有更换数据接收方或扩大范围时才会重新确认。",
+            english: "Confirmation returns only when the data recipient or scope changes."
         )
     }
 

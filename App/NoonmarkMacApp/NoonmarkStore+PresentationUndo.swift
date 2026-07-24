@@ -110,6 +110,44 @@ extension NoonmarkStore {
         )
     }
 
+    func setZhulongDataReadingPolicy(
+        _ policy: ZhulongPermissionPolicy
+    ) {
+        guard zhulongFeaturePreferences
+            .conversationPermissionCeiling.dataReading != policy
+        else {
+            return
+        }
+        zhulongFeaturePreferences
+            .conversationPermissionCeiling.dataReading = policy
+        zhulongFeaturePreferencesRepository.save(
+            zhulongFeaturePreferences
+        )
+        NSLog(
+            "Noonmark Zhulong data reading policy=%@",
+            policy.rawValue
+        )
+    }
+
+    func setZhulongRemoteSendingPolicy(
+        _ policy: ZhulongPermissionPolicy
+    ) {
+        guard zhulongFeaturePreferences
+            .conversationPermissionCeiling.remoteSending != policy
+        else {
+            return
+        }
+        zhulongFeaturePreferences
+            .conversationPermissionCeiling.remoteSending = policy
+        zhulongFeaturePreferencesRepository.save(
+            zhulongFeaturePreferences
+        )
+        NSLog(
+            "Noonmark Zhulong remote sending policy=%@",
+            policy.rawValue
+        )
+    }
+
     func setHorizontalPageNavigationSwipeDirection(
         _ direction: HorizontalPageNavigationSwipeDirection
     ) {

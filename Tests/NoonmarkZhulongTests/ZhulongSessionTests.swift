@@ -32,6 +32,12 @@ final class ZhulongSessionTests: XCTestCase {
         var session = try makeSession()
         let identity = try makeProviderIdentity()
 
+        XCTAssertEqual(
+            session.scopeAuthorizationRequirement(
+                for: identity
+            ),
+            .initialSession
+        )
         XCTAssertThrowsError(
             try session.beginProviderRun(
                 payload: makePayload(),
@@ -52,7 +58,6 @@ final class ZhulongSessionTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: identity,
-            expiresAt: now.addingTimeInterval(301),
             now: now.addingTimeInterval(1)
         )
         let payload = try makePayload()
@@ -81,7 +86,6 @@ final class ZhulongSessionTests: XCTestCase {
             try session.authorizeScope(
                 [.currentDayTodo, .taskPool],
                 providerIdentity: identity,
-                expiresAt: now.addingTimeInterval(301),
                 now: now.addingTimeInterval(1)
             )
         ) { error in
@@ -99,7 +103,6 @@ final class ZhulongSessionTests: XCTestCase {
             try session.authorizeScope(
                 [.currentDayTodo],
                 providerIdentity: identity,
-                expiresAt: now.addingTimeInterval(301),
                 now: now.addingTimeInterval(-1)
             )
         ) { error in
@@ -130,7 +133,6 @@ final class ZhulongSessionTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: identity,
-            expiresAt: now.addingTimeInterval(302),
             now: now.addingTimeInterval(2)
         )
         let request = try session.beginProviderRun(
@@ -160,7 +162,6 @@ final class ZhulongSessionTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: identity,
-            expiresAt: now.addingTimeInterval(600),
             now: now.addingTimeInterval(1)
         )
 
@@ -209,7 +210,6 @@ final class ZhulongSessionTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: firstIdentity,
-            expiresAt: now.addingTimeInterval(300),
             now: now.addingTimeInterval(1)
         )
         let firstRequest = try session.beginProviderRun(
@@ -225,14 +225,12 @@ final class ZhulongSessionTests: XCTestCase {
 
         XCTAssertFalse(
             session.requiresScopeAuthorization(
-                for: firstIdentity,
-                at: now.addingTimeInterval(4)
+                for: firstIdentity
             )
         )
         XCTAssertTrue(
             session.requiresScopeAuthorization(
-                for: replacementIdentity,
-                at: now.addingTimeInterval(4)
+                for: replacementIdentity
             )
         )
 
@@ -249,7 +247,6 @@ final class ZhulongSessionTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: replacementIdentity,
-            expiresAt: now.addingTimeInterval(600),
             now: now.addingTimeInterval(5)
         )
         XCTAssertNil(session.draftVersion)
@@ -264,47 +261,28 @@ final class ZhulongSessionTests: XCTestCase {
         XCTAssertEqual(continuedRequest.providerIdentity, replacementIdentity)
         XCTAssertFalse(
             session.requiresScopeAuthorization(
-                for: replacementIdentity,
-                at: now.addingTimeInterval(6)
+                for: replacementIdentity
             )
         )
     }
 
-    func testExpiredAuthorizationCannotRunAndCanBeExplicitlyRenewed() throws {
+    func testScopeAuthorizationDoesNotExpireWhileRecipientAndScopeStayUnchanged() throws {
         var session = try makeSession()
-        let firstIdentity = try makeProviderIdentity()
+        let identity = try makeProviderIdentity()
         try session.authorizeScope(
             [.currentDayTodo],
-            providerIdentity: firstIdentity,
-            expiresAt: now.addingTimeInterval(2),
+            providerIdentity: identity,
             now: now.addingTimeInterval(1)
         )
 
-        XCTAssertThrowsError(
-            try session.beginProviderRun(
-                payload: makePayload(),
-                providerIdentity: firstIdentity,
-                now: now.addingTimeInterval(2)
-            )
-        ) { error in
-            XCTAssertEqual(error as? ZhulongSessionError, .authorizationExpired)
-        }
-
-        let renewedIdentity = try makeProviderIdentity(version: "v5")
-        try session.authorizeScope(
-            [.currentDayTodo],
-            providerIdentity: renewedIdentity,
-            expiresAt: now.addingTimeInterval(600),
-            now: now.addingTimeInterval(3)
-        )
         let request = try session.beginProviderRun(
             payload: makePayload(),
-            providerIdentity: renewedIdentity,
-            now: now.addingTimeInterval(4)
+            providerIdentity: identity,
+            now: now.addingTimeInterval(60 * 60 * 24 * 30)
         )
 
-        XCTAssertEqual(session.authorizations.count, 2)
-        XCTAssertEqual(request.providerIdentity, renewedIdentity)
+        XCTAssertEqual(session.authorizations.count, 1)
+        XCTAssertEqual(request.providerIdentity, identity)
     }
 
     func testProviderIdentityIncludesEveryTrustRelevantConfigurationField() throws {
@@ -318,6 +296,63 @@ final class ZhulongSessionTests: XCTestCase {
         )
     }
 
+    func testScopeAuthorizationFollowsDataRecipientInsteadOfProviderPresentation() throws {
+        var session = try makeSession()
+        let authorizedIdentity = try ZhulongProviderConfigurationIdentity(
+            providerID: "原 Provider 名称",
+            kind: .openAICompatible,
+            baseURL: URL(string: "https://provider.example/v1")!,
+            location: .remote,
+            model: "model-v1",
+            dataCapabilities: [.structuredOutput, .taskContext]
+        )
+        let sameRecipient = try ZhulongProviderConfigurationIdentity(
+            providerID: "重命名后的 Provider",
+            kind: .openAICompatible,
+            baseURL: URL(string: "https://provider.example/v1")!,
+            location: .remote,
+            model: "model-v2",
+            dataCapabilities: [.structuredOutput]
+        )
+        let differentRecipient = try ZhulongProviderConfigurationIdentity(
+            providerID: "另一个接收方",
+            kind: .openAICompatible,
+            baseURL: URL(string: "https://other.example/v1")!,
+            location: .remote,
+            model: "model-v2",
+            dataCapabilities: [.structuredOutput]
+        )
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: authorizedIdentity,
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertFalse(
+            session.requiresScopeAuthorization(
+                for: sameRecipient
+            )
+        )
+        XCTAssertTrue(
+            session.requiresScopeAuthorization(
+                for: differentRecipient
+            )
+        )
+        XCTAssertEqual(
+            session.scopeAuthorizationRequirement(
+                for: differentRecipient
+            ),
+            .dataRecipientChanged
+        )
+        XCTAssertNoThrow(
+            try session.beginProviderRun(
+                payload: makePayload(),
+                providerIdentity: sameRecipient,
+                now: now.addingTimeInterval(2)
+            )
+        )
+    }
+
     func testChangingProviderRequiresAndAcceptsExplicitReauthorization() throws {
         var session = try makeSession()
         let firstIdentity = try makeProviderIdentity()
@@ -325,7 +360,6 @@ final class ZhulongSessionTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: firstIdentity,
-            expiresAt: now.addingTimeInterval(300),
             now: now.addingTimeInterval(1)
         )
 
@@ -342,7 +376,6 @@ final class ZhulongSessionTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: replacementIdentity,
-            expiresAt: now.addingTimeInterval(400),
             now: now.addingTimeInterval(3)
         )
         XCTAssertEqual(session.authorization?.providerIdentity, replacementIdentity)
@@ -355,7 +388,6 @@ final class ZhulongSessionTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: identity,
-            expiresAt: now.addingTimeInterval(300),
             now: now.addingTimeInterval(1)
         )
         let request = try session.beginProviderRun(

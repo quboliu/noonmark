@@ -68,6 +68,26 @@ public struct ZhulongProviderConfigurationIdentity: Codable, Hashable, Sendable 
         self.model = normalizedModel
         self.dataCapabilities = dataCapabilities
     }
+
+    public var dataRecipient: ZhulongProviderDataRecipient {
+        ZhulongProviderDataRecipient(
+            location: location,
+            remoteEndpoint: location == .remote ? baseURL : nil
+        )
+    }
+}
+
+public struct ZhulongProviderDataRecipient: Hashable, Sendable {
+    public let location: ZhulongProviderLocation
+    public let remoteEndpoint: URL?
+
+    fileprivate init(
+        location: ZhulongProviderLocation,
+        remoteEndpoint: URL?
+    ) {
+        self.location = location
+        self.remoteEndpoint = remoteEndpoint
+    }
 }
 
 public enum ZhulongDataScope: String, Codable, CaseIterable, Hashable, Sendable {
@@ -84,6 +104,12 @@ public enum ZhulongSessionPhase: String, Codable, Equatable, Sendable {
     case providerRunning
     case decisionGate
     case draftReview
+}
+
+public enum ZhulongScopeAuthorizationRequirement: Equatable, Sendable {
+    case initialSession
+    case dataScopeChanged
+    case dataRecipientChanged
 }
 
 public enum ZhulongSessionEventKind: String, Codable, Equatable, Sendable {
@@ -140,11 +166,6 @@ public struct ZhulongScopeAuthorization: Equatable, Sendable {
     public let scopes: Set<ZhulongDataScope>
     public let providerIdentity: ZhulongProviderConfigurationIdentity
     public let grantedAt: Date
-    public let expiresAt: Date
-
-    public func isValid(at date: Date) -> Bool {
-        date >= grantedAt && date < expiresAt
-    }
 }
 
 public enum ZhulongSessionError: Error, Equatable, Sendable {
@@ -152,10 +173,8 @@ public enum ZhulongSessionError: Error, Equatable, Sendable {
     case emptyScopeProposal
     case emptyProviderIdentity
     case invalidProviderIdentity
-    case invalidAuthorizationExpiration
     case scopeNotAuthorized
     case scopeDoesNotMatchProposal
-    case authorizationExpired
     case providerIdentityMismatch
     case providerPayloadScopeMismatch
     case providerRunMismatch
@@ -362,7 +381,6 @@ public struct ZhulongSession: Equatable, Sendable {
     public mutating func authorizeScope(
         _ scopes: Set<ZhulongDataScope>,
         providerIdentity: ZhulongProviderConfigurationIdentity,
-        expiresAt: Date,
         now: Date = Date()
     ) throws {
         guard workspaceStatus == .active else {
@@ -376,21 +394,16 @@ public struct ZhulongSession: Equatable, Sendable {
             throw ZhulongSessionError.scopeDoesNotMatchProposal
         }
         try validateEventTime(now)
-        guard expiresAt > now else {
-            throw ZhulongSessionError.invalidAuthorizationExpiration
-        }
 
         let invalidatedDelegation = activePlanningDelegation
         authorizations.append(ZhulongScopeAuthorization(
             scopes: scopes,
             providerIdentity: providerIdentity,
-            grantedAt: now,
-            expiresAt: expiresAt
+            grantedAt: now
         ))
-        // A draft belongs to the Provider identity that produced it. Once the
-        // user explicitly reauthorises a different identity (or renews an
-        // expired one), that old draft remains in the append-only history but
-        // cannot keep posing as the current provider result.
+        // Reauthorisation means the data scope or its recipient changed. The
+        // old draft remains in the append-only history but cannot keep posing
+        // as the current provider result.
         draftVersion = nil
         phase = .readyForProvider
         appendEvent(
@@ -417,16 +430,35 @@ public struct ZhulongSession: Equatable, Sendable {
     }
 
     public func requiresScopeAuthorization(
-        for providerIdentity: ZhulongProviderConfigurationIdentity,
-        at now: Date = Date()
+        for providerIdentity: ZhulongProviderConfigurationIdentity
     ) -> Bool {
-        guard workspaceStatus == .active else { return false }
-        if phase == .scopeReview { return true }
-        guard phase == .readyForProvider || phase == .draftReview else {
-            return false
+        scopeAuthorizationRequirement(
+            for: providerIdentity
+        ) != nil
+    }
+
+    public func scopeAuthorizationRequirement(
+        for providerIdentity: ZhulongProviderConfigurationIdentity
+    ) -> ZhulongScopeAuthorizationRequirement? {
+        guard workspaceStatus == .active else { return nil }
+        guard phase == .scopeReview
+            || phase == .readyForProvider
+            || phase == .draftReview
+        else {
+            return nil
         }
-        guard let authorization else { return true }
-        return authorization.providerIdentity != providerIdentity || authorization.isValid(at: now) == false
+        guard let authorization else {
+            return .initialSession
+        }
+        if authorization.scopes != proposedScopes {
+            return .dataScopeChanged
+        }
+        if authorization.providerIdentity.dataRecipient
+            != providerIdentity.dataRecipient
+        {
+            return .dataRecipientChanged
+        }
+        return nil
     }
 
     public mutating func beginProviderRun(
@@ -437,7 +469,6 @@ public struct ZhulongSession: Equatable, Sendable {
     ) throws -> ZhulongProviderRequest {
         let authorization = try validateProviderStart(
             providerIdentity: providerIdentity,
-            now: now,
             allowsDraftReview: true
         )
         guard payload.scopes.isSubset(of: authorization.scopes) else {
@@ -470,10 +501,10 @@ public struct ZhulongSession: Equatable, Sendable {
         )
         let authorization = try validateProviderStart(
             providerIdentity: providerIdentity,
-            now: providerStartedAt,
             allowsDraftReview: true
         )
-        guard authorization.providerIdentity == delegation.providerIdentity,
+        guard authorization.providerIdentity.dataRecipient
+            == delegation.providerIdentity.dataRecipient,
               delegation.dataScopes.isSubset(of: authorization.scopes),
               payload.scopes == delegation.dataScopes
         else {
@@ -502,7 +533,6 @@ public struct ZhulongSession: Equatable, Sendable {
 
     private func validateProviderStart(
         providerIdentity: ZhulongProviderConfigurationIdentity,
-        now: Date,
         allowsDraftReview: Bool
     ) throws -> ZhulongScopeAuthorization {
         guard workspaceStatus == .active else {
@@ -516,11 +546,10 @@ public struct ZhulongSession: Equatable, Sendable {
             }
             throw ZhulongSessionError.invalidTransition(from: phase, to: .providerRunning)
         }
-        guard providerIdentity == authorization.providerIdentity else {
+        guard providerIdentity.dataRecipient
+            == authorization.providerIdentity.dataRecipient
+        else {
             throw ZhulongSessionError.providerIdentityMismatch
-        }
-        guard authorization.isValid(at: now) else {
-            throw ZhulongSessionError.authorizationExpired
         }
         return authorization
     }

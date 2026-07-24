@@ -525,6 +525,36 @@ struct SettingsProviderOverviewCard: View {
                     }
                 }
 
+                SettingSection(
+                    title: store.copy.zhulongPermissionCeilingTitle
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        permissionPolicyRow(
+                            title: store.copy.zhulongDataReadingPermission,
+                            selected: store.zhulongFeaturePreferences
+                                .conversationPermissionCeiling.dataReading,
+                            action: store.setZhulongDataReadingPolicy,
+                            identifier:
+                            "settings.zhulong.permission.data-reading"
+                        )
+                        permissionPolicyRow(
+                            title: store.copy.zhulongRemoteSendingPermission,
+                            selected: store.zhulongFeaturePreferences
+                                .conversationPermissionCeiling.remoteSending,
+                            action: store.setZhulongRemoteSendingPolicy,
+                            identifier:
+                            "settings.zhulong.permission.remote-sending"
+                        )
+                        Text(
+                            store.copy
+                                .zhulongPermissionCeilingExplanation
+                        )
+                        .font(.noonmarkSystem(size: 11.5))
+                        .foregroundStyle(Theme.text3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
                 SettingSection(title: store.copy.zhulongFeaturesTitle) {
                     VStack(alignment: .leading, spacing: 14) {
                         featureToggle(
@@ -616,6 +646,33 @@ struct SettingsProviderOverviewCard: View {
             circuit.waitingCount,
             failureCode: circuit.failureCode
         )
+    }
+
+    private func permissionPolicyRow(
+        title: String,
+        selected: ZhulongPermissionPolicy,
+        action: @escaping (ZhulongPermissionPolicy) -> Void,
+        identifier: String
+    ) -> some View {
+        HStack(spacing: 14) {
+            Text(title)
+                .font(.noonmarkSystem(size: 11.5, weight: .medium))
+                .foregroundStyle(Theme.text2)
+                .frame(width: 92, alignment: .leading)
+            SegmentedOptionRow(
+                options: ZhulongPermissionPolicy.allCases,
+                selected: selected,
+                title: store.copy.zhulongPermissionPolicyTitle,
+                action: action
+            )
+            .accessibilityIdentifier(identifier)
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "\(identifier).anchor",
+                    verificationText: selected.rawValue
+                )
+            }
+        }
     }
 
     /// Provider credentials are security-sensitive settings, so their actions

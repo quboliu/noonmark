@@ -214,14 +214,12 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         XCTAssertEqual(reauthorized.phase, .draftReview)
         XCTAssertTrue(
             reauthorized.requiresScopeAuthorization(
-                for: replacementIdentity,
-                at: baseDate.addingTimeInterval(4)
+                for: replacementIdentity
             )
         )
         try reauthorized.authorizeScope(
             [.currentDayTodo],
             providerIdentity: replacementIdentity,
-            expiresAt: baseDate.addingTimeInterval(600),
             now: baseDate.addingTimeInterval(4)
         )
         try repository.save(reauthorized)
@@ -819,7 +817,6 @@ final class ZhulongProviderOrchestratorTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: makeProviderIdentity(),
-            expiresAt: baseDate.addingTimeInterval(301),
             now: baseDate.addingTimeInterval(1)
         )
         return session

@@ -367,12 +367,16 @@ struct ZhulongSessionStreamPage: View {
 
     @ViewBuilder
     private var currentAction: some View {
-        if let session = workspace.selectedSession, needsScopeAuthorization {
+        if let session = workspace.selectedSession,
+           let requirement =
+           store.currentZhulongScopeAuthorizationRequirement,
+           store.currentZhulongSessionAccessIsDenied == false
+        {
             VStack(alignment: .leading, spacing: 8) {
-                Text(copy.confirmScopeTitle)
+                Text(scopeAuthorizationTitle(requirement))
                     .font(.noonmarkSystem(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.text1)
-                Text(copy.scopeDisclosure)
+                Text(scopeAuthorizationDisclosure(requirement))
                     .font(.noonmarkSystem(size: 12))
                     .foregroundStyle(Theme.text2)
                     .lineSpacing(3)
@@ -390,15 +394,47 @@ struct ZhulongSessionStreamPage: View {
                             }
                     }
                 }
-                SmallActionButton(copy.useThisSessionOnly, tone: .accent) {
-                    store.authorizeCurrentZhulongWorkspaceSession()
+                if let identity =
+                    store.activeZhulongProviderIdentity
+                {
+                    Text(providerDisclosure(identity))
+                        .font(.noonmarkSystem(size: 10.8))
+                        .foregroundStyle(
+                            identity.location == .local
+                                ? Theme.ok
+                                : Theme.warn
+                        )
                 }
-                .accessibilityIdentifier("zhulong-authorize-scope")
-                .background {
-                    AppE2EViewAnchor(
-                        identifier: "zhulong-authorize-scope",
-                        verificationText: copy.useThisSessionOnly
+                HStack(spacing: 8) {
+                    SmallActionButton(
+                        copy.continueCurrentSession,
+                        tone: .accent
+                    ) {
+                        store.authorizeCurrentZhulongWorkspaceSession()
+                    }
+                    .accessibilityIdentifier(
+                        "zhulong-authorize-scope"
                     )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "zhulong-authorize-scope",
+                            verificationText:
+                            copy.continueCurrentSession
+                        )
+                    }
+                    SmallActionButton(copy.notNow) {
+                        store
+                            .declineCurrentZhulongWorkspaceAuthorization()
+                    }
+                    .accessibilityIdentifier(
+                        "zhulong-decline-scope"
+                    )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "zhulong-decline-scope",
+                            verificationText: copy.notNow
+                        )
+                    }
                 }
             }
             .padding(.vertical, 4)
@@ -580,6 +616,7 @@ struct ZhulongSessionStreamPage: View {
     private var canSubmitEntry: Bool {
         guard let session = workspace.selectedSession else { return false }
         return session.workspaceStatus == .active &&
+            store.currentZhulongSessionAccessIsDenied == false &&
             needsScopeAuthorization == false &&
             (session.phase == .readyForProvider || session.phase == .draftReview)
     }
@@ -587,6 +624,9 @@ struct ZhulongSessionStreamPage: View {
     private var composerHint: String {
         guard let session = workspace.selectedSession else {
             return copy.messageComposerKeyboardHint
+        }
+        if store.currentZhulongSessionAccessIsDenied {
+            return copy.composerDataAccessDeniedHint
         }
         if needsScopeAuthorization {
             return copy.composerScopeAuthorizationHint
@@ -950,6 +990,52 @@ struct ZhulongSessionStreamPage: View {
 
     private var needsScopeAuthorization: Bool {
         store.currentZhulongSessionNeedsScopeAuthorization
+    }
+
+    private func scopeAuthorizationTitle(
+        _ requirement: ZhulongScopeAuthorizationRequirement
+    ) -> String {
+        switch requirement {
+        case .initialSession:
+            copy.confirmInitialDataUseTitle
+        case .dataScopeChanged:
+            copy.confirmChangedDataScopeTitle
+        case .dataRecipientChanged:
+            copy.confirmChangedRecipientTitle
+        }
+    }
+
+    private func scopeAuthorizationDisclosure(
+        _ requirement: ZhulongScopeAuthorizationRequirement
+    ) -> String {
+        switch requirement {
+        case .initialSession:
+            copy.initialDataUseDisclosure
+        case .dataScopeChanged:
+            copy.changedDataScopeDisclosure
+        case .dataRecipientChanged:
+            copy.changedRecipientDisclosure
+        }
+    }
+
+    private func providerDisclosure(
+        _ identity: ZhulongProviderConfigurationIdentity
+    ) -> String {
+        guard identity.location == .remote else {
+            return "\(identity.providerID) · \(copy.localProcessing)"
+        }
+        let endpoint = identity.baseURL
+            .flatMap {
+                URLComponents(
+                    url: $0,
+                    resolvingAgainstBaseURL: false
+                )?.host
+            }
+            ?? identity.providerID
+        return copy.remoteRecipient(
+            endpoint: endpoint,
+            model: identity.model
+        )
     }
 
     private var actionEmphasisFill: Color {

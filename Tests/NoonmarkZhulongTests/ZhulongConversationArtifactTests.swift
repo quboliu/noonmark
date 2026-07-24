@@ -218,7 +218,6 @@ final class ZhulongConversationArtifactTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: identity,
-            expiresAt: now.addingTimeInterval(600),
             now: now.addingTimeInterval(1)
         )
         let request = try session.beginProviderRun(
@@ -342,7 +341,6 @@ final class ZhulongConversationArtifactTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: identity,
-            expiresAt: now.addingTimeInterval(600),
             now: now.addingTimeInterval(1)
         )
         let firstRequest = try session.beginProviderRun(

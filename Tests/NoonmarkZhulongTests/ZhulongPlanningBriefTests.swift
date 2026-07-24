@@ -159,7 +159,6 @@ final class ZhulongPlanningBriefTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: makeProviderIdentity(version: "v5"),
-            expiresAt: now.addingTimeInterval(400),
             now: now.addingTimeInterval(5)
         )
 
@@ -188,7 +187,6 @@ final class ZhulongPlanningBriefTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo, .taskPool],
             providerIdentity: makeProviderIdentity(),
-            expiresAt: now.addingTimeInterval(300),
             now: now.addingTimeInterval(1)
         )
         let brief = try session.publishPlanningBrief(
@@ -227,36 +225,39 @@ final class ZhulongPlanningBriefTests: XCTestCase {
         )
     }
 
-    func testPlanningStartChecksAuthorizationAtActualProviderStart() throws {
-        let requestedAt = now.addingTimeInterval(5)
-        let providerStartedAt = Date(
-            timeIntervalSinceReferenceDate: requestedAt.timeIntervalSinceReferenceDate.nextUp
-        )
+    func testPlanningAuthorizationDoesNotExpireBeforeActualProviderStart() throws {
+        let requestedAt = now.addingTimeInterval(6)
         var session = try makeSession()
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: makeProviderIdentity(),
-            expiresAt: providerStartedAt,
             now: now.addingTimeInterval(1)
         )
-        let brief = try session.publishPlanningBrief(makeDraft(for: session), now: now.addingTimeInterval(2))
-        try session.reviewPlanningBrief(brief.id, now: now.addingTimeInterval(3))
-        let delegation = try session.delegatePlanning(for: brief.id, now: now.addingTimeInterval(4))
-        let originalEvents = session.events
+        let brief = try session.publishPlanningBrief(
+            makeDraft(for: session),
+            now: now.addingTimeInterval(3)
+        )
+        try session.reviewPlanningBrief(
+            brief.id,
+            now: now.addingTimeInterval(4)
+        )
+        let delegation = try session.delegatePlanning(
+            for: brief.id,
+            now: now.addingTimeInterval(5)
+        )
+        let request = try session.beginPlanningProviderRun(
+            delegationID: delegation.id,
+            payload: makePayload(),
+            providerIdentity: makeProviderIdentity(),
+            now: requestedAt
+        )
 
-        XCTAssertThrowsError(
-            try session.beginPlanningProviderRun(
-                delegationID: delegation.id,
-                payload: makePayload(),
-                providerIdentity: makeProviderIdentity(),
-                now: requestedAt
-            )
-        ) { error in
-            XCTAssertEqual(error as? ZhulongSessionError, .authorizationExpired)
-        }
-        XCTAssertEqual(session.events, originalEvents)
-        XCTAssertTrue(session.planningDelegationConsumptions.isEmpty)
-        XCTAssertTrue(session.providerSends.isEmpty)
+        XCTAssertEqual(
+            request.providerIdentity.dataRecipient,
+            try makeProviderIdentity().dataRecipient
+        )
+        XCTAssertEqual(session.planningDelegationConsumptions.map(\.delegationID), [delegation.id])
+        XCTAssertEqual(session.providerSends.count, 1)
     }
 
     func testReviewedBriefCanReceiveAnotherExplicitDelegationAfterDraftReview() throws {
@@ -363,7 +364,6 @@ final class ZhulongPlanningBriefTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: makeProviderIdentity(),
-            expiresAt: now.addingTimeInterval(300),
             now: now.addingTimeInterval(1)
         )
         return session

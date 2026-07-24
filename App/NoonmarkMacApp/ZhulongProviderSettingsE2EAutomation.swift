@@ -62,6 +62,30 @@ enum ZhulongProviderSettingsE2EUIInteractionDriver {
             try await activate(window)
             let input = try WindowServerInputDriver()
 
+            try await selectSegment(
+                1,
+                input: input,
+                in: window,
+                identifier: "settings.zhulong.permission.data-reading",
+                step: "任务数据读取改为每次询问"
+            )
+            try await waitUntil("任务数据读取权限没有改为每次询问") { [self] in
+                store.zhulongFeaturePreferences
+                    .conversationPermissionCeiling.dataReading == .ask
+            }
+
+            try await selectSegment(
+                2,
+                input: input,
+                in: window,
+                identifier: "settings.zhulong.permission.remote-sending",
+                step: "远程发送改为禁止"
+            )
+            try await waitUntil("远程发送权限没有改为禁止") { [self] in
+                store.zhulongFeaturePreferences
+                    .conversationPermissionCeiling.remoteSending == .deny
+            }
+
             try await click(
                 input,
                 in: window,
@@ -321,6 +345,51 @@ enum ZhulongProviderSettingsE2EUIInteractionDriver {
             )
         }
 
+        private func selectSegment(
+            _ segment: Int,
+            input: WindowServerInputDriver,
+            in window: NSWindow,
+            identifier: String,
+            step: String
+        ) async throws {
+            try await waitUntil("\(step)控件") {
+                guard let target = self.segmentedControl(
+                    identifier: identifier,
+                    in: window
+                ) else { return false }
+                return segment >= 0
+                    && segment < target.segmentCount
+                    && self.isUsable(target, in: window)
+            }
+            let coordinate: @MainActor () throws
+                -> WindowServerInputDriver.PointerCoordinate = {
+                guard let target = self.segmentedControl(
+                    identifier: identifier,
+                    in: window
+                ),
+                    segment >= 0,
+                    segment < target.segmentCount,
+                    self.isUsable(target, in: window)
+                else {
+                    throw Failure.missing("\(step)控件在点击前变化")
+                }
+                let frame = AppViewTreeE2E.frameInWindow(for: target)
+                let width = frame.width / CGFloat(target.segmentCount)
+                return try input.pointerCoordinate(
+                    windowPoint: NSPoint(
+                        x: frame.minX + width * (CGFloat(segment) + 0.5),
+                        y: frame.midY
+                    ),
+                    in: window
+                )
+            }
+            try await input.postClick(
+                at: try coordinate(),
+                modifiers: [],
+                resolveTarget: coordinate
+            )
+        }
+
         private func field(identifier: String, in window: NSWindow) -> NSTextField? {
             let matches = allViews(in: window).compactMap { $0 as? NSTextField }
                 .filter { view in
@@ -371,6 +440,39 @@ enum ZhulongProviderSettingsE2EUIInteractionDriver {
                 }
             guard matches.count == 1 else { return nil }
             return matches[0]
+        }
+
+        private func segmentedControl(
+            identifier: String,
+            in window: NSWindow
+        ) -> NSSegmentedControl? {
+            let controls = allViews(in: window)
+                .compactMap { $0 as? NSSegmentedControl }
+                .filter {
+                    isUsable($0, in: window)
+                }
+            let identified = controls.filter { control in
+                    control.identifier?.rawValue == identifier
+            }
+            if identified.count == 1 {
+                return identified[0]
+            }
+            guard let anchor = AppViewTreeE2E.view(
+                identifier: "\(identifier).anchor"
+            ),
+                anchor.window === window,
+                isUsable(anchor, in: window)
+            else {
+                return nil
+            }
+            let anchorFrame = AppViewTreeE2E.frameInWindow(for: anchor)
+            let aligned = controls.filter { control in
+                let frame = AppViewTreeE2E.frameInWindow(for: control)
+                return abs(frame.midX - anchorFrame.midX) <= 3
+                    && abs(frame.midY - anchorFrame.midY) <= 3
+            }
+            guard aligned.count == 1 else { return nil }
+            return aligned[0]
         }
 
         private func allViews(in window: NSWindow) -> [NSView] {

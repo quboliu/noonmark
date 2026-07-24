@@ -317,7 +317,6 @@ final class ZhulongAIProviderAdapterTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: identity,
-            expiresAt: now.addingTimeInterval(3600),
             now: now.addingTimeInterval(1)
         )
         let payload = try ZhulongProviderPayload(

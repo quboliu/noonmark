@@ -4,12 +4,44 @@ import XCTest
 
 @MainActor
 final class ZhulongFeaturePreferencesTests: XCTestCase {
+    func testConversationPermissionCeilingCombinesDataReadingAndRemoteSending() {
+        XCTAssertEqual(
+            ZhulongConversationPermissionCeiling(
+                dataReading: .allow,
+                remoteSending: .deny
+            ).decision(sendsRemotely: false),
+            .allow
+        )
+        XCTAssertEqual(
+            ZhulongConversationPermissionCeiling(
+                dataReading: .allow,
+                remoteSending: .deny
+            ).decision(sendsRemotely: true),
+            .deny
+        )
+        XCTAssertEqual(
+            ZhulongConversationPermissionCeiling(
+                dataReading: .ask,
+                remoteSending: .allow
+            ).decision(sendsRemotely: true),
+            .ask
+        )
+        XCTAssertEqual(
+            ZhulongConversationPermissionCeiling(
+                dataReading: .deny,
+                remoteSending: .allow
+            ).decision(sendsRemotely: false),
+            .deny
+        )
+    }
+
     func testDefaultsKeepPageAndAutomaticClassificationAvailable() {
         XCTAssertEqual(
             ZhulongFeaturePreferences.defaultValue,
             ZhulongFeaturePreferences(
                 pageEnabled: true,
-                automaticClassificationEnabled: true
+                automaticClassificationEnabled: true,
+                conversationPermissionCeiling: .defaultValue
             )
         )
     }
@@ -20,7 +52,12 @@ final class ZhulongFeaturePreferencesTests: XCTestCase {
         let repository = ZhulongFeaturePreferencesRepository(defaults: defaults)
         let expected = ZhulongFeaturePreferences(
             pageEnabled: false,
-            automaticClassificationEnabled: true
+            automaticClassificationEnabled: true,
+            conversationPermissionCeiling:
+            ZhulongConversationPermissionCeiling(
+                dataReading: .ask,
+                remoteSending: .deny
+            )
         )
 
         repository.save(expected)
@@ -28,21 +65,29 @@ final class ZhulongFeaturePreferencesTests: XCTestCase {
         XCTAssertEqual(repository.load(), expected)
     }
 
-    func testCorruptOrIncompleteValueFailsClosedToCurrentDefault() {
+    func testCorruptOrIncompleteValueDisablesAIDataOperations() {
         let (suiteName, defaults) = makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let repository = ZhulongFeaturePreferencesRepository(defaults: defaults)
+        let failClosed = ZhulongFeaturePreferences(
+            pageEnabled: true,
+            automaticClassificationEnabled: false,
+            conversationPermissionCeiling: .init(
+                dataReading: .deny,
+                remoteSending: .deny
+            )
+        )
         defaults.set(
             Data("{\"pageEnabled\":false}".utf8),
             forKey: ZhulongFeaturePreferencesRepository.defaultStorageKey
         )
-        XCTAssertEqual(repository.load(), .defaultValue)
+        XCTAssertEqual(repository.load(), failClosed)
 
         defaults.set(
             Data("not-json".utf8),
             forKey: ZhulongFeaturePreferencesRepository.defaultStorageKey
         )
-        XCTAssertEqual(repository.load(), .defaultValue)
+        XCTAssertEqual(repository.load(), failClosed)
     }
 
     func testAvailabilityKeepsProviderPageAndAutomationOrthogonal() {

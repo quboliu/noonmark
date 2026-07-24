@@ -107,6 +107,10 @@ extension NoonmarkStore {
         purpose: ZhulongSessionPurpose,
         scopes: Set<ZhulongDataScope>
     ) {
+        guard zhulongConversationPermissionDecision != .deny else {
+            toast = copy.zhulongDataAccessDeniedToast
+            return
+        }
         guard let sessionID = zhulongWorkspace.createSession(
             intent: intent,
             purpose: purpose,
@@ -115,7 +119,9 @@ extension NoonmarkStore {
         else {
             return
         }
-        authorizeCurrentZhulongWorkspaceSession()
+        if zhulongConversationPermissionDecision == .allow {
+            authorizeCurrentZhulongWorkspaceSession()
+        }
     }
 
     func zhulongTask(for session: ZhulongSession) -> ZhulongTask {
@@ -160,15 +166,56 @@ extension NoonmarkStore {
     }
 
     var currentZhulongSessionNeedsScopeAuthorization: Bool {
-        guard let session = zhulongWorkspace.selectedSession else { return false }
-        guard let providerIdentity = try? zhulongProviderIdentity() else {
-            return session.workspaceStatus == .active && session.phase == .scopeReview
+        guard currentZhulongSessionAccessIsDenied == false else {
+            return false
         }
-        return session.requiresScopeAuthorization(for: providerIdentity)
+        return currentZhulongScopeAuthorizationRequirement != nil
+    }
+
+    var currentZhulongScopeAuthorizationRequirement:
+        ZhulongScopeAuthorizationRequirement?
+    {
+        guard let session = zhulongWorkspace.selectedSession else { return nil }
+        guard let providerIdentity = try? zhulongProviderIdentity() else {
+            return session.workspaceStatus == .active
+                && session.phase == .scopeReview
+                ? .initialSession
+                : nil
+        }
+        return session.scopeAuthorizationRequirement(
+            for: providerIdentity
+        )
+    }
+
+    var zhulongConversationPermissionDecision:
+        ZhulongConversationPermissionDecision
+    {
+        guard let identity = try? zhulongProviderIdentity() else {
+            return .deny
+        }
+        return zhulongFeaturePreferences
+            .conversationPermissionCeiling.decision(
+                sendsRemotely: identity.location == .remote
+            )
+    }
+
+    var currentZhulongSessionAccessIsDenied: Bool {
+        zhulongWorkspace.selectedSession != nil
+            && zhulongConversationPermissionDecision == .deny
+    }
+
+    var activeZhulongProviderIdentity:
+        ZhulongProviderConfigurationIdentity?
+    {
+        try? zhulongProviderIdentity()
     }
 
     func authorizeCurrentZhulongWorkspaceSession() {
         do {
+            guard zhulongConversationPermissionDecision != .deny else {
+                toast = copy.zhulongDataAccessDeniedToast
+                return
+            }
             let authorizesFirstResponse = zhulongWorkspace.selectedSession?.phase == .scopeReview
             let authorized = zhulongWorkspace.authorizeCurrentSession(
                 providerIdentity: try zhulongProviderIdentity()
@@ -180,11 +227,21 @@ extension NoonmarkStore {
         }
     }
 
+    func declineCurrentZhulongWorkspaceAuthorization() {
+        guard zhulongWorkspace.selectedSession?.workspaceStatus == .active
+        else {
+            return
+        }
+        zhulongWorkspace.pauseCurrentSession()
+        zhulongWorkspace.showHome()
+    }
+
     @discardableResult
     func sendZhulongConversationMessage(_ content: String) -> Bool {
         guard let session = zhulongWorkspace.selectedSession,
               session.workspaceStatus == .active,
               session.phase == .readyForProvider || session.phase == .draftReview,
+              currentZhulongSessionAccessIsDenied == false,
               currentZhulongSessionNeedsScopeAuthorization == false
         else { return false }
         let sent = zhulongWorkspace.appendToCurrentSession(
@@ -207,6 +264,8 @@ extension NoonmarkStore {
         guard zhulongFeatureAvailability.providerCanExecute,
               let session = zhulongWorkspace.selectedSession,
               session.workspaceStatus == .active,
+              currentZhulongSessionAccessIsDenied == false,
+              currentZhulongSessionNeedsScopeAuthorization == false,
               session.phase == .readyForProvider || session.phase == .draftReview
         else { return }
         runCurrentZhulongProvider()
@@ -389,7 +448,12 @@ extension NoonmarkStore {
 
     private func runCurrentZhulongProviderRequest() async {
         do {
-            guard let session = zhulongWorkspace.selectedSession else {
+            guard currentZhulongSessionAccessIsDenied == false else {
+                throw ZhulongProviderUIError.dataAccessDenied
+            }
+            guard currentZhulongSessionNeedsScopeAuthorization == false,
+                  let session = zhulongWorkspace.selectedSession
+            else {
                 throw ZhulongProviderUIError.missingSession
             }
             let payload = try zhulongProviderPayload(for: session)
@@ -406,7 +470,11 @@ extension NoonmarkStore {
 
     private func runCurrentZhulongPlanningProviderRequest() async {
         do {
-            guard let session = zhulongWorkspace.selectedSession,
+            guard currentZhulongSessionAccessIsDenied == false else {
+                throw ZhulongProviderUIError.dataAccessDenied
+            }
+            guard currentZhulongSessionNeedsScopeAuthorization == false,
+                  let session = zhulongWorkspace.selectedSession,
                   session.activePlanningDelegation != nil
             else {
                 throw ZhulongProviderUIError.missingPlanningDelegation

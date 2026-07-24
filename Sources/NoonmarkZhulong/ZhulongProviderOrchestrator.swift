@@ -100,7 +100,9 @@ public actor ZhulongProviderOrchestrator {
         }
         let sessionBeforeRun = try repository.load(sessionID)
         var session = sessionBeforeRun
-        guard session.authorization?.providerIdentity == provider.configurationIdentity else {
+        guard session.authorization?.providerIdentity.dataRecipient
+            == provider.configurationIdentity.dataRecipient
+        else {
             throw ZhulongProviderOrchestrationError.providerIdentityMismatch
         }
 

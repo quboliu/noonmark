@@ -41,7 +41,6 @@ public enum ZhulongPlanningBriefError: Error, Equatable, Sendable {
     case briefNotReviewed
     case blockingQuestionsRemain
     case scopeNotAuthorized
-    case authorizationExpired
     case activeDelegationAlreadyExists
     case delegationNotActive
     case decisionGateUnresolved
@@ -446,9 +445,6 @@ public extension ZhulongSession {
         }
         guard let authorization else {
             throw ZhulongPlanningBriefError.scopeNotAuthorized
-        }
-        guard authorization.isValid(at: now) else {
-            throw ZhulongPlanningBriefError.authorizationExpired
         }
         guard brief.dataScopes.isSubset(of: authorization.scopes) else {
             throw ZhulongPlanningBriefError.scopeNotAuthorized

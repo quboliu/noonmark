@@ -218,7 +218,6 @@ private struct NoonmarkAIProviderLiveSmoke {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: identity,
-            expiresAt: now.addingTimeInterval(3600),
             now: now.addingTimeInterval(1)
         )
         try repository.save(session)

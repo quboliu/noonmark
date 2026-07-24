@@ -1,4 +1,5 @@
 import NoonmarkCore
+import NoonmarkMacRuntime
 import NoonmarkStorage
 import NoonmarkSync
 
@@ -363,8 +364,8 @@ struct AppCopy {
     var providerTitle: String { language == .chinese ? "烛龙与自动化" : "Zhulong and Automation" }
     var providerSubtitle: String {
         language == .chinese
-            ? "页面、自动分组与标签、Provider 分别独立控制；普通清单不依赖它们。"
-            : "The page, automatic groups and labels, and Provider are independent; normal lists depend on none of them."
+            ? "页面、对话权限、自动分组与标签、Provider 分别独立控制；普通清单不依赖它们。"
+            : "The page, conversation permissions, automatic groups and labels, and Provider are independent; normal lists depend on none of them."
     }
 
     var zhulongSubtitle: String {
@@ -391,6 +392,43 @@ struct AppCopy {
     var save: String { language == .chinese ? "保存" : "Save" }
     var testConnection: String { language == .chinese ? "测试连接" : "Test" }
     var clear: String { language == .chinese ? "清空" : "Clear" }
+    var zhulongPermissionCeilingTitle: String {
+        language == .chinese ? "对话权限上限" : "Conversation permission ceiling"
+    }
+
+    var zhulongDataReadingPermission: String {
+        language == .chinese ? "任务数据读取" : "Task data reading"
+    }
+
+    var zhulongRemoteSendingPermission: String {
+        language == .chinese ? "远程发送" : "Remote sending"
+    }
+
+    var zhulongPermissionCeilingExplanation: String {
+        language == .chinese
+            ? "“每次询问”只在新会话或接收方实质变化时确认；Todo 写入始终需要单独提交。"
+            : "Ask confirms only for a new session or a material recipient change. Todo writes always require a separate commit."
+    }
+
+    func zhulongPermissionPolicyTitle(
+        _ policy: ZhulongPermissionPolicy
+    ) -> String {
+        switch (language, policy) {
+        case (.chinese, .allow): "允许"
+        case (.chinese, .ask): "每次询问"
+        case (.chinese, .deny): "禁止"
+        case (.english, .allow): "Allow"
+        case (.english, .ask): "Ask"
+        case (.english, .deny): "Deny"
+        }
+    }
+
+    var zhulongDataAccessDeniedToast: String {
+        language == .chinese
+            ? "烛龙数据访问已在设置中禁止"
+            : "Zhulong data access is denied in Settings"
+    }
+
     var localFirstSyncChangedToast: String { language == .chinese ? "本地优先同步设置已更新" : "Local-first sync settings updated" }
 
     func localFirstSyncResult(

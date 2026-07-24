@@ -1,20 +1,87 @@
 import Foundation
 
+public enum ZhulongPermissionPolicy:
+    String,
+    Codable,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case allow
+    case ask
+    case deny
+}
+
+public enum ZhulongConversationPermissionDecision: Equatable, Sendable {
+    case allow
+    case ask
+    case deny
+}
+
+public struct ZhulongConversationPermissionCeiling: Codable, Equatable, Sendable {
+    public static let defaultValue = ZhulongConversationPermissionCeiling(
+        dataReading: .allow,
+        remoteSending: .allow
+    )
+
+    public var dataReading: ZhulongPermissionPolicy
+    public var remoteSending: ZhulongPermissionPolicy
+
+    public init(
+        dataReading: ZhulongPermissionPolicy,
+        remoteSending: ZhulongPermissionPolicy
+    ) {
+        self.dataReading = dataReading
+        self.remoteSending = remoteSending
+    }
+
+    public func decision(
+        sendsRemotely: Bool
+    ) -> ZhulongConversationPermissionDecision {
+        let policies = sendsRemotely
+            ? [dataReading, remoteSending]
+            : [dataReading]
+        if policies.contains(.deny) {
+            return .deny
+        }
+        if policies.contains(.ask) {
+            return .ask
+        }
+        return .allow
+    }
+}
+
 public struct ZhulongFeaturePreferences: Codable, Equatable, Sendable {
     public static let defaultValue = ZhulongFeaturePreferences(
         pageEnabled: true,
-        automaticClassificationEnabled: true
+        automaticClassificationEnabled: true,
+        conversationPermissionCeiling: .defaultValue
+    )
+
+    static let failClosedValue = ZhulongFeaturePreferences(
+        pageEnabled: true,
+        automaticClassificationEnabled: false,
+        conversationPermissionCeiling: .init(
+            dataReading: .deny,
+            remoteSending: .deny
+        )
     )
 
     public var pageEnabled: Bool
     public var automaticClassificationEnabled: Bool
+    public var conversationPermissionCeiling:
+        ZhulongConversationPermissionCeiling
 
     public init(
         pageEnabled: Bool,
-        automaticClassificationEnabled: Bool
+        automaticClassificationEnabled: Bool,
+        conversationPermissionCeiling:
+        ZhulongConversationPermissionCeiling = .defaultValue
     ) {
         self.pageEnabled = pageEnabled
         self.automaticClassificationEnabled = automaticClassificationEnabled
+        self.conversationPermissionCeiling =
+            conversationPermissionCeiling
     }
 }
 
@@ -65,13 +132,14 @@ public final class ZhulongFeaturePreferencesRepository {
     }
 
     public func load() -> ZhulongFeaturePreferences {
-        guard let data = defaults.data(forKey: storageKey),
-              let preferences = try? decoder.decode(
-                  ZhulongFeaturePreferences.self,
-                  from: data
-              )
-        else {
+        guard let data = defaults.data(forKey: storageKey) else {
             return .defaultValue
+        }
+        guard let preferences = try? decoder.decode(
+            ZhulongFeaturePreferences.self,
+            from: data
+        ) else {
+            return .failClosedValue
         }
         return preferences
     }

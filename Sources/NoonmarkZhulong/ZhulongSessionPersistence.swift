@@ -33,7 +33,6 @@ struct ZhulongScopeAuthorizationRecord: Codable, Equatable {
     var scopes: Set<ZhulongDataScope>
     var providerIdentity: ZhulongProviderConfigurationIdentity
     var grantedAt: Date
-    var expiresAt: Date
 }
 
 private struct ZhulongEventReplayState {
@@ -131,8 +130,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
             ZhulongScopeAuthorizationRecord(
                 scopes: $0.scopes,
                 providerIdentity: $0.providerIdentity,
-                grantedAt: $0.grantedAt,
-                expiresAt: $0.expiresAt
+                grantedAt: $0.grantedAt
             )
         }
         draftVersion = session.draftVersion
@@ -900,8 +898,6 @@ struct ZhulongSessionRecord: Codable, Equatable {
         try authorizations.map { record in
             guard record.scopes == proposedScopes,
                   record.grantedAt.timeIntervalSinceReferenceDate.isFinite,
-                  record.expiresAt.timeIntervalSinceReferenceDate.isFinite,
-                  record.expiresAt > record.grantedAt,
                   validIdentity(record.providerIdentity)
             else {
                 throw ZhulongSessionRestorationError.invalidAuthorization
@@ -909,8 +905,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
             return ZhulongScopeAuthorization(
                 scopes: record.scopes,
                 providerIdentity: record.providerIdentity,
-                grantedAt: record.grantedAt,
-                expiresAt: record.expiresAt
+                grantedAt: record.grantedAt
             )
         }
     }
@@ -1175,8 +1170,8 @@ struct ZhulongSessionRecord: Codable, Equatable {
             throw ZhulongSessionRestorationError.invalidEventsForPhase
         }
         let send = providerSends[state.sendIndex]
-        guard state.currentAuthorization?.isValid(at: send.startedAt) == true,
-              state.currentAuthorization?.providerIdentity == send.providerIdentity,
+        guard state.currentAuthorization?.providerIdentity.dataRecipient
+            == send.providerIdentity.dataRecipient,
               send.payload.scopes.isSubset(of: state.currentAuthorization?.scopes ?? []),
               validPhaseForRun(send, phase: state.phase),
               validRunAuthority(send, state: state),
@@ -1599,7 +1594,6 @@ struct ZhulongSessionRecord: Codable, Equatable {
               state.reviewedBriefID == delegation.briefID,
               let brief = planningBriefs.first(where: { $0.id == delegation.briefID }),
               brief.openQuestions.contains(where: \.isBlocking) == false,
-              state.currentAuthorization?.isValid(at: delegation.grantedAt) == true,
               state.currentAuthorization?.providerIdentity == delegation.providerIdentity,
               delegation.dataScopes.isSubset(of: state.currentAuthorization?.scopes ?? []),
               event == planningDelegationEvent(delegation, sequence: event.sequence)

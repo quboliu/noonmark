@@ -182,7 +182,6 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: identity,
-            expiresAt: now.addingTimeInterval(600),
             now: now.addingTimeInterval(1)
         )
         let request = try session.beginProviderRun(
@@ -479,14 +478,12 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: makeProviderIdentity(),
-            expiresAt: now.addingTimeInterval(300),
             now: now.addingTimeInterval(1)
         )
         let replacement = try makeProviderIdentity(version: "v5")
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: replacement,
-            expiresAt: now.addingTimeInterval(400),
             now: now.addingTimeInterval(2)
         )
         let request = try session.beginProviderRun(
@@ -766,7 +763,6 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: try makeProviderIdentity(version: "v5"),
-            expiresAt: now.addingTimeInterval(400),
             now: now.addingTimeInterval(5)
         )
         let replacement = try session.delegatePlanning(
@@ -821,8 +817,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         record.authorizations.append(ZhulongScopeAuthorizationRecord(
             scopes: [.currentDayTodo],
             providerIdentity: try makeProviderIdentity(version: "v5"),
-            grantedAt: forgedAt,
-            expiresAt: now.addingTimeInterval(400)
+            grantedAt: forgedAt
         ))
         record.events.append(ZhulongSessionEventRecord(
             sequence: UInt64(record.events.count + 1),
@@ -951,7 +946,6 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo, .taskPool],
             providerIdentity: makeProviderIdentity(),
-            expiresAt: now.addingTimeInterval(300),
             now: now.addingTimeInterval(1)
         )
         let brief = try session.publishPlanningBrief(
@@ -1086,7 +1080,6 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: makeProviderIdentity(),
-            expiresAt: now.addingTimeInterval(301),
             now: now.addingTimeInterval(1)
         )
         let identity = try makeProviderIdentity()
@@ -1118,7 +1111,6 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: makeProviderIdentity(),
-            expiresAt: now.addingTimeInterval(300),
             now: now.addingTimeInterval(1)
         )
         return session

@@ -312,7 +312,6 @@ final class ZhulongWorkspaceStore: ObservableObject {
             try session.authorizeScope(
                 session.proposedScopes,
                 providerIdentity: providerIdentity,
-                expiresAt: now.addingTimeInterval(60 * 60),
                 now: now
             )
         }

@@ -516,7 +516,6 @@ final class ZhulongStructuredPlanningSessionTests: XCTestCase {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: makeProviderIdentity(),
-            expiresAt: now.addingTimeInterval(300),
             now: now.addingTimeInterval(1)
         )
         let brief = try session.publishPlanningBrief(

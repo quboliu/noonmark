@@ -84,9 +84,11 @@ struct ZhulongE2EConversationProvider: ZhulongProvider, ZhulongStreamingProvider
                 draftVersion: 1
             )
         }
-        let turn = try! ZhulongConversationTurnParser().parse(
+        guard let turn = try? ZhulongConversationTurnParser().parse(
             artifactRawContent()
-        )
+        ) else {
+            preconditionFailure("Invalid deterministic Zhulong E2E artifact")
+        }
         return ZhulongProviderResponse(
             content: turn.message,
             draftVersion: 1,
@@ -185,7 +187,9 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
         var draft = ZhulongProviderDraft()
         draft.displayName = "E2E conversation provider"
         draft.kind = .openAICompatible
-        draft.baseURL = "https://e2e.provider.example/v1"
+        draft.baseURL = mode == .restartVerification
+            ? "https://e2e-replacement.provider.example/v1"
+            : "https://e2e.provider.example/v1"
         draft.model = mode == .restartVerification
             ? "e2e-conversation-v2"
             : "e2e-conversation-v1"
@@ -243,7 +247,8 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
                         )
                 },
                 beginReauthorization: {
-                    store.zhulongProviderDraft.model = "e2e-conversation-v2"
+                    store.zhulongProviderDraft.baseURL =
+                        "https://e2e-replacement.provider.example/v1"
                 },
                 hasReauthorizationRequired: {
                     let session = store.zhulongWorkspace.selectedSession
@@ -251,6 +256,7 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
                         && session?.authorizations.count == 1
                         && session?.phase == .draftReview
                         && AppViewTreeE2E.view(identifier: "zhulong-authorize-scope") != nil
+                        && AppViewTreeE2E.view(identifier: "zhulong-decline-scope") != nil
                 },
                 hasReauthorizedSessionReady: {
                     let session = store.zhulongWorkspace.selectedSession
@@ -295,6 +301,10 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
             $0.author == .zhulong && $0.content == ZhulongChatE2EFixture.reauthorizationReply
         }) && session.authorizations.count == 2
             && session.purpose == .freeform
+            && store.currentZhulongSessionNeedsScopeAuthorization == false
+            && AppViewTreeE2E.hasNoVisibleView(
+                identifier: "zhulong-authorize-scope"
+            )
         write(persisted ? "ok" : "failed: conversation did not survive restart")
     }
 

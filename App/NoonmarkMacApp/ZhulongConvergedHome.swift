@@ -137,44 +137,91 @@ private struct ZhulongWorkspaceHome: View {
     }
 
     private var intentComposer: some View {
-        HStack(alignment: .center, spacing: 10) {
-            MarkdownEditor(
-                text: $intent,
-                placeholder: copy.intentPlaceholder,
-                style: .compact,
-                showsSurface: false,
-                onCommit: startIntent
-            )
-            .focused($intentIsFocused)
-            .frame(maxHeight: 36)
-            .accessibilityIdentifier("zhulong-home-intent")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                MarkdownEditor(
+                    text: $intent,
+                    placeholder: copy.intentPlaceholder,
+                    style: .compact,
+                    showsSurface: false,
+                    onCommit: startIntent
+                )
+                .focused($intentIsFocused)
+                .frame(maxHeight: 36)
+                .accessibilityIdentifier("zhulong-home-intent")
 
-            Button(action: startIntent) {
-                Image(systemName: "arrow.up")
-                    .font(.noonmarkSystem(size: 11, weight: .bold))
-                    .foregroundStyle(canSubmitIntent ? Theme.panel : Theme.text3)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(canSubmitIntent ? Theme.text1 : Theme.controlFill))
-                    .overlay(Circle().stroke(canSubmitIntent ? Color.clear : Theme.line))
-                    .contentShape(Circle())
+                Button(action: startIntent) {
+                    Image(systemName: "arrow.up")
+                        .font(.noonmarkSystem(size: 11, weight: .bold))
+                        .foregroundStyle(
+                            canSubmitIntent ? Theme.panel : Theme.text3
+                        )
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle().fill(
+                                canSubmitIntent
+                                    ? Theme.text1
+                                    : Theme.controlFill
+                            )
+                        )
+                        .overlay(
+                            Circle().stroke(
+                                canSubmitIntent
+                                    ? Color.clear
+                                    : Theme.line
+                            )
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(canSubmitIntent == false)
+                .accessibilityLabel(copy.beginIntentAccessibilityLabel)
+                .accessibilityIdentifier("zhulong-home-submit")
             }
-            .buttonStyle(.plain)
-            .disabled(canSubmitIntent == false)
-            .accessibilityLabel(copy.beginIntentAccessibilityLabel)
-            .accessibilityIdentifier("zhulong-home-submit")
-        }
-        .padding(.leading, 16)
-        .padding(.trailing, 10)
-        .frame(height: CGFloat(MacUIZhulongHomeLayout.composerHeight))
-        .background(
-            RoundedRectangle(cornerRadius: CGFloat(MacUIZhulongHomeLayout.composerCornerRadius))
+            .padding(.leading, 16)
+            .padding(.trailing, 10)
+            .frame(
+                height: CGFloat(
+                    MacUIZhulongHomeLayout.composerHeight
+                )
+            )
+            .background(
+                RoundedRectangle(
+                    cornerRadius: CGFloat(
+                        MacUIZhulongHomeLayout.composerCornerRadius
+                    )
+                )
                 .fill(Theme.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: CGFloat(MacUIZhulongHomeLayout.composerCornerRadius))
-                .stroke(intentIsFocused ? Theme.accent.opacity(0.5) : Theme.line, lineWidth: intentIsFocused ? 1.2 : 1)
-        )
-        .shadow(color: Theme.text1.opacity(0.045), radius: 16, y: 8)
+            )
+            .overlay(
+                RoundedRectangle(
+                    cornerRadius: CGFloat(
+                        MacUIZhulongHomeLayout.composerCornerRadius
+                    )
+                )
+                .stroke(
+                    intentIsFocused
+                        ? Theme.accent.opacity(0.5)
+                        : Theme.line,
+                    lineWidth: intentIsFocused ? 1.2 : 1
+                )
+            )
+            .shadow(
+                color: Theme.text1.opacity(0.045),
+                radius: 16,
+                y: 8
+            )
+
+            if conversationAccessIsDenied {
+                Text(copy.homeDataAccessDeniedHint)
+                    .font(.noonmarkSystem(size: 10.8))
+                    .foregroundStyle(Theme.warn)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(
+                        "zhulong-home-access-denied"
+                    )
+            }
+        }
     }
 
     private var workflowSection: some View {
@@ -237,6 +284,7 @@ private struct ZhulongWorkspaceHome: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(conversationAccessIsDenied)
         .onHover { isHovered in
             hoveredWorkflowID = isHovered ? workflow.id : nil
         }
@@ -289,7 +337,14 @@ private struct ZhulongWorkspaceHome: View {
     }
 
     private var canSubmitIntent: Bool {
-        intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        conversationAccessIsDenied == false
+            && intent.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty == false
+    }
+
+    private var conversationAccessIsDenied: Bool {
+        store.zhulongConversationPermissionDecision == .deny
     }
 
     private func startIntent() {

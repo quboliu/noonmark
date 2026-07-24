@@ -77,14 +77,15 @@ struct ZhulongWorkspaceRail: View {
             railDivider
             DetailSection(copy.providerBoundaryTitle) {
                 VStack(alignment: .leading, spacing: 4) {
-                    if let identity = session.authorization?.providerIdentity {
+                    if let identity =
+                        session.providerSends.last?.providerIdentity
+                        ?? session.authorization?.providerIdentity
+                    {
                         Text(identity.providerID)
                             .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                             .foregroundStyle(Theme.text1)
                         Text(
-                            identity.location == .local
-                                ? copy.localProcessing
-                                : copy.remoteProcessing(model: identity.model)
+                            providerDisclosure(identity)
                         )
                             .font(.noonmarkSystem(size: 10.5))
                             .foregroundStyle(identity.location == .local ? Theme.ok : Theme.warn)
@@ -137,5 +138,25 @@ struct ZhulongWorkspaceRail: View {
 
     private func scopeLabel(_ scope: ZhulongDataScope) -> String {
         copy.scopeTitle(scope.presentationCopyKey)
+    }
+
+    private func providerDisclosure(
+        _ identity: ZhulongProviderConfigurationIdentity
+    ) -> String {
+        guard identity.location == .remote else {
+            return copy.localProcessing
+        }
+        let endpoint = identity.baseURL
+            .flatMap {
+                URLComponents(
+                    url: $0,
+                    resolvingAgainstBaseURL: false
+                )?.host
+            }
+            ?? identity.providerID
+        return copy.remoteRecipient(
+            endpoint: endpoint,
+            model: identity.model
+        )
     }
 }

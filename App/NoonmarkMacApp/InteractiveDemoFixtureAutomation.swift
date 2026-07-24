@@ -304,7 +304,6 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         try session.authorizeScope(
             scopes,
             providerIdentity: providerIdentity,
-            expiresAt: start.addingTimeInterval(60 * 60 * 24 * 30),
             now: start.addingTimeInterval(1)
         )
         let plan = try ZhulongConversationTaskPlan(
@@ -443,7 +442,6 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         try session.authorizeScope(
             scopes,
             providerIdentity: providerIdentity,
-            expiresAt: start.addingTimeInterval(60 * 60 * 24 * 30),
             now: start.addingTimeInterval(1)
         )
         let plan = try ZhulongConversationTaskPlan(
@@ -532,7 +530,6 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         try session.authorizeScope(
             scopes,
             providerIdentity: providerIdentity,
-            expiresAt: start.addingTimeInterval(60 * 60 * 24 * 30),
             now: start.addingTimeInterval(1)
         )
         let request = try session.beginProviderRun(
@@ -573,7 +570,6 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         try session.authorizeScope(
             [.currentDayTodo],
             providerIdentity: providerIdentity,
-            expiresAt: start.addingTimeInterval(60 * 60 * 24 * 30),
             now: start.addingTimeInterval(0.25)
         )
         _ = try session.appendEntry(
@@ -634,12 +630,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let currentProviderIdentity = try store.zhulongProviderIdentity()
         let visibleScopeReauthorizationCardCount = sessions.filter {
             $0.requiresScopeAuthorization(
-                for: currentProviderIdentity,
-                at: DemoFixtureClock.timestamp(
-                    fixture.anchorDate,
-                    hour: 18,
-                    minute: 0
-                )
+                for: currentProviderIdentity
             )
         }.count
         let submittedArtifacts = sessions.flatMap(

@@ -310,6 +310,165 @@ final class ZhulongConversationArtifactTests: XCTestCase {
         XCTAssertNil(session.applyReceipt(for: draft))
     }
 
+    func testProviderRevisionReusesConversationArtifactUntilCommit() throws {
+        let identity = try makeProviderIdentity()
+        let initialPlan = try ZhulongConversationTaskPlan(
+            tasks: [
+                try ZhulongConversationTaskDraft(
+                    title: "初版任务",
+                    descriptionText: nil,
+                    initialNoteBody: nil,
+                    destination: .taskPool,
+                    subtasks: []
+                )
+            ]
+        )
+        let revisedPlan = try ZhulongConversationTaskPlan(
+            tasks: [
+                try ZhulongConversationTaskDraft(
+                    title: "修改后的任务",
+                    descriptionText: "保留在同一张对话表单",
+                    initialNoteBody: nil,
+                    destination: .today,
+                    subtasks: []
+                )
+            ]
+        )
+        var session = try ZhulongSession(
+            primaryIntent: "帮我规划任务",
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: identity,
+            expiresAt: now.addingTimeInterval(600),
+            now: now.addingTimeInterval(1)
+        )
+        let firstRequest = try session.beginProviderRun(
+            payload: makePayload(),
+            providerIdentity: identity,
+            now: now.addingTimeInterval(2)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(
+                content: "这是初版。",
+                draftVersion: 1,
+                artifacts: [.taskPlan(initialPlan)]
+            ),
+            runID: firstRequest.runID,
+            now: now.addingTimeInterval(3)
+        )
+        let engine = NoonmarkEngine()
+        let original = try ZhulongTodoDiffDraft(
+            sessionID: session.id,
+            conversationRunID: firstRequest.runID,
+            planningDate: today,
+            sourceSnapshot: engine.snapshot(),
+            createdAt: now.addingTimeInterval(4),
+            items: initialPlan.todoDiffItems(planningDate: today)
+        )
+        try session.publishConversationTodoDiff(
+            original,
+            now: now.addingTimeInterval(4)
+        )
+
+        let secondRequest = try session.beginProviderRun(
+            payload: makePayload(),
+            providerIdentity: identity,
+            now: now.addingTimeInterval(5)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(
+                content: "我按你的意见修改了。",
+                draftVersion: 2,
+                artifacts: [.taskPlan(revisedPlan)]
+            ),
+            runID: secondRequest.runID,
+            now: now.addingTimeInterval(6)
+        )
+        let revision = try ZhulongTodoDiffDraft(
+            revising: original,
+            conversationRunID: secondRequest.runID,
+            planningDate: today,
+            sourceSnapshot: engine.snapshot(),
+            createdAt: now.addingTimeInterval(7),
+            items: revisedPlan.todoDiffItems(planningDate: today)
+        )
+        try session.reviseConversationTodoDiff(
+            revision,
+            now: now.addingTimeInterval(7)
+        )
+
+        XCTAssertEqual(session.currentTodoDiff?.id, revision.id)
+        XCTAssertEqual(session.currentTodoDiff?.origin, original.origin)
+        XCTAssertEqual(session.conversationTodoArtifacts.count, 1)
+        XCTAssertEqual(
+            session.conversationTodoArtifacts.first?.anchorRunID,
+            firstRequest.runID
+        )
+        XCTAssertEqual(
+            session.conversationTodoArtifacts.first?.draft.id,
+            revision.id
+        )
+
+        var appliedEngine = engine
+        _ = try session.authorizeTodoWrite(
+            against: appliedEngine,
+            today: today,
+            now: now.addingTimeInterval(8)
+        )
+        let receipt = try session.applyAuthorizedTodoDiff(
+            to: &appliedEngine,
+            today: today,
+            now: now.addingTimeInterval(9)
+        )
+
+        XCTAssertNil(session.currentTodoDiff)
+        XCTAssertEqual(session.conversationTodoArtifacts.count, 1)
+        XCTAssertEqual(
+            session.conversationTodoArtifacts.first?.receipt?.id,
+            receipt.id
+        )
+
+        let thirdRequest = try session.beginProviderRun(
+            payload: makePayload(),
+            providerIdentity: identity,
+            now: now.addingTimeInterval(10)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(
+                content: "这是下一份独立规划。",
+                draftVersion: 1,
+                artifacts: [.taskPlan(initialPlan)]
+            ),
+            runID: thirdRequest.runID,
+            now: now.addingTimeInterval(11)
+        )
+        let nextArtifact = try ZhulongTodoDiffDraft(
+            sessionID: session.id,
+            conversationRunID: thirdRequest.runID,
+            planningDate: today,
+            sourceSnapshot: appliedEngine.snapshot(),
+            createdAt: now.addingTimeInterval(12),
+            items: initialPlan.todoDiffItems(planningDate: today)
+        )
+        try session.publishConversationTodoDiff(
+            nextArtifact,
+            now: now.addingTimeInterval(12)
+        )
+
+        XCTAssertEqual(session.conversationTodoArtifacts.count, 2)
+        XCTAssertEqual(
+            session.conversationTodoArtifacts.last?.anchorRunID,
+            thirdRequest.runID
+        )
+        XCTAssertEqual(
+            session.conversationTodoArtifacts.last?.draft.id,
+            nextArtifact.id
+        )
+    }
+
     private func makePayload() throws -> ZhulongProviderPayload {
         try ZhulongProviderPayload(
             systemPrompt: "自然对话并生成结构化产物。",

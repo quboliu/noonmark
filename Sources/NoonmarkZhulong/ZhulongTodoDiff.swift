@@ -75,6 +75,10 @@ public struct ZhulongTodoDiffItem: Codable, Equatable, Sendable {
 
 public enum ZhulongTodoDiffSource: Codable, Equatable, Sendable {
     case providerOriginal
+    case providerRevision(
+        parentDraftID: ZhulongTodoDiffID,
+        runID: ZhulongProviderRunID
+    )
     case userRevision(parentDraftID: ZhulongTodoDiffID, modifiedItemIDs: [ZhulongTodoDiffItemID])
 }
 
@@ -222,6 +226,39 @@ public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
         try validate()
     }
 
+    public init(
+        id: ZhulongTodoDiffID = ZhulongTodoDiffID(),
+        revising parent: ZhulongTodoDiffDraft,
+        conversationRunID: ZhulongProviderRunID,
+        planningDate: LocalDate,
+        sourceSnapshot: NoonmarkSnapshot,
+        createdAt: Date = Date(),
+        items: [ZhulongTodoDiffItem]
+    ) throws {
+        try parent.validate()
+        guard case .conversation = parent.origin,
+              createdAt.timeIntervalSinceReferenceDate.isFinite,
+              createdAt > parent.createdAt
+        else {
+            throw ZhulongTodoDiffError.invalidRevision
+        }
+        self.id = id
+        sessionID = parent.sessionID
+        origin = parent.origin
+        version = parent.version + 1
+        source = .providerRevision(
+            parentDraftID: parent.id,
+            runID: conversationRunID
+        )
+        self.planningDate = planningDate
+        sourceSnapshotDigest = try ZhulongTodoDigest.snapshot(
+            sourceSnapshot
+        )
+        self.createdAt = createdAt
+        self.items = items
+        try validate()
+    }
+
     public func integrityDigest() throws -> String {
         try validate()
         return try ZhulongTodoDigest.value(self)
@@ -245,6 +282,13 @@ public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
         switch source {
         case .providerOriginal:
             guard version == 1 else { throw ZhulongTodoDiffError.invalidRevision }
+        case let .providerRevision(parentDraftID, runID):
+            guard version > 1,
+                  parentDraftID != id,
+                  conversationRunID != runID
+            else {
+                throw ZhulongTodoDiffError.invalidRevision
+            }
         case let .userRevision(parentDraftID, modifiedItemIDs):
             guard version > 1,
                   parentDraftID != id,
@@ -256,6 +300,21 @@ public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
         }
         guard items.allSatisfy({ Self.isValid($0.operation) }) else {
             throw ZhulongTodoDiffError.invalidOperation
+        }
+    }
+
+    static func conversationOperations(
+        in response: ZhulongProviderResponse,
+        planningDate: LocalDate
+    ) -> [ZhulongTodoDiffOperation] {
+        response.artifacts.flatMap {
+            artifact -> [ZhulongTodoDiffOperation] in
+            guard case let .taskPlan(plan) = artifact else {
+                return []
+            }
+            return plan.todoDiffItems(
+                planningDate: planningDate
+            ).map(\.operation)
         }
     }
 
@@ -511,6 +570,22 @@ public struct ZhulongTodoDiffApplier: Sendable {
     }
 }
 
+public struct ZhulongConversationTodoArtifact: Equatable, Sendable {
+    public let anchorRunID: ZhulongProviderRunID
+    public let draft: ZhulongTodoDiffDraft
+    public let receipt: ZhulongTodoApplyReceipt?
+
+    public init(
+        anchorRunID: ZhulongProviderRunID,
+        draft: ZhulongTodoDiffDraft,
+        receipt: ZhulongTodoApplyReceipt?
+    ) {
+        self.anchorRunID = anchorRunID
+        self.draft = draft
+        self.receipt = receipt
+    }
+}
+
 public extension ZhulongSession {
     var currentTodoDiff: ZhulongTodoDiffDraft? {
         guard let draft = todoDiffDrafts.reversed().first(where: { draft in
@@ -538,6 +613,34 @@ public extension ZhulongSession {
         for draft: ZhulongTodoDiffDraft
     ) -> ZhulongTodoApplyReceipt? {
         todoApplyReceipts.last { $0.draftID == draft.id }
+    }
+
+    var conversationTodoArtifacts: [ZhulongConversationTodoArtifact] {
+        var orderedOrigins: [ZhulongTodoDiffOrigin] = []
+        var latestByOrigin: [
+            ZhulongTodoDiffOrigin: ZhulongTodoDiffDraft
+        ] = [:]
+        for draft in todoDiffDrafts {
+            guard case .conversation = draft.origin else {
+                continue
+            }
+            if latestByOrigin[draft.origin] == nil {
+                orderedOrigins.append(draft.origin)
+            }
+            latestByOrigin[draft.origin] = draft
+        }
+        return orderedOrigins.compactMap { origin in
+            guard case let .conversation(runID) = origin,
+                  let draft = latestByOrigin[origin]
+            else {
+                return nil
+            }
+            return ZhulongConversationTodoArtifact(
+                anchorRunID: runID,
+                draft: draft,
+                receipt: applyReceipt(for: draft)
+            )
+        }
     }
 
     mutating func publishTodoDiff(
@@ -595,15 +698,11 @@ public extension ZhulongSession {
         else {
             throw ZhulongTodoDiffError.sessionBindingMismatch
         }
-        let proposedOperations = response.artifacts.flatMap {
-            artifact -> [ZhulongTodoDiffOperation] in
-            guard case let .taskPlan(plan) = artifact else {
-                return []
-            }
-            return plan.todoDiffItems(
+        let proposedOperations = ZhulongTodoDiffDraft
+            .conversationOperations(
+                in: response,
                 planningDate: draft.planningDate
-            ).map(\.operation)
-        }
+            )
         guard proposedOperations == draft.items.map(\.operation),
               proposedOperations.isEmpty == false
         else {
@@ -647,6 +746,65 @@ public extension ZhulongSession {
         appendEvent(
             .todoDiffRevised,
             summary: "用户已建立 Todo 变更 diff 修订版本",
+            reference: .todoDiff(revision.id),
+            now: now
+        )
+    }
+
+    mutating func reviseConversationTodoDiff(
+        _ revision: ZhulongTodoDiffDraft,
+        now: Date = Date()
+    ) throws {
+        guard workspaceStatus == .active,
+              phase == .draftReview,
+              let parent = currentTodoDiff,
+              revision.sessionID == id,
+              revision.origin == parent.origin,
+              revision.version == parent.version + 1,
+              revision.createdAt == now,
+              case let .providerRevision(
+                  parentDraftID,
+                  runID
+              ) = revision.source,
+              parentDraftID == parent.id,
+              let send = providerSends.last(where: {
+                  $0.runID == runID
+              }),
+              case .conversation = send.purpose,
+              let response = send.response,
+              let completedAt = send.completedAt,
+              completedAt > parent.createdAt,
+              completedAt < now,
+              todoWriteAuthorizations.contains(where: {
+                  $0.draftID == parent.id
+                      && $0.status == .active
+              }) == false,
+              todoApplyReceipts.contains(where: {
+                  $0.draftID == parent.id
+              }) == false,
+              todoDiffDrafts.contains(where: {
+                  $0.id == revision.id
+              }) == false
+        else {
+            throw ZhulongTodoDiffError.sessionBindingMismatch
+        }
+        let proposedOperations = ZhulongTodoDiffDraft
+            .conversationOperations(
+                in: response,
+                planningDate: revision.planningDate
+            )
+        guard proposedOperations
+            == revision.items.map(\.operation),
+            proposedOperations.isEmpty == false
+        else {
+            throw ZhulongTodoDiffError.sessionBindingMismatch
+        }
+        try revision.validate()
+        try validateActivityTime(now)
+        todoDiffDrafts.append(revision)
+        appendEvent(
+            .todoDiffRevised,
+            summary: "Provider 已更新对话 Todo 变更 diff",
             reference: .todoDiff(revision.id),
             now: now
         )

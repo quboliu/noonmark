@@ -88,10 +88,13 @@ struct ZhulongInlineArtifactE2EAutomation:
             }
             return
         }
+        let artifactIdentifier = draft.conversationRunID?
+            .rawValue.uuidString ?? "missing"
         if session.applyReceipt(for: draft) != nil {
             waitForReceipt(
                 on: store,
                 draftID: draft.id,
+                artifactIdentifier: artifactIdentifier,
                 remainingAttempts: 80
             )
             return
@@ -145,11 +148,12 @@ struct ZhulongInlineArtifactE2EAutomation:
             return
         }
         guard AppViewTreeE2E.view(
-            identifier: "zhulong-inline-task-draft-anchor"
+            identifier:
+            "zhulong-inline-task-draft-anchor-\(artifactIdentifier)"
         ) != nil,
             let submitAnchor = AppViewTreeE2E.view(
                 identifier:
-                "zhulong-inline-task-draft-submit-anchor"
+                "zhulong-inline-task-draft-submit-anchor-\(artifactIdentifier)"
             ),
             let submitButton = AppViewTreeE2E.button(
                 overlapping: submitAnchor
@@ -179,6 +183,7 @@ struct ZhulongInlineArtifactE2EAutomation:
         waitForReceipt(
             on: store,
             draftID: draft.id,
+            artifactIdentifier: artifactIdentifier,
             remainingAttempts: 80
         )
     }
@@ -187,6 +192,7 @@ struct ZhulongInlineArtifactE2EAutomation:
     private func waitForReceipt(
         on store: NoonmarkStore,
         draftID: ZhulongTodoDiffID,
+        artifactIdentifier: String,
         remainingAttempts: Int
     ) {
         guard remainingAttempts > 0 else {
@@ -227,16 +233,27 @@ struct ZhulongInlineArtifactE2EAutomation:
             identifier:
             "zhulong-stream-conversation-current-action"
         )
+        let historyRetained = AppViewTreeE2E.view(
+            identifier:
+            "zhulong-inline-task-draft-anchor-\(artifactIdentifier)"
+        ) != nil
+        let submitRemoved = AppViewTreeE2E.hasNoVisibleView(
+            identifier:
+            "zhulong-inline-task-draft-submit-anchor-\(artifactIdentifier)"
+        )
         guard applied,
               visibleTask,
               pooledTask,
               futureTask,
-              actionDismissed
+              actionDismissed,
+              historyRetained,
+              submitRemoved
         else {
             retry {
                 waitForReceipt(
                     on: store,
                     draftID: draftID,
+                    artifactIdentifier: artifactIdentifier,
                     remainingAttempts: remainingAttempts - 1
                 )
             }

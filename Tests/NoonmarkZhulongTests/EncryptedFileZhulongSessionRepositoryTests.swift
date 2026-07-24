@@ -157,7 +157,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         }
     }
 
-    func testRepositoryRoundTripsConversationTaskDraftAndUserRevision()
+    func testRepositoryRoundTripsConversationTaskDraftAndRevisions()
         throws
     {
         let repository = makeRepository(key: key)
@@ -237,15 +237,69 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
             revision,
             now: now.addingTimeInterval(5)
         )
+        let providerPlan = try ZhulongConversationTaskPlan(
+            tasks: [
+                try ZhulongConversationTaskDraft(
+                    title: "Provider 再次修改的任务",
+                    descriptionText: nil,
+                    initialNoteBody: nil,
+                    destination: .taskPool,
+                    subtasks: []
+                )
+            ]
+        )
+        let secondRequest = try session.beginProviderRun(
+            payload: ZhulongProviderPayload(
+                systemPrompt: "自然对话并修订任务产物。",
+                userPrompt: "请根据意见调整",
+                contextVersion: "conversation-artifact-v2",
+                scopeContent: [
+                    .currentDayTodo: "今天暂无任务"
+                ]
+            ),
+            providerIdentity: identity,
+            now: now.addingTimeInterval(6)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(
+                content: "我已经按意见调整。",
+                draftVersion: 3,
+                artifacts: [.taskPlan(providerPlan)]
+            ),
+            runID: secondRequest.runID,
+            now: now.addingTimeInterval(7)
+        )
+        let providerRevision = try ZhulongTodoDiffDraft(
+            revising: revision,
+            conversationRunID: secondRequest.runID,
+            planningDate: date,
+            sourceSnapshot: engine.snapshot(),
+            createdAt: now.addingTimeInterval(8),
+            items: providerPlan.todoDiffItems(
+                planningDate: date
+            )
+        )
+        try session.reviseConversationTodoDiff(
+            providerRevision,
+            now: now.addingTimeInterval(8)
+        )
 
         try repository.save(session)
 
         let restored = try repository.load(session.id)
         XCTAssertEqual(restored, session)
-        XCTAssertEqual(restored.currentTodoDiff?.id, revision.id)
+        XCTAssertEqual(
+            restored.currentTodoDiff?.id,
+            providerRevision.id
+        )
         XCTAssertEqual(
             restored.currentTodoDiff?.conversationRunID,
             request.runID
+        )
+        XCTAssertEqual(
+            restored.conversationTodoArtifacts.first?
+                .draft.id,
+            providerRevision.id
         )
     }
 

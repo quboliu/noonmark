@@ -566,19 +566,47 @@ struct ZhulongSessionRecord: Codable, Equatable {
                     guard let response = providerSends.first(
                         where: { $0.runID == runID }
                     )?.response,
-                    response.artifacts.flatMap({
-                        artifact -> [ZhulongTodoDiffOperation] in
-                        guard case let .taskPlan(plan) = artifact else {
-                            return []
-                        }
-                        return plan.todoDiffItems(
-                            planningDate: draft.planningDate
-                        ).map(\.operation)
-                    }) == draft.items.map(\.operation)
+                    ZhulongTodoDiffDraft
+                    .conversationOperations(
+                        in: response,
+                        planningDate: draft.planningDate
+                    ) == draft.items.map(\.operation)
                     else {
                         throw ZhulongSessionRestorationError
                             .invalidEventsForPhase
                     }
+                }
+            case let .providerRevision(
+                parentDraftID,
+                runID
+            ):
+                guard let parent = latestDraftByOrigin[
+                    draft.origin
+                ],
+                parent.id == parentDraftID,
+                let send = providerSends.first(where: {
+                    $0.runID == runID
+                }),
+                case .conversation = send.purpose,
+                let response = send.response,
+                let completedAt = send.completedAt,
+                completedAt > parent.createdAt,
+                completedAt < draft.createdAt,
+                ZhulongTodoDiffDraft
+                    .conversationOperations(
+                        in: response,
+                        planningDate: draft.planningDate
+                    ) == draft.items.map(\.operation),
+                todoWriteAuthorizations.contains(where: {
+                    $0.draftID == parent.id
+                        && $0.status == .active
+                }) == false,
+                todoApplyReceipts.contains(where: {
+                    $0.draftID == parent.id
+                }) == false
+                else {
+                    throw ZhulongSessionRestorationError
+                        .invalidEventsForPhase
                 }
             case let .userRevision(parentDraftID, _):
                 guard let parent = latestDraftByOrigin[draft.origin],
@@ -657,14 +685,20 @@ struct ZhulongSessionRecord: Codable, Equatable {
         expected.append(contentsOf: todoDiffDrafts.map { draft in
             let revised = switch draft.source {
             case .providerOriginal: false
-            case .userRevision: true
+            case .providerRevision, .userRevision: true
+            }
+            let summary = switch draft.source {
+            case .providerOriginal:
+                "已发布可编辑 Todo 变更 diff"
+            case .providerRevision:
+                "Provider 已更新对话 Todo 变更 diff"
+            case .userRevision:
+                "用户已建立 Todo 变更 diff 修订版本"
             }
             return (
                 draft.createdAt,
                 revised ? .todoDiffRevised : .todoDiffPublished,
-                revised
-                    ? "用户已建立 Todo 变更 diff 修订版本"
-                    : "已发布可编辑 Todo 变更 diff",
+                summary,
                 .todoDiff(draft.id)
             )
         })

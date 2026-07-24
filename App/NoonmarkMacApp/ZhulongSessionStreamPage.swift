@@ -19,6 +19,15 @@ private enum ZhulongArtifactDraftPersistence<ID> {
     }
 }
 
+private extension ZhulongTodoDiffSource {
+    var isProviderRevision: Bool {
+        if case .providerRevision = self {
+            return true
+        }
+        return false
+    }
+}
+
 struct ZhulongSessionStreamPage: View {
     @EnvironmentObject private var store: NoonmarkStore
     @ObservedObject var workspace: ZhulongWorkspaceStore
@@ -151,8 +160,14 @@ struct ZhulongSessionStreamPage: View {
                     of: workspace.selectedSession?
                         .currentTodoDiff?.id.rawValue
                 ) {
-                    guard workspace.selectedSession?
-                        .currentTodoDiff?.version == 1
+                    guard let draft = workspace.selectedSession?
+                        .currentTodoDiff,
+                        draft.version == 1
+                            || draft.source.isProviderRevision,
+                        let recordID =
+                        conversationArtifactRecordID(
+                            for: draft
+                        )
                     else {
                         return
                     }
@@ -164,7 +179,7 @@ struct ZhulongSessionStreamPage: View {
                             : .top
                     DispatchQueue.main.async {
                         proxy.scrollTo(
-                            "zhulong-stream-conversation-current-action",
+                            recordID,
                             anchor: anchor
                         )
                     }
@@ -343,6 +358,9 @@ struct ZhulongSessionStreamPage: View {
             dossierSectionTitle: { copy.dossierSectionTitle($0) },
             chapterSectionTitle: {
                 copy.chapterSectionTitle(number: $0, section: $1)
+            },
+            artifactContent: { draftID in
+                conversationTodoArtifactContent(draftID)
             }
         )
     }
@@ -386,13 +404,6 @@ struct ZhulongSessionStreamPage: View {
             .padding(.vertical, 4)
         } else if let gate = workspace.selectedSession?.currentDecisionGate {
             decisionGateAction(gate)
-        } else if let session = workspace.selectedSession,
-                  let draft = pendingConversationTodoDraft(session)
-        {
-            inlineTodoDraftAction(
-                draft,
-                session: session
-            )
         } else if let session = workspace.selectedSession,
                   hasPendingDailyReview(in: session)
         {
@@ -599,7 +610,6 @@ struct ZhulongSessionStreamPage: View {
         guard let session = workspace.selectedSession else { return false }
         return needsScopeAuthorization
             || session.currentDecisionGate != nil
-            || pendingConversationTodoDraft(session) != nil
             || hasPendingDailyReview(in: session)
     }
 
@@ -648,13 +658,17 @@ struct ZhulongSessionStreamPage: View {
     @ViewBuilder
     private func inlineTodoDraftAction(
         _ draft: ZhulongTodoDiffDraft,
-        session: ZhulongSession
+        artifactIdentifier: String
     ) -> some View {
         if let binding = inlineTodoDraftBinding(for: draft) {
             ZhulongInlineTaskDraftCard(
                 state: binding,
                 language: store.engine.preferences.language,
-                isApplied: session.applyReceipt(for: draft) != nil,
+                artifactIdentifier: artifactIdentifier,
+                isApplied: false,
+                isUpdating:
+                workspace.selectedSession?.phase
+                    == .providerRunning,
                 onSubmit: submitInlineTodoDraft
             )
         } else {
@@ -667,6 +681,51 @@ struct ZhulongSessionStreamPage: View {
                     )
                 }
         }
+    }
+
+    @ViewBuilder
+    private func conversationTodoArtifactContent(
+        _ draftID: ZhulongTodoDiffID
+    ) -> some View {
+        if let artifact = workspace.selectedSession?
+            .conversationTodoArtifacts.first(where: {
+                $0.draft.id == draftID
+            })
+        {
+            let identifier =
+                artifact.anchorRunID.rawValue.uuidString
+            if artifact.receipt == nil,
+               workspace.selectedSession?.currentTodoDiff?.id
+               == artifact.draft.id
+            {
+                inlineTodoDraftAction(
+                    artifact.draft,
+                    artifactIdentifier: identifier
+                )
+            } else if let state = ZhulongInlineTaskDraftState(
+                draft: artifact.draft,
+                today: store.today
+            ) {
+                ZhulongInlineTaskDraftCard(
+                    state: .constant(state),
+                    language:
+                    store.engine.preferences.language,
+                    artifactIdentifier: identifier,
+                    isApplied: artifact.receipt != nil,
+                    isUpdating: false,
+                    onSubmit: {}
+                )
+            }
+        }
+    }
+
+    private func conversationArtifactRecordID(
+        for draft: ZhulongTodoDiffDraft
+    ) -> String? {
+        guard let runID = draft.conversationRunID else {
+            return nil
+        }
+        return "conversation-todo-artifact-\(runID.rawValue.uuidString)"
     }
 
     private func pendingConversationTodoDraft(

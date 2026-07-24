@@ -1,15 +1,18 @@
 import NoonmarkMacRuntime
+import NoonmarkZhulong
 import SwiftUI
 
 /// All four stream views deliberately reuse this one transcript grammar. The
 /// projection changes how records are grouped for reading; it never replaces
 /// the message primitive with a second dashboard renderer.
-struct ZhulongChatTranscript: View {
+struct ZhulongChatTranscript<ArtifactContent: View>: View {
     let records: [ZhulongStreamRecord]
     let variant: ZhulongStreamView
     let sectionTitle: (ZhulongStreamSection) -> String
     let dossierSectionTitle: (String) -> String
     let chapterSectionTitle: (Int, String) -> String
+    @ViewBuilder let artifactContent:
+        (ZhulongTodoDiffID) -> ArtifactContent
 
     var body: some View {
         transcript
@@ -84,9 +87,18 @@ struct ZhulongChatTranscript: View {
         }
     }
 
-    private func transcriptRecord(_ record: ZhulongStreamRecord) -> some View {
-        ZhulongChatMessage(record: record)
-            .id(record.id)
+    @ViewBuilder
+    private func transcriptRecord(
+        _ record: ZhulongStreamRecord
+    ) -> some View {
+        switch record.content {
+        case .message:
+            ZhulongChatMessage(record: record)
+                .id(record.id)
+        case let .conversationTodoArtifact(draftID):
+            artifactContent(draftID)
+                .id(record.id)
+        }
     }
 
     private func beginsSection(

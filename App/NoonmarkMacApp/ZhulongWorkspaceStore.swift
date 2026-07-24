@@ -67,8 +67,14 @@ enum ZhulongStreamSection: CaseIterable, Identifiable {
 }
 
 struct ZhulongStreamRecord: Identifiable, Equatable {
+    enum Content: Equatable {
+        case message
+        case conversationTodoArtifact(ZhulongTodoDiffID)
+    }
+
     let id: String
     let occurredAt: Date
+    let sortRank: Int
     let actor: ZhulongStreamActor
     let section: ZhulongStreamSection
     let eyebrow: String
@@ -77,6 +83,7 @@ struct ZhulongStreamRecord: Identifiable, Equatable {
     let isBoundary: Bool
     let isInvalidation: Bool
     let isCriticalSystemNotice: Bool
+    let content: Content
 }
 
 /// Text currently arriving from an authorized Provider. This exists only in
@@ -210,6 +217,15 @@ final class ZhulongWorkspaceStore: ObservableObject {
     func records(using copy: ZhulongCopy) -> [ZhulongStreamRecord] {
         guard let session = selectedSession else { return [] }
         var projected = session.entries.map { record(for: $0, copy: copy) }
+        projected.append(contentsOf: session
+            .conversationTodoArtifacts
+            .compactMap {
+                record(
+                    for: $0,
+                    in: session,
+                    copy: copy
+                )
+            })
         projected.append(contentsOf: session.events
             .filter {
                 isConversationResponseEvent($0, in: session) == false
@@ -218,6 +234,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
             .map { record(for: $0, copy: copy) })
         return projected.sorted { lhs, rhs in
             if lhs.occurredAt != rhs.occurredAt { return lhs.occurredAt < rhs.occurredAt }
+            if lhs.sortRank != rhs.sortRank {
+                return lhs.sortRank < rhs.sortRank
+            }
             return lhs.id < rhs.id
         }
     }
@@ -934,18 +953,35 @@ final class ZhulongWorkspaceStore: ObservableObject {
             $0.todoDiffItems(planningDate: planningDate)
         }
         if taskItems.isEmpty == false {
-            let draft = try ZhulongTodoDiffDraft(
-                sessionID: session.id,
-                conversationRunID: send.runID,
-                planningDate: planningDate,
-                sourceSnapshot: sourceSnapshot,
-                createdAt: mutationDate,
-                items: taskItems
-            )
-            try session.publishConversationTodoDiff(
-                draft,
-                now: mutationDate
-            )
+            if let parent = session.currentTodoDiff,
+               parent.conversationRunID != nil
+            {
+                let revision = try ZhulongTodoDiffDraft(
+                    revising: parent,
+                    conversationRunID: send.runID,
+                    planningDate: planningDate,
+                    sourceSnapshot: sourceSnapshot,
+                    createdAt: mutationDate,
+                    items: taskItems
+                )
+                try session.reviseConversationTodoDiff(
+                    revision,
+                    now: mutationDate
+                )
+            } else {
+                let draft = try ZhulongTodoDiffDraft(
+                    sessionID: session.id,
+                    conversationRunID: send.runID,
+                    planningDate: planningDate,
+                    sourceSnapshot: sourceSnapshot,
+                    createdAt: mutationDate,
+                    items: taskItems
+                )
+                try session.publishConversationTodoDiff(
+                    draft,
+                    now: mutationDate
+                )
+            }
             mutationDate = strictlyAfter(mutationDate)
         }
         if let review = response.artifacts.compactMap({
@@ -1368,6 +1404,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
         return ZhulongStreamRecord(
             id: "entry-\(entry.id.rawValue.uuidString)",
             occurredAt: entry.createdAt,
+            sortRank: 0,
             actor: actor,
             section: entry.kind == .decision || entry.kind == .correction ? .decision : .intent,
             eyebrow: entry.author == .user ? copy.userEyebrow : copy.zhulongEyebrow,
@@ -1375,7 +1412,38 @@ final class ZhulongWorkspaceStore: ObservableObject {
             body: entry.content,
             isBoundary: entry.kind == .decision || entry.kind == .correction,
             isInvalidation: false,
-            isCriticalSystemNotice: false
+            isCriticalSystemNotice: false,
+            content: .message
+        )
+    }
+
+    private func record(
+        for artifact: ZhulongConversationTodoArtifact,
+        in session: ZhulongSession,
+        copy: ZhulongCopy
+    ) -> ZhulongStreamRecord? {
+        guard let anchorDate = session.providerSends.first(
+            where: { $0.runID == artifact.anchorRunID }
+        )?.completedAt
+        else {
+            return nil
+        }
+        return ZhulongStreamRecord(
+            id:
+            "conversation-todo-artifact-\(artifact.anchorRunID.rawValue.uuidString)",
+            occurredAt: anchorDate,
+            sortRank: 1,
+            actor: .zhulong,
+            section: .todo,
+            eyebrow: copy.zhulongOutputEyebrow,
+            title: "",
+            body: nil,
+            isBoundary: false,
+            isInvalidation: false,
+            isCriticalSystemNotice: false,
+            content: .conversationTodoArtifact(
+                artifact.draft.id
+            )
         )
     }
 
@@ -1404,6 +1472,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
         ZhulongStreamRecord(
             id: "event-\(event.sequence)",
             occurredAt: event.occurredAt,
+            sortRank: 0,
             actor: actor(for: event.kind),
             section: section(for: event.kind),
             eyebrow: eyebrow(for: event.kind, copy: copy),
@@ -1414,7 +1483,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
             body: detail(for: event, copy: copy),
             isBoundary: isBoundary(event.kind),
             isInvalidation: isInvalidation(event.kind),
-            isCriticalSystemNotice: isCriticalSystemNotice(event.kind)
+            isCriticalSystemNotice: isCriticalSystemNotice(event.kind),
+            content: .message
         )
     }
 

@@ -188,7 +188,9 @@ struct ZhulongInlineTaskDraftCard: View {
     @Binding var state: ZhulongInlineTaskDraftState
 
     let language: AppLanguage
+    let artifactIdentifier: String
     let isApplied: Bool
+    let isUpdating: Bool
     let onSubmit: () -> Void
 
     private var isChinese: Bool {
@@ -204,6 +206,10 @@ struct ZhulongInlineTaskDraftCard: View {
                 Text(
                     isApplied
                         ? (isChinese ? "已提交" : "Committed")
+                        : isUpdating
+                        ? (isChinese
+                            ? "烛龙正在更新"
+                            : "Zhulong is updating")
                         : (isChinese ? "可直接编辑" : "Editable")
                 )
                 .font(.noonmarkSystem(size: 10.5, weight: .semibold))
@@ -228,7 +234,7 @@ struct ZhulongInlineTaskDraftCard: View {
                 }
             }
 
-            if isApplied == false {
+            if isApplied == false, isUpdating == false {
                 Button {
                     state.addTask()
                 } label: {
@@ -258,19 +264,19 @@ struct ZhulongInlineTaskDraftCard: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .accessibilityIdentifier(
-                        "zhulong-inline-task-draft-submit"
+                        "zhulong-inline-task-draft-submit-\(artifactIdentifier)"
                     )
                     .background {
                         AppE2EViewAnchor(
                             identifier:
-                            "zhulong-inline-task-draft-submit-anchor",
+                            "zhulong-inline-task-draft-submit-anchor-\(artifactIdentifier)",
                             verificationText:
                             isChinese ? "提交任务" : "Commit tasks"
                         )
                     }
                 }
                 .padding(.top, 16)
-            } else {
+            } else if isApplied {
                 Label(
                     isChinese
                         ? "这些任务已经写入对应的任务池、Day Todo 或未来计划。"
@@ -279,6 +285,16 @@ struct ZhulongInlineTaskDraftCard: View {
                 )
                 .font(.noonmarkSystem(size: 11.5, weight: .medium))
                 .foregroundStyle(Theme.ok)
+                .padding(.top, 16)
+            } else {
+                Label(
+                    isChinese
+                        ? "当前可见版本已保存；烛龙返回修订前暂不可编辑。"
+                        : "This visible version is saved and locked until Zhulong returns the revision.",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+                .font(.noonmarkSystem(size: 11.5, weight: .medium))
+                .foregroundStyle(Theme.accent)
                 .padding(.top, 16)
             }
         }
@@ -295,11 +311,14 @@ struct ZhulongInlineTaskDraftCard: View {
                         : Theme.accent.opacity(0.22)
                 )
         )
-        .accessibilityIdentifier("zhulong-inline-task-draft")
-        .disabled(isApplied)
+        .accessibilityIdentifier(
+            "zhulong-inline-task-draft-\(artifactIdentifier)"
+        )
+        .disabled(isApplied || isUpdating)
         .background {
             AppE2EViewAnchor(
-                identifier: "zhulong-inline-task-draft-anchor",
+                identifier:
+                "zhulong-inline-task-draft-anchor-\(artifactIdentifier)",
                 verificationText:
                 isChinese ? "任务草稿" : "Task draft"
             )

@@ -248,12 +248,13 @@ final class ZhulongWorkspaceStore: ObservableObject {
         }
     }
 
+    @discardableResult
     func createSession(
         intent: String,
         purpose: ZhulongSessionPurpose = .freeform,
         scopes: Set<ZhulongDataScope>,
         now: Date = Date()
-    ) {
+    ) -> ZhulongSessionID? {
         do {
             try assertNoPendingApplication()
             let session = try ZhulongSession(
@@ -266,10 +267,12 @@ final class ZhulongWorkspaceStore: ObservableObject {
             sessions.insert(session, at: 0)
             selectedSessionID = session.id
             status = nil
+            return session.id
         } catch {
             projectSidecarMutationFailure(
                 fallback: .sessionCreationFailed
             )
+            return nil
         }
     }
 

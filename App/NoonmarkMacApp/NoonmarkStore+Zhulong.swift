@@ -87,7 +87,7 @@ extension NoonmarkStore {
     }
 
     func startZhulongWorkspaceSession(intent: String) {
-        zhulongWorkspace.createSession(
+        startZhulongWorkspaceSession(
             intent: intent,
             purpose: .freeform,
             scopes: [.currentDayTodo]
@@ -95,11 +95,27 @@ extension NoonmarkStore {
     }
 
     func startZhulongWorkspaceSession(intent: String, task: ZhulongTask) {
-        zhulongWorkspace.createSession(
+        startZhulongWorkspaceSession(
             intent: intent,
             purpose: zhulongSessionPurpose(for: task),
             scopes: zhulongDataScopes(for: task)
         )
+    }
+
+    private func startZhulongWorkspaceSession(
+        intent: String,
+        purpose: ZhulongSessionPurpose,
+        scopes: Set<ZhulongDataScope>
+    ) {
+        guard let sessionID = zhulongWorkspace.createSession(
+            intent: intent,
+            purpose: purpose,
+            scopes: scopes
+        ), zhulongWorkspace.selectedSessionID == sessionID
+        else {
+            return
+        }
+        authorizeCurrentZhulongWorkspaceSession()
     }
 
     func zhulongTask(for session: ZhulongSession) -> ZhulongTask {

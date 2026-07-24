@@ -198,7 +198,6 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
     private func startInteraction(on store: NoonmarkStore) {
         store.page = .zhulong
         store.startZhulongWorkspaceSession(intent: ZhulongChatE2EFixture.intent)
-        store.authorizeCurrentZhulongWorkspaceSession()
         guard store.zhulongWorkspace.selectedSession != nil else {
             write("failed: missing Zhulong session")
             return
@@ -214,6 +213,9 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
                     return store.zhulongWorkspace.selectedLiveResponse?.content
                             == ZhulongChatE2EFixture.initialReplyStreamingFragment
                         && fullReplyAlreadyPersisted == false
+                        && AppViewTreeE2E.hasNoVisibleView(
+                            identifier: "zhulong-authorize-scope"
+                        )
                         && AppViewTreeE2E.view(
                             identifier: "zhulong-live-assistant-message"
                         ) != nil

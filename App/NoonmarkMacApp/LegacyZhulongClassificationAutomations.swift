@@ -55,7 +55,6 @@ struct ZhulongStreamE2EAutomation: LaunchAutomationRunnable {
                 intent: task.e2eIntent,
                 task: task
             )
-            store.authorizeCurrentZhulongWorkspaceSession()
         } else if let intent, intent.isEmpty == false {
             store.startZhulongWorkspaceSession(intent: intent)
         }

@@ -206,10 +206,15 @@ struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
             let sessionCount = store.zhulongWorkspace.sessions.count
             store.startZhulongWorkspaceSession(intent: "结束今天并安排明天")
             try expect(store.zhulongWorkspace.sessions.count == sessionCount + 1, "workspace session was not created")
-            try expect(store.zhulongWorkspace.selectedSession?.phase == .scopeReview, "new session bypassed scope review")
+            try expect(
+                store.zhulongWorkspace.selectedSession?.phase != .scopeReview,
+                "new session kept the redundant initial scope gate"
+            )
             try expect(store.zhulongWorkspace.selectedSession?.purpose == .freeform, "natural chat intent became a workflow")
-            store.authorizeCurrentZhulongWorkspaceSession()
-            try expect(store.zhulongWorkspace.selectedSession?.phase == .readyForProvider, "scope authorization was not persisted")
+            try expect(
+                store.zhulongWorkspace.selectedSession?.authorizations.count == 1,
+                "new session did not persist its initial scope authorization"
+            )
 
             store.requestZhulongDailyReviewFromReviewRail()
             try expect(

@@ -525,7 +525,9 @@ struct ReviewZhulongEntryE2EAutomation: LaunchAutomationRunnable {
         store.requestZhulongDailyReviewFromReviewRail()
 
         guard store.page == .zhulong,
-              store.zhulongWorkspace.selectedSession?.phase == .scopeReview,
+              store.zhulongWorkspace.selectedSession?.phase != .scopeReview,
+              store.zhulongWorkspace.selectedSession?
+              .authorizations.count == 1,
               store.zhulongWorkspace.selectedSession?.proposedScopes == [.currentDayTodo]
         else {
             try? writeResult("failed")

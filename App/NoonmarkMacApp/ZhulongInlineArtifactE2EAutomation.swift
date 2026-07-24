@@ -34,7 +34,6 @@ struct ZhulongInlineArtifactE2EAutomation:
             intent: ZhulongChatE2EFixture.artifactIntent,
             task: .taskDecomposition
         )
-        store.authorizeCurrentZhulongWorkspaceSession()
         waitForDraft(on: store, remainingAttempts: 120)
     }
 

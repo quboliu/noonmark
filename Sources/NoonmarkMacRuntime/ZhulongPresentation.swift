@@ -436,7 +436,7 @@ public struct ZhulongCopy: Sendable {
     }
 
     public var confirmScopeTitle: String {
-        localized(chinese: "开始前，确认本次阅读范围", english: "Before we begin, confirm this reading scope")
+        localized(chinese: "重新确认本次阅读范围", english: "Reconfirm this reading scope")
     }
 
     public var sharedDecisionTitle: String {

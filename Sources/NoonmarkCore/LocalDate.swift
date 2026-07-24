@@ -23,6 +23,47 @@ public struct LocalDate: Codable, Hashable, Comparable, Sendable, CustomStringCo
         )
     }
 
+    public init?(validatingISO8601Date value: String) {
+        let components = value.split(
+            separator: "-",
+            omittingEmptySubsequences: false
+        )
+        guard components.count == 3,
+              components[0].count == 4,
+              components[1].count == 2,
+              components[2].count == 2,
+              let year = Int(components[0]),
+              let month = Int(components[1]),
+              let day = Int(components[2]),
+              (1 ... 12).contains(month),
+              (1 ... 31).contains(day)
+        else {
+            return nil
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        guard let date = calendar.date(
+            from: DateComponents(
+                year: year,
+                month: month,
+                day: day
+            )
+        ) else {
+            return nil
+        }
+        let resolved = calendar.dateComponents(
+            [.year, .month, .day],
+            from: date
+        )
+        guard resolved.year == year,
+              resolved.month == month,
+              resolved.day == day
+        else {
+            return nil
+        }
+        self.init(year: year, month: month, day: day)
+    }
+
     public var description: String {
         String(format: "%04d-%02d-%02d", year, month, day)
     }

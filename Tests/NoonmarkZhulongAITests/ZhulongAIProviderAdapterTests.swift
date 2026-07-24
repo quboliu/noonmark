@@ -30,7 +30,75 @@ final class ZhulongAIProviderAdapterTests: XCTestCase {
         XCTAssertTrue(forwarded.userPrompt.contains("用户：结束今天"))
         XCTAssertEqual(forwarded.metadata["contextVersion"], "scope-v1")
         XCTAssertEqual(forwarded.metadata["zhulongSessionID"], request.sessionID.description)
-        XCTAssertEqual(forwarded.responseSchemaName, "noonmark.zhulong.conversation-draft.v1")
+        XCTAssertEqual(
+            forwarded.responseSchemaName,
+            "noonmark.zhulong.conversation-artifact.v2"
+        )
+    }
+
+    func testConversationExtractsTaskArtifactFromNaturalReply()
+        async throws
+    {
+        let upstream = RecordingAIProvider(
+            recorder: AIRequestRecorder(),
+            result: .success(
+                AIProviderResponse(
+                    text: """
+                    我整理成一个可编辑任务。
+                    <noonmark-artifacts>
+                    {
+                      "artifacts": [
+                        {
+                          "kind": "taskPlan",
+                          "tasks": [
+                            {
+                              "title": "重做烛龙",
+                              "description": null,
+                              "note": null,
+                              "destination": { "kind": "today" },
+                              "subtasks": [
+                                {
+                                  "title": "实现任务草稿卡",
+                                  "difficulty": "medium"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                    </noonmark-artifacts>
+                    """
+                )
+            )
+        )
+        let identity = try makeIdentity()
+        let adapter = ZhulongAIProviderAdapter(
+            configurationIdentity: identity,
+            upstream: upstream
+        )
+
+        let result = await adapter.complete(
+            try makeConversationRequest(identity: identity)
+        )
+
+        guard case let .success(response) = result else {
+            return XCTFail("Expected a structured conversation response")
+        }
+        XCTAssertEqual(
+            response.content,
+            "我整理成一个可编辑任务。"
+        )
+        guard case let .taskPlan(plan) = try XCTUnwrap(
+            response.artifacts.first
+        ) else {
+            return XCTFail("Expected task plan")
+        }
+        XCTAssertEqual(plan.tasks.first?.title, "重做烛龙")
+        XCTAssertEqual(
+            plan.tasks.first?.subtasks.first?.title,
+            "实现任务草稿卡"
+        )
     }
 
     func testUpstreamFailureBecomesRecordedDomainFailure() async throws {

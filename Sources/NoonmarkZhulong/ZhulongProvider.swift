@@ -87,10 +87,16 @@ public struct ZhulongProviderRequest: Equatable, Sendable {
 public struct ZhulongProviderResponse: Codable, Equatable, Sendable {
     public let content: String
     public let draftVersion: Int?
+    public let artifacts: [ZhulongConversationArtifactProposal]
 
-    public init(content: String, draftVersion: Int? = nil) {
+    public init(
+        content: String,
+        draftVersion: Int? = nil,
+        artifacts: [ZhulongConversationArtifactProposal] = []
+    ) {
         self.content = content.trimmingCharacters(in: .whitespacesAndNewlines)
         self.draftVersion = draftVersion
+        self.artifacts = artifacts
     }
 }
 

@@ -11,6 +11,12 @@ struct ZhulongWorkspaceApplicationResult {
     let commitCompleted: Bool
 }
 
+struct ZhulongRetainedDailyReviewEdit {
+    let draftID: ZhulongDailyReviewDraftID
+    let summary: String
+    let tomorrowNote: String
+}
+
 enum ZhulongStreamActor: Equatable {
     case user
     case zhulong
@@ -77,7 +83,13 @@ struct ZhulongStreamRecord: Identifiable, Equatable {
 /// memory; a completed Provider response remains the sole source of a durable
 /// Zhulong conversation record.
 struct ZhulongLiveResponse: Equatable {
-    var content: String
+    var rawContent: String
+
+    var content: String {
+        ZhulongConversationTurnParser.visibleMessage(
+            in: rawContent
+        )
+    }
 }
 
 @MainActor
@@ -100,6 +112,13 @@ final class ZhulongWorkspaceStore: ObservableObject {
     private let providerOrchestrator: ZhulongProviderOrchestrator
     private let applicationJournal: EncryptedFileZhulongApplicationJournal
     private let streamViewRepository: ZhulongStreamViewRepository
+    private var retainedInlineTodoEdits: [
+        ZhulongTodoDiffID: ZhulongInlineTaskDraftState
+    ] = [:]
+    private var retainedDailyReviewEdits: [
+        ZhulongDailyReviewDraftID:
+            ZhulongRetainedDailyReviewEdit
+    ] = [:]
 
     init(directoryURL: URL, keySource: any ZhulongSidecarKeySource) {
         self.directoryURL = directoryURL
@@ -132,18 +151,70 @@ final class ZhulongWorkspaceStore: ObservableObject {
 
     var selectedLiveResponse: ZhulongLiveResponse? {
         guard let selectedSessionID else { return nil }
-        return liveResponses[selectedSessionID]
+        guard let response = liveResponses[selectedSessionID],
+              response.content.isEmpty == false
+        else {
+            return nil
+        }
+        return response
     }
 
     var statusMessage: String? {
         status.map { presentationCopy.notice($0) }
     }
 
+    func retainInlineTodoEdit(
+        _ state: ZhulongInlineTaskDraftState
+    ) {
+        retainedInlineTodoEdits[state.sourceDraftID] =
+            state
+    }
+
+    func retainedInlineTodoEdit(
+        for draftID: ZhulongTodoDiffID
+    ) -> ZhulongInlineTaskDraftState? {
+        retainedInlineTodoEdits[draftID]
+    }
+
+    func clearRetainedInlineTodoEdit(
+        for draftID: ZhulongTodoDiffID
+    ) {
+        retainedInlineTodoEdits[draftID] = nil
+    }
+
+    func retainDailyReviewEdit(
+        draftID: ZhulongDailyReviewDraftID,
+        summary: String,
+        tomorrowNote: String
+    ) {
+        retainedDailyReviewEdits[draftID] =
+            ZhulongRetainedDailyReviewEdit(
+                draftID: draftID,
+                summary: summary,
+                tomorrowNote: tomorrowNote
+            )
+    }
+
+    func retainedDailyReviewEdit(
+        for draftID: ZhulongDailyReviewDraftID
+    ) -> ZhulongRetainedDailyReviewEdit? {
+        retainedDailyReviewEdits[draftID]
+    }
+
+    func clearRetainedDailyReviewEdit(
+        for draftID: ZhulongDailyReviewDraftID
+    ) {
+        retainedDailyReviewEdits[draftID] = nil
+    }
+
     func records(using copy: ZhulongCopy) -> [ZhulongStreamRecord] {
         guard let session = selectedSession else { return [] }
         var projected = session.entries.map { record(for: $0, copy: copy) }
         projected.append(contentsOf: session.events
-            .filter { isConversationResponseEvent($0, in: session) == false }
+            .filter {
+                isConversationResponseEvent($0, in: session) == false
+                    && isConversationVisibleEvent($0.kind)
+            }
             .map { record(for: $0, copy: copy) })
         return projected.sorted { lhs, rhs in
             if lhs.occurredAt != rhs.occurredAt { return lhs.occurredAt < rhs.occurredAt }
@@ -387,6 +458,40 @@ final class ZhulongWorkspaceStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    func reviseTodoDiff(
+        draftID: ZhulongTodoDiffID,
+        items: [ZhulongTodoDiffItem],
+        now: Date = Date()
+    ) -> ZhulongTodoDiffID? {
+        updateSession(containing: {
+            $0.todoDiffDrafts.contains { $0.id == draftID }
+        }) { session in
+            guard let parent = session.currentTodoDiff else {
+                throw ZhulongTodoDiffError.todoDiffRequired
+            }
+            guard parent.id == draftID else {
+                throw ZhulongTodoDiffError.sessionBindingMismatch
+            }
+            guard parent.items != items else {
+                return parent.id
+            }
+            let revisionDate = now > parent.createdAt
+                ? now
+                : parent.createdAt.addingTimeInterval(0.000_001)
+            let revision = try ZhulongTodoDiffDraft(
+                revising: parent,
+                createdAt: revisionDate,
+                items: items
+            )
+            try session.reviseTodoDiff(
+                revision,
+                now: revisionDate
+            )
+            return revision.id
+        }
+    }
+
     func publishDailyReviewDraft(
         summary: String?,
         tomorrowNote: String?,
@@ -403,6 +508,40 @@ final class ZhulongWorkspaceStore: ObservableObject {
                 causeResolutionIDs: [],
                 now: now
             )
+        }
+    }
+
+    @discardableResult
+    func reviseDailyReviewDraft(
+        draftID: ZhulongDailyReviewDraftID,
+        summary: String?,
+        tomorrowNote: String?,
+        now: Date = Date()
+    ) -> ZhulongDailyReviewDraftID? {
+        updateSession(containing: {
+            $0.dailyReviewDrafts.contains { $0.id == draftID }
+        }) { session in
+            guard let current = session.dailyReviewDrafts.last,
+                  current.id == draftID
+            else {
+                throw ZhulongDailyCloseError.invalidReviewDraft
+            }
+            if current.summary == summary,
+               current.tomorrowNote == tomorrowNote
+            {
+                return current.id
+            }
+            let revisionDate = now > current.createdAt
+                ? now
+                : current.createdAt.addingTimeInterval(0.000_001)
+            return try session.publishDailyReviewDraft(
+                dailyCloseID: current.dailyCloseID,
+                summary: summary,
+                tomorrowNote: tomorrowNote,
+                causeResolutionIDs:
+                current.confirmedCauseResolutionIDs,
+                now: revisionDate
+            ).id
         }
     }
 
@@ -712,14 +851,14 @@ final class ZhulongWorkspaceStore: ObservableObject {
 
     func runCurrentSession(
         payload: ZhulongProviderPayload,
-        provider: any ZhulongProvider
+        provider: any ZhulongProvider,
+        sourceSnapshot: NoonmarkSnapshot,
+        planningDate: LocalDate
     ) async {
         guard let selectedSessionID else { return }
         do {
             try assertNoPendingApplication()
-            status = .providerRunning
-            liveResponses[selectedSessionID] = ZhulongLiveResponse(content: "")
-            let session = try await providerOrchestrator.runStreaming(
+            let providerSession = try await providerOrchestrator.runStreaming(
                 sessionID: selectedSessionID,
                 payload: payload,
                 provider: provider,
@@ -729,6 +868,11 @@ final class ZhulongWorkspaceStore: ObservableObject {
                         for: selectedSessionID
                     )
                 }
+            )
+            let session = try integrateConversationArtifacts(
+                into: providerSession,
+                sourceSnapshot: sourceSnapshot,
+                planningDate: planningDate
             )
             replaceLoadedSession(session)
             clearLiveResponse(for: selectedSessionID)
@@ -746,9 +890,105 @@ final class ZhulongWorkspaceStore: ObservableObject {
         _ delta: String,
         for sessionID: ZhulongSessionID
     ) {
-        guard var liveResponse = liveResponses[sessionID] else { return }
-        liveResponse.content += delta
+        var liveResponse = liveResponses[sessionID]
+            ?? ZhulongLiveResponse(rawContent: "")
+        liveResponse.rawContent += delta
         liveResponses[sessionID] = liveResponse
+    }
+
+    private func integrateConversationArtifacts(
+        into providerSession: ZhulongSession,
+        sourceSnapshot: NoonmarkSnapshot,
+        planningDate: LocalDate
+    ) throws -> ZhulongSession {
+        guard let send = providerSession.providerSends.last,
+              case .conversation = send.purpose,
+              let response = send.response,
+              response.artifacts.isEmpty == false
+        else {
+            return providerSession
+        }
+        var session = providerSession
+        var mutationDate = strictlyAfterLatestActivity(in: session)
+        let taskPlans = response.artifacts.compactMap {
+            artifact -> ZhulongConversationTaskPlan? in
+            guard case let .taskPlan(plan) = artifact else {
+                return nil
+            }
+            return plan
+        }
+        let taskItems = taskPlans.flatMap {
+            $0.todoDiffItems(planningDate: planningDate)
+        }
+        if taskItems.isEmpty == false {
+            let draft = try ZhulongTodoDiffDraft(
+                sessionID: session.id,
+                conversationRunID: send.runID,
+                planningDate: planningDate,
+                sourceSnapshot: sourceSnapshot,
+                createdAt: mutationDate,
+                items: taskItems
+            )
+            try session.publishConversationTodoDiff(
+                draft,
+                now: mutationDate
+            )
+            mutationDate = strictlyAfter(mutationDate)
+        }
+        if let review = response.artifacts.compactMap({
+            artifact -> ZhulongConversationDailyReview? in
+            guard case let .dailyReview(review) = artifact else {
+                return nil
+            }
+            return review
+        }).last {
+            let engine = try NoonmarkEngine(snapshot: sourceSnapshot)
+            if session.dailyCloseSnapshots.contains(where: {
+                $0.date == planningDate
+            }) == false {
+                try session.captureDailyClose(
+                    date: planningDate,
+                    from: engine,
+                    now: mutationDate
+                )
+                mutationDate = strictlyAfter(mutationDate)
+            }
+            guard let dailyClose = session.dailyCloseSnapshots.last(
+                where: { $0.date == planningDate }
+            ) else {
+                throw ZhulongDailyCloseError.invalidReviewDraft
+            }
+            try session.publishDailyReviewDraft(
+                dailyCloseID: dailyClose.id,
+                summary: review.summary,
+                tomorrowNote: review.tomorrowNote,
+                causeResolutionIDs: [],
+                now: mutationDate
+            )
+        }
+        try sessionRepository.save(
+            session,
+            replacing: providerSession
+        )
+        return session
+    }
+
+    private func strictlyAfterLatestActivity(
+        in session: ZhulongSession
+    ) -> Date {
+        strictlyAfter(
+            max(
+                session.events.last?.occurredAt ?? .distantPast,
+                session.entries.last?.createdAt ?? .distantPast
+            )
+        )
+    }
+
+    private func strictlyAfter(_ date: Date) -> Date {
+        Date(
+            timeIntervalSinceReferenceDate:
+            date.timeIntervalSinceReferenceDate.nextUp
+        )
     }
 
     private func clearLiveResponse(for sessionID: ZhulongSessionID) {
@@ -847,6 +1087,41 @@ final class ZhulongWorkspaceStore: ObservableObject {
                 fallback: .sessionOperationFailed
             )
             return false
+        }
+    }
+
+    private func updateSession<Result>(
+        containing predicate: (ZhulongSession) -> Bool,
+        _ operation: (inout ZhulongSession) throws -> Result
+    ) -> Result? {
+        guard let index = sessions.firstIndex(
+            where: predicate
+        ) else {
+            return nil
+        }
+        do {
+            try assertNoPendingApplication()
+            var session = sessions[index]
+            let expectedSession = session
+            let result = try operation(&session)
+            if session != expectedSession {
+                try sessionRepository.save(
+                    session,
+                    replacing: expectedSession
+                )
+                sessions[index] = session
+                sessions.sort {
+                    $0.events.last?.occurredAt ?? .distantPast
+                        > $1.events.last?.occurredAt ?? .distantPast
+                }
+            }
+            status = nil
+            return result
+        } catch {
+            projectSidecarMutationFailure(
+                fallback: .sessionOperationFailed
+            )
+            return nil
         }
     }
 
@@ -1101,6 +1376,12 @@ final class ZhulongWorkspaceStore: ObservableObject {
         else { return false }
         guard case .conversation = send.purpose else { return false }
         return true
+    }
+
+    private func isConversationVisibleEvent(
+        _ kind: ZhulongSessionEventKind
+    ) -> Bool {
+        kind == .providerRunFailed || isInvalidation(kind)
     }
 
     private func record(

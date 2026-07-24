@@ -1,46 +1,15 @@
 import NoonmarkMacRuntime
 import SwiftUI
 
-enum ZhulongConversationWorkflowSelection: Equatable {
-    case planning
-    case dailyReview
-}
-
 /// All four stream views deliberately reuse this one transcript grammar. The
 /// projection changes how records are grouped for reading; it never replaces
 /// the message primitive with a second dashboard renderer.
-struct ZhulongChatTranscript<InlineWorkflowContent: View>: View {
+struct ZhulongChatTranscript: View {
     let records: [ZhulongStreamRecord]
     let variant: ZhulongStreamView
     let sectionTitle: (ZhulongStreamSection) -> String
     let dossierSectionTitle: (String) -> String
     let chapterSectionTitle: (Int, String) -> String
-    let planningWorkflowTitle: String
-    let dailyReviewWorkflowTitle: String
-    let onWorkflowSelection: (ZhulongConversationWorkflowSelection, ZhulongStreamRecord) -> Void
-    private let inlineWorkflowContent: (ZhulongStreamRecord) -> InlineWorkflowContent
-
-    init(
-        records: [ZhulongStreamRecord],
-        variant: ZhulongStreamView,
-        sectionTitle: @escaping (ZhulongStreamSection) -> String,
-        dossierSectionTitle: @escaping (String) -> String,
-        chapterSectionTitle: @escaping (Int, String) -> String,
-        planningWorkflowTitle: String,
-        dailyReviewWorkflowTitle: String,
-        onWorkflowSelection: @escaping (ZhulongConversationWorkflowSelection, ZhulongStreamRecord) -> Void,
-        @ViewBuilder inlineWorkflowContent: @escaping (ZhulongStreamRecord) -> InlineWorkflowContent
-    ) {
-        self.records = records
-        self.variant = variant
-        self.sectionTitle = sectionTitle
-        self.dossierSectionTitle = dossierSectionTitle
-        self.chapterSectionTitle = chapterSectionTitle
-        self.planningWorkflowTitle = planningWorkflowTitle
-        self.dailyReviewWorkflowTitle = dailyReviewWorkflowTitle
-        self.onWorkflowSelection = onWorkflowSelection
-        self.inlineWorkflowContent = inlineWorkflowContent
-    }
 
     var body: some View {
         transcript
@@ -116,16 +85,8 @@ struct ZhulongChatTranscript<InlineWorkflowContent: View>: View {
     }
 
     private func transcriptRecord(_ record: ZhulongStreamRecord) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ZhulongChatMessage(
-                record: record,
-                planningWorkflowTitle: planningWorkflowTitle,
-                dailyReviewWorkflowTitle: dailyReviewWorkflowTitle,
-                onWorkflowSelection: onWorkflowSelection
-            )
+        ZhulongChatMessage(record: record)
             .id(record.id)
-            inlineWorkflowContent(record)
-        }
     }
 
     private func beginsSection(
@@ -191,9 +152,6 @@ struct ZhulongChatTranscript<InlineWorkflowContent: View>: View {
 
 private struct ZhulongChatMessage: View {
     let record: ZhulongStreamRecord
-    let planningWorkflowTitle: String
-    let dailyReviewWorkflowTitle: String
-    let onWorkflowSelection: (ZhulongConversationWorkflowSelection, ZhulongStreamRecord) -> Void
 
     private var message: String {
         guard let body = record.body?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -216,40 +174,43 @@ private struct ZhulongChatMessage: View {
     private var userMessage: some View {
         HStack(alignment: .top) {
             Spacer(minLength: 96)
-            ZhulongUserBubbleLayout(
-                maximumWidth: NoonmarkVisualMetrics.zhulongConversationUserBubbleMaxWidth
-            ) {
-                MarkdownText(message)
-                    .font(.noonmarkSystem(size: NoonmarkVisualMetrics.zhulongConversationUserBodyPointSize))
-                    .foregroundStyle(Theme.text1)
-                    .lineSpacing(4)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 11)
-                    .background(
-                        RoundedRectangle(
-                            cornerRadius: NoonmarkVisualMetrics.zhulongConversationUserBubbleCornerRadius
-                        )
-                        .fill(Theme.chip)
-                    )
-            }
-            .background {
-                AppE2EViewAnchor(
-                    identifier: "zhulong-message-\(record.id)",
-                    verificationText: message
-                )
-            }
-            .contextMenu {
-                Button(planningWorkflowTitle) {
-                    onWorkflowSelection(.planning, record)
-                }
-                .accessibilityIdentifier("zhulong-message-organize-planning")
-                Button(dailyReviewWorkflowTitle) {
-                    onWorkflowSelection(.dailyReview, record)
-                }
-                .accessibilityIdentifier("zhulong-message-organize-daily-review")
-            }
+            userBubble
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var userBubble: some View {
+        ZhulongUserBubbleLayout(
+            maximumWidth:
+            NoonmarkVisualMetrics.zhulongConversationUserBubbleMaxWidth
+        ) {
+            MarkdownText(message)
+                .font(
+                    .noonmarkSystem(
+                        size:
+                        NoonmarkVisualMetrics
+                            .zhulongConversationUserBodyPointSize
+                    )
+                )
+                .foregroundStyle(Theme.text1)
+                .lineSpacing(4)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(
+                        cornerRadius:
+                        NoonmarkVisualMetrics
+                            .zhulongConversationUserBubbleCornerRadius
+                    )
+                    .fill(Theme.chip)
+                )
+        }
+        .background {
+            AppE2EViewAnchor(
+                identifier: "zhulong-message-\(record.id)",
+                verificationText: message
+            )
+        }
     }
 
     private var zhulongMessage: some View {

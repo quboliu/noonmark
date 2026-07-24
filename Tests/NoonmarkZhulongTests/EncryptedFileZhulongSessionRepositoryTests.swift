@@ -157,6 +157,98 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         }
     }
 
+    func testRepositoryRoundTripsConversationTaskDraftAndUserRevision()
+        throws
+    {
+        let repository = makeRepository(key: key)
+        let identity = try makeProviderIdentity()
+        let date = LocalDate("2026-07-24")
+        let plan = try ZhulongConversationTaskPlan(
+            tasks: [
+                try ZhulongConversationTaskDraft(
+                    title: "原始任务",
+                    descriptionText: nil,
+                    initialNoteBody: nil,
+                    destination: .today,
+                    subtasks: []
+                )
+            ]
+        )
+        var session = try ZhulongSession(
+            primaryIntent: "直接形成任务",
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: identity,
+            expiresAt: now.addingTimeInterval(600),
+            now: now.addingTimeInterval(1)
+        )
+        let request = try session.beginProviderRun(
+            payload: ZhulongProviderPayload(
+                systemPrompt: "自然对话并生成任务产物。",
+                userPrompt: "直接形成任务",
+                contextVersion: "conversation-artifact-v2",
+                scopeContent: [.currentDayTodo: "今天暂无任务"]
+            ),
+            providerIdentity: identity,
+            now: now.addingTimeInterval(2)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(
+                content: "我整理成一项任务。",
+                draftVersion: 1,
+                artifacts: [.taskPlan(plan)]
+            ),
+            runID: request.runID,
+            now: now.addingTimeInterval(3)
+        )
+        let engine = NoonmarkEngine()
+        let draft = try ZhulongTodoDiffDraft(
+            sessionID: session.id,
+            conversationRunID: request.runID,
+            planningDate: date,
+            sourceSnapshot: engine.snapshot(),
+            createdAt: now.addingTimeInterval(4),
+            items: plan.todoDiffItems(planningDate: date)
+        )
+        try session.publishConversationTodoDiff(
+            draft,
+            now: now.addingTimeInterval(4)
+        )
+        let revision = try ZhulongTodoDiffDraft(
+            revising: draft,
+            createdAt: now.addingTimeInterval(5),
+            items: [
+                ZhulongTodoDiffItem(
+                    id: draft.items[0].id,
+                    operation: .createTask(
+                        title: "用户改过的任务",
+                        descriptionText: nil,
+                        initialNoteBody: nil,
+                        plannedSubtasks: [],
+                        targetDate: date
+                    )
+                )
+            ]
+        )
+        try session.reviseTodoDiff(
+            revision,
+            now: now.addingTimeInterval(5)
+        )
+
+        try repository.save(session)
+
+        let restored = try repository.load(session.id)
+        XCTAssertEqual(restored, session)
+        XCTAssertEqual(restored.currentTodoDiff?.id, revision.id)
+        XCTAssertEqual(
+            restored.currentTodoDiff?.conversationRunID,
+            request.runID
+        )
+    }
+
     func testRepositoryRoundTripsDailyCloseLedgerAndRejectsMissingSnapshot() throws {
         let repository = makeRepository(key: key)
         var session = try ZhulongSession(

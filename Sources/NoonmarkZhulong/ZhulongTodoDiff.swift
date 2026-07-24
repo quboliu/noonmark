@@ -78,6 +78,19 @@ public enum ZhulongTodoDiffSource: Codable, Equatable, Sendable {
     case userRevision(parentDraftID: ZhulongTodoDiffID, modifiedItemIDs: [ZhulongTodoDiffItemID])
 }
 
+public enum ZhulongTodoDiffOrigin:
+    Codable,
+    Equatable,
+    Hashable,
+    Sendable
+{
+    case planArtifact(
+        id: ZhulongPlanArtifactID,
+        version: Int
+    )
+    case conversation(runID: ZhulongProviderRunID)
+}
+
 public enum ZhulongTodoDiffError: Error, Equatable, Sendable {
     case emptyDiff
     case duplicateItem
@@ -96,14 +109,20 @@ public enum ZhulongTodoDiffError: Error, Equatable, Sendable {
 public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
     public let id: ZhulongTodoDiffID
     public let sessionID: ZhulongSessionID
-    public let planArtifactID: ZhulongPlanArtifactID
-    public let planArtifactVersion: Int
+    public let origin: ZhulongTodoDiffOrigin
     public let version: Int
     public let source: ZhulongTodoDiffSource
     public let planningDate: LocalDate
     public let sourceSnapshotDigest: String
     public let createdAt: Date
     public let items: [ZhulongTodoDiffItem]
+
+    public var conversationRunID: ZhulongProviderRunID? {
+        guard case let .conversation(runID) = origin else {
+            return nil
+        }
+        return runID
+    }
 
     public init(
         id: ZhulongTodoDiffID = ZhulongTodoDiffID(),
@@ -117,8 +136,31 @@ public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
     ) throws {
         self.id = id
         self.sessionID = sessionID
-        self.planArtifactID = planArtifactID
-        self.planArtifactVersion = planArtifactVersion
+        origin = .planArtifact(
+            id: planArtifactID,
+            version: planArtifactVersion
+        )
+        version = 1
+        source = .providerOriginal
+        self.planningDate = planningDate
+        sourceSnapshotDigest = try ZhulongTodoDigest.snapshot(sourceSnapshot)
+        self.createdAt = createdAt
+        self.items = items
+        try validate()
+    }
+
+    public init(
+        id: ZhulongTodoDiffID = ZhulongTodoDiffID(),
+        sessionID: ZhulongSessionID,
+        conversationRunID: ZhulongProviderRunID,
+        planningDate: LocalDate,
+        sourceSnapshot: NoonmarkSnapshot,
+        createdAt: Date = Date(),
+        items: [ZhulongTodoDiffItem]
+    ) throws {
+        self.id = id
+        self.sessionID = sessionID
+        origin = .conversation(runID: conversationRunID)
         version = 1
         source = .providerOriginal
         self.planningDate = planningDate
@@ -130,8 +172,7 @@ public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
 
     func isValidRevision(of parent: ZhulongTodoDiffDraft) -> Bool {
         guard sessionID == parent.sessionID,
-              planArtifactID == parent.planArtifactID,
-              planArtifactVersion == parent.planArtifactVersion,
+              origin == parent.origin,
               version == parent.version + 1,
               sourceSnapshotDigest == parent.sourceSnapshotDigest,
               createdAt > parent.createdAt,
@@ -168,8 +209,7 @@ public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
             .sorted { $0.rawValue.uuidString < $1.rawValue.uuidString }
         self.id = id
         sessionID = parent.sessionID
-        planArtifactID = parent.planArtifactID
-        planArtifactVersion = parent.planArtifactVersion
+        origin = parent.origin
         version = parent.version + 1
         source = .userRevision(
             parentDraftID: parent.id,
@@ -188,7 +228,12 @@ public struct ZhulongTodoDiffDraft: Codable, Equatable, Sendable {
     }
 
     func validate() throws {
-        guard planArtifactVersion > 0, version > 0 else {
+        guard version > 0 else {
+            throw ZhulongTodoDiffError.invalidRevision
+        }
+        if case let .planArtifact(_, planArtifactVersion) = origin,
+           planArtifactVersion <= 0
+        {
             throw ZhulongTodoDiffError.invalidRevision
         }
         guard createdAt.timeIntervalSinceReferenceDate.isFinite else {
@@ -468,10 +513,31 @@ public struct ZhulongTodoDiffApplier: Sendable {
 
 public extension ZhulongSession {
     var currentTodoDiff: ZhulongTodoDiffDraft? {
-        guard let artifact = effectivePlanArtifact else { return nil }
-        return todoDiffDrafts.last {
-            $0.planArtifactID == artifact.id && $0.planArtifactVersion == artifact.version
+        guard let draft = todoDiffDrafts.reversed().first(where: { draft in
+            switch draft.origin {
+            case .conversation:
+                return true
+            case let .planArtifact(id, version):
+                return effectivePlanArtifact.map {
+                    $0.id == id && $0.version == version
+                } == true
+            }
+        }) else {
+            return nil
         }
+        return todoApplyReceipts.contains {
+            $0.draftID == draft.id
+        } ? nil : draft
+    }
+
+    var latestTodoDiff: ZhulongTodoDiffDraft? {
+        todoDiffDrafts.last
+    }
+
+    func applyReceipt(
+        for draft: ZhulongTodoDiffDraft
+    ) -> ZhulongTodoApplyReceipt? {
+        todoApplyReceipts.last { $0.draftID == draft.id }
     }
 
     mutating func publishTodoDiff(
@@ -482,13 +548,64 @@ public extension ZhulongSession {
               phase == .draftReview,
               let artifact = effectivePlanArtifact,
               draft.sessionID == id,
-              draft.planArtifactID == artifact.id,
-              draft.planArtifactVersion == artifact.version,
+              draft.origin == .planArtifact(
+                  id: artifact.id,
+                  version: artifact.version
+              ),
               draft.version == 1,
               draft.source == .providerOriginal,
               draft.createdAt == now,
               currentTodoDiff == nil,
               todoDiffDrafts.contains(where: { $0.id == draft.id }) == false
+        else {
+            throw ZhulongTodoDiffError.sessionBindingMismatch
+        }
+        try draft.validate()
+        try validateActivityTime(now)
+        todoDiffDrafts.append(draft)
+        appendEvent(
+            .todoDiffPublished,
+            summary: "已发布可编辑 Todo 变更 diff",
+            reference: .todoDiff(draft.id),
+            now: now
+        )
+    }
+
+    mutating func publishConversationTodoDiff(
+        _ draft: ZhulongTodoDiffDraft,
+        now: Date = Date()
+    ) throws {
+        guard workspaceStatus == .active,
+              phase == .draftReview,
+              draft.sessionID == id,
+              case let .conversation(runID) = draft.origin,
+              let send = providerSends.last(where: {
+                  $0.runID == runID
+              }),
+              case .conversation = send.purpose,
+              let response = send.response,
+              let completedAt = send.completedAt,
+              completedAt < now,
+              draft.version == 1,
+              draft.source == .providerOriginal,
+              draft.createdAt == now,
+              todoDiffDrafts.contains(where: {
+                  $0.id == draft.id
+              }) == false
+        else {
+            throw ZhulongTodoDiffError.sessionBindingMismatch
+        }
+        let proposedOperations = response.artifacts.flatMap {
+            artifact -> [ZhulongTodoDiffOperation] in
+            guard case let .taskPlan(plan) = artifact else {
+                return []
+            }
+            return plan.todoDiffItems(
+                planningDate: draft.planningDate
+            ).map(\.operation)
+        }
+        guard proposedOperations == draft.items.map(\.operation),
+              proposedOperations.isEmpty == false
         else {
             throw ZhulongTodoDiffError.sessionBindingMismatch
         }
@@ -511,8 +628,7 @@ public extension ZhulongSession {
               phase == .draftReview,
               let parent = currentTodoDiff,
               revision.sessionID == id,
-              revision.planArtifactID == parent.planArtifactID,
-              revision.planArtifactVersion == parent.planArtifactVersion,
+              revision.origin == parent.origin,
               revision.version == parent.version + 1,
               revision.createdAt == now,
               case let .userRevision(parentDraftID, _) = revision.source,

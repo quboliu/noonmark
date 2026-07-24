@@ -292,8 +292,6 @@ final class ZhulongPresentationTests: XCTestCase {
         XCTAssertEqual(english.todoEditorTitle, "Review Todo changes")
         XCTAssertEqual(chinese.messageComposerPlaceholder, "向烛龙发消息……")
         XCTAssertEqual(english.messageComposerPlaceholder, "Message Zhulong…")
-        XCTAssertEqual(chinese.openPlanningWorkflow, "整理为规划简报")
-        XCTAssertEqual(english.openDailyReviewWorkflow, "Turn into today’s review")
         XCTAssertEqual(chinese.todoValidationMessage(.missingTitle), "任务标题不能为空。")
         XCTAssertEqual(english.todoValidationMessage(.missingTitle), "Task title cannot be empty.")
         XCTAssertEqual(chinese.todoTitlePart(1), "（部分 1）")

@@ -1,22 +1,36 @@
+import Foundation
 import NoonmarkMacRuntime
 import NoonmarkMacUIContract
 import NoonmarkZhulong
 import SwiftUI
 
+private enum ZhulongArtifactDraftPersistence<ID> {
+    case absent
+    case current(ID)
+    case failed
+
+    var succeeded: Bool {
+        switch self {
+        case .absent, .current:
+            true
+        case .failed:
+            false
+        }
+    }
+}
+
 struct ZhulongSessionStreamPage: View {
     @EnvironmentObject private var store: NoonmarkStore
     @ObservedObject var workspace: ZhulongWorkspaceStore
     @State private var entryText = ""
-    @State private var briefGoal = ""
-    @State private var briefSuccessCriteria = ""
-    @State private var briefHardConstraints = ""
     @State private var dailyReviewSummary = ""
     @State private var dailyReviewTomorrow = ""
+    @State private var dailyReviewDraftID:
+        ZhulongDailyReviewDraftID?
     @State private var decisionSupplement = ""
     @State private var todoDiffBeingEdited: ZhulongTodoDiffDraft?
-    @State private var isWorkflowActionExpanded = false
-    @State private var selectedConversationWorkflow: ZhulongConversationWorkflowSelection?
-    @State private var selectedConversationWorkflowRecordID: String?
+    @State private var inlineTodoDraft:
+        ZhulongInlineTaskDraftState?
 
     private var copy: ZhulongCopy {
         AppPresentation(language: store.engine.preferences.language).zhulong
@@ -31,6 +45,10 @@ struct ZhulongSessionStreamPage: View {
     private var currentRecordID: String? { records.last?.id }
 
     var body: some View {
+        sheetPage
+    }
+
+    private var pageSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(
                 title: copy.name,
@@ -40,7 +58,12 @@ struct ZhulongSessionStreamPage: View {
                 titleAnchorIdentifier: "zhulong.session.title"
             ) {
                 HStack(spacing: 7) {
-                    HeaderButton(copy.allSessionsAction) { workspace.showHome() }
+                    HeaderButton(copy.allSessionsAction) {
+                        guard persistCurrentArtifactEdits() else {
+                            return
+                        }
+                        workspace.showHome()
+                    }
                         .accessibilityIdentifier("zhulong-session-show-home")
                         .background {
                             AppE2EViewAnchor(
@@ -118,19 +141,40 @@ struct ZhulongSessionStreamPage: View {
                     guard let currentRecordID else { return }
                     proxy.scrollTo(currentRecordID, anchor: .center)
                 }
-                .onChange(of: workspace.selectedSession?.events.count) {
-                    guard hasCurrentAction else { return }
-                    proxy.scrollTo("zhulong-stream-conversation-current-action", anchor: .bottom)
-                }
                 .onChange(of: workspace.selectedLiveResponse?.content) {
                     guard workspace.selectedLiveResponse != nil else { return }
                     withAnimation(Theme.shouldReduceMotion ? nil : .easeOut(duration: 0.16)) {
                         proxy.scrollTo("zhulong-live-assistant-message", anchor: .bottom)
                     }
                 }
+                .onChange(
+                    of: workspace.selectedSession?
+                        .currentTodoDiff?.id.rawValue
+                ) {
+                    guard workspace.selectedSession?
+                        .currentTodoDiff?.version == 1
+                    else {
+                        return
+                    }
+                    let anchor: UnitPoint =
+                        AppLaunchArguments.contains(
+                            "--e2e-zhulong-inline-artifact"
+                        )
+                            ? .bottom
+                            : .top
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(
+                            "zhulong-stream-conversation-current-action",
+                            anchor: anchor
+                        )
+                    }
+                }
                 .onAppear {
                     guard hasCurrentAction else { return }
-                    proxy.scrollTo("zhulong-stream-conversation-current-action", anchor: .bottom)
+                    proxy.scrollTo(
+                        "zhulong-stream-conversation-current-action",
+                        anchor: .top
+                    )
                 }
             }
         }
@@ -144,27 +188,114 @@ struct ZhulongSessionStreamPage: View {
                 verificationText: workspace.selectedSession?.primaryIntent ?? copy.sessionFallbackTitle
             )
         }
-        .onAppear {
-            if briefGoal.isEmpty {
-                briefGoal = workspace.selectedSession?.primaryIntent ?? ""
+    }
+
+    private var initializedPage: some View {
+        pageSurface
+            .onAppear {
+                if dailyReviewSummary.isEmpty {
+                    dailyReviewSummary = store.engine.days[store.today]?
+                        .reviewSummary ?? ""
+                }
+                if dailyReviewTomorrow.isEmpty {
+                    dailyReviewTomorrow = store.engine.days[store.today]?
+                        .reviewTomorrowNote ?? ""
+                }
+                openTodoDiffEditorForE2EIfReady()
+                synchronizeInlineTodoDraft()
+                synchronizeDailyReviewDraft()
             }
-            if dailyReviewSummary.isEmpty {
-                dailyReviewSummary = store.engine.days[store.today]?.reviewSummary ?? ""
+            .onChange(
+                of: workspace.selectedSession?
+                    .currentTodoDiff?.id.rawValue
+            ) {
+                openTodoDiffEditorForE2EIfReady()
+                synchronizeInlineTodoDraft()
             }
-            if dailyReviewTomorrow.isEmpty {
-                dailyReviewTomorrow = store.engine.days[store.today]?.reviewTomorrowNote ?? ""
+            .onChange(
+                of: workspace.selectedSession?
+                    .todoDiffDrafts.count
+            ) {
+                synchronizeInlineTodoDraft()
             }
-            openTodoDiffEditorForE2EIfReady()
+            .onChange(
+                of: workspace.selectedSession?
+                    .todoApplyReceipts.count
+            ) {
+                synchronizeInlineTodoDraft()
+            }
+    }
+
+    private var synchronizedPage: some View {
+        initializedPage
+            .onChange(
+                of: workspace.selectedSession?
+                    .dailyReviewDrafts.last?.id.rawValue
+            ) {
+                synchronizeDailyReviewDraft()
+            }
+            .onChange(of: workspace.selectedSessionID) {
+                guard persistCurrentArtifactEdits(
+                    reportValidationError: false
+                ) else {
+                    return
+                }
+                synchronizeInlineTodoDraft()
+                synchronizeDailyReviewDraft()
+            }
+    }
+
+    private var autosavingPage: some View {
+        synchronizedPage
+            .task(id: inlineTodoDraft?.tasks) {
+                guard inlineTodoDraft?.isModified(
+                    today: store.today
+                ) == true else {
+                    return
+                }
+                do {
+                    try await Task.sleep(
+                        nanoseconds: 350_000_000
+                    )
+                } catch {
+                    return
+                }
+                guard Task.isCancelled == false else { return }
+                _ = persistInlineTodoDraftIfNeeded(
+                    reportValidationError: false
+                )
+            }
+            .onDisappear {
+                _ = persistInlineTodoDraftIfNeeded(
+                    reportValidationError: false
+                )
+                _ = persistDailyReviewDraftIfNeeded(
+                    reportValidationError: false
+                )
+            }
+    }
+
+    private var artifactAutosavingPage: some View {
+        autosavingPage.task(
+            id: dailyReviewAutosaveToken
+        ) {
+            guard dailyReviewDraftID != nil else { return }
+            do {
+                try await Task.sleep(
+                    nanoseconds: 350_000_000
+                )
+            } catch {
+                return
+            }
+            guard Task.isCancelled == false else { return }
+            _ = persistDailyReviewDraftIfNeeded(
+                reportValidationError: false
+            )
         }
-        .onChange(of: workspace.selectedSession?.currentTodoDiff?.id.rawValue) {
-            openTodoDiffEditorForE2EIfReady()
-        }
-        .onChange(of: workspace.selectedSessionID) {
-            isWorkflowActionExpanded = false
-            selectedConversationWorkflow = nil
-            selectedConversationWorkflowRecordID = nil
-        }
-        .sheet(
+    }
+
+    private var sheetPage: some View {
+        artifactAutosavingPage.sheet(
             isPresented: Binding(
                 get: { todoDiffBeingEdited != nil },
                 set: { if $0 == false { todoDiffBeingEdited = nil } }
@@ -210,13 +341,10 @@ struct ZhulongSessionStreamPage: View {
             variant: workspace.variant,
             sectionTitle: { sectionTitle($0) },
             dossierSectionTitle: { copy.dossierSectionTitle($0) },
-            chapterSectionTitle: { copy.chapterSectionTitle(number: $0, section: $1) },
-            planningWorkflowTitle: copy.openPlanningWorkflow,
-            dailyReviewWorkflowTitle: copy.openDailyReviewWorkflow,
-            onWorkflowSelection: openConversationWorkflow
-        ) { record in
-            inlineConversationWorkflowAction(for: record)
-        }
+            chapterSectionTitle: {
+                copy.chapterSectionTitle(number: $0, section: $1)
+            }
+        )
     }
 
     @ViewBuilder
@@ -259,165 +387,21 @@ struct ZhulongSessionStreamPage: View {
         } else if let gate = workspace.selectedSession?.currentDecisionGate {
             decisionGateAction(gate)
         } else if let session = workspace.selectedSession,
-                  let workflow = conversationWorkflowForCurrentAction
+                  let draft = pendingConversationTodoDraft(session)
         {
-            conversationWorkflowAction(workflow, session: session)
+            inlineTodoDraftAction(
+                draft,
+                session: session
+            )
         } else if let session = workspace.selectedSession,
-                  session.phase == .readyForProvider,
-                  session.purpose != .freeform
+                  hasPendingDailyReview(in: session)
         {
-            if let session = decisionRevisionSession {
-                decisionGateRevisionAction(session)
-            } else if let context = readyPlanningBriefContext {
-                planningBriefAction(context.brief, session: context.session)
-            } else if let session = readyDailyReviewSession {
-                if needsExplicitWorkflowEntry(for: session) {
-                    workflowEntryAction(for: session)
-                } else {
-                    dailyReviewAction(session)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Notice(
-                        text: copy.scopeConfirmed(
-                            providerEnabled: store.zhulongProviderDraft.enabled
-                        ),
-                        tone: .future
-                    )
-                    if store.zhulongProviderDraft.enabled {
-                        SmallActionButton(copy.startGenerating, tone: .accent) {
-                            store.runCurrentZhulongProvider()
-                        }
-                        .accessibilityIdentifier("zhulong-run-provider")
-                    } else if workspace.selectedSession?.dailyCloseSnapshots.contains(where: { $0.date == store.today }) == false {
-                        SmallActionButton(copy.captureTodayFacts) {
-                            store.captureCurrentZhulongDailyClose()
-                        }
-                        .accessibilityIdentifier("zhulong-capture-daily-close")
-                    }
-                }
-            }
-        } else if let session = workspace.selectedSession,
-                  session.phase == .draftReview,
-                  session.purpose != .freeform
-        {
-            if needsExplicitWorkflowEntry(for: session) {
-                workflowEntryAction(for: session)
-            } else if isDailyReviewSession(session) {
-                dailyReviewAction(session)
-            } else {
-                draftReviewAction(session)
-            }
+            dailyReviewAction(session)
         }
-    }
-
-    @ViewBuilder
-    private func inlineConversationWorkflowAction(for record: ZhulongStreamRecord) -> some View {
-        if let selectedConversationWorkflow,
-           selectedConversationWorkflowRecordID == record.id,
-           let session = workspace.selectedSession,
-           canPresentConversationWorkflow(for: session)
-        {
-            conversationWorkflowAction(selectedConversationWorkflow, session: session)
-                .accessibilityIdentifier(
-                    "zhulong-inline-workflow-\(selectedConversationWorkflow.accessibilityIdentifier)"
-                )
-                .background {
-                    AppE2EViewAnchor(
-                        identifier: "zhulong-inline-workflow-\(selectedConversationWorkflow.accessibilityIdentifier)",
-                        verificationText: selectedConversationWorkflow == .planning
-                            ? copy.openPlanningWorkflow
-                            : copy.openDailyReviewWorkflow
-                    )
-                }
-        }
-    }
-
-    @ViewBuilder
-    private func conversationWorkflowAction(
-        _ workflow: ZhulongConversationWorkflowSelection,
-        session: ZhulongSession
-    ) -> some View {
-        switch workflow {
-        case .planning:
-            if let artifact = session.effectivePlanArtifact {
-                planArtifactAction(artifact, session: session)
-            } else if let brief = session.currentPlanningBrief {
-                planningBriefAction(brief, session: session)
-            } else {
-                draftReviewAction(session)
-            }
-        case .dailyReview:
-            if session.dailyCloseSnapshots.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(copy.conversationWorkflowBoundary)
-                        .font(.noonmarkSystem(size: 12))
-                        .foregroundStyle(Theme.text2)
-                    SmallActionButton(copy.captureTodayFacts, tone: .accent) {
-                        store.captureCurrentZhulongDailyClose()
-                    }
-                    .accessibilityIdentifier("zhulong-capture-daily-close")
-                }
-                .padding(.vertical, 4)
-            } else {
-                dailyReviewAction(session)
-            }
-        }
-    }
-
-    private func openConversationWorkflow(
-        _ workflow: ZhulongConversationWorkflowSelection,
-        from record: ZhulongStreamRecord
-    ) {
-        guard record.actor == .user else { return }
-        selectedConversationWorkflow = workflow
-        selectedConversationWorkflowRecordID = record.id
-        let content = conversationRecordContent(record)
-        switch workflow {
-        case .planning:
-            if briefGoal.isEmpty {
-                briefGoal = content
-            }
-        case .dailyReview:
-            if dailyReviewSummary.isEmpty {
-                dailyReviewSummary = content
-            }
-        }
-    }
-
-    private func conversationRecordContent(_ record: ZhulongStreamRecord) -> String {
-        let content = record.body?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return content?.isEmpty == false ? content! : record.title
-    }
-
-    private var conversationWorkflowForCurrentAction: ZhulongConversationWorkflowSelection? {
-        guard selectedConversationWorkflowRecordID == nil,
-              let session = workspace.selectedSession,
-              session.purpose == .freeform,
-              canPresentConversationWorkflow(for: session)
-        else { return nil }
-        if let selectedConversationWorkflow {
-            return selectedConversationWorkflow
-        }
-        if session.currentPlanningBrief != nil || session.effectivePlanArtifact != nil {
-            return .planning
-        }
-        if session.dailyCloseSnapshots.isEmpty == false,
-           session.dailyReviewReceipts.isEmpty
-        {
-            return .dailyReview
-        }
-        return nil
-    }
-
-    private func canPresentConversationWorkflow(for session: ZhulongSession) -> Bool {
-        session.workspaceStatus == .active &&
-            needsScopeAuthorization == false &&
-            (session.phase == .readyForProvider || session.phase == .draftReview)
     }
 
     private func decisionGateAction(_ gate: ZhulongDecisionGate) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
+        return VStack(alignment: .leading, spacing: 11) {
             HStack {
                 Text(copy.sharedDecisionTitle)
                     .font(.noonmarkSystem(size: 12.5, weight: .semibold))
@@ -478,50 +462,30 @@ struct ZhulongSessionStreamPage: View {
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(actionEmphasisStroke.opacity(0.24)))
     }
 
-    private func decisionGateRevisionAction(_ session: ZhulongSession) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(copy.incorporateDecisionTitle)
-                .font(.noonmarkSystem(size: 12.5, weight: .semibold))
-                .foregroundStyle(Theme.text1)
-            Text(copy.decisionRevisionNotice)
-                .font(.noonmarkSystem(size: 11))
-                .foregroundStyle(Theme.text2)
-                .lineSpacing(3)
-            SmallActionButton(copy.createRevisedBrief, tone: .accent) {
-                workspace.incorporateDecisionGateResolution()
-            }
-            .accessibilityIdentifier("zhulong-revise-brief-after-decision")
-        }
-        .padding(13)
-        .background(RoundedRectangle(cornerRadius: 8).fill(actionSurfaceFill))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(actionSurfaceStroke))
-    }
-
     private func dailyReviewAction(_ session: ZhulongSession) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
+        let draft = session.dailyReviewDrafts.last
+        let isSaved = draft.map { draft in
+            session.dailyReviewReceipts.contains {
+                $0.draftID == draft.id
+            }
+        } ?? false
+        return VStack(alignment: .leading, spacing: 11) {
             HStack {
                 Text(copy.dailyReviewTitle)
                     .font(.noonmarkSystem(size: 12.5, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                 Spacer()
                 StatusPill(
-                    text: session.dailyReviewReceipts.isEmpty ? copy.awaitingConfirmation : copy.saved,
-                    color: session.dailyReviewReceipts.isEmpty ? Theme.warn : Theme.ok
+                    text:
+                    isSaved
+                        ? copy.saved
+                        : copy.awaitingConfirmation,
+                    color: isSaved ? Theme.ok : Theme.accent
                 )
             }
-            if let suggestion = latestProviderSuggestion(session) {
-                Text(copy.providerSuggestion(suggestion))
-                    .font(.noonmarkSystem(size: 11))
-                    .foregroundStyle(Theme.text2)
-                    .lineSpacing(3)
-                    .padding(9)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            }
-            if session.dailyReviewReceipts.isEmpty == false {
+            if isSaved {
                 Notice(text: copy.dailyReviewSavedNotice, tone: .future)
-            } else if session.dailyReviewDrafts.isEmpty {
+            } else {
                 MarkdownEditor(
                     text: $dailyReviewSummary,
                     placeholder: copy.dailyReviewSummaryPlaceholder,
@@ -534,308 +498,49 @@ struct ZhulongSessionStreamPage: View {
                     style: .body
                 )
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                SmallActionButton(copy.createReviewDraft, tone: .accent) {
-                    store.publishCurrentZhulongDailyReview(
-                        summary: optionalText(dailyReviewSummary),
-                        tomorrowNote: optionalText(dailyReviewTomorrow)
+                HStack(spacing: 10) {
+                    Text(
+                        store.engine.preferences.language == .chinese
+                            ? "可以直接编辑，也可以说“提交”保存当前版本。"
+                            : "Edit directly, or say “commit” to save this version."
+                    )
+                    .font(.noonmarkSystem(size: 10.5))
+                    .foregroundStyle(Theme.text3)
+                    Spacer()
+                    SmallActionButton(
+                        copy.confirmAndSaveReview,
+                        tone: .accent
+                    ) {
+                        submitDailyReviewDraft()
+                    }
+                    .accessibilityIdentifier(
+                        "zhulong-confirm-save-daily-review"
                     )
                 }
-                .disabled(optionalText(dailyReviewSummary) == nil && optionalText(dailyReviewTomorrow) == nil)
-                .accessibilityIdentifier("zhulong-publish-daily-review")
-            } else {
-                let draft = session.dailyReviewDrafts.last
-                MarkdownText(draft?.summary ?? draft?.tomorrowNote ?? "")
-                    .font(.noonmarkSystem(size: 11.5))
-                    .foregroundStyle(Theme.text2)
-                    .lineSpacing(3)
-                SmallActionButton(copy.confirmAndSaveReview, tone: .accent) {
-                    store.confirmAndSaveCurrentZhulongDailyReview()
-                }
-                .accessibilityIdentifier("zhulong-confirm-save-daily-review")
-            }
-            Text(copy.reviewBoundaryNotice)
-                .font(.noonmarkSystem(size: 10.5))
-                .foregroundStyle(Theme.text3)
-        }
-        .padding(13)
-        .background(RoundedRectangle(cornerRadius: 8).fill(actionSurfaceFill))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(actionSurfaceStroke))
-    }
-
-    private func isDailyReviewSession(_ session: ZhulongSession) -> Bool {
-        session.purpose == .dailyClose
-    }
-
-    private func needsExplicitWorkflowEntry(for session: ZhulongSession) -> Bool {
-        guard session.purpose != .freeform,
-              isWorkflowActionExpanded == false
-        else { return false }
-        if isDailyReviewSession(session) {
-            return session.dailyReviewDrafts.isEmpty
-        }
-        return session.currentPlanningBrief == nil && session.effectivePlanArtifact == nil
-    }
-
-    private func workflowEntryAction(for session: ZhulongSession) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(copy.conversationWorkflowBoundary)
-                .font(.noonmarkSystem(size: 12))
-                .foregroundStyle(Theme.text2)
-                .fixedSize(horizontal: false, vertical: true)
-            SmallActionButton(
-                isDailyReviewSession(session)
-                    ? copy.openDailyReviewWorkflow
-                    : copy.openPlanningWorkflow
-            ) {
-                isWorkflowActionExpanded = true
             }
         }
-        .padding(.vertical, 4)
-    }
-
-    private var readyDailyReviewSession: ZhulongSession? {
-        guard let session = workspace.selectedSession,
-              isDailyReviewSession(session),
-              session.dailyCloseSnapshots.isEmpty == false
-        else { return nil }
-        return session
-    }
-
-    private var decisionRevisionSession: ZhulongSession? {
-        guard let session = workspace.selectedSession,
-              session.currentBriefRequiresDecisionGateRevision
-        else { return nil }
-        return session
-    }
-
-    private var readyPlanningBriefContext: (
-        session: ZhulongSession,
-        brief: ZhulongPlanningBrief
-    )? {
-        guard let session = workspace.selectedSession,
-              let brief = session.currentPlanningBrief
-        else { return nil }
-        return (session, brief)
-    }
-
-    private func latestProviderSuggestion(_ session: ZhulongSession) -> String? {
-        session.providerSends.reversed().compactMap(\.response?.content).first
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Theme.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(
+                    isSaved
+                        ? Theme.ok.opacity(0.25)
+                        : Theme.accent.opacity(0.22)
+                )
+        )
+        .disabled(isSaved)
+        .accessibilityIdentifier(
+            "zhulong-inline-daily-review-draft"
+        )
     }
 
     private func optionalText(_ value: String) -> String? {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.isEmpty ? nil : normalized
-    }
-
-    @ViewBuilder
-    private func draftReviewAction(_ session: ZhulongSession) -> some View {
-        if let artifact = session.effectivePlanArtifact {
-            planArtifactAction(artifact, session: session)
-        } else if let brief = session.currentPlanningBrief {
-            planningBriefAction(brief, session: session)
-        } else {
-            VStack(alignment: .leading, spacing: 11) {
-                Text(copy.condenseBriefTitle)
-                    .font(.noonmarkSystem(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                MarkdownEditor(text: $briefGoal, placeholder: copy.goalPlaceholder, style: .compact)
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                MarkdownEditor(
-                    text: $briefSuccessCriteria,
-                    placeholder: copy.successCriteriaPlaceholder,
-                    style: .body
-                )
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                MarkdownEditor(
-                    text: $briefHardConstraints,
-                    placeholder: copy.hardConstraintsPlaceholder,
-                    style: .body
-                )
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                SmallActionButton(copy.savePlanningBrief, tone: .accent) {
-                    publishPlanningBrief(for: session)
-                }
-                .disabled(normalizedLines(briefSuccessCriteria).isEmpty)
-                .accessibilityIdentifier("zhulong-publish-planning-brief")
-            }
-            .padding(13)
-            .background(RoundedRectangle(cornerRadius: 8).fill(actionSurfaceFill))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(actionSurfaceStroke))
-        }
-    }
-
-    private func planningBriefAction(
-        _ brief: ZhulongPlanningBrief,
-        session: ZhulongSession
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack {
-                Text(copy.planningBriefTitle(version: brief.version))
-                    .font(.noonmarkSystem(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                Spacer()
-                StatusPill(
-                    text: session.reviewedPlanningBrief?.id == brief.id ? copy.reviewed : copy.awaitingReview,
-                    color: session.reviewedPlanningBrief?.id == brief.id ? Theme.ok : Theme.warn
-                )
-            }
-            MarkdownText(brief.goal)
-                .font(.noonmarkSystem(size: 12))
-                .foregroundStyle(Theme.text1)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(copy.successCriteriaTitle)
-                    .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                ForEach(brief.successCriteria, id: \.self) { criterion in
-                    MarkdownText("- \(criterion)")
-                        .font(.noonmarkSystem(size: 11))
-                        .foregroundStyle(Theme.text2)
-                }
-            }
-            if session.reviewedPlanningBrief?.id != brief.id {
-                SmallActionButton(copy.confirmBrief, tone: .accent) {
-                    workspace.reviewCurrentPlanningBrief()
-                }
-                .accessibilityIdentifier("zhulong-review-planning-brief")
-            } else if session.activePlanningDelegation == nil {
-                SmallActionButton(copy.delegatePlanningOnce, tone: .accent) {
-                    workspace.delegateCurrentPlanningBrief()
-                }
-                .accessibilityIdentifier("zhulong-delegate-planning")
-            } else if store.zhulongProviderDraft.enabled {
-                SmallActionButton(copy.runThisPlanning, tone: .accent) {
-                    store.runCurrentZhulongPlanningProvider()
-                }
-                .accessibilityIdentifier("zhulong-run-planning-provider")
-            } else {
-                Notice(text: copy.providerRequiredForPlanning, tone: .future)
-            }
-            Text(copy.planningDelegationBoundary)
-                .font(.noonmarkSystem(size: 10.5))
-                .foregroundStyle(Theme.text3)
-        }
-        .padding(13)
-        .background(RoundedRectangle(cornerRadius: 8).fill(actionSurfaceFill))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(actionSurfaceStroke))
-    }
-
-    private func planArtifactAction(
-        _ artifact: ZhulongPlanArtifact,
-        session: ZhulongSession
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack {
-                Text(copy.planArtifactTitle(version: artifact.version))
-                    .font(.noonmarkSystem(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
-                Spacer()
-                StatusPill(
-                    text: copy.todoDiffReviewStatus(hasDiff: session.currentTodoDiff != nil),
-                    color: Theme.warn
-                )
-            }
-            MarkdownText(artifact.proposal.summary)
-                .font(.noonmarkSystem(size: 11.5))
-                .foregroundStyle(Theme.text2)
-                .lineSpacing(3)
-            ForEach(artifact.proposal.stages, id: \.id) { stage in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(stage.title)
-                        .font(.noonmarkSystem(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                    Text(stage.objective)
-                        .font(.noonmarkSystem(size: 10.5))
-                        .foregroundStyle(Theme.text3)
-                    if stage.deliverables.isEmpty == false {
-                        Text(copy.deliverables(stage.deliverables))
-                            .font(.noonmarkSystem(size: 10.5))
-                            .foregroundStyle(Theme.text2)
-                    }
-                }
-                .padding(9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            }
-            if let diff = session.currentTodoDiff {
-                let appliedReceipt = session.todoApplyReceipts.last {
-                    $0.draftID == diff.id
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(copy.todoDiffTitle(version: diff.version, count: diff.items.count))
-                        .font(.noonmarkSystem(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                    ForEach(diff.items, id: \.id) { item in
-                        Label(todoOperationLabel(item.operation), systemImage: "plus.circle")
-                            .font(.noonmarkSystem(size: 10.8))
-                            .foregroundStyle(Theme.text2)
-                    }
-                }
-                if let appliedReceipt {
-                    HStack(spacing: 8) {
-                        Label(
-                            copy.todoDiffAppliedReceipt(
-                                count: appliedReceipt.items.count
-                            ),
-                            systemImage: "checkmark.circle.fill"
-                        )
-                        .font(.noonmarkSystem(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.ok)
-                        SmallActionButton(copy.openTaskPool) {
-                            store.selectPage(.pool)
-                        }
-                        .accessibilityIdentifier("zhulong-open-applied-todo-pool")
-                    }
-                } else {
-                    HStack(spacing: 8) {
-                        SmallActionButton(copy.reviewAndRevise) {
-                            todoDiffBeingEdited = diff
-                        }
-                        .disabled(workspace.hasActiveTodoAuthorization)
-                        .accessibilityIdentifier("zhulong-edit-todo-diff")
-                        SmallActionButton(copy.confirmAndApplyAtomically, tone: .accent) {
-                            store.confirmAndApplyCurrentZhulongTodoDiff()
-                        }
-                        .accessibilityIdentifier("zhulong-confirm-apply-todo-diff")
-                        .background {
-                            AppE2EViewAnchor(
-                                identifier: "zhulong-confirm-apply-todo-diff",
-                                verificationText: copy.confirmAndApplyAtomically
-                            )
-                        }
-                    }
-                }
-            } else {
-                SmallActionButton(copy.createReviewableTodoDiff, tone: .accent) {
-                    store.publishCurrentZhulongTodoDiff()
-                }
-                .accessibilityIdentifier("zhulong-publish-todo-diff")
-            }
-            Text(copy.todoAtomicBoundary)
-                .font(.noonmarkSystem(size: 10.5))
-                .foregroundStyle(Theme.text3)
-        }
-        .padding(13)
-        .background(RoundedRectangle(cornerRadius: 8).fill(actionSurfaceFill))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(actionSurfaceStroke))
-    }
-
-    private func todoOperationLabel(_ operation: ZhulongTodoDiffOperation) -> String {
-        switch operation {
-        case let .createTask(title, _, _, _, targetDate):
-            copy.createTaskOperation(
-                title: title,
-                targetDate: targetDate?.description
-            )
-        case let .addSubtask(_, title, _):
-            copy.addSubtaskOperation(title: title)
-        case let .scheduleFromPool(_, targetDate):
-            copy.scheduleFromPoolOperation(targetDate: targetDate.description)
-        case let .continueTrace(_, targetDate):
-            copy.continueTraceOperation(targetDate: targetDate.description)
-        case .abandonChain:
-            copy.abandonChainOperation
-        }
     }
 
     private func openTodoDiffEditorForE2EIfReady() {
@@ -894,56 +599,298 @@ struct ZhulongSessionStreamPage: View {
         guard let session = workspace.selectedSession else { return false }
         return needsScopeAuthorization
             || session.currentDecisionGate != nil
-            || conversationWorkflowForCurrentAction != nil
-            || (session.purpose != .freeform
-                && (session.phase == .readyForProvider || session.phase == .draftReview))
+            || pendingConversationTodoDraft(session) != nil
+            || hasPendingDailyReview(in: session)
     }
 
     private func sendMessage() {
         let content = entryText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard content.isEmpty == false, canSubmitEntry else { return }
+        let todoPersistence = persistInlineTodoDraftIfNeeded()
+        guard todoPersistence.succeeded else {
+            return
+        }
+        let reviewPersistence = persistDailyReviewDraftIfNeeded()
+        guard reviewPersistence.succeeded else { return }
+        if ZhulongConversationCommand.isCommit(content),
+           case let .current(draftID) = todoPersistence,
+           workspace.selectedSession?.currentTodoDiff?.id
+           == draftID
+        {
+            guard store.confirmCurrentZhulongArtifact(
+                expectedDraftID: draftID,
+                userCommand: content
+            ) else {
+                return
+            }
+            entryText = ""
+            return
+        }
+        if ZhulongConversationCommand.isCommit(content),
+           case let .current(draftID) = reviewPersistence,
+           workspace.selectedSession?.dailyReviewDrafts
+           .last?.id == draftID
+        {
+            guard store.confirmCurrentZhulongDailyReviewArtifact(
+                expectedDraftID: draftID,
+                userCommand: content
+            )
+            else {
+                return
+            }
+            entryText = ""
+            return
+        }
         guard store.sendZhulongConversationMessage(content) else { return }
-        isWorkflowActionExpanded = false
         entryText = ""
     }
 
-    private func publishPlanningBrief(for session: ZhulongSession) {
-        do {
-            let draft = try ZhulongPlanningBriefDraft(
-                goal: briefGoal,
-                successCriteria: normalizedLines(briefSuccessCriteria),
-                hardConstraints: normalizedLines(briefHardConstraints),
-                userDecisions: session.entries.filter { $0.kind == .decision }.map(\.content),
-                delegatedActivities: [.taskDecomposition, .sequencing, .riskReview, .initialScheduling],
-                assumptions: [],
-                openQuestions: [],
-                dataScopes: session.proposedScopes,
-                sourceEntryIDs: Set(session.entries.filter { $0.correctsEntryID == nil }.map(\.id))
+    @ViewBuilder
+    private func inlineTodoDraftAction(
+        _ draft: ZhulongTodoDiffDraft,
+        session: ZhulongSession
+    ) -> some View {
+        if let binding = inlineTodoDraftBinding(for: draft) {
+            ZhulongInlineTaskDraftCard(
+                state: binding,
+                language: store.engine.preferences.language,
+                isApplied: session.applyReceipt(for: draft) != nil,
+                onSubmit: submitInlineTodoDraft
             )
-            workspace.publishPlanningBrief(draft)
-        } catch {
-            workspace.reportUIError(.planningBriefSaveFailed)
+        } else {
+            Color.clear
+                .frame(height: 1)
+                .onAppear {
+                    inlineTodoDraft = ZhulongInlineTaskDraftState(
+                        draft: draft,
+                        today: store.today
+                    )
+                }
         }
     }
 
-    private func normalizedLines(_ value: String) -> [String] {
-        value.components(separatedBy: .newlines)
-            .flatMap { $0.components(separatedBy: "；") }
-            .flatMap { $0.components(separatedBy: ";") }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { $0.isEmpty == false }
+    private func pendingConversationTodoDraft(
+        _ session: ZhulongSession
+    ) -> ZhulongTodoDiffDraft? {
+        guard let draft = session.currentTodoDiff,
+              draft.conversationRunID != nil
+        else {
+            return nil
+        }
+        return draft
+    }
+
+    private func hasPendingDailyReview(
+        in session: ZhulongSession
+    ) -> Bool {
+        guard let draft = session.dailyReviewDrafts.last else {
+            return false
+        }
+        return session.dailyReviewReceipts.contains {
+            $0.draftID == draft.id
+        } == false
+    }
+
+    private func synchronizeInlineTodoDraft() {
+        guard let session = workspace.selectedSession,
+              let draft = pendingConversationTodoDraft(session)
+        else {
+            inlineTodoDraft = nil
+            return
+        }
+        guard inlineTodoDraft?.sourceDraftID != draft.id else {
+            return
+        }
+        if let retained = workspace
+            .retainedInlineTodoEdit(for: draft.id)
+        {
+            inlineTodoDraft = retained
+            return
+        }
+        inlineTodoDraft = ZhulongInlineTaskDraftState(
+            draft: draft,
+            today: store.today
+        )
+    }
+
+    private func inlineTodoDraftBinding(
+        for draft: ZhulongTodoDiffDraft
+    ) -> Binding<ZhulongInlineTaskDraftState>? {
+        guard inlineTodoDraft?.sourceDraftID == draft.id else {
+            return nil
+        }
+        return Binding(
+            get: {
+                guard let inlineTodoDraft else {
+                    preconditionFailure(
+                        "Missing synchronized inline Todo draft"
+                    )
+                }
+                return inlineTodoDraft
+            },
+            set: { inlineTodoDraft = $0 }
+        )
+    }
+
+    private func persistInlineTodoDraftIfNeeded(
+        reportValidationError: Bool = true
+    ) -> ZhulongArtifactDraftPersistence<
+        ZhulongTodoDiffID
+    > {
+        guard let inlineTodoDraft else {
+            return .absent
+        }
+        do {
+            guard let draftID = workspace.reviseTodoDiff(
+                draftID: inlineTodoDraft.sourceDraftID,
+                items: try inlineTodoDraft.makeItems(
+                    today: store.today
+                )
+            ) else {
+                workspace.retainInlineTodoEdit(
+                    inlineTodoDraft
+                )
+                return .failed
+            }
+            workspace.clearRetainedInlineTodoEdit(
+                for: inlineTodoDraft.sourceDraftID
+            )
+            return .current(draftID)
+        } catch {
+            workspace.retainInlineTodoEdit(
+                inlineTodoDraft
+            )
+            if reportValidationError {
+                workspace.reportUIError(
+                    store.engine.preferences.language == .chinese
+                        ? "请补全任务标题、子任务标题和有效日期。"
+                        : "Complete every title and use a valid date."
+                )
+            }
+            return .failed
+        }
+    }
+
+    private func submitInlineTodoDraft() {
+        guard case let .current(draftID) =
+            persistInlineTodoDraftIfNeeded()
+        else {
+            return
+        }
+        store.confirmCurrentZhulongArtifact(
+            expectedDraftID: draftID,
+            userCommand:
+            store.engine.preferences.language == .chinese
+                ? "提交"
+                : "Commit"
+        )
+    }
+
+    private func synchronizeDailyReviewDraft() {
+        guard let draft = workspace.selectedSession?
+            .dailyReviewDrafts.last
+        else {
+            dailyReviewDraftID = nil
+            return
+        }
+        guard dailyReviewDraftID != draft.id else {
+            return
+        }
+        dailyReviewDraftID = draft.id
+        if let retained = workspace
+            .retainedDailyReviewEdit(for: draft.id)
+        {
+            dailyReviewSummary = retained.summary
+            dailyReviewTomorrow = retained.tomorrowNote
+            return
+        }
+        dailyReviewSummary = draft.summary ?? ""
+        dailyReviewTomorrow = draft.tomorrowNote ?? ""
+    }
+
+    private var dailyReviewAutosaveToken: String {
+        [
+            dailyReviewDraftID?.rawValue.uuidString ?? "none",
+            dailyReviewSummary,
+            dailyReviewTomorrow
+        ].joined(separator: "\u{0}")
+    }
+
+    private func persistDailyReviewDraftIfNeeded(
+        reportValidationError: Bool = true
+    ) -> ZhulongArtifactDraftPersistence<
+        ZhulongDailyReviewDraftID
+    > {
+        guard let draftID = dailyReviewDraftID
+        else {
+            return .absent
+        }
+        let summary = optionalText(dailyReviewSummary)
+        let tomorrow = optionalText(dailyReviewTomorrow)
+        guard summary != nil || tomorrow != nil else {
+            workspace.retainDailyReviewEdit(
+                draftID: draftID,
+                summary: dailyReviewSummary,
+                tomorrowNote: dailyReviewTomorrow
+            )
+            if reportValidationError {
+                workspace.reportUIError(
+                    store.engine.preferences.language == .chinese
+                        ? "复盘内容不能为空。"
+                        : "The review cannot be empty."
+                )
+            }
+            return .failed
+        }
+        guard let persistedDraftID =
+            workspace.reviseDailyReviewDraft(
+                draftID: draftID,
+                summary: summary,
+                tomorrowNote: tomorrow
+            )
+        else {
+            workspace.retainDailyReviewEdit(
+                draftID: draftID,
+                summary: dailyReviewSummary,
+                tomorrowNote: dailyReviewTomorrow
+            )
+            return .failed
+        }
+        workspace.clearRetainedDailyReviewEdit(
+            for: draftID
+        )
+        return .current(persistedDraftID)
+    }
+
+    private func submitDailyReviewDraft() {
+        guard case let .current(draftID) =
+            persistDailyReviewDraftIfNeeded()
+        else {
+            return
+        }
+        store.confirmCurrentZhulongDailyReviewArtifact(
+            expectedDraftID: draftID,
+            userCommand:
+            store.engine.preferences.language == .chinese
+                ? "提交"
+                : "Commit"
+        )
+    }
+
+    private func persistCurrentArtifactEdits(
+        reportValidationError: Bool = true
+    ) -> Bool {
+        let todo = persistInlineTodoDraftIfNeeded(
+            reportValidationError: reportValidationError
+        )
+        let review = persistDailyReviewDraftIfNeeded(
+            reportValidationError: reportValidationError
+        )
+        return todo.succeeded && review.succeeded
     }
 
     private var needsScopeAuthorization: Bool {
         store.currentZhulongSessionNeedsScopeAuthorization
-    }
-
-    private var actionSurfaceFill: Color {
-        .clear
-    }
-
-    private var actionSurfaceStroke: Color {
-        .clear
     }
 
     private var actionEmphasisFill: Color {
@@ -975,14 +922,5 @@ struct ZhulongSessionStreamPage: View {
 
     private func scopeLabel(_ scope: ZhulongDataScope) -> String {
         copy.scopeTitle(scope.presentationCopyKey)
-    }
-}
-
-private extension ZhulongConversationWorkflowSelection {
-    var accessibilityIdentifier: String {
-        switch self {
-        case .planning: "planning"
-        case .dailyReview: "daily-review"
-        }
     }
 }

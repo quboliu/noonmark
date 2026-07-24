@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import NoonmarkAI
+import NoonmarkCore
 import NoonmarkZhulong
 
 enum ZhulongChatE2EFixture {
@@ -13,18 +14,33 @@ enum ZhulongChatE2EFixture {
     static let continuedReply = "我看到了两行内容。我们继续沿着这个问题一起梳理。"
     static let reauthorizationEntry = "E2E 重新授权后的消息"
     static let reauthorizationReply = "身份变更已经确认。我们可以继续沿着这个问题推进。"
+    static let artifactIntent = "E2E 规划一个带三个子任务的今天任务"
+    static let artifactReply = "我整理成三项可编辑任务，你可以调整后直接提交。"
+    static let artifactTaskTitle = "重做烛龙对话"
+    static let artifactPoolTaskTitle = "整理烛龙后续想法"
+    static let artifactFutureTaskTitle = "复查烛龙交互"
+    static let artifactFutureDate = LocalDate("2099-12-31")
+    static let artifactSubtaskTitles = [
+        "定义对话产物",
+        "实现内联编辑",
+        "验证一次提交"
+    ]
 }
 
 struct ZhulongE2EConversationProvider: ZhulongProvider, ZhulongStreamingProvider {
     let configurationIdentity: ZhulongProviderConfigurationIdentity
 
     func complete(_ request: ZhulongProviderRequest) async -> ZhulongProviderResult {
-        let content = responseContent(for: request)
-        return .success(ZhulongProviderResponse(content: content, draftVersion: 1))
+        .success(response(for: request))
     }
 
     func stream(_ request: ZhulongProviderRequest) -> AsyncStream<ZhulongProviderStreamEvent> {
-        let content = responseContent(for: request)
+        let response = response(for: request)
+        let content = request.payload.userPrompt.contains(
+            ZhulongChatE2EFixture.artifactIntent
+        )
+            ? artifactRawContent()
+            : response.content
         let firstFragment = String(content.prefix(5))
         let remaining = String(content.dropFirst(firstFragment.count))
         let fragmentWindowNanoseconds: UInt64 = content == ZhulongChatE2EFixture.initialReply
@@ -39,10 +55,7 @@ struct ZhulongE2EConversationProvider: ZhulongProvider, ZhulongStreamingProvider
                 if remaining.isEmpty == false {
                     continuation.yield(.delta(remaining))
                 }
-                continuation.yield(.finished(.success(ZhulongProviderResponse(
-                    content: content,
-                    draftVersion: 1
-                ))))
+                continuation.yield(.finished(.success(response)))
             }
             continuation.onTermination = { _ in
                 task.cancel()
@@ -58,6 +71,72 @@ struct ZhulongE2EConversationProvider: ZhulongProvider, ZhulongStreamingProvider
         } else {
             ZhulongChatE2EFixture.initialReply
         }
+    }
+
+    private func response(
+        for request: ZhulongProviderRequest
+    ) -> ZhulongProviderResponse {
+        guard request.payload.userPrompt.contains(
+            ZhulongChatE2EFixture.artifactIntent
+        ) else {
+            return ZhulongProviderResponse(
+                content: responseContent(for: request),
+                draftVersion: 1
+            )
+        }
+        let turn = try! ZhulongConversationTurnParser().parse(
+            artifactRawContent()
+        )
+        return ZhulongProviderResponse(
+            content: turn.message,
+            draftVersion: 1,
+            artifacts: turn.artifacts
+        )
+    }
+
+    private func artifactRawContent() -> String {
+        """
+        \(ZhulongChatE2EFixture.artifactReply)
+        <noonmark-artifacts>
+        {
+          "artifacts": [
+            {
+              "kind": "taskPlan",
+              "tasks": [
+                {
+                  "title": "\(ZhulongChatE2EFixture.artifactTaskTitle)",
+                  "description": "用自然对话形成可执行任务",
+                  "note": null,
+                  "destination": { "kind": "today" },
+                  "subtasks": [
+                    { "title": "\(ZhulongChatE2EFixture.artifactSubtaskTitles[0])", "difficulty": "medium" },
+                    { "title": "\(ZhulongChatE2EFixture.artifactSubtaskTitles[1])", "difficulty": "hard" },
+                    { "title": "\(ZhulongChatE2EFixture.artifactSubtaskTitles[2])", "difficulty": "medium" }
+                  ]
+                },
+                {
+                  "title": "\(ZhulongChatE2EFixture.artifactPoolTaskTitle)",
+                  "description": null,
+                  "note": null,
+                  "destination": { "kind": "pool" },
+                  "subtasks": []
+                },
+                {
+                  "title": "\(ZhulongChatE2EFixture.artifactFutureTaskTitle)",
+                  "description": null,
+                  "note": null,
+                  "destination": {
+                    "kind": "date",
+                    "date": "\(ZhulongChatE2EFixture.artifactFutureDate)"
+                  },
+                  "subtasks": []
+                }
+              ]
+            }
+          ]
+        }
+        </noonmark-artifacts>
+        """
     }
 }
 
@@ -188,20 +267,6 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
                     }) && store.zhulongWorkspace.selectedSession?.authorizations.count == 2
                         && store.zhulongWorkspace.selectedSession?.phase == .draftReview
                 },
-                planningWorkflowSource: {
-                    guard let entry = store.zhulongWorkspace.selectedSession?.entries.last(where: {
-                        $0.author == .user
-                            && $0.content == ZhulongChatE2EFixture.reauthorizationEntry
-                    }) else { return nil }
-                    return AppViewTreeE2E.view(
-                        identifier: "zhulong-message-entry-\(entry.id.rawValue.uuidString)"
-                    )
-                },
-                hasPlanningWorkflowVisible: {
-                    AppViewTreeE2E.view(
-                        identifier: "zhulong-inline-workflow-planning"
-                    ) != nil
-                },
                 resultURL: resultURL
             )
         )
@@ -254,8 +319,6 @@ enum ZhulongChatE2EUIInteractionDriver {
         let hasReauthorizationRequired: @MainActor () -> Bool
         let hasReauthorizedSessionReady: @MainActor () -> Bool
         let hasReauthorizedConversation: @MainActor () -> Bool
-        let planningWorkflowSource: @MainActor () -> NSView?
-        let hasPlanningWorkflowVisible: @MainActor () -> Bool
         let resultURL: URL
     }
 
@@ -362,19 +425,6 @@ enum ZhulongChatE2EUIInteractionDriver {
             try input.postKey(keyCode: 36)
             try await waitUntil("重新授权后 Enter 没有继续对话") {
                 textView.string.isEmpty && self.interaction.hasReauthorizedConversation()
-            }
-
-            try await waitUntil("可整理为规划的用户消息") {
-                self.interaction.planningWorkflowSource() != nil
-            }
-            guard let workflowSource = interaction.planningWorkflowSource() else {
-                throw ZhulongChatE2EError.missing("可整理为规划的用户消息")
-            }
-            guard AppViewTreeE2E.selectFirstContextMenuItem(of: workflowSource) else {
-                throw ZhulongChatE2EError.missing("真实对话消息的规划上下文菜单")
-            }
-            try await waitUntil("消息上下文没有展开规划流程") {
-                self.interaction.hasPlanningWorkflowVisible()
             }
         }
 

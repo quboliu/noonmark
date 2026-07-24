@@ -559,14 +559,6 @@ public struct ZhulongCopy: Sendable {
         )
     }
 
-    public var openDailyReviewWorkflow: String {
-        localized(chinese: "整理为今日复盘", english: "Turn into today’s review")
-    }
-
-    public var openPlanningWorkflow: String {
-        localized(chinese: "整理为规划简报", english: "Turn into a planning brief")
-    }
-
     public var goalPlaceholder: String { localized(chinese: "目标", english: "Goal") }
     public var successCriteriaPlaceholder: String {
         localized(chinese: "成功标准，每行一项", english: "Success criteria, one per line")

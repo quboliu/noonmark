@@ -59,10 +59,9 @@ public struct ZhulongAIProviderAdapter: ZhulongProvider, ZhulongStreamingProvide
                         continuation.finish()
                         return
                     }
-                    continuation.yield(.finished(.success(ZhulongProviderResponse(
-                        content: content,
-                        draftVersion: 1
-                    ))))
+                    continuation.yield(
+                        .finished(conversationResult(content))
+                    )
                 } catch {
                     if Task.isCancelled {
                         continuation.finish()
@@ -106,7 +105,7 @@ public struct ZhulongAIProviderAdapter: ZhulongProvider, ZhulongStreamingProvide
     ) -> ZhulongProviderResult {
         switch request.purpose {
         case .conversation:
-            return .success(ZhulongProviderResponse(content: response.text, draftVersion: 1))
+            return conversationResult(response.text)
         case .delegatedPlanning:
             guard let rawContent = response.rawContent else {
                 return .failure(ZhulongProviderFailure(
@@ -137,10 +136,32 @@ public struct ZhulongAIProviderAdapter: ZhulongProvider, ZhulongStreamingProvide
         ))
     }
 
+    private func conversationResult(
+        _ content: String
+    ) -> ZhulongProviderResult {
+        do {
+            let turn = try ZhulongConversationTurnParser().parse(content)
+            return .success(
+                ZhulongProviderResponse(
+                    content: turn.message,
+                    draftVersion: 1,
+                    artifacts: turn.artifacts
+                )
+            )
+        } catch {
+            return .failure(
+                ZhulongProviderFailure(
+                    code: "invalid_conversation_artifact",
+                    message: "Provider 返回的对话产物无法验证"
+                )
+            )
+        }
+    }
+
     private func schemaName(for purpose: ZhulongProviderRunPurpose) -> String {
         switch purpose {
         case .conversation:
-            "noonmark.zhulong.conversation-draft.v1"
+            "noonmark.zhulong.conversation-artifact.v2"
         case .delegatedPlanning:
             "noonmark.zhulong.planning-output.v1"
         }

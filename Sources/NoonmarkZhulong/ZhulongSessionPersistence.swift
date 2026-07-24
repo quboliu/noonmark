@@ -521,25 +521,67 @@ struct ZhulongSessionRecord: Codable, Equatable {
     }
 
     private func validateTodoDrafts() throws {
-        var latestDraftByArtifact: [ZhulongPlanArtifactID: ZhulongTodoDiffDraft] = [:]
+        var latestDraftByOrigin:
+            [ZhulongTodoDiffOrigin: ZhulongTodoDiffDraft] = [:]
         for draft in todoDiffDrafts {
             guard (try? draft.validate()) != nil,
                   draft.sessionID == id,
-                  let artifact = planArtifacts.first(where: {
-                      $0.id == draft.planArtifactID && $0.version == draft.planArtifactVersion
-                  }),
-                  draft.createdAt > artifact.createdAt,
                   validDigest(draft.sourceSnapshotDigest)
             else {
                 throw ZhulongSessionRestorationError.invalidEventsForPhase
             }
-            switch draft.source {
-            case .providerOriginal:
-                guard draft.version == 1, latestDraftByArtifact[artifact.id] == nil else {
+            switch draft.origin {
+            case let .planArtifact(id, version):
+                guard let artifact = planArtifacts.first(where: {
+                    $0.id == id && $0.version == version
+                }), draft.createdAt > artifact.createdAt else {
                     throw ZhulongSessionRestorationError.invalidEventsForPhase
                 }
+            case let .conversation(runID):
+                guard let send = providerSends.first(where: {
+                    $0.runID == runID
+                }),
+                case .conversation = send.purpose,
+                let response = send.response,
+                let completedAt = send.completedAt,
+                draft.createdAt > completedAt,
+                response.artifacts.contains(where: {
+                    if case .taskPlan = $0 {
+                        return true
+                    }
+                    return false
+                })
+                else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+            }
+            switch draft.source {
+            case .providerOriginal:
+                guard draft.version == 1,
+                      latestDraftByOrigin[draft.origin] == nil
+                else {
+                    throw ZhulongSessionRestorationError.invalidEventsForPhase
+                }
+                if case let .conversation(runID) = draft.origin {
+                    guard let response = providerSends.first(
+                        where: { $0.runID == runID }
+                    )?.response,
+                    response.artifacts.flatMap({
+                        artifact -> [ZhulongTodoDiffOperation] in
+                        guard case let .taskPlan(plan) = artifact else {
+                            return []
+                        }
+                        return plan.todoDiffItems(
+                            planningDate: draft.planningDate
+                        ).map(\.operation)
+                    }) == draft.items.map(\.operation)
+                    else {
+                        throw ZhulongSessionRestorationError
+                            .invalidEventsForPhase
+                    }
+                }
             case let .userRevision(parentDraftID, _):
-                guard let parent = latestDraftByArtifact[artifact.id],
+                guard let parent = latestDraftByOrigin[draft.origin],
                       parent.id == parentDraftID,
                       draft.isValidRevision(of: parent),
                       todoWriteAuthorizations.contains(where: {
@@ -550,7 +592,7 @@ struct ZhulongSessionRecord: Codable, Equatable {
                     throw ZhulongSessionRestorationError.invalidEventsForPhase
                 }
             }
-            latestDraftByArtifact[artifact.id] = draft
+            latestDraftByOrigin[draft.origin] = draft
         }
     }
 

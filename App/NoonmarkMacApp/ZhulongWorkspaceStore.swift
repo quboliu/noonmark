@@ -880,9 +880,19 @@ final class ZhulongWorkspaceStore: ObservableObject {
         } catch {
             clearLiveResponse(for: selectedSessionID)
             reload()
-            projectSidecarMutationFailure(
-                fallback: .providerRunFailed
-            )
+            if let failure = selectedSession?
+                .providerSends.last?.failure
+            {
+                status = .diagnostic(
+                    presentationCopy.providerRunFailureNotice(
+                        code: failure.code
+                    )
+                )
+            } else {
+                projectSidecarMutationFailure(
+                    fallback: .providerRunFailed
+                )
+            }
         }
     }
 
@@ -1482,7 +1492,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
             case .delegatedPlanning:
                 return copy.delegatedPlanningSuccessDetail
             }
-        case .failed: return copy.providerFailureDetail
+        case let .failed(_, failure):
+            return copy.providerFailureDetail(code: failure.code)
         case .running: return detail(for: event.kind, copy: copy)
         }
     }

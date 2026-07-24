@@ -916,10 +916,29 @@ public struct ZhulongCopy: Sendable {
         )
     }
 
-    public var providerFailureDetail: String {
-        localized(
-            chinese: "Provider 请求失败。请检查配置后重试。",
-            english: "The Provider request failed. Check the configuration and try again."
+    public func providerFailureDetail(code: String) -> String {
+        if Self.isConversationArtifactFailure(code) {
+            return localized(
+                chinese: "Provider 返回的对话产物无法验证；未写入任何任务或复盘。",
+                english: "The Provider returned an unverifiable conversation artifact. No tasks or review were written."
+            )
+        }
+        return localized(
+            chinese: "Provider 请求未完成；未写入任何变更。",
+            english: "The Provider request did not complete. No changes were written."
+        )
+    }
+
+    public func providerRunFailureNotice(code: String) -> String {
+        if Self.isConversationArtifactFailure(code) {
+            return localized(
+                chinese: "Provider 返回的对话产物格式无效，协议修复后仍无法验证。请重试。",
+                english: "The Provider returned an invalid conversation artifact that remained unverifiable after protocol repair. Try again."
+            )
+        }
+        return localized(
+            chinese: "Provider 请求未完成，请检查网络、额度或 Provider 服务后重试。",
+            english: "The Provider request did not complete. Check the network, quota, or Provider service and try again."
         )
     }
 
@@ -1164,6 +1183,16 @@ public struct ZhulongCopy: Sendable {
 
     private func localized(chinese: String, english: String) -> String {
         language == .chinese ? chinese : english
+    }
+
+    private static func isConversationArtifactFailure(
+        _ code: String
+    ) -> Bool {
+        [
+            "invalid_conversation_envelope",
+            "invalid_conversation_artifact",
+            "unsupported_conversation_artifact"
+        ].contains(code)
     }
 }
 

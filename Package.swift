@@ -43,7 +43,12 @@ let package = Package(
         ),
         .executableTarget(
             name: "NoonmarkAIProviderLiveSmoke",
-            dependencies: ["NoonmarkAI"],
+            dependencies: [
+                "NoonmarkAI",
+                "NoonmarkCore",
+                "NoonmarkZhulong",
+                "NoonmarkZhulongAI"
+            ],
             path: "Tools/NoonmarkAIProviderLiveSmoke"
         ),
         .target(name: "NoonmarkCore"),

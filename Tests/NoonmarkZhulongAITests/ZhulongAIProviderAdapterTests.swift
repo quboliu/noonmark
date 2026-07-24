@@ -220,6 +220,91 @@ final class ZhulongAIProviderAdapterTests: XCTestCase {
         XCTAssertEqual(completionCallCount, 1)
     }
 
+    func testConversationRepairsMalformedStreamedArtifactOnce() async throws {
+        let probe = ArtifactRepairInvocationProbe()
+        let identity = try makeIdentity()
+        let adapter = ZhulongAIProviderAdapter(
+            configurationIdentity: identity,
+            upstream: ArtifactRepairAIProvider(probe: probe)
+        )
+
+        var terminalResult: ZhulongProviderResult?
+        for await event in adapter.stream(
+            try makeConversationRequest(identity: identity)
+        ) {
+            if case let .finished(result) = event {
+                terminalResult = result
+            }
+        }
+
+        guard case let .success(response) = terminalResult else {
+            return XCTFail("Expected one repair attempt to recover the task artifact")
+        }
+        XCTAssertEqual(response.content, "我整理成一个可编辑任务。")
+        guard case let .taskPlan(plan) = try XCTUnwrap(
+            response.artifacts.first
+        ) else {
+            return XCTFail("Expected repaired task plan")
+        }
+        XCTAssertEqual(plan.tasks.first?.title, "重做烛龙")
+        let recordedRepairRequest = await probe.repairRequest
+        let repairRequest = try XCTUnwrap(recordedRepairRequest)
+        XCTAssertEqual(
+            repairRequest.responseSchemaName,
+            "noonmark.zhulong.conversation-artifact.repair.v1"
+        )
+        XCTAssertEqual(repairRequest.responseFormat, .jsonObject)
+        XCTAssertTrue(
+            repairRequest.userPrompt.contains(
+                "我整理成一个可编辑任务。<noonmark-artifacts>"
+            )
+        )
+        let streamCallCount = await probe.streamCallCount
+        let completionCallCount = await probe.completionCallCount
+        XCTAssertEqual(streamCallCount, 1)
+        XCTAssertEqual(completionCallCount, 1)
+    }
+
+    func testConversationFailsClosedAfterOneInvalidRepair() async throws {
+        let probe = ArtifactRepairInvocationProbe()
+        let identity = try makeIdentity()
+        let adapter = ZhulongAIProviderAdapter(
+            configurationIdentity: identity,
+            upstream: ArtifactRepairAIProvider(
+                probe: probe,
+                repairText: """
+                {
+                  "message": "我整理成一个可编辑任务。",
+                  "artifacts": [
+                    {
+                      "kind": "taskPlan",
+                      "tasks": [{ "title": "缺少必填字段" }]
+                    }
+                  ]
+                }
+                """
+            )
+        )
+
+        var terminalResult: ZhulongProviderResult?
+        for await event in adapter.stream(
+            try makeConversationRequest(identity: identity)
+        ) {
+            if case let .finished(result) = event {
+                terminalResult = result
+            }
+        }
+
+        guard case let .failure(failure) = terminalResult else {
+            return XCTFail("Expected invalid repair to remain fail-closed")
+        }
+        XCTAssertEqual(failure.code, "invalid_conversation_envelope")
+        let streamCallCount = await probe.streamCallCount
+        let completionCallCount = await probe.completionCallCount
+        XCTAssertEqual(streamCallCount, 1)
+        XCTAssertEqual(completionCallCount, 1)
+    }
+
     private func makeConversationRequest(
         identity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongProviderRequest {
@@ -278,6 +363,21 @@ private actor StreamingInvocationProbe {
 
     func recordCompletionCall() {
         completionCallCount += 1
+    }
+}
+
+private actor ArtifactRepairInvocationProbe {
+    private(set) var streamCallCount = 0
+    private(set) var completionCallCount = 0
+    private(set) var repairRequest: AIRequest?
+
+    func recordStreamCall() {
+        streamCallCount += 1
+    }
+
+    func recordCompletion(_ request: AIRequest) {
+        completionCallCount += 1
+        repairRequest = request
     }
 }
 
@@ -382,4 +482,67 @@ private struct StreamingCapabilityDisabledProvider: AIProvider, AIProviderStream
     func healthCheck() async -> AIProviderHealth {
         AIProviderHealth(status: .healthy)
     }
+}
+
+private struct ArtifactRepairAIProvider: AIProvider, AIProviderStreaming {
+    let config = AIProviderConfig(
+        providerID: AIProviderID("artifact-repair"),
+        displayName: "Artifact repair",
+        kind: .openAICompatible,
+        capabilities: AIProviderCapabilities(supportsStreaming: true)
+    )
+    let probe: ArtifactRepairInvocationProbe
+    let repairText: String
+
+    init(
+        probe: ArtifactRepairInvocationProbe,
+        repairText: String = Self.validRepairText
+    ) {
+        self.probe = probe
+        self.repairText = repairText
+    }
+
+    func complete(_ request: AIRequest) async throws -> AIProviderResponse {
+        await probe.recordCompletion(request)
+        return AIProviderResponse(text: repairText)
+    }
+
+    func stream(
+        _: AIRequest
+    ) async throws -> AsyncThrowingStream<String, Error> {
+        await probe.recordStreamCall()
+        return AsyncThrowingStream { continuation in
+            continuation.yield(
+                "我整理成一个可编辑任务。<noonmark-artifacts>"
+            )
+            continuation.yield(
+                #"{"artifacts":[{"kind":"taskPlan"}]}"#
+            )
+            continuation.finish()
+        }
+    }
+
+    func healthCheck() async -> AIProviderHealth {
+        AIProviderHealth(status: .healthy)
+    }
+
+    private static let validRepairText = """
+    {
+      "message": "我整理成一个可编辑任务。",
+      "artifacts": [
+        {
+          "kind": "taskPlan",
+          "tasks": [
+            {
+              "title": "重做烛龙",
+              "description": null,
+              "note": null,
+              "destination": { "kind": "pool" },
+              "subtasks": []
+            }
+          ]
+        }
+      ]
+    }
+    """
 }

@@ -3,6 +3,23 @@ import NoonmarkCore
 import XCTest
 
 final class ZhulongPresentationTests: XCTestCase {
+    func testProviderFailureCopyDistinguishesArtifactAndTransportFailures() {
+        let copy = AppPresentation(language: .chinese).zhulong
+
+        XCTAssertEqual(
+            copy.providerRunFailureNotice(
+                code: "invalid_conversation_artifact"
+            ),
+            "Provider 返回的对话产物格式无效，协议修复后仍无法验证。请重试。"
+        )
+        XCTAssertEqual(
+            copy.providerRunFailureNotice(
+                code: "upstream_provider_failed"
+            ),
+            "Provider 请求未完成，请检查网络、额度或 Provider 服务后重试。"
+        )
+    }
+
     func testHomeAndWorkspaceCopyIsBilingual() {
         let chinese = AppPresentation(language: .chinese).zhulong
         let english = AppPresentation(language: .english).zhulong

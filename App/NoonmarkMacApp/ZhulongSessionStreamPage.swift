@@ -81,15 +81,6 @@ struct ZhulongSessionStreamPage: View {
                             )
                         }
                     variantMenu(accessibilityIdentifier: "zhulong-stream-variant-menu")
-                    if workspace.selectedSession?.workspaceStatus == .paused {
-                        HeaderButton(copy.continueAction) { workspace.resumeCurrentSession() }
-                    } else if workspace.selectedSession?.phase == .providerRunning {
-                        Text(copy.composerProviderRunningHint)
-                            .font(.noonmarkSystem(size: 11, weight: .medium))
-                            .foregroundStyle(Theme.text3)
-                    } else {
-                        HeaderButton(copy.pauseAction) { workspace.pauseCurrentSession() }
-                    }
                 }
             }
 
@@ -348,6 +339,13 @@ struct ZhulongSessionStreamPage: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .accessibilityIdentifier(accessibilityIdentifier)
+        .background {
+            AppE2EViewAnchor(
+                identifier: accessibilityIdentifier,
+                verificationText:
+                workspace.variant.title(language: language)
+            )
+        }
     }
 
     private var streamContent: some View {
@@ -613,7 +611,43 @@ struct ZhulongSessionStreamPage: View {
             keyboardHint: composerHint,
             sendAccessibilityLabel: copy.sendMessageAccessibilityLabel,
             canSubmit: canSubmitEntry,
+            sessionControlTitle: composerSessionControl?.title,
+            sessionControlSystemImage:
+            composerSessionControl?.systemImage ?? "pause.fill",
+            sessionControlAccessibilityIdentifier:
+            composerSessionControl?.identifier,
+            onSessionControl: composerSessionControl?.action,
             onSend: sendMessage
+        )
+    }
+
+    private var composerSessionControl: (
+        title: String,
+        systemImage: String,
+        identifier: String,
+        action: () -> Void
+    )? {
+        guard let session = workspace.selectedSession,
+              session.phase != .providerRunning
+        else {
+            return nil
+        }
+        if session.workspaceStatus == .paused {
+            return (
+                copy.continueAction,
+                "play.fill",
+                "zhulong-session-resume",
+                { workspace.resumeCurrentSession() }
+            )
+        }
+        guard session.workspaceStatus == .active else {
+            return nil
+        }
+        return (
+            copy.pauseAction,
+            "pause.fill",
+            "zhulong-session-pause",
+            { workspace.pauseCurrentSession() }
         )
     }
 

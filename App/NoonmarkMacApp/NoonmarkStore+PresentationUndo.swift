@@ -74,6 +74,13 @@ extension NoonmarkStore {
         zhulongFeatureAvailability.pageIsAvailable
     }
 
+    var isZhulongProviderReady: Bool {
+        zhulongProviderDraft.isConfigured
+            && zhulongProviderDraft.hasStoredAPIKey
+            && ZhulongProviderSettingsStore
+                .persistedReadyExecutionRevision() != nil
+    }
+
     var isAutomaticClassificationEnabled: Bool {
         zhulongFeatureAvailability.shouldEnqueueAutomaticClassification
     }

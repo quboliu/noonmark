@@ -2,75 +2,70 @@ extension AppCopy {
     // MARK: - Context rails
 
     var unscheduled: String { language == .chinese ? "未排期" : "Unscheduled" }
-    var hasDescription: String { language == .chinese ? "有说明" : "With details" }
     var plannedTasks: String { language == .chinese ? "计划任务" : "Planned tasks" }
     var coveredDates: String { language == .chinese ? "覆盖日期" : "Dates covered" }
     var continuedTasks: String { language == .chinese ? "延续任务" : "Continued tasks" }
     var taskChains: String { language == .chinese ? "任务链" : "Task chains" }
     var missedOccurrences: String { language == .chinese ? "未完成次" : "Missed times" }
     var completedTasks: String { language == .chinese ? "完成任务" : "Completed tasks" }
-    var poolSchedulingTitle: String { language == .chinese ? "任务池排期" : "Task Pool scheduling" }
-    var poolSchedulingSubtitle: String {
+    var poolStatisticsTitle: String {
+        language == .chinese ? "任务池统计" : "Task Pool statistics"
+    }
+
+    var poolStatisticsSubtitle: String {
         language == .chinese
-            ? "先用本地统计检查任务池完整度与组织状态，再决定下一步排期。"
-            : "Use local signals to review Task Pool readiness and organization before scheduling."
+            ? "当前任务池的本地事实，不依赖 Provider。"
+            : "Local facts from the current Task Pool, independent of any Provider."
     }
 
-    var poolSchedulingIntent: String {
-        language == .chinese ? "给任务池重新排期" : "Reschedule the Task Pool"
+    var poolTaskTotalMetric: String {
+        language == .chinese ? "任务总量" : "Tasks"
     }
 
-    func poolOldestSignal(_ date: String?) -> String {
-        guard let date else {
-            return language == .chinese ? "任务池目前为空。" : "The Task Pool is currently empty."
-        }
-        return language == .chinese
-            ? "最早进入任务池：\(date)。"
-            : "Oldest Task Pool entry: \(date)."
+    var poolCategoryTotalMetric: String {
+        language == .chinese ? "池内分组" : "Groups used"
     }
 
-    func poolOrganizationSignal(unclassifiedCount: Int) -> String {
-        guard unclassifiedCount > 0 else {
-            return language == .chinese
-                ? "所有任务都已有主要分组。"
-                : "Every task has a primary group."
-        }
-        return language == .chinese
-            ? "\(unclassifiedCount) 项任务尚未分组。"
-            : "\(unclassifiedCount) task\(unclassifiedCount == 1 ? " is" : "s are") not grouped."
+    var poolLabelTotalMetric: String {
+        language == .chinese ? "池内标签" : "Labels used"
     }
 
-    func poolDetailsRecommendation(needsDetailCount: Int) -> String {
-        guard needsDetailCount > 0 else {
-            return language == .chinese
-                ? "现有任务已具备说明、附言或子任务，可直接评估排期。"
-                : "Existing tasks have enough detail, notes, or subtasks to assess for scheduling."
-        }
-        return language == .chinese
-            ? "先为 \(needsDetailCount) 项缺少上下文的任务补充目标或范围。"
-            : "Add a goal or scope to \(needsDetailCount) task\(needsDetailCount == 1 ? "" : "s") that lack context."
+    var poolContextualTaskMetric: String {
+        language == .chinese ? "有说明" : "With context"
     }
 
-    func poolPlanningRecommendation(plannedCount: Int, totalCount: Int) -> String {
-        guard totalCount > 0 else {
-            return language == .chinese
-                ? "有新承诺时先加入任务池，再选择合适日期。"
-                : "Add new commitments to the Task Pool before choosing a date."
-        }
-        guard plannedCount > 0 else {
-            return language == .chinese
-                ? "复杂任务可先拆成可验证子任务，再进入 Day Todo。"
-                : "Split complex work into verifiable subtasks before moving it into Day Todo."
-        }
-        return language == .chinese
-            ? "\(plannedCount) 项任务已有子任务计划，优先检查最早进入池中的项目。"
-            : "\(plannedCount) task\(plannedCount == 1 ? " has" : "s have") a subtask plan; review the oldest entries first."
+    var poolReturnedTaskMetric: String {
+        language == .chinese ? "重新回池" : "Returned"
     }
 
-    var poolZhulongNote: String {
+    var poolAnalysisTitle: String {
+        language == .chinese ? "烛龙分析" : "Zhulong analysis"
+    }
+
+    var poolAnalysisSubtitle: String {
         language == .chinese
-            ? "开启烛龙后，可结合历史节奏生成范围明确的排期草稿。"
-            : "Enable Zhulong to draft a scoped schedule using past working rhythm."
+            ? "基于任务内容与已授权轨迹，生成可审查的判断。"
+            : "Generate reviewable findings from task content and authorized trails."
+    }
+
+    var poolAnalysisActionSubtitle: String {
+        language == .chinese
+            ? "使用已接入的 Provider；发送前仍会确认本次任务池范围。"
+            : "Use the connected Provider and confirm this Task Pool scope before sending."
+    }
+
+    var poolAnalysisIntent: String {
+        language == .chinese
+            ? "分析当前任务池，指出需要澄清、拆分或安排的任务"
+            : "Analyze the current Task Pool for tasks that need clarification, decomposition, or scheduling"
+    }
+
+    var analyzeTaskPool: String {
+        language == .chinese ? "分析任务池" : "Analyze Task Pool"
+    }
+
+    var continueTaskPoolAnalysis: String {
+        language == .chinese ? "继续任务池分析" : "Continue Task Pool analysis"
     }
 
     var futureReschedulingTitle: String { language == .chinese ? "未来改期" : "Upcoming rescheduling" }

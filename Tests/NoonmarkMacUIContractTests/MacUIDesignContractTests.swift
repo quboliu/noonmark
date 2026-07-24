@@ -574,6 +574,17 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertFalse(MacUIZhulongConversationLayout.showsAssistantAvatar)
         XCTAssertFalse(MacUIZhulongConversationLayout.showsMessageTimestamps)
         XCTAssertTrue(MacUIZhulongConversationLayout.sharesComposerAcrossProjections)
+        XCTAssertEqual(MacUIZhulongConversationLayout.persistentHeaderActionCount, 2)
+        XCTAssertTrue(MacUIZhulongConversationLayout.placesSessionRunControlInComposer)
+        XCTAssertTrue(MacUIZhulongConversationLayout.preservesCenteredTitleAxis)
+    }
+
+    func testTaskPoolRailSeparatesLocalStatisticsFromProviderAnalysis() {
+        XCTAssertEqual(MacUITaskPoolHomeRailLayout.statisticsContainerCount, 1)
+        XCTAssertEqual(MacUITaskPoolHomeRailLayout.statisticsColumnCount, 2)
+        XCTAssertFalse(MacUITaskPoolHomeRailLayout.statisticsDependOnProvider)
+        XCTAssertFalse(MacUITaskPoolHomeRailLayout.analysisVisibleWithoutReadyProvider)
+        XCTAssertFalse(MacUITaskPoolHomeRailLayout.includesLocalInterpretiveSuggestions)
     }
 
     func testZhulongTitleCentersWithoutChangingSharedPageHeaderDefault() {

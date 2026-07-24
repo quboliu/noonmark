@@ -334,6 +334,10 @@ struct ZhulongChatComposer: View {
     let keyboardHint: String
     let sendAccessibilityLabel: String
     let canSubmit: Bool
+    let sessionControlTitle: String?
+    let sessionControlSystemImage: String
+    let sessionControlAccessibilityIdentifier: String?
+    let onSessionControl: (() -> Void)?
     let onSend: () -> Void
 
     private var canSend: Bool {
@@ -358,6 +362,36 @@ struct ZhulongChatComposer: View {
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
                 Spacer(minLength: 12)
+                if let sessionControlTitle,
+                   let sessionControlAccessibilityIdentifier,
+                   let onSessionControl
+                {
+                    Button(action: onSessionControl) {
+                        Label(
+                            sessionControlTitle,
+                            systemImage: sessionControlSystemImage
+                        )
+                        .font(.noonmarkSystem(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.text2)
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(
+                            Capsule().fill(Theme.chip.opacity(0.72))
+                        )
+                        .overlay(Capsule().stroke(Theme.line))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(
+                        sessionControlAccessibilityIdentifier
+                    )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier:
+                            sessionControlAccessibilityIdentifier,
+                            verificationText: sessionControlTitle
+                        )
+                    }
+                }
                 Button(action: submitIfAvailable) {
                     Image(systemName: "arrow.up")
                         .font(.noonmarkSystem(size: 12, weight: .bold))
@@ -386,6 +420,12 @@ struct ZhulongChatComposer: View {
         )
         .shadow(color: Theme.text1.opacity(0.07), radius: 16, y: 5)
         .accessibilityIdentifier("zhulong-session-composer")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "zhulong-session-composer",
+                verificationText: placeholder
+            )
+        }
     }
 
     private func submitIfAvailable() {

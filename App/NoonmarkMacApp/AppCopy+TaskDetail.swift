@@ -338,13 +338,6 @@ extension AppCopy {
     var localSignals: String { language == .chinese ? "本地信号" : "Local signals" }
     var algorithmSuggestions: String { language == .chinese ? "算法建议" : "Suggestions" }
 
-    func poolCreatedAtLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: language == .chinese ? "zh_Hans_SG" : "en_SG")
-        formatter.setLocalizedDateFormatFromTemplate("MMMd")
-        return formatter.string(from: date)
-    }
-
     func noteTimestamp(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: language == .chinese ? "zh_Hans_SG" : "en_SG")

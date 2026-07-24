@@ -22,6 +22,207 @@ struct ZhulongRail: View {
     }
 }
 
+struct TaskPoolHomeRailModel {
+    let statistics: TaskPoolStatisticsSnapshot
+    let analysisAvailability: TaskPoolAnalysisAvailability
+
+    @MainActor
+    static func make(store: NoonmarkStore) -> TaskPoolHomeRailModel {
+        let items = store.engine.taskPool().map { task in
+            let classification = store.currentClassification(
+                for: task.chain.id
+            )
+            let hasReturnedToPool = (
+                try? store.engine.taskTrail(chainID: task.chain.id)
+            )?.contains { $0.kind == .returnedToPool } ?? false
+            return TaskPoolStatisticsItem(
+                categoryID: classification?.category?.id,
+                labelIDs: Set(
+                    classification?.labels.map(\.id) ?? []
+                ),
+                hasContext:
+                (task.definition.descriptionText ?? "").isEmpty == false
+                    || task.chain.activeNoteEntries.isEmpty == false,
+                hasPlannedSubtasks:
+                task.definition.plannedSubtasks.isEmpty == false,
+                hasReturnedToPool: hasReturnedToPool
+            )
+        }
+        return TaskPoolHomeRailModel(
+            statistics: TaskPoolStatisticsSnapshot(items: items),
+            analysisAvailability: TaskPoolAnalysisAvailability(
+                providerConfigurationIsReady:
+                store.isZhulongProviderReady
+            )
+        )
+    }
+}
+
+struct TaskPoolHomeRail: View {
+    private struct Statistic: Identifiable {
+        let id: String
+        let label: String
+        let value: Int
+    }
+
+    @EnvironmentObject private var store: NoonmarkStore
+    let model: TaskPoolHomeRailModel
+
+    private var secondaryStatistics: [Statistic] {
+        [
+            Statistic(
+                id: "categories",
+                label: store.copy.poolCategoryTotalMetric,
+                value: model.statistics.categoryCount
+            ),
+            Statistic(
+                id: "labels",
+                label: store.copy.poolLabelTotalMetric,
+                value: model.statistics.labelCount
+            ),
+            Statistic(
+                id: "ungrouped",
+                label: store.copy.ungrouped,
+                value: model.statistics.ungroupedTaskCount
+            ),
+            Statistic(
+                id: "context",
+                label: store.copy.poolContextualTaskMetric,
+                value: model.statistics.contextualTaskCount
+            ),
+            Statistic(
+                id: "planned",
+                label: store.copy.plannedSubtasksMetric,
+                value: model.statistics.plannedTaskCount
+            ),
+            Statistic(
+                id: "returned",
+                label: store.copy.poolReturnedTaskMetric,
+                value: model.statistics.returnedTaskCount
+            )
+        ]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            statisticsSection
+
+            if model.analysisAvailability.isVisible {
+                Divider()
+                analysisSection
+            }
+        }
+        .background {
+            AppE2EViewAnchor(
+                identifier: "detail.summary.pool",
+                verificationText: store.copy.poolStatisticsTitle
+            )
+        }
+    }
+
+    private var statisticsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(store.copy.poolStatisticsTitle)
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Text(store.copy.poolStatisticsSubtitle)
+                    .font(.noonmarkSystem(size: 12))
+                    .foregroundStyle(Theme.text2)
+                    .lineSpacing(3)
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(store.copy.poolTaskTotalMetric)
+                        .font(.noonmarkSystem(size: 11.5, weight: .medium))
+                        .foregroundStyle(Theme.text2)
+                    Spacer()
+                    Text("\(model.statistics.taskCount)")
+                        .font(.noonmarkSystem(size: 28, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .monospacedDigit()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+
+                Divider()
+
+                LazyVGrid(
+                    columns: Array(
+                        repeating: GridItem(.flexible(), alignment: .leading),
+                        count: MacUITaskPoolHomeRailLayout.statisticsColumnCount
+                    ),
+                    alignment: .leading,
+                    spacing: 0
+                ) {
+                    ForEach(secondaryStatistics) { statistic in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("\(statistic.value)")
+                                .font(.noonmarkSystem(size: 17, weight: .semibold))
+                                .foregroundStyle(Theme.text1)
+                                .monospacedDigit()
+                            Text(statistic.label)
+                                .font(.noonmarkSystem(size: 10.5))
+                                .foregroundStyle(Theme.text3)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(Theme.panel2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(Theme.line)
+            )
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "detail.summary.pool.statistics",
+                    verificationText:
+                    "\(model.statistics.taskCount),\(secondaryStatistics.count)"
+                )
+            }
+        }
+    }
+
+    private var analysisSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(store.copy.poolAnalysisTitle)
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.8)
+                Text(store.copy.poolAnalysisSubtitle)
+                    .font(.noonmarkSystem(size: 12))
+                    .foregroundStyle(Theme.text2)
+                    .lineSpacing(3)
+            }
+            ZhulongAnalysisEntry(
+                page: .pool,
+                intent: store.copy.poolAnalysisIntent,
+                scopes: [.taskPool],
+                newSessionTitle: store.copy.analyzeTaskPool,
+                recentSessionTitle:
+                store.copy.continueTaskPoolAnalysis,
+                newSessionSubtitle:
+                store.copy.poolAnalysisActionSubtitle
+            )
+        }
+        .background {
+            AppE2EViewAnchor(
+                identifier: "detail.summary.pool.analysis",
+                verificationText: store.copy.poolAnalysisTitle
+            )
+        }
+    }
+}
+
 struct SidebarAnalysisMetric: Identifiable {
     enum Tone {
         case accent
@@ -77,72 +278,7 @@ struct SidebarAnalysisModel {
     static func make(for page: NoonmarkStore.Page, store: NoonmarkStore) -> SidebarAnalysisModel? {
         switch page {
         case .pool:
-            let tasks = store.engine.taskPool()
-                .sorted { $0.definition.createdAt < $1.definition.createdAt }
-            let contextCount = tasks.filter {
-                ($0.definition.descriptionText ?? "").isEmpty == false
-                    || $0.chain.activeNoteEntries.isEmpty == false
-            }.count
-            let plannedCount = tasks.filter {
-                $0.definition.plannedSubtasks.isEmpty == false
-            }.count
-            let needsDetailCount = tasks.filter {
-                ($0.definition.descriptionText ?? "").isEmpty
-                    && $0.chain.activeNoteEntries.isEmpty
-                    && $0.definition.plannedSubtasks.isEmpty
-            }.count
-            let unclassifiedCount = tasks.filter {
-                store.isUnclassified($0.chain.id)
-            }.count
-            return SidebarAnalysisModel(
-                page: page,
-                title: store.copy.poolSchedulingTitle,
-                subtitle: store.copy.poolSchedulingSubtitle,
-                metrics: [
-                    SidebarAnalysisMetric(
-                        label: store.copy.unscheduled,
-                        value: "\(tasks.count)",
-                        tone: .accent
-                    ),
-                    SidebarAnalysisMetric(
-                        label: store.copy.hasDescription,
-                        value: "\(contextCount)",
-                        tone: contextCount == tasks.count ? .ok : .neutral
-                    ),
-                    SidebarAnalysisMetric(
-                        label: store.copy.plannedSubtasksMetric,
-                        value: "\(plannedCount)",
-                        tone: .neutral
-                    ),
-                    SidebarAnalysisMetric(
-                        label: store.copy.ungrouped,
-                        value: "\(unclassifiedCount)",
-                        tone: unclassifiedCount == 0 ? .ok : .warn
-                    )
-                ],
-                signals: [
-                    store.copy.poolOldestSignal(
-                        tasks.first.map {
-                            store.copy.poolCreatedAtLabel($0.definition.createdAt)
-                        }
-                    ),
-                    store.copy.poolOrganizationSignal(
-                        unclassifiedCount: unclassifiedCount
-                    )
-                ],
-                recommendations: [
-                    store.copy.poolDetailsRecommendation(
-                        needsDetailCount: needsDetailCount
-                    ),
-                    store.copy.poolPlanningRecommendation(
-                        plannedCount: plannedCount,
-                        totalCount: tasks.count
-                    )
-                ],
-                zhulongNote: store.copy.poolZhulongNote,
-                zhulongIntent: store.copy.poolSchedulingIntent,
-                zhulongScopes: [.taskPool, .unfinishedPool]
-            )
+            return nil
         case .future:
             let plans = store.engine.futurePlans(today: store.today)
             let dates = Set(plans.map(\.trace.date))
@@ -392,6 +528,25 @@ struct ZhulongAnalysisEntry: View {
     let page: NoonmarkStore.Page
     let intent: String
     let scopes: Set<ZhulongDataScope>
+    let newSessionTitle: String?
+    let recentSessionTitle: String?
+    let newSessionSubtitle: String?
+
+    init(
+        page: NoonmarkStore.Page,
+        intent: String,
+        scopes: Set<ZhulongDataScope>,
+        newSessionTitle: String? = nil,
+        recentSessionTitle: String? = nil,
+        newSessionSubtitle: String? = nil
+    ) {
+        self.page = page
+        self.intent = intent
+        self.scopes = scopes
+        self.newSessionTitle = newSessionTitle
+        self.recentSessionTitle = recentSessionTitle
+        self.newSessionSubtitle = newSessionSubtitle
+    }
 
     private var recentSession: ZhulongSession? {
         store.recentZhulongSession(matching: scopes)
@@ -399,15 +554,16 @@ struct ZhulongAnalysisEntry: View {
 
     private var title: String {
         recentSession == nil
-            ? store.copy.handToZhulong
-            : store.copy.continueRecentSession
+            ? (newSessionTitle ?? store.copy.handToZhulong)
+            : (recentSessionTitle ?? store.copy.continueRecentSession)
     }
 
     private var subtitle: String {
         if let recentSession {
             return "\(recentSession.primaryIntent) · \(store.zhulongWorkspaceStatus(recentSession))"
         }
-        return store.copy.zhulongContextEntrySubtitle
+        return newSessionSubtitle
+            ?? store.copy.zhulongContextEntrySubtitle
     }
 
     var body: some View {
@@ -509,7 +665,11 @@ struct DetailRail: View {
         case .dayReview:
             ReviewRail()
         case let .pageSummary(page):
-            if let model = SidebarAnalysisModel.make(for: page, store: store) {
+            if page == .pool {
+                TaskPoolHomeRail(
+                    model: TaskPoolHomeRailModel.make(store: store)
+                )
+            } else if let model = SidebarAnalysisModel.make(for: page, store: store) {
                 SidebarAnalysisRail(model: model)
             } else {
                 RailHint(text: hint)

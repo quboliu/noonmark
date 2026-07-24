@@ -54,6 +54,8 @@ if [[ ! -f "$result_path" ]]; then
   exit 1
 fi
 
+view_tree_path="${result_path%.json}.view-tree.txt"
+
 for expected in \
   '"status" : "ready"' \
   '"anchorDate" : "2026-07-24"' \
@@ -67,10 +69,16 @@ for expected in \
   '"multiDayCompletedTaskCount" : 2' \
   '"completedPoolRowHierarchyVerified" : true' \
   '"visibleScopeReauthorizationCardCount" : 0' \
-  '"scopeAuthorizationUIVerified" : true'; do
+  '"scopeAuthorizationUIVerified" : true' \
+  '"taskPoolStatisticsPresentationVerified" : true' \
+  '"taskPoolProviderBoundaryVerified" : true' \
+  '"zhulongHeaderComposerHierarchyVerified" : true'; do
   if ! grep -Fq "$expected" "$result_path"; then
     echo "demo fixture manifest is missing: $expected" >&2
     sed -n '1,200p' "$result_path" >&2
+    if [[ -f "$view_tree_path" ]]; then
+      sed -n '1,240p' "$view_tree_path" >&2
+    fi
     exit 1
   fi
 done

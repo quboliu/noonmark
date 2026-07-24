@@ -682,6 +682,37 @@ struct SummarySidebarE2EAutomation: LaunchAutomationRunnable {
         zhulongEnabled: Bool
     ) async throws {
         let prefix = "detail.summary.\(page.rawValue)"
+        if page == .pool {
+            try await waitUntil(
+                "Task Pool statistics were not separated from Provider analysis"
+            ) {
+                store.detailRailRoute == .pageSummary(page)
+                    && store.shouldShowDetailRail
+                    && AppViewTreeE2E.view(identifier: prefix) != nil
+                    && AppViewTreeE2E.view(
+                        identifier: "\(prefix).statistics"
+                    ) != nil
+                    && AppViewTreeE2E.hasNoVisibleView(
+                        identifier: "\(prefix).signals"
+                    )
+                    && AppViewTreeE2E.hasNoVisibleView(
+                        identifier: "\(prefix).recommendations"
+                    )
+                    && AppViewTreeE2E.hasNoVisibleView(
+                        identifier: "\(prefix).zhulong-hint"
+                    )
+                    && (
+                        store.isZhulongProviderReady
+                            ? AppViewTreeE2E.view(
+                                identifier: "\(prefix).analysis"
+                            ) != nil
+                            : AppViewTreeE2E.hasNoVisibleView(
+                                identifier: "\(prefix).analysis"
+                            )
+                    )
+            }
+            return
+        }
         try await waitUntil("\(page.rawValue) local summary was not visible") {
             store.detailRailRoute == .pageSummary(page)
                 && store.shouldShowDetailRail

@@ -114,21 +114,13 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             )
             return
         }
-
-        do {
-            let result = try manifest(
-                fixture: fixture,
-                engine: engine,
-                sessions: sessions,
-                store: store,
-                scopeAuthorizationUIVerified: true
-            )
-            store.page = .day
-            store.selectedDate = fixture.anchorDate
-            try write(result)
-        } catch {
-            finishWithFailure(error, on: store)
-        }
+        verifyZhulongHeaderPresentation(
+            fixture: fixture,
+            engine: engine,
+            sessions: sessions,
+            store: store,
+            remainingAttempts: 100
+        )
     }
 
     @MainActor
@@ -147,6 +139,131 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 store: store,
                 remainingAttempts: remainingAttempts
             )
+        }
+    }
+
+    @MainActor
+    private func verifyZhulongHeaderPresentation(
+        fixture: NoonmarkDemoFixture,
+        engine: NoonmarkEngine,
+        sessions: [ZhulongSession],
+        store: NoonmarkStore,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError
+                    .presentationContractFailed,
+                on: store
+            )
+            return
+        }
+        guard AppViewTreeE2E.view(
+            identifier: "zhulong.session.title"
+        ) != nil,
+        AppViewTreeE2E.view(
+            identifier: "zhulong-session-show-home"
+        ) != nil,
+        AppViewTreeE2E.view(
+            identifier: "zhulong-stream-variant-menu"
+        ) != nil,
+        AppViewTreeE2E.view(
+            identifier: "zhulong-session-composer"
+        ) != nil,
+        AppViewTreeE2E.view(
+            identifier: "zhulong-session-pause"
+        ) != nil
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyZhulongHeaderPresentation(
+                    fixture: fixture,
+                    engine: engine,
+                    sessions: sessions,
+                    store: store,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+
+        store.page = .pool
+        store.clearSelection()
+        store.isDetailRailExpanded = true
+        verifyTaskPoolPresentation(
+            fixture: fixture,
+            engine: engine,
+            sessions: sessions,
+            store: store,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func verifyTaskPoolPresentation(
+        fixture: NoonmarkDemoFixture,
+        engine: NoonmarkEngine,
+        sessions: [ZhulongSession],
+        store: NoonmarkStore,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError
+                    .presentationContractFailed,
+                on: store
+            )
+            return
+        }
+        let prefix = "detail.summary.pool"
+        let analysisVisible = AppViewTreeE2E.view(
+            identifier: "\(prefix).analysis"
+        ) != nil
+        guard AppViewTreeE2E.activateMainWindow(),
+              AppViewTreeE2E.view(identifier: prefix) != nil,
+              AppViewTreeE2E.view(
+                  identifier: "\(prefix).statistics"
+              ) != nil,
+              AppViewTreeE2E.hasNoVisibleView(
+                  identifier: "\(prefix).signals"
+              ),
+              AppViewTreeE2E.hasNoVisibleView(
+                  identifier: "\(prefix).recommendations"
+              ),
+              AppViewTreeE2E.hasNoVisibleView(
+                  identifier: "\(prefix).zhulong-hint"
+              ),
+              analysisVisible == store.isZhulongProviderReady
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyTaskPoolPresentation(
+                    fixture: fixture,
+                    engine: engine,
+                    sessions: sessions,
+                    store: store,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+
+        do {
+            let result = try manifest(
+                fixture: fixture,
+                engine: engine,
+                sessions: sessions,
+                store: store,
+                scopeAuthorizationUIVerified: true,
+                taskPoolStatisticsPresentationVerified: true,
+                taskPoolProviderBoundaryVerified: true,
+                zhulongHeaderComposerHierarchyVerified: true
+            )
+            store.page = .day
+            store.selectedDate = fixture.anchorDate
+            try write(result)
+        } catch {
+            finishWithFailure(error, on: store)
         }
     }
 
@@ -626,7 +743,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         engine: NoonmarkEngine,
         sessions: [ZhulongSession],
         store: NoonmarkStore,
-        scopeAuthorizationUIVerified: Bool
+        scopeAuthorizationUIVerified: Bool,
+        taskPoolStatisticsPresentationVerified: Bool,
+        taskPoolProviderBoundaryVerified: Bool,
+        zhulongHeaderComposerHierarchyVerified: Bool
     ) throws -> InteractiveDemoManifest {
         let currentProviderIdentity = try store.zhulongProviderIdentity()
         let visibleScopeReauthorizationCardCount = sessions.filter {
@@ -726,6 +846,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               store.zhulongWorkspace.sessions.count == sessions.count,
               dayTodoGroupingPresentationVerified,
               completedPoolRowHierarchyVerified,
+              taskPoolStatisticsPresentationVerified,
+              taskPoolProviderBoundaryVerified,
+              zhulongHeaderComposerHierarchyVerified,
               engine.getDayTodo(date: fixture.anchorDate).traces
               .isEmpty == false
         else {
@@ -756,6 +879,12 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             visibleScopeReauthorizationCardCount,
             scopeAuthorizationUIVerified:
             scopeAuthorizationUIVerified,
+            taskPoolStatisticsPresentationVerified:
+            taskPoolStatisticsPresentationVerified,
+            taskPoolProviderBoundaryVerified:
+            taskPoolProviderBoundaryVerified,
+            zhulongHeaderComposerHierarchyVerified:
+            zhulongHeaderComposerHierarchyVerified,
             persistedDatabasePath: store.databaseURL?.path ?? ""
         )
     }
@@ -808,6 +937,9 @@ private struct InteractiveDemoManifest: Codable {
     let completedPoolRowHierarchyVerified: Bool
     let visibleScopeReauthorizationCardCount: Int
     let scopeAuthorizationUIVerified: Bool
+    let taskPoolStatisticsPresentationVerified: Bool
+    let taskPoolProviderBoundaryVerified: Bool
+    let zhulongHeaderComposerHierarchyVerified: Bool
     let persistedDatabasePath: String
 }
 
@@ -823,6 +955,7 @@ private enum InteractiveDemoFixtureError: LocalizedError {
     case incompleteZhulongCoverage
     case unexpectedScopeReauthorization(count: Int)
     case scopeAuthorizationPresentationFailed
+    case presentationContractFailed
 
     var errorDescription: String? {
         switch self {
@@ -838,6 +971,8 @@ private enum InteractiveDemoFixtureError: LocalizedError {
             "演示 fixture 出现 \(count) 张非预期的烛龙阅读范围确认卡。"
         case .scopeAuthorizationPresentationFailed:
             "演示 App 的烛龙历史会话仍然显示阅读范围确认卡。"
+        case .presentationContractFailed:
+            "演示 App 未满足任务池统计边界或烛龙头部／输入框层级契约。"
         }
     }
 }

@@ -658,6 +658,17 @@ public enum MacUIZhulongConversationLayout {
     public static let showsAssistantAvatar = false
     public static let showsMessageTimestamps = false
     public static let sharesComposerAcrossProjections = true
+    public static let persistentHeaderActionCount = 2
+    public static let placesSessionRunControlInComposer = true
+    public static let preservesCenteredTitleAxis = true
+}
+
+public enum MacUITaskPoolHomeRailLayout {
+    public static let statisticsContainerCount = 1
+    public static let statisticsColumnCount = 2
+    public static let statisticsDependOnProvider = false
+    public static let analysisVisibleWithoutReadyProvider = false
+    public static let includesLocalInterpretiveSuggestions = false
 }
 
 public enum MacUIClassificationAccessibility {

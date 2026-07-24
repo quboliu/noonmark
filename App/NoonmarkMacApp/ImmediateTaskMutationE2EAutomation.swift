@@ -8,6 +8,7 @@ import NoonmarkStorage
 @MainActor
 struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
     private static let dayInitialTitle = "E2E Day original title"
+    private static let dayInitialDescription = "快速记录自 Day Todo。"
     private static let daySavedTitle = "E2E Day saved immediately"
     private static let daySavedDescription = "E2E Day description saved immediately"
     private static let daySiblingTitle = "E2E Day click-away target"
@@ -97,6 +98,13 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         )
 
         store.selectTrace(fixture.dayTraceID)
+        try await clearDescriptionAndKeepEmpty(
+            initialText: Self.dayInitialDescription,
+            readback: {
+                store.engine.traces[fixture.dayTraceID]?.descriptionText
+            },
+            input: input
+        )
         try await editDescription(
             TextEdit(
                 initialText: "",
@@ -204,6 +212,7 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
 
         let dayChainID = try store.engine.createPoolTask(
             title: Self.dayInitialTitle,
+            descriptionText: Self.dayInitialDescription,
             now: try timeline.nextInstant()
         )
         let dayTraceID = try store.engine.scheduleFromPool(
@@ -313,19 +322,73 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         store.selectedDate = fixture.today
         store.selectedCalendarDate = fixture.today
         try await chooseMenuAction(
-            .returnToPool,
+            .deferTo,
             for: fixture.returnedTraceID,
             from: dayIdentifier(fixture.returnedTraceID),
             store: store,
             input: input
         )
-        try await waitUntil("returned task did not leave Day Todo immediately") {
-            store.page == .day
-                && store.selectedDate == fixture.today
-                && store.engine.traces[fixture.returnedTraceID]?.status == .returnedToPool
-                && store.engine.getDayTodo(date: fixture.today).traces.allSatisfy {
-                    $0.id != fixture.returnedTraceID
-                }
+        try await waitUntil("defer date picker did not appear") {
+            store.showingPicker?.id
+                == NoonmarkStore.DatePickerPurpose.deferTrace(
+                    fixture.returnedTraceID
+                ).id
+                && AppViewTreeE2E.view(
+                    identifier: "date-picker.confirm"
+                ) != nil
+        }
+        try await click(
+            identifier: "date-picker.confirm",
+            modifiers: [],
+            input: input
+        )
+        let tomorrow = NoonmarkStore.offset(fixture.today, by: 1)
+        var deferredTargetTraceID: DayTraceID?
+        try await waitUntil("task was not deferred to tomorrow") {
+            deferredTargetTraceID = store.engine.traces.values.first {
+                $0.chainID == fixture.returnedChainID
+                    && $0.id != fixture.returnedTraceID
+                    && $0.status == .pending
+                    && $0.date == tomorrow
+            }?.id
+            return store.showingPicker == nil
+                && store.engine.traces[
+                    fixture.returnedTraceID
+                ]?.status == .deferred
+                && deferredTargetTraceID != nil
+        }
+        guard let deferredTargetTraceID else {
+            throw Failure.failed("deferred target identity was unavailable")
+        }
+
+        try await click(
+            identifier: "sidebar.nav.future",
+            modifiers: [],
+            input: input
+        )
+        try await waitUntil("Future Plans navigation did not complete") {
+            store.page == .future
+                && AppViewTreeE2E.view(
+                    identifier: self.futureIdentifier(
+                        deferredTargetTraceID
+                    )
+                ) != nil
+        }
+        try await chooseFutureMenuAction(
+            .returnToPool,
+            for: deferredTargetTraceID,
+            from: futureIdentifier(deferredTargetTraceID),
+            store: store,
+            input: input
+        )
+        try await waitUntil("deferred target did not return to the pool") {
+            store.page == .future
+                && store.engine.traces[
+                    fixture.returnedTraceID
+                ]?.status == .deferred
+                && store.engine.traces[
+                    deferredTargetTraceID
+                ]?.status == .cancelledDraft
                 && store.engine.taskPool().contains {
                     $0.chain.id == fixture.returnedChainID
                 }
@@ -349,7 +412,13 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         }
         try await assertTrail(
             chainID: fixture.returnedChainID,
-            expectedKinds: [.createdInPool, .scheduled, .returnedToPool],
+            expectedKinds: [
+                .createdInPool,
+                .scheduled,
+                .scheduled,
+                .deferred,
+                .returnedToPool
+            ],
             store: store
         )
 
@@ -422,6 +491,7 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             replacementTraceID = store.engine.traces.values.first {
                 $0.chainID == fixture.returnedChainID
                     && $0.id != fixture.returnedTraceID
+                    && $0.id != deferredTargetTraceID
                     && $0.status == .pending
                     && $0.date == fixture.today
             }?.id
@@ -457,7 +527,66 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         }
         try await assertTrail(
             chainID: fixture.returnedChainID,
-            expectedKinds: [.createdInPool, .scheduled, .returnedToPool, .scheduled],
+            expectedKinds: [
+                .createdInPool,
+                .scheduled,
+                .scheduled,
+                .deferred,
+                .returnedToPool,
+                .scheduled
+            ],
+            store: store
+        )
+
+        let replacementSubtasks = store.subtasks(for: replacementTraceID)
+        for subtask in replacementSubtasks {
+            try await clickCompletionButton(
+                identifier:
+                    "day.subtask.\(subtask.id.description).completion",
+                label: store.copy.markComplete,
+                input: input
+            )
+            try await waitUntil(
+                "rescheduled task subtask status could not be changed"
+            ) {
+                store.engine.subtasks[subtask.id]?.status == .completed
+            }
+        }
+        try await clickCompletionButton(
+            identifier:
+                "day.trace.\(replacementTraceID.description).completion",
+            label: store.copy.markComplete,
+            input: input
+        )
+        try await waitUntil(
+            "rescheduled task status could not be changed after returning"
+        ) {
+            store.engine.traces[replacementTraceID]?.status == .completed
+                && store.engine.getDayTodo(
+                    date: fixture.today
+                ).traces.filter {
+                    $0.chainID == fixture.returnedChainID
+                }.map(\.id) == [replacementTraceID]
+                && AppViewTreeE2E.view(
+                    identifier: self.dayIdentifier(
+                        fixture.returnedTraceID
+                    )
+                ) == nil
+                && AppViewTreeE2E.view(
+                    identifier: self.dayIdentifier(replacementTraceID)
+                ) != nil
+        }
+        try await assertTrail(
+            chainID: fixture.returnedChainID,
+            expectedKinds: [
+                .createdInPool,
+                .scheduled,
+                .scheduled,
+                .deferred,
+                .returnedToPool,
+                .scheduled,
+                .completed
+            ],
             store: store
         )
         try captureMainWindow()
@@ -655,6 +784,29 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         )
     }
 
+    private func chooseFutureMenuAction(
+        _ action: NoonmarkStore.TraceContextAction,
+        for traceID: DayTraceID,
+        from identifier: String,
+        store: NoonmarkStore,
+        input: WindowServerInputDriver
+    ) async throws {
+        let trace = try requiredTrace(traceID, in: store)
+        guard let actionIndex = store.contextMenuActions(for: trace)
+            .firstIndex(of: action)
+        else {
+            throw Failure.failed(
+                "future context menu did not expose \(action)"
+            )
+        }
+        // FuturePlanRow prepends “View details” before shared trace actions.
+        try await chooseMenuItem(
+            from: identifier,
+            downArrowCount: actionIndex + 2,
+            input: input
+        )
+    }
+
     private func chooseMenuItem(
         from identifier: String,
         downArrowCount: Int,
@@ -715,6 +867,47 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
+    private func clearDescriptionAndKeepEmpty(
+        initialText: String,
+        readback: @escaping () -> String?,
+        input: WindowServerInputDriver
+    ) async throws {
+        var editor: NSTextView?
+        try await waitUntil("native description editor was not ready for clearing") {
+            editor = AppViewTreeE2E.view(identifier: "detail.description.input")
+                as? NSTextView
+            return editor?.string == initialText
+        }
+        guard let editor else {
+            throw Failure.failed("native description editor disappeared before clearing")
+        }
+
+        try await click(identifier: "detail.description.input", modifiers: [], input: input)
+        try await waitUntil("description editor did not focus before Control-A") {
+            editor.window?.firstResponder === editor
+        }
+        try input.postKey(keyCode: 0, modifiers: .control)
+        let fullRange = NSRange(location: 0, length: initialText.utf16.count)
+        try await waitUntil("Control-A did not select the full description") {
+            editor.selectedRange() == fullRange
+        }
+        try input.postKey(keyCode: 51)
+
+        for _ in 0 ..< 5 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            guard let currentEditor = AppViewTreeE2E.view(
+                identifier: "detail.description.input"
+            ) as? NSTextView,
+                currentEditor.string.isEmpty,
+                readback() == nil
+            else {
+                throw Failure.failed(
+                    "Control-A and Delete did not keep the task description empty"
+                )
+            }
+        }
+    }
+
     private func click(
         identifier: String,
         modifiers: NSEvent.ModifierFlags,
@@ -758,6 +951,53 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         try await input.postClick(
             at: coordinate,
             modifiers: modifiers,
+            resolveTarget: resolveTarget
+        )
+    }
+
+    private func clickCompletionButton(
+        identifier: String,
+        label: String,
+        input: WindowServerInputDriver
+    ) async throws {
+        guard let window = NSApp.keyWindow else {
+            throw Failure.failed(
+                "completion control window was unavailable: \(identifier)"
+            )
+        }
+        let resolveTarget = {
+            guard NSApp.keyWindow === window,
+                  let frame = ReadOnlyAccessibilityTarget.uniqueButton(
+                      identifier: identifier,
+                      label: label,
+                      enabled: true,
+                      in: window
+                  )?.frame
+            else {
+                throw Failure.failed(
+                    "completion control changed before mouseDown: \(identifier)"
+                )
+            }
+            return try input.pointerCoordinate(
+                quartzPoint: CGPoint(x: frame.midX, y: frame.midY),
+                in: window
+            )
+        }
+        var coordinate: WindowServerInputDriver.PointerCoordinate?
+        try await waitUntil(
+            "visible completion control was missing: \(identifier)"
+        ) {
+            coordinate = try? resolveTarget()
+            return coordinate != nil
+        }
+        guard let coordinate else {
+            throw Failure.failed(
+                "completion control frame was unavailable: \(identifier)"
+            )
+        }
+        try await input.postClick(
+            at: coordinate,
+            modifiers: [],
             resolveTarget: resolveTarget
         )
     }
@@ -808,20 +1048,42 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
               restored.taskPool().contains(where: {
                   $0.chain.id == fixture.deletedChainID
               }) == false,
-              restored.traces[fixture.returnedTraceID]?.status == .returnedToPool,
+              restored.traces[fixture.returnedTraceID]?.status == .deferred,
+              restored.traces.values.contains(where: {
+                  $0.chainID == fixture.returnedChainID
+                      && $0.date == NoonmarkStore.offset(
+                          fixture.today,
+                          by: 1
+                      )
+                      && $0.status == .cancelledDraft
+              }),
               restored.subtasks[fixture.deletedDaySubtaskID]?.status
                   == .cancelledDraft,
               restored.getDayTodo(date: fixture.today).traces.filter({
                   $0.chainID == fixture.returnedChainID
               }).count == 1,
-              replacementTrace.status == .pending,
+              replacementTrace.status == .completed,
               replacementTrace.descriptionText == Self.returnedSavedDescription,
               replacementSubtaskTitles == [
                   Self.returnedSubtaskSavedTitle,
                   Self.addedPoolSubtaskTitle
               ],
+              restored.subtasks.values.filter({
+                  $0.traceID == replacementTrace.id
+                      && $0.isUserPresentable
+              }).allSatisfy({
+                  $0.status == .completed
+              }),
               returnedTrailKinds
-                  == [.createdInPool, .scheduled, .returnedToPool, .scheduled]
+                  == [
+                      .createdInPool,
+                      .scheduled,
+                      .scheduled,
+                      .deferred,
+                      .returnedToPool,
+                      .scheduled,
+                      .completed
+                  ]
         else {
             throw Failure.failed(
                 "immediate mutations or return/reschedule projection did not persist exactly"
@@ -870,6 +1132,10 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
 
     private func poolIdentifier(_ chainID: TaskChainID) -> String {
         "workspace.item.pool.\(chainID.description)"
+    }
+
+    private func futureIdentifier(_ traceID: DayTraceID) -> String {
+        "workspace.item.future.\(traceID.description)"
     }
 
     private func waitUntil(

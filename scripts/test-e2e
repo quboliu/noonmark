@@ -8197,6 +8197,7 @@ run_horizontal_page_navigation_probe() {
   local navigation_dir="artifacts/e2e-horizontal-page-navigation"
   local navigation_result="${navigation_dir}/result.txt"
   local navigation_log="${navigation_dir}/app.log"
+  local navigation_screenshot="${navigation_dir}/settings.png"
 
   rm -rf "$navigation_dir"
   mkdir -p "$navigation_dir"
@@ -8211,9 +8212,15 @@ run_horizontal_page_navigation_probe() {
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-reset-selection \
-    --e2e-horizontal-page-navigation-result-url "$PWD/$navigation_result"
+    --e2e-horizontal-page-navigation-result-url "$PWD/$navigation_result" \
+    --e2e-horizontal-page-navigation-screenshot-url "$PWD/$navigation_screenshot"
 
-  echo "E2E Day Todo day swipe and Calendar month swipe: $navigation_result"
+  if [[ ! -s "$navigation_screenshot" ]]; then
+    echo "horizontal page navigation settings screenshot missing: $navigation_screenshot" >&2
+    exit 1
+  fi
+
+  echo "E2E Day Todo and Calendar book/reversed swipe directions: $navigation_result"
 }
 
 parse_native_command_help_ready() {

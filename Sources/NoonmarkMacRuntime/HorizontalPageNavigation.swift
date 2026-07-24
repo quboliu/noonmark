@@ -1,6 +1,61 @@
+import Foundation
+
 public enum HorizontalPageNavigationDirection: Equatable, Sendable {
     case previous
     case next
+}
+
+public enum HorizontalPageNavigationSwipeDirection: String, Equatable, Sendable {
+    case book
+    case reversed
+
+    public func resolve(
+        _ recognizedDirection: HorizontalPageNavigationDirection
+    ) -> HorizontalPageNavigationDirection {
+        guard self == .reversed else { return recognizedDirection }
+        return recognizedDirection == .next ? .previous : .next
+    }
+}
+
+public enum HorizontalPageNavigationDeviceDelta {
+    public static func normalized(
+        _ delta: Double,
+        isDirectionInvertedFromDevice: Bool
+    ) -> Double {
+        isDirectionInvertedFromDevice ? -delta : delta
+    }
+}
+
+@MainActor
+public final class HorizontalSwipePreferenceRepository {
+    public static let defaultStorageKey =
+        "Noonmark.HorizontalPageNavigationSwipeDirection.v1"
+
+    private let defaults: UserDefaults
+    private let storageKey: String
+
+    public init(
+        defaults: UserDefaults = .standard,
+        storageKey: String = defaultStorageKey
+    ) {
+        self.defaults = defaults
+        self.storageKey = storageKey
+    }
+
+    public func load() -> HorizontalPageNavigationSwipeDirection {
+        guard let rawValue = defaults.string(forKey: storageKey),
+              let direction = HorizontalPageNavigationSwipeDirection(
+                  rawValue: rawValue
+              )
+        else {
+            return .book
+        }
+        return direction
+    }
+
+    public func save(_ direction: HorizontalPageNavigationSwipeDirection) {
+        defaults.set(direction.rawValue, forKey: storageKey)
+    }
 }
 
 public enum HorizontalPageNavigationPhase: Equatable, Sendable {
@@ -79,22 +134,29 @@ public struct HorizontalPageNavigationRecognizer: Sendable {
         _ sample: HorizontalPageNavigationSample
     ) -> HorizontalPageNavigationDirection? {
         if sample.phase == .mayBegin || sample.phase == .began {
-            reset()
-            guard sample.isPrecise, sample.isMomentum == false else {
-                return nil
+            if sample.isMomentum {
+                guard isTrackingGesture else { return nil }
+            } else {
+                reset()
+                guard sample.isPrecise else { return nil }
+                isTrackingGesture = true
             }
-            isTrackingGesture = true
         }
 
-        if sample.phase == .ended || sample.phase == .cancelled {
+        if sample.phase == .cancelled {
             reset()
+            return nil
+        }
+        if sample.phase == .ended {
+            if sample.isMomentum {
+                reset()
+            }
             return nil
         }
 
         guard isTrackingGesture,
               sample.phase != .none,
               sample.isPrecise,
-              sample.isMomentum == false,
               didNavigate == false
         else {
             return nil

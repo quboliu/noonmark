@@ -149,7 +149,7 @@ struct CalendarPage: View {
                         store.page == .calendar
                             && store.canNavigateDatePage
                     },
-                    onNavigate: { store.moveSelectedPage($0) }
+                    onNavigate: { store.moveSelectedPageFromSwipe($0) }
                 )
             }
         }

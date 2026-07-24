@@ -594,8 +594,25 @@ public final class NoonmarkEngine {
     }
 
     public func getDayTodo(date: LocalDate, sort: ViewSort = .priority) -> DayTodoView {
-        let items = traces.values.filter {
+        let candidates = traces.values.filter {
             $0.date == date && $0.status.isVisibleInDayTodo
+        }
+        let newestDayFactCreatedAtByChain = traces.values
+            .filter { $0.date == date && $0.formsDayHistory }
+            .reduce(into: [TaskChainID: Date]()) { newest, trace in
+                newest[trace.chainID] = max(
+                    newest[trace.chainID] ?? trace.createdAt,
+                    trace.createdAt
+                )
+            }
+        let items = candidates.filter { trace in
+            guard trace.status == .deferred,
+                  let newestCreatedAt =
+                  newestDayFactCreatedAtByChain[trace.chainID]
+            else {
+                return true
+            }
+            return newestCreatedAt <= trace.createdAt
         }
         return DayTodoView(day: days[date], traces: sorted(items, by: sort))
     }

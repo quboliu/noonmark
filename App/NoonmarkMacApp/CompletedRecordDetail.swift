@@ -30,7 +30,7 @@ struct CompletedRecordDetail: View {
             } description: {
                 DetailDescriptionBlock(
                     text: Binding(
-                        get: { item.trace.descriptionText ?? item.definition.descriptionText ?? "" },
+                        get: { item.trace.descriptionText ?? "" },
                         set: { store.updateTraceText(traceID: item.trace.id, descriptionText: $0) }
                     ),
                     placeholder: store.copy.taskDescriptionPlaceholder,

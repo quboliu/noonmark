@@ -196,11 +196,21 @@ final class HorizontalPageNavigationView: NSView {
             return
         }
 
+        let isMomentum = event.momentumPhase.isEmpty == false
+        let isDirectionInverted = event.isDirectionInvertedFromDevice
         let sample = HorizontalPageNavigationSample(
-            deltaX: event.scrollingDeltaX,
-            deltaY: event.scrollingDeltaY,
-            phase: Self.navigationPhase(for: event.phase),
-            isMomentum: event.momentumPhase.isEmpty == false,
+            deltaX: HorizontalPageNavigationDeviceDelta.normalized(
+                event.scrollingDeltaX,
+                isDirectionInvertedFromDevice: isDirectionInverted
+            ),
+            deltaY: HorizontalPageNavigationDeviceDelta.normalized(
+                event.scrollingDeltaY,
+                isDirectionInvertedFromDevice: isDirectionInverted
+            ),
+            phase: Self.navigationPhase(
+                for: isMomentum ? event.momentumPhase : event.phase
+            ),
+            isMomentum: isMomentum,
             isPrecise: event.hasPreciseScrollingDeltas
         )
         if let direction = recognizer.consume(sample) {

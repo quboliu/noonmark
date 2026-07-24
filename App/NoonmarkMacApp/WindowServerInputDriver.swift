@@ -8,6 +8,11 @@ import NoonmarkMacRuntime
 /// interaction machinery observes the same event stream as real hardware.
 @MainActor
 final class WindowServerInputDriver {
+    enum HorizontalTrackpadSwipeDirection {
+        case left
+        case right
+    }
+
     struct MenuKeyboardSelection {
         fileprivate let highlightEvents: [CGEvent]
         fileprivate let confirmationEvents: [CGEvent]
@@ -300,7 +305,7 @@ final class WindowServerInputDriver {
 
     func postHorizontalTrackpadSwipe(
         at initialCoordinate: PointerCoordinate,
-        toward direction: HorizontalPageNavigationDirection,
+        toward direction: HorizontalTrackpadSwipeDirection,
         resolveTarget: () throws -> PointerCoordinate
     ) async throws {
         try Task.checkCancellation()
@@ -316,12 +321,21 @@ final class WindowServerInputDriver {
             modifiers: [],
             resolveTarget: resolveTarget
         )
-        let sign: Int32 = direction == .next ? 1 : -1
-        let samples: [(delta: Int32, phase: Int64)] = [
-            (8 * sign, 1),
-            (22 * sign, 2),
-            (24 * sign, 2),
-            (0, 4)
+        let deviceSign: Int32 = direction == .left ? 1 : -1
+        let eventSign = syntheticScrollDirectionIsInverted()
+            ? -deviceSign
+            : deviceSign
+        let samples: [(
+            delta: Int32,
+            scrollPhase: Int64,
+            momentumPhase: Int64
+        )] = [
+            (2 * eventSign, 1, 0),
+            (0, 2, 0),
+            (0, 4, 0),
+            (73 * eventSign, 0, 1),
+            (660 * eventSign, 0, 2),
+            (0, 0, 3)
         ]
 
         for sample in samples {
@@ -356,15 +370,30 @@ final class WindowServerInputDriver {
             )
             event.setIntegerValueField(
                 .scrollWheelEventScrollPhase,
-                value: sample.phase
+                value: sample.scrollPhase
             )
             event.setIntegerValueField(
                 .scrollWheelEventMomentumPhase,
-                value: 0
+                value: sample.momentumPhase
             )
             event.post(tap: .cghidEventTap)
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+    }
+
+    private func syntheticScrollDirectionIsInverted() -> Bool {
+        guard let event = CGEvent(
+            scrollWheelEvent2Source: source,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: 0,
+            wheel2: 1,
+            wheel3: 0
+        ), let appKitEvent = NSEvent(cgEvent: event)
+        else {
+            return false
+        }
+        return appKitEvent.isDirectionInvertedFromDevice
     }
 
     private func postClickGesture(

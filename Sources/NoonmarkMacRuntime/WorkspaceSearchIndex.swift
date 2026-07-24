@@ -73,50 +73,58 @@ public struct WorkspaceSearchIndex: Sendable {
             entries.append(Self.indexed(result, recency: task.definition.contentUpdatedAt))
         }
 
-        for trace in engine.traces.values {
-            guard trace.status.isVisibleInDayTodo else { continue }
-            guard let definition = engine.definitions[trace.definitionID] else { continue }
-            let actualSubtasks = engine.subtasks.values
-                .filter {
-                    $0.traceID == trace.id && $0.isUserPresentable
-                }
-                .sorted { $0.position < $1.position }
-            let chainNotes = engine.chains[trace.chainID]?.activeNoteEntries ?? []
-            let contextParts: [String?] = [
-                definition.descriptionText,
-                trace.descriptionText,
-                trace.activeNoteEntries.map(\.body).joined(separator: " "),
-                chainNotes.map(\.body).joined(separator: " "),
-                actualSubtasks.map(\.title).joined(separator: " ")
-            ]
-            let context = Self.joinedContext(contextParts)
-            let result = WorkspaceSearchResult(
-                id: "trace-\(trace.id.description)",
-                kind: .task,
-                title: definition.title,
-                context: context,
-                destination: .trace(
-                    id: trace.id,
-                    date: trace.date,
-                    status: trace.status
-                )
-            )
-            entries.append(Self.indexed(result, recency: trace.contentUpdatedAt))
-
-            for subtask in actualSubtasks {
-                let subtaskResult = WorkspaceSearchResult(
-                    id: "subtask-\(subtask.id.description)",
-                    kind: .subtask,
-                    title: subtask.title,
-                    context: definition.title,
-                    destination: .subtask(
-                        id: subtask.id,
-                        parentTraceID: trace.id,
+        let dayTodoDates = Set(
+            engine.traces.values.compactMap { trace in
+                trace.status.isVisibleInDayTodo ? trace.date : nil
+            }
+        ).sorted()
+        for date in dayTodoDates {
+            for trace in engine.getDayTodo(date: date).traces {
+                guard let definition = engine.definitions[trace.definitionID] else { continue }
+                let actualSubtasks = engine.subtasks.values
+                    .filter {
+                        $0.traceID == trace.id && $0.isUserPresentable
+                    }
+                    .sorted { $0.position < $1.position }
+                let contextParts: [String?] = [
+                    trace.descriptionText,
+                    trace.activeNoteEntries.map(\.body).joined(separator: " "),
+                    actualSubtasks.map(\.title).joined(separator: " ")
+                ]
+                let context = Self.joinedContext(contextParts)
+                let result = WorkspaceSearchResult(
+                    id: "trace-\(trace.id.description)",
+                    kind: .task,
+                    title: definition.title,
+                    context: context,
+                    destination: .trace(
+                        id: trace.id,
                         date: trace.date,
-                        parentStatus: trace.status
+                        status: trace.status
                     )
                 )
-                entries.append(Self.indexed(subtaskResult, recency: subtask.createdAt))
+                entries.append(Self.indexed(result, recency: trace.contentUpdatedAt))
+
+                for subtask in actualSubtasks {
+                    let subtaskResult = WorkspaceSearchResult(
+                        id: "subtask-\(subtask.id.description)",
+                        kind: .subtask,
+                        title: subtask.title,
+                        context: definition.title,
+                        destination: .subtask(
+                            id: subtask.id,
+                            parentTraceID: trace.id,
+                            date: trace.date,
+                            parentStatus: trace.status
+                        )
+                    )
+                    entries.append(
+                        Self.indexed(
+                            subtaskResult,
+                            recency: subtask.createdAt
+                        )
+                    )
+                }
             }
         }
 

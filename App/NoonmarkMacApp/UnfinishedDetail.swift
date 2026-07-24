@@ -42,7 +42,7 @@ struct UnfinishedDetail: View {
                     DetailTitleRow(store.copy.displayTaskTitle(item.definition.title))
                 } description: {
                     DetailDescriptionBlock(
-                        text: .constant(trace.descriptionText ?? item.definition.descriptionText ?? ""),
+                        text: .constant(trace.descriptionText ?? ""),
                         placeholder: "",
                         editable: false
                     )

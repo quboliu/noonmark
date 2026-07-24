@@ -143,7 +143,7 @@ public struct AIPromptBuilder: Sendable {
             "子任务 \(snapshot.subtaskProgress.completed)/\(snapshot.subtaskProgress.total) 已完成"
         ]
 
-        let descriptionText = trace.descriptionText ?? snapshot.definition.descriptionText
+        let descriptionText = trace.descriptionText
         if let descriptionText = guardrail.sanitizeUserText(descriptionText), descriptionText.isEmpty == false {
             parts.append("描述 \(descriptionText)")
         }

@@ -619,6 +619,8 @@ final class NoonmarkStore: ObservableObject {
         AutomaticClassificationCircuitPresentation?
     @Published var zhulongProviderDraft = ZhulongProviderSettingsStore.load()
     @Published var zhulongFeaturePreferences: ZhulongFeaturePreferences
+    @Published var horizontalPageNavigationSwipeDirection:
+        HorizontalPageNavigationSwipeDirection
     @Published var reviewAutosaveMessage: String?
     @Published var isLocalFirstSyncing = false
     @Published var localFirstSyncMessage: String?
@@ -638,6 +640,8 @@ final class NoonmarkStore: ObservableObject {
     let automaticClassificationJobRepository: SQLiteAutomaticClassificationJobRepository?
     let automaticClassificationOperationalClock: AutomaticClassificationOperationalClock
     let zhulongFeaturePreferencesRepository: ZhulongFeaturePreferencesRepository
+    let horizontalPageNavigationPreferenceRepository:
+        HorizontalSwipePreferenceRepository
     let databaseURL: URL?
     let syncDeviceIdentity: SyncDeviceIdentity?
     let permitsPersistenceFailureE2E: Bool
@@ -685,6 +689,13 @@ final class NoonmarkStore: ObservableObject {
         self.zhulongFeaturePreferencesRepository = zhulongFeaturePreferencesRepository
         _zhulongFeaturePreferences = Published(
             initialValue: zhulongFeaturePreferencesRepository.load()
+        )
+        let horizontalPageNavigationPreferenceRepository =
+            HorizontalSwipePreferenceRepository()
+        self.horizontalPageNavigationPreferenceRepository =
+            horizontalPageNavigationPreferenceRepository
+        _horizontalPageNavigationSwipeDirection = Published(
+            initialValue: horizontalPageNavigationPreferenceRepository.load()
         )
         if let executionRevision = ZhulongProviderSettingsStore
             .persistedReadyExecutionRevision()

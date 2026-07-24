@@ -39,7 +39,7 @@ struct FuturePlanDetail: View {
             } description: {
                 DetailDescriptionBlock(
                     text: Binding(
-                        get: { trace.descriptionText ?? definition.descriptionText ?? "" },
+                        get: { trace.descriptionText ?? "" },
                         set: {
                             store.updateTraceText(
                                 traceID: trace.id,

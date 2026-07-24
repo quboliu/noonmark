@@ -602,6 +602,69 @@ final class NoonmarkEngineTests: XCTestCase {
         )
     }
 
+    func testReschedulingReturnedDeferralToSourceDayHidesSupersededDeferredRow() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "延期回池再排回今天",
+            now: now
+        )
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let targetTraceID = try engine.deferCurrentTrace(
+            traceID: sourceTraceID,
+            targetDate: day2,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+        try engine.returnToPool(
+            traceID: targetTraceID,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+        let replacementTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(4)
+        )
+
+        XCTAssertEqual(engine.traces[sourceTraceID]?.status, .deferred)
+        XCTAssertEqual(engine.traces[targetTraceID]?.status, .cancelledDraft)
+        XCTAssertEqual(engine.traces[replacementTraceID]?.status, .pending)
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.id),
+            [replacementTraceID]
+        )
+        XCTAssertEqual(
+            try engine.taskTrail(chainID: chainID).map(\.kind),
+            [
+                .createdInPool,
+                .scheduled,
+                .scheduled,
+                .deferred,
+                .returnedToPool,
+                .scheduled
+            ]
+        )
+
+        try engine.markCompleted(
+            traceID: replacementTraceID,
+            today: day1,
+            now: now.addingTimeInterval(5)
+        )
+
+        XCTAssertEqual(engine.traces[replacementTraceID]?.status, .completed)
+        XCTAssertEqual(
+            engine.getDayTodo(date: day1).traces.map(\.id),
+            [replacementTraceID]
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
     func testCurrentDayDeferralCanBeWithdrawnWithoutLosingTargetEdits() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "可撤回延期", now: now)

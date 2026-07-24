@@ -192,6 +192,24 @@ struct AppCopy {
     var coolGray: String { language == .chinese ? "冷灰" : "Cool gray" }
     var warmPaper: String { language == .chinese ? "微暖纸感" : "Warm paper" }
     var languageTitle: String { language == .chinese ? "语言" : "Language" }
+    var swipeDirectionTitle: String {
+        language == .chinese ? "页面滑动方向" : "Page swipe direction"
+    }
+
+    var bookSwipeDirection: String {
+        language == .chinese ? "翻书方向" : "Book direction"
+    }
+
+    var reversedSwipeDirection: String {
+        language == .chinese ? "反向" : "Reversed"
+    }
+
+    var swipeDirectionExplanation: String {
+        language == .chinese
+            ? "同时用于 Day Todo 与日历；翻书方向为左滑到下一天或下个月。"
+            : "Applies to Day Todo and Calendar; Book direction swipes left to the next day or month."
+    }
+
     var settingsPoemTitle: String { language == .chinese ? "关于页诗文" : "Poem" }
     var settingsPoemDisplay: String {
         language == .chinese ? "在“关于晷迹”中展示诗文" : "Show poem in About Noonmark"

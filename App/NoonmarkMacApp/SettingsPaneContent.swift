@@ -113,6 +113,29 @@ struct SettingsPreferenceCard: View {
                         identifier: "settings.preferences.language"
                     )
                 }
+                SettingSection(title: store.copy.swipeDirectionTitle) {
+                    SegmentedPair(
+                        left: store.copy.bookSwipeDirection,
+                        right: store.copy.reversedSwipeDirection,
+                        leftSelected: store
+                            .horizontalPageNavigationSwipeDirection == .book,
+                        leftAction: {
+                            store.setHorizontalPageNavigationSwipeDirection(
+                                .book
+                            )
+                        },
+                        rightAction: {
+                            store.setHorizontalPageNavigationSwipeDirection(
+                                .reversed
+                            )
+                        },
+                        identifier: "settings.preferences.swipe-direction"
+                    )
+                    Text(store.copy.swipeDirectionExplanation)
+                        .font(.noonmarkSystem(size: 11.5))
+                        .foregroundStyle(Theme.text3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 DisclosureGroup(
                     store.copy.settingsPoemTitle,
                     isExpanded: $poemIsExpanded

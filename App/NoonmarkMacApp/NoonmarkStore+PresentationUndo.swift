@@ -110,6 +110,16 @@ extension NoonmarkStore {
         )
     }
 
+    func setHorizontalPageNavigationSwipeDirection(
+        _ direction: HorizontalPageNavigationSwipeDirection
+    ) {
+        guard horizontalPageNavigationSwipeDirection != direction else {
+            return
+        }
+        horizontalPageNavigationSwipeDirection = direction
+        horizontalPageNavigationPreferenceRepository.save(direction)
+    }
+
     var hasActiveDetailSelection: Bool {
         if selectedPoolTask != nil || selectedUnfinishedItem != nil || selectedCompletedItem != nil || selectedCompletedSubtaskRecord != nil {
             return true
@@ -384,6 +394,16 @@ extension NoonmarkStore {
         case .pool, .future, .unfinished, .completed, .zhulong, .settings:
             return
         }
+    }
+
+    func moveSelectedPageFromSwipe(
+        _ recognizedDirection: HorizontalPageNavigationDirection
+    ) {
+        moveSelectedPage(
+            horizontalPageNavigationSwipeDirection.resolve(
+                recognizedDirection
+            )
+        )
     }
 
     func moveSelectedDate(_ direction: MoveCommandDirection) {

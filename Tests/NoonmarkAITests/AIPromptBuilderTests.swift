@@ -1,4 +1,5 @@
 @testable import NoonmarkAI
+@testable import NoonmarkCore
 import XCTest
 
 final class AIPromptBuilderTests: XCTestCase {
@@ -42,5 +43,43 @@ final class AIPromptBuilderTests: XCTestCase {
 
         XCTAssertEqual(combined.classifications.categories, ["工程", "生活"])
         XCTAssertEqual(combined.classifications.labels, ["SwiftUI", "健康"])
+    }
+
+    func testClearedTraceDescriptionDoesNotFallBackToDefinitionInPrompt() throws {
+        let today = LocalDate("2026-07-23")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let inheritedDescription = "快速记录自 Day Todo。"
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "清空描述",
+            descriptionText: inheritedDescription,
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.updateTraceText(
+            traceID: traceID,
+            descriptionText: "",
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        let scope = AIScopeSnapshot.day(
+            date: today,
+            from: engine,
+            requestedAt: now.addingTimeInterval(3)
+        )
+
+        let request = AIPromptBuilder().buildRequest(
+            task: .dailyReview,
+            scope: scope,
+            report: LocalInsightAnalyzer().analyze(scope)
+        )
+
+        XCTAssertNil(engine.traces[traceID]?.descriptionText)
+        XCTAssertFalse(request.userPrompt.contains(inheritedDescription))
     }
 }

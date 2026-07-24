@@ -127,6 +127,77 @@ final class WorkspaceSearchIndexTests: XCTestCase {
         )
     }
 
+    func testReturnedDeferralRescheduledToSourceDayIndexesOnlyReplacement() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "延期回池再排回今天",
+            now: start
+        )
+        let sourceTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: start.addingTimeInterval(1)
+        )
+        let targetTraceID = try engine.deferCurrentTrace(
+            traceID: sourceTraceID,
+            targetDate: LocalDate("2026-07-16"),
+            today: today,
+            now: start.addingTimeInterval(2)
+        )
+        try engine.returnToPool(
+            traceID: targetTraceID,
+            today: today,
+            now: start.addingTimeInterval(3)
+        )
+        let replacementTraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: start.addingTimeInterval(4)
+        )
+
+        let results = WorkspaceSearchIndex(engine: engine).search(
+            "延期回池再排回今天"
+        )
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(
+            results.first?.destination,
+            .trace(id: replacementTraceID, date: today, status: .pending)
+        )
+    }
+
+    func testClearedTraceDescriptionDoesNotIndexDefinitionDescription() throws {
+        let inheritedDescription = "快速记录自 Day Todo。"
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "清空描述搜索",
+            descriptionText: inheritedDescription,
+            now: start
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: start.addingTimeInterval(1)
+        )
+        try engine.updateTraceText(
+            traceID: traceID,
+            descriptionText: "",
+            today: today,
+            now: start.addingTimeInterval(2)
+        )
+
+        let index = WorkspaceSearchIndex(engine: engine)
+
+        XCTAssertTrue(index.search(inheritedDescription).isEmpty)
+        XCTAssertEqual(
+            index.search("清空描述搜索").first?.destination,
+            .trace(id: traceID, date: today, status: .pending)
+        )
+    }
+
     func testSnapshotUndoCancelledSubtaskIsNotSearchableUnderVisibleTrace() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(

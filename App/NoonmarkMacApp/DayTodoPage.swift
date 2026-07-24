@@ -117,7 +117,7 @@ struct DayTodoPage: View {
         .background {
             HorizontalPageNavigationBridge(
                 isEnabled: { store.page == .day && store.canNavigateDatePage },
-                onNavigate: { store.moveSelectedPage($0) }
+                onNavigate: { store.moveSelectedPageFromSwipe($0) }
             )
         }
     }

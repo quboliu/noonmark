@@ -188,7 +188,7 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
         draft.displayName = "E2E conversation provider"
         draft.kind = .openAICompatible
         draft.baseURL = mode == .restartVerification
-            ? "https://e2e-replacement.provider.example/v1"
+            ? "https://e2e.provider.example/v2"
             : "https://e2e.provider.example/v1"
         draft.model = mode == .restartVerification
             ? "e2e-conversation-v2"
@@ -201,7 +201,134 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
     @MainActor
     private func startInteraction(on store: NoonmarkStore) {
         store.page = .zhulong
-        store.startZhulongWorkspaceSession(intent: ZhulongChatE2EFixture.intent)
+        Task { @MainActor in
+            do {
+                try await submitHomeIntentThroughWindowServer(
+                    on: store
+                )
+                beginInteractionMonitoring(on: store)
+            } catch {
+                write("failed: \(error.localizedDescription)")
+                E2EApplicationTermination.schedule()
+            }
+        }
+    }
+
+    @MainActor
+    private func submitHomeIntentThroughWindowServer(
+        on store: NoonmarkStore
+    ) async throws {
+        var textView: NSTextView?
+        try await waitForHome("首页没有在发送前披露范围与接收方") {
+            guard let disclosure = AppViewTreeE2E.view(
+                identifier: "zhulong-home-data-disclosure"
+            ), let text = AppViewTreeE2E.verificationText(
+                for: disclosure
+            )
+            else { return false }
+            textView = AppViewTreeE2E.view(
+                identifier: "zhulong-home-intent.input"
+            ) as? NSTextView
+            return textView != nil
+                && text.contains("Day Todo")
+                && text.contains("https://e2e.provider.example/v1")
+                && text.contains("e2e-conversation-v1")
+        }
+        guard let textView, let window = textView.window else {
+            throw ZhulongChatE2EError.missing("真实烛龙首页输入框窗口")
+        }
+        window.makeKeyAndOrderFront(nil)
+        window.makeMain()
+        NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        try await waitForHome("烛龙首页窗口没有成为 key") {
+            NSApp.isActive && window.isKeyWindow
+        }
+
+        let input = try WindowServerInputDriver()
+        let inputTarget: @MainActor () throws
+            -> WindowServerInputDriver.PointerCoordinate = {
+            guard let current = AppViewTreeE2E.view(
+                identifier: "zhulong-home-intent.input"
+            ) as? NSTextView,
+                current.window === window,
+                window.isKeyWindow
+            else {
+                throw ZhulongChatE2EError.missing(
+                    "烛龙首页输入框在点击前变化"
+                )
+            }
+            let frame = AppViewTreeE2E.frameInWindow(for: current)
+            return try input.pointerCoordinate(
+                windowPoint: NSPoint(x: frame.midX, y: frame.midY),
+                in: window
+            )
+        }
+        try await input.postClick(
+            at: try inputTarget(),
+            modifiers: [],
+            resolveTarget: inputTarget
+        )
+        try await waitForHome("烛龙首页输入框没有获得真实焦点") {
+            window.firstResponder === textView
+        }
+        try input.typeUnicode(ZhulongChatE2EFixture.intent)
+        try await waitForHome("烛龙首页意图没有通过键盘输入") {
+            guard let current = AppViewTreeE2E.view(
+                identifier: "zhulong-home-intent.input"
+            ) as? NSTextView
+            else { return false }
+            return current.string == ZhulongChatE2EFixture.intent
+        }
+        try await waitForHome("烛龙首页发送按钮没有进入可点击状态") {
+            guard let submit = AppViewTreeE2E.view(
+                identifier: "zhulong-home-submit-target"
+            ) else { return false }
+            return (submit as? NSControl)?.isEnabled != false
+        }
+
+        let submitTarget: @MainActor () throws
+            -> WindowServerInputDriver.PointerCoordinate = {
+            guard let submit = AppViewTreeE2E.view(
+                identifier: "zhulong-home-submit-target"
+            ), submit.window === window
+            else {
+                throw ZhulongChatE2EError.missing(
+                    "烛龙首页发送按钮在点击前变化"
+                )
+            }
+            let frame = AppViewTreeE2E.frameInWindow(for: submit)
+            return try input.pointerCoordinate(
+                windowPoint: NSPoint(x: frame.midX, y: frame.midY),
+                in: window
+            )
+        }
+        try await input.postClick(
+            at: try submitTarget(),
+            modifiers: [],
+            resolveTarget: submitTarget
+        )
+        try await waitForHome("点击首页发送按钮后没有建立会话") {
+            store.zhulongWorkspace.selectedSession?.primaryIntent
+                == ZhulongChatE2EFixture.intent
+        }
+    }
+
+    @MainActor
+    private func waitForHome(
+        _ step: String,
+        attempts: Int = 180,
+        condition: @MainActor () -> Bool
+    ) async throws {
+        for _ in 0 ..< attempts {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw ZhulongChatE2EError.missing(step)
+    }
+
+    @MainActor
+    private func beginInteractionMonitoring(on store: NoonmarkStore) {
         guard store.zhulongWorkspace.selectedSession != nil else {
             write("failed: missing Zhulong session")
             return
@@ -248,13 +375,24 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
                 },
                 beginReauthorization: {
                     store.zhulongProviderDraft.baseURL =
-                        "https://e2e-replacement.provider.example/v1"
+                        "https://e2e.provider.example/v2"
                 },
                 hasReauthorizationRequired: {
                     let session = store.zhulongWorkspace.selectedSession
+                    let recipientDisclosure = AppViewTreeE2E.view(
+                        identifier: "zhulong-authorization-recipient"
+                    ).flatMap {
+                        AppViewTreeE2E.verificationText(for: $0)
+                    }
                     return store.currentZhulongSessionNeedsScopeAuthorization
                         && session?.authorizations.count == 1
                         && session?.phase == .draftReview
+                        && recipientDisclosure?.contains(
+                            "https://e2e.provider.example/v2"
+                        ) == true
+                        && recipientDisclosure?.contains(
+                            "e2e-conversation-v1"
+                        ) == true
                         && AppViewTreeE2E.view(identifier: "zhulong-authorize-scope") != nil
                         && AppViewTreeE2E.view(identifier: "zhulong-decline-scope") != nil
                 },

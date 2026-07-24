@@ -17,7 +17,7 @@ public enum ZhulongSidecarRepositoryError: Error, Equatable {
 
 public struct EncryptedFileZhulongSessionRepository: ZhulongSessionRepository, @unchecked Sendable {
     private static let magic = Data("NOONMARK-ZHULONG-SIDECAR".utf8)
-    private static let formatVersion: UInt8 = 1
+    private static let formatVersion: UInt8 = 2
 
     public let directoryURL: URL
     private let keySource: any ZhulongSidecarKeySource

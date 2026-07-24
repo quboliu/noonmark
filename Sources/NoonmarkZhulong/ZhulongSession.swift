@@ -55,8 +55,18 @@ public struct ZhulongProviderConfigurationIdentity: Codable, Hashable, Sendable 
         guard location != .remote || baseURL != nil else {
             throw ZhulongSessionError.invalidProviderIdentity
         }
-        if let components = baseURL.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) }) {
-            guard components.user == nil, components.password == nil, components.fragment == nil else {
+        if let baseURL {
+            guard let components = URLComponents(
+                url: baseURL,
+                resolvingAgainstBaseURL: false
+            ) else {
+                throw ZhulongSessionError.invalidProviderIdentity
+            }
+            guard components.user == nil,
+                  components.password == nil,
+                  components.query == nil,
+                  components.fragment == nil
+            else {
                 throw ZhulongSessionError.invalidProviderIdentity
             }
         }

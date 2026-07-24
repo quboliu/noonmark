@@ -157,9 +157,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         }
     }
 
-    func testRepositoryRoundTripsConversationTaskDraftAndRevisions()
-        throws
-    {
+    func testRepositoryRoundTripsConversationTaskDraftAndRevisions() throws {
         let repository = makeRepository(key: key)
         let identity = try makeProviderIdentity()
         let date = LocalDate("2026-07-24")
@@ -399,7 +397,7 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
         try assertVersionTamperingFails(
             repository: repository,
             sessionID: session.id,
-            replacementVersions: [0, 2, 8, 255]
+            replacementVersions: [0, 1, 8, 255]
         )
     }
 
@@ -466,6 +464,53 @@ final class EncryptedZhulongRepositoryTests: XCTestCase {
                 .invalidEventsForPhase
             )
         }
+    }
+
+    func testRepositoryAcceptsProviderPresentationChangeForSameRecipient() throws {
+        let repository = makeRepository(key: key)
+        let authorizedIdentity = try makeProviderIdentity()
+        let changedPresentation = try ZhulongProviderConfigurationIdentity(
+            providerID: "renamed-provider",
+            kind: authorizedIdentity.kind,
+            baseURL: authorizedIdentity.baseURL,
+            location: authorizedIdentity.location,
+            model: "new-model",
+            dataCapabilities: [.structuredOutput]
+        )
+        var session = try ZhulongSession(
+            primaryIntent: "继续同一接收方的会话",
+            proposedScopes: [.currentDayTodo],
+            now: now
+        )
+        try session.authorizeScope(
+            [.currentDayTodo],
+            providerIdentity: authorizedIdentity,
+            now: now.addingTimeInterval(1)
+        )
+        let request = try session.beginProviderRun(
+            payload: try ZhulongProviderPayload(
+                systemPrompt: "继续自然对话。",
+                userPrompt: session.primaryIntent,
+                contextVersion: "same-recipient-v1",
+                scopeContent: [
+                    .currentDayTodo: "今天有一项任务"
+                ]
+            ),
+            providerIdentity: changedPresentation,
+            now: now.addingTimeInterval(2)
+        )
+        try session.recordProviderResponse(
+            ZhulongProviderResponse(
+                content: "接收方未改变。",
+                draftVersion: 1
+            ),
+            runID: request.runID,
+            now: now.addingTimeInterval(3)
+        )
+
+        try repository.save(session)
+
+        XCTAssertEqual(try repository.load(session.id), session)
     }
 
     func testRepositoryRoundTripsExplicitProviderReauthorizationInEventOrder() throws {

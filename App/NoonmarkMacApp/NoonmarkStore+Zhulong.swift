@@ -541,7 +541,7 @@ extension NoonmarkStore {
         return ZhulongE2ESidecarKeySource()
     }
 
-    private func zhulongDataScopes(for task: ZhulongTask) -> Set<ZhulongDataScope> {
+    func zhulongDataScopes(for task: ZhulongTask) -> Set<ZhulongDataScope> {
         switch task {
         case .dailyReview, .habitInsight, .taskDecomposition:
             [.currentDayTodo]

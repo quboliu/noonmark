@@ -88,6 +88,12 @@ final class ZhulongFeaturePreferencesTests: XCTestCase {
             forKey: ZhulongFeaturePreferencesRepository.defaultStorageKey
         )
         XCTAssertEqual(repository.load(), failClosed)
+
+        defaults.set(
+            "not-data",
+            forKey: ZhulongFeaturePreferencesRepository.defaultStorageKey
+        )
+        XCTAssertEqual(repository.load(), failClosed)
     }
 
     func testAvailabilityKeepsProviderPageAndAutomationOrthogonal() {

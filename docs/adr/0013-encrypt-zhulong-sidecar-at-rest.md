@@ -8,7 +8,7 @@
 - 不复用 Provider API Key 或同步凭证作为数据密钥。
 - Keychain 密钥丢失时不回退明文；sidecar 可以不可恢复，但核心任务事实必须继续可用。
 - 普通 Todo 数据包和同步仍不包含 sidecar；未来导出使用独立用户密码加密包，不复制本机密钥。
-- 晷迹尚未发布且没有用户数据，烛龙会话 sidecar 只定义一种 canonical current envelope，并从 format version 1 开始；只接受最新完整 schema，不保留旧 record、decoder、converter、旧 AAD fallback 或迁移分支。
+- 晷迹尚未发布且没有用户数据，烛龙会话 sidecar 只定义一种 canonical current envelope；当前由 ADR 0030 升为 format version 2，并直接拒绝 version 1。只接受最新完整 schema，不保留旧 record、decoder、converter、旧 AAD fallback 或迁移分支。
 - 非当前 envelope、缺失必填字段或存在未知顶层字段时一律 fail-closed，由开发者显式清理可重新生成的测试 sidecar；App 不推断、补齐或自动升级格式。
 - 测试数据只由当前领域行为生成，只验证当前格式 round-trip、当前 schema 完整性及拒绝损坏或非当前 envelope。
 - 存储、搜索、备份和恢复设计必须验证加密边界及 fail-closed 行为。
@@ -29,7 +29,7 @@
 ## 灰度策略
 
 1. 先以独立 `NoonmarkZhulong` 模块和临时目录完成错误密钥、篡改、权限、重启与真实 Keychain 测试。
-2. 再接入内部 App 会话路径；用户主动提交新会话即手动授权该入口固定、并在会话上下文与事件历史中披露的初始范围并触发 Provider，身份、范围或有效期变化仍重新确认，且绝不自动写 Todo。
+2. 再接入内部 App 会话路径；用户主动提交新会话后，按设置中的对话权限上限决定直接开始或首次询问，并持续披露数据范围与实际接收方；范围扩大或接收方改变时仍重新确认，且绝不自动写 Todo。该授权边界与无时间到期语义由 ADR 0030 更新。
 3. Provider live smoke、真实 `.app` E2E、持久化探针和 DMG 安装启动全部通过后，才允许 clean-sheet 一次性 cutover。
 
 ## 监控方案

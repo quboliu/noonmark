@@ -33,6 +33,25 @@ final class ZhulongPresentationTests: XCTestCase {
         XCTAssertEqual(chinese.itemCount(2), "2 项")
         XCTAssertEqual(english.itemCount(1), "1 item")
         XCTAssertEqual(english.itemCount(2), "2 items")
+        XCTAssertEqual(
+            chinese.homeDataUseDisclosure(
+                scopes: "当前 Day Todo",
+                recipient: "远程发送 · https://provider.example/v1 · model-v1"
+            ),
+            "自由对话范围：当前 Day Todo · 远程发送 · https://provider.example/v1 · model-v1"
+        )
+        XCTAssertEqual(
+            english.workflowDetailWithScope(
+                detail: "Suggest a reviewable schedule",
+                scopes: "Current Day Todo, Task Pool"
+            ),
+            "Suggest a reviewable schedule · Scope: Current Day Todo, Task Pool"
+        )
+        XCTAssertEqual(
+            chinese.providerExecutionUnavailable,
+            "Provider 尚未启用，不会发送"
+        )
+        XCTAssertFalse(containsHan(english.providerExecutionUnavailable))
     }
 
     func testScopeAndSessionStatesAreCompleteInBothLanguages() {
@@ -66,6 +85,11 @@ final class ZhulongPresentationTests: XCTestCase {
         XCTAssertFalse(containsHan(english.composerScopeAuthorizationHint))
         XCTAssertFalse(containsHan(english.composerDecisionGateHint))
         XCTAssertFalse(containsHan(english.composerPausedHint))
+        XCTAssertEqual(
+            chinese.scopeAuthorizationDetail,
+            "绑定当前数据范围与实际接收方，不按时间过期；Todo 写入仍需另行确认。"
+        )
+        XCTAssertFalse(containsHan(english.scopeAuthorizationDetail))
     }
 
     func testEveryEventKeyHasAnEnglishPresentationWithoutReplacingChineseAuditDetail() {

@@ -143,20 +143,9 @@ struct ZhulongWorkspaceRail: View {
     private func providerDisclosure(
         _ identity: ZhulongProviderConfigurationIdentity
     ) -> String {
-        guard identity.location == .remote else {
-            return copy.localProcessing
-        }
-        let endpoint = identity.baseURL
-            .flatMap {
-                URLComponents(
-                    url: $0,
-                    resolvingAgainstBaseURL: false
-                )?.host
-            }
-            ?? identity.providerID
-        return copy.remoteRecipient(
-            endpoint: endpoint,
-            model: identity.model
+        ZhulongProviderDisclosureFormatter.disclosure(
+            for: identity,
+            copy: copy
         )
     }
 }

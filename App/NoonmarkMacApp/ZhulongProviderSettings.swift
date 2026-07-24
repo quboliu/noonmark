@@ -311,7 +311,11 @@ private enum ZhulongProviderEndpointPolicy {
     static func permits(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(),
               let rawHost = url.host?.lowercased(),
-              let decodedHost = rawHost.removingPercentEncoding
+              let decodedHost = rawHost.removingPercentEncoding,
+              url.user == nil,
+              url.password == nil,
+              url.query == nil,
+              url.fragment == nil
         else { return false }
         let host = decodedHost.trimmingCharacters(
             in: CharacterSet(charactersIn: "[]")

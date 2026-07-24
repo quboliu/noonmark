@@ -404,6 +404,14 @@ struct ZhulongSessionStreamPage: View {
                                 ? Theme.ok
                                 : Theme.warn
                         )
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier:
+                                "zhulong-authorization-recipient",
+                                verificationText:
+                                providerDisclosure(identity)
+                            )
+                        }
                 }
                 HStack(spacing: 8) {
                     SmallActionButton(
@@ -1021,20 +1029,9 @@ struct ZhulongSessionStreamPage: View {
     private func providerDisclosure(
         _ identity: ZhulongProviderConfigurationIdentity
     ) -> String {
-        guard identity.location == .remote else {
-            return "\(identity.providerID) · \(copy.localProcessing)"
-        }
-        let endpoint = identity.baseURL
-            .flatMap {
-                URLComponents(
-                    url: $0,
-                    resolvingAgainstBaseURL: false
-                )?.host
-            }
-            ?? identity.providerID
-        return copy.remoteRecipient(
-            endpoint: endpoint,
-            model: identity.model
+        ZhulongProviderDisclosureFormatter.disclosure(
+            for: identity,
+            copy: copy
         )
     }
 

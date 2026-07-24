@@ -406,8 +406,8 @@ struct AppCopy {
 
     var zhulongPermissionCeilingExplanation: String {
         language == .chinese
-            ? "“每次询问”只在新会话或接收方实质变化时确认；Todo 写入始终需要单独提交。"
-            : "Ask confirms only for a new session or a material recipient change. Todo writes always require a separate commit."
+            ? "“每次询问”会确认新会话；允许或询问状态下，数据范围扩大或接收方实质变化会重新确认；禁止状态不会发送。Todo 写入始终需要单独提交。"
+            : "Ask confirms new sessions. With Allow or Ask, expanded scope or a material recipient change requires confirmation; Deny sends nothing. Todo writes always require a separate commit."
     }
 
     func zhulongPermissionPolicyTitle(

@@ -296,6 +296,26 @@ final class ZhulongSessionTests: XCTestCase {
         )
     }
 
+    func testProviderIdentityRejectsEndpointQueryThatCannotBeSafelyDisclosed() {
+        XCTAssertThrowsError(
+            try ZhulongProviderConfigurationIdentity(
+                providerID: "带查询参数的 Provider",
+                kind: .openAICompatible,
+                baseURL: URL(
+                    string: "https://provider.example/v1?tenant=secret"
+                )!,
+                location: .remote,
+                model: "model-v1",
+                dataCapabilities: [.structuredOutput]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ZhulongSessionError,
+                .invalidProviderIdentity
+            )
+        }
+    }
+
     func testScopeAuthorizationFollowsDataRecipientInsteadOfProviderPresentation() throws {
         var session = try makeSession()
         let authorizedIdentity = try ZhulongProviderConfigurationIdentity(

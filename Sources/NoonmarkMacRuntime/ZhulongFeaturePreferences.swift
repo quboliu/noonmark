@@ -132,8 +132,11 @@ public final class ZhulongFeaturePreferencesRepository {
     }
 
     public func load() -> ZhulongFeaturePreferences {
-        guard let data = defaults.data(forKey: storageKey) else {
+        guard defaults.object(forKey: storageKey) != nil else {
             return .defaultValue
+        }
+        guard let data = defaults.data(forKey: storageKey) else {
+            return .failClosedValue
         }
         guard let preferences = try? decoder.decode(
             ZhulongFeaturePreferences.self,

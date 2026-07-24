@@ -754,6 +754,30 @@ public struct ZhulongCopy: Sendable {
         )
     }
 
+    public func homeDataUseDisclosure(
+        scopes: String,
+        recipient: String
+    ) -> String {
+        localized(
+            chinese: "自由对话范围：\(scopes) · \(recipient)",
+            english: "Freeform scope: \(scopes) · \(recipient)"
+        )
+    }
+
+    public func workflowDetailWithScope(
+        detail: String,
+        scopes: String
+    ) -> String {
+        localized(
+            chinese: "\(detail) · 范围：\(scopes)",
+            english: "\(detail) · Scope: \(scopes)"
+        )
+    }
+
+    public func scopeList(_ scopes: [String]) -> String {
+        scopes.joined(separator: language == .chinese ? "、" : ", ")
+    }
+
     public var composerProviderRunningHint: String {
         localized(
             chinese: "烛龙正在回应…",
@@ -843,6 +867,13 @@ public struct ZhulongCopy: Sendable {
         )
     }
 
+    public var providerExecutionUnavailable: String {
+        localized(
+            chinese: "Provider 尚未启用，不会发送",
+            english: "Provider is not enabled; nothing will be sent"
+        )
+    }
+
     public var providerReauthorizationNotice: String {
         localized(
             chinese: "只有更换数据接收方或扩大范围时才会重新确认。",
@@ -926,8 +957,8 @@ public struct ZhulongCopy: Sendable {
 
     public var scopeAuthorizationDetail: String {
         localized(
-            chinese: "范围绑定当前 Provider 配置身份，有效期一小时；Todo 写入仍需另行确认。",
-            english: "The scope is bound to the current Provider identity for one hour. Todo writes still require separate confirmation."
+            chinese: "绑定当前数据范围与实际接收方，不按时间过期；Todo 写入仍需另行确认。",
+            english: "Bound to the current data scope and actual recipient with no time expiry. Todo writes still require separate confirmation."
         )
     }
 

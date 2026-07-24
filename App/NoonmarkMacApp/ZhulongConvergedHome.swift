@@ -144,11 +144,12 @@ private struct ZhulongWorkspaceHome: View {
                     placeholder: copy.intentPlaceholder,
                     style: .compact,
                     showsSurface: false,
-                    onCommit: startIntent
+                    onCommit: startIntent,
+                    nativeAccessibilityIdentifier:
+                    "zhulong-home-intent"
                 )
                 .focused($intentIsFocused)
                 .frame(maxHeight: 36)
-                .accessibilityIdentifier("zhulong-home-intent")
 
                 Button(action: startIntent) {
                     Image(systemName: "arrow.up")
@@ -177,6 +178,13 @@ private struct ZhulongWorkspaceHome: View {
                 .disabled(canSubmitIntent == false)
                 .accessibilityLabel(copy.beginIntentAccessibilityLabel)
                 .accessibilityIdentifier("zhulong-home-submit")
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "zhulong-home-submit-target",
+                        verificationText:
+                        copy.beginIntentAccessibilityLabel
+                    )
+                }
             }
             .padding(.leading, 16)
             .padding(.trailing, 10)
@@ -212,6 +220,17 @@ private struct ZhulongWorkspaceHome: View {
                 y: 8
             )
 
+            Text(freeformDataUseDisclosure)
+                .font(.noonmarkSystem(size: 10.8))
+                .foregroundStyle(Theme.text3)
+                .fixedSize(horizontal: false, vertical: true)
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "zhulong-home-data-disclosure",
+                        verificationText: freeformDataUseDisclosure
+                    )
+                }
+
             if conversationAccessIsDenied {
                 Text(copy.homeDataAccessDeniedHint)
                     .font(.noonmarkSystem(size: 10.8))
@@ -239,7 +258,11 @@ private struct ZhulongWorkspaceHome: View {
     }
 
     private func workflowButton(_ workflow: ZhulongHomeWorkflow) -> some View {
-        Button {
+        let disclosedDetail = copy.workflowDetailWithScope(
+            detail: workflow.detail,
+            scopes: scopeList(store.zhulongDataScopes(for: workflow.task))
+        )
+        return Button {
             startWorkflow(workflow)
         } label: {
             HStack(spacing: 12) {
@@ -263,10 +286,10 @@ private struct ZhulongWorkspaceHome: View {
                                 .foregroundStyle(Theme.text3)
                         }
                     }
-                    Text(workflow.detail)
+                    Text(disclosedDetail)
                         .font(.noonmarkSystem(size: 11.3))
                         .foregroundStyle(Theme.text2)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
 
                 Spacer(minLength: 10)
@@ -291,7 +314,7 @@ private struct ZhulongWorkspaceHome: View {
         .accessibilityLabel(
             copy.workflowAccessibilityLabel(
                 title: workflow.title,
-                detail: workflow.detail
+                detail: disclosedDetail
             )
         )
         .accessibilityIdentifier("zhulong-home-workflow-\(workflow.id)")
@@ -300,7 +323,7 @@ private struct ZhulongWorkspaceHome: View {
                 identifier: "zhulong-home-workflow-\(workflow.id)",
                 verificationText: copy.workflowAccessibilityLabel(
                     title: workflow.title,
-                    detail: workflow.detail
+                    detail: disclosedDetail
                 )
             )
         }
@@ -345,6 +368,36 @@ private struct ZhulongWorkspaceHome: View {
 
     private var conversationAccessIsDenied: Bool {
         store.zhulongConversationPermissionDecision == .deny
+    }
+
+    private var freeformDataUseDisclosure: String {
+        copy.homeDataUseDisclosure(
+            scopes: scopeList([.currentDayTodo]),
+            recipient: currentProviderDisclosure
+        )
+    }
+
+    private var currentProviderDisclosure: String {
+        guard store.zhulongProviderDraft.isConfigured else {
+            return copy.providerExecutionUnavailable
+        }
+        guard let identity = try? store.zhulongProviderIdentity() else {
+            return copy.noProviderIdentity
+        }
+        return ZhulongProviderDisclosureFormatter.disclosure(
+            for: identity,
+            copy: copy
+        )
+    }
+
+    private func scopeList(
+        _ scopes: Set<ZhulongDataScope>
+    ) -> String {
+        copy.scopeList(
+            scopes
+                .sorted(by: { $0.rawValue < $1.rawValue })
+                .map { copy.scopeTitle($0.presentationCopyKey) }
+        )
     }
 
     private func startIntent() {

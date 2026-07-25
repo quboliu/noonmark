@@ -500,6 +500,13 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                 "one production sync did not consume both preference journals"
             )
         }
+        try await assertTaskSummaryPresentation(
+            syncResult,
+            on: store,
+            in: settingsWindow,
+            input: input,
+            beforeClock: languageClock
+        )
 
         entries = try preferenceJournalEntries()
         guard entries.count == 2,
@@ -751,6 +758,63 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             )
         }
         return try lastSyncResult()
+    }
+
+    private func assertTaskSummaryPresentation(
+        _ result: SQLiteLocalFirstSyncResult,
+        on store: NoonmarkStore,
+        in settingsWindow: NSWindow,
+        input: WindowServerInputDriver,
+        beforeClock: Date
+    ) async throws {
+        let unresolvedConflictCount = try SQLiteSyncRepository(
+            databaseURL: databaseURL
+        ).unresolvedConflicts().count
+        let expected = store.copy.localFirstSyncResult(
+            result,
+            unresolvedConflictCount: unresolvedConflictCount
+        )
+        guard result.upload.uploadedCount == 2,
+              result.taskChanges
+              == SQLiteSyncTaskChanges(
+                  newTaskCount: 0,
+                  updatedTaskCount: 0
+              ),
+              store.localFirstSyncMessage == expected,
+              expected == "同步完成：新增任务 0 条，更新任务 0 条"
+        else {
+            throw Failure.failed(
+                "production sync did not expose the unique-task summary"
+            )
+        }
+
+        try await clickElement(
+            identifier: "settings.sidebar.sync",
+            expectedWindow: settingsWindow,
+            input: input,
+            beforeClock: beforeClock
+        )
+        try await waitUntil(
+            "Settings sync result did not render the unique-task summary"
+        ) {
+            guard let resultView = AppViewTreeE2E.view(
+                identifier: "settings.sync.result",
+                in: settingsWindow
+            ) else {
+                return false
+            }
+            return AppViewTreeE2E.verificationText(for: resultView)
+                == expected
+        }
+        let screenshotURL = resultURL.deletingLastPathComponent()
+            .appendingPathComponent("sync-task-summary.png")
+        try AppE2EScreenshot.captureContent(
+            of: settingsWindow,
+            to: screenshotURL
+        )
+        try appendTrace(
+            "sync task-summary new=0 updated=0 rendered=true"
+        )
     }
 
     private func lastSyncResult() throws -> SQLiteLocalFirstSyncResult {

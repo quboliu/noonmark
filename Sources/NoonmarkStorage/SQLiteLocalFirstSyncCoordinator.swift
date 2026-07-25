@@ -90,6 +90,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
     }
 
     private func uploadAllPending(limit: Int) async throws -> SQLiteSyncUploadResult {
+        let batchLimit = max(limit, 1)
         var result = SQLiteSyncUploadResult(
             pendingCount: 0,
             uploadedCount: 0,
@@ -97,7 +98,9 @@ public final class SQLiteLocalFirstSyncCoordinator {
         )
 
         while true {
-            let batch = try await uploadCoordinator.uploadPending(limit: limit)
+            let batch = try await uploadCoordinator.uploadPending(
+                limit: batchLimit
+            )
             result.pendingCount += batch.pendingCount
             result.uploadedCount += batch.uploadedCount
             result.failedCount += batch.failedCount

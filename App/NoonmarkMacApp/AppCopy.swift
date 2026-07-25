@@ -437,15 +437,17 @@ struct AppCopy {
         unresolvedConflictCount: Int? = nil
     ) -> String {
         let conflictCount = unresolvedConflictCount ?? result.download.conflictCount
-        let requiresAttention = result.upload.failedCount > 0
-            || result.download.waitingCount > 0
-            || conflictCount > 0
+        let attentionIssues = syncAttentionIssues(
+            result,
+            conflictCount: conflictCount
+        )
+        let requiresAttention = attentionIssues.isEmpty == false
         let taskChanges = result.taskChanges
         return switch language {
         case .chinese:
-            "\(requiresAttention ? "同步需处理" : "同步完成")：新增任务 \(taskChanges.newTaskCount) 条，更新任务 \(taskChanges.updatedTaskCount) 条\(syncAttentionSuffix(result, conflictCount: conflictCount))"
+            "\(requiresAttention ? "同步需处理" : "同步完成")：新增任务 \(taskChanges.newTaskCount) 条，更新任务 \(taskChanges.updatedTaskCount) 条\(syncAttentionSuffix(attentionIssues))"
         case .english:
-            "\(requiresAttention ? "Sync needs attention" : "Sync complete"): \(englishTaskCount(taskChanges.newTaskCount, adjective: "new")), \(englishTaskCount(taskChanges.updatedTaskCount, adjective: "updated"))\(syncAttentionSuffix(result, conflictCount: conflictCount))"
+            "\(requiresAttention ? "Sync needs attention" : "Sync complete"): \(englishTaskCount(taskChanges.newTaskCount, adjective: "new")), \(englishTaskCount(taskChanges.updatedTaskCount, adjective: "updated"))\(syncAttentionSuffix(attentionIssues))"
         }
     }
 
@@ -456,10 +458,10 @@ struct AppCopy {
         "\(count) \(adjective) \(count == 1 ? "task" : "tasks")"
     }
 
-    private func syncAttentionSuffix(
+    private func syncAttentionIssues(
         _ result: SQLiteLocalFirstSyncResult,
         conflictCount: Int
-    ) -> String {
+    ) -> [String] {
         var issues: [String] = []
         if result.upload.failedCount > 0 {
             issues.append(language == .chinese ? "部分数据同步失败" : "some data failed to sync")
@@ -470,6 +472,10 @@ struct AppCopy {
         if conflictCount > 0 {
             issues.append(language == .chinese ? "存在未解决冲突" : "there are unresolved conflicts")
         }
+        return issues
+    }
+
+    private func syncAttentionSuffix(_ issues: [String]) -> String {
         guard issues.isEmpty == false else { return "" }
         return language == .chinese
             ? "；\(issues.joined(separator: "、"))"

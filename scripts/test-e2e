@@ -5077,6 +5077,7 @@ run_preferences_clock_probe() {
   local setup_log="${preferences_dir}/setup.log"
   local exercise_result="${preferences_dir}/exercise-result.txt"
   local exercise_log="${preferences_dir}/exercise.log"
+  local task_summary_screenshot="${preferences_dir}/sync-task-summary.png"
   local restart_result="${preferences_dir}/restart-result.txt"
   local restart_log="${preferences_dir}/restart.log"
   local sync_root="/tmp/noonmark-e2e-preferences-clock-sync-$$"
@@ -5326,11 +5327,16 @@ run_preferences_clock_probe() {
     /click identifier=settings.preferences.language/ { language = 1 }
     /click identifier=settings.preferences.poem.enabled/ { poem = 1 }
     /sync uploaded=2 pending=0 failed=0/ { synced = 1 }
+    /sync task-summary new=0 updated=0 rendered=true/ { summary = 1 }
     /restart stale=/ { restarted = 1 }
-    END { print theme, language, poem, synced, restarted }
+    END { print theme, language, poem, synced, summary, restarted }
   ' "${preferences_dir}/input-trace.txt")"
-  if [[ "$trace_probe" != "1 1 1 1 1" ]]; then
+  if [[ "$trace_probe" != "1 1 1 1 1 1" ]]; then
     echo "preference WindowServer input trace probe failed: ${trace_probe:-missing}" >&2
+    exit 1
+  fi
+  if [[ ! -s "$task_summary_screenshot" ]]; then
+    echo "preference sync task-summary screenshot is missing" >&2
     exit 1
   fi
 

@@ -117,15 +117,14 @@ struct SQLiteSyncTaskChangeAnalyzer {
         before: [SyncRecord],
         after: [SyncRecord]
     ) -> TaskChangeSet {
-        let beforeByID = recordIndex(before)
-        let afterByID = recordIndex(after)
+        let beforeEvidence = recordEvidenceIndex(before)
+        let afterEvidence = recordEvidenceIndex(after)
         let beforeTaskIDs = taskChainIDs(in: before)
         let afterTaskIDs = taskChainIDs(in: after)
         let newTaskIDs = afterTaskIDs.subtracting(beforeTaskIDs)
         let traceOwners = traceOwnerIndex(records: before + after)
-        let changedRecords = afterByID.values.filter { record in
-            guard let previous = beforeByID[record.id] else { return true }
-            return previous.exactlyMatches(record) == false
+        let changedRecords = afterEvidence.compactMap { evidenceID, record in
+            beforeEvidence[evidenceID] == nil ? record : nil
         }
         let affectedTaskIDs = changedRecords.reduce(into: Set<TaskChainID>()) { result, record in
             result.formUnion(
@@ -143,11 +142,11 @@ struct SQLiteSyncTaskChangeAnalyzer {
         )
     }
 
-    private func recordIndex(
+    private func recordEvidenceIndex(
         _ records: [SyncRecord]
-    ) -> [SyncRecordID: SyncRecord] {
+    ) -> [SyncRecordEvidenceID: SyncRecord] {
         records.reduce(into: [:]) { result, record in
-            result[record.id] = record
+            result[SyncRecordEvidenceID(record: record)] = record
         }
     }
 
@@ -162,18 +161,18 @@ struct SQLiteSyncTaskChangeAnalyzer {
 
     private func traceOwnerIndex(
         records: [SyncRecord]
-    ) -> [DayTraceID: TaskChainID] {
+    ) -> [DayTraceID: Set<TaskChainID>] {
         records.reduce(into: [:]) { result, record in
             guard record.entityType == .dayTrace,
                   let trace = try? mapper.decodeDayTrace(record)
             else { return }
-            result[trace.id] = trace.chainID
+            result[trace.id, default: []].insert(trace.chainID)
         }
     }
 
     private func taskChainIDs(
         affectedBy record: SyncRecord,
-        traceOwners: [DayTraceID: TaskChainID]
+        traceOwners: [DayTraceID: Set<TaskChainID>]
     ) -> Set<TaskChainID> {
         switch record.entityType {
         case .taskChain:
@@ -187,9 +186,9 @@ struct SQLiteSyncTaskChangeAnalyzer {
                 .map { [$0.chainID] } ?? []
         case .subtask:
             guard let subtask = try? mapper.decodeSubtask(record),
-                  let chainID = traceOwners[subtask.traceID]
+                  let chainIDs = traceOwners[subtask.traceID]
             else { return [] }
-            return [chainID]
+            return chainIDs
         case .classificationCommit:
             guard let envelope = try? mapper.decodeClassificationCommit(record)
             else { return [] }
@@ -199,9 +198,9 @@ struct SQLiteSyncTaskChangeAnalyzer {
             )
         case .traceClassificationEvent:
             guard let envelope = try? mapper.decodeTraceClassificationEvent(record),
-                  let chainID = traceOwners[envelope.event.traceID]
+                  let chainIDs = traceOwners[envelope.event.traceID]
             else { return [] }
-            return [chainID]
+            return chainIDs
         case .day, .appPreferences:
             return []
         }

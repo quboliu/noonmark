@@ -7,6 +7,110 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let today = LocalDate("2026-07-05")
 
+    func testNonPositiveBatchLimitStillDrainsTheUploadQueue() async throws {
+        let databaseURL = makeDatabaseURL("non-positive-batch-limit")
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(title: "仍须完成同步", now: now)
+        try repository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("mac-zero-limit"),
+            changedAt: now
+        )
+
+        let result = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: InMemorySyncTransport()
+        ).sync(limit: 0, now: now.addingTimeInterval(1))
+
+        XCTAssertEqual(
+            result.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 1, updatedTaskCount: 0)
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .pendingUpload).isEmpty
+        )
+    }
+
+    func testTaskChangeSummaryIsIndependentOfSameIDVariantOrder() throws {
+        let mapper = SyncRecordMapper()
+        let firstChain = TaskChain(
+            id: TaskChainID(
+                UUID(uuidString: "51000000-0000-0000-0000-000000000001")!
+            ),
+            now: now
+        )
+        let secondChain = TaskChain(
+            id: TaskChainID(
+                UUID(uuidString: "51000000-0000-0000-0000-000000000002")!
+            ),
+            now: now
+        )
+        let traceID = DayTraceID(
+            UUID(uuidString: "51000000-0000-0000-0000-000000000003")!
+        )
+        let firstDefinitionID = TaskDefinitionID(
+            UUID(uuidString: "51000000-0000-0000-0000-000000000004")!
+        )
+        let secondDefinitionID = TaskDefinitionID(
+            UUID(uuidString: "51000000-0000-0000-0000-000000000005")!
+        )
+        let firstTrace = DayTrace(
+            id: traceID,
+            chainID: firstChain.id,
+            definitionID: firstDefinitionID,
+            date: today,
+            priority: 0,
+            now: now
+        )
+        let secondTrace = DayTrace(
+            id: traceID,
+            chainID: secondChain.id,
+            definitionID: secondDefinitionID,
+            date: today,
+            priority: 0,
+            now: now.addingTimeInterval(1)
+        )
+        let deviceID = SyncDeviceID("variant-order")
+        let chainRecords = try [
+            mapper.record(for: firstChain, modifiedBy: deviceID),
+            mapper.record(for: secondChain, modifiedBy: deviceID)
+        ]
+        let firstTraceRecord = try mapper.record(
+            for: firstTrace,
+            modifiedBy: deviceID
+        )
+        let secondTraceRecord = try mapper.record(
+            for: secondTrace,
+            modifiedBy: deviceID
+        )
+        let before = chainRecords + [firstTraceRecord]
+        let local = NoonmarkEngine().snapshot()
+        let analyzer = SQLiteSyncTaskChangeAnalyzer()
+
+        let forward = analyzer.changes(
+            localBefore: local,
+            localAfter: local,
+            remoteBefore: before,
+            remoteAfter: chainRecords
+                + [firstTraceRecord, secondTraceRecord]
+        )
+        let reversed = analyzer.changes(
+            localBefore: local,
+            localAfter: local,
+            remoteBefore: before.reversed(),
+            remoteAfter: chainRecords.reversed()
+                + [secondTraceRecord, firstTraceRecord]
+        )
+
+        XCTAssertEqual(forward, reversed)
+        XCTAssertEqual(
+            forward,
+            SQLiteSyncTaskChanges(newTaskCount: 0, updatedTaskCount: 1)
+        )
+    }
+
     func testOneSyncDrainsMoreThanOneInternalUploadBatch() async throws {
         let databaseURL = makeDatabaseURL("drain-upload-batches")
         let repository = SQLiteEngineRepository(databaseURL: databaseURL)

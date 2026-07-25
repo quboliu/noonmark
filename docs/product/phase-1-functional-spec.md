@@ -573,6 +573,13 @@ func syncLocalFirstNow() async throws
 - 当前 iCloud Drive、本地文件夹与受签名门禁保护的 CloudKit adapter 都交换逐条 canonical 记录；S3 与 WebDAV 尚未接入。
 - 任何端点都不得直接同步裸 SQLite 文件。
 
+#### 同步任务汇总的风险、回滚、灰度与监控
+
+- 风险等级：P 级。主要风险是批次边界造成队列未排空却误报完成、同一任务的多条内部记录被重复计数、同 ID 多版本记录因到达顺序产生不同汇总，以及统计失败反向阻断任务事实同步。
+- 回滚：以本次同步汇总改动前的 Git commit 为边界整体回退协调器、任务汇总器、文案与验证；当前未发布且没有 schema 迁移，回滚后必须执行 `scripts/reset-dev-data`，不得只隐藏新文案而保留不完整的完成语义。
+- 灰度：项目没有 deployed endpoint 或生产用户，不能臆造线上灰度。交付顺序是隔离 SQLite 单测、同 ID 输入排列测试、双 Store 本地文件夹同步、真实 `.app` 设置页结果与截图、完整 E2E、`make check`，最后才进入 DMG 安装验收。
+- 监控：内部 journal、uploaded、waiting、failed、conflict 和 audit 计数继续保留在 SQLite 与不含正文的诊断日志中；用户界面只展示唯一任务链的新增／更新数。待上传队列未空、同一输入排列产生不同汇总、结果文案出现内部条数或真实 App 结果与 metadata 不一致都属于阻断信号。
+
 ### UndoUseCase
 
 ```swift

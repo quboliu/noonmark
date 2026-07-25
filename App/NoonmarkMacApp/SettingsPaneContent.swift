@@ -348,6 +348,12 @@ struct LocalFirstCloudSyncCard: View {
                             Text(message)
                                 .font(.noonmarkSystem(size: 11.5, weight: .medium))
                                 .foregroundStyle(Theme.accent)
+                                .background {
+                                    AppE2EViewAnchor(
+                                        identifier: "settings.sync.result",
+                                        verificationText: message
+                                    )
+                                }
                         }
                     }
                     .padding(10)

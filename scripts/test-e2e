@@ -3458,8 +3458,8 @@ run_workspace_productivity_probe() {
       ORDER BY trace.priority
     );
   ")"
-  if [[ "$persisted_order" != "E2E workspace drag D|E2E workspace drag A|E2E workspace drag B|E2E workspace drag C" ]]; then
-    echo "workspace drag SQLite order probe failed: ${persisted_order:-missing}" >&2
+  if [[ "$persisted_order" != "E2E workspace drag A|E2E workspace drag B|E2E workspace drag C|E2E workspace drag D" ]]; then
+    echo "workspace Day Todo order preservation probe failed: ${persisted_order:-missing}" >&2
     exit 1
   fi
 
@@ -3530,7 +3530,7 @@ run_workspace_productivity_probe() {
     exit 1
   fi
 
-  echo "E2E workspace selection, bulk actions, drag order, atomic save failure, and restart: $productivity_db (probe=$sqlite_probe capability=$completion_capability_probe)"
+  echo "E2E workspace selection, bulk actions, Day Todo drag rejection, Future Plans native drag, atomic save failure, and restart: $productivity_db (probe=$sqlite_probe capability=$completion_capability_probe)"
 }
 
 run_data_import_ui_probe() {
@@ -3640,7 +3640,7 @@ run_data_import_ui_probe() {
       (SELECT count(*) FROM task_definitions),
       (SELECT count(*) FROM day_traces);
   ")"
-  if [[ "$sqlite_probe" != "0 1 1 1 1 1 0 1 1 0 0 0 1 4 3" ]]; then
+  if [[ "$sqlite_probe" != "0 1 1 2 1 1 0 2 1 0 0 0 1 6 3" ]]; then
     echo "data-import UI SQLite/restart probe failed: ${sqlite_probe:-missing}" >&2
     exit 1
   fi
@@ -3714,6 +3714,7 @@ run_data_import_integrity_probe() {
   local state_format_version
   local state_journal_count
   local state_journal_sha256
+  local fixture_format_version
   local scenario_xml
   local completed_xml
   local scenario_count
@@ -3751,6 +3752,8 @@ run_data_import_integrity_probe() {
   baseline_journal_digest="$(data_import_integrity_journal_digest "$import_db")"
   baseline_journal_count="$(sqlite3 -noheader "$import_db" \
     "SELECT count(*) FROM change_journal;")"
+  fixture_format_version="$(/usr/bin/plutil -extract formatVersion raw -o - \
+    "$fixture_json")"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "data-import malformed Snapshot fail-closed UI" \
@@ -3817,7 +3820,7 @@ run_data_import_integrity_probe() {
     "$state_file")"
   scenario_count="$(grep -c '<string>' <<<"$scenario_xml")"
   completed_count="$(grep -c '<string>' <<<"$completed_xml")"
-  if [[ "$state_format_version" != "2" \
+  if [[ "$state_format_version" != "$fixture_format_version" \
     || "$state_journal_count" != "$baseline_journal_count" \
     || "${#state_journal_sha256}" -ne 64 \
     || "$scenario_count" -ne "${#scenarios[@]}" \
@@ -3911,7 +3914,7 @@ run_data_import_integrity_probe() {
   } >"$probe_file"
 
   rm -rf "$fixture_dir"
-  echo "E2E malformed DataPackage v2 fail-closed, real NSOpenPanel, SQLite/journal/restart: $import_db (probe=$probe_file)"
+  echo "E2E malformed current DataPackage fail-closed, real NSOpenPanel, SQLite/journal/restart: $import_db (probe=$probe_file)"
 }
 
 run_pool_list_layout_probe() {
@@ -4079,7 +4082,7 @@ run_unfinished_action_probe() {
       (SELECT count(*)
        FROM day_traces
        WHERE chain_id IN (SELECT chain_id FROM targets)
-         AND status = 'continued'),
+         AND status = 'unfinished'),
       (SELECT count(*)
        FROM day_traces
        WHERE chain_id IN (SELECT chain_id FROM targets)
@@ -4702,7 +4705,7 @@ run_copy_undo_persistence_probe() {
          AND source.content_updated_at_bits = continuation.undo_bits
          AND target.date = continuation.target_date
          AND target.status = 'cancelledDraft'
-         AND target.continued_from_trace_id =
+         AND target.carried_from_trace_id =
              continuation.source_trace_id
          AND target.draft_cancellation_id =
              continuation.cancellation_id
@@ -9993,13 +9996,15 @@ echo "E2E provider config round-trip: $provider_result (name=$provider_name mode
 workflow_dir="artifacts/e2e-workflow"
 workflow_db="${workflow_dir}/Noonmark.sqlite"
 workflow_result="${workflow_dir}/workflow-result.txt"
-workflow_title="E2E 排期延续复盘"
+workflow_title="E2E 排期延期复盘"
 rm -rf "$workflow_dir"
 mkdir -p "$workflow_dir"
 
 open -W -n "$app_path" --args \
   --data-url "$PWD/$workflow_db" \
   --page pool \
+  --e2e-fixed-instant 2026-07-05T16:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
   --e2e-domain-workflow \
   --e2e-workflow-title "$workflow_title" \
   --e2e-workflow-result-url "$PWD/$workflow_result" \
@@ -10015,7 +10020,7 @@ if [[ "$(cat "$workflow_result")" != "ok" ]]; then
   exit 1
 fi
 
-read -r workflow_continued workflow_pending workflow_review < <(
+read -r workflow_deferred workflow_pending workflow_review < <(
   sqlite3 -separator " " "$workflow_db" "
     SELECT
       (SELECT count(*)
@@ -10023,29 +10028,38 @@ read -r workflow_continued workflow_pending workflow_review < <(
        JOIN task_definitions ON task_definitions.id = day_traces.definition_id
        WHERE task_definitions.title = '$workflow_title'
          AND day_traces.date = '2026-07-05'
-         AND day_traces.status = 'continued'),
+         AND day_traces.status = 'deferred'),
       (SELECT count(*)
        FROM day_traces
        JOIN task_definitions ON task_definitions.id = day_traces.definition_id
        WHERE task_definitions.title = '$workflow_title'
          AND day_traces.date = '2026-07-06'
          AND day_traces.status = 'pending'
-         AND day_traces.continuation_seq = 1),
+         AND day_traces.continuation_seq = 0
+         AND day_traces.carried_from_trace_id IN (
+           SELECT source.id
+           FROM day_traces AS source
+           JOIN task_definitions AS source_definition
+             ON source_definition.id = source.definition_id
+           WHERE source_definition.title = '$workflow_title'
+             AND source.date = '2026-07-05'
+             AND source.status = 'deferred'
+         )),
       (SELECT count(*)
        FROM days
        WHERE date = '2026-07-05'
-         AND review_summary = 'E2E 已完成排期、延续和复盘写入。'
+         AND review_summary = 'E2E 已完成排期、延期和复盘写入。'
          AND review_unfinished_reason = '验证真实 App workflow 自动化。'
-         AND review_tomorrow_note = '明天检查延续任务。');
+         AND review_tomorrow_note = '明天检查延期任务。');
   "
 )
 
-if [[ "$workflow_continued" -ne 1 || "$workflow_pending" -ne 1 || "$workflow_review" -ne 1 ]]; then
-  echo "workflow e2e persistence failed: continued=$workflow_continued pending=$workflow_pending review=$workflow_review" >&2
+if [[ "$workflow_deferred" -ne 1 || "$workflow_pending" -ne 1 || "$workflow_review" -ne 1 ]]; then
+  echo "workflow e2e persistence failed: deferred=$workflow_deferred pending=$workflow_pending review=$workflow_review" >&2
   exit 1
 fi
 
-echo "E2E domain workflow: $workflow_db (continued=$workflow_continued pending=$workflow_pending review=$workflow_review)"
+echo "E2E domain workflow: $workflow_db (deferred=$workflow_deferred pending=$workflow_pending review=$workflow_review)"
 
 run_lifecycle_persistence_probe
 run_mutation_clock_probe

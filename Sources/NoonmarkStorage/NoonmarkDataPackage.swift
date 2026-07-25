@@ -13,7 +13,7 @@ public struct DataPackageWriteReceipt: Equatable, Sendable {
 }
 
 public enum NoonmarkDataPackage {
-    private static let currentFormatVersion = 4
+    public static let currentFormatVersion = 4
 
     public static func encode(_ snapshot: NoonmarkSnapshot) throws -> Data {
         try validate(snapshot)

@@ -790,7 +790,7 @@ private enum EnglishScreenshotUIVerifier {
             instanceID: selected.id.description,
             expectedOverflowText: windowWidth
                 <= CGFloat(MacUIWindowLayout.minimumWidth) + 1
-                ? "+2"
+                ? "+1"
                 : nil
         )
         return classificationEvidenceLines + selectionLines(
@@ -1158,11 +1158,12 @@ private enum EnglishScreenshotUIVerifier {
         instanceID: String
     ) throws {
         let identifier = "classification.\(surface).\(instanceID).overflow"
-        guard let overflow = AppViewTreeE2E.view(identifier: identifier),
-              AppViewTreeE2E.verificationText(for: overflow) == expectedText
-        else {
+        let actualText = AppViewTreeE2E.view(identifier: identifier).flatMap {
+            AppViewTreeE2E.verificationText(for: $0)
+        }
+        guard actualText == expectedText else {
             throw EnglishScreenshotFixtureE2EAutomation.Failure.failed(
-                "classification overflow does not match the minimum-width surface contract"
+                "classification overflow does not match the minimum-width surface contract: expected=\(expectedText) actual=\(actualText ?? "missing") identifier=\(identifier)"
             )
         }
     }

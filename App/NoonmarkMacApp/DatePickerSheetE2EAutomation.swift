@@ -757,7 +757,7 @@ struct DatePickerSheetE2EAutomation: LaunchAutomationRunnable {
             entry: ContextMenuEntry(
                 page: .future,
                 rowIdentifier: "workspace.item.future.\(fixture.futureTraceID.description)",
-                menuItemPosition: 2,
+                menuItemPosition: 3,
                 purpose: purpose
             ),
             store: store,
@@ -881,7 +881,7 @@ struct DatePickerSheetE2EAutomation: LaunchAutomationRunnable {
             entry: ContextMenuEntry(
                 page: .future,
                 rowIdentifier: "workspace.item.future.\(fixture.futureTraceID.description)",
-                menuItemPosition: 2,
+                menuItemPosition: 3,
                 purpose: reschedulePurpose
             ),
             store: store,

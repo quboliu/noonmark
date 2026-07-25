@@ -46,9 +46,13 @@ private let alignmentFixtures: [String: DetailTextAlignmentFixture] = [
     )
 ]
 
-// Vision must segment the detail rail itself. Segmenting the full 2400×1536
-// window first and filtering observations afterwards can merge or truncate
-// small Chinese labels before the rail filter ever sees them.
+private func normalizedOCRAnchorText(_ text: String) -> String {
+    text.filter { $0.isWhitespace == false }
+}
+
+/// Vision must segment the detail rail itself. Segmenting the full 2400×1536
+/// window first and filtering observations afterwards can merge or truncate
+/// small Chinese labels before the rail filter ever sees them.
 let rightRailRegion = CGRect(x: 0.75, y: 0, width: 0.25, height: 1)
 
 for path in screenshotPaths {
@@ -110,18 +114,28 @@ for path in screenshotPaths {
     }
     if let fixture = alignmentFixtures[screenshotName] {
         func observation(withPrefix prefix: String) -> VNRecognizedTextObservation? {
-            rightRailObservations.first { observation in
-                observation.topCandidates(1).first?.string.hasPrefix(prefix) == true
+            let normalizedPrefix = normalizedOCRAnchorText(prefix)
+            return rightRailObservations.first { observation in
+                guard let candidate = observation.topCandidates(1).first else {
+                    return false
+                }
+                return normalizedOCRAnchorText(candidate.string)
+                    .hasPrefix(normalizedPrefix)
             }
         }
-        guard let title = observation(withPrefix: fixture.titlePrefix),
-              let description = observation(withPrefix: fixture.descriptionPrefix),
-              let axis = observation(withPrefix: fixture.axisPrefix)
-        else {
-            fputs("task detail alignment fixture was not recognized in \(path)\n", stderr)
+        let title = observation(withPrefix: fixture.titlePrefix)
+        let description = observation(withPrefix: fixture.descriptionPrefix)
+        let axis = observation(withPrefix: fixture.axisPrefix)
+        guard let title, let description, let axis else {
+            fputs(
+                "task detail alignment fixture was not recognized in \(path): "
+                    + "title=\(title != nil) description=\(description != nil) "
+                    + "axis=\(axis != nil) labels=\(rightRailLabels)\n",
+                stderr
+            )
             exit(7)
         }
-        let railWidthInPoints = 1_200.0 * rightRailRegion.width
+        let railWidthInPoints = 1200.0 * rightRailRegion.width
         let titleDelta = abs(title.boundingBox.minX - axis.boundingBox.minX)
             * railWidthInPoints
         let descriptionDelta = abs(description.boundingBox.minX - axis.boundingBox.minX)

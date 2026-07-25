@@ -148,55 +148,37 @@ private struct ZhulongTodoDiffE2EProvider: ZhulongProvider {
     let configurationIdentity: ZhulongProviderConfigurationIdentity
 
     func complete(_ request: ZhulongProviderRequest) async -> ZhulongProviderResult {
-        .success(ZhulongProviderResponse(content: Self.planArtifact, draftVersion: 1))
-    }
-
-    private static let planArtifact = """
-    {
-      "kind":"planArtifact",
-      "summary":"先取得测量，再交付近期切片。",
-      "stages":[
-        {
-          "id":"measure",
-          "title":"工程测量",
-          "objective":"取得真实数据",
-          "horizon":"nearTerm",
-          "dependencyIDs":[],
-          "deliverables":["测量记录","验证记录"],
-          "triggerCondition":null
-        },
-        {
-          "id":"delivery",
-          "title":"交付切片",
-          "objective":"完成任务成形闭环",
-          "horizon":"later",
-          "dependencyIDs":["measure"],
-          "deliverables":[],
-          "triggerCondition":"测量记录已审查"
+        guard let plan = try? ZhulongConversationTaskPlan(tasks: [
+            try ZhulongConversationTaskDraft(
+                title: "测量记录",
+                descriptionText: "取得真实数据",
+                initialNoteBody: "保留第一项并修改",
+                destination: .taskPool,
+                subtasks: []
+            ),
+            try ZhulongConversationTaskDraft(
+                title: "验证记录",
+                descriptionText: "取得真实数据",
+                initialNoteBody: "由用户拆分新增",
+                destination: .taskPool,
+                subtasks: []
+            )
+        ]) else {
+            return .failure(
+                ZhulongProviderFailure(
+                    code: "e2eFixtureInvalid",
+                    message: "E2E Todo diff fixture is invalid"
+                )
+            )
         }
-      ],
-      "decisionExplanations":[
-        {
-          "subject":"为何先测量",
-          "userDecisions":["先完成 Mac 版"],
-          "assumptions":[],
-          "dataScopes":["currentDayTodo"],
-          "evidence":["当前没有同度量工程数据"],
-          "constraints":["普通 Todo 必须离线可用"],
-          "alternatives":[
-            {"title":"直接排期","tradeoffs":["快，但没有证据"]},
-            {"title":"先测量","tradeoffs":["较慢，但可校准"]}
-          ],
-          "counterexamples":["直接排期会隐藏证据缺口"],
-          "rationale":"测量后才能形成可信承诺。",
-          "uncertainties":["测量结果尚未知"],
-          "expectedImpacts":["近期只生成调查任务"],
-          "requiredAuthorizations":["todoWrite"]
-        }
-      ],
-      "precisionClaims":[]
+        return .success(
+            ZhulongProviderResponse(
+                content: "已形成两项可编辑任务，提交前仍需确认 Todo 写入。",
+                draftVersion: 1,
+                artifacts: [.taskPlan(plan)]
+            )
+        )
     }
-    """
 }
 
 struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
@@ -244,24 +226,6 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                 scopes: [.currentDayTodo]
             )
             store.zhulongWorkspace.authorizeCurrentSession(providerIdentity: identity)
-            guard let sourceEntryID = store.zhulongWorkspace.selectedSession?.entries.first?.id else {
-                return
-            }
-            store.zhulongWorkspace.publishPlanningBrief(
-                try ZhulongPlanningBriefDraft(
-                    goal: "发布稳定版",
-                    successCriteria: ["真实 App E2E 通过"],
-                    hardConstraints: ["普通 Todo 必须离线可用"],
-                    userDecisions: ["先完成 Mac 版"],
-                    delegatedActivities: [.taskDecomposition, .sequencing, .riskReview],
-                    assumptions: [],
-                    openQuestions: [],
-                    dataScopes: [.currentDayTodo],
-                    sourceEntryIDs: [sourceEntryID]
-                )
-            )
-            store.zhulongWorkspace.reviewCurrentPlanningBrief()
-            store.zhulongWorkspace.delegateCurrentPlanningBrief()
             let payload = try ZhulongProviderPayload(
                 systemPrompt: "只返回符合规划协议的结构化产物。",
                 userPrompt: "规划发布新版",
@@ -270,11 +234,12 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
             )
             let provider = ZhulongTodoDiffE2EProvider(configurationIdentity: identity)
             Task { @MainActor in
-                await store.zhulongWorkspace.runCurrentPlanningSession(
+                await store.zhulongWorkspace.runCurrentSession(
                     payload: payload,
-                    provider: provider
+                    provider: provider,
+                    sourceSnapshot: store.engine.snapshot(),
+                    planningDate: store.today
                 )
-                store.publishCurrentZhulongTodoDiff()
                 guard let resultURL else { return }
                 let result = await exerciseRevisionAndApply(on: store)
                 try? result.write(to: resultURL, atomically: true, encoding: .utf8)
@@ -349,9 +314,15 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
         guard let session = store.zhulongWorkspace.selectedSession,
               let receipt = session.todoApplyReceipts.last,
               session.todoApplyReceipts.count == 1,
-              session.events.suffix(3).map(\.kind) == [
-                  .todoDiffRevised, .todoWriteAuthorized, .todoBatchApplied
+              session.events.suffix(4).map(\.kind) == [
+                  .todoDiffRevised,
+                  .sessionDecisionRecorded,
+                  .todoWriteAuthorized,
+                  .todoBatchApplied
               ],
+              session.entries.last?.author == .user,
+              session.entries.last?.kind == .decision,
+              session.entries.last?.content == "提交",
               Set(store.engine.definitions.values.map(\.title)) == [
                   "E2E 编辑后的测量",
                   "E2E 拆分后的验证"
@@ -388,10 +359,18 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
 
     @MainActor
     private func clickConfirmAndApply(on store: NoonmarkStore) async throws {
-        let identifier = "zhulong-confirm-apply-todo-diff"
         let streamIdentifier = "zhulong-session-stream"
-        let label = AppPresentation(language: store.engine.preferences.language)
-            .zhulong.confirmAndApplyAtomically
+        guard let runID = store.zhulongWorkspace.selectedSession?
+            .currentTodoDiff?.conversationRunID
+        else {
+            throw ZhulongTodoDiffUIE2EError.failed(
+                "Todo diff is not a conversation artifact"
+            )
+        }
+        let identifier =
+            "zhulong-inline-task-draft-submit-anchor-\(runID.rawValue.uuidString)"
+        let label = AppCopy(language: store.engine.preferences.language)
+            .commitZhulongTaskDraft
         var mainWindow: NSWindow?
         try await waitUntil("visible Todo diff session stream") {
             guard AppViewTreeE2E.activateMainWindow(),
@@ -423,6 +402,7 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                 return false
             }
             return AppViewTreeE2E.verificationText(for: confirmation) == label
+                && AppViewTreeE2E.button(overlapping: confirmation) != nil
         }
         let input = try WindowServerInputDriver()
         let resolveTarget = {
@@ -432,16 +412,19 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                   let confirmation = AppViewTreeE2E.view(
                       identifier: identifier,
                       in: mainWindow
-                  ), AppViewTreeE2E.verificationText(for: confirmation) == label
+                  ), AppViewTreeE2E.verificationText(for: confirmation) == label,
+                  let button = AppViewTreeE2E.button(
+                      overlapping: confirmation
+                  )
             else {
                 throw ZhulongTodoDiffUIE2EError.failed(
                     "Todo diff confirmation changed before mouseDown"
                 )
             }
-            let point = confirmation.convert(
+            let point = button.convert(
                 NSPoint(
-                    x: confirmation.bounds.midX,
-                    y: confirmation.bounds.midY
+                    x: button.bounds.midX,
+                    y: button.bounds.midY
                 ),
                 to: nil
             )

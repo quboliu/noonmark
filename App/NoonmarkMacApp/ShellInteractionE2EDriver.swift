@@ -309,7 +309,12 @@ enum ZhulongNavigationUIE2EDriver {
                   NativeSettingsWindowE2E.close(settingsWindow)
             else {
                 retry(attemptsRemaining, action: closeSettingsAfterEnable) {
-                    "failed: 启用烛龙后无法关闭原生 Settings window"
+                    let state = store.isZhulongEnabled ? "enabled" : "disabled"
+                    let window = NativeSettingsWindowE2E.visibleWindow() == nil
+                        ? "missing"
+                        : "visible"
+                    return "failed: 启用烛龙或关闭原生 Settings window 失败 "
+                        + "(state=\(state), settings=\(window))"
                 }
                 return
             }
@@ -521,7 +526,24 @@ enum ZhulongNavigationUIE2EDriver {
         }
 
         private func clickControl(identifier: String) -> Bool {
-            guard let anchor = AppViewTreeE2E.view(identifier: identifier) else {
+            guard let initialAnchor = AppViewTreeE2E.view(
+                identifier: identifier
+            ) else {
+                return false
+            }
+            initialAnchor.scrollToVisible(initialAnchor.bounds)
+            initialAnchor.window?.displayIfNeeded()
+            guard let anchor = AppViewTreeE2E.view(identifier: identifier),
+                  let contentView = anchor.window?.contentView
+            else {
+                return false
+            }
+            let visibleFrame = anchor.convert(anchor.bounds, to: contentView)
+            let intersection = visibleFrame.intersection(contentView.bounds)
+            guard intersection.isNull == false,
+                  intersection.width >= 2,
+                  intersection.height >= 2
+            else {
                 return false
             }
             if let button = AppViewTreeE2E.button(overlapping: anchor) {

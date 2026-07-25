@@ -636,7 +636,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
     }
 
     private struct ProbeState: Codable {
-        let reorderedDayTraceIDs: [String]
+        let dayTraceIDs: [String]
         let resolvedParentTraceID: String
         let resolvedSubtaskID: String
         let resolvedSubtaskCompletedAt: Date
@@ -779,65 +779,24 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         )
 
         try await ensureMainWindowActive(window)
-        WorkspaceDragE2EDiagnostics.reset()
-        let dragPump = try drag(
-            from: dayIdentifier(fixture.dayTraceIDs[3]),
-            to: dayIdentifier(fixture.dayTraceIDs[0]),
-            sourceTraceID: fixture.dayTraceIDs[3],
-            targetTraceID: fixture.dayTraceIDs[0],
-            expectsNativePath: true
+        try await exerciseDayPriorityDragRejection(
+            store: store,
+            window: window,
+            traceIDs: fixture.dayTraceIDs
         )
-        defer { dragPump.cancel() }
-        try await waitUntil("drag event pump did not finalize") {
-            dragPump.isFinalized
-        }
-        if let failure = dragPump.failure {
-            throw Failure.failed(
-                "drag event pump failed: \(failure); "
-                    + WorkspaceDragE2EDiagnostics.report
-            )
-        }
-        let reorderedDayTraceIDs = [fixture.dayTraceIDs[3]]
-            + Array(fixture.dayTraceIDs[0 ... 2])
-        do {
-            try await waitUntil("drag/drop did not reorder the day workspace") {
-                store.engine.getDayTodo(date: store.today).traces
-                    .filter { fixture.dayTraceIDs.contains($0.id) }
-                    .map(\.id) == reorderedDayTraceIDs
-            }
-        } catch {
-            throw Failure.failed(
-                "drag/drop did not reorder the day workspace; "
-                    + WorkspaceDragE2EDiagnostics.report
-            )
-        }
-        guard WorkspaceDragE2EDiagnostics.completedNativePath(
-            sourceTraceID: fixture.dayTraceIDs[3],
-            targetTraceID: fixture.dayTraceIDs[0]
-        ) else {
-            throw Failure.failed(
-                "drag/drop reordered without completing the native path; "
-                    + WorkspaceDragE2EDiagnostics.report
-            )
-        }
         guard try persistedSnapshot() == store.engine.snapshot() else {
             throw Failure.failed(
-                "drag/drop did not commit its exact reordered snapshot to SQLite"
+                "Day Todo drag rejection did not preserve the exact SQLite snapshot"
             )
         }
         try assertContiguousPriorities(
-            reorderedDayTraceIDs,
+            fixture.dayTraceIDs,
             in: store.engine
         )
 
         try await exerciseAtomicBulkCompletion(
             store: store,
             fixture: fixture
-        )
-        try await exerciseTerminalPriorityDragRejection(
-            store: store,
-            window: window,
-            traceIDs: fixture.dayTraceIDs
         )
         try await exercisePoolScheduling(
             store: store,
@@ -851,7 +810,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
 
         try writeState(
             ProbeState(
-                reorderedDayTraceIDs: reorderedDayTraceIDs.map(\.description),
+                dayTraceIDs: fixture.dayTraceIDs.map(\.description),
                 resolvedParentTraceID: fixture.dayTraceIDs[0].description,
                 resolvedSubtaskID: fixture.resolvedSubtaskID.description,
                 resolvedSubtaskCompletedAt: fixture.resolvedSubtaskCompletedAt,
@@ -1071,7 +1030,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
-    private func exerciseTerminalPriorityDragRejection(
+    private func exerciseDayPriorityDragRejection(
         store: NoonmarkStore,
         window: NSWindow,
         traceIDs: [DayTraceID]
@@ -1079,14 +1038,14 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         try await ensureMainWindowActive(window)
         try await waitForRows(
             traceIDs.map(dayIdentifier),
-            failure: "completed day rows did not remain visible for drag rejection"
+            failure: "pending Day Todo rows were unavailable for drag rejection"
         )
         let baseline = store.engine.snapshot()
-        guard traceIDs.allSatisfy({ store.engine.traces[$0]?.status == .completed }),
+        guard traceIDs.allSatisfy({ store.engine.traces[$0]?.status == .pending }),
               try persistedSnapshot() == baseline
         else {
             throw Failure.failed(
-                "terminal drag rejection did not start from persisted completed facts"
+                "Day Todo drag rejection did not start from persisted pending facts"
             )
         }
 
@@ -1099,18 +1058,18 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             expectsNativePath: false
         )
         defer { dragPump.cancel() }
-        try await waitUntil("terminal drag event pump did not finalize") {
+        try await waitUntil("Day Todo drag rejection pump did not finalize") {
             dragPump.isFinalized
         }
         if let failure = dragPump.failure {
             throw Failure.failed(
-                "terminal drag rejection pump failed: \(failure); "
+                "Day Todo drag rejection pump failed: \(failure); "
                     + WorkspaceDragE2EDiagnostics.report
             )
         }
         guard WorkspaceDragE2EDiagnostics.hasNativePathActivity == false else {
             throw Failure.failed(
-                "completed day rows still exposed a native priority drag path; "
+                "Day Todo still exposed a removed native priority drag path; "
                     + WorkspaceDragE2EDiagnostics.report
             )
         }
@@ -1118,7 +1077,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
               try persistedSnapshot() == baseline
         else {
             throw Failure.failed(
-                "completed-row drag attempt changed memory or SQLite"
+                "Day Todo drag attempt changed memory or SQLite"
             )
         }
     }
@@ -1170,6 +1129,55 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             traceIDs.map(futureIdentifier),
             failure: "future workspace rows did not render"
         )
+        WorkspaceDragE2EDiagnostics.reset()
+        let dragPump = try drag(
+            from: futureIdentifier(traceIDs[2]),
+            to: futureIdentifier(traceIDs[0]),
+            sourceTraceID: traceIDs[2],
+            targetTraceID: traceIDs[0],
+            expectsNativePath: true
+        )
+        defer { dragPump.cancel() }
+        try await waitUntil("future drag event pump did not finalize") {
+            dragPump.isFinalized
+        }
+        if let failure = dragPump.failure {
+            throw Failure.failed(
+                "future drag event pump failed: \(failure); "
+                    + WorkspaceDragE2EDiagnostics.report
+            )
+        }
+        let reorderedFutureTraceIDs = [
+            traceIDs[2],
+            traceIDs[0],
+            traceIDs[1]
+        ]
+        do {
+            try await waitUntil("drag/drop did not reorder Future Plans") {
+                store.engine.futurePlans(today: store.today)
+                    .filter { traceIDs.contains($0.trace.id) }
+                    .map(\.trace.id) == reorderedFutureTraceIDs
+            }
+        } catch {
+            throw Failure.failed(
+                "drag/drop did not reorder Future Plans; "
+                    + WorkspaceDragE2EDiagnostics.report
+            )
+        }
+        guard WorkspaceDragE2EDiagnostics.completedNativePath(
+            sourceTraceID: traceIDs[2],
+            targetTraceID: traceIDs[0]
+        ) else {
+            throw Failure.failed(
+                "Future Plans reordered without completing the native path; "
+                    + WorkspaceDragE2EDiagnostics.report
+            )
+        }
+        guard try persistedSnapshot() == store.engine.snapshot() else {
+            throw Failure.failed(
+                "Future Plans drag/drop did not persist its exact snapshot"
+            )
+        }
         let staleSearchResult = WorkspaceSearchIndex(engine: store.engine)
             .search(Self.futureTitles[0])
             .first { result in
@@ -1184,8 +1192,11 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             )
         }
 
-        try await click(futureIdentifier(traceIDs[0]))
-        try await click(futureIdentifier(traceIDs[2]), modifiers: .shift)
+        try await click(futureIdentifier(reorderedFutureTraceIDs[0]))
+        try await click(
+            futureIdentifier(reorderedFutureTraceIDs[2]),
+            modifiers: .shift
+        )
         try await waitForSelection(
             store,
             expected: traceIDs.map { .futureTrace($0) },
@@ -1223,7 +1234,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
 
     private func verifyRestart(on store: NoonmarkStore) async throws {
         let state = try readState()
-        let reorderedIDs = try state.reorderedDayTraceIDs.map(dayTraceID)
+        let dayTraceIDs = try state.dayTraceIDs.map(dayTraceID)
         let resolvedParentTraceID = try dayTraceID(state.resolvedParentTraceID)
         let resolvedSubtaskID = try subtaskID(state.resolvedSubtaskID)
         let blockingTraceID = try dayTraceID(state.blockingTraceID)
@@ -1240,7 +1251,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
                     && $0.formsDayHistory == false
             }
         }
-        let completedTasksWereRetained = reorderedIDs.allSatisfy {
+        let completedTasksWereRetained = dayTraceIDs.allSatisfy {
             store.engine.traces[$0]?.status == .completed
         }
         let completionCapabilityFactsWereRetained: Bool = {
@@ -1250,7 +1261,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
             else {
                 return false
             }
-            return reorderedIDs.contains(resolvedParentTraceID)
+            return dayTraceIDs.contains(resolvedParentTraceID)
                 && resolvedSubtask.traceID == resolvedParentTraceID
                 && resolvedSubtask.status == .completed
                 && resolvedSubtask.completedAt == state.resolvedSubtaskCompletedAt
@@ -1280,16 +1291,16 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         }
 
         let persistedOrder = store.engine.getDayTodo(date: store.today).traces
-            .filter { reorderedIDs.contains($0.id) }
+            .filter { dayTraceIDs.contains($0.id) }
             .map(\.id)
-        guard persistedOrder == reorderedIDs else {
-            throw Failure.failed("restarted engine did not retain drag order")
+        guard persistedOrder == dayTraceIDs else {
+            throw Failure.failed("restarted engine changed the Day Todo order")
         }
 
         store.page = .day
         store.selectedDate = store.today
         store.clearSelection()
-        let rowIdentifiers = reorderedIDs.map(dayIdentifier)
+        let rowIdentifiers = dayTraceIDs.map(dayIdentifier)
         try await waitForRows(
             rowIdentifiers,
             failure: "restarted day rows did not render"
@@ -1303,7 +1314,7 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         guard zip(rowFrames, rowFrames.dropFirst()).allSatisfy({ pair in
             pair.0.midY > pair.1.midY
         }) else {
-            throw Failure.failed("restarted visible rows did not retain drag order")
+            throw Failure.failed("restarted visible Day Todo rows changed order")
         }
     }
 

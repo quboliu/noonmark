@@ -505,7 +505,7 @@ struct WorkflowE2EAutomation: LaunchAutomationRunnable {
     @MainActor
     static func fromCommandLine() -> WorkflowE2EAutomation? {
         guard AppLaunchArguments.contains("--e2e-domain-workflow") else { return nil }
-        let title = AppLaunchArguments.value(after: "--e2e-workflow-title") ?? "E2E 排期延续复盘"
+        let title = AppLaunchArguments.value(after: "--e2e-workflow-title") ?? "E2E 排期延期复盘"
         let resultURL = AppLaunchArguments.value(after: "--e2e-workflow-result-url")
             .map { URL(fileURLWithPath: $0) }
         return WorkflowE2EAutomation(title: title, resultURL: resultURL)
@@ -530,14 +530,14 @@ struct WorkflowE2EAutomation: LaunchAutomationRunnable {
 
             store.deferTrace(todayTraceID, to: tomorrow)
             guard store.selectedTraceID != todayTraceID else {
-                throw WorkflowE2EAutomationError.missing("continued trace")
+                throw WorkflowE2EAutomationError.missing("deferred trace")
             }
 
             store.selectedDate = store.today
             store.updateReview(
-                summary: "E2E 已完成排期、延续和复盘写入。",
+                summary: "E2E 已完成排期、延期和复盘写入。",
                 reason: "验证真实 App workflow 自动化。",
-                tomorrow: "明天检查延续任务。"
+                tomorrow: "明天检查延期任务。"
             )
 
             try writeResult("ok")

@@ -135,17 +135,45 @@ struct FuturePlanRow: View {
                 date: item.trace.date
             )
         )
-        .dropDestination(for: TaskPriorityDragItem.self) { items, _ in
-            guard let moving = items.first,
-                  moving.date == item.trace.date
-            else {
-                return false
+        .dropDestination(
+            for: TaskPriorityDragItem.self,
+            action: { items, _ in
+                guard let moving = items.first,
+                      moving.date == item.trace.date
+                else {
+                    WorkspaceDragE2EDiagnostics.recordDrop(
+                        targetTraceID: item.trace.id,
+                        items: items,
+                        accepted: false
+                    )
+                    return false
+                }
+                let accepted = store.enqueueTraceReorder(
+                    moving.traceID,
+                    before: item.trace.id
+                ) { committed in
+                    WorkspaceDragE2EDiagnostics.recordDrop(
+                        targetTraceID: item.trace.id,
+                        items: items,
+                        accepted: committed
+                    )
+                }
+                if accepted == false {
+                    WorkspaceDragE2EDiagnostics.recordDrop(
+                        targetTraceID: item.trace.id,
+                        items: items,
+                        accepted: false
+                    )
+                }
+                return accepted
+            },
+            isTargeted: { isTargeted in
+                WorkspaceDragE2EDiagnostics.recordTarget(
+                    traceID: item.trace.id,
+                    isTargeted: isTargeted
+                )
             }
-            return store.enqueueTraceReorder(
-                moving.traceID,
-                before: item.trace.id
-            )
-        }
+        )
         .onTapGesture { store.userSelectTrace(item.trace.id) }
         .contextMenu {
             Button(store.copy.viewDetails) { store.selectTrace(item.trace.id) }

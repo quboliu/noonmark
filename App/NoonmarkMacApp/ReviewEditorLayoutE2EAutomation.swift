@@ -175,10 +175,14 @@ struct ReviewEditorLayoutE2EAutomation: LaunchAutomationRunnable {
         store.page = .pool
         store.poolText = "E2E 已完成只读附言"
         store.addPoolTask()
-        guard let chainID = store.selectedPoolChainID,
+        guard let chainID = store.selectedPoolChainID else {
+            throw Failure.failed("无法建立只读附言 fixture")
+        }
+        store.detailNoteText = "E2E 已完成任务的只读附言"
+        guard store.appendPoolNote(chainID: chainID),
               let noteID = store.engine.chains[chainID]?.activeNoteEntries.first?.id
         else {
-            throw Failure.failed("无法建立只读附言 fixture")
+            throw Failure.failed("无法通过真实附言入口建立只读附言 fixture")
         }
         store.schedulePoolTask(chainID, date: store.today)
         guard let traceID = store.selectedTraceID else {

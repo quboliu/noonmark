@@ -1868,7 +1868,7 @@ capture_task_snapshot() {
         'description_text', trace.description_text,
         'note_entries_json', trace.note_entries_json,
         'manual_progress_percent', trace.manual_progress_percent,
-        'continued_from_trace_id', trace.continued_from_trace_id,
+        'carried_from_trace_id', trace.carried_from_trace_id,
         'changed_to_trace_id', trace.changed_to_trace_id,
         'created_at', trace.created_at,
         'created_at_bits', trace.created_at_bits,

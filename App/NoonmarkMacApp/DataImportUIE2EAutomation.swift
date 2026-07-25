@@ -42,6 +42,10 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
         let scheduledDate: String
         let cancellationConfirmationWasVisible: Bool
         let destructiveConfirmationWasVisible: Bool
+        let scheduledImportDefinitionCount: Int
+        let poolImportDefinitionCount: Int
+        let returnedImportDefinitionCount: Int
+        let retiredImportDefinitionCount: Int
     }
 
     private struct IntegrityProbeState: Codable {
@@ -90,7 +94,9 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
     private static let decoyImportTitle = "E2E UI import decoy 7319"
     private static let integrityBaselineTitle = "E2E import integrity baseline 9340"
     private static let malformedPayloadTitle = "E2E malformed import payload 9340"
-    private static let currentDataPackageFormatVersion = 2
+    private static var currentDataPackageFormatVersion: Int {
+        NoonmarkDataPackage.currentFormatVersion
+    }
 
     private let mode: Mode
     private let fixtureURL: URL
@@ -339,6 +345,32 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
             failure: "second import selection did not present data-import.confirmation"
         )
         try validatePreparedImportSummary(store)
+        guard let preparedSnapshot = store.preparedDataImport?.snapshot else {
+            throw Failure.failed("selected import package disappeared before confirmation")
+        }
+        let scheduledImportDefinitionCount = definitionCount(
+            titled: Self.scheduledImportTitle,
+            in: preparedSnapshot
+        )
+        let poolImportDefinitionCount = definitionCount(
+            titled: Self.poolImportTitle,
+            in: preparedSnapshot
+        )
+        let returnedImportDefinitionCount = definitionCount(
+            titled: Self.returnedImportTitle,
+            in: preparedSnapshot
+        )
+        let retiredImportDefinitionCount = definitionCount(
+            titled: Self.retiredImportTitle,
+            in: preparedSnapshot
+        )
+        guard scheduledImportDefinitionCount > 0,
+              poolImportDefinitionCount > 0,
+              returnedImportDefinitionCount > 0,
+              retiredImportDefinitionCount > 0
+        else {
+            throw Failure.failed("selected import package lost expected definition history")
+        }
         let destructiveConfirmationWasVisible = true
         try await clickConfirmationButton(
             identifier: "data-import.confirm",
@@ -353,12 +385,15 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
                 && self.definitionCount(
                     titled: Self.scheduledImportTitle,
                     in: store
-                ) == 1
-                && self.definitionCount(titled: Self.poolImportTitle, in: store) == 1
+                ) == scheduledImportDefinitionCount
+                && self.definitionCount(
+                    titled: Self.poolImportTitle,
+                    in: store
+                ) == poolImportDefinitionCount
                 && self.definitionCount(
                     titled: Self.returnedImportTitle,
                     in: store
-                ) == 1
+                ) == returnedImportDefinitionCount
         }
 
         let persistedAfterImport = try persistedEngine()
@@ -370,15 +405,15 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
               definitionCount(
                   titled: Self.scheduledImportTitle,
                   in: persistedAfterImport
-              ) == 1,
+              ) == scheduledImportDefinitionCount,
               definitionCount(
                   titled: Self.poolImportTitle,
                   in: persistedAfterImport
-              ) == 1,
+              ) == poolImportDefinitionCount,
               definitionCount(
                   titled: Self.returnedImportTitle,
                   in: persistedAfterImport
-              ) == 1,
+              ) == returnedImportDefinitionCount,
               persistedAfterImport.traces.values.contains(where: {
                   $0.status == .cancelledDraft
                       && persistedAfterImport.definitions[$0.definitionID]?
@@ -387,7 +422,7 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
               definitionCount(
                   titled: Self.retiredImportTitle,
                   in: persistedAfterImport
-              ) == 1,
+              ) == retiredImportDefinitionCount,
               definitionCount(
                   titled: Self.decoyImportTitle,
                   in: persistedAfterImport
@@ -417,7 +452,11 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
                 returnedImportTitle: Self.returnedImportTitle,
                 scheduledDate: store.today.description,
                 cancellationConfirmationWasVisible: cancellationConfirmationWasVisible,
-                destructiveConfirmationWasVisible: destructiveConfirmationWasVisible
+                destructiveConfirmationWasVisible: destructiveConfirmationWasVisible,
+                scheduledImportDefinitionCount: scheduledImportDefinitionCount,
+                poolImportDefinitionCount: poolImportDefinitionCount,
+                returnedImportDefinitionCount: returnedImportDefinitionCount,
+                retiredImportDefinitionCount: retiredImportDefinitionCount
             )
         )
     }
@@ -434,9 +473,18 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
               state.poolImportTitle == Self.poolImportTitle,
               state.returnedImportTitle == Self.returnedImportTitle,
               definitionCount(titled: state.baselineTitle, in: store) == 0,
-              definitionCount(titled: state.scheduledImportTitle, in: store) == 1,
-              definitionCount(titled: state.poolImportTitle, in: store) == 1,
-              definitionCount(titled: state.returnedImportTitle, in: store) == 1,
+              definitionCount(
+                  titled: state.scheduledImportTitle,
+                  in: store
+              ) == state.scheduledImportDefinitionCount,
+              definitionCount(
+                  titled: state.poolImportTitle,
+                  in: store
+              ) == state.poolImportDefinitionCount,
+              definitionCount(
+                  titled: state.returnedImportTitle,
+                  in: store
+              ) == state.returnedImportDefinitionCount,
               store.engine.taskPool().contains(where: {
                   $0.definition.title == state.returnedImportTitle
               }),
@@ -459,10 +507,22 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
         }
         let persisted = try persistedEngine()
         guard definitionCount(titled: state.baselineTitle, in: persisted) == 0,
-              definitionCount(titled: state.scheduledImportTitle, in: persisted) == 1,
-              definitionCount(titled: state.poolImportTitle, in: persisted) == 1,
-              definitionCount(titled: state.returnedImportTitle, in: persisted) == 1,
-              definitionCount(titled: Self.retiredImportTitle, in: persisted) == 1,
+              definitionCount(
+                  titled: state.scheduledImportTitle,
+                  in: persisted
+              ) == state.scheduledImportDefinitionCount,
+              definitionCount(
+                  titled: state.poolImportTitle,
+                  in: persisted
+              ) == state.poolImportDefinitionCount,
+              definitionCount(
+                  titled: state.returnedImportTitle,
+                  in: persisted
+              ) == state.returnedImportDefinitionCount,
+              definitionCount(
+                  titled: Self.retiredImportTitle,
+                  in: persisted
+              ) == state.retiredImportDefinitionCount,
               definitionCount(titled: Self.decoyImportTitle, in: persisted) == 0,
               persisted.taskPool().allSatisfy({
                   $0.definition.title != Self.retiredImportTitle
@@ -748,7 +808,7 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
             try canonicalJSON(envelope) == canonicalData
         else {
             throw Failure.failed(
-                "integrity fixture source was not a canonical DataPackage v2 envelope"
+                "integrity fixture source was not a canonical current DataPackage envelope"
             )
         }
         return envelope
@@ -821,7 +881,7 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
             == Self.currentDataPackageFormatVersion
         else {
             throw Failure.failed(
-                "integrity fixture mutation changed DataPackage v2"
+                "integrity fixture mutation changed the current DataPackage version"
             )
         }
         return try canonicalJSON(envelope)
@@ -1133,6 +1193,10 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
 
     private func definitionCount(titled title: String, in engine: NoonmarkEngine) -> Int {
         engine.definitions.values.filter { $0.title == title }.count
+    }
+
+    private func definitionCount(titled title: String, in snapshot: NoonmarkSnapshot) -> Int {
+        snapshot.definitions.filter { $0.title == title }.count
     }
 
     private var decoyURL: URL {

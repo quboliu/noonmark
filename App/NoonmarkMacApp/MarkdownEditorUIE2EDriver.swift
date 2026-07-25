@@ -236,7 +236,8 @@ enum MarkdownEditorUIE2EDriver {
                 return
             }
 
-            replacePasteboard(with: "SENTINEL")
+            let pasteboardChangeCountBeforeCopy =
+                NSPasteboard.general.changeCount
             let copyHandled = performMenuKey(
                 "c",
                 modifiers: .command
@@ -251,22 +252,146 @@ enum MarkdownEditorUIE2EDriver {
                 )
                 return
             }
+            waitForStableCopyPasteboard(
+                in: textView,
+                changeCountBeforeCopy: pasteboardChangeCountBeforeCopy
+            )
+        }
 
-            guard performMenuKey(
+        private func waitForStableCopyPasteboard(
+            in textView: NSTextView,
+            changeCountBeforeCopy: Int,
+            previousChangeCount: Int? = nil,
+            attemptsRemaining: Int = 40
+        ) {
+            let pasteboard = NSPasteboard.general
+            let changeCount = pasteboard.changeCount
+            let value = pasteboard.string(forType: .string)
+            guard value == initialText,
+                  changeCount > changeCountBeforeCopy,
+                  previousChangeCount == changeCount
+            else {
+                retryOrFail(
+                    attemptsRemaining: attemptsRemaining,
+                    message: pasteboardFailure(
+                        operation: "⌘C",
+                        value: value,
+                        changeCount: changeCount,
+                        textView: textView
+                    )
+                ) { [self] nextAttempts in
+                    waitForStableCopyPasteboard(
+                        in: textView,
+                        changeCountBeforeCopy: changeCountBeforeCopy,
+                        previousChangeCount: value == initialText ? changeCount : nil,
+                        attemptsRemaining: nextAttempts
+                    )
+                }
+                return
+            }
+
+            let changeCountBeforeCut = pasteboard.changeCount
+            let cutHandled = performMenuKey(
                 "x",
                 modifiers: .command
-            ), textView.string.isEmpty else {
-                finish("failed: ⌘X 没有通过 responder chain 剪切")
+            )
+            guard cutHandled else {
+                finish(
+                    "failed: ⌘X 没有通过 responder chain 剪切 "
+                        + pasteboardFailure(
+                            operation: "⌘X",
+                            value: pasteboard.string(forType: .string),
+                            changeCount: pasteboard.changeCount,
+                            textView: textView
+                        )
+                )
                 return
             }
-            guard performMenuKey(
-                "v",
-                modifiers: .command
-            ), textView.string == initialText else {
-                finish("failed: ⌘V 没有通过 responder chain 粘贴")
+            waitForStableCutPasteboard(
+                in: textView,
+                changeCountBeforeCut: changeCountBeforeCut
+            )
+        }
+
+        private func waitForStableCutPasteboard(
+            in textView: NSTextView,
+            changeCountBeforeCut: Int,
+            previousChangeCount: Int? = nil,
+            attemptsRemaining: Int = 40
+        ) {
+            let pasteboard = NSPasteboard.general
+            let changeCount = pasteboard.changeCount
+            let value = pasteboard.string(forType: .string)
+            guard textView.string.isEmpty,
+                  value == initialText,
+                  changeCount > changeCountBeforeCut,
+                  previousChangeCount == changeCount
+            else {
+                retryOrFail(
+                    attemptsRemaining: attemptsRemaining,
+                    message: pasteboardFailure(
+                        operation: "⌘X",
+                        value: value,
+                        changeCount: changeCount,
+                        textView: textView
+                    )
+                ) { [self] nextAttempts in
+                    waitForStableCutPasteboard(
+                        in: textView,
+                        changeCountBeforeCut: changeCountBeforeCut,
+                        previousChangeCount: textView.string.isEmpty
+                            && value == initialText ? changeCount : nil,
+                        attemptsRemaining: nextAttempts
+                    )
+                }
                 return
             }
 
+            let pasteHandled = performMenuKey(
+                "v",
+                modifiers: .command
+            )
+            guard pasteHandled else {
+                finish(
+                    "failed: ⌘V 没有通过 responder chain 粘贴 "
+                        + pasteboardFailure(
+                            operation: "⌘V",
+                            value: pasteboard.string(forType: .string),
+                            changeCount: pasteboard.changeCount,
+                            textView: textView
+                        )
+                )
+                return
+            }
+            waitForPastedText(in: textView)
+        }
+
+        private func waitForPastedText(
+            in textView: NSTextView,
+            attemptsRemaining: Int = 40
+        ) {
+            guard textView.string == initialText else {
+                let pasteboard = NSPasteboard.general
+                retryOrFail(
+                    attemptsRemaining: attemptsRemaining,
+                    message: pasteboardFailure(
+                        operation: "⌘V",
+                        value: pasteboard.string(forType: .string),
+                        changeCount: pasteboard.changeCount,
+                        textView: textView
+                    )
+                ) { [self] nextAttempts in
+                    waitForPastedText(
+                        in: textView,
+                        attemptsRemaining: nextAttempts
+                    )
+                }
+                return
+            }
+            continueNativeEditingAfterPaste(in: textView)
+        }
+
+        private func continueNativeEditingAfterPaste(in textView: NSTextView) {
             textView.setSelectedRange(
                 NSRange(location: textView.string.utf16.count, length: 0)
             )
@@ -316,6 +441,18 @@ enum MarkdownEditorUIE2EDriver {
             }
 
             beginOptionTabProbe(in: textView)
+        }
+
+        private func pasteboardFailure(
+            operation: String,
+            value: String?,
+            changeCount: Int,
+            textView: NSTextView
+        ) -> String {
+            "\(operation) pasteboard/responder state did not settle "
+                + "value=\(value ?? "nil") changeCount=\(changeCount) "
+                + "text=\(textView.string) selection=\(textView.selectedRange()) "
+                + "firstResponder=\(String(describing: textView.window?.firstResponder))"
         }
 
         private func beginOptionTabProbe(in textView: NSTextView) {
@@ -500,11 +637,6 @@ enum MarkdownEditorUIE2EDriver {
             case "z": 6
             default: 0
             }
-        }
-
-        private func replacePasteboard(with value: String) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(value, forType: .string)
         }
 
         private func menuSnapshot() -> String {

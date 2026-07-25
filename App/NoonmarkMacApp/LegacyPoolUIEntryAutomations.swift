@@ -463,6 +463,9 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
                 }
             )
         case .zhulongWorkflows:
+            var preferences = store.zhulongFeaturePreferences
+            preferences.conversationPermissionCeiling.dataReading = .ask
+            store.zhulongFeaturePreferences = preferences
             ZhulongWorkflowE2EUIInteractionDriver.start(resultURL: resultURL)
         }
     }

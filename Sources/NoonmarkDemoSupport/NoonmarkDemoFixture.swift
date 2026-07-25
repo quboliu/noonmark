@@ -348,6 +348,11 @@ private struct DemoStory {
             labels: [("体验", "#7C5CFF")]
         )
         try classify(
+            taskIDs.unfinishedHandoff,
+            category: ("协作", "#E0851B"),
+            labels: [("交接", "#2A6FDB")]
+        )
+        try classify(
             taskIDs.plannedPool,
             category: ("复盘", "#E0851B"),
             labels: [("发布", "#E0851B")]

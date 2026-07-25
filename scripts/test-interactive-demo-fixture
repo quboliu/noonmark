@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/runtime-evidence
+
 configuration="${1:-debug}"
 app_path="dist/NoonmarkDemo.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacAppDemo"
+app_executable_name="NoonmarkMacAppDemo"
 
 scripts/build-mac-app "$configuration" demo >/dev/null
 mkdir -p "$PWD/artifacts"
@@ -11,8 +14,10 @@ test_root="$(mktemp -d "$PWD/artifacts/demo-fixture-test.XXXXXX")"
 database_path="$test_root/Noonmark.sqlite"
 result_path="$test_root/fixture-manifest.json"
 app_log="$test_root/app.log"
+runtime_console_log="$test_root/runtime-console.log"
 
 cleanup() {
+  runtime_evidence_stop_console_capture >/dev/null 2>&1 || true
   if [[ -n "${app_pid:-}" ]] \
       && kill -0 "$app_pid" >/dev/null 2>&1; then
     kill -TERM "$app_pid" >/dev/null 2>&1 || true
@@ -23,6 +28,9 @@ cleanup() {
 trap cleanup EXIT
 
 app_pid=""
+runtime_evidence_start_console_capture \
+  "$app_executable_name" \
+  "$runtime_console_log"
 "$app_executable" \
   --data-url "$database_path" \
   --e2e-fixed-instant 2026-07-24T22:00:00Z \
@@ -65,6 +73,7 @@ for expected in \
   '"dailyReviewReceiptCount" : 1' \
   '"dayTodoMixedStatusSectionCount" : 1' \
   '"dayTodoGroupingPresentationVerified" : true' \
+  '"taskCollectionCategoryVisibilityVerified" : true' \
   '"singleDayCompletedTaskCount" : 5' \
   '"multiDayCompletedTaskCount" : 2' \
   '"completedPoolRowHierarchyVerified" : true' \
@@ -84,6 +93,21 @@ for expected in \
   fi
 done
 
+for page in pool day unfinished completed; do
+  screenshot="$test_root/task-collection-$page.png"
+  if [[ ! -s "$screenshot" ]]; then
+    echo "task collection screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+  width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
+  height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
+  if [[ -z "$width" || -z "$height" \
+        || "$width" -lt 600 || "$height" -lt 400 ]]; then
+    echo "invalid task collection screenshot size: $screenshot" >&2
+    exit 1
+  fi
+done
+
 if [[ ! -s "$database_path" ]]; then
   echo "demo fixture SQLite database was not persisted" >&2
   exit 1
@@ -98,5 +122,11 @@ if [[ "$sidecar_count" != "5" ]]; then
   echo "expected 5 encrypted Zhulong sessions, found $sidecar_count" >&2
   exit 1
 fi
+
+runtime_evidence_stop_console_capture
+runtime_evidence_assert_clean_logs \
+  "interactive demo fixture" \
+  "$app_log" \
+  "$runtime_console_log"
 
 echo "interactive demo fixture: ok"

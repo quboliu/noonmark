@@ -246,24 +246,16 @@ struct HorizontalPageNavigationE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func capture(_ window: NSWindow) throws {
-        guard let contentView = window.contentView,
-              contentView.bounds.width > 0,
-              contentView.bounds.height > 0,
-              let bitmap = contentView.bitmapImageRepForCachingDisplay(
-                  in: contentView.bounds
-              )
-        else {
-            throw Failure.failed("滑动方向设置截图缓冲区不可用")
+        do {
+            try AppE2EScreenshot.captureContent(
+                of: window,
+                to: screenshotURL
+            )
+        } catch {
+            throw Failure.failed(
+                "滑动方向设置截图失败：\(error.localizedDescription)"
+            )
         }
-        window.displayIfNeeded()
-        contentView.cacheDisplay(in: contentView.bounds, to: bitmap)
-        guard let data = bitmap.representation(
-            using: .png,
-            properties: [:]
-        ) else {
-            throw Failure.failed("滑动方向设置截图编码失败")
-        }
-        try data.write(to: screenshotURL, options: .atomic)
     }
 
     private func targetCoordinate(

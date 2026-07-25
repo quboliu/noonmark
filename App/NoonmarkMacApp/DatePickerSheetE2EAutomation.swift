@@ -182,26 +182,14 @@ struct DatePickerSheetE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func captureSheet(_ window: NSWindow) throws {
-        guard let contentView = window.contentView,
-              contentView.bounds.width > 0,
-              contentView.bounds.height > 0,
-              let bitmap = contentView.bitmapImageRepForCachingDisplay(
-                  in: contentView.bounds
-              )
-        else {
-            throw Failure.failed("date picker sheet could not create a screenshot buffer")
-        }
-        window.displayIfNeeded()
-        contentView.cacheDisplay(in: contentView.bounds, to: bitmap)
-        guard let data = bitmap.representation(using: .png, properties: [:])
-        else {
-            throw Failure.failed("date picker sheet could not encode its screenshot")
-        }
         do {
-            try data.write(to: screenshotURL, options: .atomic)
+            try AppE2EScreenshot.captureContent(
+                of: window,
+                to: screenshotURL
+            )
         } catch {
             throw Failure.failed(
-                "date picker sheet screenshot write failed: "
+                "date picker sheet screenshot failed: "
                     + error.localizedDescription
             )
         }

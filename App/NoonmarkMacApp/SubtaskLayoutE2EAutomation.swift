@@ -211,20 +211,17 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
 
     private func captureMainWindow(to url: URL) throws {
         guard let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
-              let view = window.contentView,
-              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+              let view = window.contentView
         else {
-            throw Failure.failed("无法取得真实 App 主窗口截图缓冲区")
+            throw Failure.failed("无法取得真实 App 主窗口截图内容")
         }
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        guard let data = bitmap.representation(using: .png, properties: [:]) else {
-            throw Failure.failed("无法编码真实 App 主窗口截图")
+        do {
+            try AppE2EScreenshot.capture(view, to: url)
+        } catch {
+            throw Failure.failed(
+                "无法捕获真实 App 主窗口截图：\(error.localizedDescription)"
+            )
         }
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try data.write(to: url, options: .atomic)
     }
 
     private func writeResult(_ value: String) throws {

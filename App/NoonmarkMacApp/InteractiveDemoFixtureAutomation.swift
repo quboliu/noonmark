@@ -1,3 +1,4 @@
+import AppKit
 import CryptoKit
 import Foundation
 import NoonmarkAI
@@ -266,28 +267,225 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             return
         }
 
-        do {
-            let result = try manifest(
-                fixture: fixture,
-                engine: engine,
-                sessions: sessions,
-                store: store,
-                presentationVerification:
-                InteractiveDemoPresentationVerification(
-                    scopeAuthorizationUIVerified: true,
-                    taskPoolStatisticsPresentationVerified: true,
-                    taskPoolProviderBoundaryVerified: true,
-                    taskPoolProviderReportPresentationVerified:
-                    analysisReportContractVerified,
-                    zhulongHeaderComposerHierarchyVerified: true
-                )
+        let presentationVerification =
+            InteractiveDemoPresentationVerification(
+                scopeAuthorizationUIVerified: true,
+                taskPoolStatisticsPresentationVerified: true,
+                taskPoolProviderBoundaryVerified: true,
+                taskPoolProviderReportPresentationVerified:
+                analysisReportContractVerified,
+                taskCollectionCategoryVisibilityVerified: false,
+                zhulongHeaderComposerHierarchyVerified: true
             )
-            store.page = .day
-            store.selectedDate = fixture.anchorDate
-            try write(result)
-        } catch {
-            finishWithFailure(error, on: store)
+        let collectionCheckContext = DemoCollectionCheckContext(
+            fixture: fixture,
+            engine: engine,
+            sessions: sessions,
+            store: store,
+            presentationVerification: presentationVerification,
+            cases: categoryVerificationCases
+        )
+        verifyTaskCollectionCategoryVisibility(
+            context: collectionCheckContext,
+            index: 0,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func verifyTaskCollectionCategoryVisibility(
+        context: DemoCollectionCheckContext,
+        index: Int,
+        remainingAttempts: Int
+    ) {
+        guard context.cases.indices.contains(index),
+              remainingAttempts > 0
+        else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError
+                    .presentationContractFailed,
+                on: context.store
+            )
+            return
         }
+        let verificationCase = context.cases[index]
+        guard context.store.page == verificationCase.page else {
+            retryTaskCollectionCategoryVisibility(
+                context: context,
+                index: index,
+                remainingAttempts: remainingAttempts - 1
+            )
+            return
+        }
+
+        let sectionIdentifiers = AppViewTreeE2E.identifiers(
+            withPrefix: "task-collection.section.category."
+        )
+        let rowIdentifiers = taskCollectionRowIdentifiers(
+            prefixes: verificationCase.rowPrefixes
+        )
+        let categoryIdentifiers = rowIdentifiers?.filter {
+            $0.hasSuffix(".category")
+        }
+        let labelIdentifiers = rowIdentifiers?.filter {
+            $0.contains(".label.")
+        }
+        let categoryPlacementIsValid =
+            switch verificationCase.organization {
+            case .flat:
+                sectionIdentifiers?.isEmpty == true
+                    && categoryIdentifiers?.isEmpty == false
+            case .grouped:
+                sectionIdentifiers?.isEmpty == false
+                    && categoryIdentifiers?.isEmpty == true
+            }
+        guard AppViewTreeE2E.activateMainWindow(),
+              labelIdentifiers?.isEmpty == false,
+              categoryPlacementIsValid
+        else {
+            retryTaskCollectionCategoryVisibility(
+                context: context,
+                index: index,
+                remainingAttempts: remainingAttempts - 1
+            )
+            return
+        }
+        do {
+            try captureTaskCollectionScreenshot(verificationCase)
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+
+        let nextIndex = index + 1
+        guard context.cases.indices.contains(nextIndex) else {
+            do {
+                let result = try manifest(
+                    fixture: context.fixture,
+                    engine: context.engine,
+                    sessions: context.sessions,
+                    store: context.store,
+                    presentationVerification:
+                    context.presentationVerification
+                        .verifyingTaskCollectionCategoryVisibility()
+                )
+                guard AppViewTreeE2E.click(
+                    identifier: "sidebar.nav.day"
+                ) else {
+                    throw InteractiveDemoFixtureError
+                        .presentationContractFailed
+                }
+                context.store.selectedDate = context.fixture.anchorDate
+                try write(result)
+            } catch {
+                finishWithFailure(error, on: context.store)
+            }
+            return
+        }
+        guard AppViewTreeE2E.click(
+            identifier: context.cases[nextIndex]
+                .sidebarNavigationIdentifier
+        ) else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError
+                    .presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        retryTaskCollectionCategoryVisibility(
+            context: context,
+            index: nextIndex,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func retryTaskCollectionCategoryVisibility(
+        context: DemoCollectionCheckContext,
+        index: Int,
+        remainingAttempts: Int
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            verifyTaskCollectionCategoryVisibility(
+                context: context,
+                index: index,
+                remainingAttempts: remainingAttempts
+            )
+        }
+    }
+
+    @MainActor
+    private func taskCollectionRowIdentifiers(
+        prefixes: [String]
+    ) -> Set<String>? {
+        var result = Set<String>()
+        for prefix in prefixes {
+            guard let identifiers = AppViewTreeE2E.identifiers(
+                withPrefix: prefix
+            ) else {
+                return nil
+            }
+            result.formUnion(identifiers)
+        }
+        return result
+    }
+
+    @MainActor
+    private func captureTaskCollectionScreenshot(
+        _ verificationCase: DemoCollectionCheckCase
+    ) throws {
+        guard let window = NSApp.windows.first(where: {
+            $0 is NoonmarkWindow
+                && $0.isVisible
+                && $0.isMiniaturized == false
+        })
+        else {
+            throw InteractiveDemoFixtureError
+                .presentationContractFailed
+        }
+        do {
+            try AppE2EScreenshot.captureContent(
+                of: window,
+                to: resultURL.deletingLastPathComponent()
+                    .appendingPathComponent(
+                        verificationCase.screenshotFileName
+                    )
+            )
+        } catch {
+            throw InteractiveDemoFixtureError
+                .presentationContractFailed
+        }
+    }
+
+    private var categoryVerificationCases: [DemoCollectionCheckCase] {
+        [
+            DemoCollectionCheckCase(
+                page: .pool,
+                rowPrefixes: ["classification.pool-row."],
+                organization: .grouped
+            ),
+            DemoCollectionCheckCase(
+                page: .day,
+                rowPrefixes: ["classification.day-row."],
+                organization: .grouped
+            ),
+            DemoCollectionCheckCase(
+                page: .unfinished,
+                rowPrefixes: ["classification.unfinished-row."],
+                organization: .flat
+            ),
+            DemoCollectionCheckCase(
+                page: .completed,
+                rowPrefixes: [
+                    "classification.completed-row.",
+                    "classification.completed-subtask-row."
+                ],
+                organization: .grouped
+            )
+        ]
     }
 
     @MainActor
@@ -997,6 +1195,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               presentationVerification
               .taskPoolProviderReportPresentationVerified,
               presentationVerification
+              .taskCollectionCategoryVisibilityVerified,
+              presentationVerification
               .zhulongHeaderComposerHierarchyVerified,
               engine.getDayTodo(date: fixture.anchorDate).traces
               .isEmpty == false
@@ -1037,6 +1237,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             taskPoolProviderReportPresentationVerified:
             presentationVerification
                 .taskPoolProviderReportPresentationVerified,
+            taskCollectionCategoryVisibilityVerified:
+            presentationVerification
+                .taskCollectionCategoryVisibilityVerified,
             zhulongHeaderComposerHierarchyVerified:
             presentationVerification
                 .zhulongHeaderComposerHierarchyVerified,
@@ -1081,7 +1284,48 @@ private struct InteractiveDemoPresentationVerification {
     let taskPoolStatisticsPresentationVerified: Bool
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
+    let taskCollectionCategoryVisibilityVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool
+
+    func verifyingTaskCollectionCategoryVisibility() -> Self {
+        Self(
+            scopeAuthorizationUIVerified:
+            scopeAuthorizationUIVerified,
+            taskPoolStatisticsPresentationVerified:
+            taskPoolStatisticsPresentationVerified,
+            taskPoolProviderBoundaryVerified:
+            taskPoolProviderBoundaryVerified,
+            taskPoolProviderReportPresentationVerified:
+            taskPoolProviderReportPresentationVerified,
+            taskCollectionCategoryVisibilityVerified: true,
+            zhulongHeaderComposerHierarchyVerified:
+            zhulongHeaderComposerHierarchyVerified
+        )
+    }
+}
+
+private struct DemoCollectionCheckContext {
+    let fixture: NoonmarkDemoFixture
+    let engine: NoonmarkEngine
+    let sessions: [ZhulongSession]
+    let store: NoonmarkStore
+    let presentationVerification:
+        InteractiveDemoPresentationVerification
+    let cases: [DemoCollectionCheckCase]
+}
+
+private struct DemoCollectionCheckCase {
+    let page: NoonmarkStore.Page
+    let rowPrefixes: [String]
+    let organization: TaskCollectionOrganization
+
+    var sidebarNavigationIdentifier: String {
+        "sidebar.nav.\(page.rawValue)"
+    }
+
+    var screenshotFileName: String {
+        "task-collection-\(page.rawValue).png"
+    }
 }
 
 private struct InteractiveDemoManifest: Codable {
@@ -1103,6 +1347,7 @@ private struct InteractiveDemoManifest: Codable {
     let taskPoolStatisticsPresentationVerified: Bool
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
+    let taskCollectionCategoryVisibilityVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool
     let persistedDatabasePath: String
 }

@@ -4,6 +4,21 @@ import NoonmarkMacRuntime
 import NoonmarkMacUIContract
 import SwiftUI
 
+private extension EnvironmentValues {
+    @Entry var taskRowCategoryIsVisible: Bool = true
+}
+
+extension View {
+    func taskCollectionCategoryVisibility(
+        _ preference: TaskCollectionPresentationPreference
+    ) -> some View {
+        environment(
+            \.taskRowCategoryIsVisible,
+            preference.showsCategoryInItemRows
+        )
+    }
+}
+
 struct TaskClassificationAccessibilityNamespace: Hashable {
     let rawValue: String
 
@@ -37,14 +52,16 @@ struct TaskClassificationBadges: View {
     let display: TaskClassificationDisplay
     let taskTitle: String
     let accessibilityNamespace: TaskClassificationAccessibilityNamespace
-    var showsCategory = true
 
     @EnvironmentObject private var store: NoonmarkStore
+    @Environment(\.taskRowCategoryIsVisible)
+    private var taskRowCategoryIsVisible
 
     @State private var isShowingAllLabels = false
 
     private var hasClassification: Bool {
-        (showsCategory && display.category != nil) || display.labels.isEmpty == false
+        (taskRowCategoryIsVisible && display.category != nil)
+            || display.labels.isEmpty == false
     }
 
     private var copy: TaskClassificationBadgesCopy {
@@ -90,7 +107,7 @@ struct TaskClassificationBadges: View {
         let overflowCount = max(0, display.labels.count - visibleLabels.count)
 
         return HStack(spacing: 6) {
-            if showsCategory, let category = display.category {
+            if taskRowCategoryIsVisible, let category = display.category {
                 TaskGroupMarker(
                     category: category,
                     accessibilityIdentifier: accessibilityNamespace.categoryIdentifier,

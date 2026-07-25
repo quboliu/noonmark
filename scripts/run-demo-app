@@ -95,6 +95,14 @@ if [[ ! -f "$result_path" ]] \
   exit 1
 fi
 
+for page in pool day unfinished completed; do
+  screenshot="$demo_root/task-collection-$page.png"
+  if [[ ! -s "$screenshot" ]]; then
+    echo "interactive demo task collection screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+done
+
 for _ in {1..20}; do
   if ! kill -0 "$target_pid" >/dev/null 2>&1; then
     echo "interactive demo app exited after fixture installation" >&2

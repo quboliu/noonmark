@@ -618,22 +618,19 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func captureMainWindow() throws {
-        guard let window = NSApp.keyWindow,
-              let contentView = window.contentView,
-              contentView.bounds.width > 0,
-              contentView.bounds.height > 0,
-              let bitmap = contentView.bitmapImageRepForCachingDisplay(
-                  in: contentView.bounds
-              )
-        else {
-            throw Failure.failed("Day Todo screenshot buffer was unavailable")
+        guard let window = NSApp.keyWindow else {
+            throw Failure.failed("Day Todo screenshot window was unavailable")
         }
-        window.displayIfNeeded()
-        contentView.cacheDisplay(in: contentView.bounds, to: bitmap)
-        guard let data = bitmap.representation(using: .png, properties: [:]) else {
-            throw Failure.failed("Day Todo screenshot encoding failed")
+        do {
+            try AppE2EScreenshot.captureContent(
+                of: window,
+                to: screenshotURL
+            )
+        } catch {
+            throw Failure.failed(
+                "Day Todo screenshot failed: \(error.localizedDescription)"
+            )
         }
-        try data.write(to: screenshotURL, options: .atomic)
     }
 
     private func editTitle(

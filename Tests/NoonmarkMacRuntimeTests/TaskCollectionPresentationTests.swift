@@ -4,6 +4,22 @@ import XCTest
 
 @MainActor
 final class TaskCollectionPresentationTests: XCTestCase {
+    func testGroupedOrganizationHidesRowCategoryAndFlatOrganizationShowsIt() {
+        let grouped = TaskCollectionPresentationPreference(
+            organization: .grouped,
+            sortKey: .time,
+            direction: .ascending
+        )
+        let flat = TaskCollectionPresentationPreference(
+            organization: .flat,
+            sortKey: .time,
+            direction: .ascending
+        )
+
+        XCTAssertFalse(grouped.showsCategoryInItemRows)
+        XCTAssertTrue(flat.showsCategoryInItemRows)
+    }
+
     func testDefaultsPreserveEachPageCurrentPresentation() {
         XCTAssertEqual(
             TaskCollectionPresentationPreference.defaultValue(for: .dayTodo),

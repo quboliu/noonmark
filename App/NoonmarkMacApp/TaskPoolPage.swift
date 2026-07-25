@@ -139,6 +139,7 @@ struct TaskPoolPage: View {
                 .padding(.bottom, 20)
             }
         }
+        .taskCollectionCategoryVisibility(presentationPreference)
         .onChange(of: presentationPreference) { _, preference in
             presentationRepository.save(preference, for: .taskPool)
         }
@@ -192,8 +193,7 @@ struct PoolTaskRow: View {
                     accessibilityNamespace: TaskClassificationAccessibilityNamespace(
                         surface: "pool-row",
                         instanceID: task.chain.id.description
-                    ),
-                    showsCategory: false
+                    )
                 )
             }
             AutomaticTaskClassificationStatusView(

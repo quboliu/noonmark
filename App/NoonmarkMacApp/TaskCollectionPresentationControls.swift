@@ -60,6 +60,15 @@ struct TaskCollectionSectionHeader: View {
         }
         .padding(.top, 12)
         .padding(.bottom, 4)
+        .background {
+            if let category = section.category {
+                AppE2EViewAnchor(
+                    identifier:
+                    "task-collection.section.category.\(category.id)",
+                    verificationText: category.name
+                )
+            }
+        }
     }
 }
 

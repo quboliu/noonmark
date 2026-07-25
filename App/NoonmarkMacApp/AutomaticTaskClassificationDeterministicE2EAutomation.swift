@@ -1948,26 +1948,14 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
         _ window: NSWindow,
         to screenshotURL: URL
     ) throws {
-        guard let contentView = window.contentView,
-              contentView.bounds.width > 0,
-              contentView.bounds.height > 0,
-              let bitmap = contentView.bitmapImageRepForCachingDisplay(
-                  in: contentView.bounds
-              )
-        else {
-            throw failure("status-surface screenshot buffer was unavailable")
-        }
-        window.displayIfNeeded()
-        contentView.cacheDisplay(in: contentView.bounds, to: bitmap)
-        guard let data = bitmap.representation(using: .png, properties: [:])
-        else {
-            throw failure("status-surface screenshot encoding failed")
-        }
         do {
-            try data.write(to: screenshotURL, options: .atomic)
+            try AppE2EScreenshot.captureContent(
+                of: window,
+                to: screenshotURL
+            )
         } catch {
             throw failure(
-                "status-surface screenshot write failed: "
+                "status-surface screenshot capture failed: "
                     + error.localizedDescription
             )
         }

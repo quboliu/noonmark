@@ -47,6 +47,10 @@ public struct TaskCollectionPresentationPreference: Codable, Equatable, Sendable
             Self(organization: .flat, sortKey: .time, direction: .descending)
         }
     }
+
+    public var showsCategoryInItemRows: Bool {
+        organization == .flat
+    }
 }
 
 public enum TaskCollectionCategoryApproval: String, Codable, Equatable, Sendable {

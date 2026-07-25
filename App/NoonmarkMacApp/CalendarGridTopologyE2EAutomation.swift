@@ -27,7 +27,7 @@ struct CalendarGridTopologyE2EAutomation: LaunchAutomationRunnable {
             month: 8,
             day: 22
         )
-        store.isDetailRailExpanded = false
+        store.isDetailRailExpanded = true
         CalendarGridTopologyE2EDriver.start(
             store: store,
             resultURL: resultURL
@@ -46,6 +46,7 @@ private enum CalendarGridTopologyE2EDriver {
         private let store: NoonmarkStore
         private let resultURL: URL
         private let expectedSlotCount = 42
+        private let columnCount = 7
         private var failures: [String] = []
 
         init(store: NoonmarkStore, resultURL: URL) {
@@ -67,9 +68,13 @@ private enum CalendarGridTopologyE2EDriver {
                     identifier: "calendar.grid-slot.\($0).trailing-boundary"
                 )
             }
+            let expectedBottomBoundaryCount =
+                expectedSlotCount - columnCount
+            let expectedTrailingBoundaryCount =
+                expectedSlotCount - expectedSlotCount / columnCount
             guard slots.count == expectedSlotCount,
-                  bottomBoundaries.count == expectedSlotCount,
-                  trailingBoundaries.count == expectedSlotCount
+                  bottomBoundaries.count == expectedBottomBoundaryCount,
+                  trailingBoundaries.count == expectedTrailingBoundaryCount
             else {
                 retry(attemptsRemaining) {
                     "2026 年 8 月网格没有形成 42 个完整槽位："
@@ -80,25 +85,48 @@ private enum CalendarGridTopologyE2EDriver {
             }
 
             verifyCompleteGrid(
-                slots: slots,
-                bottomBoundaries: bottomBoundaries,
-                trailingBoundaries: trailingBoundaries
+                slots: slots
             )
+            verifyContainerEdgeAlignment(slots: slots)
             finish()
         }
 
+        private func verifyContainerEdgeAlignment(slots: [NSView]) {
+            guard let middlePane = AppViewTreeE2E.view(
+                identifier: "shell.middle-pane"
+            ) else {
+                failures.append("日历缺少主区域几何锚点")
+                return
+            }
+            let middleFrame = AppViewTreeE2E.frameInWindow(for: middlePane)
+            let slotFrames = slots.map(AppViewTreeE2E.frameInWindow(for:))
+            let trailingEdge = (0..<6)
+                .map { slotFrames[$0 * 7 + 6].maxX }
+                .max() ?? 0
+            let bottomEdge = (35..<42)
+                .map { slotFrames[$0].minY }
+                .min() ?? 0
+
+            if abs(trailingEdge - middleFrame.maxX) > 1.5 {
+                failures.append(
+                    "日历最右列没有借主区域右边界收口："
+                        + "grid=\(trailingEdge),middle=\(middleFrame.maxX)"
+                )
+            }
+            if abs(bottomEdge - middleFrame.minY) > 1.5 {
+                failures.append(
+                    "日历最后一行没有借主区域底边界收口："
+                        + "grid=\(bottomEdge),middle=\(middleFrame.minY)"
+                )
+            }
+        }
+
         private func verifyCompleteGrid(
-            slots: [NSView],
-            bottomBoundaries: [NSView],
-            trailingBoundaries: [NSView]
+            slots: [NSView]
         ) {
             let slotFrames = slots.map(AppViewTreeE2E.frameInWindow(for:))
-            let bottomFrames = bottomBoundaries.map(
-                AppViewTreeE2E.frameInWindow(for:)
-            )
-            let trailingFrames = trailingBoundaries.map(
-                AppViewTreeE2E.frameInWindow(for:)
-            )
+            var bottomFrames: [Int: NSRect] = [:]
+            var trailingFrames: [Int: NSRect] = [:]
 
             if AppViewTreeE2E.view(
                 identifier: "calendar.grid-slot.\(expectedSlotCount)"
@@ -108,24 +136,20 @@ private enum CalendarGridTopologyE2EDriver {
 
             for index in 0..<expectedSlotCount {
                 let slot = slotFrames[index]
-                let bottom = bottomFrames[index]
-                let trailing = trailingFrames[index]
                 if slot.width <= 0 || slot.height < 88 {
                     failures.append("日历槽位 \(index) 尺寸无效：\(slot)")
                 }
-                let hasCompleteBottom = abs(bottom.width - slot.width) <= 1.5
-                    && abs(bottom.minY - slot.minY) <= 1.5
-                    && abs(bottom.height - 1) <= 1
-                if hasCompleteBottom == false {
-                    failures.append("日历槽位 \(index) 缺少完整底边：\(bottom)")
+                if let bottom = verifiedBottomBoundary(
+                    at: index,
+                    slot: slot
+                ) {
+                    bottomFrames[index] = bottom
                 }
-                let hasCompleteTrailing = abs(
-                    trailing.height - slot.height
-                ) <= 1.5
-                    && abs(trailing.maxX - slot.maxX) <= 1.5
-                    && abs(trailing.width - 1) <= 1
-                if hasCompleteTrailing == false {
-                    failures.append("日历槽位 \(index) 缺少完整右边：\(trailing)")
+                if let trailing = verifiedTrailingBoundary(
+                    at: index,
+                    slot: slot
+                ) {
+                    trailingFrames[index] = trailing
                 }
             }
 
@@ -136,22 +160,92 @@ private enum CalendarGridTopologyE2EDriver {
             )
         }
 
+        private func verifiedBottomBoundary(
+            at index: Int,
+            slot: NSRect
+        ) -> NSRect? {
+            let boundary = AppViewTreeE2E.view(
+                identifier: "calendar.grid-slot.\(index).bottom-boundary"
+            )
+            let shouldShow = index < expectedSlotCount - columnCount
+            guard shouldShow else {
+                if boundary != nil {
+                    failures.append(
+                        "日历最后一行槽位 \(index) 重复绘制外部底边"
+                    )
+                }
+                return nil
+            }
+            guard let boundary else {
+                failures.append("日历槽位 \(index) 缺少内部底边")
+                return nil
+            }
+            let frame = AppViewTreeE2E.frameInWindow(for: boundary)
+            let isComplete = abs(frame.width - slot.width) <= 1.5
+                && abs(frame.minY - slot.minY) <= 1.5
+                && abs(frame.height - 1) <= 1
+            if isComplete == false {
+                failures.append("日历槽位 \(index) 缺少完整底边：\(frame)")
+            }
+            return frame
+        }
+
+        private func verifiedTrailingBoundary(
+            at index: Int,
+            slot: NSRect
+        ) -> NSRect? {
+            let boundary = AppViewTreeE2E.view(
+                identifier: "calendar.grid-slot.\(index).trailing-boundary"
+            )
+            let shouldShow = index % columnCount < columnCount - 1
+            guard shouldShow else {
+                if boundary != nil {
+                    failures.append(
+                        "日历最右列槽位 \(index) 重复绘制外部右边"
+                    )
+                }
+                return nil
+            }
+            guard let boundary else {
+                failures.append("日历槽位 \(index) 缺少内部右边")
+                return nil
+            }
+            let frame = AppViewTreeE2E.frameInWindow(for: boundary)
+            let isComplete = abs(frame.height - slot.height) <= 1.5
+                && abs(frame.maxX - slot.maxX) <= 1.5
+                && abs(frame.width - 1) <= 1
+            if isComplete == false {
+                failures.append("日历槽位 \(index) 缺少完整右边：\(frame)")
+            }
+            return frame
+        }
+
         private func verifyMissingEdgeRegression(
             slotFrames: [NSRect],
-            bottomFrames: [NSRect],
-            trailingFrames: [NSRect]
+            bottomFrames: [Int: NSRect],
+            trailingFrames: [Int: NSRect]
         ) {
             let dayOneSlot = slotFrames[5]
-            if abs(trailingFrames[4].midX - dayOneSlot.minX) > 1.5 {
-                failures.append("1 号左侧没有由前置空白槽位提供连续边界")
+            if let leadingBoundary = trailingFrames[4] {
+                let isMisaligned =
+                    abs(leadingBoundary.midX - dayOneSlot.minX) > 1.5
+                if isMisaligned {
+                    failures.append(
+                        "1 号左侧没有由前置空白槽位提供连续边界"
+                    )
+                }
             }
 
             for leadingIndex in 0...4 {
                 let nextRowSlot = slotFrames[leadingIndex + 7]
-                if abs(bottomFrames[leadingIndex].midY - nextRowSlot.maxY) > 1.5 {
-                    failures.append(
-                        "\(leadingIndex + 3) 号上方没有由前置空白槽位提供连续边界"
-                    )
+                if let upperBoundary = bottomFrames[leadingIndex] {
+                    let isMisaligned =
+                        abs(upperBoundary.midY - nextRowSlot.maxY) > 1.5
+                    if isMisaligned {
+                        failures.append(
+                            "\(leadingIndex + 3) 号上方没有由前置空白槽位提供连续边界"
+                        )
+                    }
                 }
             }
 

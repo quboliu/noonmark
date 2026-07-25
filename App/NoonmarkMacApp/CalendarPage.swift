@@ -67,6 +67,7 @@ struct CalendarPage: View {
                     }
                 }
             }
+            .padding(.trailing, 18)
 
             Text(store.copy.calendarSubtitle)
                 .font(.noonmarkSystem(size: 12))
@@ -103,6 +104,13 @@ struct CalendarPage: View {
                         calendarGrid.slots,
                         id: \.index
                     ) { slot in
+                        let showsBottomBoundary =
+                            slot.index < calendarGrid.slots.count
+                                - MacUICalendarGridLayout.columnCount
+                        let showsTrailingBoundary =
+                            slot.index
+                                % MacUICalendarGridLayout.columnCount
+                                < MacUICalendarGridLayout.columnCount - 1
                         Group {
                             switch slot.content {
                             case .blank:
@@ -121,7 +129,9 @@ struct CalendarPage: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: rowHeight)
                         .calendarGridSlotSurface(
-                            identifier: "calendar.grid-slot.\(slot.index)"
+                            identifier: "calendar.grid-slot.\(slot.index)",
+                            showsBottomBoundary: showsBottomBoundary,
+                            showsTrailingBoundary: showsTrailingBoundary
                         )
                         .background {
                             AppE2EViewAnchor(
@@ -135,8 +145,7 @@ struct CalendarPage: View {
             .padding(.top, 14)
         }
         .padding(.top, 16)
-        .padding(.horizontal, 18)
-        .padding(.bottom, 18)
+        .padding(.leading, 18)
         .background {
             ZStack {
                 DateNavigationKeyboardFocusBridge(
@@ -290,35 +299,51 @@ struct CalendarCell: View {
 
 private struct CalendarGridSlotSurface: ViewModifier {
     let identifier: String
+    let showsBottomBoundary: Bool
+    let showsTrailingBoundary: Bool
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(Theme.line)
-                    .frame(height: 1)
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: "\(identifier).bottom-boundary"
-                        )
-                    }
+                if showsBottomBoundary {
+                    Rectangle()
+                        .fill(Theme.line)
+                        .frame(height: 1)
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "\(identifier).bottom-boundary"
+                            )
+                        }
+                }
             }
             .overlay(alignment: .trailing) {
-                Rectangle()
-                    .fill(Theme.line)
-                    .frame(width: 1)
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: "\(identifier).trailing-boundary"
-                        )
-                    }
+                if showsTrailingBoundary {
+                    Rectangle()
+                        .fill(Theme.line)
+                        .frame(width: 1)
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "\(identifier).trailing-boundary"
+                            )
+                        }
+                }
             }
     }
 }
 
 private extension View {
-    func calendarGridSlotSurface(identifier: String) -> some View {
-        modifier(CalendarGridSlotSurface(identifier: identifier))
+    func calendarGridSlotSurface(
+        identifier: String,
+        showsBottomBoundary: Bool,
+        showsTrailingBoundary: Bool
+    ) -> some View {
+        modifier(
+            CalendarGridSlotSurface(
+                identifier: identifier,
+                showsBottomBoundary: showsBottomBoundary,
+                showsTrailingBoundary: showsTrailingBoundary
+            )
+        )
     }
 }
 

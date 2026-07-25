@@ -112,6 +112,7 @@ public enum MacUICalendarGridLayout {
     public static let minimumRowCount = 5
     public static let completesTrailingBlankSlots = true
     public static let blankSlotsRenderGridBoundaries = true
+    public static let outermostSlotsDeferToContainerBoundaries = true
 }
 
 public enum MacUIDatePickerLayout {

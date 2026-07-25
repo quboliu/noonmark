@@ -34,6 +34,9 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUICalendarGridLayout.minimumRowCount, 5)
         XCTAssertTrue(MacUICalendarGridLayout.completesTrailingBlankSlots)
         XCTAssertTrue(MacUICalendarGridLayout.blankSlotsRenderGridBoundaries)
+        XCTAssertTrue(
+            MacUICalendarGridLayout.outermostSlotsDeferToContainerBoundaries
+        )
     }
 
     func testSettingsWindowSidebarKeepsLocalizedSectionTitlesReadable() {

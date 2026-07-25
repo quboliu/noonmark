@@ -7,6 +7,165 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let today = LocalDate("2026-07-05")
 
+    func testOneSyncDrainsMoreThanOneInternalUploadBatch() async throws {
+        let databaseURL = makeDatabaseURL("drain-upload-batches")
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let transport = InMemorySyncTransport()
+        let engine = NoonmarkEngine()
+
+        for index in 1 ... 51 {
+            _ = try engine.createPoolTask(
+                title: "待同步任务 \(index)",
+                now: now.addingTimeInterval(Double(index))
+            )
+        }
+        try repository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("mac-batch"),
+            changedAt: now.addingTimeInterval(100)
+        )
+
+        let result = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(200))
+
+        XCTAssertEqual(result.upload.uploadedCount, 102)
+        XCTAssertEqual(
+            result.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 51, updatedTaskCount: 0)
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .pendingUpload).isEmpty
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .failed).isEmpty
+        )
+    }
+
+    func testSyncReportsUniqueNewAndUpdatedTasksAcrossUploadAndDownload() async throws {
+        let macURL = makeDatabaseURL("task-summary-mac")
+        let phoneURL = makeDatabaseURL("task-summary-phone")
+        let macRepository = SQLiteEngineRepository(databaseURL: macURL)
+        let phoneRepository = SQLiteEngineRepository(databaseURL: phoneURL)
+        let transport = InMemorySyncTransport()
+        let macDevice = SyncDeviceID("mac-task-summary")
+        let firstClock = now.addingTimeInterval(10)
+        let macEngine = NoonmarkEngine()
+        let firstChainID = try macEngine.createPoolTask(
+            title: "第一条任务",
+            now: now
+        )
+        _ = try macEngine.createPoolTask(
+            title: "第二条任务",
+            now: now.addingTimeInterval(1)
+        )
+        _ = try macEngine.createPoolTask(
+            title: "第三条任务",
+            now: now.addingTimeInterval(2)
+        )
+        try macRepository.save(
+            macEngine.snapshot(),
+            recordingChangesFor: macDevice,
+            changedAt: firstClock
+        )
+        try phoneRepository.save(NoonmarkEngine().snapshot())
+
+        let macSync = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: macURL,
+            transport: transport
+        )
+        let phoneSync = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: phoneURL,
+            transport: transport
+        )
+
+        let uploaded = try await macSync.sync(
+            now: now.addingTimeInterval(20)
+        )
+        XCTAssertEqual(
+            uploaded.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 3, updatedTaskCount: 0)
+        )
+
+        let downloaded = try await phoneSync.sync(
+            now: now.addingTimeInterval(30)
+        )
+        XCTAssertEqual(
+            downloaded.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 3, updatedTaskCount: 0)
+        )
+
+        let changedEngine = try macRepository.load()
+        try changedEngine.renameTaskTitle(
+            chainID: firstChainID,
+            title: "第一条任务已更新",
+            today: today,
+            now: now.addingTimeInterval(40)
+        )
+        _ = try changedEngine.appendPoolNote(
+            chainID: firstChainID,
+            body: "同一任务的另一项内部变化",
+            now: now.addingTimeInterval(41)
+        )
+        try macRepository.save(
+            changedEngine.snapshot(),
+            recordingChangesFor: macDevice,
+            changedAt: now.addingTimeInterval(41)
+        )
+
+        let updatedUpload = try await macSync.sync(
+            now: now.addingTimeInterval(50)
+        )
+        XCTAssertEqual(
+            updatedUpload.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 0, updatedTaskCount: 1)
+        )
+
+        let updatedDownload = try await phoneSync.sync(
+            now: now.addingTimeInterval(60)
+        )
+        XCTAssertEqual(
+            updatedDownload.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 0, updatedTaskCount: 1)
+        )
+
+        let classifiedEngine = try macRepository.load()
+        try commitClassification(
+            on: classifiedEngine,
+            chainID: firstChainID,
+            interactionID: UUID(
+                uuidString: "42000000-0000-0000-0000-000000000001"
+            )!,
+            decisionID: UUID(
+                uuidString: "42000000-0000-0000-0000-000000000002"
+            )!,
+            now: now.addingTimeInterval(70)
+        )
+        try macRepository.save(
+            classifiedEngine.snapshot(),
+            recordingChangesFor: macDevice,
+            changedAt: now.addingTimeInterval(70)
+        )
+
+        let classifiedUpload = try await macSync.sync(
+            now: now.addingTimeInterval(80)
+        )
+        XCTAssertEqual(
+            classifiedUpload.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 0, updatedTaskCount: 1)
+        )
+
+        let classifiedDownload = try await phoneSync.sync(
+            now: now.addingTimeInterval(90)
+        )
+        XCTAssertEqual(
+            classifiedDownload.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 0, updatedTaskCount: 1)
+        )
+    }
+
     func testTwoSQLiteStoresSyncThroughLocalFolderEndpoint() async throws {
         let folderURL = makeFolderURL()
         let macURL = makeDatabaseURL("mac")
@@ -50,7 +209,15 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let phoneEngine = try phoneRepository.load()
 
         XCTAssertGreaterThanOrEqual(macUpload.upload.uploadedCount, 6)
+        XCTAssertEqual(
+            macUpload.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 1, updatedTaskCount: 0)
+        )
         XCTAssertGreaterThanOrEqual(phoneDownload.download.appliedCount, 6)
+        XCTAssertEqual(
+            phoneDownload.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 1, updatedTaskCount: 0)
+        )
         XCTAssertEqual(phoneDownload.download.waitingCount, 0)
         XCTAssertEqual(phoneDownload.download.conflictCount, 0)
         XCTAssertEqual(phoneEngine.getDayTodo(date: today).traces.first?.id, traceID)
@@ -95,7 +262,15 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let restoredMac = try macRepository.load()
 
         XCTAssertEqual(phoneUpload.upload.uploadedCount, 1)
+        XCTAssertEqual(
+            phoneUpload.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 0, updatedTaskCount: 0)
+        )
         XCTAssertGreaterThanOrEqual(macDownload.download.appliedCount, 1)
+        XCTAssertEqual(
+            macDownload.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 0, updatedTaskCount: 0)
+        )
         XCTAssertEqual(macDownload.download.waitingCount, 0)
         XCTAssertEqual(restoredMac.days[today]?.reviewSummary, "手机端补写复盘")
         let statusMetadata = try XCTUnwrap(

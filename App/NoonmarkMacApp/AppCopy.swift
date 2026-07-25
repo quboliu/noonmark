@@ -440,12 +440,40 @@ struct AppCopy {
         let requiresAttention = result.upload.failedCount > 0
             || result.download.waitingCount > 0
             || conflictCount > 0
+        let taskChanges = result.taskChanges
         return switch language {
         case .chinese:
-            "\(requiresAttention ? "同步需处理" : "同步完成")：上传 \(result.upload.uploadedCount) 条，下载合并 \(result.download.appliedCount) 条，等待 \(result.download.waitingCount) 条，失败 \(result.upload.failedCount) 条，未解决冲突 \(conflictCount) 条"
+            "\(requiresAttention ? "同步需处理" : "同步完成")：新增任务 \(taskChanges.newTaskCount) 条，更新任务 \(taskChanges.updatedTaskCount) 条\(syncAttentionSuffix(result, conflictCount: conflictCount))"
         case .english:
-            "\(requiresAttention ? "Sync needs attention" : "Sync complete"): uploaded \(result.upload.uploadedCount), merged \(result.download.appliedCount), waiting \(result.download.waitingCount), failed \(result.upload.failedCount), unresolved conflicts \(conflictCount)"
+            "\(requiresAttention ? "Sync needs attention" : "Sync complete"): \(englishTaskCount(taskChanges.newTaskCount, adjective: "new")), \(englishTaskCount(taskChanges.updatedTaskCount, adjective: "updated"))\(syncAttentionSuffix(result, conflictCount: conflictCount))"
         }
+    }
+
+    private func englishTaskCount(
+        _ count: Int,
+        adjective: String
+    ) -> String {
+        "\(count) \(adjective) \(count == 1 ? "task" : "tasks")"
+    }
+
+    private func syncAttentionSuffix(
+        _ result: SQLiteLocalFirstSyncResult,
+        conflictCount: Int
+    ) -> String {
+        var issues: [String] = []
+        if result.upload.failedCount > 0 {
+            issues.append(language == .chinese ? "部分数据同步失败" : "some data failed to sync")
+        }
+        if result.download.waitingCount > 0 {
+            issues.append(language == .chinese ? "部分数据仍在等待依赖" : "some data is waiting for dependencies")
+        }
+        if conflictCount > 0 {
+            issues.append(language == .chinese ? "存在未解决冲突" : "there are unresolved conflicts")
+        }
+        guard issues.isEmpty == false else { return "" }
+        return language == .chinese
+            ? "；\(issues.joined(separator: "、"))"
+            : "; \(issues.joined(separator: ", "))"
     }
 
     func dataModeChangedToast(for dataMode: AppDataMode) -> String {

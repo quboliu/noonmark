@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import NoonmarkCore
 import NoonmarkMacRuntime
+import NoonmarkStorage
 
 /// Exercises Noonmark's native command surface inside the real application.
 ///
@@ -1135,6 +1136,24 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     private func assertCommercialCopyContract() throws {
         let english = AppCopy(language: .english)
         let chinese = AppCopy(language: .chinese)
+        let syncResult = SQLiteLocalFirstSyncResult(
+            upload: SQLiteSyncUploadResult(
+                pendingCount: 156,
+                uploadedCount: 156,
+                failedCount: 0
+            ),
+            download: SQLiteSyncDownloadResult(
+                fetchedCount: 27,
+                appliedCount: 27,
+                waitingCount: 0,
+                conflictCount: 0
+            ),
+            taskChanges: SQLiteSyncTaskChanges(
+                newTaskCount: 3,
+                updatedTaskCount: 1
+            ),
+            syncedAt: Date(timeIntervalSince1970: 0)
+        )
         let englishContract: [(String, String)] = [
             (english.emptyDay, "No tasks on this day."),
             (
@@ -1145,11 +1164,19 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             (english.emptyUnfinished, "No unfinished tasks."),
             (english.settingsPoemTitle, "Poem"),
             (english.settingsPoemDisplay, "Show poem in About Noonmark"),
-            (english.organizationTitle, "Organisation")
+            (english.organizationTitle, "Organisation"),
+            (
+                english.localFirstSyncResult(syncResult),
+                "Sync complete: 3 new tasks, 1 updated task"
+            )
         ]
         let chineseContract: [(String, String)] = [
             (chinese.settingsPoemTitle, "关于页诗文"),
-            (chinese.settingsPoemDisplay, "在“关于晷迹”中展示诗文")
+            (chinese.settingsPoemDisplay, "在“关于晷迹”中展示诗文"),
+            (
+                chinese.localFirstSyncResult(syncResult),
+                "同步完成：新增任务 3 条，更新任务 1 条"
+            )
         ]
         guard (englishContract + chineseContract).allSatisfy({ $0.0 == $0.1 })
         else {

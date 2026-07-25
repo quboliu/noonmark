@@ -21,6 +21,11 @@ public struct SQLiteSyncDownloadResult: Codable, Equatable, Sendable {
     }
 }
 
+struct SQLiteSyncDownloadObservation {
+    var result: SQLiteSyncDownloadResult
+    var fetchedRecords: [SyncRecord]
+}
+
 public final class SQLiteSyncDownloadCoordinator {
     private let engineRepository: SQLiteEngineRepository
     private let syncRepository: SQLiteSyncRepository
@@ -55,9 +60,35 @@ public final class SQLiteSyncDownloadCoordinator {
     }
 
     public func downloadAndMerge(detectedAt: Date = Date()) async throws -> SQLiteSyncDownloadResult {
+        try await downloadAndMergeObservingRecords(
+            detectedAt: detectedAt
+        ).result
+    }
+
+    func downloadAndMergeObservingRecords(
+        detectedAt: Date
+    ) async throws -> SQLiteSyncDownloadObservation {
         let pending = try syncRepository.pendingDownloads()
         let terminalRejections = try syncRepository.terminalRejectionEvidence()
         let fetchedRecords = try await transport.fetchAll()
+        let result = try downloadAndMerge(
+            pending: pending,
+            terminalRejections: terminalRejections,
+            fetchedRecords: fetchedRecords,
+            detectedAt: detectedAt
+        )
+        return SQLiteSyncDownloadObservation(
+            result: result,
+            fetchedRecords: fetchedRecords
+        )
+    }
+
+    private func downloadAndMerge(
+        pending: [SyncPendingDownloadRecord],
+        terminalRejections: [SyncTerminalRejection],
+        fetchedRecords: [SyncRecord],
+        detectedAt: Date
+    ) throws -> SQLiteSyncDownloadResult {
         let records = combinedRecords(
             pending: pending.map(\.record),
             fetched: fetchedRecords

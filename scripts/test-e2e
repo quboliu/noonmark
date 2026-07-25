@@ -5710,6 +5710,7 @@ run_zhulong_navigation_probe() {
   local navigation_dir="artifacts/e2e-zhulong-navigation"
   local navigation_result="${navigation_dir}/zhulong-navigation-result.txt"
   local navigation_log="${navigation_dir}/zhulong-navigation.log"
+  local navigation_screenshot="${navigation_dir}/zhulong-home-after-return.png"
 
   rm -rf "$navigation_dir"
   mkdir -p "$navigation_dir"
@@ -5722,9 +5723,10 @@ run_zhulong_navigation_probe() {
     --page zhulong \
     --e2e-zhulong-sidecar-key \
     --e2e-zhulong-navigation \
-    --e2e-zhulong-navigation-result-url "$PWD/$navigation_result"
+    --e2e-zhulong-navigation-result-url "$PWD/$navigation_result" \
+    --e2e-zhulong-navigation-screenshot-url "$PWD/$navigation_screenshot"
 
-  echo "E2E zhulong navigation visibility: $navigation_result"
+  echo "E2E zhulong navigation visibility: $navigation_result, $navigation_screenshot"
 }
 
 run_zhulong_chat_conversation_probe() {

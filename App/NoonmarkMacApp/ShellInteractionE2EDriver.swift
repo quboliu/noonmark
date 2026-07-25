@@ -230,20 +230,36 @@ enum DateNavigationUIE2EDriver {
 
 @MainActor
 enum ZhulongNavigationUIE2EDriver {
-    static func start(store: NoonmarkStore, resultURL: URL) {
-        Session(store: store, resultURL: resultURL).start()
+    static func start(
+        store: NoonmarkStore,
+        resultURL: URL,
+        screenshotURL: URL?
+    ) {
+        Session(
+            store: store,
+            resultURL: resultURL,
+            screenshotURL: screenshotURL
+        ).start()
     }
 
     @MainActor
     private final class Session {
         private let store: NoonmarkStore
         private let resultURL: URL
+        private let screenshotURL: URL?
         private weak var mainWindow: NSWindow?
         private var pageBeforeSettings: NoonmarkStore.Page?
+        private var returnToHomeStartedAt: TimeInterval?
+        private var homeStateReachedAt: TimeInterval?
 
-        init(store: NoonmarkStore, resultURL: URL) {
+        init(
+            store: NoonmarkStore,
+            resultURL: URL,
+            screenshotURL: URL?
+        ) {
             self.store = store
             self.resultURL = resultURL
+            self.screenshotURL = screenshotURL
         }
 
         func start(attemptsRemaining: Int = 80) {
@@ -370,29 +386,111 @@ enum ZhulongNavigationUIE2EDriver {
             guard store.page == .zhulong,
                   store.zhulongWorkspace.selectedSession != nil,
                   AppViewTreeE2E.view(identifier: "shell.detail-rail.toggle") != nil,
-                  clickControl(identifier: "zhulong-session-show-home")
+                  clickControl(identifier: "shell.detail-rail.toggle")
             else {
                 retry(attemptsRemaining, action: waitForZhulongSessionToolbar) {
-                    "failed: 烛龙会话没有同步显示原生右栏入口"
+                    "failed: 烛龙会话没有同步显示或无法展开原生右栏"
                 }
                 return
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
-                waitForReturnedZhulongHomeToolbar()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [self] in
+                waitForExpandedZhulongDetailRail()
             }
         }
 
-        private func waitForReturnedZhulongHomeToolbar(attemptsRemaining: Int = 60) {
+        private func waitForExpandedZhulongDetailRail(attemptsRemaining: Int = 60) {
             guard store.page == .zhulong,
-                  store.zhulongWorkspace.selectedSession == nil,
-                  AppViewTreeE2E.hasNoVisibleView(identifier: "shell.detail-rail.toggle")
+                  store.zhulongWorkspace.selectedSession != nil,
+                  store.shouldShowDetailRail,
+                  AppViewTreeE2E.view(identifier: "shell.detail-rail") != nil,
+                  clickControl(identifier: "zhulong-session-show-home")
             else {
-                retry(attemptsRemaining, action: waitForReturnedZhulongHomeToolbar) {
-                    "failed: 烛龙返回首页后仍残留右栏入口"
+                retry(attemptsRemaining, action: waitForExpandedZhulongDetailRail) {
+                    "failed: 烛龙会话右栏没有在真实窗口中展开"
                 }
                 return
             }
-            disableFromSettings()
+            returnToHomeStartedAt = ProcessInfo.processInfo.systemUptime
+            observeReturnedZhulongHome()
+        }
+
+        private func observeReturnedZhulongHome(attemptsRemaining: Int = 600) {
+            let now = ProcessInfo.processInfo.systemUptime
+            let isHome = store.page == .zhulong
+                && store.zhulongWorkspace.selectedSession == nil
+            if isHome, homeStateReachedAt == nil {
+                homeStateReachedAt = now
+            }
+            let railIsGone = AppViewTreeE2E.hasNoVisibleView(
+                identifier: "shell.detail-rail"
+            )
+            let toggleIsGone = AppViewTreeE2E.hasNoVisibleView(
+                identifier: "shell.detail-rail.toggle"
+            )
+            if isHome, railIsGone, toggleIsGone {
+                guard let returnToHomeStartedAt,
+                      let homeStateReachedAt
+                else {
+                    finish("failed: 烛龙返回首页时序缺少起点")
+                    return
+                }
+                let stateMilliseconds = Int(
+                    (homeStateReachedAt - returnToHomeStartedAt) * 1000
+                )
+                let railMilliseconds = Int(
+                    (now - returnToHomeStartedAt) * 1000
+                )
+                guard railMilliseconds <= 150 else {
+                    finish(
+                        "failed: 烛龙返回首页后右栏延迟收起 "
+                            + "(state=\(stateMilliseconds)ms, "
+                            + "rail=\(railMilliseconds)ms)"
+                    )
+                    return
+                }
+                NSLog(
+                    "Noonmark E2E Zhulong home detail collapse "
+                        + "state=%dms rail=%dms",
+                    stateMilliseconds,
+                    railMilliseconds
+                )
+                if let screenshotURL {
+                    guard let window = mainWindow else {
+                        finish("failed: 烛龙返回首页截图缺少主窗口")
+                        return
+                    }
+                    do {
+                        try AppE2EScreenshot.captureContent(
+                            of: window,
+                            to: screenshotURL
+                        )
+                    } catch {
+                        finish(
+                            "failed: 烛龙返回首页截图失败："
+                                + error.localizedDescription
+                        )
+                        return
+                    }
+                }
+                disableFromSettings()
+                return
+            }
+            guard attemptsRemaining > 1 else {
+                let state = homeStateReachedAt.map {
+                    Int(($0 - (returnToHomeStartedAt ?? $0)) * 1000)
+                }
+                finish(
+                    "failed: 烛龙返回首页后右栏未收起 "
+                        + "(state=\(state.map(String.init) ?? "missing")ms, "
+                        + "rail=>6000ms)"
+                )
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [self] in
+                observeReturnedZhulongHome(
+                    attemptsRemaining: attemptsRemaining - 1
+                )
+            }
         }
 
         private func disableFromSettings(attemptsRemaining: Int = 60) {

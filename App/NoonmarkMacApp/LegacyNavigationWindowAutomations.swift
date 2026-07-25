@@ -163,13 +163,20 @@ struct DetailRailLayoutE2EAutomation: LaunchAutomationRunnable {
 
 struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
     var resultURL: URL?
+    var screenshotURL: URL?
 
     @MainActor
     static func fromCommandLine() -> ZhulongNavigationE2EAutomation? {
         guard AppLaunchArguments.contains("--e2e-zhulong-navigation") else { return nil }
         let resultURL = AppLaunchArguments.value(after: "--e2e-zhulong-navigation-result-url")
             .map { URL(fileURLWithPath: $0) }
-        return ZhulongNavigationE2EAutomation(resultURL: resultURL)
+        let screenshotURL = AppLaunchArguments.value(
+            after: "--e2e-zhulong-navigation-screenshot-url"
+        ).map { URL(fileURLWithPath: $0) }
+        return ZhulongNavigationE2EAutomation(
+            resultURL: resultURL,
+            screenshotURL: screenshotURL
+        )
     }
 
     @MainActor
@@ -236,7 +243,11 @@ struct ZhulongNavigationE2EAutomation: LaunchAutomationRunnable {
             )
 
             if let resultURL {
-                ZhulongNavigationUIE2EDriver.start(store: store, resultURL: resultURL)
+                ZhulongNavigationUIE2EDriver.start(
+                    store: store,
+                    resultURL: resultURL,
+                    screenshotURL: screenshotURL
+                )
             }
         } catch {
             try? writeResult("failed: \(error.localizedDescription)")

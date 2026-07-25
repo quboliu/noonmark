@@ -144,6 +144,7 @@ private struct ZhulongWorkspaceHome: View {
                     placeholder: copy.intentPlaceholder,
                     style: .compact,
                     showsSurface: false,
+                    commitsOnReturn: true,
                     onCommit: startIntent,
                     nativeAccessibilityIdentifier:
                     "zhulong-home-intent"

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import NoonmarkMacRuntime
 import SwiftUI
 
@@ -35,7 +36,9 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                 .preferredColorScheme(.light)
         )
         let detailController = NSHostingController(
-            rootView: DetailRail()
+            rootView: DetailRail(
+                zhulongWorkspace: store.zhulongWorkspace
+            )
                 .ignoresSafeArea(.container, edges: .top)
                 .environmentObject(store)
                 .preferredColorScheme(.light)
@@ -105,6 +108,8 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
         private var pendingAutomaticDetailWidth: CGFloat?
         private var expandedSidebarWidth: CGFloat
         private var customDetailWidth: CGFloat
+        private var zhulongHasSelectedSession: Bool
+        private var zhulongSelectionObservation: AnyCancellable?
 
         init(
             store: NoonmarkStore,
@@ -120,7 +125,17 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
             customDetailWidth = Self.clampedCustomDetailWidth(
                 persistedState.customDetailWidth
             )
+            zhulongHasSelectedSession =
+                store.zhulongWorkspace.selectedSessionID != nil
             super.init()
+            zhulongSelectionObservation = store.zhulongWorkspace
+                .$selectedSessionID
+                .removeDuplicates()
+                .sink { [weak self] selectedSessionID in
+                    self?.zhulongHasSelectedSession =
+                        selectedSessionID != nil
+                    self?.applyStoreState()
+                }
         }
 
         func attach(to controller: WorkspaceSplitViewController) {
@@ -148,7 +163,14 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
 
             let sidebarItem = controller.splitViewItems[0]
             let detailItem = controller.splitViewItems[2]
-            let shouldCollapseDetail = !store.shouldShowDetailRail
+            let hasDetailRailContent = if store.page == .zhulong {
+                zhulongHasSelectedSession
+            } else {
+                store.hasDetailRailContent
+            }
+            let shouldCollapseDetail = !(
+                store.isDetailRailExpanded && hasDetailRailContent
+            )
             let automaticDetailWidth = store.page.detailRailWidth
 
             let automaticDetailWidthChanged = usesCustomDetailWidth == false

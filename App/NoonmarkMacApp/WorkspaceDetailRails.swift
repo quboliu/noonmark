@@ -818,6 +818,7 @@ struct ZhulongAnalysisEntry: View {
 
 struct DetailRail: View {
     @EnvironmentObject private var store: NoonmarkStore
+    @ObservedObject var zhulongWorkspace: ZhulongWorkspaceStore
 
     var body: some View {
         VStack(spacing: 0) {
@@ -841,7 +842,7 @@ struct DetailRail: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        switch store.detailRailRoute {
+        switch detailRailRoute {
         case .some(.calendar):
             CalendarDetailPanel()
         case let .some(route):
@@ -855,6 +856,15 @@ struct DetailRail: View {
         case .none:
             EmptyView()
         }
+    }
+
+    private var detailRailRoute: NoonmarkStore.DetailRailRoute? {
+        guard store.page == .zhulong else {
+            return store.detailRailRoute
+        }
+        return zhulongWorkspace.selectedSession == nil
+            ? nil
+            : .zhulong
     }
 
     @ViewBuilder

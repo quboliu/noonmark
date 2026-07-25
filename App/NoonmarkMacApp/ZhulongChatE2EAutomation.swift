@@ -280,29 +280,8 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
             ) else { return false }
             return (submit as? NSControl)?.isEnabled != false
         }
-
-        let submitTarget: @MainActor () throws
-            -> WindowServerInputDriver.PointerCoordinate = {
-            guard let submit = AppViewTreeE2E.view(
-                identifier: "zhulong-home-submit-target"
-            ), submit.window === window
-            else {
-                throw ZhulongChatE2EError.missing(
-                    "烛龙首页发送按钮在点击前变化"
-                )
-            }
-            let frame = AppViewTreeE2E.frameInWindow(for: submit)
-            return try input.pointerCoordinate(
-                windowPoint: NSPoint(x: frame.midX, y: frame.midY),
-                in: window
-            )
-        }
-        try await input.postClick(
-            at: try submitTarget(),
-            modifiers: [],
-            resolveTarget: submitTarget
-        )
-        try await waitForHome("点击首页发送按钮后没有建立会话") {
+        try input.postKey(keyCode: 36)
+        try await waitForHome("首页输入框按 Enter 后没有建立会话") {
             store.zhulongWorkspace.selectedSession?.primaryIntent
                 == ZhulongChatE2EFixture.intent
         }

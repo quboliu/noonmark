@@ -391,6 +391,7 @@ struct AppCopy {
     var openZhulongConfig: String { language == .chinese ? "打开烛龙配置" : "Open Zhulong settings" }
     var save: String { language == .chinese ? "保存" : "Save" }
     var testConnection: String { language == .chinese ? "测试连接" : "Test" }
+    var testingConnection: String { language == .chinese ? "测试中…" : "Testing…" }
     var clear: String { language == .chinese ? "清空" : "Clear" }
     var zhulongPermissionCeilingTitle: String {
         language == .chinese ? "对话权限上限" : "Conversation permission ceiling"

@@ -100,6 +100,18 @@ struct AppOperationFailureNotice: Equatable, Identifiable {
     }
 }
 
+enum ZhulongProviderSettingsFeedbackTone: Equatable {
+    case progress
+    case success
+    case information
+    case failure
+}
+
+struct ZhulongProviderSettingsFeedback: Equatable {
+    let message: String
+    let tone: ZhulongProviderSettingsFeedbackTone
+}
+
 @MainActor
 final class NoonmarkStore: ObservableObject {
     static let undoHistoryLimit = 100
@@ -619,6 +631,9 @@ final class NoonmarkStore: ObservableObject {
     @Published var automaticClassificationCircuitPresentation:
         AutomaticClassificationCircuitPresentation?
     @Published var zhulongProviderDraft = ZhulongProviderSettingsStore.load()
+    @Published var zhulongProviderSettingsFeedback:
+        ZhulongProviderSettingsFeedback?
+    @Published var isTestingZhulongProviderConnection = false
     @Published var zhulongFeaturePreferences: ZhulongFeaturePreferences
     @Published var horizontalPageNavigationSwipeDirection:
         HorizontalPageNavigationSwipeDirection
@@ -668,6 +683,8 @@ final class NoonmarkStore: ObservableObject {
     var zhulongProviderTask: Task<Void, Never>?
     var zhulongProviderTaskID: UUID?
     var zhulongProviderTaskSessionID: ZhulongSessionID?
+    var zhulongProviderHealthCheckTask: Task<Void, Never>?
+    var zhulongProviderHealthCheckTaskID: UUID?
     var naturalDayObservation: NaturalDayObservation?
     var accessibilityDisplayObservation: AnyCancellable?
     var retainedCloudKitSyncTransport: CloudKitSyncEngineTransport?
@@ -767,5 +784,6 @@ final class NoonmarkStore: ObservableObject {
         automaticClassificationBacklogDecisionTask?.cancel()
         automaticClassificationCircuitRetryTask?.cancel()
         cloudKitAccountCheckTask?.cancel()
+        zhulongProviderHealthCheckTask?.cancel()
     }
 }

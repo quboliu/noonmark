@@ -5784,26 +5784,53 @@ run_zhulong_inline_artifact_probe() {
   echo "E2E zhulong inline artifact commit and retained history: $artifact_result"
 }
 
-run_zhulong_provider_settings_ui_probe() {
+run_zhulong_provider_settings_ui_probe() (
+  set -euo pipefail
   local settings_dir="artifacts/e2e-zhulong-provider-settings"
   local settings_result="${settings_dir}/settings-result.txt"
   local settings_log="${settings_dir}/settings.log"
+  local provider_ready="${settings_dir}/provider-ready.txt"
+  local provider_count="${settings_dir}/provider-count.txt"
+  local provider_health_count="${settings_dir}/provider-health-count.txt"
+  local provider_log="${settings_dir}/provider.log"
+  local provider_pid=""
+  local provider_port
 
   rm -rf "$settings_dir"
   mkdir -p "$settings_dir"
+  clear_automatic_classification_e2e_credentials
+  trap '
+    if [[ -n "$provider_pid" ]]; then
+      kill "$provider_pid" >/dev/null 2>&1 || true
+      wait "$provider_pid" 2>/dev/null || true
+    fi
+    clear_automatic_classification_e2e_credentials
+  ' EXIT
+
+  start_automatic_classification_e2e_provider \
+    "$PWD/$provider_ready" \
+    "$PWD/$provider_count" \
+    "$PWD/$provider_health_count" \
+    "$PWD/$provider_log"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
-    "zhulong Provider settings API Key mask" \
+    "zhulong Provider settings feedback and API Key mask" \
     "$settings_result" \
     "$settings_log" \
     --ephemeral \
     --page settings \
     --e2e-settings-zhulong \
     --e2e-zhulong-provider-settings-ui \
+    --e2e-zhulong-provider-settings-base-url \
+    "http://127.0.0.1:${provider_port}/v1" \
     --e2e-zhulong-provider-settings-result-url "$PWD/$settings_result"
 
-  echo "E2E zhulong Provider Settings save, mask, and clear: $settings_result"
-}
+  assert_automatic_classification_provider_count \
+    "zhulong Provider settings health check" \
+    "$provider_health_count" \
+    "2"
+  echo "E2E zhulong Provider Settings test, feedback, save, mask, and clear: $settings_result"
+)
 
 run_zhulong_daily_recovery_clock_probe() {
   local recovery_dir="artifacts/e2e-zhulong-recovery"

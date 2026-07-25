@@ -71,8 +71,16 @@ struct ZhulongProviderSettingsTransition: Equatable {
     }
 }
 
+struct ZhulongProviderHealthCheckMaterial {
+    let config: AIProviderConfig
+    let apiKey: String?
+    let requiresSaveForExecution: Bool
+}
+
 enum ZhulongProviderSettingsStore {
     private static let defaultsKey = "noonmark.zhulong.provider.config"
+    private static let healthCheckKeyRef =
+        "memory:noonmark.zhulong.provider.health-check"
 
     static func load() -> ZhulongProviderDraft {
         var draft = ZhulongProviderDraft()
@@ -303,6 +311,55 @@ enum ZhulongProviderSettingsStore {
             apiKeyRef: keyRef,
             enabled: draft.enabled,
             capabilities: AIProviderCapabilities(supportsStreaming: true)
+        )
+    }
+
+    static func makeHealthCheckMaterial(
+        from draft: ZhulongProviderDraft
+    ) throws -> ZhulongProviderHealthCheckMaterial {
+        guard let baseURL = draft.normalizedBaseURL else {
+            throw ZhulongProviderSettingsError.invalidBaseURL
+        }
+        guard draft.normalizedModel.isEmpty == false else {
+            throw ZhulongProviderSettingsError.emptyModel
+        }
+
+        let stored = storedConfig()
+        let persistedAPIKey = try stored.flatMap {
+            try ZhulongProviderKeychain.readAPIKey(for: $0.executionRevision)
+        }
+        let submittedAPIKey = draft.apiKeyInput
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+            ? nil
+            : draft.apiKeyInput
+        let currentAPIKey = submittedAPIKey ?? persistedAPIKey
+        let persistedExecutionMatches =
+            stored?.enabled == draft.enabled
+                && stored?.kind == draft.kind
+                && stored?.baseURL == baseURL
+                && stored?.model == draft.normalizedModel
+                && (
+                    submittedAPIKey == nil
+                        || submittedAPIKey == persistedAPIKey
+                )
+                && persistedAPIKey?.isEmpty == false
+
+        return ZhulongProviderHealthCheckMaterial(
+            config: AIProviderConfig(
+                providerID: AIProviderID("health-check"),
+                displayName: draft.normalizedDisplayName,
+                kind: draft.kind,
+                baseURL: baseURL,
+                model: draft.normalizedModel,
+                apiKeyRef: currentAPIKey?.isEmpty == false
+                    ? healthCheckKeyRef
+                    : nil,
+                enabled: draft.enabled,
+                capabilities: AIProviderCapabilities(supportsStreaming: true)
+            ),
+            apiKey: currentAPIKey,
+            requiresSaveForExecution: persistedExecutionMatches == false
         )
     }
 }

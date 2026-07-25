@@ -334,6 +334,7 @@ struct NativeSmallActionButton: NSViewRepresentable {
     let tone: SmallActionButton.Tone
     let identifier: String
     let accessibilityLabel: String
+    var isEnabled = true
     let action: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -359,6 +360,7 @@ struct NativeSmallActionButton: NSViewRepresentable {
         button.contentTintColor = NSColor(color)
         button.identifier = NSUserInterfaceItemIdentifier(identifier)
         button.toolTip = accessibilityLabel
+        button.isEnabled = isEnabled
         button.setAccessibilityIdentifier(identifier)
         button.setAccessibilityLabel(accessibilityLabel)
         button.invalidateIntrinsicContentSize()

@@ -507,8 +507,12 @@ struct SettingsProviderOverviewCard: View {
                                 store.saveZhulongProvider()
                             }
                             providerActionButton(
-                                store.copy.testConnection,
-                                identifier: "settings.zhulong.provider.test"
+                                store.isTestingZhulongProviderConnection
+                                    ? store.copy.testingConnection
+                                    : store.copy.testConnection,
+                                identifier: "settings.zhulong.provider.test",
+                                isEnabled: store
+                                    .isTestingZhulongProviderConnection == false
                             ) {
                                 store.testZhulongProvider()
                             }
@@ -522,6 +526,37 @@ struct SettingsProviderOverviewCard: View {
                             Spacer()
                         }
                         .padding(.top, 2)
+
+                        if let feedback = store.zhulongProviderSettingsFeedback {
+                            HStack(spacing: 7) {
+                                if feedback.tone == .progress {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .frame(width: 14, height: 14)
+                                } else {
+                                    Image(
+                                        systemName: providerFeedbackIcon(
+                                            feedback.tone
+                                        )
+                                    )
+                                }
+                                Text(feedback.message)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .font(.noonmarkSystem(size: 11.5, weight: .medium))
+                            .foregroundStyle(
+                                providerFeedbackColor(feedback.tone)
+                            )
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(feedback.message)
+                            .background {
+                                AppE2EViewAnchor(
+                                    identifier:
+                                    "settings.zhulong.provider.action-feedback",
+                                    verificationText: feedback.message
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -683,6 +718,7 @@ struct SettingsProviderOverviewCard: View {
         _ title: String,
         tone: SmallActionButton.Tone = .normal,
         identifier: String,
+        isEnabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
         NativeSmallActionButton(
@@ -690,6 +726,7 @@ struct SettingsProviderOverviewCard: View {
             tone: tone,
             identifier: identifier,
             accessibilityLabel: title,
+            isEnabled: isEnabled,
             action: action
         )
         .fixedSize(horizontal: true, vertical: false)
@@ -700,6 +737,36 @@ struct SettingsProviderOverviewCard: View {
             idleStroke: Theme.line.opacity(0.72),
             hoverStroke: Theme.line2.opacity(0.72)
         )
+    }
+
+    private func providerFeedbackIcon(
+        _ tone: ZhulongProviderSettingsFeedbackTone
+    ) -> String {
+        switch tone {
+        case .progress:
+            "hourglass"
+        case .success:
+            "checkmark.circle"
+        case .information:
+            "info.circle"
+        case .failure:
+            "exclamationmark.triangle"
+        }
+    }
+
+    private func providerFeedbackColor(
+        _ tone: ZhulongProviderSettingsFeedbackTone
+    ) -> Color {
+        switch tone {
+        case .progress:
+            Theme.accent
+        case .success:
+            Theme.ok
+        case .information:
+            Theme.text2
+        case .failure:
+            Theme.warn
+        }
     }
 
     private func featureToggle(

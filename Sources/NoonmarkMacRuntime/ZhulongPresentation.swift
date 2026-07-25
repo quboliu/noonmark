@@ -261,7 +261,9 @@ public enum ZhulongProviderActionNotice: CaseIterable, Hashable, Sendable {
     case clearFailed
     case connectionTestSkippedDisabled
     case healthCheckUnsupported
+    case connectionTesting
     case connectionSucceeded
+    case connectionSucceededSaveRequired
     case connectionFailed
     case providerNotEnabled
     case invalidConfiguration
@@ -309,7 +311,12 @@ public struct ZhulongCopy: Sendable {
         .clearFailed: ("Provider 配置未能清空，请稍后再试。", "Provider configuration could not be cleared. Try again shortly."),
         .connectionTestSkippedDisabled: ("Provider 已关闭，未发起连接测试", "Provider is off; no connection test was started"),
         .healthCheckUnsupported: ("Provider 配置完整；该类型尚不支持远程健康检查", "Provider configuration is complete; remote health checks are not supported for this type"),
+        .connectionTesting: ("正在测试 Provider 连接…", "Testing Provider connection…"),
         .connectionSucceeded: ("Provider 连接成功", "Provider connection succeeded"),
+        .connectionSucceededSaveRequired: (
+            "Provider 连接成功；保存配置后，自动分组与标签才会开始工作。",
+            "Provider connection succeeded. Save the configuration to enable automatic grouping and labels."
+        ),
         .connectionFailed: ("Provider 连接失败，请检查配置后重试。", "Provider connection failed. Check the configuration and try again."),
         .providerNotEnabled: ("Provider 尚未启用", "Provider is not enabled"),
         .invalidConfiguration: ("Provider 配置无效，请检查后重试。", "Provider configuration is invalid. Check it and try again.")

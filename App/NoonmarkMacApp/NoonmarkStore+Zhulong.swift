@@ -8,63 +8,113 @@ import NoonmarkZhulongAI
 
 extension NoonmarkStore {
     func saveZhulongProvider() {
+        cancelZhulongProviderHealthCheck()
         do {
             let transition = try ZhulongProviderSettingsStore.save(
                 zhulongProviderDraft
             )
             zhulongProviderDraft = transition.draft
             automaticClassificationProviderConfigurationDidChange(transition)
-            showToast(zhulongCopy.providerActionNotice(.configurationSaved))
+            publishZhulongProviderSettingsFeedback(
+                .configurationSaved,
+                tone: .success
+            )
         } catch {
             showZhulongProviderSettingsFailure(error)
         }
     }
 
     func clearZhulongProvider() {
+        cancelZhulongProviderHealthCheck()
         do {
             let transition = try ZhulongProviderSettingsStore.clear()
             zhulongProviderDraft = transition.draft
             automaticClassificationProviderConfigurationDidChange(transition)
-            showToast(zhulongCopy.providerActionNotice(.configurationCleared))
+            publishZhulongProviderSettingsFeedback(
+                .configurationCleared,
+                tone: .information
+            )
         } catch {
             showZhulongProviderSettingsFailure(error)
         }
     }
 
     func testZhulongProvider() {
-        Task { @MainActor in
-            await testZhulongProviderHealth()
+        guard isTestingZhulongProviderConnection == false else { return }
+        cancelZhulongProviderHealthCheck()
+        let testID = UUID()
+        let draft = zhulongProviderDraft
+        zhulongProviderHealthCheckTaskID = testID
+        isTestingZhulongProviderConnection = true
+        zhulongProviderSettingsFeedback = ZhulongProviderSettingsFeedback(
+            message: zhulongCopy.providerActionNotice(.connectionTesting),
+            tone: .progress
+        )
+        zhulongProviderHealthCheckTask = Task { @MainActor [weak self] in
+            await self?.testZhulongProviderHealth(draft: draft, testID: testID)
         }
     }
 
-    private func testZhulongProviderHealth() async {
+    private func testZhulongProviderHealth(
+        draft: ZhulongProviderDraft,
+        testID: UUID
+    ) async {
         do {
-            let config = try ZhulongProviderSettingsStore.makeConfig(from: zhulongProviderDraft)
-            guard config.enabled else {
-                showToast(zhulongCopy.providerActionNotice(.connectionTestSkippedDisabled))
+            let material = try ZhulongProviderSettingsStore
+                .makeHealthCheckMaterial(from: draft)
+            guard material.config.enabled else {
+                finishZhulongProviderHealthCheck(
+                    testID,
+                    notice: .connectionTestSkippedDisabled,
+                    tone: .information
+                )
                 return
             }
-            guard config.kind == .openAICompatible else {
-                showToast(zhulongCopy.providerActionNotice(.healthCheckUnsupported))
+            guard material.config.kind == .openAICompatible else {
+                finishZhulongProviderHealthCheck(
+                    testID,
+                    notice: .healthCheckUnsupported,
+                    tone: .information
+                )
                 return
             }
 
+            let apiKey = material.apiKey
             let provider = OpenAICompatibleProvider(
-                config: config,
-                apiKeyResolver: { ref in
-                    try ZhulongProviderKeychain.resolveAPIKey(ref)
+                config: material.config,
+                apiKeyResolver: { _ in
+                    apiKey
                 }
             )
             let health = await provider.healthCheck()
+            guard Task.isCancelled == false else { return }
             switch health.status {
             case .healthy:
-                showToast(zhulongCopy.providerActionNotice(.connectionSucceeded))
+                finishZhulongProviderHealthCheck(
+                    testID,
+                    notice: material.requiresSaveForExecution
+                        ? .connectionSucceededSaveRequired
+                        : .connectionSucceeded,
+                    tone: .success
+                )
             case .unavailable:
-                showToast(zhulongCopy.providerActionNotice(.connectionFailed))
+                finishZhulongProviderHealthCheck(
+                    testID,
+                    notice: .connectionFailed,
+                    tone: .failure
+                )
             case .unconfigured:
-                showToast(zhulongCopy.providerActionNotice(.providerNotEnabled))
+                finishZhulongProviderHealthCheck(
+                    testID,
+                    notice: .providerNotEnabled,
+                    tone: .failure
+                )
             }
         } catch {
+            guard Task.isCancelled == false,
+                  zhulongProviderHealthCheckTaskID == testID
+            else { return }
+            finishZhulongProviderHealthCheckState(testID)
             showZhulongProviderSettingsFailure(error)
         }
     }
@@ -80,10 +130,50 @@ extension NoonmarkStore {
         )
         let failure = (error as? ZhulongProviderSettingsError)?
             .presentationFailure ?? .unexpected
+        zhulongProviderSettingsFeedback = ZhulongProviderSettingsFeedback(
+            message: zhulongCopy.providerSettingsFailure(failure),
+            tone: .failure
+        )
         showPersistentFailureMessage(
             zhulongCopy.providerSettingsFailure(failure),
             context: .provider
         )
+    }
+
+    private func publishZhulongProviderSettingsFeedback(
+        _ notice: ZhulongProviderActionNotice,
+        tone: ZhulongProviderSettingsFeedbackTone
+    ) {
+        let message = zhulongCopy.providerActionNotice(notice)
+        zhulongProviderSettingsFeedback = ZhulongProviderSettingsFeedback(
+            message: message,
+            tone: tone
+        )
+        showToast(message)
+    }
+
+    private func finishZhulongProviderHealthCheck(
+        _ testID: UUID,
+        notice: ZhulongProviderActionNotice,
+        tone: ZhulongProviderSettingsFeedbackTone
+    ) {
+        guard zhulongProviderHealthCheckTaskID == testID else { return }
+        finishZhulongProviderHealthCheckState(testID)
+        publishZhulongProviderSettingsFeedback(notice, tone: tone)
+    }
+
+    private func finishZhulongProviderHealthCheckState(_ testID: UUID) {
+        guard zhulongProviderHealthCheckTaskID == testID else { return }
+        zhulongProviderHealthCheckTask = nil
+        zhulongProviderHealthCheckTaskID = nil
+        isTestingZhulongProviderConnection = false
+    }
+
+    private func cancelZhulongProviderHealthCheck() {
+        zhulongProviderHealthCheckTask?.cancel()
+        zhulongProviderHealthCheckTask = nil
+        zhulongProviderHealthCheckTaskID = nil
+        isTestingZhulongProviderConnection = false
     }
 
     func startZhulongWorkspaceSession(intent: String) {

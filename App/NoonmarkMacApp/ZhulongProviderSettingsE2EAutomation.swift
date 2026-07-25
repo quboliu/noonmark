@@ -1,24 +1,33 @@
 import AppKit
 import Foundation
+import NoonmarkMacRuntime
 
 struct ZhulongProviderSettingsE2EAutomation: LaunchAutomationRunnable {
     let resultURL: URL
+    let providerBaseURL: String
 
     @MainActor
     static func fromCommandLine() -> Self? {
         guard AppLaunchArguments.contains("--e2e-zhulong-provider-settings-ui"),
               let resultPath = AppLaunchArguments.value(
                   after: "--e2e-zhulong-provider-settings-result-url"
-              ), resultPath.isEmpty == false
+              ), resultPath.isEmpty == false,
+              let providerBaseURL = AppLaunchArguments.value(
+                  after: "--e2e-zhulong-provider-settings-base-url"
+              ), providerBaseURL.isEmpty == false
         else { return nil }
-        return Self(resultURL: URL(fileURLWithPath: resultPath))
+        return Self(
+            resultURL: URL(fileURLWithPath: resultPath),
+            providerBaseURL: providerBaseURL
+        )
     }
 
     @MainActor
     func run(on store: NoonmarkStore) {
         ZhulongProviderSettingsE2EUIInteractionDriver.start(
             store: store,
-            resultURL: resultURL
+            resultURL: resultURL,
+            providerBaseURL: providerBaseURL
         )
     }
 }
@@ -28,22 +37,36 @@ struct ZhulongProviderSettingsE2EAutomation: LaunchAutomationRunnable {
 /// and buttons; it never calls Provider-setting mutations itself.
 @MainActor
 enum ZhulongProviderSettingsE2EUIInteractionDriver {
-    private static let model = "noonmark-e2e-mask-model"
-    private static let syntheticAPIKey = "noonmark-e2e-mask-key"
+    private static let model = "noonmark-e2e-automatic-classification"
+    private static let syntheticAPIKey = "noonmark-e2e-local-provider-key"
     private static let maskedPlaceholder = "••••••••••••"
 
-    static func start(store: NoonmarkStore, resultURL: URL) {
-        Session(store: store, resultURL: resultURL).start()
+    static func start(
+        store: NoonmarkStore,
+        resultURL: URL,
+        providerBaseURL: String
+    ) {
+        Session(
+            store: store,
+            resultURL: resultURL,
+            providerBaseURL: providerBaseURL
+        ).start()
     }
 
     @MainActor
     private final class Session {
         private let store: NoonmarkStore
         private let resultURL: URL
+        private let providerBaseURL: String
 
-        init(store: NoonmarkStore, resultURL: URL) {
+        init(
+            store: NoonmarkStore,
+            resultURL: URL,
+            providerBaseURL: String
+        ) {
             self.store = store
             self.resultURL = resultURL
+            self.providerBaseURL = providerBaseURL
         }
 
         func start() {
@@ -119,6 +142,17 @@ enum ZhulongProviderSettingsE2EUIInteractionDriver {
 
             try await replaceText(
                 in: field(
+                    identifier: "settings.zhulong.provider.base-url",
+                    in: window
+                ),
+                with: providerBaseURL,
+                input: input,
+                window: window,
+                label: "Provider Base URL"
+            )
+
+            try await replaceText(
+                in: field(
                     identifier: "settings.zhulong.provider.model",
                     in: window
                 ),
@@ -138,6 +172,39 @@ enum ZhulongProviderSettingsE2EUIInteractionDriver {
                 window: window,
                 label: "Provider API Key"
             )
+
+            guard ZhulongProviderSettingsStore
+                .persistedReadyExecutionRevision() == nil
+            else {
+                throw Failure.missing("未保存表单意外成为可执行配置")
+            }
+
+            try await click(
+                input,
+                in: window,
+                step: "测试未保存的当前 Provider 表单"
+            ) { [self] in
+                button(
+                    identifier: "settings.zhulong.provider.test",
+                    title: store.copy.testConnection,
+                    in: window
+                )
+            }
+            let connectionSucceededSaveRequired = AppPresentation(
+                language: store.engine.preferences.language
+            ).zhulong.providerActionNotice(.connectionSucceededSaveRequired)
+            try await waitUntil("当前 Provider 表单没有完成真实连接测试") { [self] in
+                store.toast == connectionSucceededSaveRequired
+            }
+            try await waitForSettingsFeedback(
+                connectionSucceededSaveRequired,
+                in: window
+            )
+            guard ZhulongProviderSettingsStore
+                .persistedReadyExecutionRevision() == nil
+            else {
+                throw Failure.missing("连接测试意外保存了 Provider 配置")
+            }
 
             try await click(
                 input,
@@ -161,6 +228,72 @@ enum ZhulongProviderSettingsE2EUIInteractionDriver {
                     && apiKeyField.placeholderString
                     == ZhulongProviderSettingsE2EUIInteractionDriver.maskedPlaceholder
             }
+            guard ZhulongProviderSettingsStore
+                .persistedReadyExecutionRevision() != nil
+            else {
+                throw Failure.missing("保存后 Provider 没有成为可执行配置")
+            }
+            let configurationSaved = AppPresentation(
+                language: store.engine.preferences.language
+            ).zhulong.providerActionNotice(.configurationSaved)
+            try await waitForSettingsFeedback(
+                configurationSaved,
+                in: window
+            )
+
+            try await click(
+                input,
+                in: window,
+                step: "测试已保存的 Provider"
+            ) { [self] in
+                button(
+                    identifier: "settings.zhulong.provider.test",
+                    title: store.copy.testConnection,
+                    in: window
+                )
+            }
+            let connectionSucceeded = AppPresentation(
+                language: store.engine.preferences.language
+            ).zhulong.providerActionNotice(.connectionSucceeded)
+            try await waitUntil("已保存 Provider 没有完成真实连接测试") { [self] in
+                store.toast == connectionSucceeded
+            }
+            try await waitForSettingsFeedback(
+                connectionSucceeded,
+                in: window
+            )
+
+            try await replaceText(
+                in: secureField(
+                    identifier: "settings.zhulong.provider.api-key",
+                    in: window
+                ),
+                with: "noonmark-e2e-invalid-provider-key",
+                input: input,
+                window: window,
+                label: "无效 Provider API Key"
+            )
+            try await click(
+                input,
+                in: window,
+                step: "测试无效的当前 Provider 表单"
+            ) { [self] in
+                button(
+                    identifier: "settings.zhulong.provider.test",
+                    title: store.copy.testConnection,
+                    in: window
+                )
+            }
+            let connectionFailed = AppPresentation(
+                language: store.engine.preferences.language
+            ).zhulong.providerActionNotice(.connectionFailed)
+            try await waitUntil("无效 Provider 没有返回连接失败") { [self] in
+                store.toast == connectionFailed
+            }
+            try await waitForSettingsFeedback(
+                connectionFailed,
+                in: window
+            )
 
             try await click(
                 input,
@@ -177,6 +310,30 @@ enum ZhulongProviderSettingsE2EUIInteractionDriver {
                 store.zhulongProviderDraft.enabled == false
                     && store.zhulongProviderDraft.hasStoredAPIKey == false
                     && store.zhulongProviderDraft.apiKeyInput.isEmpty
+            }
+            let configurationCleared = AppPresentation(
+                language: store.engine.preferences.language
+            ).zhulong.providerActionNotice(.configurationCleared)
+            try await waitForSettingsFeedback(
+                configurationCleared,
+                in: window
+            )
+        }
+
+        private func waitForSettingsFeedback(
+            _ expected: String,
+            in window: NSWindow
+        ) async throws {
+            try await waitUntil("设置窗口没有显示 Provider 操作反馈：\(expected)") {
+                guard let feedback = AppViewTreeE2E.view(
+                    identifier: "settings.zhulong.provider.action-feedback"
+                ) else {
+                    return false
+                }
+                return feedback.window === window
+                    && self.isUsable(feedback, in: window)
+                    && AppViewTreeE2E.verificationText(for: feedback)
+                    == expected
             }
         }
 

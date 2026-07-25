@@ -1,4 +1,7 @@
 import AppKit
+import Combine
+import NoonmarkCore
+import NoonmarkMacRuntime
 import SwiftUI
 
 @MainActor
@@ -7,6 +10,7 @@ final class NoonmarkQuickEntryWindowController: NSWindowController {
 
     private let store: NoonmarkStore
     private let model = NoonmarkQuickEntryWindowModel()
+    private var contentHeightObservation: AnyCancellable?
 
     init(store: NoonmarkStore) {
         self.store = store
@@ -35,6 +39,18 @@ final class NoonmarkQuickEntryWindowController: NSWindowController {
 
         super.init(window: panel)
         model.onClose = { [weak self] in self?.close() }
+        contentHeightObservation = model.$contentHeight
+            .removeDuplicates()
+            .sink { [weak panel] contentHeight in
+                guard let panel else { return }
+                let top = panel.frame.maxY
+                panel.setContentSize(
+                    NSSize(width: panel.contentView?.frame.width ?? 520, height: contentHeight)
+                )
+                var frame = panel.frame
+                frame.origin.y = top - frame.height
+                panel.setFrame(frame, display: true)
+            }
     }
 
     @available(*, unavailable)
@@ -75,12 +91,22 @@ final class NoonmarkQuickEntryWindowController: NSWindowController {
 final class NoonmarkQuickEntryWindowModel: ObservableObject {
     @Published var text = ""
     @Published private(set) var focusRequest = 0
+    @Published fileprivate(set) var contentHeight: CGFloat = 168
     var onSubmit: ((String) -> Bool)?
     var onClose: (() -> Void)?
 
     func prepareForPresentation() {
         text = ""
+        contentHeight = 168
         focusRequest &+= 1
+    }
+
+    func updatePresentation(suggestionCount: Int, showsIssue: Bool) {
+        let suggestionHeight = suggestionCount > 0
+            ? CGFloat(min(suggestionCount, 4) * 28 + 12)
+            : 0
+        let issueHeight: CGFloat = showsIssue ? 28 : 0
+        contentHeight = 168 + suggestionHeight + issueHeight
     }
 
     func submit() {
@@ -101,6 +127,18 @@ private struct NoonmarkQuickEntryView: View {
     @EnvironmentObject private var store: NoonmarkStore
     @ObservedObject var model: NoonmarkQuickEntryWindowModel
     @FocusState private var inputIsFocused: Bool
+
+    private var suggestions: [ClassificationCatalogItemProjection] {
+        Array(store.newTaskClassificationSuggestions(for: model.text).prefix(4))
+    }
+
+    private var activeToken: NewTaskClassificationToken? {
+        store.newTaskClassificationToken(for: model.text)
+    }
+
+    private var issueMessage: String? {
+        store.newTaskDraftIssueMessage(for: model.text)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -125,6 +163,24 @@ private struct NoonmarkQuickEntryView: View {
                     AppE2EViewAnchor(identifier: "quick-entry.field")
                 }
 
+            if suggestions.isEmpty == false, let activeToken {
+                NewTaskClassificationSuggestionList(
+                    tokenKind: activeToken.kind,
+                    suggestions: suggestions
+                ) { suggestion in
+                    model.text = store.completeNewTaskClassificationToken(
+                        in: model.text,
+                        with: suggestion.name
+                    )
+                }
+            }
+
+            if let issueMessage {
+                Text(issueMessage)
+                    .font(.noonmarkSystem(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.warn)
+            }
+
             HStack {
                 Spacer()
                 Button(store.copy.cancel) {
@@ -142,6 +198,7 @@ private struct NoonmarkQuickEntryView: View {
                 }
                 .disabled(
                     model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || issueMessage != nil
                 )
             }
         }
@@ -151,6 +208,12 @@ private struct NoonmarkQuickEntryView: View {
         .background(Theme.background)
         .onAppear { inputIsFocused = true }
         .onChange(of: model.focusRequest) { _, _ in inputIsFocused = true }
+        .onChange(of: model.text, initial: true) { _, _ in
+            model.updatePresentation(
+                suggestionCount: suggestions.count,
+                showsIssue: issueMessage != nil
+            )
+        }
         .background {
             AppE2EViewAnchor(
                 identifier: "quick-entry.window",

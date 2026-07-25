@@ -66,8 +66,8 @@ extension AppCopy {
 
     var quickEntryPlaceholder: String {
         language == .chinese
-            ? "输入今天要完成的任务，可附加 #标签"
-            : "Add a task for today; #labels are supported"
+            ? "输入今天要完成的任务，可附加 #标签、@分组"
+            : "Add a task for today; use #labels and @group"
     }
 
     var quickEntryTodayHint: String {
@@ -227,15 +227,27 @@ extension AppCopy {
     var previousMonth: String { language == .chinese ? "上个月" : "Previous month" }
     var nextMonth: String { language == .chinese ? "下个月" : "Next month" }
     var dayQuickAddTodayPlaceholder: String {
-        language == .chinese ? "添加今日任务，回车确认" : "Add a task for today; press Return"
+        language == .chinese
+            ? "添加今日任务，可用 #标签、@分组"
+            : "Add a task; use #labels and @group"
     }
 
     var dayQuickAddFuturePlaceholder: String {
-        language == .chinese ? "为这一天排期任务，回车确认" : "Schedule a task for this day; press Return"
+        language == .chinese
+            ? "为这一天排期，可用 #标签、@分组"
+            : "Schedule a task; use #labels and @group"
     }
 
     var poolQuickAddPlaceholder: String {
-        language == .chinese ? "新建任务到任务池，回车确认" : "Add a task to the pool; press Return"
+        language == .chinese
+            ? "新建到任务池，可用 #标签、@分组"
+            : "Add to the pool; use #labels and @group"
+    }
+
+    var newTaskMultipleCategories: String {
+        language == .chinese
+            ? "每个任务只能有一个分组，请只保留一个 @分组。"
+            : "A task can have only one group. Keep a single @group."
     }
 
     // MARK: - Calendar

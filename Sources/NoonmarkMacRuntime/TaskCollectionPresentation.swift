@@ -51,6 +51,12 @@ public struct TaskCollectionPresentationPreference: Codable, Equatable, Sendable
     public var showsCategoryInItemRows: Bool {
         organization == .flat
     }
+
+    public func showsCategoryInItemRows(
+        in section: TaskCollectionPresentationSection
+    ) -> Bool {
+        showsCategoryInItemRows || section.title == nil
+    }
 }
 
 public enum TaskCollectionCategoryApproval: String, Codable, Equatable, Sendable {

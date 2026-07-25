@@ -188,6 +188,10 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     }
 
     private static let fixtureTitle = "commandrecoverytask"
+    private static let fixtureLabelName = "commandlabel"
+    private static let fixtureCategoryName = "commandgroup"
+    private static let fixtureInput =
+        "\(fixtureTitle) #\(fixtureLabelName) @\(fixtureCategoryName)"
     private static let maximumHelpProtocolArtifactSize: off_t = 8192
     private static let externalHelpProtocolPhaseDeadline: Duration = .seconds(60)
     private static let externalHelpProtocolPollNanoseconds: UInt64 = 50_000_000
@@ -316,10 +320,16 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         let created = try requireTaskRecord(titled: Self.fixtureTitle, in: store)
         guard created.trace.date == store.today,
               created.trace.status == .pending,
+              store.currentClassification(for: created.trace.chainID)?
+              .category?.name == Self.fixtureCategoryName,
+              store.currentClassification(for: created.trace.chainID)?
+              .labels.map(\.name) == [Self.fixtureLabelName],
               store.canUndoDomainAction,
               store.canRedoDomainAction == false
         else {
-            throw Failure.failed("Quick Entry did not create one undoable task for today")
+            throw Failure.failed(
+                "Quick Entry did not create one tagged, undoable task for today"
+            )
         }
 
         try await exerciseAuxiliaryWindowCommandIsolation(
@@ -672,10 +682,10 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         guard editor.string.isEmpty else {
             throw Failure.failed("Quick Entry did not start with an empty editor")
         }
-        try await typeASCII(Self.fixtureTitle, into: editor)
+        try await typeASCII(Self.fixtureInput, into: editor)
         do {
             try await waitUntil("Quick Entry did not receive real keyboard input") {
-                editor.string == Self.fixtureTitle
+                editor.string == Self.fixtureInput
                     && self.hasEnabledButton(
                         identifier: "quick-entry.add",
                         in: panel
@@ -705,6 +715,69 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             else { return false }
             return store.automaticClassificationStatus(for: task.trace.chainID)
                 == .waitingForConfiguration
+        }
+
+        try await exerciseQuickEntryClassificationSuggestions(
+            mainWindow: mainWindow,
+            store: store,
+            input: input
+        )
+    }
+
+    private func exerciseQuickEntryClassificationSuggestions(
+        mainWindow: NSWindow,
+        store: NoonmarkStore,
+        input: WindowServerInputDriver
+    ) async throws {
+        try await activate(mainWindow)
+        try performMenuShortcut(
+            MenuShortcut(
+                action: NoonmarkMenuAction.showQuickEntry,
+                key: "n",
+                modifiers: .command
+            ),
+            input: input
+        )
+        let panel = try await visibleWindow(
+            identifier: NoonmarkQuickEntryWindowController.windowIdentifier,
+            failure: "Quick Entry did not reopen for classification suggestions"
+        )
+        let editor = try await focusedTextEditor(
+            identifier: "quick-entry.field",
+            in: panel,
+            input: input
+        )
+
+        try await typeASCII("probe #comm", into: editor)
+        try await assertAnchor(
+            "new-task.classification-suggestions",
+            verificationText: "#:\(Self.fixtureLabelName)",
+            in: panel
+        )
+
+        try replaceEditorContents(with: "", in: editor)
+        try await waitUntil("Quick Entry did not clear the label query") {
+            editor.string.isEmpty
+        }
+        try await typeASCII("probe @comm", into: editor)
+        try await assertAnchor(
+            "new-task.classification-suggestions",
+            verificationText: "@:\(Self.fixtureCategoryName)",
+            in: panel
+        )
+
+        try sendKeyDown(
+            Keystroke(
+                characters: "\u{1b}",
+                charactersIgnoringModifiers: "\u{1b}",
+                keyCode: 53,
+                modifiers: []
+            ),
+            to: panel,
+            requiring: editor
+        )
+        try await waitUntil("Quick Entry Escape did not dismiss suggestions") {
+            panel.isVisible == false && mainWindow.isVisible
         }
     }
 
@@ -1525,9 +1598,21 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
 
     private func keystroke(for character: Character) throws -> Keystroke {
         let rendered = String(character)
-        guard character.isASCII,
-              let keyCode = Self.keyCodes[Character(rendered.lowercased())]
-        else {
+        guard character.isASCII else {
+            throw Failure.failed("fixture contained an unsupported keyboard character")
+        }
+        if let base = Self.shiftedCharacters[character] {
+            guard let keyCode = Self.keyCodes[base] else {
+                throw Failure.failed("shifted fixture character lacked a key code")
+            }
+            return Keystroke(
+                characters: rendered,
+                charactersIgnoringModifiers: String(base),
+                keyCode: keyCode,
+                modifiers: .shift
+            )
+        }
+        guard let keyCode = Self.keyCodes[Character(rendered.lowercased())] else {
             throw Failure.failed("fixture contained an unsupported keyboard character")
         }
         return Keystroke(
@@ -2105,8 +2190,15 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5,
         "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12,
         "w": 13, "e": 14, "r": 15, "y": 16, "t": 17,
+        "3": 20, "2": 19,
         "o": 31, "u": 32, "i": 34, "p": 35, "l": 37,
-        "j": 38, "k": 40, ",": 43, "n": 45, "m": 46
+        "j": 38, "k": 40, ",": 43, "n": 45, "m": 46,
+        " ": 49
+    ]
+
+    private static let shiftedCharacters: [Character: Character] = [
+        "#": "3",
+        "@": "2"
     ]
 }
 

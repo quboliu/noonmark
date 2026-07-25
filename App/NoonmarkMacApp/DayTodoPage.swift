@@ -85,6 +85,10 @@ struct DayTodoPage: View {
                             ForEach(section.items, id: \.id) { item in
                                 if let trace = tracesByID[item.id] {
                                     TaskRow(trace: trace)
+                                        .taskCollectionCategoryVisibility(
+                                            presentationPreference,
+                                            in: section
+                                        )
                                 }
                             }
                         }
@@ -329,7 +333,15 @@ struct NewTaskInlineField: View {
     let onSubmit: () -> Void
 
     var suggestions: [ClassificationCatalogItemProjection] {
-        store.newTaskLabelSuggestions(for: text)
+        store.newTaskClassificationSuggestions(for: text)
+    }
+
+    var activeToken: NewTaskClassificationToken? {
+        store.newTaskClassificationToken(for: text)
+    }
+
+    var showsSuggestions: Bool {
+        store.shouldShowNewTaskClassificationSuggestions(for: text)
     }
 
     var body: some View {
@@ -346,42 +358,74 @@ struct NewTaskInlineField: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line.opacity(0.72)))
 
-            if store.shouldShowNewTaskLabelSuggestions(for: text) {
-                VStack(spacing: 0) {
-                    ForEach(suggestions.prefix(6)) { label in
-                        Button {
-                            text = store.completeLastHashToken(in: text, with: label.name)
-                        } label: {
-                            HStack(spacing: 7) {
-                                Text("#")
-                                    .font(.noonmarkSystem(size: 10, weight: .black, design: .rounded))
-                                    .foregroundStyle(label.color)
-                                    .frame(width: 18, height: 18)
-                                    .background(RoundedRectangle(cornerRadius: 3).fill(label.color.opacity(0.10)))
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 3)
-                                            .stroke(label.color.opacity(0.48), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
-                                    }
-                                Text("#\(label.name)")
-                                    .font(.noonmarkSystem(size: 11.5, weight: .semibold))
-                                    .foregroundStyle(Theme.text1)
-                                    .lineLimit(1)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 9)
-                            .frame(height: 28)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
+            if showsSuggestions, let activeToken {
+                NewTaskClassificationSuggestionList(
+                    tokenKind: activeToken.kind,
+                    suggestions: Array(suggestions.prefix(6))
+                ) { suggestion in
+                    text = store.completeNewTaskClassificationToken(
+                        in: text,
+                        with: suggestion.name
+                    )
                 }
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line.opacity(0.72)))
-                .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+            }
+
+            if let issue = store.newTaskDraftIssueMessage(for: text) {
+                Text(issue)
+                    .font(.noonmarkSystem(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.warn)
             }
         }
         .layoutPriority(1)
+    }
+}
+
+struct NewTaskClassificationSuggestionList: View {
+    let tokenKind: NewTaskClassificationTokenKind
+    let suggestions: [ClassificationCatalogItemProjection]
+    let onSelect: (ClassificationCatalogItemProjection) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(suggestions) { suggestion in
+                Button {
+                    onSelect(suggestion)
+                } label: {
+                    HStack(spacing: 7) {
+                        Text(String(tokenKind.marker))
+                            .font(.noonmarkSystem(size: 10, weight: .black, design: .rounded))
+                            .foregroundStyle(suggestion.color)
+                            .frame(width: 18, height: 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(suggestion.color.opacity(0.10))
+                            )
+                        Text("\(String(tokenKind.marker))\(suggestion.name)")
+                            .font(.noonmarkSystem(size: 11.5, weight: .semibold))
+                            .foregroundStyle(Theme.text1)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 9)
+                    .frame(height: 28)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line.opacity(0.72)))
+        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+        .accessibilityIdentifier("new-task.classification-suggestions")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "new-task.classification-suggestions",
+                verificationText:
+                    "\(String(tokenKind.marker)):"
+                    + suggestions.map(\.name).joined(separator: ",")
+            )
+        }
     }
 }
 

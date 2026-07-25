@@ -328,6 +328,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let categoryIdentifiers = rowIdentifiers?.filter {
             $0.hasSuffix(".category")
         }
+        let expectedGroupedRowCategoryIdentifiers =
+            groupedRowCategoryIdentifiers(
+                context: context,
+                verificationCase: verificationCase
+            )
         let labelIdentifiers = rowIdentifiers?.filter {
             $0.contains(".label.")
         }
@@ -338,7 +343,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                     && categoryIdentifiers?.isEmpty == false
             case .grouped:
                 sectionIdentifiers?.isEmpty == false
-                    && categoryIdentifiers?.isEmpty == true
+                    && categoryIdentifiers
+                    == expectedGroupedRowCategoryIdentifiers
             }
         guard AppViewTreeE2E.activateMainWindow(),
               labelIdentifiers?.isEmpty == false,
@@ -431,6 +437,36 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             result.formUnion(identifiers)
         }
         return result
+    }
+
+    @MainActor
+    private func groupedRowCategoryIdentifiers(
+        context: DemoCollectionCheckContext,
+        verificationCase: DemoCollectionCheckCase
+    ) -> Set<String> {
+        guard verificationCase.page == .day,
+              verificationCase.organization == .grouped
+        else {
+            return []
+        }
+        return Set(
+            context.store.engine.getDayTodo(
+                date: context.fixture.anchorDate
+            ).traces.compactMap { trace in
+                guard trace.status == .pending,
+                      trace.pinOrder != nil,
+                      context.store.displayableClassification(
+                          for: trace
+                      )?.category != nil
+                else {
+                    return nil
+                }
+                return TaskClassificationAccessibilityNamespace(
+                    surface: "day-row",
+                    instanceID: trace.id.description
+                ).categoryIdentifier
+            }
+        )
     }
 
     @MainActor

@@ -1,5 +1,6 @@
 import Foundation
 @_spi(ClassificationUserDecision) import NoonmarkCore
+import NoonmarkMacRuntime
 
 extension NoonmarkStore {
     func isUnclassified(_ chainID: TaskChainID) -> Bool {
@@ -7,26 +8,74 @@ extension NoonmarkStore {
         return classification.category == nil && classification.labels.isEmpty
     }
 
-    func newTaskLabelSuggestions(for draft: String) -> [ClassificationCatalogItemProjection] {
-        let selectedKeys = Set(parsedTaskDraft(draft).labelNames.map(ClassificationNameCanonicalizer.canonicalKey))
-        return orderedActiveLabelSuggestions(
-            query: lastHashQuery(in: draft),
-            excludingCanonicalKeys: selectedKeys
-        )
+    func newTaskClassificationToken(
+        for draft: String
+    ) -> NewTaskClassificationToken? {
+        NewTaskDraftParser.activeToken(in: draft)
     }
 
-    func shouldShowNewTaskLabelSuggestions(for draft: String) -> Bool {
-        draft.contains("#")
-            && lastHashQuery(in: draft) != nil
-            && newTaskLabelSuggestions(for: draft).isEmpty == false
-    }
-
-    func completeLastHashToken(in draft: String, with labelName: String) -> String {
-        guard let hashIndex = draft.lastIndex(of: "#") else {
-            return "\(draft) #\(labelName)"
+    func newTaskClassificationSuggestions(
+        for draft: String
+    ) -> [ClassificationCatalogItemProjection] {
+        guard let token = newTaskClassificationToken(for: draft) else { return [] }
+        switch token.kind {
+        case .label:
+            let selectedKeys = Set(
+                parsedTaskDraft(draft).labelNames.map(
+                    ClassificationNameCanonicalizer.canonicalKey
+                )
+            )
+            return orderedActiveLabelSuggestions(
+                query: token.query,
+                excludingCanonicalKeys: selectedKeys
+            )
+        case .category:
+            return orderedActiveCategorySuggestions(query: token.query)
         }
-        let prefix = draft[..<hashIndex]
-        return "\(prefix)#\(labelName) "
+    }
+
+    func shouldShowNewTaskClassificationSuggestions(
+        for draft: String
+    ) -> Bool {
+        newTaskClassificationToken(for: draft) != nil
+            && newTaskClassificationSuggestions(for: draft).isEmpty == false
+    }
+
+    func completeNewTaskClassificationToken(
+        in draft: String,
+        with name: String
+    ) -> String {
+        NewTaskDraftParser.completingActiveToken(in: draft, with: name)
+    }
+
+    func newTaskDraftIssueMessage(for draft: String) -> String? {
+        switch parsedTaskDraft(draft).issue {
+        case .multipleCategories:
+            copy.newTaskMultipleCategories
+        case nil:
+            nil
+        }
+    }
+
+    private func orderedActiveCategorySuggestions(
+        query: String
+    ) -> [ClassificationCatalogItemProjection] {
+        let normalizedQuery = query.trimmingCharacters(
+            in: CharacterSet(charactersIn: "@").union(.whitespacesAndNewlines)
+        )
+        return (classificationCatalog()?.categories ?? [])
+            .filter { $0.lifecycle == .active }
+            .filter { category in
+                normalizedQuery.isEmpty
+                    || category.name.localizedStandardContains(normalizedQuery)
+            }
+            .sorted { lhs, rhs in
+                if lhs.currentUsageCount != rhs.currentUsageCount {
+                    return lhs.currentUsageCount > rhs.currentUsageCount
+                }
+                return ClassificationNameCanonicalizer.canonicalKey(lhs.name)
+                    < ClassificationNameCanonicalizer.canonicalKey(rhs.name)
+            }
     }
 
     private func orderedActiveLabelSuggestions(
@@ -78,21 +127,47 @@ extension NoonmarkStore {
         }
     }
 
+    private func taskCategoryChoice(
+        for rawName: String?,
+        in candidate: NoonmarkEngine
+    ) -> TaskCategoryChoice? {
+        guard let rawName else { return nil }
+        let name = ClassificationNameCanonicalizer.displayName(
+            rawName.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        )
+        guard name.isEmpty == false else { return nil }
+        let key = ClassificationNameCanonicalizer.canonicalKey(name)
+        let catalog: ClassificationCatalogProjection? = if case let .catalog(projection) = try? candidate.classification(.catalog) {
+            projection
+        } else {
+            nil
+        }
+        if let existing = catalog?.categories.first(where: {
+            $0.lifecycle == .active
+                && ClassificationNameCanonicalizer.canonicalKey($0.name) == key
+        }), let id = UUID(uuidString: existing.id) {
+            return .existing(TaskCategoryID(id))
+        }
+        return .new(name: name, colorHex: "#2A6FDB")
+    }
+
     @discardableResult
-    func applyTaskDraftLabels(
+    func applyTaskDraftClassification(
         to candidate: NoonmarkEngine,
         chainID: TaskChainID,
+        categoryName: String?,
         labelNames: [String],
         now: Date
     ) throws -> Bool {
+        let category = taskCategoryChoice(for: categoryName, in: candidate)
         let choices = taskLabelChoices(for: labelNames, in: candidate)
-        guard choices.isEmpty == false else { return false }
+        guard category != nil || choices.isEmpty == false else { return false }
         let interactionID = UUID()
         let plan = try candidate.prepareClassification(
             .setCurrent(
                 TaskClassificationDraft(
                     chainID: chainID,
-                    category: nil,
+                    category: category,
                     labels: choices
                 )
             ),

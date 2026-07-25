@@ -1,5 +1,6 @@
 import Foundation
 @_spi(ClassificationUserDecision) import NoonmarkCore
+import NoonmarkMacRuntime
 
 private enum TaskNoteMutationTargetError: LocalizedError {
     case unavailable
@@ -33,6 +34,10 @@ extension NoonmarkStore {
         target: QuickTaskTarget
     ) -> Bool {
         let draft = parsedTaskDraft(text)
+        guard draft.issue == nil else {
+            showToast(copy.newTaskMultipleCategories)
+            return false
+        }
         guard draft.title.isEmpty == false else { return false }
         let originDescription = copy.quickTaskOriginDescription
         do {
@@ -57,9 +62,10 @@ extension NoonmarkStore {
                     today: moment.today,
                     now: moment.instant
                 )
-                _ = try applyTaskDraftLabels(
+                _ = try applyTaskDraftClassification(
                     to: candidate,
                     chainID: chainID,
+                    categoryName: draft.categoryName,
                     labelNames: draft.labelNames,
                     now: moment.instant
                 )
@@ -74,6 +80,10 @@ extension NoonmarkStore {
 
     func addPoolTask() {
         let draft = parsedTaskDraft(poolText)
+        guard draft.issue == nil else {
+            showToast(copy.newTaskMultipleCategories)
+            return
+        }
         guard draft.title.isEmpty == false else { return }
         do {
             let chainID = try commitEngineMutation(
@@ -84,9 +94,10 @@ extension NoonmarkStore {
                     title: draft.title,
                     now: moment.instant
                 )
-                _ = try applyTaskDraftLabels(
+                _ = try applyTaskDraftClassification(
                     to: candidate,
                     chainID: chainID,
+                    categoryName: draft.categoryName,
                     labelNames: draft.labelNames,
                     now: moment.instant
                 )
@@ -100,34 +111,8 @@ extension NoonmarkStore {
         }
     }
 
-    func parsedTaskDraft(_ rawText: String) -> (title: String, labelNames: [String]) {
-        let raw = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard raw.isEmpty == false else { return ("", []) }
-        let pattern = #"#([^\s#]+)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return (raw, [])
-        }
-        let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
-        let matches = regex.matches(in: raw, range: range)
-        let labelNames = matches.compactMap { match -> String? in
-            guard let range = Range(match.range(at: 1), in: raw) else { return nil }
-            let labelName = String(raw[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-            return labelName.isEmpty ? nil : labelName
-        }
-        let title = regex.stringByReplacingMatches(
-            in: raw,
-            range: range,
-            withTemplate: " "
-        )
-        .split(whereSeparator: \.isWhitespace)
-        .joined(separator: " ")
-        return (title, labelNames)
-    }
-
-    func lastHashQuery(in text: String) -> String? {
-        guard let hashIndex = text.lastIndex(of: "#") else { return nil }
-        let tail = text[text.index(after: hashIndex)...]
-        return tail.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+    func parsedTaskDraft(_ rawText: String) -> NewTaskDraft {
+        NewTaskDraftParser.parse(rawText)
     }
 
     func schedulePoolTask(_ chainID: TaskChainID, date: LocalDate) {

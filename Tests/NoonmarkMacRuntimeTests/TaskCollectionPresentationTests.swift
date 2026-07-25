@@ -20,6 +20,47 @@ final class TaskCollectionPresentationTests: XCTestCase {
         XCTAssertTrue(flat.showsCategoryInItemRows)
     }
 
+    func testPinnedQueueKeepsRowCategoryWhenGroupedSectionsHideIt() throws {
+        let category = TaskCollectionCategoryPresentation(
+            id: "category-work",
+            name: "Work",
+            colorHex: "#2A6FDB",
+            approval: .userApproved
+        )
+        let preference = TaskCollectionPresentationPreference(
+            organization: .grouped,
+            sortKey: .time,
+            direction: .ascending
+        )
+        let sections = TaskCollectionPresentationProjector().sections(
+            for: [
+                TaskCollectionPresentationItem(
+                    id: "pinned",
+                    title: "Pinned",
+                    time: Date(timeIntervalSince1970: 1000),
+                    category: category,
+                    fixedOrder: 0
+                ),
+                TaskCollectionPresentationItem(
+                    id: "normal",
+                    title: "Normal",
+                    time: Date(timeIntervalSince1970: 1001),
+                    category: category
+                ),
+            ],
+            preference: preference,
+            ungroupedTitle: "Ungrouped"
+        )
+
+        let pinnedSection = try XCTUnwrap(sections.first)
+        let groupedSection = try XCTUnwrap(sections.last)
+        XCTAssertNil(pinnedSection.title)
+        XCTAssertEqual(groupedSection.title, "Work")
+        XCTAssertEqual(pinnedSection.items.first?.category, category)
+        XCTAssertTrue(preference.showsCategoryInItemRows(in: pinnedSection))
+        XCTAssertFalse(preference.showsCategoryInItemRows(in: groupedSection))
+    }
+
     func testDefaultsPreserveEachPageCurrentPresentation() {
         XCTAssertEqual(
             TaskCollectionPresentationPreference.defaultValue(for: .dayTodo),

@@ -17,6 +17,16 @@ extension View {
             preference.showsCategoryInItemRows
         )
     }
+
+    func taskCollectionCategoryVisibility(
+        _ preference: TaskCollectionPresentationPreference,
+        in section: TaskCollectionPresentationSection
+    ) -> some View {
+        environment(
+            \.taskRowCategoryIsVisible,
+            preference.showsCategoryInItemRows(in: section)
+        )
+    }
 }
 
 struct TaskClassificationAccessibilityNamespace: Hashable {

@@ -275,6 +275,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 taskPoolProviderReportPresentationVerified:
                 analysisReportContractVerified,
                 taskCollectionCategoryVisibilityVerified: false,
+                taskCyclePresentationVerified: false,
                 zhulongHeaderComposerHierarchyVerified: true
             )
         let collectionCheckContext = DemoCollectionCheckContext(
@@ -358,7 +359,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             return
         }
         do {
-            try captureTaskCollectionScreenshot(verificationCase)
+            try captureTaskCollectionScreenshot(page: verificationCase.page)
         } catch {
             finishWithFailure(error, on: context.store)
             return
@@ -366,27 +367,34 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
         let nextIndex = index + 1
         guard context.cases.indices.contains(nextIndex) else {
-            do {
-                let result = try manifest(
-                    fixture: context.fixture,
-                    engine: context.engine,
-                    sessions: context.sessions,
-                    store: context.store,
-                    presentationVerification:
-                    context.presentationVerification
-                        .verifyingTaskCollectionCategoryVisibility()
+            let cycleContext = DemoCycleCheckContext(
+                fixture: context.fixture,
+                engine: context.engine,
+                sessions: context.sessions,
+                store: context.store,
+                presentationVerification:
+                context.presentationVerification
+                    .verifyingTaskCollectionCategoryVisibility(),
+                cases: cycleVerificationCases
+            )
+            guard let firstCase = cycleContext.cases.first,
+                  AppViewTreeE2E.click(
+                      identifier: firstCase.sidebarNavigationIdentifier
+                  )
+            else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError
+                        .presentationContractFailed,
+                    on: context.store
                 )
-                guard AppViewTreeE2E.click(
-                    identifier: "sidebar.nav.day"
-                ) else {
-                    throw InteractiveDemoFixtureError
-                        .presentationContractFailed
-                }
-                context.store.selectedDate = context.fixture.anchorDate
-                try write(result)
-            } catch {
-                finishWithFailure(error, on: context.store)
+                return
             }
+            retryTaskCyclePresentation(
+                context: cycleContext,
+                index: 0,
+                remainingAttempts: 100
+            )
             return
         }
         guard AppViewTreeE2E.click(
@@ -420,6 +428,173 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 index: index,
                 remainingAttempts: remainingAttempts
             )
+        }
+    }
+
+    @MainActor
+    private func verifyTaskCyclePresentation(
+        context: DemoCycleCheckContext,
+        index: Int,
+        remainingAttempts: Int
+    ) {
+        guard context.cases.indices.contains(index),
+              remainingAttempts > 0
+        else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        let verificationCase = context.cases[index]
+        guard context.store.page == verificationCase.page,
+              let track = context.engine.taskCycleTracks(
+                  today: context.fixture.anchorDate,
+                  collection: verificationCase.collection
+              ).first
+        else {
+            retryTaskCyclePresentation(
+                context: context,
+                index: index,
+                remainingAttempts: remainingAttempts - 1
+            )
+            return
+        }
+        let expectedTrackIdentifier =
+            "task-cycle-track.\(verificationCase.accessibilityName).\(track.id.description)"
+        let expectedDayIdentifiers = Set(track.days.map {
+            "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\($0.date.description).\($0.state.rawValue)"
+        })
+        let trackIdentifiers = AppViewTreeE2E.identifiers(
+            withPrefix:
+            "task-cycle-track.\(verificationCase.accessibilityName)."
+        )
+        let dayIdentifiers = AppViewTreeE2E.identifiers(
+            withPrefix:
+            "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description)."
+        )
+        guard AppViewTreeE2E.activateMainWindow(),
+              trackIdentifiers == Set([expectedTrackIdentifier]),
+              dayIdentifiers == expectedDayIdentifiers
+        else {
+            retryTaskCyclePresentation(
+                context: context,
+                index: index,
+                remainingAttempts: remainingAttempts - 1
+            )
+            return
+        }
+        do {
+            try captureTaskCollectionScreenshot(page: verificationCase.page)
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+
+        let nextIndex = index + 1
+        if context.cases.indices.contains(nextIndex) {
+            guard AppViewTreeE2E.click(
+                identifier: context.cases[nextIndex]
+                    .sidebarNavigationIdentifier
+            ) else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError.presentationContractFailed,
+                    on: context.store
+                )
+                return
+            }
+            retryTaskCyclePresentation(
+                context: context,
+                index: nextIndex,
+                remainingAttempts: 100
+            )
+            return
+        }
+
+        guard let anchorDay = track.days.first(where: {
+            $0.date == context.fixture.anchorDate
+                && $0.traceID != nil
+                && $0.traceDate != nil
+        }), let expectedTraceID = anchorDay.traceID,
+        let expectedDate = anchorDay.traceDate,
+        AppViewTreeE2E.click(
+            identifier:
+            "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\(anchorDay.date.description).\(anchorDay.state.rawValue)"
+        ) else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        retryTaskCycleNavigation(
+            context: context,
+            expectedTraceID: expectedTraceID,
+            expectedDate: expectedDate,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func retryTaskCyclePresentation(
+        context: DemoCycleCheckContext,
+        index: Int,
+        remainingAttempts: Int
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            verifyTaskCyclePresentation(
+                context: context,
+                index: index,
+                remainingAttempts: remainingAttempts
+            )
+        }
+    }
+
+    @MainActor
+    private func retryTaskCycleNavigation(
+        context: DemoCycleCheckContext,
+        expectedTraceID: DayTraceID,
+        expectedDate: LocalDate,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        guard context.store.page == .day,
+              context.store.selectedDate == expectedDate,
+              context.store.selectedTraceID == expectedTraceID
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                retryTaskCycleNavigation(
+                    context: context,
+                    expectedTraceID: expectedTraceID,
+                    expectedDate: expectedDate,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        do {
+            let result = try manifest(
+                fixture: context.fixture,
+                engine: context.engine,
+                sessions: context.sessions,
+                store: context.store,
+                presentationVerification:
+                context.presentationVerification
+                    .verifyingTaskCyclePresentation()
+            )
+            try write(result)
+        } catch {
+            finishWithFailure(error, on: context.store)
         }
     }
 
@@ -470,9 +645,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     }
 
     @MainActor
-    private func captureTaskCollectionScreenshot(
-        _ verificationCase: DemoCollectionCheckCase
-    ) throws {
+    private func captureTaskCollectionScreenshot(page: NoonmarkStore.Page) throws {
         guard let window = NSApp.windows.first(where: {
             $0 is NoonmarkWindow
                 && $0.isVisible
@@ -487,7 +660,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 of: window,
                 to: resultURL.deletingLastPathComponent()
                     .appendingPathComponent(
-                        verificationCase.screenshotFileName
+                        "task-collection-\(page.rawValue).png"
                     )
             )
         } catch {
@@ -521,6 +694,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 ],
                 organization: .grouped
             )
+        ]
+    }
+
+    private var cycleVerificationCases: [DemoCycleCheckCase] {
+        [
+            DemoCycleCheckCase(page: .future, collection: .future),
+            DemoCycleCheckCase(page: .unfinished, collection: .unfinished),
+            DemoCycleCheckCase(page: .completed, collection: .completed)
         ]
     }
 
@@ -1180,15 +1361,30 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 && mixedStatusSectionCount > 0
                 && statusSinkingVerified
         let completedItems = engine.completedPool()
+        let ordinaryCompletedItems = completedItems.filter {
+            engine.chains[$0.trace.chainID]?.cycleMembership == nil
+        }
+        let cycleCompletedItems = completedItems.filter {
+            engine.chains[$0.trace.chainID]?.cycleMembership != nil
+        }
         let singleDayCompletedTaskCount = completedItems.count {
             $0.trajectory.traces.count == 1
         }
+        let ordinarySingleDayCompletedTaskCount =
+            ordinaryCompletedItems.count {
+                $0.trajectory.traces.count == 1
+            }
+        let cycleSingleDayCompletedTaskCount =
+            cycleCompletedItems.count {
+                $0.trajectory.traces.count == 1
+            }
         let multiDayCompletedTaskCount = completedItems.count {
             $0.trajectory.traces.count
                 >= MacUICompletedPoolRowLayout.minimumVisibleTrajectoryNodeCount
         }
         let completedPoolRowHierarchyVerified =
-            singleDayCompletedTaskCount > 0
+            ordinarySingleDayCompletedTaskCount > 0
+                && cycleSingleDayCompletedTaskCount > 0
                 && multiDayCompletedTaskCount > 0
                 && MacUICompletedPoolRowLayout
                 .strongStatusRepresentationCount == 1
@@ -1233,6 +1429,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               presentationVerification
               .taskCollectionCategoryVisibilityVerified,
               presentationVerification
+              .taskCyclePresentationVerified,
+              presentationVerification
               .zhulongHeaderComposerHierarchyVerified,
               engine.getDayTodo(date: fixture.anchorDate).traces
               .isEmpty == false
@@ -1257,6 +1455,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             dayTodoGroupingPresentationVerified:
             dayTodoGroupingPresentationVerified,
             singleDayCompletedTaskCount: singleDayCompletedTaskCount,
+            ordinarySingleDayCompletedTaskCount:
+            ordinarySingleDayCompletedTaskCount,
+            cycleSingleDayCompletedTaskCount:
+            cycleSingleDayCompletedTaskCount,
             multiDayCompletedTaskCount: multiDayCompletedTaskCount,
             completedPoolRowHierarchyVerified:
             completedPoolRowHierarchyVerified,
@@ -1276,6 +1478,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             taskCollectionCategoryVisibilityVerified:
             presentationVerification
                 .taskCollectionCategoryVisibilityVerified,
+            taskCyclePresentationVerified:
+            presentationVerification
+                .taskCyclePresentationVerified,
             zhulongHeaderComposerHierarchyVerified:
             presentationVerification
                 .zhulongHeaderComposerHierarchyVerified,
@@ -1321,6 +1526,7 @@ private struct InteractiveDemoPresentationVerification {
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
     let taskCollectionCategoryVisibilityVerified: Bool
+    let taskCyclePresentationVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool
 
     func verifyingTaskCollectionCategoryVisibility() -> Self {
@@ -1334,6 +1540,26 @@ private struct InteractiveDemoPresentationVerification {
             taskPoolProviderReportPresentationVerified:
             taskPoolProviderReportPresentationVerified,
             taskCollectionCategoryVisibilityVerified: true,
+            taskCyclePresentationVerified:
+            taskCyclePresentationVerified,
+            zhulongHeaderComposerHierarchyVerified:
+            zhulongHeaderComposerHierarchyVerified
+        )
+    }
+
+    func verifyingTaskCyclePresentation() -> Self {
+        Self(
+            scopeAuthorizationUIVerified:
+            scopeAuthorizationUIVerified,
+            taskPoolStatisticsPresentationVerified:
+            taskPoolStatisticsPresentationVerified,
+            taskPoolProviderBoundaryVerified:
+            taskPoolProviderBoundaryVerified,
+            taskPoolProviderReportPresentationVerified:
+            taskPoolProviderReportPresentationVerified,
+            taskCollectionCategoryVisibilityVerified:
+            taskCollectionCategoryVisibilityVerified,
+            taskCyclePresentationVerified: true,
             zhulongHeaderComposerHierarchyVerified:
             zhulongHeaderComposerHierarchyVerified
         )
@@ -1358,9 +1584,32 @@ private struct DemoCollectionCheckCase {
     var sidebarNavigationIdentifier: String {
         "sidebar.nav.\(page.rawValue)"
     }
+}
 
-    var screenshotFileName: String {
-        "task-collection-\(page.rawValue).png"
+private struct DemoCycleCheckContext {
+    let fixture: NoonmarkDemoFixture
+    let engine: NoonmarkEngine
+    let sessions: [ZhulongSession]
+    let store: NoonmarkStore
+    let presentationVerification:
+        InteractiveDemoPresentationVerification
+    let cases: [DemoCycleCheckCase]
+}
+
+private struct DemoCycleCheckCase {
+    let page: NoonmarkStore.Page
+    let collection: TaskCycleCollection
+
+    var accessibilityName: String {
+        switch collection {
+        case .future: "future"
+        case .unfinished: "unfinished"
+        case .completed: "completed"
+        }
+    }
+
+    var sidebarNavigationIdentifier: String {
+        "sidebar.nav.\(page.rawValue)"
     }
 }
 
@@ -1376,6 +1625,8 @@ private struct InteractiveDemoManifest: Codable {
     let dayTodoMixedStatusSectionCount: Int
     let dayTodoGroupingPresentationVerified: Bool
     let singleDayCompletedTaskCount: Int
+    let ordinarySingleDayCompletedTaskCount: Int
+    let cycleSingleDayCompletedTaskCount: Int
     let multiDayCompletedTaskCount: Int
     let completedPoolRowHierarchyVerified: Bool
     let visibleScopeReauthorizationCardCount: Int
@@ -1384,6 +1635,7 @@ private struct InteractiveDemoManifest: Codable {
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
     let taskCollectionCategoryVisibilityVerified: Bool
+    let taskCyclePresentationVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool
     let persistedDatabasePath: String
 }

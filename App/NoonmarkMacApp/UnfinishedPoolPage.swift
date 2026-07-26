@@ -30,9 +30,9 @@ struct UnfinishedPoolPage: View {
     }
 
     var cycleTracks: [TaskCycleTrack] {
-        TaskCycleCollectionProjector().tracks(
-            store.engine.taskCycleTracks(today: store.today),
-            for: .unfinished
+        store.engine.taskCycleTracks(
+            today: store.today,
+            collection: .unfinished
         )
     }
 

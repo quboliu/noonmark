@@ -17,9 +17,9 @@ import UniformTypeIdentifiers
 struct FuturePlansPage: View {
     @EnvironmentObject private var store: NoonmarkStore
     var cycleTracks: [TaskCycleTrack] {
-        TaskCycleCollectionProjector().tracks(
-            store.engine.taskCycleTracks(today: store.today),
-            for: .future
+        store.engine.taskCycleTracks(
+            today: store.today,
+            collection: .future
         )
     }
 

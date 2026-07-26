@@ -17,6 +17,10 @@ struct TaskCycleTrackRow: View {
         }
     }
 
+    private var accessibilityIdentifier: String {
+        "task-cycle-track.\(collection.accessibilityName).\(track.id.description)"
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: 1)
@@ -45,7 +49,11 @@ struct TaskCycleTrackRow: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 5) {
                         ForEach(track.days) { day in
-                            TaskCycleTrackDayButton(day: day)
+                            TaskCycleTrackDayButton(
+                                seriesID: track.id,
+                                collection: collection,
+                                day: day
+                            )
                         }
                     }
                 }
@@ -60,20 +68,57 @@ struct TaskCycleTrackRow: View {
             separatorLeadingInset: 24
         )
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(
-            "task-cycle-track.\(collection.accessibilityName).\(track.id.description)"
-        )
+        .accessibilityIdentifier(accessibilityIdentifier)
+        .background {
+            AppE2EViewAnchor(identifier: accessibilityIdentifier)
+        }
     }
 }
 
 private struct TaskCycleTrackDayButton: View {
     @EnvironmentObject private var store: NoonmarkStore
+    let seriesID: TaskCycleSeriesID
+    let collection: TaskCycleCollection
     let day: TaskCycleTrackDay
+
+    private var navigationTraceID: DayTraceID? {
+        if collection == .future {
+            return day.futurePlanTraceID
+        }
+        return day.traceID
+    }
+
+    private var navigationDate: LocalDate? {
+        if collection == .future {
+            return day.futurePlanDate
+        }
+        return day.traceDate
+    }
+
+    private var accessibilityLabel: String {
+        let state = store.copy.taskCycleState(day.state)
+        let base = "\(store.displayDate(day.date))，\(state)"
+        guard collection == .future,
+              let targetDate = day.futurePlanDate,
+              targetDate != day.date
+        else {
+            return base
+        }
+        return "\(base)，\(store.copy.taskCycleFutureTarget(store.displayDate(targetDate)))"
+    }
+
+    private var accessibilityIdentifier: String {
+        "task-cycle-day.\(collection.accessibilityName).\(seriesID.description).\(day.date.description).\(day.state.rawValue)"
+    }
 
     var body: some View {
         Button {
-            guard let traceID = day.traceID else { return }
-            store.selectedDate = day.date
+            guard let traceID = navigationTraceID,
+                  let targetDate = navigationDate
+            else {
+                return
+            }
+            store.selectedDate = targetDate
             store.page = .day
             store.selectTrace(traceID)
         } label: {
@@ -104,13 +149,15 @@ private struct TaskCycleTrackDayButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(day.traceID == nil)
-        .accessibilityLabel(
-            "\(store.displayDate(day.date))，\(store.copy.taskCycleState(day.state))"
-        )
-        .accessibilityIdentifier(
-            "task-cycle-day.\(day.date.description).\(day.state.rawValue)"
-        )
+        .disabled(navigationTraceID == nil)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier(accessibilityIdentifier)
+        .background {
+            AppE2EViewAnchor(
+                identifier: accessibilityIdentifier,
+                verificationText: accessibilityLabel
+            )
+        }
     }
 }
 

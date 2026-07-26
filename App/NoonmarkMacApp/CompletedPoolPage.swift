@@ -30,9 +30,9 @@ struct CompletedPoolPage: View {
     }
 
     var cycleTracks: [TaskCycleTrack] {
-        TaskCycleCollectionProjector().tracks(
-            store.engine.taskCycleTracks(today: store.today),
-            for: .completed
+        store.engine.taskCycleTracks(
+            today: store.today,
+            collection: .completed
         )
     }
 

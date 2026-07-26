@@ -59,17 +59,26 @@ public struct TaskCycleTrackDay: Equatable, Identifiable, Sendable {
     public let state: TaskCycleTrackDayState
     public let chainID: TaskChainID?
     public let traceID: DayTraceID?
+    public let traceDate: LocalDate?
+    public let futurePlanTraceID: DayTraceID?
+    public let futurePlanDate: LocalDate?
 
     public init(
         date: LocalDate,
         state: TaskCycleTrackDayState,
         chainID: TaskChainID?,
-        traceID: DayTraceID?
+        traceID: DayTraceID?,
+        traceDate: LocalDate? = nil,
+        futurePlanTraceID: DayTraceID? = nil,
+        futurePlanDate: LocalDate? = nil
     ) {
         self.date = date
         self.state = state
         self.chainID = chainID
         self.traceID = traceID
+        self.traceDate = traceDate
+        self.futurePlanTraceID = futurePlanTraceID
+        self.futurePlanDate = futurePlanDate
     }
 }
 
@@ -119,10 +128,14 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
         days.count { $0.state == .planned }
     }
 
+    public var futurePlanCount: Int {
+        days.count { $0.futurePlanTraceID != nil }
+    }
+
     public func appears(in collection: TaskCycleCollection) -> Bool {
         switch collection {
         case .future:
-            days.contains { $0.state == .planned }
+            futurePlanCount > 0
         case .unfinished:
             days.contains {
                 $0.state == .unfinished || $0.state == .abandoned
@@ -228,28 +241,38 @@ public extension NoonmarkEngine {
                             date: date,
                             state: .notScheduled,
                             chainID: nil,
-                            traceID: nil
+                            traceID: nil,
+                            traceDate: nil,
+                            futurePlanTraceID: nil,
+                            futurePlanDate: nil
                         )
                     }
-                    let trace = traces.values
-                        .filter {
-                            $0.chainID == chain.id && $0.date == date
+                    let chainTraces = traces.values.filter {
+                        $0.chainID == chain.id
+                    }
+                    let scheduledTrace = latestTaskCycleTrace(
+                        chainTraces.filter { $0.date == date }
+                    )
+                    let representativeTrace =
+                        scheduledTrace
+                        ?? latestTaskCycleTrace(chainTraces)
+                    let futurePlanTrace = latestTaskCycleTrace(
+                        chainTraces.filter {
+                            $0.status == .pending && $0.date > today
                         }
-                        .max {
-                            if $0.createdAt != $1.createdAt {
-                                return $0.createdAt < $1.createdAt
-                            }
-                            return $0.id.description < $1.id.description
-                        }
+                    )
                     return TaskCycleTrackDay(
                         date: date,
                         state: taskCycleTrackState(
-                            trace: trace,
-                            date: date,
+                            trace: representativeTrace,
+                            date: representativeTrace?.date ?? date,
                             today: today
                         ),
                         chainID: chain.id,
-                        traceID: trace?.id
+                        traceID: representativeTrace?.id,
+                        traceDate: representativeTrace?.date,
+                        futurePlanTraceID: futurePlanTrace?.id,
+                        futurePlanDate: futurePlanTrace?.date
                     )
                 }
                 return TaskCycleTrack(
@@ -269,32 +292,46 @@ public extension NoonmarkEngine {
             }
     }
 
+    func taskCycleTracks(
+        today: LocalDate,
+        collection: TaskCycleCollection
+    ) -> [TaskCycleTrack] {
+        taskCycleTracks(today: today).filter {
+            $0.appears(in: collection)
+        }
+    }
+
+    private func latestTaskCycleTrace(
+        _ candidates: [DayTrace]
+    ) -> DayTrace? {
+        candidates.max {
+            if $0.createdAt != $1.createdAt {
+                return $0.createdAt < $1.createdAt
+            }
+            return $0.id.description < $1.id.description
+        }
+    }
+
     private func taskCycleTrackState(
         trace: DayTrace?,
         date: LocalDate,
         today: LocalDate
     ) -> TaskCycleTrackDayState {
         guard let trace else { return .skipped }
-        switch trace.status {
-        case .pending:
+        if trace.status == .pending {
             if date < today { return .pendingPast }
             if date == today { return .pendingToday }
             return .planned
-        case .completed:
-            return .completed
-        case .unfinished:
-            return .unfinished
-        case .deferred:
-            return .deferred
-        case .changed:
-            return .changed
-        case .returnedToPool:
-            return .returnedToPool
-        case .cancelledDraft:
-            return .skipped
-        case .abandoned:
-            return .abandoned
         }
+        if trace.status == .cancelledDraft {
+            return .skipped
+        }
+        guard let state = TaskCycleTrackDayState(
+            rawValue: trace.status.rawValue
+        ) else {
+            preconditionFailure("visible trace status must map to cycle state")
+        }
+        return state
     }
 }
 

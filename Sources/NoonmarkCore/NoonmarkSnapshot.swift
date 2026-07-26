@@ -209,7 +209,6 @@ public extension NoonmarkSnapshot {
                   membership.schedule.includes(membership.occurrenceDate),
                   traces.contains(where: {
                       $0.chainID == chain.id
-                          && $0.date == membership.occurrenceDate
                   })
             else {
                 throw NoonmarkError.invalidInput(

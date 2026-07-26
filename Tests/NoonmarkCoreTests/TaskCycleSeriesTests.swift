@@ -69,7 +69,7 @@ final class TaskCycleSeriesTests: XCTestCase {
             thursday,
             friday,
             saturday,
-            sunday,
+            sunday
         ])
         XCTAssertEqual(
             track.days.map(\.state),
@@ -80,7 +80,7 @@ final class TaskCycleSeriesTests: XCTestCase {
                 .planned,
                 .planned,
                 .notScheduled,
-                .notScheduled,
+                .notScheduled
             ]
         )
         XCTAssertEqual(track.scheduledCount, 5)
@@ -128,6 +128,95 @@ final class TaskCycleSeriesTests: XCTestCase {
         XCTAssertEqual(track.completedCount, 1)
         XCTAssertEqual(track.unfinishedCount, 1)
         XCTAssertEqual(track.plannedCount, 2)
+        for collection in [
+            TaskCycleCollection.future,
+            .unfinished,
+            .completed
+        ] {
+            let projectedTrack = try XCTUnwrap(
+                engine.taskCycleTracks(
+                    today: wednesday,
+                    collection: collection
+                ).first { $0.id == seriesID }
+            )
+            XCTAssertEqual(projectedTrack.days, track.days)
+        }
+    }
+
+    func testReschedulingFutureOccurrenceKeepsCycleMembershipValid() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日复盘",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let tuesdayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: tuesday
+        )
+
+        try engine.rescheduleFuturePlan(
+            traceID: tuesdayTrace.id,
+            targetDate: sunday,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(engine.traces[tuesdayTrace.id]?.date, sunday)
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: monday).first {
+                $0.id == seriesID
+            }
+        )
+        let tuesdayDay = try XCTUnwrap(
+            track.days.first { $0.date == tuesday }
+        )
+        XCTAssertEqual(tuesdayDay.state, .planned)
+        XCTAssertEqual(tuesdayDay.traceID, tuesdayTrace.id)
+        XCTAssertEqual(tuesdayDay.traceDate, sunday)
+        XCTAssertEqual(tuesdayDay.futurePlanTraceID, tuesdayTrace.id)
+        XCTAssertEqual(tuesdayDay.futurePlanDate, sunday)
+        XCTAssertTrue(track.appears(in: .future))
+    }
+
+    func testDeferringTheFinalOccurrenceKeepsItsFutureTargetVisible() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日复盘",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let mondayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+
+        let futureTraceID = try engine.deferCurrentTrace(
+            traceID: mondayTrace.id,
+            targetDate: tuesday,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: monday).first {
+                $0.id == seriesID
+            }
+        )
+        XCTAssertEqual(track.days.map(\.state), [.deferred])
+        XCTAssertEqual(track.futurePlanCount, 1)
+        XCTAssertEqual(track.days.first?.futurePlanTraceID, futureTraceID)
+        XCTAssertEqual(track.days.first?.futurePlanDate, tuesday)
+        XCTAssertTrue(track.appears(in: .future))
     }
 
     func testSnapshotRejectsDivergentSeriesDescriptorsAndDuplicateOccurrences() throws {
@@ -186,7 +275,7 @@ final class TaskCycleSeriesTests: XCTestCase {
         XCTAssertTrue(engine.traces.isEmpty)
     }
 
-    func testSnapshotRejectsCycleMembershipWithoutItsScheduledTrace() throws {
+    func testSnapshotRejectsCycleMembershipWithoutAnyTrace() throws {
         let engine = NoonmarkEngine()
         let seriesID = try engine.createTaskCycleSeries(
             title: "缺失实例",

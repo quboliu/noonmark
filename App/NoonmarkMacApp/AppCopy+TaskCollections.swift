@@ -11,7 +11,7 @@ private let chineseTaskCycleStateNames: [TaskCycleTrackDayState: String] = [
     .changed: "已变更",
     .returnedToPool: "已回池",
     .skipped: "已跳过",
-    .abandoned: "已废弃",
+    .abandoned: "已废弃"
 ]
 
 private let englishTaskCycleStateNames: [TaskCycleTrackDayState: String] = [
@@ -25,7 +25,7 @@ private let englishTaskCycleStateNames: [TaskCycleTrackDayState: String] = [
     .changed: "Changed",
     .returnedToPool: "Returned to pool",
     .skipped: "Skipped",
-    .abandoned: "Abandoned",
+    .abandoned: "Abandoned"
 ]
 
 extension AppCopy {
@@ -55,13 +55,13 @@ extension AppCopy {
     ) -> String {
         switch (language, collection) {
         case (.chinese, .future):
-            "\(track.plannedCount) 天待计划 · \(track.completedCount) 天已完成"
+            "\(track.futurePlanCount) 天待计划 · \(track.completedCount) 天已完成"
         case (.chinese, .unfinished):
             "\(track.unfinishedCount) 天未完成 · \(track.completedCount) 天已完成"
         case (.chinese, .completed):
             "\(track.completedCount) 天已完成 · 共 \(track.scheduledCount) 个计划日"
         case (.english, .future):
-            "\(track.plannedCount) planned · \(track.completedCount) completed"
+            "\(track.futurePlanCount) planned · \(track.completedCount) completed"
         case (.english, .unfinished):
             "\(track.unfinishedCount) unfinished · \(track.completedCount) completed"
         case (.english, .completed):
@@ -74,5 +74,9 @@ extension AppCopy {
             ? chineseTaskCycleStateNames
             : englishTaskCycleStateNames
         return names[state] ?? state.rawValue
+    }
+
+    func taskCycleFutureTarget(_ date: String) -> String {
+        language == .chinese ? "目标 \(date)" : "Target \(date)"
     }
 }

@@ -27,6 +27,8 @@ struct NoonmarkDemoFixtureTests {
         #expect(track.appears(in: .future))
         #expect(track.appears(in: .unfinished))
         #expect(track.appears(in: .completed))
+        #expect(fixture.report.taskCycleSeriesCount == 1)
+        #expect(fixture.report.taskCycleOccurrenceCount == 13)
         #expect(fixture.report.isComplete)
     }
 
@@ -77,6 +79,28 @@ struct NoonmarkDemoFixtureTests {
             engine.snapshot().days.filter {
                 $0.reviewSummary?.isEmpty == false
             }.count >= 6
+        )
+        let completedItems = engine.completedPool()
+        #expect(
+            completedItems.count {
+                $0.trajectory.traces.count == 1
+                    && engine.chains[
+                        $0.trace.chainID
+                    ]?.cycleMembership == nil
+            } == 5
+        )
+        #expect(
+            completedItems.count {
+                $0.trajectory.traces.count == 1
+                    && engine.chains[
+                        $0.trace.chainID
+                    ]?.cycleMembership != nil
+            } == 5
+        )
+        #expect(
+            completedItems.count {
+                $0.trajectory.traces.count >= 2
+            } == 2
         )
     }
 

@@ -80,6 +80,7 @@ for expected in \
   '"taskPoolStatisticsPresentationVerified" : true' \
   '"taskPoolProviderBoundaryVerified" : true' \
   '"taskPoolProviderReportPresentationVerified" : true' \
+  '"taskCyclePresentationVerified" : true' \
   '"zhulongHeaderComposerHierarchyVerified" : true'; do
   if ! grep -Fq "$expected" "$result_path"; then
     echo "demo fixture manifest is missing: $expected" >&2
@@ -94,17 +95,33 @@ done
 single_day_completed_count="$(
   plutil -extract singleDayCompletedTaskCount raw -o - "$result_path"
 )"
+ordinary_single_day_completed_count="$(
+  plutil -extract ordinarySingleDayCompletedTaskCount raw -o - "$result_path"
+)"
+cycle_single_day_completed_count="$(
+  plutil -extract cycleSingleDayCompletedTaskCount raw -o - "$result_path"
+)"
 multi_day_completed_count="$(
   plutil -extract multiDayCompletedTaskCount raw -o - "$result_path"
 )"
-if [[ "$single_day_completed_count" -lt 1 \
-      || "$multi_day_completed_count" -lt 1 ]]; then
-  echo "demo fixture must contain both single-day and multi-day completions" >&2
+cycle_series_count="$(
+  plutil -extract core.taskCycleSeriesCount raw -o - "$result_path"
+)"
+cycle_occurrence_count="$(
+  plutil -extract core.taskCycleOccurrenceCount raw -o - "$result_path"
+)"
+if [[ "$single_day_completed_count" != "10" \
+      || "$ordinary_single_day_completed_count" != "5" \
+      || "$cycle_single_day_completed_count" != "5" \
+      || "$multi_day_completed_count" != "2" \
+      || "$cycle_series_count" != "1" \
+      || "$cycle_occurrence_count" != "13" ]]; then
+  echo "demo fixture task and cycle counts drifted" >&2
   sed -n '1,200p' "$result_path" >&2
   exit 1
 fi
 
-for page in pool day unfinished completed; do
+for page in pool day future unfinished completed; do
   screenshot="$test_root/task-collection-$page.png"
   if [[ ! -s "$screenshot" ]]; then
     echo "task collection screenshot is missing: $screenshot" >&2

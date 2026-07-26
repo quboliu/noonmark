@@ -116,6 +116,8 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
     static let currentStateLabelName = "E2E进行中标签"
     static let completedStateLabelName = "E2E终局标签"
     static let unfinishedStateLabelName = "E2E未完成标签"
+    static let stoppedStateLabelName = "E2E已停止标签"
+    private static let conversionMenuDownArrowCount = 4
 
     let resultURL: URL
 
@@ -552,20 +554,40 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
         private func addCreatedSeriesLabel(
             seriesID: TaskCycleSeriesID
         ) {
+            addSeriesLabel(
+                seriesID: seriesID,
+                labelName:
+                TaskCycleMutationE2EAutomation.detailLabelName,
+                interactionName: "重复任务父级"
+            ) { [self] in
+                addCreatedSeriesPlannedSubtask(
+                    seriesID: seriesID
+                )
+            }
+        }
+
+        private func addSeriesLabel(
+            seriesID: TaskCycleSeriesID,
+            labelName: String,
+            interactionName: String,
+            onSuccess: @escaping @MainActor () -> Void
+        ) {
             let inputIdentifier =
                 "classification.editor.label-input.cycle-\(seriesID.description)"
-            waitFor("重复任务父级 # 标签输入") {
+            waitFor("\(interactionName) # 标签输入") {
                 AppViewTreeE2E.click(identifier: inputIdentifier)
             } onSuccess: { [self] in
                 guard AppViewTreeE2E.typeUnicode(
-                    "#\(TaskCycleMutationE2EAutomation.detailLabelName)"
+                    "#\(labelName)"
                 ),
                     AppViewTreeE2E.sendReturnKey()
                 else {
-                    finish("failed: 无法通过父级详情输入 # 标签")
+                    finish(
+                        "failed: 无法通过\(interactionName)输入 # 标签"
+                    )
                     return
                 }
-                waitFor("重复任务父级标签保存") {
+                waitFor("\(interactionName)标签保存") {
                     guard let projection = try? self.store.engine
                         .taskCycleTemplateClassification(
                             seriesID: seriesID
@@ -574,14 +596,10 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                         return false
                     }
                     return projection.labels.contains {
-                        $0.name
-                            == TaskCycleMutationE2EAutomation
-                            .detailLabelName
+                        $0.name == labelName
                     }
-                } onSuccess: { [self] in
-                    addCreatedSeriesPlannedSubtask(
-                        seriesID: seriesID
-                    )
+                } onSuccess: {
+                    onSuccess()
                 }
             }
         }
@@ -638,7 +656,11 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                         let durationStepper = AppViewTreeE2E.view(
                             identifier:
                             "task-cycle-plan-edit.duration-days"
-                        )
+                        ),
+                        AppViewTreeE2E.view(
+                            identifier:
+                            "task-cycle-plan-edit.start-date.anchor"
+                        ) == nil
                     else {
                         return false
                     }
@@ -762,7 +784,9 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 }
                 return AppViewTreeE2E.selectContextMenuItem(
                     of: titleView,
-                    downArrowCount: 4
+                    downArrowCount:
+                    TaskCycleMutationE2EAutomation
+                        .conversionMenuDownArrowCount
                 )
             } onSuccess: { [self] in
                 waitFor("右键转换重复任务配置") {
@@ -854,6 +878,15 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 finish("failed: 缺少详情转换源任务")
                 return
             }
+            openPoolTaskDetail(chainID: chainID) { [self] in
+                selectDetailConversion(chainID: chainID)
+            }
+        }
+
+        private func openPoolTaskDetail(
+            chainID: TaskChainID,
+            onSuccess: @escaping @MainActor () -> Void
+        ) {
             let titleIdentifier = PoolTaskRowE2ENamespace(
                 taskIdentifier: chainID.description
             ).titleIdentifier
@@ -872,8 +905,8 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                             identifier:
                             "pool.detail-overflow.\(chainID.description)"
                         ) != nil
-                } onSuccess: { [self] in
-                    selectDetailConversion(chainID: chainID)
+                } onSuccess: {
+                    onSuccess()
                 }
             }
         }
@@ -881,7 +914,27 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
         private func selectDetailConversion(
             chainID: TaskChainID
         ) {
-            let probe = MenuTrackingProbe(downArrowCount: 4)
+            selectDetailConversionAction(chainID: chainID) { [self] in
+                confirmConvertedSeries(
+                    title:
+                    TaskCycleMutationE2EAutomation
+                        .detailConvertedTitle,
+                    chainID: chainID
+                ) {
+                    self.convertEmptyTitleTask()
+                }
+            }
+        }
+
+        private func selectDetailConversionAction(
+            chainID: TaskChainID,
+            onSuccess: @escaping @MainActor () -> Void
+        ) {
+            let probe = MenuTrackingProbe(
+                downArrowCount:
+                TaskCycleMutationE2EAutomation
+                    .conversionMenuDownArrowCount
+            )
             menuTrackingProbe = probe
             waitFor("详情省略号转换入口") {
                 AppViewTreeE2E.click(
@@ -895,14 +948,7 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 } onSuccess: { [self] in
                     probe.stop()
                     menuTrackingProbe = nil
-                    confirmConvertedSeries(
-                        title:
-                        TaskCycleMutationE2EAutomation
-                            .detailConvertedTitle,
-                        chainID: chainID
-                    ) {
-                        self.convertEmptyTitleTask()
-                    }
+                    onSuccess()
                 }
             }
         }
@@ -912,27 +958,16 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 finish("failed: 缺少空标题转换源任务")
                 return
             }
-            let titleIdentifier = PoolTaskRowE2ENamespace(
-                taskIdentifier: chainID.description
-            ).titleIdentifier
-            waitFor("空标题既有任务右键转换入口") {
-                guard let titleView = AppViewTreeE2E.view(
-                    identifier: titleIdentifier
-                ) else {
-                    return false
-                }
-                return AppViewTreeE2E.selectContextMenuItem(
-                    of: titleView,
-                    downArrowCount: 4
-                )
-            } onSuccess: { [self] in
-                waitFor("空标题转换允许输入系列标题") {
-                    self.conversionRequestTargets(chainID)
-                        && self.taskCycleTitleField()?.stringValue.isEmpty
-                        == true
-                        && self.taskCycleTitleField()?.isEnabled == true
-                } onSuccess: { [self] in
-                    typeEmptyConversionTitle(chainID: chainID)
+            openPoolTaskDetail(chainID: chainID) { [self] in
+                selectDetailConversionAction(chainID: chainID) { [self] in
+                    waitFor("空标题转换允许输入系列标题") {
+                        self.conversionRequestTargets(chainID)
+                            && self.taskCycleTitleField()?.stringValue.isEmpty
+                            == true
+                            && self.taskCycleTitleField()?.isEnabled == true
+                    } onSuccess: { [self] in
+                        typeEmptyConversionTitle(chainID: chainID)
+                    }
                 }
             }
         }
@@ -972,7 +1007,7 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                             )
                             return
                         }
-                        self.openReturnedOccurrence()
+                        self.verifyUnstartedStartDateEditor()
                     }
                 }
             }
@@ -1019,6 +1054,61 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                     && adoptsSourceChain
             }
             return false
+        }
+
+        private func verifyUnstartedStartDateEditor() {
+            guard let series = series(
+                titled: TaskCycleMutationE2EAutomation.skippedTitle
+            ) else {
+                finish("failed: 缺少尚未开始的重复任务")
+                return
+            }
+            waitFor("尚未开始重复任务父级详情入口") {
+                AppViewTreeE2E.click(
+                    identifier:
+                    "task-cycle-track.pool.\(series.id.description).detail"
+                )
+            } onSuccess: { [self] in
+                waitFor("尚未开始重复任务父级详情") {
+                    self.store.selectedTaskCycleSeriesID == series.id
+                        && AppViewTreeE2E.view(
+                            identifier: "task-cycle-detail.edit-plan"
+                        ) != nil
+                } onSuccess: { [self] in
+                    waitFor("尚未开始重复任务周期设置入口") {
+                        AppViewTreeE2E.click(
+                            identifier: "task-cycle-detail.edit-plan"
+                        )
+                    } onSuccess: { [self] in
+                        waitFor("尚未开始重复任务开始日期可编辑") {
+                            AppViewTreeE2E.activateWindow(
+                                containing:
+                                "task-cycle-plan-edit.start-date.anchor"
+                            )
+                                && AppViewTreeE2E.view(
+                                    identifier:
+                                    "task-cycle-plan-edit.start-date.anchor"
+                                ).map {
+                                    AppViewTreeE2E.verificationText(
+                                        for: $0
+                                    ) == series.startDate.description
+                                } == true
+                        } onSuccess: { [self] in
+                            guard AppViewTreeE2E.sendEscapeKey() else {
+                                self.finish(
+                                    "failed: 无法关闭尚未开始重复任务周期设置"
+                                )
+                                return
+                            }
+                            self.waitFor("尚未开始重复任务周期设置关闭") {
+                                AppViewTreeE2E.hasNoAttachedSheets()
+                            } onSuccess: { [self] in
+                                self.openReturnedOccurrence()
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         private func currentDefinitionTitle(
@@ -1162,12 +1252,35 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 return AppViewTreeE2E.click(confirm)
             } onSuccess: { [self] in
                 waitFor("停止重复任务结果") {
-                    self.series(
+                    guard let series = self.series(
                         titled:
                         TaskCycleMutationE2EAutomation.stoppedTitle
-                    )?.stoppedAfterDate == self.store.today
+                    ), series.stoppedAfterDate == self.store.today,
+                        AppViewTreeE2E.view(
+                            identifier:
+                            "classification.editor.label-input.cycle-\(series.id.description)"
+                        ) != nil
+                    else {
+                        return false
+                    }
+                    return true
                 } onSuccess: { [self] in
-                    verifyCrossStateHierarchy()
+                    guard let series = series(
+                        titled:
+                        TaskCycleMutationE2EAutomation.stoppedTitle
+                    ) else {
+                        finish("failed: 停止后重复任务丢失")
+                        return
+                    }
+                    addSeriesLabel(
+                        seriesID: series.id,
+                        labelName:
+                        TaskCycleMutationE2EAutomation
+                            .stoppedStateLabelName,
+                        interactionName: "已停止重复任务"
+                    ) {
+                        self.verifyCrossStateHierarchy()
+                    }
                 }
             }
         }

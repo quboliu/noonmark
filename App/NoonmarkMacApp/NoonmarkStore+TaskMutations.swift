@@ -421,6 +421,7 @@ extension NoonmarkStore {
 
     func reviseTaskCycleSeries(
         seriesID: TaskCycleSeriesID,
+        startDate: LocalDate? = nil,
         schedule: TaskCycleSchedule,
         endCondition: TaskCycleEndCondition
     ) -> Bool {
@@ -436,6 +437,7 @@ extension NoonmarkStore {
             ) { candidate, moment in
                 try candidate.reviseTaskCycleSeries(
                     seriesID: seriesID,
+                    startDate: startDate,
                     schedule: schedule,
                     endCondition: endCondition,
                     today: moment.today,

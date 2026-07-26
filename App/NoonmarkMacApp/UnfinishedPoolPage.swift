@@ -157,17 +157,14 @@ struct UnfinishedTaskContextMenu: View {
                 }
             }
         }
-        if item.chain.cycleMembership == nil {
-            Divider()
-            Button(store.copy.convertToRecurringTask) {
-                store.beginTaskCycleConversion(
-                    chainID: item.chain.id,
-                    traceID:
-                    item.activeTrace?.id
-                        ?? item.unfinishedTraces.last?.id
-                )
-            }
-        }
+        TaskCycleConversionMenuSection(
+            chainID: item.chain.id,
+            traceID:
+            item.activeTrace?.id
+                ?? item.unfinishedTraces.last?.id,
+            accessibilityIdentifier:
+            "task-cycle-conversion.unfinished.\(item.chain.id.description)"
+        )
     }
 }
 

@@ -995,59 +995,38 @@ private extension SQLiteEngineRepository {
         _ membership: TaskCycleMembership?
     ) throws -> String? {
         guard let membership else { return nil }
-        let data = try JSONEncoder().encode(membership)
-        guard let string = String(data: data, encoding: .utf8) else {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "task cycle membership JSON encoding failed"
-            )
-        }
-        return string
+        return try taskCycleDomainJSON(
+            membership,
+            description: "task cycle membership"
+        )
     }
 
     func taskCycleCancellationFactsJSON(
         _ facts: [TaskCycleCancellationFact]
     ) throws -> String {
-        let data = try ExactDateJSONCoding.encoder(
-            nonFiniteDateDescription: "domain JSON date must be finite"
-        ).encode(facts)
-        guard let string = String(data: data, encoding: .utf8) else {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "task cycle cancellation facts JSON encoding failed"
-            )
-        }
-        return string
+        try taskCycleDomainJSON(
+            facts,
+            description: "task cycle cancellation facts"
+        )
     }
 
     func taskCycleScheduleJSON(
         _ schedule: TaskCycleSchedule
     ) throws -> String {
-        let data = try JSONEncoder().encode(schedule)
-        guard let string = String(data: data, encoding: .utf8) else {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "task cycle schedule JSON encoding failed"
-            )
-        }
-        return string
+        try taskCycleDomainJSON(
+            schedule,
+            description: "task cycle schedule"
+        )
     }
 
     func taskCycleSchedule(
         from json: String
     ) throws -> TaskCycleSchedule {
-        guard let data = json.data(using: .utf8) else {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "task cycle schedule JSON is not UTF-8"
-            )
-        }
-        do {
-            return try JSONDecoder().decode(
-                TaskCycleSchedule.self,
-                from: data
-            )
-        } catch {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "invalid task cycle schedule JSON: \(error.localizedDescription)"
-            )
-        }
+        try taskCycleDomainValue(
+            TaskCycleSchedule.self,
+            from: json,
+            description: "task cycle schedule"
+        )
     }
 
     func taskCycleEndConditionJSON(
@@ -1167,41 +1146,22 @@ private extension SQLiteEngineRepository {
     func taskCycleCancellationFacts(
         from json: String
     ) throws -> [TaskCycleCancellationFact] {
-        guard let data = json.data(using: .utf8) else {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "task cycle cancellation facts JSON is not UTF-8"
-            )
-        }
-        do {
-            return try ExactDateJSONCoding.decoder(
-                nonFiniteDateDescription: "domain JSON date must be finite"
-            ).decode([TaskCycleCancellationFact].self, from: data)
-        } catch {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "invalid task cycle cancellation facts JSON: \(error.localizedDescription)"
-            )
-        }
+        try taskCycleDomainValue(
+            [TaskCycleCancellationFact].self,
+            from: json,
+            description: "task cycle cancellation facts"
+        )
     }
 
     func taskCycleMembership(
         from json: String?
     ) throws -> TaskCycleMembership? {
         guard let json else { return nil }
-        guard let data = json.data(using: .utf8) else {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "task cycle membership JSON is not UTF-8"
-            )
-        }
-        do {
-            return try JSONDecoder().decode(
-                TaskCycleMembership.self,
-                from: data
-            )
-        } catch {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "invalid task cycle membership JSON: \(error.localizedDescription)"
-            )
-        }
+        return try taskCycleDomainValue(
+            TaskCycleMembership.self,
+            from: json,
+            description: "task cycle membership"
+        )
     }
 
     func validateClassificationStateIntegrity(_ state: TaskClassificationState) throws {

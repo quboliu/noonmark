@@ -1183,9 +1183,6 @@ struct TaskContextMenu: View {
     @EnvironmentObject private var store: NoonmarkStore
     let trace: DayTrace
     var actions: [NoonmarkStore.TraceContextAction] { store.contextMenuActions(for: trace) }
-    var canConvertToRecurring: Bool {
-        store.engine.chains[trace.chainID]?.cycleMembership == nil
-    }
 
     var body: some View {
         ForEach(actions, id: \.self) { action in
@@ -1232,14 +1229,11 @@ struct TaskContextMenu: View {
                 Button(store.copy.abandonChain, role: .destructive) { store.abandon(trace.id) }
             }
         }
-        if canConvertToRecurring {
-            Divider()
-            Button(store.copy.convertToRecurringTask) {
-                store.beginTaskCycleConversion(
-                    chainID: trace.chainID,
-                    traceID: trace.id
-                )
-            }
-        }
+        TaskCycleConversionMenuSection(
+            chainID: trace.chainID,
+            traceID: trace.id,
+            accessibilityIdentifier:
+            "task-cycle-conversion.day.\(trace.chainID.description)"
+        )
     }
 }

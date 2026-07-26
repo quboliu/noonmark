@@ -123,6 +123,7 @@ public struct TaskCyclePlanRevision: Codable, Equatable, Hashable, Sendable,
 {
     public let id: UUID
     public let effectiveFrom: LocalDate
+    public let endConditionAnchorDate: LocalDate
     public let schedule: TaskCycleSchedule
     public let endCondition: TaskCycleEndCondition
     public let recordedAt: Date
@@ -130,12 +131,15 @@ public struct TaskCyclePlanRevision: Codable, Equatable, Hashable, Sendable,
     public init(
         id: UUID = UUID(),
         effectiveFrom: LocalDate,
+        endConditionAnchorDate: LocalDate? = nil,
         schedule: TaskCycleSchedule,
         endCondition: TaskCycleEndCondition,
         recordedAt: Date
     ) {
         self.id = id
         self.effectiveFrom = effectiveFrom
+        self.endConditionAnchorDate =
+            endConditionAnchorDate ?? effectiveFrom
         self.schedule = schedule
         self.endCondition = endCondition
         self.recordedAt = recordedAt
@@ -215,7 +219,7 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
     public private(set) var plannedSubtasks: [PlannedSubtask]
     public private(set) var categoryID: TaskCategoryID?
     public private(set) var labelIDs: Set<TaskLabelID>
-    public let startDate: LocalDate
+    public private(set) var startDate: LocalDate
     public private(set) var endDate: LocalDate
     public private(set) var schedule: TaskCycleSchedule
     public private(set) var endCondition: TaskCycleEndCondition
@@ -255,6 +259,7 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         self.planRevisions = planRevisions ?? [
             TaskCyclePlanRevision(
                 effectiveFrom: startDate,
+                endConditionAnchorDate: startDate,
                 schedule: schedule,
                 endCondition: endCondition ?? .onDate(endDate),
                 recordedAt: createdAt
@@ -327,6 +332,8 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
 
     mutating func appendPlanRevision(
         effectiveFrom: LocalDate,
+        endConditionAnchorDate: LocalDate? = nil,
+        updatesStartDate: Bool = false,
         schedule: TaskCycleSchedule,
         endCondition: TaskCycleEndCondition,
         now: Date
@@ -343,10 +350,11 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
                 "content mutation time cannot move backwards"
             )
         }
+        let anchorDate = endConditionAnchorDate ?? startDate
         let endDate = try endCondition.resolvedEndDate(
-            from: startDate
+            from: anchorDate
         )
-        guard effectiveFrom >= startDate,
+        guard effectiveFrom >= anchorDate,
               effectiveFrom <= endDate
         else {
             throw NoonmarkError.invalidTransition(
@@ -355,15 +363,24 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         }
         try schedule.validateIntegrity()
         _ = try TaskCycleCivilCalendar.materializableDates(
-            from: startDate,
+            from: anchorDate,
             through: endDate
         )
+        if updatesStartDate {
+            guard effectiveFrom == anchorDate else {
+                throw NoonmarkError.invalidTransition(
+                    "task cycle start revision must begin at its new start date"
+                )
+            }
+            startDate = anchorDate
+        }
         self.schedule = schedule
         self.endCondition = endCondition
         self.endDate = endDate
         planRevisions.append(
             TaskCyclePlanRevision(
                 effectiveFrom: effectiveFrom,
+                endConditionAnchorDate: anchorDate,
                 schedule: schedule,
                 endCondition: endCondition,
                 recordedAt: now
@@ -454,7 +471,8 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         }
         try schedule.validateIntegrity()
         for revision in planRevisions {
-            guard revision.effectiveFrom >= startDate,
+            guard revision.effectiveFrom
+                >= revision.endConditionAnchorDate,
                   revision.recordedAt.timeIntervalSinceReferenceDate.isFinite,
                   revision.recordedAt >= createdAt,
                   revision.recordedAt <= updatedAt
@@ -465,15 +483,18 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
             }
             try revision.schedule.validateIntegrity()
             let revisionEndDate = try revision.endCondition
-                .resolvedEndDate(from: startDate)
+                .resolvedEndDate(
+                    from: revision.endConditionAnchorDate
+                )
             _ = try TaskCycleCivilCalendar.materializableDates(
-                from: startDate,
+                from: revision.endConditionAnchorDate,
                 through: revisionEndDate
             )
         }
         guard let latestRevision = planRevisions.last,
             latestRevision.schedule == schedule,
-            latestRevision.endCondition == endCondition
+            latestRevision.endCondition == endCondition,
+            latestRevision.endConditionAnchorDate == startDate
         else {
             throw NoonmarkError.invalidInput(
                 "task cycle current plan does not match its revision facts"
@@ -518,7 +539,9 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         var result: Set<LocalDate> = []
         for revision in planRevisions {
             let revisionEndDate = try revision.endCondition
-                .resolvedEndDate(from: startDate)
+                .resolvedEndDate(
+                    from: revision.endConditionAnchorDate
+                )
             let dates = try TaskCycleCivilCalendar.materializableDates(
                 from: revision.effectiveFrom,
                 through: revisionEndDate
@@ -540,10 +563,13 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         endDate: LocalDate
     ) {
         let revisionEndDates = try planRevisions.map {
-            try $0.endCondition.resolvedEndDate(from: startDate)
+            try $0.endCondition.resolvedEndDate(
+                from: $0.endConditionAnchorDate
+            )
         }
         let boundaryDates = [startDate, endDate]
             + planRevisions.map(\.effectiveFrom)
+            + planRevisions.map(\.endConditionAnchorDate)
             + revisionEndDates
         guard let earliestDate = boundaryDates.min(),
               let latestDate = boundaryDates.max()
@@ -1220,9 +1246,54 @@ public extension NoonmarkEngine {
         storeTaskCycleSeries(series)
     }
 
+    func canReviseTaskCycleStartDate(
+        seriesID: TaskCycleSeriesID,
+        today: LocalDate
+    ) -> Bool {
+        guard let series = taskCycleSeries[seriesID],
+              series.stoppedAfterDate == nil,
+              series.startDate > today
+        else {
+            return false
+        }
+        let memberChainIDs = Set(chains.values.compactMap { chain in
+            chain.cycleMembership?.seriesID == seriesID
+                ? chain.id
+                : nil
+        })
+        guard memberChainIDs.isEmpty == false else {
+            return false
+        }
+        return traces.values
+            .filter { memberChainIDs.contains($0.chainID) }
+            .allSatisfy {
+                $0.status == .cancelledDraft
+                    || ($0.status == .pending && $0.date > today)
+            }
+    }
+
     @discardableResult
     func reviseTaskCycleSeries(
         seriesID: TaskCycleSeriesID,
+        schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> TaskCycleRevisionOutcome {
+        try reviseTaskCycleSeries(
+            seriesID: seriesID,
+            startDate: nil,
+            schedule: schedule,
+            endCondition: endCondition,
+            today: today,
+            now: now
+        )
+    }
+
+    @discardableResult
+    func reviseTaskCycleSeries(
+        seriesID: TaskCycleSeriesID,
+        startDate revisedStartDate: LocalDate?,
         schedule: TaskCycleSchedule,
         endCondition: TaskCycleEndCondition,
         today: LocalDate,
@@ -1235,9 +1306,35 @@ public extension NoonmarkEngine {
                 "task cycle revision date could not advance"
             )
         }
-        let effectiveFrom = max(series.startDate, tomorrow)
+        let revisesStartDate = revisedStartDate.map {
+            $0 != series.startDate
+        } ?? false
+        if revisesStartDate {
+            guard canReviseTaskCycleStartDate(
+                seriesID: seriesID,
+                today: today
+            ), let revisedStartDate,
+                revisedStartDate >= today
+            else {
+                throw NoonmarkError.invalidTransition(
+                    "only an unstarted task cycle without execution history can change its start date"
+                )
+            }
+        }
+        let planStartDate =
+            if revisesStartDate, let revisedStartDate {
+                revisedStartDate
+            } else {
+                series.startDate
+            }
+        let effectiveFrom = revisesStartDate
+            ? planStartDate
+            : max(series.startDate, tomorrow)
+        let editableWindowStart = revisesStartDate
+            ? today
+            : effectiveFrom
         let revisedEndDate = try endCondition.resolvedEndDate(
-            from: series.startDate
+            from: planStartDate
         )
         guard revisedEndDate >= effectiveFrom else {
             throw NoonmarkError.invalidTransition(
@@ -1287,14 +1384,14 @@ public extension NoonmarkEngine {
         let cancellations = memberChains.compactMap {
             chain -> (LocalDate, DayTrace)? in
             guard let membership = chain.cycleMembership,
-                  membership.occurrenceDate >= effectiveFrom,
+                  membership.occurrenceDate >= editableWindowStart,
                   revisedDateSet.contains(membership.occurrenceDate)
                   == false,
                   let trace = traces.values.first(where: {
                       $0.chainID == chain.id
                           && $0.status == .pending
                           && $0.date == membership.occurrenceDate
-                          && $0.date > today
+                          && $0.date >= editableWindowStart
                   })
             else {
                 return nil
@@ -1303,7 +1400,7 @@ public extension NoonmarkEngine {
         }
         let reactivations = revisedDates.compactMap {
             occurrenceDate -> (LocalDate, TaskChain)? in
-            guard occurrenceDate > today,
+            guard occurrenceDate >= editableWindowStart,
                   let chain = membersByDate[occurrenceDate],
                   series.latestOccurrenceCancellationReason(
                       on: occurrenceDate
@@ -1329,6 +1426,8 @@ public extension NoonmarkEngine {
         }
         try series.appendPlanRevision(
             effectiveFrom: effectiveFrom,
+            endConditionAnchorDate: planStartDate,
+            updatesStartDate: revisesStartDate,
             schedule: schedule,
             endCondition: endCondition,
             now: now
@@ -1666,7 +1765,7 @@ public extension NoonmarkEngine {
                 trace.descriptionText = descriptionText
                 storeTaskCycleTrace(trace)
             }
-            if plannedSubtasksChanged, pendingTrace.date > today {
+            if plannedSubtasksChanged, pendingTrace.date >= today {
                 try replaceTaskCycleTraceSubtasks(
                     traceID: pendingTrace.id,
                     plannedSubtasks: plannedSubtasks,
@@ -1810,20 +1909,26 @@ public extension NoonmarkEngine {
         today: LocalDate,
         cancelledState: TaskCycleTrackDayState
     ) -> TaskCycleTrackDayState {
-        if trace.status == .pending {
+        switch trace.status {
+        case .pending:
             if date < today { return .pendingPast }
             if date == today { return .pendingToday }
             return .planned
-        }
-        if trace.status == .cancelledDraft {
+        case .cancelledDraft:
             return cancelledState
+        case .completed:
+            return .completed
+        case .unfinished:
+            return .unfinished
+        case .deferred:
+            return .deferred
+        case .changed:
+            return .changed
+        case .returnedToPool:
+            return .returnedToPool
+        case .abandoned:
+            return .abandoned
         }
-        guard let state = TaskCycleTrackDayState(
-            rawValue: trace.status.rawValue
-        ) else {
-            preconditionFailure("visible trace status must map to cycle state")
-        }
-        return state
     }
 
     private func taskCycleTraceTarget(

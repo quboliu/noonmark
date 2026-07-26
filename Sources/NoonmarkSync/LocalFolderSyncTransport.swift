@@ -35,9 +35,20 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
 
     private let rootURL: URL
     private let fileManager: FileManager
-    private let encoder: JSONEncoder
-    private let decoder: JSONDecoder
-    private let currentRecordMerger: CurrentSyncRecordMerger
+    private let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }()
+
+    private let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    private let currentRecordMerger = CurrentSyncRecordMerger()
     private let publicationFault: @Sendable (
         LocalFolderSyncPublicationPoint
     ) throws -> Void
@@ -45,12 +56,6 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     public init(rootURL: URL, fileManager: FileManager = .default) {
         self.rootURL = rootURL
         self.fileManager = fileManager
-        encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        currentRecordMerger = CurrentSyncRecordMerger()
         publicationFault = { _ in }
     }
 
@@ -63,12 +68,6 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     ) {
         self.rootURL = rootURL
         self.fileManager = fileManager
-        encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        currentRecordMerger = CurrentSyncRecordMerger()
         self.publicationFault = publicationFault
     }
 

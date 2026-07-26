@@ -490,7 +490,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                   identifier:
                   "task-cycle-section.\(verificationCase.accessibilityName)"
               ) != nil,
-              trackIdentifiers == expectedTrackIdentifiers,
+              expectedTrackIdentifiers.isSubset(
+                  of: trackIdentifiers ?? []
+              ),
               AppViewTreeE2E.view(
                   identifier: "task-cycle-create.open"
               ) == nil

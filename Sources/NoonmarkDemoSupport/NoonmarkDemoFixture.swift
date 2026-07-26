@@ -68,6 +68,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let classifiedTaskCycleSeriesCount: Int
     public let taskCycleSeriesWithPlannedSubtasksCount: Int
     public let taskCyclePlanRevisionCount: Int
+    public let unstartedTaskCycleSeriesCount: Int
     public let openParentWithCompletedChildrenCount: Int
     public let completedParentWithCompletedChildrenCount: Int
 
@@ -146,6 +147,11 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         require(
             taskCyclePlanRevisionCount > taskCycleSeriesCount,
             "重复任务包含向前生效的规则修订",
+            into: &missing
+        )
+        require(
+            unstartedTaskCycleSeriesCount > 0,
+            "尚未开始的重复任务可调整开始日期",
             into: &missing
         )
         require(
@@ -244,6 +250,12 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             }
         taskCyclePlanRevisionCount = snapshot.taskCycleSeries.reduce(0) {
             $0 + $1.planRevisions.count
+        }
+        unstartedTaskCycleSeriesCount = snapshot.taskCycleSeries.count {
+            engine.canReviseTaskCycleStartDate(
+                seriesID: $0.id,
+                today: anchorDate
+            )
         }
         let ordinaryCompletedHierarchies =
             engine.completedTaskHierarchies().filter {
@@ -390,7 +402,95 @@ private struct DemoStory {
                 now: classificationTime
             )
         }
+        try createUnstartedCycleSeries(
+            categoryID: classification.categoryID,
+            labelIDs: classification.labelIDs
+        )
         return seriesID
+    }
+
+    private func createUnstartedCycleSeries(
+        categoryID: TaskCategoryID?,
+        labelIDs: Set<TaskLabelID>
+    ) throws {
+        let startDate = try DemoCalendar.offset(dates[9], by: 2)
+        let createdAt = time(
+            on: dates[0],
+            hour: 6,
+            minute: 49
+        )
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "准备下周工作回顾",
+            descriptionText: "尚未开始，可在父任务详情中调整开始日期。",
+            plannedSubtasks: [
+                PlannedSubtask(
+                    title: "整理本周输入",
+                    position: 1,
+                    now: createdAt
+                )
+            ],
+            startDate: startDate,
+            schedule: .daily,
+            endCondition: .durationDays(3),
+            today: dates[0],
+            now: createdAt
+        )
+        try engine.setTaskCycleTemplateClassification(
+            seriesID: seriesID,
+            categoryID: categoryID,
+            labelIDs: labelIDs,
+            now: createdAt
+        )
+        let memberChainIDs = engine.chains.values
+            .filter {
+                $0.cycleMembership?.seriesID == seriesID
+            }
+            .sorted {
+                $0.cycleMembership!.occurrenceDate
+                    < $1.cycleMembership!.occurrenceDate
+            }
+            .map(\.id)
+        guard let anchorChainID = memberChainIDs.first else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage([
+                "尚未开始的重复任务"
+            ])
+        }
+        if categoryID != nil || labelIDs.isEmpty == false {
+            let interactionID = UUID()
+            let plan = try engine.prepareClassification(
+                .setCurrent(
+                    TaskClassificationDraft(
+                        chainID: anchorChainID,
+                        category: categoryID.map(
+                            TaskCategoryChoice.existing
+                        ),
+                        labels: labelIDs
+                            .sorted {
+                                $0.description < $1.description
+                            }
+                            .map(TaskLabelChoice.existing)
+                    )
+                ),
+                source: .userDirect,
+                interactionID: interactionID,
+                now: createdAt
+            )
+            _ = try engine.commitClassification(
+                plan,
+                confirmation: .confirmedByUser(
+                    confirming: plan,
+                    decisionID: interactionID
+                ),
+                now: createdAt
+            )
+            for chainID in memberChainIDs.dropFirst() {
+                _ = try engine.inheritCurrentClassification(
+                    from: anchorChainID,
+                    to: chainID,
+                    now: createdAt
+                )
+            }
+        }
     }
 
     private mutating func createTaskPool() throws -> DemoTaskIDs {

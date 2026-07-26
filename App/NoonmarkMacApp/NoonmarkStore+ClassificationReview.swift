@@ -301,13 +301,6 @@ extension NoonmarkStore {
                     seriesID: seriesID,
                     today: moment.today
                 )
-            guard candidate.taskCycleSeries[seriesID]?
-                .stoppedAfterDate == nil
-            else {
-                throw NoonmarkError.invalidTransition(
-                    "stopped recurring tasks cannot change classification"
-                )
-            }
             let fallbackChainIDs = candidate.chains.values
                 .filter {
                     $0.cycleMembership?.seriesID == seriesID
@@ -368,6 +361,10 @@ extension NoonmarkStore {
                 ) {
                     boundaries.append(candidate.snapshot())
                 }
+            }
+            if boundaries.isEmpty == false {
+                boundaries[boundaries.index(before: boundaries.endIndex)] =
+                    candidate.snapshot()
             }
             return boundaries
         }

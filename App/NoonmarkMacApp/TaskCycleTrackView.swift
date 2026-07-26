@@ -45,11 +45,6 @@ struct TaskCycleTrackRow: View {
                     store.userSelectTaskCycleSeries(track.id)
                 } label: {
                     HStack(spacing: 10) {
-                    Image(systemName: "repeat")
-                        .font(.noonmarkSystem(size: 12, weight: .semibold))
-                        .foregroundStyle(accent)
-                        .frame(width: 18)
-
                     MarkdownInlineText(
                         store.copy.displayTaskTitle(track.title)
                     )

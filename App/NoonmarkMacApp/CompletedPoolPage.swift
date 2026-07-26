@@ -363,17 +363,12 @@ struct CompletedTaskContextMenu: View {
         Button(store.copy.copyAsNewTask) {
             store.copyAsNewTask(item.trace.id)
         }
-        if store.engine.chains[
-            item.trace.chainID
-        ]?.cycleMembership == nil {
-            Divider()
-            Button(store.copy.convertToRecurringTask) {
-                store.beginTaskCycleConversion(
-                    chainID: item.trace.chainID,
-                    traceID: item.trace.id
-                )
-            }
-        }
+        TaskCycleConversionMenuSection(
+            chainID: item.trace.chainID,
+            traceID: item.trace.id,
+            accessibilityIdentifier:
+            "task-cycle-conversion.completed.\(item.trace.chainID.description)"
+        )
     }
 }
 

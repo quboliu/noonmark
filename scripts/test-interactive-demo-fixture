@@ -114,8 +114,8 @@ if [[ "$single_day_completed_count" != "10" \
       || "$ordinary_single_day_completed_count" != "5" \
       || "$cycle_single_day_completed_count" != "5" \
       || "$multi_day_completed_count" != "2" \
-      || "$cycle_series_count" != "1" \
-      || "$cycle_occurrence_count" != "13" ]]; then
+      || "$cycle_series_count" != "2" \
+      || "$cycle_occurrence_count" != "16" ]]; then
   echo "demo fixture task and cycle counts drifted" >&2
   sed -n '1,200p' "$result_path" >&2
   exit 1

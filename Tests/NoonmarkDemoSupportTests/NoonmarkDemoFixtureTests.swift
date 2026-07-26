@@ -28,13 +28,14 @@ struct NoonmarkDemoFixtureTests {
         #expect(track.appears(in: .unfinished))
         #expect(track.appears(in: .completed))
         #expect(track.appears(in: .pool))
-        #expect(fixture.report.taskCycleSeriesCount == 1)
-        #expect(fixture.report.taskCycleOccurrenceCount == 13)
-        #expect(fixture.report.classifiedTaskCycleSeriesCount == 1)
+        #expect(fixture.report.taskCycleSeriesCount == 2)
+        #expect(fixture.report.taskCycleOccurrenceCount == 16)
+        #expect(fixture.report.classifiedTaskCycleSeriesCount == 2)
         #expect(
-            fixture.report.taskCycleSeriesWithPlannedSubtasksCount == 1
+            fixture.report.taskCycleSeriesWithPlannedSubtasksCount == 2
         )
-        #expect(fixture.report.taskCyclePlanRevisionCount == 2)
+        #expect(fixture.report.taskCyclePlanRevisionCount == 3)
+        #expect(fixture.report.unstartedTaskCycleSeriesCount == 1)
         #expect(fixture.report.deletableCategoryBoundaryCount > 0)
         #expect(
             fixture.report.openParentWithCompletedChildrenCount > 0

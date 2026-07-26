@@ -39,13 +39,10 @@ struct PoolTaskContextMenu: View {
             store.showingPicker = .schedulePool(task.chain.id)
         }
         .accessibilityIdentifier("\(accessibilityPrefix).schedule-date")
-        Divider()
-        Button(store.copy.convertToRecurringTask) {
-            store.beginTaskCycleConversion(
-                chainID: task.chain.id
-            )
-        }
-        .accessibilityIdentifier(
+        TaskCycleConversionMenuSection(
+            chainID: task.chain.id,
+            traceID: nil,
+            accessibilityIdentifier:
             "\(accessibilityPrefix).convert-recurring"
         )
         Divider()

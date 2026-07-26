@@ -95,6 +95,85 @@ final class TaskCycleSeriesTests: XCTestCase {
         )
     }
 
+    func testUnstartedPlanCanReviseItsStartDateWithoutRewritingEarlierPlanFacts() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "尚未开始的周期",
+            startDate: tuesday,
+            schedule: .daily,
+            endCondition: .durationDays(3),
+            today: monday,
+            now: now
+        )
+
+        XCTAssertTrue(
+            engine.canReviseTaskCycleStartDate(
+                seriesID: seriesID,
+                today: monday
+            )
+        )
+
+        let outcome = try engine.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            startDate: wednesday,
+            schedule: .everyDays(2),
+            endCondition: .durationDays(3),
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+
+        let series = try XCTUnwrap(engine.taskCycleSeries[seriesID])
+        XCTAssertEqual(series.startDate, wednesday)
+        XCTAssertEqual(series.endDate, friday)
+        XCTAssertEqual(outcome.effectiveFrom, wednesday)
+        XCTAssertEqual(outcome.cancelledOccurrenceCount, 2)
+        XCTAssertEqual(outcome.createdOccurrenceCount, 1)
+        XCTAssertEqual(
+            series.planRevisions.map(\.endConditionAnchorDate),
+            [tuesday, wednesday]
+        )
+        XCTAssertEqual(
+            engine.taskCycleTracks(today: monday)
+                .first { $0.id == seriesID }?.days.map(\.state),
+            [.skipped, .planned, .skipped, .planned]
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testStartedPlanRejectsAStartDateRevision() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "已经开始的周期",
+            startDate: monday,
+            schedule: .daily,
+            endCondition: .durationDays(3),
+            today: monday,
+            now: now
+        )
+
+        XCTAssertFalse(
+            engine.canReviseTaskCycleStartDate(
+                seriesID: seriesID,
+                today: monday
+            )
+        )
+        XCTAssertThrowsError(
+            try engine.reviseTaskCycleSeries(
+                seriesID: seriesID,
+                startDate: tuesday,
+                schedule: .daily,
+                endCondition: .durationDays(3),
+                today: monday,
+                now: now.addingTimeInterval(1)
+            )
+        )
+        XCTAssertEqual(
+            engine.taskCycleSeries[seriesID]?.startDate,
+            monday
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
     func testPlanRevisionReplacesOnlyFutureScheduleFromTomorrow() throws {
         let engine = NoonmarkEngine()
         let seriesID = try engine.createTaskCycleSeries(
@@ -310,7 +389,7 @@ final class TaskCycleSeriesTests: XCTestCase {
                         && $0.isUserPresentable
                 }
                 .map(\.title),
-            ["旧步骤"]
+            ["新步骤"]
         )
         let wednesdayTrace = try trace(
             in: engine,

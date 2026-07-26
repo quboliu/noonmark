@@ -64,7 +64,6 @@ struct TaskCycleDetail: View {
                     seriesID: series.id,
                     taskTitle: series.title
                 )
-                .disabled(isStopped)
             }
 
             DetailSection(store.copy.subtasksTitle, showsTitle: false) {
@@ -213,6 +212,7 @@ private struct TaskCyclePlanEditingSheet: View {
     @EnvironmentObject private var store: NoonmarkStore
     @Environment(\.dismiss) private var dismiss
     @State private var state = TaskCyclePlanEditorState()
+    @State private var editedStartDate = Date()
     let series: TaskCycleSeries
 
     private var formatter: AppDateTimeFormatter {
@@ -224,26 +224,51 @@ private struct TaskCyclePlanEditingSheet: View {
         )
     }
 
-    private var startDate: Date {
+    private var storedStartDate: Date {
         (try? formatter.foundationDate(from: series.startDate))
             ?? Date()
     }
 
+    private var todayFoundationDate: Date {
+        (try? formatter.foundationDate(from: store.today))
+            ?? Date()
+    }
+
+    private var canReviseStartDate: Bool {
+        store.engine.canReviseTaskCycleStartDate(
+            seriesID: series.id,
+            today: store.today
+        )
+    }
+
+    private var planStartDate: Date {
+        canReviseStartDate ? editedStartDate : storedStartDate
+    }
+
+    private var planStartLocalDate: LocalDate? {
+        try? formatter.localDate(from: planStartDate)
+    }
+
     private var canSave: Bool {
-        guard let condition = state.endCondition(
-            startDate: series.startDate,
-            formatter: formatter
-        ),
+        guard let planStartLocalDate,
+            let condition = state.endCondition(
+                startDate: planStartLocalDate,
+                formatter: formatter
+            ),
             let endDate = try? condition.resolvedEndDate(
-                from: series.startDate
+                from: planStartLocalDate
             )
         else {
             return false
         }
         let tomorrow = NoonmarkStore.offset(store.today, by: 1)
-        return endDate >= max(series.startDate, tomorrow)
+        let effectiveFrom = canReviseStartDate
+            ? planStartLocalDate
+            : max(series.startDate, tomorrow)
+        return planStartLocalDate >= store.today
+            && endDate >= effectiveFrom
             && ((try? state.schedule.occurrenceCount(
-                from: max(series.startDate, tomorrow),
+                from: effectiveFrom,
                 through: endDate
             )) ?? 0) > 0
     }
@@ -254,9 +279,32 @@ private struct TaskCyclePlanEditingSheet: View {
                 .font(.noonmarkSystem(size: 17, weight: .semibold))
                 .foregroundStyle(Theme.text1)
 
+            if canReviseStartDate {
+                LabeledContent(store.copy.recurringTaskStartDate) {
+                    DatePicker(
+                        "",
+                        selection: $editedStartDate,
+                        in: todayFoundationDate ... Date.distantFuture,
+                        displayedComponents: .date
+                    )
+                    .labelsHidden()
+                    .accessibilityIdentifier(
+                        "task-cycle-plan-edit.start-date"
+                    )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier:
+                            "task-cycle-plan-edit.start-date.anchor",
+                            verificationText:
+                            planStartLocalDate?.description ?? ""
+                        )
+                    }
+                }
+            }
+
             TaskCyclePlanEditor(
                 state: $state,
-                startDate: startDate,
+                startDate: planStartDate,
                 formatter: formatter,
                 accessibilityNamespace: "task-cycle-plan-edit"
             )
@@ -274,14 +322,20 @@ private struct TaskCyclePlanEditingSheet: View {
                 }
                 .keyboardShortcut(.cancelAction)
                 Button(store.copy.taskCycleSavePlan) {
+                    guard let planStartLocalDate else {
+                        return
+                    }
                     guard let endCondition = state.endCondition(
-                        startDate: series.startDate,
+                        startDate: planStartLocalDate,
                         formatter: formatter
                     ) else {
                         return
                     }
                     if store.reviseTaskCycleSeries(
                         seriesID: series.id,
+                        startDate: canReviseStartDate
+                            ? planStartLocalDate
+                            : nil,
                         schedule: state.schedule,
                         endCondition: endCondition
                     ) {
@@ -304,6 +358,7 @@ private struct TaskCyclePlanEditingSheet: View {
         .padding(22)
         .frame(width: 430)
         .onAppear {
+            editedStartDate = storedStartDate
             state = .editing(series, formatter: formatter)
         }
     }

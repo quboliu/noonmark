@@ -113,8 +113,8 @@ extension AppCopy {
 
     var taskCyclePlanEffectiveNotice: String {
         language == .chinese
-            ? "开始日期创建后固定；频率和结束条件的修改从明天起生效，历史不会改写。"
-            : "The start date is fixed after creation. Schedule and end-rule changes take effect tomorrow without rewriting history."
+            ? "尚未开始且没有执行记录时可调整开始日期；开始后，频率和结束条件的修改从明天起生效，历史不会改写。"
+            : "The start date can change before the series begins and before it has any execution history. After it starts, schedule and end-rule changes take effect tomorrow without rewriting history."
     }
 
     var taskCycleStoppedNotice: String {

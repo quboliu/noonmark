@@ -1682,6 +1682,122 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(record.parentDefinition.title, "审阅 onboarding 三屏文案")
     }
 
+    func testCompletedTaskHierarchiesRevealOnlyCompletedChildrenUntilParentCompletes() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "完成父子任务",
+            now: now
+        )
+        let day1TraceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        let firstID = try engine.addSubtask(
+            traceID: day1TraceID,
+            title: "子任务一",
+            now: now.addingTimeInterval(2)
+        )
+        _ = try engine.addSubtask(
+            traceID: day1TraceID,
+            title: "子任务二",
+            now: now.addingTimeInterval(3)
+        )
+        _ = try engine.addSubtask(
+            traceID: day1TraceID,
+            title: "子任务三",
+            now: now.addingTimeInterval(4)
+        )
+        try engine.completeSubtask(
+            firstID,
+            today: day1,
+            now: now.addingTimeInterval(5)
+        )
+
+        var hierarchy = try XCTUnwrap(
+            engine.completedTaskHierarchies().first
+        )
+        XCTAssertEqual(hierarchy.chain.id, chainID)
+        XCTAssertNil(hierarchy.parentCompletion)
+        XCTAssertEqual(
+            hierarchy.completedChildren.map(\.subtask.title),
+            ["子任务一"]
+        )
+
+        try engine.settleDays(
+            upTo: day2,
+            now: now.addingTimeInterval(6)
+        )
+        XCTAssertEqual(
+            engine.unfinishedPool().map(\.chain.id),
+            [chainID]
+        )
+        let day2TraceID = try engine.continueUnfinishedTrace(
+            traceID: day1TraceID,
+            targetDate: day2,
+            today: day2,
+            now: now.addingTimeInterval(7)
+        )
+        let secondID = try XCTUnwrap(
+            engine.subtasks.values.first {
+                $0.traceID == day2TraceID
+                    && $0.title == "子任务二"
+            }?.id
+        )
+        try engine.completeSubtask(
+            secondID,
+            today: day2,
+            now: now.addingTimeInterval(8)
+        )
+
+        hierarchy = try XCTUnwrap(
+            engine.completedTaskHierarchies().first
+        )
+        XCTAssertNil(hierarchy.parentCompletion)
+        XCTAssertEqual(
+            hierarchy.completedChildren.map(\.subtask.title),
+            ["子任务一", "子任务二"]
+        )
+
+        try engine.settleDays(
+            upTo: day3,
+            now: now.addingTimeInterval(9)
+        )
+        let day3TraceID = try engine.continueUnfinishedTrace(
+            traceID: day2TraceID,
+            targetDate: day3,
+            today: day3,
+            now: now.addingTimeInterval(10)
+        )
+        let thirdID = try XCTUnwrap(
+            engine.subtasks.values.first {
+                $0.traceID == day3TraceID
+                    && $0.title == "子任务三"
+            }?.id
+        )
+        try engine.completeSubtask(
+            thirdID,
+            today: day3,
+            now: now.addingTimeInterval(11)
+        )
+        try engine.markCompleted(
+            traceID: day3TraceID,
+            today: day3,
+            now: now.addingTimeInterval(12)
+        )
+
+        hierarchy = try XCTUnwrap(
+            engine.completedTaskHierarchies().first
+        )
+        XCTAssertEqual(hierarchy.parentCompletion?.trace.id, day3TraceID)
+        XCTAssertEqual(
+            hierarchy.completedChildren.map(\.subtask.title),
+            ["子任务一", "子任务二", "子任务三"]
+        )
+        XCTAssertTrue(engine.unfinishedPool().isEmpty)
+    }
+
     func testAbandonedChainStaysInUnfinishedPoolAndCanBeReenabledInPlace() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "暂停但不删除的任务", now: now)

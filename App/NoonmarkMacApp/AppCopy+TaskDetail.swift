@@ -102,8 +102,8 @@ extension AppCopy {
 
     var historicalReadOnlyNotice: String {
         language == .chinese
-            ? "历史只读：任务事实不可改写。"
-            : "History is read-only; task facts cannot be changed."
+            ? "历史执行事实只读；分组与标签仍可调整。"
+            : "Execution history is read-only; groups and tags remain editable."
     }
 
     func progressFloorNotice(_ percent: Int) -> String {
@@ -383,14 +383,14 @@ extension AppCopy {
 
     var abandonedChainHistoryNotice: String {
         language == .chinese
-            ? "任务链已废弃；历史事实保留，可重新启用并回到未完成状态。"
-            : "The task chain was dropped. Its history remains, and it can be reactivated as unfinished."
+            ? "任务链已废弃；历史执行事实保留，分组与标签仍可调整，也可重新启用。"
+            : "The task chain was dropped. Execution history remains; groups and tags stay editable, and the chain can be reactivated."
     }
 
     var historicalFactsReadOnlyNotice: String {
         language == .chinese
-            ? "历史事实只读，不可删除或改写。"
-            : "Historical facts are read-only and cannot be deleted or changed."
+            ? "历史执行事实不可删除或改写；分组与标签仍可调整。"
+            : "Execution history cannot be deleted or changed; groups and tags remain editable."
     }
 
     var noUnfinishedDetail: String {
@@ -448,18 +448,6 @@ extension AppCopy {
 
     var newTaskTitlePlaceholder: String { language == .chinese ? "新的任务标题" : "New task title" }
     var confirmChange: String { language == .chinese ? "确认变更" : "Confirm Change" }
-    var historicalClassificationNotice: String {
-        language == .chinese
-            ? "显示这条任务轨迹形成时的分组与标签；历史事实不可改写。"
-            : "Shows the group and tags captured with this trail; historical facts cannot be changed."
-    }
-
-    var noHistoricalClassification: String {
-        language == .chinese
-            ? "这条任务轨迹形成时未设置分组或标签。"
-            : "No group or tags were set when this trail was created."
-    }
-
     func detailRailHint(for page: NoonmarkStore.Page) -> String {
         Self.detailRailHintCopyByPage[page.rawValue]?.resolved(for: language) ?? ""
     }

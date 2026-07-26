@@ -65,6 +65,11 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let taskWithDescriptionCount: Int
     public let taskCycleSeriesCount: Int
     public let taskCycleOccurrenceCount: Int
+    public let classifiedTaskCycleSeriesCount: Int
+    public let taskCycleSeriesWithPlannedSubtasksCount: Int
+    public let taskCyclePlanRevisionCount: Int
+    public let openParentWithCompletedChildrenCount: Int
+    public let completedParentWithCompletedChildrenCount: Int
 
     public var missingRequirements: [String] {
         var missing: [String] = []
@@ -129,8 +134,33 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         )
         require(taskCycleSeriesCount > 0, "周期系列非空", into: &missing)
         require(
+            classifiedTaskCycleSeriesCount > 0,
+            "重复任务父项包含分组与标签",
+            into: &missing
+        )
+        require(
+            taskCycleSeriesWithPlannedSubtasksCount > 0,
+            "重复任务父项包含规划子任务",
+            into: &missing
+        )
+        require(
+            taskCyclePlanRevisionCount > taskCycleSeriesCount,
+            "重复任务包含向前生效的规则修订",
+            into: &missing
+        )
+        require(
             taskCycleOccurrenceCount >= 10,
             "周期系列覆盖完整十天轨迹",
+            into: &missing
+        )
+        require(
+            openParentWithCompletedChildrenCount > 0,
+            "父任务未完成时只展示已完成子任务",
+            into: &missing
+        )
+        require(
+            completedParentWithCompletedChildrenCount > 0,
+            "父任务完成后的简洁子任务层级",
             into: &missing
         )
         return missing
@@ -204,6 +234,31 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         let cycleMemberships = snapshot.chains.compactMap(\.cycleMembership)
         taskCycleSeriesCount = snapshot.taskCycleSeries.count
         taskCycleOccurrenceCount = cycleMemberships.count
+        classifiedTaskCycleSeriesCount =
+            snapshot.taskCycleSeries.count {
+                $0.categoryID != nil || $0.labelIDs.isEmpty == false
+            }
+        taskCycleSeriesWithPlannedSubtasksCount =
+            snapshot.taskCycleSeries.count {
+                $0.plannedSubtasks.isEmpty == false
+            }
+        taskCyclePlanRevisionCount = snapshot.taskCycleSeries.reduce(0) {
+            $0 + $1.planRevisions.count
+        }
+        let ordinaryCompletedHierarchies =
+            engine.completedTaskHierarchies().filter {
+                $0.chain.cycleMembership == nil
+            }
+        openParentWithCompletedChildrenCount =
+            ordinaryCompletedHierarchies.count {
+                $0.parentCompletion == nil
+                    && $0.completedChildren.isEmpty == false
+            }
+        completedParentWithCompletedChildrenCount =
+            ordinaryCompletedHierarchies.count {
+                $0.parentCompletion != nil
+                    && $0.completedChildren.isEmpty == false
+            }
     }
 
     private func require(
@@ -230,18 +285,33 @@ private struct DemoStory {
 
     mutating func replay() throws {
         let taskIDs = try createTaskPool()
-        try createCycleSeries()
+        let cycleSeriesID = try createCycleSeries()
         try replayFirstFiveDays(taskIDs)
         try replayLastFiveDays(taskIDs)
         try addTodayAndFutureState(taskIDs)
+        _ = try engine.reviseTaskCycleSeries(
+            seriesID: cycleSeriesID,
+            schedule: .daily,
+            endCondition: .onDate(
+                try DemoCalendar.offset(dates[9], by: 3)
+            ),
+            today: dates[9],
+            now: time(on: dates[9], hour: 14, minute: 50)
+        )
         try addReviews()
         try engine.snapshot().validateIntegrity()
     }
 
-    private func createCycleSeries() throws {
+    private func createCycleSeries() throws -> TaskCycleSeriesID {
+        let plannedSubtask = PlannedSubtask(
+            title: "记录完成、遗漏与下一步",
+            position: 1,
+            now: time(on: dates[0], hour: 6, minute: 44)
+        )
         let seriesID = try engine.createTaskCycleSeries(
             title: "每日产品复盘",
             descriptionText: "每天用十分钟记录完成、遗漏与下一步。",
+            plannedSubtasks: [plannedSubtask],
             startDate: dates[0],
             endDate: try DemoCalendar.offset(dates[9], by: 3),
             schedule: .daily,
@@ -275,6 +345,52 @@ private struct DemoStory {
             today: dates[0],
             now: time(on: dates[0], hour: 6, minute: 47)
         )
+        let memberChainIDs = engine.chains.values
+            .filter {
+                $0.cycleMembership?.seriesID == seriesID
+            }
+            .sorted {
+                $0.cycleMembership!.occurrenceDate
+                    < $1.cycleMembership!.occurrenceDate
+            }
+            .map(\.id)
+        guard let anchorChainID = memberChainIDs.first else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage([
+                "重复任务父项"
+            ])
+        }
+        let classificationTime = time(
+            on: dates[0],
+            hour: 6,
+            minute: 48
+        )
+        try classify(
+            anchorChainID,
+            category: ("复盘", "#E0851B"),
+            labels: [("发布", "#E0851B")],
+            at: classificationTime
+        )
+        guard let classification = engine.snapshot().classifications
+            .currentByChainID[anchorChainID]
+        else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage([
+                "重复任务父项分类"
+            ])
+        }
+        try engine.setTaskCycleTemplateClassification(
+            seriesID: seriesID,
+            categoryID: classification.categoryID,
+            labelIDs: classification.labelIDs,
+            now: classificationTime
+        )
+        for chainID in memberChainIDs.dropFirst() {
+            _ = try engine.inheritCurrentClassification(
+                from: anchorChainID,
+                to: chainID,
+                now: classificationTime
+            )
+        }
+        return seriesID
     }
 
     private mutating func createTaskPool() throws -> DemoTaskIDs {
@@ -414,6 +530,11 @@ private struct DemoStory {
             taskIDs.todayActive,
             category: ("工程", "#0E9488"),
             labels: [("体验", "#7C5CFF")]
+        )
+        try classify(
+            taskIDs.todayCompleted,
+            category: ("工程", "#0E9488"),
+            labels: [("同步", "#2A6FDB")]
         )
         try classify(
             taskIDs.unfinishedHandoff,
@@ -699,6 +820,34 @@ private struct DemoStory {
             on: dates[9],
             hour: 7
         )
+        let completedChildren = try [
+            engine.addSubtask(
+                traceID: completed,
+                title: "同步当天目标",
+                now: time(on: dates[9], hour: 7, minute: 1)
+            ),
+            engine.addSubtask(
+                traceID: completed,
+                title: "确认关键风险",
+                now: time(on: dates[9], hour: 7, minute: 2)
+            ),
+            engine.addSubtask(
+                traceID: completed,
+                title: "记录下一步",
+                now: time(on: dates[9], hour: 7, minute: 3)
+            )
+        ]
+        for (index, childID) in completedChildren.enumerated() {
+            try engine.completeSubtask(
+                childID,
+                today: dates[9],
+                now: time(
+                    on: dates[9],
+                    hour: 7,
+                    minute: 10 + index
+                )
+            )
+        }
         try engine.markCompleted(
             traceID: completed,
             today: dates[9],
@@ -789,10 +938,11 @@ private struct DemoStory {
     private func classify(
         _ chainID: TaskChainID,
         category: (name: String, colorHex: String),
-        labels: [(name: String, colorHex: String)]
+        labels: [(name: String, colorHex: String)],
+        at explicitNow: Date? = nil
     ) throws {
         let interactionID = UUID()
-        let now = clock.next(
+        let now = explicitNow ?? clock.next(
             from: time(on: dates[0], hour: 6, minute: 30)
         )
         let plan = try engine.prepareClassification(
@@ -858,10 +1008,28 @@ private struct DemoStory {
                 ["周期实例 \(date.description) 缺失"]
             )
         }
+        let occurrenceSubtasks = engine.subtasks.values
+            .filter {
+                $0.traceID == trace.id
+                    && $0.status == .pending
+            }
+            .sorted {
+                if $0.position != $1.position {
+                    return $0.position < $1.position
+                }
+                return $0.id.description < $1.id.description
+            }
+        for subtask in occurrenceSubtasks {
+            try engine.completeSubtask(
+                subtask.id,
+                today: date,
+                now: time(on: date, hour: hour)
+            )
+        }
         try engine.markCompleted(
             traceID: trace.id,
             today: date,
-            now: time(on: date, hour: hour)
+            now: time(on: date, hour: hour, minute: 1)
         )
     }
 

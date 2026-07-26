@@ -32,6 +32,12 @@ extension NoonmarkStore {
         return trace
     }
 
+    var selectedTaskCycleSeries: TaskCycleSeries? {
+        selectedTaskCycleSeriesID.flatMap {
+            engine.taskCycleSeries[$0]
+        }
+    }
+
     var selectedDefinition: TaskDefinition? {
         guard let selectedTrace else { return nil }
         return engine.definitions[selectedTrace.definitionID]
@@ -166,6 +172,9 @@ extension NoonmarkStore {
     }
 
     var hasActiveDetailSelection: Bool {
+        if selectedTaskCycleSeries != nil {
+            return true
+        }
         if selectedPoolTask != nil || selectedUnfinishedItem != nil || selectedCompletedItem != nil || selectedCompletedSubtaskRecord != nil {
             return true
         }
@@ -294,7 +303,7 @@ extension NoonmarkStore {
         case .unfinished:
             return engine.unfinishedPool().count
         case .completed:
-            return engine.completedPool().count + engine.completedSubtaskRecords().count
+            return engine.completedTaskHierarchies().count
         case .calendar, .zhulong, .settings:
             return 0
         }

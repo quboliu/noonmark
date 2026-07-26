@@ -1977,7 +1977,50 @@ public extension NoonmarkEngine {
             next.committedReceiptsByInteractionID[plan.interactionID] = receipt
         }
         classificationState = next
+        try normalizeTaskCycleTemplateClassification(
+            after: plan.intent,
+            now: now
+        )
         return receipt
+    }
+
+    private func normalizeTaskCycleTemplateClassification(
+        after intent: ClassificationIntent,
+        now: Date
+    ) throws {
+        switch intent {
+        case let .mergeCategory(source, target):
+            let affectedIDs = taskCycleSeries.values
+                .filter { $0.categoryID == source }
+                .map(\.id)
+            for id in affectedIDs {
+                guard var series = taskCycleSeries[id] else { continue }
+                try series.updateTemplateClassification(
+                    categoryID: target,
+                    labelIDs: series.labelIDs,
+                    now: now
+                )
+                storeTaskCycleSeries(series)
+            }
+        case let .mergeLabel(source, target):
+            let affectedIDs = taskCycleSeries.values
+                .filter { $0.labelIDs.contains(source) }
+                .map(\.id)
+            for id in affectedIDs {
+                guard var series = taskCycleSeries[id] else { continue }
+                var labels = series.labelIDs
+                labels.remove(source)
+                labels.insert(target)
+                try series.updateTemplateClassification(
+                    categoryID: series.categoryID,
+                    labelIDs: labels,
+                    now: now
+                )
+                storeTaskCycleSeries(series)
+            }
+        default:
+            break
+        }
     }
 
     private func validatePreparedClassificationPlan(
@@ -3286,7 +3329,9 @@ extension NoonmarkEngine {
             event.category?.id == id ? event.id : nil
         })
         return ClassificationReferenceSummary(
-            currentRelationCount: state.currentByChainID.values.count { $0.categoryID == id },
+            currentRelationCount:
+            state.currentByChainID.values.count { $0.categoryID == id }
+                + taskCycleSeries.values.count { $0.categoryID == id },
             relationHistoryCount: state.relationHistory.count {
                 $0.kind == .category && $0.itemID == id.description
             },
@@ -3304,7 +3349,13 @@ extension NoonmarkEngine {
             event.labels.contains(where: { $0.id == id }) ? event.id : nil
         })
         return ClassificationReferenceSummary(
-            currentRelationCount: state.currentByChainID.values.count { $0.labelIDs.contains(id) },
+            currentRelationCount:
+            state.currentByChainID.values.count {
+                $0.labelIDs.contains(id)
+            }
+                + taskCycleSeries.values.count {
+                    $0.labelIDs.contains(id)
+                },
             relationHistoryCount: state.relationHistory.count {
                 $0.kind == .label && $0.itemID == id.description
             },

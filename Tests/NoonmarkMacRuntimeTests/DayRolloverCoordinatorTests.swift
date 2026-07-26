@@ -8,6 +8,53 @@ import XCTest
 
 @MainActor
 final class DayRolloverCoordinatorTests: XCTestCase {
+    func testReconcileStopsCompletionTargetAfterCompletedDayLocks() throws {
+        let yesterday = LocalDate("2026-07-14")
+        let today = LocalDate("2026-07-15")
+        let tomorrow = LocalDate("2026-07-16")
+        let engine = NoonmarkEngine()
+        let createdAt = makeMoment(yesterday).instant
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "完成一次即结束",
+            startDate: yesterday,
+            schedule: .daily,
+            endCondition: .completionTarget(
+                count: 1,
+                latestDate: tomorrow
+            ),
+            today: yesterday,
+            now: createdAt
+        )
+        let completedTrace = try XCTUnwrap(
+            engine.traces.values.first {
+                engine.chains[$0.chainID]?.cycleMembership?
+                    .seriesID == seriesID
+                    && $0.date == yesterday
+            }
+        )
+        try engine.markCompleted(
+            traceID: completedTrace.id,
+            today: yesterday,
+            now: createdAt.addingTimeInterval(1)
+        )
+
+        let reconciled = try DayRolloverCoordinator().reconcile(
+            engine: engine,
+            moment: makeMoment(today),
+            persist: { _, _ in }
+        )
+
+        XCTAssertEqual(
+            reconciled.taskCycleSeries[seriesID]?.stoppedAfterDate,
+            yesterday
+        )
+        XCTAssertEqual(
+            reconciled.taskCycleTracks(today: today)
+                .first { $0.id == seriesID }?.days.map(\.state),
+            [.completed, .skipped, .skipped]
+        )
+    }
+
     func testReconcileSettlesCandidateBeforePersistenceAndLeavesSourceUntouched() throws {
         let yesterday = LocalDate("2026-07-14")
         let today = LocalDate("2026-07-15")

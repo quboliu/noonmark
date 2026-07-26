@@ -71,8 +71,7 @@ struct UnfinishedDetail: View {
 
                 TaskClassificationDetailSection(
                     trace: trace,
-                    taskTitle: item.definition.title,
-                    editable: false
+                    taskTitle: item.definition.title
                 )
 
                 DetailSection(store.copy.taskTrailTitle) {

@@ -52,6 +52,8 @@ struct WorkspaceSelectableRow: ViewModifier {
 private extension NoonmarkStore.WorkspaceSelectionItem {
     var e2eIdentifier: String {
         switch self {
+        case let .taskCycleSeries(seriesID):
+            "workspace.item.task-cycle.\(seriesID.description)"
         case let .dayTrace(traceID):
             "workspace.item.day.\(traceID.description)"
         case let .poolTask(chainID):

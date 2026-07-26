@@ -456,6 +456,9 @@ final class MacUIDesignContractTests: XCTestCase {
                 .title,
                 .description,
                 .groupedByCompletionDate,
+                .parentChildHierarchy,
+                .completedChildrenOnly,
+                .quietChildrenAfterParentCompletion,
                 .parentCompletionRecord,
                 .subtaskCompletionRecord,
                 .trajectoryNodes,
@@ -645,6 +648,11 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.detailElements.contains(.iconOnlyOverflowMenu))
         XCTAssertTrue(contract.detailElements.contains(.progressSection))
         XCTAssertTrue(contract.detailElements.contains(.compactClassificationEditor))
+        XCTAssertTrue(
+            contract.detailElements.contains(
+                .classificationEditableAcrossTaskStates
+            )
+        )
         XCTAssertTrue(contract.detailElements.contains(.onDemandClassificationLabelInput))
         XCTAssertTrue(contract.detailElements.contains(.descriptionEditor))
         XCTAssertTrue(contract.detailElements.contains(.descriptionImmediatelyUnderTitle))

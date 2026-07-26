@@ -86,8 +86,7 @@ struct FuturePlanDetail: View {
 
             TaskClassificationDetailSection(
                 trace: trace,
-                taskTitle: definition.title,
-                editable: true
+                taskTitle: definition.title
             )
 
             DetailSection(store.copy.taskTrailTitle) {

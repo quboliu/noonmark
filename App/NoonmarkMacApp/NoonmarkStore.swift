@@ -201,6 +201,7 @@ final class NoonmarkStore: ObservableObject {
     }
 
     enum WorkspaceSelectionItem: Hashable {
+        case taskCycleSeries(TaskCycleSeriesID)
         case dayTrace(DayTraceID)
         case poolTask(TaskChainID)
         case futureTrace(DayTraceID)
@@ -620,6 +621,7 @@ final class NoonmarkStore: ObservableObject {
     }
 
     @Published var selectedCalendarDate: LocalDate
+    @Published var selectedTaskCycleSeriesID: TaskCycleSeriesID?
     @Published var selectedTraceID: DayTraceID?
     @Published var selectedPoolChainID: TaskChainID?
     @Published var selectedUnfinishedChainID: TaskChainID?

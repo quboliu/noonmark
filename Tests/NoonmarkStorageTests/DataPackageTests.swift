@@ -33,11 +33,18 @@ final class DataPackageTests: XCTestCase {
     func testDataPackagePreservesTaskCycleParentCancellationAndFullTrack() throws {
         let engine = NoonmarkEngine()
         let endDate = LocalDate("2026-07-09")
+        let plannedSubtask = PlannedSubtask(
+            title: "整理结论",
+            position: 1,
+            now: now
+        )
         let seriesID = try engine.createTaskCycleSeries(
             title: "每日导出复盘",
+            descriptionText: "父任务说明",
+            plannedSubtasks: [plannedSubtask],
             startDate: today,
-            endDate: endDate,
             schedule: .daily,
+            endCondition: .onDate(endDate),
             today: today,
             now: now
         )
@@ -46,6 +53,13 @@ final class DataPackageTests: XCTestCase {
             occurrenceDate: LocalDate("2026-07-06"),
             today: today,
             now: now.addingTimeInterval(1)
+        )
+        _ = try engine.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            schedule: .everyDays(2),
+            endCondition: .durationDays(5),
+            today: today,
+            now: now.addingTimeInterval(2)
         )
 
         let restored = try NoonmarkEngine(
@@ -63,7 +77,16 @@ final class DataPackageTests: XCTestCase {
         XCTAssertEqual(track.scheduledCount, 5)
         XCTAssertEqual(
             restored.taskCycleSeries[seriesID]?.cancellationFacts.count,
-            1
+            3
+        )
+        XCTAssertEqual(
+            restored.taskCycleSeries[seriesID]?.planRevisions.count,
+            2
+        )
+        XCTAssertEqual(
+            restored.taskCycleSeries[seriesID]?.plannedSubtasks
+                .map(\.title),
+            ["整理结论"]
         )
         XCTAssertTrue(
             restored.taskCycleSeries[seriesID]?

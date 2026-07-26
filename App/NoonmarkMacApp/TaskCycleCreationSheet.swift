@@ -5,9 +5,8 @@ import SwiftUI
 struct TaskCycleCreationSheet: View {
     @EnvironmentObject private var store: NoonmarkStore
     @State private var title = ""
-    @State private var schedule = TaskCycleSchedule.daily
+    @State private var plan = TaskCyclePlanEditorState()
     @State private var startDate = Date()
-    @State private var endDate = Date()
     @FocusState private var titleIsFocused: Bool
 
     private var request: TaskCycleCreationRequest? {
@@ -55,25 +54,25 @@ struct TaskCycleCreationSheet: View {
         try? formatter.localDate(from: startDate)
     }
 
-    private var endLocalDate: LocalDate? {
-        try? formatter.localDate(from: endDate)
-    }
-
-    private var latestEndDate: Date {
-        let local = startLocalDate.map {
-            NoonmarkStore.offset($0, by: 365)
-        } ?? NoonmarkStore.offset(store.today, by: 365)
-        return (try? formatter.foundationDate(from: local))
-            ?? endDate
+    private var endCondition: TaskCycleEndCondition? {
+        guard let startLocalDate else { return nil }
+        return plan.endCondition(
+            startDate: startLocalDate,
+            formatter: formatter
+        )
     }
 
     private var occurrenceCount: Int? {
-        guard let startLocalDate, let endLocalDate else {
+        guard let startLocalDate,
+              let endDate = try? endCondition?.resolvedEndDate(
+                  from: startLocalDate
+              )
+        else {
             return nil
         }
-        return try? schedule.occurrenceCount(
+        return try? plan.schedule.occurrenceCount(
             from: startLocalDate,
-            through: endLocalDate
+            through: endDate
         )
     }
 
@@ -81,9 +80,7 @@ struct TaskCycleCreationSheet: View {
         title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             == false
             && startLocalDate.map { $0 >= store.today } == true
-            && endLocalDate.map { end in
-                startLocalDate.map { end >= $0 } == true
-            } == true
+            && endCondition != nil
             && occurrenceCount.map { $0 > 0 } == true
     }
 
@@ -112,22 +109,6 @@ struct TaskCycleCreationSheet: View {
                         .disabled(allowsTitleEditing == false)
                 }
 
-                LabeledContent(store.copy.recurringTaskSchedule) {
-                    Picker("", selection: $schedule) {
-                        ForEach(TaskCycleSchedule.allCases, id: \.self) {
-                            value in
-                            Text(store.copy.taskCycleSchedule(value))
-                                .tag(value)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 250)
-                    .accessibilityIdentifier(
-                        "task-cycle-create.schedule"
-                    )
-                }
-
                 LabeledContent(store.copy.recurringTaskStartDate) {
                     DatePicker(
                         "",
@@ -142,18 +123,15 @@ struct TaskCycleCreationSheet: View {
                     .disabled(request?.locksStartDate == true)
                 }
 
-                LabeledContent(store.copy.recurringTaskEndDate) {
-                    DatePicker(
-                        "",
-                        selection: $endDate,
-                        in: startDate ... latestEndDate,
-                        displayedComponents: .date
-                    )
-                    .labelsHidden()
-                    .accessibilityIdentifier(
-                        "task-cycle-create.end-date"
-                    )
-                }
+                TaskCyclePlanEditor(
+                    state: $plan,
+                    startDate: startDate,
+                    formatter: formatter,
+                    accessibilityNamespace: "task-cycle-create.plan"
+                )
+                .accessibilityIdentifier(
+                    "task-cycle-create.schedule"
+                )
             }
 
             if let occurrenceCount {
@@ -209,7 +187,7 @@ struct TaskCycleCreationSheet: View {
             startDate = request.flatMap {
                 try? formatter.foundationDate(from: $0.startDate)
             } ?? todayFoundationDate
-            endDate = (try? formatter.foundationDate(
+            plan.deadline = (try? formatter.foundationDate(
                 from: NoonmarkStore.offset(
                     request?.startDate ?? store.today,
                     by: 6
@@ -223,10 +201,8 @@ struct TaskCycleCreationSheet: View {
             }
         }
         .onChange(of: startDate) { _, newStartDate in
-            if endDate < newStartDate {
-                endDate = newStartDate
-            } else if endDate > latestEndDate {
-                endDate = latestEndDate
+            if plan.deadline < newStartDate {
+                plan.deadline = newStartDate
             }
         }
         .background {
@@ -244,15 +220,15 @@ struct TaskCycleCreationSheet: View {
     private func create() {
         guard canCreate,
               let startLocalDate,
-              let endLocalDate
+              let endCondition
         else {
             return
         }
         _ = store.createTaskCycleSeries(
             title: title,
             startDate: startLocalDate,
-            endDate: endLocalDate,
-            schedule: schedule
+            schedule: plan.schedule,
+            endCondition: endCondition
         )
     }
 }

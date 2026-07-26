@@ -1439,9 +1439,9 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
             surface: .completedRow,
             instanceID: completedTrace.id.description
         )
-        let completedSubtaskStatusID = statusIdentifier(
-            surface: .completedSubtaskRow,
-            instanceID: completedSubtask.id.description
+        let completedSubtaskParentStatusID = statusIdentifier(
+            surface: .completedRow,
+            instanceID: subtaskChainID.description
         )
         let failedRetryID = retryIdentifier(
             surface: .completedRow,
@@ -1459,7 +1459,7 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
                     isButton: false
                 ),
                 ExpectedStatusAccessibility(
-                    identifier: completedSubtaskStatusID,
+                    identifier: completedSubtaskParentStatusID,
                     label: statusAccessibilityLabel(
                         .waitingForDecision,
                         taskTitle: Title.statusSubtaskParent,
@@ -1528,7 +1528,7 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
                     isButton: false
                 ),
                 ExpectedStatusAccessibility(
-                    identifier: completedSubtaskStatusID,
+                    identifier: completedSubtaskParentStatusID,
                     label: statusAccessibilityLabel(
                         .waitingForDecision,
                         taskTitle: Title.statusSubtaskParent,
@@ -1607,7 +1607,7 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
               unfinishedIdentifiers.count == 2,
               postRetryIdentifiers == Set([
                   completedStatusID,
-                  completedSubtaskStatusID
+                  completedSubtaskParentStatusID
               ])
         else {
             throw failure("automatic classification AX identifiers were not global")

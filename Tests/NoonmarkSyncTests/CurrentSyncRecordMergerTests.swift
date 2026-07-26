@@ -7,6 +7,63 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
     private let now = Date(timeIntervalSinceReferenceDate: 812_345_678.25)
     private let today = LocalDate("2026-07-16")
 
+    func testConcurrentRecurringPlanRevisionsConvergeWithoutLosingHistory() throws {
+        let baseline = NoonmarkEngine()
+        let seriesID = try baseline.createTaskCycleSeries(
+            title: "同步重复规则",
+            startDate: today,
+            schedule: .daily,
+            endCondition: .durationDays(7),
+            today: today,
+            now: now
+        )
+        let first = try NoonmarkEngine(snapshot: baseline.snapshot())
+        let second = try NoonmarkEngine(snapshot: baseline.snapshot())
+        _ = try first.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            schedule: .everyDays(2),
+            endCondition: .durationDays(7),
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        _ = try second.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            schedule: .everyDays(3),
+            endCondition: .durationDays(10),
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        let mapper = SyncRecordMapper()
+        let firstRecord = try mapper.record(
+            for: XCTUnwrap(first.taskCycleSeries[seriesID]),
+            modifiedBy: SyncDeviceID("cycle-a")
+        )
+        let secondRecord = try mapper.record(
+            for: XCTUnwrap(second.taskCycleSeries[seriesID]),
+            modifiedBy: SyncDeviceID("cycle-b")
+        )
+        let merger = CurrentSyncRecordMerger()
+
+        let forward = try mapper.decodeTaskCycleSeries(
+            merger.merge(
+                existing: firstRecord,
+                incoming: secondRecord
+            )
+        )
+        let reverse = try mapper.decodeTaskCycleSeries(
+            merger.merge(
+                existing: secondRecord,
+                incoming: firstRecord
+            )
+        )
+
+        XCTAssertEqual(forward, reverse)
+        XCTAssertEqual(forward.planRevisions.count, 3)
+        XCTAssertEqual(forward.schedule, .everyDays(3))
+        XCTAssertEqual(forward.endCondition, .durationDays(10))
+        XCTAssertEqual(forward.updatedAt, now.addingTimeInterval(2))
+    }
+
     func testTransportBatchCanonicalizesConsecutivePreferenceVersionsToFinalWinner() throws {
         let mapper = SyncRecordMapper()
         let first = try mapper.record(

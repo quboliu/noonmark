@@ -136,7 +136,7 @@ public final class NoonmarkEngine {
         return outcome
     }
 
-    private func adoptState(from candidate: NoonmarkEngine) {
+    func adoptState(from candidate: NoonmarkEngine) {
         days = candidate.days
         taskCycleSeries = candidate.taskCycleSeries
         chains = candidate.chains
@@ -255,6 +255,19 @@ public final class NoonmarkEngine {
             }
         }
 
+        let affectedSeriesIDs = taskCycleSeries.values
+            .filter { $0.categoryID == categoryID }
+            .map(\.id)
+        for seriesID in affectedSeriesIDs {
+            guard var series = taskCycleSeries[seriesID] else { continue }
+            try series.updateTemplateClassification(
+                categoryID: nil,
+                labelIDs: series.labelIDs,
+                now: now
+            )
+            taskCycleSeries[seriesID] = series
+        }
+
         let archivePlan = try prepareClassification(
             .archiveCategory(categoryID),
             source: .userDirect,
@@ -309,6 +322,27 @@ public final class NoonmarkEngine {
 
     func storeTaskCycleSeries(_ series: TaskCycleSeries) {
         taskCycleSeries[series.id] = series
+    }
+
+    func currentTaskCycleDefinition(
+        for chainID: TaskChainID
+    ) throws -> TaskDefinition {
+        try currentDefinition(for: chainID)
+    }
+
+    func storeTaskCycleDefinition(_ definition: TaskDefinition) {
+        definitions[definition.id] = definition
+    }
+
+    func storeTaskCycleTrace(_ trace: DayTrace) {
+        traces[trace.id] = trace
+    }
+
+    func touchTaskCycleChain(
+        _ chainID: TaskChainID,
+        now: Date
+    ) throws {
+        try touchChain(chainID, now: now)
     }
 
     func ensureTaskCycleDatesUnlocked(
@@ -373,6 +407,13 @@ public final class NoonmarkEngine {
         chains[chain.id] = chain
         if let insertedTrace {
             traces[insertedTrace.id] = insertedTrace
+            if let definition = definitions[insertedTrace.definitionID] {
+                copyPlannedSubtasks(
+                    from: definition,
+                    to: insertedTrace.id,
+                    now: now
+                )
+            }
             ensureDay(insertedTrace.date, now: now)
         }
     }
@@ -396,7 +437,7 @@ public final class NoonmarkEngine {
     func storePreparedTaskCycleTraceCancellations(
         _ preparedTraces: [DayTrace],
         now: Date
-    ) {
+    ) throws {
         for trace in preparedTraces {
             traces[trace.id] = trace
             if let updatedAt = chains[trace.chainID]?.updatedAt {
@@ -405,13 +446,14 @@ public final class NoonmarkEngine {
         }
     }
 
+    @discardableResult
     func installTaskCycleOccurrence(
         normalizedTitle: String,
         descriptionText: String?,
         plannedSubtasks: [PlannedSubtask] = [],
         membership: TaskCycleMembership,
         now: Date
-    ) {
+    ) -> TaskChainID {
         let chain = TaskChain(
             cycleMembership: membership,
             now: now
@@ -443,7 +485,127 @@ public final class NoonmarkEngine {
         chains[chain.id] = chain
         definitions[definition.id] = definition
         traces[trace.id] = trace
+        copyPlannedSubtasks(
+            from: definition,
+            to: trace.id,
+            now: now
+        )
         ensureDay(membership.occurrenceDate, now: now)
+        return chain.id
+    }
+
+    @discardableResult
+    func reactivateTaskCycleOccurrence(
+        chainID: TaskChainID,
+        series: TaskCycleSeries,
+        occurrenceDate: LocalDate,
+        now: Date
+    ) throws -> DayTraceID {
+        var current = try currentDefinition(for: chainID)
+        let nextSequence = (definitions.values
+            .filter { $0.chainID == chainID }
+            .map(\.sequence)
+            .max() ?? current.sequence) + 1
+        let definition = TaskDefinition(
+            chainID: chainID,
+            sequence: nextSequence,
+            title: series.title,
+            descriptionText: series.descriptionText,
+            plannedSubtasks: series.plannedSubtasks.map {
+                PlannedSubtask(
+                    lineageID: $0.lineageID,
+                    title: $0.title,
+                    difficulty: $0.difficulty,
+                    position: $0.position,
+                    now: now
+                )
+            },
+            now: now
+        )
+        try current.markContentModified(at: now)
+        current.supersededAt = now
+        current.supersededByDefinitionID = definition.id
+        let trace = DayTrace(
+            chainID: chainID,
+            definitionID: definition.id,
+            date: occurrenceDate,
+            priority: nextPriority(on: occurrenceDate),
+            descriptionText: series.descriptionText,
+            now: now
+        )
+        definitions[current.id] = current
+        definitions[definition.id] = definition
+        traces[trace.id] = trace
+        copyPlannedSubtasks(
+            from: definition,
+            to: trace.id,
+            now: now
+        )
+        ensureDay(occurrenceDate, now: now)
+        try touchChain(chainID, now: now)
+        return trace.id
+    }
+
+    func replaceTaskCycleTraceSubtasks(
+        traceID: DayTraceID,
+        plannedSubtasks: [PlannedSubtask],
+        now: Date
+    ) throws {
+        let existingSubtasks = subtasks.values.filter {
+            $0.traceID == traceID
+        }
+        let desiredSubtasks = plannedSubtasks.sorted {
+            $0.position < $1.position
+        }
+        let desiredLineageIDs = Set(desiredSubtasks.map(\.lineageID))
+
+        for value in existingSubtasks
+            where value.status == .pending
+                && desiredLineageIDs.contains(value.lineageID) == false
+        {
+            var subtask = value
+            try subtask.markContentModified(at: now)
+            subtask.status = .cancelledDraft
+            subtask.completedAt = nil
+            subtask.settledAt = now
+            subtask.draftCancellationID = UUID()
+            subtasks[subtask.id] = subtask
+        }
+
+        var nextPosition =
+            (existingSubtasks.map(\.position).max() ?? 0) + 1
+        for plannedSubtask in desiredSubtasks {
+            if var existing = existingSubtasks.first(where: {
+                $0.lineageID == plannedSubtask.lineageID
+            }) {
+                guard existing.status == .pending
+                    || existing.status == .cancelledDraft
+                else {
+                    throw NoonmarkError.invalidTransition(
+                        "future task cycle subtasks must remain editable"
+                    )
+                }
+                try existing.markContentModified(at: now)
+                existing.title = plannedSubtask.title
+                existing.difficulty = plannedSubtask.difficulty
+                existing.status = .pending
+                existing.completedAt = nil
+                existing.settledAt = nil
+                existing.draftCancellationID = nil
+                subtasks[existing.id] = existing
+                continue
+            }
+            let subtask = Subtask(
+                lineageID: plannedSubtask.lineageID,
+                traceID: traceID,
+                title: plannedSubtask.title,
+                difficulty: plannedSubtask.difficulty,
+                position: nextPosition,
+                now: now
+            )
+            subtasks[subtask.id] = subtask
+            nextPosition += 1
+        }
     }
 
     public func updatePoolTask(
@@ -1097,6 +1259,85 @@ public final class NoonmarkEngine {
                     return $0.subtask.position < $1.subtask.position
                 }
                 return $0.subtask.createdAt < $1.subtask.createdAt
+            }
+    }
+
+    public func completedTaskHierarchies() -> [CompletedTaskHierarchy] {
+        let parentCompletionsByChain = Dictionary(
+            grouping: completedPool(),
+            by: \.trace.chainID
+        )
+        let childrenByChain = Dictionary(
+            grouping: completedSubtaskRecords(),
+            by: \.parentTrace.chainID
+        )
+        let chainIDs = Set(parentCompletionsByChain.keys)
+            .union(childrenByChain.keys)
+
+        return chainIDs.compactMap { chainID in
+            guard let chain = chains[chainID] else { return nil }
+            let parentCompletion = parentCompletionsByChain[chainID]?
+                .max {
+                    ($0.trace.completedAt ?? $0.trace.createdAt)
+                        < ($1.trace.completedAt ?? $1.trace.createdAt)
+                }
+            guard let definition =
+                parentCompletion?.definition
+                    ?? (try? currentDefinition(for: chainID))
+            else {
+                return nil
+            }
+            let completedChildren = latestCompletedChildren(
+                from: childrenByChain[chainID] ?? []
+            )
+            return CompletedTaskHierarchy(
+                chain: chain,
+                definition: definition,
+                parentCompletion: parentCompletion,
+                completedChildren: completedChildren
+            )
+        }
+        .sorted {
+            if $0.latestCompletionAt != $1.latestCompletionAt {
+                return $0.latestCompletionAt > $1.latestCompletionAt
+            }
+            let titleOrder = $0.definition.title.localizedStandardCompare(
+                $1.definition.title
+            )
+            if titleOrder != .orderedSame {
+                return titleOrder == .orderedAscending
+            }
+            return $0.chain.id.description < $1.chain.id.description
+        }
+    }
+
+    private func latestCompletedChildren(
+        from records: [CompletedSubtaskRecord]
+    ) -> [CompletedSubtaskRecord] {
+        Dictionary(grouping: records, by: \.subtask.lineageID)
+            .values
+            .compactMap { lineageRecords in
+                lineageRecords.max {
+                    let lhs = $0.subtask.completedAt
+                        ?? $0.subtask.updatedAt
+                    let rhs = $1.subtask.completedAt
+                        ?? $1.subtask.updatedAt
+                    if lhs != rhs {
+                        return lhs < rhs
+                    }
+                    return $0.subtask.id.description
+                        < $1.subtask.id.description
+                }
+            }
+            .sorted {
+                if $0.subtask.position != $1.subtask.position {
+                    return $0.subtask.position < $1.subtask.position
+                }
+                if $0.subtask.createdAt != $1.subtask.createdAt {
+                    return $0.subtask.createdAt < $1.subtask.createdAt
+                }
+                return $0.subtask.id.description
+                    < $1.subtask.id.description
             }
     }
 

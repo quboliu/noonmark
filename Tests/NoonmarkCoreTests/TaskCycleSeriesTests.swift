@@ -50,6 +50,506 @@ final class TaskCycleSeriesTests: XCTestCase {
         XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
     }
 
+    func testEveryTwoDaysScheduleIsAnchoredToTheSeriesStart() throws {
+        let engine = NoonmarkEngine()
+
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "隔天整理",
+            startDate: monday,
+            endDate: sunday,
+            schedule: .everyDays(2),
+            today: monday,
+            now: now
+        )
+
+        XCTAssertEqual(
+            engine.chains.values.compactMap { chain in
+                guard chain.cycleMembership?.seriesID == seriesID else {
+                    return nil
+                }
+                return chain.cycleMembership?.occurrenceDate
+            }.sorted(),
+            [monday, wednesday, friday, sunday]
+        )
+    }
+
+    func testDurationEndConditionMaterializesThatManyCalendarDays() throws {
+        let engine = NoonmarkEngine()
+
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "三天复盘",
+            startDate: monday,
+            schedule: .daily,
+            endCondition: .durationDays(3),
+            today: monday,
+            now: now
+        )
+
+        let series = try XCTUnwrap(engine.taskCycleSeries[seriesID])
+        XCTAssertEqual(series.endCondition, .durationDays(3))
+        XCTAssertEqual(series.endDate, wednesday)
+        XCTAssertEqual(
+            engine.taskCycleTracks(today: monday)
+                .first { $0.id == seriesID }?.days.map(\.date),
+            [monday, tuesday, wednesday]
+        )
+    }
+
+    func testPlanRevisionReplacesOnlyFutureScheduleFromTomorrow() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "调整频率",
+            startDate: monday,
+            endDate: sunday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        try engine.settleDays(
+            upTo: wednesday,
+            now: now.addingTimeInterval(1)
+        )
+
+        let outcome = try engine.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            schedule: .everyDays(2),
+            endCondition: .onDate(sunday),
+            today: wednesday,
+            now: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(outcome.effectiveFrom, thursday)
+        XCTAssertEqual(outcome.cancelledOccurrenceCount, 2)
+        XCTAssertEqual(outcome.createdOccurrenceCount, 0)
+        let series = try XCTUnwrap(engine.taskCycleSeries[seriesID])
+        XCTAssertEqual(series.planRevisions.count, 2)
+        XCTAssertEqual(series.schedule, .everyDays(2))
+        XCTAssertEqual(
+            engine.taskCycleTracks(today: wednesday)
+                .first { $0.id == seriesID }?.days.map(\.state),
+            [
+                .unfinished,
+                .unfinished,
+                .pendingToday,
+                .planned,
+                .skipped,
+                .planned,
+                .skipped
+            ]
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testCompletionTargetStopsOnlyAfterCompletedDaysAreLocked() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "完成两次即结束",
+            startDate: monday,
+            schedule: .daily,
+            endCondition: .completionTarget(
+                count: 2,
+                latestDate: friday
+            ),
+            today: monday,
+            now: now
+        )
+        let mondayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+        try engine.markCompleted(
+            traceID: mondayTrace.id,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+        XCTAssertEqual(
+            try engine.reconcileTaskCycleSeries(
+                today: monday,
+                now: now.addingTimeInterval(2)
+            ).cancelledOccurrenceCount,
+            0
+        )
+
+        try engine.settleDays(
+            upTo: tuesday,
+            now: now.addingTimeInterval(3)
+        )
+        let tuesdayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: tuesday
+        )
+        try engine.markCompleted(
+            traceID: tuesdayTrace.id,
+            today: tuesday,
+            now: now.addingTimeInterval(4)
+        )
+        XCTAssertEqual(
+            try engine.reconcileTaskCycleSeries(
+                today: tuesday,
+                now: now.addingTimeInterval(5)
+            ).cancelledOccurrenceCount,
+            0
+        )
+
+        try engine.settleDays(
+            upTo: wednesday,
+            now: now.addingTimeInterval(6)
+        )
+        let outcome = try engine.reconcileTaskCycleSeries(
+            today: wednesday,
+            now: now.addingTimeInterval(7)
+        )
+
+        XCTAssertEqual(outcome.cancelledOccurrenceCount, 3)
+        XCTAssertEqual(
+            engine.taskCycleSeries[seriesID]?.stoppedAfterDate,
+            tuesday
+        )
+        XCTAssertEqual(
+            engine.taskCycleTracks(today: wednesday)
+                .first { $0.id == seriesID }?.days.map(\.state),
+            [.completed, .completed, .skipped, .skipped, .skipped]
+        )
+    }
+
+    func testTemplateContentEditPreservesHistoryAndUpdatesEditableOccurrences() throws {
+        let engine = NoonmarkEngine()
+        let originalSubtask = PlannedSubtask(
+            title: "旧步骤",
+            position: 1,
+            now: now
+        )
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "原任务",
+            descriptionText: "旧说明",
+            plannedSubtasks: [originalSubtask],
+            startDate: monday,
+            schedule: .daily,
+            endCondition: .durationDays(3),
+            today: monday,
+            now: now
+        )
+        let mondayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+        let mondaySubtask = try XCTUnwrap(
+            engine.subtasks.values.first {
+                $0.traceID == mondayTrace.id && $0.status == .pending
+            }
+        )
+        try engine.completeSubtask(
+            mondaySubtask.id,
+            today: monday,
+            now: now.addingTimeInterval(0.5)
+        )
+        try engine.markCompleted(
+            traceID: mondayTrace.id,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.settleDays(
+            upTo: tuesday,
+            now: now.addingTimeInterval(2)
+        )
+        let newSubtask = PlannedSubtask(
+            title: "新步骤",
+            position: 1,
+            now: now.addingTimeInterval(3)
+        )
+
+        try engine.updateTaskCycleTemplateContent(
+            seriesID: seriesID,
+            title: "新任务",
+            descriptionText: "新说明",
+            plannedSubtasks: [newSubtask],
+            today: tuesday,
+            now: now.addingTimeInterval(3)
+        )
+
+        let series = try XCTUnwrap(engine.taskCycleSeries[seriesID])
+        XCTAssertEqual(series.title, "新任务")
+        XCTAssertEqual(series.descriptionText, "新说明")
+        XCTAssertEqual(series.plannedSubtasks.map(\.title), ["新步骤"])
+        let historicalDefinition = try XCTUnwrap(
+            engine.definitions[mondayTrace.definitionID]
+        )
+        XCTAssertEqual(historicalDefinition.title, "原任务")
+        XCTAssertEqual(
+            historicalDefinition.plannedSubtasks.map(\.title),
+            ["旧步骤"]
+        )
+        for date in [tuesday, wednesday] {
+            let editableTrace = try trace(
+                in: engine,
+                seriesID: seriesID,
+                occurrenceDate: date
+            )
+            let definition = try XCTUnwrap(
+                engine.definitions[editableTrace.definitionID]
+            )
+            XCTAssertEqual(definition.title, "新任务")
+            XCTAssertEqual(definition.descriptionText, "新说明")
+            XCTAssertEqual(
+                definition.plannedSubtasks.map(\.title),
+                ["新步骤"]
+            )
+        }
+        let tuesdayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: tuesday
+        )
+        XCTAssertEqual(
+            engine.subtasks.values
+                .filter {
+                    $0.traceID == tuesdayTrace.id
+                        && $0.isUserPresentable
+                }
+                .map(\.title),
+            ["旧步骤"]
+        )
+        let wednesdayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: wednesday
+        )
+        XCTAssertEqual(
+            engine.subtasks.values
+                .filter {
+                    $0.traceID == wednesdayTrace.id
+                        && $0.isUserPresentable
+                }
+                .map(\.title),
+            ["新步骤"]
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testDeletingCategoryUngroupsRecurringParentAndFutureOccurrencesWithoutRewritingHistory() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日发布复盘",
+            startDate: monday,
+            endDate: wednesday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let members = engine.chains.values
+            .filter { $0.cycleMembership?.seriesID == seriesID }
+            .sorted {
+                $0.cycleMembership!.occurrenceDate
+                    < $1.cycleMembership!.occurrenceDate
+            }
+        let anchorChainID = try XCTUnwrap(members.first?.id)
+        let interactionID = UUID()
+        let plan = try engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: anchorChainID,
+                    category: .new(
+                        name: "工作",
+                        colorHex: "#2A6FDB"
+                    ),
+                    labels: [
+                        .new(name: "复盘", colorHex: "#0E9488")
+                    ]
+                )
+            ),
+            source: .userDirect,
+            interactionID: interactionID,
+            now: now.addingTimeInterval(1)
+        )
+        _ = try engine.commitClassification(
+            plan,
+            confirmation: .user(decisionID: interactionID),
+            now: now.addingTimeInterval(1)
+        )
+        let anchorClassification = try XCTUnwrap(
+            engine.snapshot().classifications
+                .currentByChainID[anchorChainID]
+        )
+        let categoryID = try XCTUnwrap(
+            anchorClassification.categoryID
+        )
+        try engine.setTaskCycleTemplateClassification(
+            seriesID: seriesID,
+            categoryID: categoryID,
+            labelIDs: anchorClassification.labelIDs,
+            now: now.addingTimeInterval(1)
+        )
+        for member in members.dropFirst() {
+            _ = try engine.inheritCurrentClassification(
+                from: anchorChainID,
+                to: member.id,
+                now: now.addingTimeInterval(1)
+            )
+        }
+        try engine.settleDays(
+            upTo: tuesday,
+            now: now.addingTimeInterval(2)
+        )
+        let mondayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+
+        _ = try engine.deleteTaskCategoryFromToday(
+            categoryID,
+            today: tuesday,
+            decisionID: UUID(),
+            now: now.addingTimeInterval(3)
+        )
+
+        let parent = try engine.taskCycleTemplateClassification(
+            seriesID: seriesID
+        )
+        XCTAssertNil(parent.category)
+        XCTAssertEqual(parent.labels.map(\.name), ["复盘"])
+        for member in members.dropFirst() {
+            guard case let .task(classification) = try engine
+                .classification(.task(member.id))
+            else {
+                return XCTFail("预期重复实例当前分类")
+            }
+            XCTAssertNil(classification.category)
+            XCTAssertEqual(classification.labels.map(\.name), ["复盘"])
+        }
+        guard case let .history(history) = try engine
+            .classification(.history(mondayTrace.id))
+        else {
+            return XCTFail("预期重复实例历史分类")
+        }
+        XCTAssertEqual(history.category?.name, "工作")
+        XCTAssertEqual(history.labels.map(\.name), ["复盘"])
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testPlanRevisionCanReintroduceAnOccurrenceItPreviouslyRemoved() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "恢复频率",
+            startDate: monday,
+            schedule: .daily,
+            endCondition: .durationDays(5),
+            today: monday,
+            now: now
+        )
+        _ = try engine.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            schedule: .everyDays(2),
+            endCondition: .durationDays(5),
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+        XCTAssertEqual(
+            engine.taskCycleTracks(today: monday)
+                .first { $0.id == seriesID }?.days[2].state,
+            .skipped
+        )
+
+        let outcome = try engine.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            schedule: .daily,
+            endCondition: .durationDays(5),
+            today: tuesday,
+            now: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(outcome.createdOccurrenceCount, 2)
+        XCTAssertEqual(
+            engine.taskCycleTracks(today: tuesday)
+                .first { $0.id == seriesID }?.days.map(\.state),
+            [.pendingPast, .pendingToday, .planned, .planned, .planned]
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testPlanRevisionClassificationBoundariesEndAtFinalSnapshotAfterReactivation() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "恢复并延长频率",
+            startDate: monday,
+            schedule: .daily,
+            endCondition: .durationDays(5),
+            today: monday,
+            now: now
+        )
+        let members = engine.chains.values
+            .filter { $0.cycleMembership?.seriesID == seriesID }
+            .sorted {
+                $0.cycleMembership!.occurrenceDate
+                    < $1.cycleMembership!.occurrenceDate
+            }
+        let anchorChainID = try XCTUnwrap(members.first?.id)
+        let interactionID = UUID()
+        let plan = try engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: anchorChainID,
+                    category: .new(
+                        name: "习惯",
+                        colorHex: "#2A6FDB"
+                    ),
+                    labels: []
+                )
+            ),
+            source: .userDirect,
+            interactionID: interactionID,
+            now: now.addingTimeInterval(1)
+        )
+        _ = try engine.commitClassification(
+            plan,
+            confirmation: .user(decisionID: interactionID),
+            now: now.addingTimeInterval(1)
+        )
+        let classification = try XCTUnwrap(
+            engine.snapshot().classifications
+                .currentByChainID[anchorChainID]
+        )
+        try engine.setTaskCycleTemplateClassification(
+            seriesID: seriesID,
+            categoryID: classification.categoryID,
+            labelIDs: classification.labelIDs,
+            now: now.addingTimeInterval(1)
+        )
+        for member in members.dropFirst() {
+            _ = try engine.inheritCurrentClassification(
+                from: anchorChainID,
+                to: member.id,
+                now: now.addingTimeInterval(1)
+            )
+        }
+        _ = try engine.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            schedule: .everyDays(2),
+            endCondition: .durationDays(5),
+            today: monday,
+            now: now.addingTimeInterval(2)
+        )
+
+        let outcome = try engine.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            schedule: .daily,
+            endCondition: .durationDays(7),
+            today: tuesday,
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(outcome.createdOccurrenceCount, 4)
+        XCTAssertFalse(outcome.classificationCommitBoundaries.isEmpty)
+        XCTAssertEqual(
+            outcome.classificationCommitBoundaries.last,
+            engine.snapshot()
+        )
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
     func testConvertingPoolTaskAdoptsItsChainAsFirstOccurrence() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(

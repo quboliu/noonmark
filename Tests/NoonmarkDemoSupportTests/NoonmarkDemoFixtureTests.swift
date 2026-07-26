@@ -30,7 +30,19 @@ struct NoonmarkDemoFixtureTests {
         #expect(track.appears(in: .pool))
         #expect(fixture.report.taskCycleSeriesCount == 1)
         #expect(fixture.report.taskCycleOccurrenceCount == 13)
+        #expect(fixture.report.classifiedTaskCycleSeriesCount == 1)
+        #expect(
+            fixture.report.taskCycleSeriesWithPlannedSubtasksCount == 1
+        )
+        #expect(fixture.report.taskCyclePlanRevisionCount == 2)
         #expect(fixture.report.deletableCategoryBoundaryCount > 0)
+        #expect(
+            fixture.report.openParentWithCompletedChildrenCount > 0
+        )
+        #expect(
+            fixture.report
+                .completedParentWithCompletedChildrenCount > 0
+        )
         #expect(
             track.days.first {
                 $0.date == LocalDate("2026-07-26")
@@ -115,6 +127,22 @@ struct NoonmarkDemoFixtureTests {
             completedItems.count {
                 $0.trajectory.traces.count >= 2
             } == 2
+        )
+        let ordinaryHierarchies =
+            engine.completedTaskHierarchies().filter {
+                $0.chain.cycleMembership == nil
+            }
+        #expect(
+            ordinaryHierarchies.contains {
+                $0.parentCompletion == nil
+                    && $0.completedChildren.count == 1
+            }
+        )
+        #expect(
+            ordinaryHierarchies.contains {
+                $0.parentCompletion != nil
+                    && $0.completedChildren.count == 3
+            }
         )
     }
 

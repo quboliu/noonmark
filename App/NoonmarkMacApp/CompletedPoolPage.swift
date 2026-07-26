@@ -36,36 +36,32 @@ struct CompletedPoolPage: View {
         )
     }
 
-    var items: [CompletedPoolItem] {
+    var hierarchies: [CompletedTaskHierarchy] {
         store.standaloneCollectionItems(
-            store.engine.completedPool(),
-            chainID: \.trace.chainID
+            store.engine.completedTaskHierarchies(),
+            chainID: \.chain.id
         )
     }
 
-    var subtaskRecords: [CompletedSubtaskRecord] { store.engine.completedSubtaskRecords() }
-
-    private var entries: [CompletedCollectionEntry] {
-        items.map(CompletedCollectionEntry.task) + subtaskRecords.map(CompletedCollectionEntry.subtask)
-    }
-
-    private var entriesByID: [String: CompletedCollectionEntry] {
-        Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+    private var hierarchiesByID: [String: CompletedTaskHierarchy] {
+        Dictionary(
+            uniqueKeysWithValues: hierarchies.map {
+                ($0.chain.id.description, $0)
+            }
+        )
     }
 
     private var presentationSections: [TaskCollectionPresentationSection] {
-        let rows = entries.map { entry in
-            let title = switch entry {
-            case let .task(item):
-                store.copy.displayTaskTitle(item.definition.title)
-            case .subtask:
-                entry.title
-            }
+        let rows = hierarchies.map { hierarchy in
             return TaskCollectionPresentationItem(
-                id: entry.id,
-                title: title,
-                time: entry.completedAt,
-                category: historicalCategory(for: entry.classificationTrace)
+                id: hierarchy.chain.id.description,
+                title: store.copy.displayTaskTitle(
+                    hierarchy.definition.title
+                ),
+                time: hierarchy.latestCompletionAt,
+                category: store.currentClassification(
+                    for: hierarchy.chain.id
+                )?.category?.taskCollectionCategoryPresentation
             )
         }
         return TaskCollectionPresentationProjector().sections(
@@ -96,19 +92,14 @@ struct CompletedPoolPage: View {
                             TaskCollectionSectionHeader(section: section, count: section.items.count)
                         }
                         ForEach(section.items, id: \.id) { row in
-                            if let entry = entriesByID[row.id] {
-                                switch entry {
-                                case let .task(item):
-                                    CompletedRow(item: item)
-                                case let .subtask(record):
-                                    CompletedSubtaskRow(record: record)
-                                }
+                            if let hierarchy = hierarchiesByID[row.id] {
+                                CompletedTaskHierarchyRows(
+                                    hierarchy: hierarchy
+                                )
                             }
                         }
                     }
-                    if items.isEmpty && subtaskRecords.isEmpty
-                        && cycleTracks.isEmpty
-                    {
+                    if hierarchies.isEmpty && cycleTracks.isEmpty {
                         EmptyState(kind: .completedPool, text: store.copy.emptyCompleted)
                             .padding(.top, 40)
                     }
@@ -123,104 +114,153 @@ struct CompletedPoolPage: View {
             presentationRepository.save(preference, for: .completed)
         }
     }
-
-    private func historicalCategory(
-        for trace: DayTrace
-    ) -> TaskCollectionCategoryPresentation? {
-        if case let .history(projection) = try? store.engine.classification(.history(trace.id)),
-           let category = projection.category
-        {
-            let catalogCategory = store.classificationCatalog()?.categories.first {
-                $0.id == category.id
-            }
-            return TaskCollectionCategoryPresentation(
-                id: category.id,
-                name: category.name,
-                colorHex: catalogCategory?.colorHex ?? category.colorHex,
-                approval: catalogCategory?.presentationApproval == .userApproved
-                    ? .userApproved
-                    : .pendingAIReview
-            )
-        }
-        return nil
-    }
 }
 
-private enum CompletedCollectionEntry {
-    case task(CompletedPoolItem)
-    case subtask(CompletedSubtaskRecord)
-
-    var id: String {
-        switch self {
-        case let .task(item): "task:\(item.trace.id.description)"
-        case let .subtask(record): "subtask:\(record.subtask.id.description)"
-        }
-    }
-
-    var title: String {
-        switch self {
-        case let .task(item): item.definition.title
-        case let .subtask(record): record.subtask.title
-        }
-    }
-
-    var completedAt: Date {
-        switch self {
-        case let .task(item): item.trace.completedAt ?? item.trace.createdAt
-        case let .subtask(record): record.subtask.completedAt ?? record.subtask.updatedAt
-        }
-    }
-
-    var classificationTrace: DayTrace {
-        switch self {
-        case let .task(item): item.trace
-        case let .subtask(record): record.parentTrace
-        }
-    }
-}
-
-struct CompletedRow: View {
+struct CompletedTaskHierarchyRows: View {
     @EnvironmentObject private var store: NoonmarkStore
-    let item: CompletedPoolItem
+    let hierarchy: CompletedTaskHierarchy
 
     var body: some View {
-        let isSelected = store.isWorkspaceItemSelected(.completedTrace(item.trace.id))
-        let trajectoryNodes = item.trajectory.traces.map(
+        VStack(spacing: 0) {
+            CompletedTaskHierarchyParentRow(hierarchy: hierarchy)
+            ForEach(hierarchy.completedChildren, id: \.subtask.id) {
+                record in
+                CompletedTaskHierarchyChildRow(
+                    record: record,
+                    parentIsCompleted:
+                    hierarchy.parentCompletion != nil
+                )
+            }
+        }
+        .background {
+            AppE2EViewAnchor(
+                identifier:
+                "completed.hierarchy.\(hierarchy.chain.id.description)",
+                verificationText:
+                "\(hierarchy.parentCompletion == nil ? "open" : "completed"),\(hierarchy.completedChildren.count)"
+            )
+        }
+    }
+}
+
+struct CompletedTaskHierarchyParentRow: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let hierarchy: CompletedTaskHierarchy
+
+    private var selection: NoonmarkStore.WorkspaceSelectionItem? {
+        store.completedHierarchyParentSelection(hierarchy)
+    }
+
+    var body: some View {
+        if let item = hierarchy.parentCompletion {
+            parentContent
+                .listRowSurface(
+                    selected: store.isWorkspaceItemSelected(
+                        .completedTrace(item.trace.id)
+                    ),
+                    tint: Theme.accent,
+                    separatorLeadingInset: 40
+                )
+                .workspaceSelectable(.completedTrace(item.trace.id))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    store.userSelectCompleted(item.trace.id)
+                }
+                .contextMenu {
+                    CompletedTaskContextMenu(item: item)
+                }
+        } else if let selection {
+            parentContent
+                .listRowSurface(
+                    selected: store.isWorkspaceItemSelected(selection),
+                    tint: Theme.accent,
+                    separatorLeadingInset: 40
+                )
+                .workspaceSelectable(selection)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    store.userSelectWorkspaceItem(selection)
+                }
+        } else {
+            parentContent
+                .listRowSurface(
+                    selected: false,
+                    tint: Theme.accent,
+                    separatorLeadingInset: 40
+                )
+        }
+    }
+
+    private var parentContent: some View {
+        let completedItem = hierarchy.parentCompletion
+        let accessibilityInstanceID =
+            completedItem?.trace.id.description
+                ?? hierarchy.chain.id.description
+        let trajectoryNodes = completedItem?.trajectory.traces.map(
             CompletedTrajectoryNode.init(trace:)
-        )
-        VStack(alignment: .leading, spacing: 8) {
+        ) ?? []
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                StatusGlyph(status: .completed)
+                StatusGlyph(
+                    status: completedItem == nil
+                        ? .pending
+                        : .completed
+                )
                 VStack(alignment: .leading, spacing: 0) {
-                    MarkdownInlineText(store.copy.displayTaskTitle(item.definition.title))
+                    MarkdownInlineText(
+                        store.copy.displayTaskTitle(
+                            hierarchy.definition.title
+                        )
+                    )
                         .font(.noonmarkSystem(size: 13, weight: .medium))
+                        .foregroundStyle(
+                            completedItem == nil
+                                ? Theme.text1
+                                : Theme.text3
+                        )
+                        .strikethrough(completedItem != nil)
                         .lineLimit(1)
-                    if let classification = store.displayableClassification(for: item.trace) {
+                    if let classification =
+                        store.displayableClassification(
+                            for: hierarchy.chain.id
+                        )
+                    {
                         TaskClassificationBadges(
                             display: classification,
-                            taskTitle: item.definition.title,
-                            accessibilityNamespace: TaskClassificationAccessibilityNamespace(
+                            taskTitle: hierarchy.definition.title,
+                            accessibilityNamespace:
+                            TaskClassificationAccessibilityNamespace(
                                 surface: "completed-row",
-                                instanceID: item.trace.id.description
+                                instanceID: accessibilityInstanceID
                             )
                         )
                         .padding(.top, 4)
                     }
                     AutomaticTaskClassificationStatusView(
-                        chainID: item.trace.chainID,
-                        taskTitle: item.definition.title,
+                        chainID: hierarchy.chain.id,
+                        taskTitle: hierarchy.definition.title,
                         accessibilitySurface: .completedRow,
-                        accessibilityInstanceID: item.trace.id.description
+                        accessibilityInstanceID:
+                        accessibilityInstanceID
                     )
                     .padding(.top, 3)
                 }
                 Spacer()
-                CompletionMomentText(
-                    date: store.displayDate(item.trace.date),
-                    time: store.displayTime(item.trace.completedAt)
-                )
+                if let completedItem {
+                    CompletionMomentText(
+                        date: store.displayDate(
+                            completedItem.trace.date
+                        ),
+                        time: store.displayTime(
+                            completedItem.trace.completedAt
+                        )
+                    )
+                }
             }
-            if trajectoryNodes.count >= MacUICompletedPoolRowLayout.minimumVisibleTrajectoryNodeCount {
+            if trajectoryNodes.count
+                >= MacUICompletedPoolRowLayout
+                .minimumVisibleTrajectoryNodeCount
+            {
                 CompletedTrajectoryNodes(nodes: trajectoryNodes)
                     .padding(.leading, 28)
             }
@@ -228,76 +268,84 @@ struct CompletedRow: View {
         .frame(minHeight: 52, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
-        .listRowSurface(selected: isSelected, tint: Theme.accent, separatorLeadingInset: 40)
-        .workspaceSelectable(.completedTrace(item.trace.id))
-        .onTapGesture { store.userSelectCompleted(item.trace.id) }
-        .contextMenu {
-            CompletedTaskContextMenu(item: item)
+        .background {
+            AppE2EViewAnchor(
+                identifier:
+                "completed.hierarchy.parent.\(hierarchy.chain.id.description)",
+                verificationText:
+                hierarchy.parentCompletion == nil
+                    ? "open"
+                    : "completed"
+            )
         }
     }
 }
 
-struct CompletedSubtaskRow: View {
+struct CompletedTaskHierarchyChildRow: View {
     @EnvironmentObject private var store: NoonmarkStore
     let record: CompletedSubtaskRecord
+    let parentIsCompleted: Bool
 
     var body: some View {
-        let isSelected = store.isWorkspaceItemSelected(.completedSubtask(record.subtask.id))
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
+        let selection = NoonmarkStore.WorkspaceSelectionItem
+            .completedSubtask(record.subtask.id)
+        HStack(spacing: 10) {
+            Color.clear
+                .frame(width: 28, height: 1)
+                .accessibilityHidden(true)
+            if parentIsCompleted {
+                Text("–")
+                    .font(
+                        .noonmarkSystem(
+                            size: 12,
+                            weight: .semibold
+                        )
+                    )
+                    .foregroundStyle(Theme.text3)
+                    .frame(width: 18, height: 18)
+                    .accessibilityHidden(true)
+            } else {
                 StatusGlyph(status: .completed)
-                VStack(alignment: .leading, spacing: 1) {
-                    MarkdownInlineText(record.subtask.title)
-                        .font(.noonmarkSystem(size: 13, weight: .medium))
-                        .lineLimit(1)
-                    Text(
-                        store.copy.belongsToTask(
-                            store.copy.displayTaskTitle(record.parentDefinition.title)
-                        )
-                    )
-                        .font(.noonmarkSystem(size: 10.5))
-                        .foregroundStyle(Theme.text3)
-                        .lineLimit(1)
-                    if let classification = store.displayableClassification(for: record.parentTrace) {
-                        TaskClassificationBadges(
-                            display: classification,
-                            taskTitle: record.parentDefinition.title,
-                            accessibilityNamespace: TaskClassificationAccessibilityNamespace(
-                                surface: "completed-subtask-row",
-                                instanceID: record.subtask.id.description
-                            )
-                        )
-                        .padding(.top, 4)
-                    }
-                    AutomaticTaskClassificationStatusView(
-                        chainID: record.parentTrace.chainID,
-                        taskTitle: record.parentDefinition.title,
-                        accessibilitySurface: .completedSubtaskRow,
-                        accessibilityInstanceID: record.subtask.id.description
-                    )
-                    .padding(.top, 3)
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
-                    CompletionKindPill(
-                        text: store.copy.subtask,
-                        color: Theme.accent
-                    )
-                    CompletionMomentText(
-                        date: store.displayDate(record.date),
-                        time: store.displayTime(record.subtask.completedAt)
-                    )
-                }
             }
+            MarkdownInlineText(record.subtask.title)
+                .font(.noonmarkSystem(size: 12.5, weight: .medium))
+                .foregroundStyle(
+                    parentIsCompleted
+                        ? Theme.text2
+                        : Theme.text1
+                )
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            CompletionMomentText(
+                date: store.displayDate(record.date),
+                time: store.displayTime(record.subtask.completedAt)
+            )
         }
-        .frame(minHeight: 66, alignment: .center)
+        .frame(minHeight: 40, alignment: .center)
         .padding(.horizontal, 12)
-        .padding(.vertical, NoonmarkVisualMetrics.taskRowVerticalPadding)
-        .listRowSurface(selected: isSelected, tint: Theme.accent, separatorLeadingInset: 40)
-        .workspaceSelectable(.completedSubtask(record.subtask.id))
-        .onTapGesture { store.userSelectCompletedSubtask(record.subtask.id) }
+        .padding(.vertical, 2)
+        .listRowSurface(
+            selected: store.isWorkspaceItemSelected(selection),
+            tint: Theme.accent,
+            separatorLeadingInset: 70
+        )
+        .workspaceSelectable(selection)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            store.userSelectCompletedSubtask(record.subtask.id)
+        }
         .contextMenu {
             CompletedSubtaskContextMenu(record: record)
+        }
+        .background {
+            AppE2EViewAnchor(
+                identifier:
+                "completed.hierarchy.child.\(record.subtask.id.description)",
+                verificationText:
+                parentIsCompleted
+                    ? "quiet"
+                    : "checked"
+            )
         }
     }
 }

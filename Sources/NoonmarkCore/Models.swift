@@ -1064,6 +1064,36 @@ public struct CompletedSubtaskRecord: Equatable, Sendable {
     public let parentDefinition: TaskDefinition
 }
 
+public struct CompletedTaskHierarchy: Equatable, Sendable {
+    public let chain: TaskChain
+    public let definition: TaskDefinition
+    public let parentCompletion: CompletedPoolItem?
+    public let completedChildren: [CompletedSubtaskRecord]
+
+    public init(
+        chain: TaskChain,
+        definition: TaskDefinition,
+        parentCompletion: CompletedPoolItem?,
+        completedChildren: [CompletedSubtaskRecord]
+    ) {
+        self.chain = chain
+        self.definition = definition
+        self.parentCompletion = parentCompletion
+        self.completedChildren = completedChildren
+    }
+
+    public var latestCompletionAt: Date {
+        let parentCompletedAt = parentCompletion.map {
+            $0.trace.completedAt ?? $0.trace.createdAt
+        }
+        return ([parentCompletedAt] + completedChildren.map {
+            $0.subtask.completedAt ?? $0.subtask.updatedAt
+        })
+        .compactMap { $0 }
+        .max() ?? definition.createdAt
+    }
+}
+
 public struct DailyReviewStats: Equatable, Sendable {
     public var total: Int
     public var completed: Int

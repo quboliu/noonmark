@@ -1,18 +1,51 @@
 import Foundation
 
-public enum TaskCycleSchedule: String, Codable, CaseIterable, Equatable, Hashable, Sendable {
-    case daily
-    case weekdays
+public enum TaskCycleWeekday: Int, Codable, CaseIterable, Equatable, Hashable, Sendable {
+    case sunday = 1
+    case monday
+    case tuesday
+    case wednesday
+    case thursday
+    case friday
+    case saturday
+}
 
-    public func includes(_ date: LocalDate) -> Bool {
+public enum TaskCycleSchedule: Codable, Equatable, Hashable, Sendable {
+    case everyDays(Int)
+    case selectedWeekdays(
+        weekdays: Set<TaskCycleWeekday>,
+        everyWeeks: Int
+    )
+
+    public static let daily = TaskCycleSchedule.everyDays(1)
+    public static let weekdays = TaskCycleSchedule.selectedWeekdays(
+        weekdays: [.monday, .tuesday, .wednesday, .thursday, .friday],
+        everyWeeks: 1
+    )
+
+    public func includes(
+        _ date: LocalDate,
+        anchoredAt anchorDate: LocalDate
+    ) -> Bool {
+        guard let dayOffset = TaskCycleCivilCalendar.dayDistance(
+            from: anchorDate,
+            to: date
+        ), dayOffset >= 0 else {
+            return false
+        }
         switch self {
-        case .daily:
-            return true
-        case .weekdays:
-            guard let weekday = TaskCycleCivilCalendar.weekday(for: date) else {
+        case let .everyDays(interval):
+            return interval > 0 && dayOffset.isMultiple(of: interval)
+        case let .selectedWeekdays(weekdays, everyWeeks):
+            guard everyWeeks > 0,
+                  weekdays.isEmpty == false,
+                  (dayOffset / 7).isMultiple(of: everyWeeks),
+                  let rawWeekday = TaskCycleCivilCalendar.weekday(for: date),
+                  let weekday = TaskCycleWeekday(rawValue: rawWeekday)
+            else {
                 return false
             }
-            return weekday != 1 && weekday != 7
+            return weekdays.contains(weekday)
         }
     }
 
@@ -23,7 +56,122 @@ public enum TaskCycleSchedule: String, Codable, CaseIterable, Equatable, Hashabl
         try TaskCycleCivilCalendar.materializableDates(
             from: startDate,
             through: endDate
-        ).count(where: includes)
+        ).count {
+            includes($0, anchoredAt: startDate)
+        }
+    }
+
+    func validateIntegrity() throws {
+        switch self {
+        case let .everyDays(interval):
+            guard (1 ... 30).contains(interval) else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle day interval must be between 1 and 30"
+                )
+            }
+        case let .selectedWeekdays(weekdays, everyWeeks):
+            guard weekdays.isEmpty == false,
+                  (1 ... 4).contains(everyWeeks)
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle weekly schedule is outside supported bounds"
+                )
+            }
+        }
+    }
+}
+
+public enum TaskCycleEndCondition: Codable, Equatable, Hashable, Sendable {
+    case durationDays(Int)
+    case onDate(LocalDate)
+    case completionTarget(count: Int, latestDate: LocalDate)
+
+    public func resolvedEndDate(
+        from startDate: LocalDate
+    ) throws -> LocalDate {
+        switch self {
+        case let .durationDays(dayCount):
+            guard (1 ... TaskCycleCivilCalendar.maximumMaterializedDayCount)
+                .contains(dayCount),
+                  let endDate = TaskCycleCivilCalendar.offset(
+                      startDate,
+                      by: dayCount - 1
+                  )
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle duration must be between 1 and 366 days"
+                )
+            }
+            return endDate
+        case let .onDate(endDate):
+            return endDate
+        case let .completionTarget(count, latestDate):
+            guard (1 ... TaskCycleCivilCalendar.maximumMaterializedDayCount)
+                .contains(count)
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle completion target must be between 1 and 366"
+                )
+            }
+            return latestDate
+        }
+    }
+}
+
+public struct TaskCyclePlanRevision: Codable, Equatable, Hashable, Sendable,
+    Identifiable
+{
+    public let id: UUID
+    public let effectiveFrom: LocalDate
+    public let schedule: TaskCycleSchedule
+    public let endCondition: TaskCycleEndCondition
+    public let recordedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        effectiveFrom: LocalDate,
+        schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition,
+        recordedAt: Date
+    ) {
+        self.id = id
+        self.effectiveFrom = effectiveFrom
+        self.schedule = schedule
+        self.endCondition = endCondition
+        self.recordedAt = recordedAt
+    }
+}
+
+public struct TaskCycleRevisionOutcome: Equatable, Sendable {
+    public let effectiveFrom: LocalDate
+    public let cancelledOccurrenceCount: Int
+    public let createdOccurrenceCount: Int
+    public let classificationCommitBoundaries: [NoonmarkSnapshot]
+
+    public init(
+        effectiveFrom: LocalDate,
+        cancelledOccurrenceCount: Int,
+        createdOccurrenceCount: Int,
+        classificationCommitBoundaries: [NoonmarkSnapshot] = []
+    ) {
+        self.effectiveFrom = effectiveFrom
+        self.cancelledOccurrenceCount = cancelledOccurrenceCount
+        self.createdOccurrenceCount = createdOccurrenceCount
+        self.classificationCommitBoundaries =
+            classificationCommitBoundaries
+    }
+}
+
+public struct TaskCycleReconciliationOutcome: Equatable, Sendable {
+    public let stoppedSeriesCount: Int
+    public let cancelledOccurrenceCount: Int
+
+    public init(
+        stoppedSeriesCount: Int,
+        cancelledOccurrenceCount: Int
+    ) {
+        self.stoppedSeriesCount = stoppedSeriesCount
+        self.cancelledOccurrenceCount = cancelledOccurrenceCount
     }
 }
 
@@ -32,18 +180,30 @@ public enum TaskCycleCancellationScope: Codable, Equatable, Hashable, Sendable {
     case followingDates(after: LocalDate)
 }
 
+public enum TaskCycleCancellationReason: String, Codable, Equatable,
+    Hashable, Sendable
+{
+    case userSkipped
+    case planRevision
+    case stoppedEarly
+    case completionTargetReached
+}
+
 public struct TaskCycleCancellationFact: Codable, Equatable, Hashable, Sendable {
     public let id: UUID
     public let scope: TaskCycleCancellationScope
+    public let reason: TaskCycleCancellationReason
     public let recordedAt: Date
 
     public init(
         id: UUID = UUID(),
         scope: TaskCycleCancellationScope,
+        reason: TaskCycleCancellationReason,
         recordedAt: Date
     ) {
         self.id = id
         self.scope = scope
+        self.reason = reason
         self.recordedAt = recordedAt
     }
 }
@@ -52,9 +212,14 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
     public let id: TaskCycleSeriesID
     public private(set) var title: String
     public private(set) var descriptionText: String?
+    public private(set) var plannedSubtasks: [PlannedSubtask]
+    public private(set) var categoryID: TaskCategoryID?
+    public private(set) var labelIDs: Set<TaskLabelID>
     public let startDate: LocalDate
-    public let endDate: LocalDate
-    public let schedule: TaskCycleSchedule
+    public private(set) var endDate: LocalDate
+    public private(set) var schedule: TaskCycleSchedule
+    public private(set) var endCondition: TaskCycleEndCondition
+    public private(set) var planRevisions: [TaskCyclePlanRevision]
     public private(set) var cancellationFacts: [TaskCycleCancellationFact]
     public let createdAt: Date
     public private(set) var updatedAt: Date
@@ -63,9 +228,14 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         id: TaskCycleSeriesID = TaskCycleSeriesID(),
         title: String,
         descriptionText: String? = nil,
+        plannedSubtasks: [PlannedSubtask] = [],
+        categoryID: TaskCategoryID? = nil,
+        labelIDs: Set<TaskLabelID> = [],
         startDate: LocalDate,
         endDate: LocalDate,
         schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition? = nil,
+        planRevisions: [TaskCyclePlanRevision]? = nil,
         cancellationFacts: [TaskCycleCancellationFact] = [],
         createdAt: Date,
         updatedAt: Date? = nil
@@ -73,9 +243,23 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         self.id = id
         self.title = title
         self.descriptionText = descriptionText
+        self.plannedSubtasks = plannedSubtasks.sorted {
+            $0.position < $1.position
+        }
+        self.categoryID = categoryID
+        self.labelIDs = labelIDs
         self.startDate = startDate
         self.endDate = endDate
         self.schedule = schedule
+        self.endCondition = endCondition ?? .onDate(endDate)
+        self.planRevisions = planRevisions ?? [
+            TaskCyclePlanRevision(
+                effectiveFrom: startDate,
+                schedule: schedule,
+                endCondition: endCondition ?? .onDate(endDate),
+                recordedAt: createdAt
+            )
+        ]
         self.cancellationFacts = cancellationFacts
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
@@ -99,8 +283,28 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         }
     }
 
+    func latestOccurrenceCancellationReason(
+        on date: LocalDate
+    ) -> TaskCycleCancellationReason? {
+        cancellationFacts
+            .filter {
+                if case let .occurrence(value) = $0.scope {
+                    return value == date
+                }
+                return false
+            }
+            .max {
+                if $0.recordedAt != $1.recordedAt {
+                    return $0.recordedAt < $1.recordedAt
+                }
+                return $0.id.uuidString < $1.id.uuidString
+            }?
+            .reason
+    }
+
     mutating func appendCancellation(
         _ scope: TaskCycleCancellationScope,
+        reason: TaskCycleCancellationReason,
         now: Date
     ) throws {
         guard updatedAt.timeIntervalSinceReferenceDate.isFinite,
@@ -113,8 +317,97 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         }
         updatedAt = now
         cancellationFacts.append(
-            TaskCycleCancellationFact(scope: scope, recordedAt: now)
+            TaskCycleCancellationFact(
+                scope: scope,
+                reason: reason,
+                recordedAt: now
+            )
         )
+    }
+
+    mutating func appendPlanRevision(
+        effectiveFrom: LocalDate,
+        schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition,
+        now: Date
+    ) throws {
+        guard stoppedAfterDate == nil else {
+            throw NoonmarkError.invalidTransition(
+                "a stopped task cycle cannot be revised"
+            )
+        }
+        guard now.timeIntervalSinceReferenceDate.isFinite,
+              now >= updatedAt
+        else {
+            throw NoonmarkError.invalidInput(
+                "content mutation time cannot move backwards"
+            )
+        }
+        let endDate = try endCondition.resolvedEndDate(
+            from: startDate
+        )
+        guard effectiveFrom >= startDate,
+              effectiveFrom <= endDate
+        else {
+            throw NoonmarkError.invalidTransition(
+                "task cycle revision must retain a future occurrence window"
+            )
+        }
+        try schedule.validateIntegrity()
+        _ = try TaskCycleCivilCalendar.materializableDates(
+            from: startDate,
+            through: endDate
+        )
+        self.schedule = schedule
+        self.endCondition = endCondition
+        self.endDate = endDate
+        planRevisions.append(
+            TaskCyclePlanRevision(
+                effectiveFrom: effectiveFrom,
+                schedule: schedule,
+                endCondition: endCondition,
+                recordedAt: now
+            )
+        )
+        updatedAt = now
+    }
+
+    mutating func updateTemplateContent(
+        title: String,
+        descriptionText: String?,
+        plannedSubtasks: [PlannedSubtask],
+        now: Date
+    ) throws {
+        guard now.timeIntervalSinceReferenceDate.isFinite,
+              now >= updatedAt
+        else {
+            throw NoonmarkError.invalidInput(
+                "content mutation time cannot move backwards"
+            )
+        }
+        self.title = title
+        self.descriptionText = descriptionText
+        self.plannedSubtasks = plannedSubtasks.sorted {
+            $0.position < $1.position
+        }
+        updatedAt = now
+    }
+
+    mutating func updateTemplateClassification(
+        categoryID: TaskCategoryID?,
+        labelIDs: Set<TaskLabelID>,
+        now: Date
+    ) throws {
+        guard now.timeIntervalSinceReferenceDate.isFinite,
+              now >= updatedAt
+        else {
+            throw NoonmarkError.invalidInput(
+                "content mutation time cannot move backwards"
+            )
+        }
+        self.categoryID = categoryID
+        self.labelIDs = labelIDs
+        updatedAt = now
     }
 
     public func validateIntegrity() throws {
@@ -123,6 +416,22 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         )
         guard normalizedTitle.isEmpty == false,
               normalizedTitle == title,
+              plannedSubtasks.enumerated().allSatisfy({
+                  $0.element.position == $0.offset + 1
+              }),
+              Set(plannedSubtasks.map(\.id)).count
+              == plannedSubtasks.count,
+              Set(plannedSubtasks.map(\.lineageID)).count
+              == plannedSubtasks.count,
+              plannedSubtasks.allSatisfy({
+                  $0.title.trimmingCharacters(
+                      in: .whitespacesAndNewlines
+                  ) == $0.title
+                      && $0.title.isEmpty == false
+                      && $0.createdAt.timeIntervalSinceReferenceDate
+                      .isFinite
+                      && $0.createdAt <= updatedAt
+              }),
               createdAt.timeIntervalSinceReferenceDate.isFinite,
               updatedAt.timeIntervalSinceReferenceDate.isFinite,
               updatedAt >= createdAt
@@ -131,11 +440,46 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
                 "task cycle series contains invalid content facts"
             )
         }
-        let dates = try TaskCycleCivilCalendar.materializableDates(
+        _ = try TaskCycleCivilCalendar.materializableDates(
             from: startDate,
             through: endDate
         )
-        let scheduledDates = Set(dates.filter(schedule.includes))
+        guard try endCondition.resolvedEndDate(from: startDate) == endDate,
+              planRevisions.isEmpty == false,
+              Set(planRevisions.map(\.id)).count == planRevisions.count
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle end condition does not match its end date"
+            )
+        }
+        try schedule.validateIntegrity()
+        for revision in planRevisions {
+            guard revision.effectiveFrom >= startDate,
+                  revision.recordedAt.timeIntervalSinceReferenceDate.isFinite,
+                  revision.recordedAt >= createdAt,
+                  revision.recordedAt <= updatedAt
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle contains an invalid plan revision"
+                )
+            }
+            try revision.schedule.validateIntegrity()
+            let revisionEndDate = try revision.endCondition
+                .resolvedEndDate(from: startDate)
+            _ = try TaskCycleCivilCalendar.materializableDates(
+                from: startDate,
+                through: revisionEndDate
+            )
+        }
+        guard let latestRevision = planRevisions.last,
+            latestRevision.schedule == schedule,
+            latestRevision.endCondition == endCondition
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle current plan does not match its revision facts"
+            )
+        }
+        let scheduledDates = try everPlannedDates()
         guard scheduledDates.isEmpty == false,
               Set(cancellationFacts.map(\.id)).count
               == cancellationFacts.count
@@ -168,6 +512,47 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
                 }
             }
         }
+    }
+
+    func everPlannedDates() throws -> Set<LocalDate> {
+        var result: Set<LocalDate> = []
+        for revision in planRevisions {
+            let revisionEndDate = try revision.endCondition
+                .resolvedEndDate(from: startDate)
+            let dates = try TaskCycleCivilCalendar.materializableDates(
+                from: revision.effectiveFrom,
+                through: revisionEndDate
+            )
+            result.formUnion(
+                dates.filter {
+                    revision.schedule.includes(
+                        $0,
+                        anchoredAt: revision.effectiveFrom
+                    )
+                }
+            )
+        }
+        return result
+    }
+
+    func trackBounds() throws -> (
+        startDate: LocalDate,
+        endDate: LocalDate
+    ) {
+        let revisionEndDates = try planRevisions.map {
+            try $0.endCondition.resolvedEndDate(from: startDate)
+        }
+        let boundaryDates = [startDate, endDate]
+            + planRevisions.map(\.effectiveFrom)
+            + revisionEndDates
+        guard let earliestDate = boundaryDates.min(),
+              let latestDate = boundaryDates.max()
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle contains no track boundaries"
+            )
+        }
+        return (earliestDate, latestDate)
     }
 }
 
@@ -335,6 +720,28 @@ public extension NoonmarkEngine {
         title: String,
         descriptionText: String? = nil,
         startDate: LocalDate,
+        schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> TaskCycleSeriesID {
+        try createTaskCycleSeries(
+            title: title,
+            descriptionText: descriptionText,
+            plannedSubtasks: [],
+            startDate: startDate,
+            schedule: schedule,
+            endCondition: endCondition,
+            today: today,
+            now: now
+        )
+    }
+
+    @discardableResult
+    func createTaskCycleSeries(
+        title: String,
+        descriptionText: String? = nil,
+        startDate: LocalDate,
         endDate: LocalDate,
         schedule: TaskCycleSchedule,
         today: LocalDate,
@@ -363,12 +770,38 @@ public extension NoonmarkEngine {
         today: LocalDate,
         now: Date = Date()
     ) throws -> TaskCycleSeriesID {
+        try createTaskCycleSeries(
+            title: title,
+            descriptionText: descriptionText,
+            plannedSubtasks: plannedSubtasks,
+            startDate: startDate,
+            schedule: schedule,
+            endCondition: .onDate(endDate),
+            today: today,
+            now: now
+        )
+    }
+
+    @discardableResult
+    func createTaskCycleSeries(
+        title: String,
+        descriptionText: String? = nil,
+        plannedSubtasks: [PlannedSubtask],
+        startDate: LocalDate,
+        schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> TaskCycleSeriesID {
         let normalizedTitle = try normalizedTaskCycleTitle(title)
         guard startDate >= today else {
             throw NoonmarkError.invalidTransition(
                 "task cycle cannot begin in the past"
             )
         }
+        let endDate = try endCondition.resolvedEndDate(
+            from: startDate
+        )
         guard startDate <= endDate else {
             throw NoonmarkError.invalidInput(
                 "task cycle end date must not precede its start date"
@@ -378,7 +811,9 @@ public extension NoonmarkEngine {
             from: startDate,
             through: endDate
         )
-        let occurrenceDates = dates.filter(schedule.includes)
+        let occurrenceDates = dates.filter {
+            schedule.includes($0, anchoredAt: startDate)
+        }
         guard occurrenceDates.isEmpty == false else {
             throw NoonmarkError.invalidInput(
                 "task cycle schedule contains no occurrences"
@@ -388,9 +823,11 @@ public extension NoonmarkEngine {
         let series = TaskCycleSeries(
             title: normalizedTitle,
             descriptionText: descriptionText,
+            plannedSubtasks: plannedSubtasks,
             startDate: startDate,
             endDate: endDate,
             schedule: schedule,
+            endCondition: endCondition,
             createdAt: now
         )
         storeTaskCycleSeries(series)
@@ -419,6 +856,25 @@ public extension NoonmarkEngine {
         today: LocalDate,
         now: Date = Date()
     ) throws -> TaskCycleSeriesID {
+        try convertTaskToCycleSeries(
+            chainID: chainID,
+            startDate: startDate,
+            schedule: schedule,
+            endCondition: .onDate(endDate),
+            today: today,
+            now: now
+        )
+    }
+
+    @discardableResult
+    func convertTaskToCycleSeries(
+        chainID: TaskChainID,
+        startDate: LocalDate,
+        schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> TaskCycleSeriesID {
         let source = try taskCycleConversionSource(chainID: chainID)
         let sourceChain = source.chain
         guard sourceChain.state == .active,
@@ -432,6 +888,7 @@ public extension NoonmarkEngine {
         let normalizedTitle = try normalizedTaskCycleTitle(
             definition.title
         )
+        let endDate = try endCondition.resolvedEndDate(from: startDate)
         guard startDate >= today, startDate <= endDate else {
             throw NoonmarkError.invalidTransition(
                 "task cycle cannot begin in the past"
@@ -441,7 +898,9 @@ public extension NoonmarkEngine {
             from: startDate,
             through: endDate
         )
-        let occurrenceDates = dates.filter(schedule.includes)
+        let occurrenceDates = dates.filter {
+            schedule.includes($0, anchoredAt: startDate)
+        }
         guard let firstOccurrenceDate = occurrenceDates.first else {
             throw NoonmarkError.invalidInput(
                 "task cycle schedule contains no occurrences"
@@ -470,9 +929,11 @@ public extension NoonmarkEngine {
         let series = TaskCycleSeries(
             title: normalizedTitle,
             descriptionText: descriptionText,
+            plannedSubtasks: definition.plannedSubtasks,
             startDate: startDate,
             endDate: endDate,
             schedule: schedule,
+            endCondition: endCondition,
             createdAt: now
         )
         let adoption = try prepareTaskCycleAdoption(
@@ -518,13 +979,25 @@ public extension NoonmarkEngine {
         )
         return taskCycleSeries.values
             .compactMap { series -> TaskCycleTrack? in
-                guard let dates = try? TaskCycleCivilCalendar.materializableDates(
-                    from: series.startDate,
-                    through: series.endDate
-                ) else {
+                let entries = membersBySeries[series.id] ?? []
+                let membershipDates = entries.map(\.1.occurrenceDate)
+                guard let seriesBounds = try? series.trackBounds() else {
                     return nil
                 }
-                let entries = membersBySeries[series.id] ?? []
+                let allDates = membershipDates + [
+                    seriesBounds.startDate,
+                    seriesBounds.endDate
+                ]
+                guard let trackStartDate = allDates.min(),
+                      let trackEndDate = allDates.max(),
+                      let dates = try? TaskCycleCivilCalendar
+                      .materializableDates(
+                          from: trackStartDate,
+                          through: trackEndDate
+                      )
+                else {
+                    return nil
+                }
                 let entriesByDate = Dictionary(
                     uniqueKeysWithValues: entries.map {
                         ($0.1.occurrenceDate, $0.0)
@@ -602,8 +1075,8 @@ public extension NoonmarkEngine {
                 return TaskCycleTrack(
                     id: series.id,
                     title: series.title,
-                    startDate: series.startDate,
-                    endDate: series.endDate,
+                    startDate: trackStartDate,
+                    endDate: trackEndDate,
                     schedule: series.schedule,
                     days: days
                 )
@@ -623,6 +1096,317 @@ public extension NoonmarkEngine {
         taskCycleTracks(today: today).filter {
             $0.appears(in: collection)
         }
+    }
+
+    func taskCycleTemplateClassification(
+        seriesID: TaskCycleSeriesID
+    ) throws -> TaskClassificationProjection {
+        let series = try taskCycleSeriesValue(seriesID)
+        let category = series.categoryID.flatMap { id in
+            classificationState.categories[id].map {
+                ClassificationItemProjection(
+                    id: id.description,
+                    name: $0.name,
+                    colorHex: $0.colorHex,
+                    presentationApproval: $0.presentationApproval
+                )
+            }
+        }
+        let labels = series.labelIDs.compactMap { id in
+            classificationState.labels[id].map {
+                ClassificationItemProjection(
+                    id: id.description,
+                    name: $0.name,
+                    colorHex: $0.colorHex
+                )
+            }
+        }
+        .sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        let anchorID = chains.values
+            .filter { $0.cycleMembership?.seriesID == seriesID }
+            .sorted {
+                ($0.cycleMembership?.occurrenceDate ?? series.startDate)
+                    < ($1.cycleMembership?.occurrenceDate
+                        ?? series.startDate)
+            }
+            .first?.id ?? TaskChainID()
+        return TaskClassificationProjection(
+            chainID: anchorID,
+            category: category,
+            labels: labels,
+            revision: classificationState.revision
+        )
+    }
+
+    func taskCycleEditableMemberChainIDs(
+        seriesID: TaskCycleSeriesID,
+        today: LocalDate
+    ) -> [TaskChainID] {
+        chains.values
+            .filter { chain in
+                guard chain.state == .active,
+                      let membership = chain.cycleMembership,
+                      membership.seriesID == seriesID,
+                      membership.occurrenceDate >= today
+                else {
+                    return false
+                }
+                return traces.values.contains {
+                    $0.chainID == chain.id
+                        && $0.status == .pending
+                        && $0.date >= today
+                }
+            }
+            .sorted {
+                guard let lhs = $0.cycleMembership,
+                      let rhs = $1.cycleMembership
+                else {
+                    return $0.id.description < $1.id.description
+                }
+                if lhs.occurrenceDate != rhs.occurrenceDate {
+                    return lhs.occurrenceDate < rhs.occurrenceDate
+                }
+                return $0.id.description < $1.id.description
+            }
+            .map(\.id)
+    }
+
+    func updateTaskCycleTemplateContent(
+        seriesID: TaskCycleSeriesID,
+        title: String,
+        descriptionText: String?,
+        plannedSubtasks: [PlannedSubtask],
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        let candidate = try NoonmarkEngine(snapshot: snapshot())
+        try candidate.updateTaskCycleTemplateContentInPlace(
+            seriesID: seriesID,
+            title: title,
+            descriptionText: descriptionText,
+            plannedSubtasks: plannedSubtasks,
+            today: today,
+            now: now
+        )
+        try candidate.snapshot().validateIntegrity()
+        adoptState(from: candidate)
+    }
+
+    func setTaskCycleTemplateClassification(
+        seriesID: TaskCycleSeriesID,
+        categoryID: TaskCategoryID?,
+        labelIDs: Set<TaskLabelID>,
+        now: Date = Date()
+    ) throws {
+        guard categoryID.map({
+            classificationState.categories[$0] != nil
+        }) ?? true,
+            labelIDs.allSatisfy({
+                classificationState.labels[$0] != nil
+            })
+        else {
+            throw NoonmarkError.invalidTransition(
+                "task cycle classification references a missing item"
+            )
+        }
+        var series = try taskCycleSeriesValue(seriesID)
+        try series.updateTemplateClassification(
+            categoryID: categoryID,
+            labelIDs: labelIDs,
+            now: now
+        )
+        storeTaskCycleSeries(series)
+    }
+
+    @discardableResult
+    func reviseTaskCycleSeries(
+        seriesID: TaskCycleSeriesID,
+        schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> TaskCycleRevisionOutcome {
+        var series = try taskCycleSeriesValue(seriesID)
+        guard let tomorrow = TaskCycleCivilCalendar.offset(today, by: 1)
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle revision date could not advance"
+            )
+        }
+        let effectiveFrom = max(series.startDate, tomorrow)
+        let revisedEndDate = try endCondition.resolvedEndDate(
+            from: series.startDate
+        )
+        guard revisedEndDate >= effectiveFrom else {
+            throw NoonmarkError.invalidTransition(
+                "task cycle revision must retain a future occurrence window"
+            )
+        }
+        try schedule.validateIntegrity()
+        let revisedDates = try TaskCycleCivilCalendar.materializableDates(
+            from: effectiveFrom,
+            through: revisedEndDate
+        ).filter {
+            schedule.includes($0, anchoredAt: effectiveFrom)
+        }
+        guard revisedDates.isEmpty == false else {
+            throw NoonmarkError.invalidInput(
+                "task cycle schedule contains no occurrences"
+            )
+        }
+
+        let memberChains = chains.values
+            .filter {
+                $0.cycleMembership?.seriesID == seriesID
+            }
+            .sorted {
+                guard let lhs = $0.cycleMembership,
+                      let rhs = $1.cycleMembership
+                else {
+                    return $0.id.description < $1.id.description
+                }
+                return lhs.occurrenceDate < rhs.occurrenceDate
+            }
+        guard memberChains.isEmpty == false else {
+            throw NoonmarkError.invalidInput(
+                "task cycle has no template occurrence"
+            )
+        }
+        let membersByDate = Dictionary(
+            uniqueKeysWithValues: memberChains.compactMap {
+                chain -> (LocalDate, TaskChain)? in
+                guard let membership = chain.cycleMembership else {
+                    return nil
+                }
+                return (membership.occurrenceDate, chain)
+            }
+        )
+        let revisedDateSet = Set(revisedDates)
+        let cancellations = memberChains.compactMap {
+            chain -> (LocalDate, DayTrace)? in
+            guard let membership = chain.cycleMembership,
+                  membership.occurrenceDate >= effectiveFrom,
+                  revisedDateSet.contains(membership.occurrenceDate)
+                  == false,
+                  let trace = traces.values.first(where: {
+                      $0.chainID == chain.id
+                          && $0.status == .pending
+                          && $0.date == membership.occurrenceDate
+                          && $0.date > today
+                  })
+            else {
+                return nil
+            }
+            return (membership.occurrenceDate, trace)
+        }
+        let reactivations = revisedDates.compactMap {
+            occurrenceDate -> (LocalDate, TaskChain)? in
+            guard occurrenceDate > today,
+                  let chain = membersByDate[occurrenceDate],
+                  series.latestOccurrenceCancellationReason(
+                      on: occurrenceDate
+                  ) == .planRevision,
+                  traces.values.contains(where: {
+                      $0.chainID == chain.id
+                          && $0.status == .pending
+                  }) == false
+            else {
+                return nil
+            }
+            return (occurrenceDate, chain)
+        }
+        try ensureTaskCycleDatesUnlocked(
+            cancellations.map(\.1.date) + reactivations.map(\.0)
+        )
+        let preparedTraces = try cancellations.map {
+            try prepareTaskCycleTraceCancellation(
+                $0.1,
+                today: today,
+                now: now
+            )
+        }
+        try series.appendPlanRevision(
+            effectiveFrom: effectiveFrom,
+            schedule: schedule,
+            endCondition: endCondition,
+            now: now
+        )
+        for cancellation in cancellations {
+            try series.appendCancellation(
+                .occurrence(cancellation.0),
+                reason: .planRevision,
+                now: now
+            )
+        }
+        let newDates = revisedDates.filter {
+            membersByDate[$0] == nil
+        }
+
+        storeTaskCycleSeries(series)
+        try storePreparedTaskCycleTraceCancellations(
+            preparedTraces,
+            now: now
+        )
+        var classificationCommitBoundaries: [NoonmarkSnapshot] = []
+        for occurrenceDate in newDates {
+            let chainID = installTaskCycleOccurrence(
+                normalizedTitle: series.title,
+                descriptionText: series.descriptionText,
+                plannedSubtasks: series.plannedSubtasks,
+                membership: TaskCycleMembership(
+                    seriesID: series.id,
+                    occurrenceDate: occurrenceDate
+                ),
+                now: now
+            )
+            try applyTaskCycleTemplateClassification(
+                to: chainID,
+                series: series,
+                now: now
+            )
+            if series.categoryID != nil || series.labelIDs.isEmpty == false {
+                classificationCommitBoundaries.append(snapshot())
+            }
+        }
+        for reactivation in reactivations {
+            _ = try reactivateTaskCycleOccurrence(
+                chainID: reactivation.1.id,
+                series: series,
+                occurrenceDate: reactivation.0,
+                now: now
+            )
+        }
+        if classificationCommitBoundaries.isEmpty == false {
+            classificationCommitBoundaries[
+                classificationCommitBoundaries.index(
+                    before: classificationCommitBoundaries.endIndex
+                )
+            ] = snapshot()
+        }
+        return TaskCycleRevisionOutcome(
+            effectiveFrom: effectiveFrom,
+            cancelledOccurrenceCount: cancellations.count,
+            createdOccurrenceCount: newDates.count
+                + reactivations.count,
+            classificationCommitBoundaries:
+            classificationCommitBoundaries
+        )
+    }
+
+    @discardableResult
+    func reconcileTaskCycleSeries(
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> TaskCycleReconciliationOutcome {
+        let candidate = try NoonmarkEngine(snapshot: snapshot())
+        let outcome = try candidate.reconcileTaskCycleSeriesInPlace(
+            today: today,
+            now: now
+        )
+        adoptState(from: candidate)
+        return outcome
     }
 
     func skipTaskCycleOccurrence(
@@ -650,6 +1434,7 @@ public extension NoonmarkEngine {
         try ensureTaskCycleDatesUnlocked([trace.date])
         try series.appendCancellation(
             .occurrence(occurrenceDate),
+            reason: .userSkipped,
             now: now
         )
         let preparedTrace = try prepareTaskCycleTraceCancellation(
@@ -658,7 +1443,7 @@ public extension NoonmarkEngine {
             now: now
         )
         storeTaskCycleSeries(series)
-        storePreparedTaskCycleTraceCancellations(
+        try storePreparedTaskCycleTraceCancellations(
             [preparedTrace],
             now: now
         )
@@ -703,11 +1488,13 @@ public extension NoonmarkEngine {
         for occurrence in futurePendingOccurrences {
             try series.appendCancellation(
                 .occurrence(occurrence.occurrenceDate),
+                reason: .stoppedEarly,
                 now: now
             )
         }
         try series.appendCancellation(
             .followingDates(after: today),
+            reason: .stoppedEarly,
             now: now
         )
         let preparedTraces = try futurePendingOccurrences.map {
@@ -718,7 +1505,7 @@ public extension NoonmarkEngine {
             )
         }
         storeTaskCycleSeries(series)
-        storePreparedTaskCycleTraceCancellations(
+        try storePreparedTaskCycleTraceCancellations(
             preparedTraces,
             now: now
         )
@@ -732,6 +1519,278 @@ public extension NoonmarkEngine {
             throw NoonmarkError.notFound("task cycle series")
         }
         return series
+    }
+
+    private func updateTaskCycleTemplateContentInPlace(
+        seriesID: TaskCycleSeriesID,
+        title: String,
+        descriptionText: String?,
+        plannedSubtasks: [PlannedSubtask],
+        today: LocalDate,
+        now: Date
+    ) throws {
+        let normalizedTitle = try normalizedTaskCycleTitle(title)
+        var series = try taskCycleSeriesValue(seriesID)
+        guard series.stoppedAfterDate == nil else {
+            throw NoonmarkError.invalidTransition(
+                "a stopped task cycle cannot be edited"
+            )
+        }
+        let normalizedSubtasks = plannedSubtasks
+            .sorted { $0.position < $1.position }
+            .enumerated()
+            .map { index, subtask in
+                var normalized = subtask
+                normalized.title = subtask.title.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                normalized.position = index + 1
+                return normalized
+            }
+        guard normalizedSubtasks.allSatisfy({
+            $0.title.isEmpty == false
+        }) else {
+            throw NoonmarkError.invalidInput(
+                "planned subtask title cannot be empty"
+            )
+        }
+        let memberChainIDs = taskCycleEditableMemberChainIDs(
+            seriesID: seriesID,
+            today: today
+        )
+        for chainID in memberChainIDs {
+            try replaceTaskCycleMemberTemplate(
+                chainID: chainID,
+                title: normalizedTitle,
+                descriptionText: descriptionText,
+                plannedSubtasks: normalizedSubtasks,
+                today: today,
+                now: now
+            )
+        }
+        try series.updateTemplateContent(
+            title: normalizedTitle,
+            descriptionText: descriptionText,
+            plannedSubtasks: normalizedSubtasks,
+            now: now
+        )
+        storeTaskCycleSeries(series)
+    }
+
+    private func replaceTaskCycleMemberTemplate(
+        chainID: TaskChainID,
+        title: String,
+        descriptionText: String?,
+        plannedSubtasks: [PlannedSubtask],
+        today: LocalDate,
+        now: Date
+    ) throws {
+        let chainTraces = traces.values.filter {
+            $0.chainID == chainID && $0.formsDayHistory
+        }
+        let pendingTraces = chainTraces.filter {
+            $0.status == .pending && $0.date >= today
+        }
+        guard pendingTraces.isEmpty == false else {
+            throw NoonmarkError.invalidTransition(
+                "task cycle occurrence is no longer editable"
+            )
+        }
+        try ensureTaskCycleDatesUnlocked(pendingTraces.map(\.date))
+        var current = try currentTaskCycleDefinition(
+            for: chainID
+        )
+        let clonedSubtasks = plannedSubtasks.map {
+            PlannedSubtask(
+                lineageID: $0.lineageID,
+                title: $0.title,
+                difficulty: $0.difficulty,
+                position: $0.position,
+                now: now
+            )
+        }
+        let plannedSubtasksChanged =
+            current.plannedSubtasks.count != plannedSubtasks.count
+                || zip(
+                    current.plannedSubtasks.sorted {
+                        $0.position < $1.position
+                    },
+                    plannedSubtasks.sorted {
+                        $0.position < $1.position
+                    }
+                ).contains {
+                    $0.lineageID != $1.lineageID
+                        || $0.title != $1.title
+                        || $0.difficulty != $1.difficulty
+                        || $0.position != $1.position
+                }
+        let hasHistoricalReference = chainTraces.contains {
+            $0.definitionID == current.id && $0.status != .pending
+        }
+        if hasHistoricalReference == false {
+            try current.markContentModified(at: now)
+            current.title = title
+            current.descriptionText = descriptionText
+            current.plannedSubtasks = clonedSubtasks
+            storeTaskCycleDefinition(current)
+        } else {
+            let nextSequence = (definitions.values
+                .filter { $0.chainID == chainID }
+                .map(\.sequence)
+                .max() ?? current.sequence) + 1
+            let replacement = TaskDefinition(
+                chainID: chainID,
+                sequence: nextSequence,
+                title: title,
+                descriptionText: descriptionText,
+                plannedSubtasks: clonedSubtasks,
+                now: now
+            )
+            try current.markContentModified(at: now)
+            current.supersededAt = now
+            current.supersededByDefinitionID = replacement.id
+            storeTaskCycleDefinition(current)
+            storeTaskCycleDefinition(replacement)
+            for pendingTrace in pendingTraces {
+                var trace = pendingTrace
+                try trace.markContentModified(at: now)
+                trace.definitionID = replacement.id
+                trace.descriptionText = descriptionText
+                storeTaskCycleTrace(trace)
+            }
+        }
+        for pendingTrace in pendingTraces {
+            if pendingTrace.descriptionText != descriptionText {
+                var trace = traces[pendingTrace.id] ?? pendingTrace
+                try trace.markContentModified(at: now)
+                trace.descriptionText = descriptionText
+                storeTaskCycleTrace(trace)
+            }
+            if plannedSubtasksChanged, pendingTrace.date > today {
+                try replaceTaskCycleTraceSubtasks(
+                    traceID: pendingTrace.id,
+                    plannedSubtasks: plannedSubtasks,
+                    now: now
+                )
+            }
+        }
+        try touchTaskCycleChain(chainID, now: now)
+    }
+
+    private func applyTaskCycleTemplateClassification(
+        to chainID: TaskChainID,
+        series: TaskCycleSeries,
+        now: Date
+    ) throws {
+        guard series.categoryID != nil || series.labelIDs.isEmpty == false
+        else {
+            return
+        }
+        let plan = try prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: series.categoryID.map(
+                        TaskCategoryChoice.existing
+                    ),
+                    labels: series.labelIDs
+                        .sorted { $0.description < $1.description }
+                        .map(TaskLabelChoice.existing)
+                )
+            ),
+            source: .deterministicDomainAction(
+                reason: "recurring task template classification inherited"
+            ),
+            interactionID: UUID(),
+            now: now
+        )
+        try commitDeterministicDomainClassification(plan, now: now)
+    }
+
+    private func reconcileTaskCycleSeriesInPlace(
+        today: LocalDate,
+        now: Date
+    ) throws -> TaskCycleReconciliationOutcome {
+        var stoppedSeriesCount = 0
+        var cancelledOccurrenceCount = 0
+        for seriesID in taskCycleSeries.keys.sorted(by: {
+            $0.description < $1.description
+        }) {
+            var series = try taskCycleSeriesValue(seriesID)
+            guard series.stoppedAfterDate == nil,
+                  case let .completionTarget(targetCount, _) =
+                  series.endCondition
+            else {
+                continue
+            }
+            let memberChainIDs = Set(chains.values.compactMap {
+                $0.cycleMembership?.seriesID == seriesID ? $0.id : nil
+            })
+            let lockedCompletions = traces.values.filter { trace in
+                memberChainIDs.contains(trace.chainID)
+                    && trace.status == .completed
+                    && trace.date < today
+                    && days[trace.date]?.lockedAt != nil
+            }
+            let completedChainIDs = Set(
+                lockedCompletions.map(\.chainID)
+            )
+            guard completedChainIDs.count >= targetCount,
+                  let cutoff = lockedCompletions.map(\.date).max(),
+                  cutoff < series.endDate
+            else {
+                continue
+            }
+            let futurePending = chains.values.compactMap {
+                chain -> (LocalDate, DayTrace)? in
+                guard let membership = chain.cycleMembership,
+                      membership.seriesID == seriesID,
+                      membership.occurrenceDate > cutoff,
+                      let trace = traces.values.first(where: {
+                          $0.chainID == chain.id
+                              && $0.status == .pending
+                              && $0.date >= today
+                      })
+                else {
+                    return nil
+                }
+                return (membership.occurrenceDate, trace)
+            }
+            .sorted { $0.0 < $1.0 }
+            try ensureTaskCycleDatesUnlocked(
+                futurePending.map(\.1.date)
+            )
+            let preparedTraces = try futurePending.map {
+                try prepareTaskCycleTraceCancellation(
+                    $0.1,
+                    today: today,
+                    now: now
+                )
+            }
+            for occurrence in futurePending {
+                try series.appendCancellation(
+                    .occurrence(occurrence.0),
+                    reason: .completionTargetReached,
+                    now: now
+                )
+            }
+            try series.appendCancellation(
+                .followingDates(after: cutoff),
+                reason: .completionTargetReached,
+                now: now
+            )
+            storeTaskCycleSeries(series)
+            try storePreparedTaskCycleTraceCancellations(
+                preparedTraces,
+                now: now
+            )
+            stoppedSeriesCount += 1
+            cancelledOccurrenceCount += preparedTraces.count
+        }
+        return TaskCycleReconciliationOutcome(
+            stoppedSeriesCount: stoppedSeriesCount,
+            cancelledOccurrenceCount: cancelledOccurrenceCount
+        )
     }
 
     private func latestTaskCycleTrace(
@@ -798,6 +1857,48 @@ enum TaskCycleCivilCalendar {
     static func weekday(for date: LocalDate) -> Int? {
         guard let instant = instant(for: date) else { return nil }
         return calendar.component(.weekday, from: instant)
+    }
+
+    static func dayDistance(
+        from startDate: LocalDate,
+        to endDate: LocalDate
+    ) -> Int? {
+        guard let start = instant(for: startDate),
+              let end = instant(for: endDate)
+        else {
+            return nil
+        }
+        return calendar.dateComponents(
+            [.day],
+            from: start,
+            to: end
+        ).day
+    }
+
+    static func offset(
+        _ date: LocalDate,
+        by dayCount: Int
+    ) -> LocalDate? {
+        guard let instant = instant(for: date),
+              let target = calendar.date(
+                  byAdding: .day,
+                  value: dayCount,
+                  to: instant
+              )
+        else {
+            return nil
+        }
+        let components = calendar.dateComponents(
+            [.year, .month, .day],
+            from: target
+        )
+        guard let year = components.year,
+              let month = components.month,
+              let day = components.day
+        else {
+            return nil
+        }
+        return LocalDate(year: year, month: month, day: day)
     }
 
     static func materializableDates(

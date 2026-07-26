@@ -20,6 +20,10 @@ public struct DayRolloverCoordinator {
             upTo: moment.today,
             now: mutationInstant
         )
+        _ = try candidate.reconcileTaskCycleSeries(
+            today: moment.today,
+            now: mutationInstant
+        )
         if candidate.snapshot() != sourceSnapshot {
             try persist(candidate, mutationInstant)
         }

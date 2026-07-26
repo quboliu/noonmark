@@ -23,7 +23,7 @@ let requiredFragmentsByScreenshot: [String: [String]] = [
     "day-detail.png": ["30%", "分组", "标签", "添加子任务", "任务轨迹", "追加附言"],
     "pool-detail.png": ["分组", "标签", "添加子任务", "追加附言"],
     "future-detail.png": ["分组", "标签", "任务轨迹", "追加附言"],
-    "unfinished-detail.png": ["0%", "历史事实", "任务轨迹"],
+    "unfinished-detail.png": ["0%", "历史执行事实", "分组与", "任务轨迹"],
     "completed-detail.png": ["100%", "生活", "任务轨迹"]
 ]
 

@@ -894,7 +894,9 @@ struct DetailRail: View {
 
     @ViewBuilder
     private var selectionDetail: some View {
-        if let record = completedSubtaskDetailRecord {
+        if let series = store.selectedTaskCycleSeries {
+            TaskCycleDetail(series: series)
+        } else if let record = completedSubtaskDetailRecord {
             CompletedSubtaskDetail(record: record)
         } else if let item = completedTaskDetailItem {
             CompletedRecordDetail(item: item)

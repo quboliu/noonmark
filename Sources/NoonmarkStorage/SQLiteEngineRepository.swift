@@ -1018,6 +1018,152 @@ private extension SQLiteEngineRepository {
         return string
     }
 
+    func taskCycleScheduleJSON(
+        _ schedule: TaskCycleSchedule
+    ) throws -> String {
+        let data = try JSONEncoder().encode(schedule)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "task cycle schedule JSON encoding failed"
+            )
+        }
+        return string
+    }
+
+    func taskCycleSchedule(
+        from json: String
+    ) throws -> TaskCycleSchedule {
+        guard let data = json.data(using: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "task cycle schedule JSON is not UTF-8"
+            )
+        }
+        do {
+            return try JSONDecoder().decode(
+                TaskCycleSchedule.self,
+                from: data
+            )
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid task cycle schedule JSON: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    func taskCycleEndConditionJSON(
+        _ endCondition: TaskCycleEndCondition
+    ) throws -> String {
+        try taskCycleDomainJSON(
+            endCondition,
+            description: "task cycle end condition"
+        )
+    }
+
+    func taskCycleEndCondition(
+        from json: String
+    ) throws -> TaskCycleEndCondition {
+        try taskCycleDomainValue(
+            TaskCycleEndCondition.self,
+            from: json,
+            description: "task cycle end condition"
+        )
+    }
+
+    func taskCyclePlanRevisionsJSON(
+        _ revisions: [TaskCyclePlanRevision]
+    ) throws -> String {
+        try taskCycleDomainJSON(
+            revisions,
+            description: "task cycle plan revisions"
+        )
+    }
+
+    func taskCyclePlanRevisions(
+        from json: String
+    ) throws -> [TaskCyclePlanRevision] {
+        try taskCycleDomainValue(
+            [TaskCyclePlanRevision].self,
+            from: json,
+            description: "task cycle plan revisions"
+        )
+    }
+
+    func taskCyclePlannedSubtasksJSON(
+        _ subtasks: [PlannedSubtask]
+    ) throws -> String {
+        try taskCycleDomainJSON(
+            subtasks,
+            description: "task cycle planned subtasks"
+        )
+    }
+
+    func taskCyclePlannedSubtasks(
+        from json: String
+    ) throws -> [PlannedSubtask] {
+        try taskCycleDomainValue(
+            [PlannedSubtask].self,
+            from: json,
+            description: "task cycle planned subtasks"
+        )
+    }
+
+    func taskCycleLabelIDsJSON(
+        _ labelIDs: Set<TaskLabelID>
+    ) throws -> String {
+        try taskCycleDomainJSON(
+            labelIDs.sorted { $0.description < $1.description },
+            description: "task cycle label IDs"
+        )
+    }
+
+    func taskCycleLabelIDs(
+        from json: String
+    ) throws -> Set<TaskLabelID> {
+        Set(
+            try taskCycleDomainValue(
+                [TaskLabelID].self,
+                from: json,
+                description: "task cycle label IDs"
+            )
+        )
+    }
+
+    func taskCycleDomainJSON(
+        _ value: some Encodable,
+        description: String
+    ) throws -> String {
+        let data = try ExactDateJSONCoding.encoder(
+            nonFiniteDateDescription: "domain JSON date must be finite"
+        ).encode(value)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "\(description) JSON encoding failed"
+            )
+        }
+        return string
+    }
+
+    func taskCycleDomainValue<Value: Decodable>(
+        _ type: Value.Type,
+        from json: String,
+        description: String
+    ) throws -> Value {
+        guard let data = json.data(using: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "\(description) JSON is not UTF-8"
+            )
+        }
+        do {
+            return try ExactDateJSONCoding.decoder(
+                nonFiniteDateDescription: "domain JSON date must be finite"
+            ).decode(type, from: data)
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid \(description) JSON: \(error.localizedDescription)"
+            )
+        }
+    }
+
     func taskCycleCancellationFacts(
         from json: String
     ) throws -> [TaskCycleCancellationFact] {
@@ -1501,16 +1647,23 @@ private extension SQLiteEngineRepository {
         let sql = """
         INSERT INTO task_cycle_series(
             id, title, description_text, start_date, end_date, schedule,
+            end_condition_json, plan_revisions_json, planned_subtasks_json,
+            category_id, label_ids_json,
             cancellation_facts_json,
             created_at, created_at_bits, updated_at, updated_at_bits
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             description_text = excluded.description_text,
             start_date = excluded.start_date,
             end_date = excluded.end_date,
             schedule = excluded.schedule,
+            end_condition_json = excluded.end_condition_json,
+            plan_revisions_json = excluded.plan_revisions_json,
+            planned_subtasks_json = excluded.planned_subtasks_json,
+            category_id = excluded.category_id,
+            label_ids_json = excluded.label_ids_json,
             cancellation_facts_json = excluded.cancellation_facts_json,
             created_at = excluded.created_at,
             created_at_bits = excluded.created_at_bits,
@@ -1524,18 +1677,49 @@ private extension SQLiteEngineRepository {
                 bind(series.descriptionText, to: 3, in: statement)
                 bind(series.startDate, to: 4, in: statement)
                 bind(series.endDate, to: 5, in: statement)
-                bind(series.schedule.rawValue, to: 6, in: statement)
+                bind(
+                    try taskCycleScheduleJSON(series.schedule),
+                    to: 6,
+                    in: statement
+                )
+                bind(
+                    try taskCycleEndConditionJSON(series.endCondition),
+                    to: 7,
+                    in: statement
+                )
+                bind(
+                    try taskCyclePlanRevisionsJSON(series.planRevisions),
+                    to: 8,
+                    in: statement
+                )
+                bind(
+                    try taskCyclePlannedSubtasksJSON(
+                        series.plannedSubtasks
+                    ),
+                    to: 9,
+                    in: statement
+                )
+                bind(
+                    series.categoryID?.rawValue.uuidString,
+                    to: 10,
+                    in: statement
+                )
+                bind(
+                    try taskCycleLabelIDsJSON(series.labelIDs),
+                    to: 11,
+                    in: statement
+                )
                 bind(
                     try taskCycleCancellationFactsJSON(
                         series.cancellationFacts
                     ),
-                    to: 7,
+                    to: 12,
                     in: statement
                 )
-                bind(series.createdAt, to: 8, in: statement)
-                try bindExactDate(series.createdAt, to: 9, in: statement)
-                bind(series.updatedAt, to: 10, in: statement)
-                try bindExactDate(series.updatedAt, to: 11, in: statement)
+                bind(series.createdAt, to: 13, in: statement)
+                try bindExactDate(series.createdAt, to: 14, in: statement)
+                bind(series.updatedAt, to: 15, in: statement)
+                try bindExactDate(series.updatedAt, to: 16, in: statement)
             }
         }
     }
@@ -3671,6 +3855,8 @@ private extension SQLiteEngineRepository {
             """
             SELECT
                 id, title, description_text, start_date, end_date, schedule,
+                end_condition_json, plan_revisions_json,
+                planned_subtasks_json, category_id, label_ids_json,
                 cancellation_facts_json,
                 created_at, created_at_bits, updated_at, updated_at_bits
             FROM task_cycle_series
@@ -3678,32 +3864,43 @@ private extension SQLiteEngineRepository {
             """,
             on: database
         ) { statement in
-            guard let schedule = TaskCycleSchedule(
-                rawValue: try string(statement, 5)
-            ) else {
-                throw SQLiteRepositoryError.invalidStoredValue(
-                    "invalid task cycle schedule"
-                )
-            }
+            let schedule = try taskCycleSchedule(
+                from: string(statement, 5)
+            )
             return TaskCycleSeries(
                 id: TaskCycleSeriesID(try uuid(statement, 0)),
                 title: try string(statement, 1),
                 descriptionText: optionalString(statement, 2),
+                plannedSubtasks: try taskCyclePlannedSubtasks(
+                    from: string(statement, 8)
+                ),
+                categoryID: try optionalUUID(statement, 9).map {
+                    TaskCategoryID($0)
+                },
+                labelIDs: try taskCycleLabelIDs(
+                    from: string(statement, 10)
+                ),
                 startDate: LocalDate(try string(statement, 3)),
                 endDate: LocalDate(try string(statement, 4)),
                 schedule: schedule,
-                cancellationFacts: try taskCycleCancellationFacts(
+                endCondition: try taskCycleEndCondition(
                     from: string(statement, 6)
+                ),
+                planRevisions: try taskCyclePlanRevisions(
+                    from: string(statement, 7)
+                ),
+                cancellationFacts: try taskCycleCancellationFacts(
+                    from: string(statement, 11)
                 ),
                 createdAt: try validatedExactDate(
                     statement,
-                    textIndex: 7,
-                    bitsIndex: 8
+                    textIndex: 12,
+                    bitsIndex: 13
                 ),
                 updatedAt: try validatedExactDate(
                     statement,
-                    textIndex: 9,
-                    bitsIndex: 10
+                    textIndex: 14,
+                    bitsIndex: 15
                 )
             )
         }

@@ -36,6 +36,17 @@ extension NoonmarkStore {
         )
     }
 
+    func selectTaskCycleSeries(_ seriesID: TaskCycleSeriesID) {
+        selectWorkspaceItem(.taskCycleSeries(seriesID), modifiers: [])
+    }
+
+    func userSelectTaskCycleSeries(_ seriesID: TaskCycleSeriesID) {
+        selectWorkspaceItem(
+            .taskCycleSeries(seriesID),
+            modifiers: currentWorkspaceSelectionModifiers
+        )
+    }
+
     func userSelectTrace(_ traceID: DayTraceID) {
         selectWorkspaceItem(
             page == .future ? .futureTrace(traceID) : .dayTrace(traceID),
@@ -364,27 +375,43 @@ extension NoonmarkStore {
                 tracesByDescription[$0.id].map(WorkspaceSelectionItem.dayTrace)
             }
         case .pool:
-            return engine.taskPool().map { .poolTask($0.chain.id) }
+            return engine.taskCycleTracks(
+                today: today,
+                collection: .pool
+            ).map { .taskCycleSeries($0.id) }
+                + engine.taskPool().map { .poolTask($0.chain.id) }
         case .future:
-            return engine.futurePlans(today: today).map {
+            return engine.taskCycleTracks(
+                today: today,
+                collection: .future
+            ).map { .taskCycleSeries($0.id) }
+                + engine.futurePlans(today: today).map {
                 .futureTrace($0.trace.id)
             }
         case .unfinished:
-            return engine.unfinishedPool().map {
+            return engine.taskCycleTracks(
+                today: today,
+                collection: .unfinished
+            ).map { .taskCycleSeries($0.id) }
+                + engine.unfinishedPool().map {
                 .unfinishedTask($0.chain.id)
             }
         case .completed:
-            let completed = engine.completedPool()
-            let subtasks = engine.completedSubtaskRecords()
-            let dates = Set(completed.map { $0.trace.date } + subtasks.map(\.date))
-                .sorted(by: >)
-            return dates.flatMap { date in
-                completed
-                    .filter { $0.trace.date == date }
-                    .map { .completedTrace($0.trace.id) }
-                    + subtasks
-                    .filter { $0.date == date }
-                    .map { .completedSubtask($0.subtask.id) }
+            let hierarchies = standaloneCollectionItems(
+                engine.completedTaskHierarchies(),
+                chainID: \.chain.id
+            )
+            return engine.taskCycleTracks(
+                today: today,
+                collection: .completed
+            ).map { .taskCycleSeries($0.id) }
+                + hierarchies.flatMap { hierarchy in
+                let parent = completedHierarchyParentSelection(
+                    hierarchy
+                ).map { [$0] } ?? []
+                return parent + hierarchy.completedChildren.map {
+                    .completedSubtask($0.subtask.id)
+                }
             }
         case .calendar, .zhulong, .settings:
             return []
@@ -406,6 +433,8 @@ extension NoonmarkStore {
             return
         }
         switch primary {
+        case let .taskCycleSeries(seriesID):
+            selectedTaskCycleSeriesID = seriesID
         case let .dayTrace(traceID), let .futureTrace(traceID):
             selectedTraceID = traceID
         case let .poolTask(chainID):
@@ -425,6 +454,7 @@ extension NoonmarkStore {
     }
 
     private func clearLegacySelection() {
+        selectedTaskCycleSeriesID = nil
         selectedTraceID = nil
         selectedPoolChainID = nil
         selectedUnfinishedChainID = nil

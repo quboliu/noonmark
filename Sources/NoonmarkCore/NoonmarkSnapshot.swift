@@ -99,6 +99,17 @@ public extension NoonmarkSnapshot {
         }
         for series in taskCycleSeries {
             try series.validateIntegrity()
+            guard series.categoryID.map({
+                classifications.categories[$0] != nil
+            }) ?? true,
+                series.labelIDs.allSatisfy({
+                    classifications.labels[$0] != nil
+                })
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle template references missing classification"
+                )
+            }
         }
         for chain in chains {
             guard chain.createdAt.timeIntervalSinceReferenceDate.isFinite,
@@ -247,12 +258,9 @@ public extension NoonmarkSnapshot {
         )
         for series in taskCycleSeries {
             let seriesMemberships = membershipsBySeries[series.id] ?? []
-            let expectedDates = try TaskCycleCivilCalendar.materializableDates(
-                from: series.startDate,
-                through: series.endDate
-            ).filter(series.schedule.includes)
+            let expectedDates = try series.everPlannedDates()
             guard Set(seriesMemberships.map(\.occurrenceDate))
-                == Set(expectedDates)
+                == expectedDates
             else {
                 throw NoonmarkError.invalidInput(
                     "task cycle series is missing a scheduled occurrence"

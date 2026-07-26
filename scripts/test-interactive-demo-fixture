@@ -71,7 +71,7 @@ for expected in \
   '"submittedTodoArtifactCount" : 1' \
   '"editableTodoArtifactCount" : 1' \
   '"dailyReviewReceiptCount" : 1' \
-  '"dayTodoMixedStatusSectionCount" : 1' \
+  '"dayTodoMixedStatusSectionCount" : 2' \
   '"dayTodoGroupingPresentationVerified" : true' \
   '"taskCollectionCategoryVisibilityVerified" : true' \
   '"completedPoolRowHierarchyVerified" : true' \

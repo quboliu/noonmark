@@ -347,9 +347,15 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                     && categoryIdentifiers
                     == expectedGroupedRowCategoryIdentifiers
             }
+        let completedHierarchyIsValid =
+            completedHierarchyPresentationIsValid(
+                context: context,
+                verificationCase: verificationCase
+            )
         guard AppViewTreeE2E.activateMainWindow(),
               labelIdentifiers?.isEmpty == false,
-              categoryPlacementIsValid
+              categoryPlacementIsValid,
+              completedHierarchyIsValid
         else {
             retryTaskCollectionCategoryVisibility(
                 context: context,
@@ -463,6 +469,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         }
         let expectedTrackIdentifier =
             "task-cycle-track.\(verificationCase.accessibilityName).\(track.id.description)"
+        let expectedTrackIdentifiers: Set<String> = [
+            expectedTrackIdentifier,
+            "\(expectedTrackIdentifier).detail",
+            "\(expectedTrackIdentifier).disclosure"
+        ]
         let expectedDayIdentifiers = Set(track.days.map {
             "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\($0.date.description).\($0.presentationState(in: verificationCase.collection).rawValue)"
         })
@@ -479,7 +490,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                   identifier:
                   "task-cycle-section.\(verificationCase.accessibilityName)"
               ) != nil,
-              trackIdentifiers == Set([expectedTrackIdentifier]),
+              trackIdentifiers == expectedTrackIdentifiers,
               AppViewTreeE2E.view(
                   identifier: "task-cycle-create.open"
               ) == nil
@@ -493,7 +504,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         }
         if dayIdentifiers?.isEmpty == true {
             guard AppViewTreeE2E.click(
-                identifier: expectedTrackIdentifier
+                identifier: "\(expectedTrackIdentifier).disclosure"
             ) else {
                 AppViewTreeE2E.writeDump(beside: resultURL)
                 finishWithFailure(
@@ -753,6 +764,81 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     }
 
     @MainActor
+    private func completedHierarchyPresentationIsValid(
+        context: DemoCollectionCheckContext,
+        verificationCase: DemoCollectionCheckCase
+    ) -> Bool {
+        guard verificationCase.page == .completed else {
+            return true
+        }
+        let ordinaryHierarchies =
+            context.engine.completedTaskHierarchies().filter {
+                $0.chain.cycleMembership == nil
+            }
+        guard let open = ordinaryHierarchies.first(where: {
+            $0.parentCompletion == nil
+                && $0.completedChildren.isEmpty == false
+        }), let completed = ordinaryHierarchies.first(where: {
+            $0.parentCompletion != nil
+                && $0.completedChildren.isEmpty == false
+        }), let openParent = AppViewTreeE2E.view(
+            identifier:
+            "completed.hierarchy.parent.\(open.chain.id.description)"
+        ), let completedParent = AppViewTreeE2E.view(
+            identifier:
+            "completed.hierarchy.parent.\(completed.chain.id.description)"
+        ), AppViewTreeE2E.verificationText(for: openParent) == "open",
+            AppViewTreeE2E.verificationText(for: completedParent)
+            == "completed"
+        else {
+            return false
+        }
+        let openChildrenAreChecked =
+            open.completedChildren.allSatisfy { record in
+                guard let view = AppViewTreeE2E.view(
+                    identifier:
+                    "completed.hierarchy.child.\(record.subtask.id.description)"
+                ) else {
+                    return false
+                }
+                return AppViewTreeE2E.verificationText(for: view)
+                    == "checked"
+            }
+        let completedChildrenAreQuiet =
+            completed.completedChildren.allSatisfy { record in
+                guard let view = AppViewTreeE2E.view(
+                    identifier:
+                    "completed.hierarchy.child.\(record.subtask.id.description)"
+                ) else {
+                    return false
+                }
+                return AppViewTreeE2E.verificationText(for: view)
+                    == "quiet"
+            }
+        let openTraceIDs = Set(
+            context.engine.traces.values
+                .filter { $0.chainID == open.chain.id }
+                .map(\.id)
+        )
+        let hiddenChildrenStayHidden =
+            context.engine.subtasks.values
+                .filter {
+                    openTraceIDs.contains($0.traceID)
+                        && $0.isUserPresentable
+                        && $0.status != .completed
+                }
+                .allSatisfy {
+                    AppViewTreeE2E.hasNoVisibleView(
+                        identifier:
+                        "completed.hierarchy.child.\($0.id.description)"
+                    )
+                }
+        return openChildrenAreChecked
+            && completedChildrenAreQuiet
+            && hiddenChildrenStayHidden
+    }
+
+    @MainActor
     private func captureTaskCollectionScreenshot(page: NoonmarkStore.Page) throws {
         guard let window = NSApp.windows.first(where: {
             $0 is NoonmarkWindow
@@ -796,10 +882,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             ),
             DemoCollectionCheckCase(
                 page: .completed,
-                rowPrefixes: [
-                    "classification.completed-row.",
-                    "classification.completed-subtask-row."
-                ],
+                rowPrefixes: ["classification.completed-row."],
                 organization: .grouped
             )
         ]
@@ -1491,10 +1574,26 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             $0.trajectory.traces.count
                 >= MacUICompletedPoolRowLayout.minimumVisibleTrajectoryNodeCount
         }
+        let ordinaryCompletedHierarchies =
+            engine.completedTaskHierarchies().filter {
+                $0.chain.cycleMembership == nil
+            }
+        let hasOpenParentWithCompletedChildren =
+            ordinaryCompletedHierarchies.contains {
+                $0.parentCompletion == nil
+                    && $0.completedChildren.isEmpty == false
+            }
+        let hasCompletedParentWithCompletedChildren =
+            ordinaryCompletedHierarchies.contains {
+                $0.parentCompletion != nil
+                    && $0.completedChildren.isEmpty == false
+            }
         let completedPoolRowHierarchyVerified =
             ordinarySingleDayCompletedTaskCount > 0
                 && cycleSingleDayCompletedTaskCount > 0
                 && multiDayCompletedTaskCount > 0
+                && hasOpenParentWithCompletedChildren
+                && hasCompletedParentWithCompletedChildren
                 && MacUICompletedPoolRowLayout
                 .strongStatusRepresentationCount == 1
                 && MacUICompletedPoolRowLayout

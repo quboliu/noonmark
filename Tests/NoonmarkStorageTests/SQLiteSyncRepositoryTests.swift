@@ -56,11 +56,18 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         let repository = SQLiteEngineRepository(databaseURL: databaseURL)
         let engine = NoonmarkEngine()
         let endDate = LocalDate("2026-07-09")
+        let plannedSubtask = PlannedSubtask(
+            title: "核对明细",
+            position: 1,
+            now: now
+        )
         let seriesID = try engine.createTaskCycleSeries(
             title: "每日 SQLite 对账",
+            descriptionText: "父任务说明",
+            plannedSubtasks: [plannedSubtask],
             startDate: today,
-            endDate: endDate,
             schedule: .daily,
+            endCondition: .onDate(endDate),
             today: today,
             now: now
         )
@@ -69,6 +76,13 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
             occurrenceDate: LocalDate("2026-07-06"),
             today: today,
             now: now.addingTimeInterval(1)
+        )
+        _ = try engine.reviseTaskCycleSeries(
+            seriesID: seriesID,
+            schedule: .everyDays(2),
+            endCondition: .durationDays(5),
+            today: today,
+            now: now.addingTimeInterval(2)
         )
 
         try repository.save(engine.snapshot())
@@ -83,7 +97,20 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertEqual(track.scheduledCount, 5)
         XCTAssertEqual(
             restored.taskCycleSeries[seriesID]?.cancellationFacts.count,
-            1
+            3
+        )
+        XCTAssertEqual(
+            restored.taskCycleSeries[seriesID]?.plannedSubtasks
+                .map(\.title),
+            ["核对明细"]
+        )
+        XCTAssertEqual(
+            restored.taskCycleSeries[seriesID]?.planRevisions.count,
+            2
+        )
+        XCTAssertEqual(
+            restored.taskCycleSeries[seriesID]?.endCondition,
+            .durationDays(5)
         )
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
     }

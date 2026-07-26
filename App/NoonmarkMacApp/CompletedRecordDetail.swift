@@ -53,8 +53,7 @@ struct CompletedRecordDetail: View {
 
             TaskClassificationDetailSection(
                 trace: item.trace,
-                taskTitle: item.definition.title,
-                editable: false
+                taskTitle: item.definition.title
             )
 
             TraceTimelineSection(trace: item.trace)
@@ -195,8 +194,7 @@ struct CompletedSubtaskDetail: View {
 
             TaskClassificationDetailSection(
                 trace: record.parentTrace,
-                taskTitle: record.parentDefinition.title,
-                editable: false
+                taskTitle: record.parentDefinition.title
             )
 
             DetailSection(store.copy.parentTaskTitle) {

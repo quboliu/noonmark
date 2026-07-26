@@ -76,8 +76,7 @@ struct TaskDetail: View {
             )
             TaskClassificationDetailSection(
                 trace: trace,
-                taskTitle: definition.title,
-                editable: canEditText
+                taskTitle: definition.title
             )
             DetailSection(store.copy.subtasksTitle, showsTitle: false) {
                 VStack(spacing: 6) {

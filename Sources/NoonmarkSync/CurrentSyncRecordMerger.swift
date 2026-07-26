@@ -718,8 +718,6 @@ struct CurrentSyncRecordMerger {
         let incomingSeries = try mapper.decodeTaskCycleSeries(incoming)
         guard existingSeries.id == incomingSeries.id,
               existingSeries.startDate == incomingSeries.startDate,
-              existingSeries.endDate == incomingSeries.endDate,
-              existingSeries.schedule == incomingSeries.schedule,
               existingSeries.createdAt.timeIntervalSinceReferenceDate.bitPattern
               == incomingSeries.createdAt.timeIntervalSinceReferenceDate.bitPattern
         else {
@@ -733,10 +731,41 @@ struct CurrentSyncRecordMerger {
         if sameVersion {
             guard existingSeries.title == incomingSeries.title,
                   existingSeries.descriptionText
-                  == incomingSeries.descriptionText
+                  == incomingSeries.descriptionText,
+                  existingSeries.plannedSubtasks
+                  == incomingSeries.plannedSubtasks,
+                  existingSeries.categoryID == incomingSeries.categoryID,
+                  existingSeries.labelIDs == incomingSeries.labelIDs,
+                  existingSeries.endDate == incomingSeries.endDate,
+                  existingSeries.schedule == incomingSeries.schedule,
+                  existingSeries.endCondition
+                  == incomingSeries.endCondition
             else {
                 throw CurrentSyncRecordMergeError.invalidContentClock
             }
+        }
+        var revisionsByID = Dictionary(
+            uniqueKeysWithValues: existingSeries.planRevisions.map {
+                ($0.id, $0)
+            }
+        )
+        for revision in incomingSeries.planRevisions {
+            if let existingRevision = revisionsByID[revision.id],
+               existingRevision != revision
+            {
+                throw CurrentSyncRecordMergeError
+                    .taskCycleSeriesIdentityCollision
+            }
+            revisionsByID[revision.id] = revision
+        }
+        let mergedRevisions = revisionsByID.values.sorted {
+            if $0.recordedAt != $1.recordedAt {
+                return $0.recordedAt < $1.recordedAt
+            }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        guard let latestRevision = mergedRevisions.last else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
         }
         var factsByID = Dictionary(
             uniqueKeysWithValues: existingSeries.cancellationFacts.map {
@@ -758,9 +787,16 @@ struct CurrentSyncRecordMerger {
             id: winnerSeries.id,
             title: winnerSeries.title,
             descriptionText: winnerSeries.descriptionText,
+            plannedSubtasks: winnerSeries.plannedSubtasks,
+            categoryID: winnerSeries.categoryID,
+            labelIDs: winnerSeries.labelIDs,
             startDate: winnerSeries.startDate,
-            endDate: winnerSeries.endDate,
-            schedule: winnerSeries.schedule,
+            endDate: try latestRevision.endCondition.resolvedEndDate(
+                from: winnerSeries.startDate
+            ),
+            schedule: latestRevision.schedule,
+            endCondition: latestRevision.endCondition,
+            planRevisions: mergedRevisions,
             cancellationFacts: factsByID.values.sorted {
                 if $0.recordedAt != $1.recordedAt {
                     return $0.recordedAt < $1.recordedAt

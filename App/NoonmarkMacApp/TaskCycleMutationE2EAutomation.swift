@@ -108,6 +108,14 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
     static let skippedTitle = "E2E UI 跳过重复"
     static let stoppedTitle = "E2E UI 停止重复"
     static let returnedTitle = "E2E UI 回池重复"
+    static let detailLabelName = "E2E详情标签"
+    static let plannedSubtaskTitle = "E2E详情步骤"
+    static let partialHierarchyTitle = "E2E 部分子任务层级"
+    static let completedHierarchyTitle = "E2E 完整子任务层级"
+    static let unfinishedClassificationTitle = "E2E 未完成分类可改"
+    static let currentStateLabelName = "E2E进行中标签"
+    static let completedStateLabelName = "E2E终局标签"
+    static let unfinishedStateLabelName = "E2E未完成标签"
 
     let resultURL: URL
 
@@ -128,6 +136,14 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
 
     @MainActor
     private final class Session {
+        private struct CrossStateFixtureIDs {
+            let partialTraceID: DayTraceID
+            let partialCompletedChildID: SubtaskID
+            let partialHiddenChildIDs: [SubtaskID]
+            let completedTraceID: DayTraceID
+            let completedChildIDs: [SubtaskID]
+        }
+
         private final class MenuTrackingProbe: @unchecked Sendable {
             private(set) var didBeginTracking = false
             private var observer: NSObjectProtocol?
@@ -201,6 +217,14 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
         private var detailConversionChainID: TaskChainID?
         private var emptyConversionChainID: TaskChainID?
         private var menuTrackingProbe: MenuTrackingProbe?
+        private var partialHierarchyChainID: TaskChainID?
+        private var partialHierarchyTraceID: DayTraceID?
+        private var partialCompletedChildID: SubtaskID?
+        private var partialHiddenChildIDs: [SubtaskID] = []
+        private var completedHierarchyChainID: TaskChainID?
+        private var completedHierarchyTraceID: DayTraceID?
+        private var completedHierarchyChildIDs: [SubtaskID] = []
+        private var unfinishedClassificationChainID: TaskChainID?
 
         init(store: NoonmarkStore, resultURL: URL) {
             self.store = store
@@ -234,6 +258,10 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
             }
             guard archiveConversionClassifications() else {
                 finish("failed: 无法归档转换源任务的分类")
+                return
+            }
+            guard seedCrossStateFixture() else {
+                finish("failed: 无法建立跨状态分类与父子层级 fixture")
                 return
             }
             let tomorrow = NoonmarkStore.offset(store.today, by: 1)
@@ -311,6 +339,130 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
             }
         }
 
+        private func seedCrossStateFixture() -> Bool {
+            func createClassifiedTask(
+                title: String
+            ) -> TaskChainID? {
+                store.poolText =
+                    "\(title) @E2E状态分组 #E2E初始标签"
+                store.addPoolTask()
+                guard let chainID = store.selectedPoolChainID,
+                      store.currentDefinition(for: chainID)?.title
+                      == title
+                else {
+                    return nil
+                }
+                return chainID
+            }
+
+            guard let partialChainID = createClassifiedTask(
+                title:
+                TaskCycleMutationE2EAutomation
+                    .partialHierarchyTitle
+            ), let completedChainID = createClassifiedTask(
+                title:
+                TaskCycleMutationE2EAutomation
+                    .completedHierarchyTitle
+            ), let unfinishedChainID = createClassifiedTask(
+                title:
+                TaskCycleMutationE2EAutomation
+                    .unfinishedClassificationTitle
+            )
+            else {
+                return false
+            }
+
+            do {
+                let fixture = try store.commitEngineMutation(
+                    undoPolicy: .invalidate
+                ) { candidate, moment in
+                    let partialTraceID =
+                        try candidate.scheduleFromPool(
+                            chainID: partialChainID,
+                            date: moment.today,
+                            today: moment.today,
+                            now: moment.instant
+                        )
+                    let partialChildren = try (1 ... 3).map {
+                        try candidate.addSubtask(
+                            traceID: partialTraceID,
+                            title: "部分子任务\($0)",
+                            now: moment.instant
+                        )
+                    }
+                    try candidate.completeSubtask(
+                        partialChildren[0],
+                        today: moment.today,
+                        now: moment.instant
+                    )
+
+                    let completedTraceID =
+                        try candidate.scheduleFromPool(
+                            chainID: completedChainID,
+                            date: moment.today,
+                            today: moment.today,
+                            now: moment.instant
+                        )
+                    let completedChildren = try (1 ... 3).map {
+                        try candidate.addSubtask(
+                            traceID: completedTraceID,
+                            title: "完成子任务\($0)",
+                            now: moment.instant
+                        )
+                    }
+                    for childID in completedChildren {
+                        try candidate.completeSubtask(
+                            childID,
+                            today: moment.today,
+                            now: moment.instant
+                        )
+                    }
+                    try candidate.markCompleted(
+                        traceID: completedTraceID,
+                        today: moment.today,
+                        now: moment.instant
+                    )
+
+                    let unfinishedTraceID =
+                        try candidate.scheduleFromPool(
+                            chainID: unfinishedChainID,
+                            date: moment.today,
+                            today: moment.today,
+                            now: moment.instant
+                        )
+                    try candidate.abandonChain(
+                        from: unfinishedTraceID,
+                        now: moment.instant
+                    )
+                    return CrossStateFixtureIDs(
+                        partialTraceID: partialTraceID,
+                        partialCompletedChildID:
+                        partialChildren[0],
+                        partialHiddenChildIDs:
+                        Array(partialChildren.dropFirst()),
+                        completedTraceID: completedTraceID,
+                        completedChildIDs: completedChildren
+                    )
+                }
+                partialHierarchyChainID = partialChainID
+                partialHierarchyTraceID = fixture.partialTraceID
+                partialCompletedChildID =
+                    fixture.partialCompletedChildID
+                partialHiddenChildIDs =
+                    fixture.partialHiddenChildIDs
+                completedHierarchyChainID = completedChainID
+                completedHierarchyTraceID =
+                    fixture.completedTraceID
+                completedHierarchyChildIDs =
+                    fixture.completedChildIDs
+                unfinishedClassificationChainID =
+                    unfinishedChainID
+                return true
+            } catch {
+                return false
+            }
+        }
+
         private func submitRecurringSlashCommand() {
             let input =
                 "/repeat \(TaskCycleMutationE2EAutomation.createdTitle)"
@@ -359,6 +511,234 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                         titled:
                         TaskCycleMutationE2EAutomation.createdTitle
                     ) != nil
+                        && AppViewTreeE2E.hasNoAttachedSheets()
+                } onSuccess: { [self] in
+                    openCreatedSeriesDetail()
+                }
+            }
+        }
+
+        private func openCreatedSeriesDetail() {
+            guard let series = series(
+                titled: TaskCycleMutationE2EAutomation.createdTitle
+            ) else {
+                finish("failed: 缺少新建重复任务父级")
+                return
+            }
+            let detailButtonIdentifier =
+                "task-cycle-track.pool.\(series.id.description).detail"
+            waitFor("重复任务父级详情入口") {
+                AppViewTreeE2E.click(
+                    identifier: detailButtonIdentifier
+                )
+            } onSuccess: { [self] in
+                waitFor("重复任务父级详情") {
+                    self.store.selectedTaskCycleSeriesID == series.id
+                        && self.store.isDetailRailExpanded
+                        && AppViewTreeE2E.view(
+                            identifier:
+                            "task-cycle-detail.\(series.id.description)"
+                        ) != nil
+                        && AppViewTreeE2E.view(
+                            identifier:
+                            "classification.editor.cycle-\(series.id.description)"
+                        ) != nil
+                } onSuccess: { [self] in
+                    addCreatedSeriesLabel(seriesID: series.id)
+                }
+            }
+        }
+
+        private func addCreatedSeriesLabel(
+            seriesID: TaskCycleSeriesID
+        ) {
+            let inputIdentifier =
+                "classification.editor.label-input.cycle-\(seriesID.description)"
+            waitFor("重复任务父级 # 标签输入") {
+                AppViewTreeE2E.click(identifier: inputIdentifier)
+            } onSuccess: { [self] in
+                guard AppViewTreeE2E.typeUnicode(
+                    "#\(TaskCycleMutationE2EAutomation.detailLabelName)"
+                ),
+                    AppViewTreeE2E.sendReturnKey()
+                else {
+                    finish("failed: 无法通过父级详情输入 # 标签")
+                    return
+                }
+                waitFor("重复任务父级标签保存") {
+                    guard let projection = try? self.store.engine
+                        .taskCycleTemplateClassification(
+                            seriesID: seriesID
+                        )
+                    else {
+                        return false
+                    }
+                    return projection.labels.contains {
+                        $0.name
+                            == TaskCycleMutationE2EAutomation
+                            .detailLabelName
+                    }
+                } onSuccess: { [self] in
+                    addCreatedSeriesPlannedSubtask(
+                        seriesID: seriesID
+                    )
+                }
+            }
+        }
+
+        private func addCreatedSeriesPlannedSubtask(
+            seriesID: TaskCycleSeriesID
+        ) {
+            let inputIdentifier =
+                "task-cycle-subtask.\(seriesID.description).new"
+            waitFor("重复任务父级计划子任务输入") {
+                AppViewTreeE2E.click(identifier: inputIdentifier)
+            } onSuccess: { [self] in
+                guard AppViewTreeE2E.typeUnicode(
+                    TaskCycleMutationE2EAutomation.plannedSubtaskTitle
+                ),
+                    AppViewTreeE2E.sendReturnKey()
+                else {
+                    finish("failed: 无法通过父级详情输入计划子任务")
+                    return
+                }
+                waitFor("重复任务父级计划子任务保存") {
+                    self.store.engine.taskCycleSeries[
+                        seriesID
+                    ]?.plannedSubtasks.contains {
+                        $0.title
+                            == TaskCycleMutationE2EAutomation
+                            .plannedSubtaskTitle
+                    } == true
+                } onSuccess: { [self] in
+                    openCreatedSeriesPlanEditor(
+                        seriesID: seriesID
+                    )
+                }
+            }
+        }
+
+        private func openCreatedSeriesPlanEditor(
+            seriesID: TaskCycleSeriesID
+        ) {
+            waitFor("重复任务父级周期设置入口") {
+                AppViewTreeE2E.click(
+                    identifier: "task-cycle-detail.edit-plan"
+                )
+            } onSuccess: { [self] in
+                waitFor("重复任务父级周期设置表单") {
+                    guard AppViewTreeE2E.activateWindow(
+                        containing:
+                        "task-cycle-plan-edit.day-interval"
+                    ),
+                        let intervalStepper = AppViewTreeE2E.view(
+                            identifier:
+                            "task-cycle-plan-edit.day-interval"
+                        ),
+                        let durationStepper = AppViewTreeE2E.view(
+                            identifier:
+                            "task-cycle-plan-edit.duration-days"
+                        )
+                    else {
+                        return false
+                    }
+                    return AppViewTreeE2E.verificationText(
+                        for: intervalStepper
+                    ) == "1"
+                        && AppViewTreeE2E.verificationText(
+                            for: durationStepper
+                        ) == "7"
+                } onSuccess: { [self] in
+                    incrementCreatedSeriesDayInterval(
+                        seriesID: seriesID
+                    )
+                }
+            }
+        }
+
+        private func incrementCreatedSeriesDayInterval(
+            seriesID: TaskCycleSeriesID
+        ) {
+            waitFor("重复任务父级每 N 天加一") {
+                guard let stepper = AppViewTreeE2E.view(
+                    identifier:
+                    "task-cycle-plan-edit.day-interval"
+                ) else {
+                    return false
+                }
+                return AppViewTreeE2E.click(
+                    stepper,
+                    normalizedX: 0.96,
+                    normalizedY: 0.75
+                )
+            } onSuccess: { [self] in
+                waitFor("重复任务父级每 N 天更新") {
+                    guard let stepper = AppViewTreeE2E.view(
+                        identifier:
+                        "task-cycle-plan-edit.day-interval"
+                    ) else {
+                        return false
+                    }
+                    return AppViewTreeE2E.verificationText(
+                        for: stepper
+                    ) == "2"
+                } onSuccess: { [self] in
+                    incrementCreatedSeriesDuration(
+                        seriesID: seriesID
+                    )
+                }
+            }
+        }
+
+        private func incrementCreatedSeriesDuration(
+            seriesID: TaskCycleSeriesID
+        ) {
+            waitFor("重复任务父级持续天数加一") {
+                guard let stepper = AppViewTreeE2E.view(
+                    identifier:
+                    "task-cycle-plan-edit.duration-days"
+                ) else {
+                    return false
+                }
+                return AppViewTreeE2E.click(
+                    stepper,
+                    normalizedX: 0.96,
+                    normalizedY: 0.75
+                )
+            } onSuccess: { [self] in
+                waitFor("重复任务父级持续天数更新") {
+                    guard let stepper = AppViewTreeE2E.view(
+                        identifier:
+                        "task-cycle-plan-edit.duration-days"
+                    ) else {
+                        return false
+                    }
+                    return AppViewTreeE2E.verificationText(
+                        for: stepper
+                    ) == "8"
+                } onSuccess: { [self] in
+                    saveCreatedSeriesPlan(seriesID: seriesID)
+                }
+            }
+        }
+
+        private func saveCreatedSeriesPlan(
+            seriesID: TaskCycleSeriesID
+        ) {
+            waitFor("重复任务父级周期设置保存") {
+                AppViewTreeE2E.click(
+                    identifier: "task-cycle-plan-edit.confirm"
+                )
+            } onSuccess: { [self] in
+                waitFor("重复任务父级周期设置落盘") {
+                    guard let series = self.store.engine
+                        .taskCycleSeries[seriesID]
+                    else {
+                        return false
+                    }
+                    return series.schedule == .everyDays(2)
+                        && series.endCondition == .durationDays(8)
+                        && series.planRevisions.count == 2
                         && AppViewTreeE2E.hasNoAttachedSheets()
                 } onSuccess: { [self] in
                     convertPoolTaskFromRow()
@@ -751,32 +1131,241 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 finish("failed: 缺少可停止的重复任务")
                 return
             }
-            waitFor("停止重复任务菜单") {
-                guard let trackView = AppViewTreeE2E.view(
-                    identifier: target.trackIdentifier
+            waitFor("停止重复任务父级详情入口") {
+                AppViewTreeE2E.click(
+                    identifier: "\(target.trackIdentifier).detail"
+                )
+            } onSuccess: { [self] in
+                waitFor("停止重复任务父级详情") {
+                    self.store.selectedTaskCycleSeriesID
+                        == target.seriesID
+                        && AppViewTreeE2E.view(
+                            identifier:
+                            "task-cycle-detail.\(target.seriesID.description)"
+                        ) != nil
+                        && AppViewTreeE2E.click(
+                            identifier: "task-cycle-detail.stop"
+                        )
+                } onSuccess: { [self] in
+                    confirmStoppedSeries()
+                }
+            }
+        }
+
+        private func confirmStoppedSeries() {
+            waitFor("停止重复任务确认") {
+                guard let confirm = AppViewTreeE2E.button(
+                    label: self.store.copy.stopRecurringTask
                 ) else {
                     return false
                 }
-                return AppViewTreeE2E.selectFirstContextMenuItem(
-                    of: trackView
+                return AppViewTreeE2E.click(confirm)
+            } onSuccess: { [self] in
+                waitFor("停止重复任务结果") {
+                    self.series(
+                        titled:
+                        TaskCycleMutationE2EAutomation.stoppedTitle
+                    )?.stoppedAfterDate == self.store.today
+                } onSuccess: { [self] in
+                    verifyCrossStateHierarchy()
+                }
+            }
+        }
+
+        private func verifyCrossStateHierarchy() {
+            waitFor("进入已完成父子层级") {
+                AppViewTreeE2E.click(
+                    identifier: "sidebar.nav.completed"
                 )
             } onSuccess: { [self] in
-                waitFor("停止重复任务确认") {
-                    guard let confirm = AppViewTreeE2E.button(
-                        label: self.store.copy.stopRecurringTask
-                    ) else {
+                waitFor("已完成父子层级真实渲染") {
+                    guard self.store.page == .completed,
+                          let partialChainID =
+                          self.partialHierarchyChainID,
+                          let partialCompletedChildID =
+                          self.partialCompletedChildID,
+                          let completedChainID =
+                          self.completedHierarchyChainID,
+                          let partialParent =
+                          AppViewTreeE2E.view(
+                              identifier:
+                              "completed.hierarchy.parent.\(partialChainID.description)"
+                          ),
+                          let partialChild =
+                          AppViewTreeE2E.view(
+                              identifier:
+                              "completed.hierarchy.child.\(partialCompletedChildID.description)"
+                          ),
+                          let completedParent =
+                          AppViewTreeE2E.view(
+                              identifier:
+                              "completed.hierarchy.parent.\(completedChainID.description)"
+                          ),
+                          AppViewTreeE2E.verificationText(
+                              for: partialParent
+                          ) == "open",
+                          AppViewTreeE2E.verificationText(
+                              for: partialChild
+                          ) == "checked",
+                          AppViewTreeE2E.verificationText(
+                              for: completedParent
+                          ) == "completed",
+                          self.completedHierarchyChildIDs
+                          .allSatisfy({
+                              guard let child =
+                                  AppViewTreeE2E.view(
+                                      identifier:
+                                      "completed.hierarchy.child.\($0.description)"
+                                  )
+                              else {
+                                  return false
+                              }
+                              return AppViewTreeE2E
+                                  .verificationText(for: child)
+                                  == "quiet"
+                          }),
+                          self.partialHiddenChildIDs
+                          .allSatisfy({
+                              AppViewTreeE2E.hasNoVisibleView(
+                                  identifier:
+                                  "completed.hierarchy.child.\($0.description)"
+                              )
+                          })
+                    else {
                         return false
                     }
-                    return AppViewTreeE2E.click(confirm)
+                    return true
                 } onSuccess: { [self] in
-                    waitFor("停止重复任务结果") {
-                        self.series(
-                            titled:
-                            TaskCycleMutationE2EAutomation.stoppedTitle
-                        )?.stoppedAfterDate == self.store.today
-                    } onSuccess: { [self] in
-                        finish("ok")
+                    openPartialHierarchyDetail()
+                }
+            }
+        }
+
+        private func openPartialHierarchyDetail() {
+            guard let chainID = partialHierarchyChainID else {
+                finish("failed: 缺少进行中父任务")
+                return
+            }
+            waitFor("进行中父任务详情入口") {
+                AppViewTreeE2E.click(
+                    identifier:
+                    "completed.hierarchy.parent.\(chainID.description)"
+                )
+            } onSuccess: { [self] in
+                waitFor("进行中父任务分类编辑器") {
+                    self.store.selectedTraceID
+                        == self.partialHierarchyTraceID
+                        && AppViewTreeE2E.view(
+                            identifier:
+                            "classification.editor.\(chainID.description)"
+                        ) != nil
+                } onSuccess: { [self] in
+                    addStateLabel(
+                        chainID: chainID,
+                        labelName:
+                        TaskCycleMutationE2EAutomation
+                            .currentStateLabelName
+                    ) {
+                        self.openCompletedHierarchyDetail()
                     }
+                }
+            }
+        }
+
+        private func openCompletedHierarchyDetail() {
+            guard let chainID = completedHierarchyChainID else {
+                finish("failed: 缺少已完成父任务")
+                return
+            }
+            waitFor("已完成父任务详情入口") {
+                AppViewTreeE2E.click(
+                    identifier:
+                    "completed.hierarchy.parent.\(chainID.description)"
+                )
+            } onSuccess: { [self] in
+                waitFor("已完成父任务分类编辑器") {
+                    self.store.selectedCompletedTraceID
+                        == self.completedHierarchyTraceID
+                        && AppViewTreeE2E.view(
+                            identifier:
+                            "classification.editor.\(chainID.description)"
+                        ) != nil
+                } onSuccess: { [self] in
+                    addStateLabel(
+                        chainID: chainID,
+                        labelName:
+                        TaskCycleMutationE2EAutomation
+                            .completedStateLabelName
+                    ) {
+                        self.openUnfinishedClassificationDetail()
+                    }
+                }
+            }
+        }
+
+        private func openUnfinishedClassificationDetail() {
+            guard let chainID = unfinishedClassificationChainID else {
+                finish("failed: 缺少未完成父任务")
+                return
+            }
+            waitFor("进入未完成任务") {
+                AppViewTreeE2E.click(
+                    identifier: "sidebar.nav.unfinished"
+                )
+            } onSuccess: { [self] in
+                waitFor("未完成父任务详情入口") {
+                    self.store.page == .unfinished
+                        && AppViewTreeE2E.click(
+                            identifier:
+                            "workspace.item.unfinished.\(chainID.description)"
+                        )
+                } onSuccess: { [self] in
+                    waitFor("未完成父任务分类编辑器") {
+                        self.store.selectedUnfinishedChainID
+                            == chainID
+                            && AppViewTreeE2E.view(
+                                identifier:
+                                "classification.editor.\(chainID.description)"
+                            ) != nil
+                    } onSuccess: { [self] in
+                        addStateLabel(
+                            chainID: chainID,
+                            labelName:
+                            TaskCycleMutationE2EAutomation
+                                .unfinishedStateLabelName
+                        ) {
+                            self.finish("ok")
+                        }
+                    }
+                }
+            }
+        }
+
+        private func addStateLabel(
+            chainID: TaskChainID,
+            labelName: String,
+            onSuccess: @escaping @MainActor () -> Void
+        ) {
+            let identifier =
+                "classification.editor.label-input.\(chainID.description)"
+            waitFor("跨状态 # 标签输入") {
+                AppViewTreeE2E.click(identifier: identifier)
+            } onSuccess: { [self] in
+                guard AppViewTreeE2E.typeUnicode(
+                    "#\(labelName)"
+                ), AppViewTreeE2E.sendReturnKey()
+                else {
+                    finish("failed: 无法输入跨状态标签 \(labelName)")
+                    return
+                }
+                waitFor("跨状态标签保存") {
+                    self.store.currentClassification(
+                        for: chainID
+                    )?.labels.contains {
+                        $0.name == labelName
+                    } == true
+                } onSuccess: {
+                    onSuccess()
                 }
             }
         }
@@ -849,7 +1438,7 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 return
             }
             _ = AppViewTreeE2E.click(
-                identifier: target.trackIdentifier
+                identifier: "\(target.trackIdentifier).disclosure"
             )
         }
 
@@ -956,6 +1545,19 @@ struct TaskCycleMutationRestartE2EAutomation:
             store: store
         ),
         seriesHasClassification(
+            created,
+            categoryName: "E2E重复分组",
+            labelName: TaskCycleMutationE2EAutomation.detailLabelName,
+            store: store
+        ),
+        created.plannedSubtasks.contains(where: {
+            $0.title
+                == TaskCycleMutationE2EAutomation.plannedSubtaskTitle
+        }),
+        created.schedule == .everyDays(2),
+        created.endCondition == .durationDays(8),
+        created.planRevisions.count == 2,
+        seriesHasClassification(
             rowConverted,
             categoryName: "E2E转换分组",
             labelName: "E2E转换标签",
@@ -996,7 +1598,128 @@ struct TaskCycleMutationRestartE2EAutomation:
             finish("failed: 重启后重复任务 UI mutation 未完整保留")
             return
         }
+        if let failure = crossStateFixturePersistenceFailure(
+            store: store
+        ) {
+            finish("failed: 重启后跨状态任务未完整保留：\(failure)")
+            return
+        }
         finish("ok")
+    }
+
+    @MainActor
+    private func crossStateFixturePersistenceFailure(
+        store: NoonmarkStore
+    ) -> String? {
+        let hierarchies = store.engine.completedTaskHierarchies()
+        guard let partial = hierarchies.first(where: {
+            $0.definition.title
+                == TaskCycleMutationE2EAutomation
+                .partialHierarchyTitle
+        }) else {
+            return "找不到部分完成父任务"
+        }
+        guard partial.parentCompletion == nil,
+              partial.completedChildren.count == 1
+        else {
+            return "部分完成父任务的完成状态或可见子任务数量错误"
+        }
+        guard let completed = hierarchies.first(where: {
+            $0.definition.title
+                == TaskCycleMutationE2EAutomation
+                .completedHierarchyTitle
+        }), completed.parentCompletion != nil,
+            completed.completedChildren.count == 3
+        else {
+            return "完整父任务或三个已完成子任务未保留"
+        }
+        guard let unfinished =
+            store.engine.unfinishedPool().first(where: {
+                $0.definition.title
+                    == TaskCycleMutationE2EAutomation
+                    .unfinishedClassificationTitle
+            }), let unfinishedTrace =
+            unfinished.latestUnfinishedTrace
+        else {
+            return "未完成父任务未保留"
+        }
+        guard taskHasCurrentClassification(
+            chainID: partial.chain.id,
+            labelName:
+            TaskCycleMutationE2EAutomation
+                .currentStateLabelName,
+            store: store
+        ) else {
+            return "进行中父任务的当前分类未保留"
+        }
+        guard taskHasCurrentClassification(
+            chainID: completed.chain.id,
+            labelName:
+            TaskCycleMutationE2EAutomation
+                .completedStateLabelName,
+            store: store
+        ) else {
+            return "已完成父任务的当前分类未保留"
+        }
+        guard taskHasCurrentClassification(
+            chainID: unfinished.chain.id,
+            labelName:
+            TaskCycleMutationE2EAutomation
+                .unfinishedStateLabelName,
+            store: store
+        ) else {
+            return "未完成父任务的当前分类未保留"
+        }
+        guard historicalClassification(
+            traceID: unfinishedTrace.id,
+            excludes:
+            TaskCycleMutationE2EAutomation
+                .unfinishedStateLabelName,
+            store: store
+        ) else {
+            return "未完成轨迹的历史分类被当前整理覆盖"
+        }
+        return nil
+    }
+
+    @MainActor
+    private func taskHasCurrentClassification(
+        chainID: TaskChainID,
+        labelName: String,
+        store: NoonmarkStore
+    ) -> Bool {
+        guard let classification =
+            store.currentClassification(for: chainID)
+        else {
+            return false
+        }
+        return classification.category?.name == "E2E状态分组"
+            && classification.labels.contains {
+                $0.name == "E2E初始标签"
+            }
+            && classification.labels.contains {
+                $0.name == labelName
+            }
+    }
+
+    @MainActor
+    private func historicalClassification(
+        traceID: DayTraceID,
+        excludes labelName: String,
+        store: NoonmarkStore
+    ) -> Bool {
+        guard case let .history(history) = try? store.engine
+            .classification(.history(traceID))
+        else {
+            return false
+        }
+        return history.category?.name == "E2E状态分组"
+            && history.labels.contains {
+                $0.name == "E2E初始标签"
+            }
+            && history.labels.contains {
+                $0.name == labelName
+            } == false
     }
 
     @MainActor
@@ -1022,6 +1745,15 @@ struct TaskCycleMutationRestartE2EAutomation:
         labelName: String,
         store: NoonmarkStore
     ) -> Bool {
+        guard let templateClassification = try? store.engine
+            .taskCycleTemplateClassification(seriesID: series.id),
+              templateClassification.category?.name == categoryName,
+              templateClassification.labels.contains(where: {
+                  $0.name == labelName
+              })
+        else {
+            return false
+        }
         let chainIDs = store.engine.chains.values.compactMap {
             $0.cycleMembership?.seriesID == series.id
                 ? $0.id

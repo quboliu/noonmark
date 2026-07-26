@@ -375,6 +375,9 @@ public enum MacUICompletedPoolElement: String, CaseIterable, Sendable {
     case title
     case description
     case groupedByCompletionDate
+    case parentChildHierarchy
+    case completedChildrenOnly
+    case quietChildrenAfterParentCompletion
     case parentCompletionRecord
     case subtaskCompletionRecord
     case trajectoryNodes
@@ -435,6 +438,7 @@ public enum MacUIDetailElement: String, CaseIterable, Sendable {
     case historyReadonlyNotice
     case progressSection
     case compactClassificationEditor
+    case classificationEditableAcrossTaskStates
     case classificationValuePicker
     case onDemandClassificationLabelInput
     case descriptionEditor
@@ -710,7 +714,6 @@ public enum MacUIAutomaticClassificationSurface: String, CaseIterable, Sendable 
     case futureRow = "future-row"
     case unfinishedRow = "unfinished-row"
     case completedRow = "completed-row"
-    case completedSubtaskRow = "completed-subtask-row"
 }
 
 public enum MacUIAutomaticClassificationRetryKind: String, Sendable {

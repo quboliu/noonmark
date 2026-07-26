@@ -1047,46 +1047,13 @@ struct TaskClassificationDetailSection: View {
 
     let trace: DayTrace
     let taskTitle: String
-    let editable: Bool
 
     var body: some View {
         DetailSection(store.copy.classificationAndLabelsTitle, showsTitle: false) {
-            if editable {
-                TaskClassificationEditor(
-                    chainID: trace.chainID,
-                    taskTitle: taskTitle
-                )
-            } else if let display = store.displayableClassification(for: trace) {
-                VStack(alignment: .leading, spacing: 7) {
-                    TaskClassificationBadges(
-                        display: display,
-                        taskTitle: taskTitle,
-                        accessibilityNamespace: TaskClassificationAccessibilityNamespace(
-                            surface: "detail",
-                            instanceID: trace.id.description
-                        )
-                    )
-                    if display.isHistorical {
-                        Text(store.copy.historicalClassificationNotice)
-                            .font(.noonmarkSystem(size: 10.5))
-                            .foregroundStyle(Theme.text3)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            } else {
-                Text(store.copy.noHistoricalClassification)
-                    .font(.noonmarkSystem(size: 11.5))
-                    .foregroundStyle(Theme.text3)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            }
+            TaskClassificationEditor(
+                chainID: trace.chainID,
+                taskTitle: taskTitle
+            )
         }
     }
 }

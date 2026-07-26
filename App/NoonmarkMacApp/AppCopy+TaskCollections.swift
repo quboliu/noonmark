@@ -69,6 +69,100 @@ extension AppCopy {
         language == .chinese ? "结束日期" : "End date"
     }
 
+    var taskCycleEveryDaysMode: String {
+        language == .chinese ? "按天" : "Day interval"
+    }
+
+    var taskCycleWeekdayMode: String {
+        language == .chinese ? "按星期" : "Weekdays"
+    }
+
+    var taskCycleEndRule: String {
+        language == .chinese ? "结束条件" : "End rule"
+    }
+
+    var taskCycleEndByDuration: String {
+        language == .chinese ? "总天数" : "Duration"
+    }
+
+    var taskCycleEndByCompletion: String {
+        language == .chinese ? "达成次数" : "Completion count"
+    }
+
+    var taskCycleEndByDate: String {
+        language == .chinese ? "指定日期" : "Date"
+    }
+
+    var taskCycleLatestDate: String {
+        language == .chinese ? "最晚截止" : "Latest date"
+    }
+
+    var taskCycleCompletionLockNotice: String {
+        language == .chinese
+            ? "完成日锁定后才计入达成次数；最晚截止用于防止无限生成。"
+            : "A completion counts after its day is locked. The latest date prevents unbounded generation."
+    }
+
+    var taskCycleEditPlan: String {
+        language == .chinese ? "修改重复设置…" : "Edit recurrence…"
+    }
+
+    var taskCycleSavePlan: String {
+        language == .chinese ? "保存修改" : "Save changes"
+    }
+
+    var taskCyclePlanEffectiveNotice: String {
+        language == .chinese
+            ? "开始日期创建后固定；频率和结束条件的修改从明天起生效，历史不会改写。"
+            : "The start date is fixed after creation. Schedule and end-rule changes take effect tomorrow without rewriting history."
+    }
+
+    var taskCycleStoppedNotice: String {
+        language == .chinese
+            ? "该重复任务已提前结束。历史与今天仍然保留。"
+            : "This recurring task ended early. History and today remain."
+    }
+
+    var taskCycleSettingsTitle: String {
+        language == .chinese ? "重复设置" : "Recurrence"
+    }
+
+    var taskCycleTemplateTitle: String {
+        language == .chinese ? "重复任务" : "Recurring task"
+    }
+
+    func taskCycleEveryDays(_ interval: Int) -> String {
+        language == .chinese
+            ? "每 \(interval) 天重复"
+            : "Repeat every \(interval) day\(interval == 1 ? "" : "s")"
+    }
+
+    func taskCycleEveryWeeks(_ interval: Int) -> String {
+        language == .chinese
+            ? "每 \(interval) 周的所选日期"
+            : "Selected days every \(interval) week\(interval == 1 ? "" : "s")"
+    }
+
+    func taskCycleDurationDays(_ days: Int) -> String {
+        language == .chinese
+            ? "从开始日起共 \(days) 天"
+            : "\(days) calendar day\(days == 1 ? "" : "s") from start"
+    }
+
+    func taskCycleCompletionTarget(_ count: Int) -> String {
+        language == .chinese
+            ? "完成 \(count) 次后结束"
+            : "End after \(count) completion\(count == 1 ? "" : "s")"
+    }
+
+    func taskCycleWeekday(_ weekday: TaskCycleWeekday) -> String {
+        let chinese = ["日", "一", "二", "三", "四", "五", "六"]
+        let english = ["S", "M", "T", "W", "T", "F", "S"]
+        return (language == .chinese ? chinese : english)[
+            weekday.rawValue - 1
+        ]
+    }
+
     var createRecurringTask: String {
         language == .chinese ? "创建" : "Create"
     }
@@ -149,11 +243,40 @@ extension AppCopy {
     var taskCollectionDescending: String { language == .chinese ? "降序" : "Descending" }
 
     func taskCycleSchedule(_ schedule: TaskCycleSchedule) -> String {
-        switch (language, schedule) {
-        case (.chinese, .daily): "每天"
-        case (.chinese, .weekdays): "工作日"
-        case (.english, .daily): "Daily"
-        case (.english, .weekdays): "Weekdays"
+        switch schedule {
+        case let .everyDays(interval):
+            if interval == 1 {
+                return language == .chinese ? "每天" : "Daily"
+            }
+            return language == .chinese
+                ? "每 \(interval) 天"
+                : "Every \(interval) days"
+        case let .selectedWeekdays(weekdays, everyWeeks):
+            if schedule == .weekdays {
+                return language == .chinese ? "工作日" : "Weekdays"
+            }
+            let dayCount = weekdays.count
+            return language == .chinese
+                ? "每 \(everyWeeks) 周 · \(dayCount) 天"
+                : "Every \(everyWeeks) weeks · \(dayCount) days"
+        }
+    }
+
+    func taskCycleEndCondition(
+        _ condition: TaskCycleEndCondition,
+        startDate: LocalDate
+    ) -> String {
+        switch condition {
+        case let .durationDays(days):
+            return taskCycleDurationDays(days)
+        case let .completionTarget(count, latestDate):
+            return language == .chinese
+                ? "完成 \(count) 次，最晚 \(latestDate.description)"
+                : "\(count) completions, by \(latestDate.description)"
+        case let .onDate(date):
+            return language == .chinese
+                ? "截至 \(date.description)"
+                : "Until \(date.description)"
         }
     }
 

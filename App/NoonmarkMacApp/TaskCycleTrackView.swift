@@ -28,10 +28,23 @@ struct TaskCycleTrackRow: View {
         "task-cycle-track.\(collection.accessibilityName).\(track.id.description)"
     }
 
+    private var selected: Bool {
+        store.isWorkspaceItemSelected(.taskCycleSeries(track.id))
+    }
+
+    private var classification: TaskClassificationProjection? {
+        try? store.engine.taskCycleTemplateClassification(
+            seriesID: track.id
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            Button(action: toggleExpanded) {
-                HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Button {
+                    store.userSelectTaskCycleSeries(track.id)
+                } label: {
+                    HStack(spacing: 10) {
                     Image(systemName: "repeat")
                         .font(.noonmarkSystem(size: 12, weight: .semibold))
                         .foregroundStyle(accent)
@@ -44,6 +57,21 @@ struct TaskCycleTrackRow: View {
                     .foregroundStyle(Theme.text1)
                     .lineLimit(1)
                     .layoutPriority(1)
+
+                    if let classification,
+                       classification.category != nil
+                        || classification.labels.isEmpty == false
+                    {
+                        TaskClassificationBadges(
+                            display: .current(classification),
+                            taskTitle: track.title,
+                            accessibilityNamespace:
+                            TaskClassificationAccessibilityNamespace(
+                                surface: "task-cycle-row",
+                                instanceID: track.id.description
+                            )
+                        )
+                    }
 
                     Text(store.copy.taskCycleSchedule(track.schedule))
                         .font(.noonmarkSystem(size: 10.5, weight: .medium))
@@ -60,7 +88,24 @@ struct TaskCycleTrackRow: View {
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text2)
                     .monospacedDigit()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    store.copy.displayTaskTitle(track.title)
+                )
+                .accessibilityIdentifier(
+                    "\(accessibilityIdentifier).detail"
+                )
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "\(accessibilityIdentifier).detail",
+                        verificationText: track.title
+                    )
+                }
 
+                Button(action: toggleExpanded) {
                     HStack(spacing: 4) {
                         Text(store.copy.recurringTaskTrack)
                         Image(
@@ -71,20 +116,25 @@ struct TaskCycleTrackRow: View {
                     }
                     .font(.noonmarkSystem(size: 10.5, weight: .medium))
                     .foregroundStyle(Theme.text2)
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
-                .padding(.horizontal, 12)
-                .padding(
-                    .vertical,
-                    NoonmarkVisualMetrics.taskRowVerticalPadding
+                .buttonStyle(.plain)
+                .accessibilityLabel(store.copy.recurringTaskTrack)
+                .accessibilityIdentifier(
+                    "\(accessibilityIdentifier).disclosure"
                 )
+                .background {
+                    AppE2EViewAnchor(
+                        identifier:
+                        "\(accessibilityIdentifier).disclosure",
+                        verificationText: store.copy.recurringTaskTrack
+                    )
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(
-                "\(store.copy.displayTaskTitle(track.title))，\(store.copy.recurringTaskTrack)"
-            )
-            .accessibilityIdentifier(
-                "\(accessibilityIdentifier).disclosure"
+            .padding(.horizontal, 12)
+            .padding(
+                .vertical,
+                NoonmarkVisualMetrics.taskRowVerticalPadding
             )
 
             if expanded {
@@ -106,10 +156,11 @@ struct TaskCycleTrackRow: View {
             }
         }
         .listRowSurface(
-            selected: false,
+            selected: selected,
             tint: accent,
             separatorLeadingInset: 40
         )
+        .workspaceSelectable(.taskCycleSeries(track.id))
         .contextMenu {
             if track.futurePlanCount > 0 {
                 Button(store.copy.stopRecurringTask, role: .destructive) {

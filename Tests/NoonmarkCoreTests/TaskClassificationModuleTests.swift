@@ -6,6 +6,84 @@ final class TaskClassificationModuleTests: XCTestCase {
     private let day2 = LocalDate("2026-07-06")
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testCompletedTaskCanChangeCurrentClassificationWithoutRewritingHistory() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "终局任务仍可整理",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: chainID,
+                category: .new(
+                    name: "完成时分组",
+                    colorHex: "#2A6FDB"
+                ),
+                labels: [
+                    .new(
+                        name: "完成时标签",
+                        colorHex: "#0E9488"
+                    )
+                ]
+            ),
+            to: engine,
+            interactionID:
+            "01000000-0000-0000-0000-000000000001",
+            decisionID:
+            "01000000-0000-0000-0000-000000000002",
+            at: now.addingTimeInterval(1)
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(2)
+        )
+        try engine.markCompleted(
+            traceID: traceID,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+        try engine.settleDays(
+            upTo: day2,
+            now: now.addingTimeInterval(4)
+        )
+
+        try commit(
+            TaskClassificationDraft(
+                chainID: chainID,
+                category: .new(
+                    name: "整理后分组",
+                    colorHex: "#D1477A"
+                ),
+                labels: [
+                    .new(
+                        name: "整理后标签",
+                        colorHex: "#E0851B"
+                    )
+                ]
+            ),
+            to: engine,
+            interactionID:
+            "01000000-0000-0000-0000-000000000003",
+            decisionID:
+            "01000000-0000-0000-0000-000000000004",
+            at: now.addingTimeInterval(5)
+        )
+
+        let current = try taskProjection(
+            from: engine.classification(.task(chainID))
+        )
+        XCTAssertEqual(current.category?.name, "整理后分组")
+        XCTAssertEqual(current.labels.map(\.name), ["整理后标签"])
+
+        let history = try historyProjection(
+            from: engine.classification(.history(traceID))
+        )
+        XCTAssertEqual(history.category?.name, "完成时分组")
+        XCTAssertEqual(history.labels.map(\.name), ["完成时标签"])
+    }
+
     func testMutationClockAdvancesPastClassificationOnlyFutureFacts() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "未来时间分类", now: now)

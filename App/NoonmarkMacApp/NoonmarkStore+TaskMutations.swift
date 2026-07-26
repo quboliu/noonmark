@@ -91,6 +91,21 @@ extension NoonmarkStore {
         endDate: LocalDate,
         schedule: TaskCycleSchedule
     ) -> Bool {
+        createTaskCycleSeries(
+            title: title,
+            startDate: startDate,
+            schedule: schedule,
+            endCondition: .onDate(endDate)
+        )
+    }
+
+    @discardableResult
+    func createTaskCycleSeries(
+        title: String,
+        startDate: LocalDate,
+        schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition
+    ) -> Bool {
         let request = taskCycleCreationRequest
             ?? TaskCycleCreationRequest(
                 origin: .newTask,
@@ -108,9 +123,10 @@ extension NoonmarkStore {
                 automaticClassificationPolicy:
                 .newlyCreatedTaskChains,
                 classificationCommitBoundaries: {
-                    $0.classificationCommitBoundaries.isEmpty
+                    (mutation: TaskCycleCreationMutation) in
+                    mutation.classificationCommitBoundaries.isEmpty
                         ? nil
-                        : $0.classificationCommitBoundaries
+                        : mutation.classificationCommitBoundaries
                 }
             ) { candidate, moment in
                 let seriesID: TaskCycleSeriesID
@@ -123,8 +139,8 @@ extension NoonmarkStore {
                         plannedSubtasks:
                         request.plannedSubtasks,
                         startDate: startDate,
-                        endDate: endDate,
                         schedule: schedule,
+                        endCondition: endCondition,
                         today: moment.today,
                         now: moment.instant
                     )
@@ -147,8 +163,8 @@ extension NoonmarkStore {
                             .convertTaskToCycleSeries(
                                 chainID: sourceChainID,
                                 startDate: startDate,
-                                endDate: endDate,
                                 schedule: schedule,
+                                endCondition: endCondition,
                                 today: moment.today,
                                 now: moment.instant
                             )
@@ -161,8 +177,8 @@ extension NoonmarkStore {
                                 plannedSubtasks:
                             request.plannedSubtasks,
                                 startDate: startDate,
-                                endDate: endDate,
                                 schedule: schedule,
+                                endCondition: endCondition,
                                 today: moment.today,
                                 now: moment.instant
                             )
@@ -223,6 +239,23 @@ extension NoonmarkStore {
                         boundaries.append(candidate.snapshot())
                     }
                 }
+                let templateClassificationChainID =
+                    classificationSourceChainID ?? targetChainIDs.first
+                let templateClassification = templateClassificationChainID
+                    .flatMap {
+                        candidate.snapshot().classifications
+                            .currentByChainID[$0]
+                    }
+                try candidate.setTaskCycleTemplateClassification(
+                    seriesID: seriesID,
+                    categoryID: templateClassification?.categoryID,
+                    labelIDs: templateClassification?.labelIDs ?? [],
+                    now: moment.instant
+                )
+                if boundaries.isEmpty == false {
+                    boundaries[boundaries.index(before: boundaries.endIndex)] =
+                        candidate.snapshot()
+                }
                 return TaskCycleCreationMutation(
                     seriesID: seriesID,
                     classificationCommitBoundaries: boundaries
@@ -279,6 +312,180 @@ extension NoonmarkStore {
         } catch {
             showOperationFailure(.taskMutation, error: error)
         }
+    }
+
+    func updateTaskCycleTitle(
+        seriesID: TaskCycleSeriesID,
+        title: String
+    ) {
+        guard let series = engine.taskCycleSeries[seriesID] else { return }
+        updateTaskCycleContent(
+            seriesID: seriesID,
+            title: title,
+            descriptionText: series.descriptionText,
+            plannedSubtasks: series.plannedSubtasks
+        )
+    }
+
+    func updateTaskCycleDescription(
+        seriesID: TaskCycleSeriesID,
+        descriptionText: String
+    ) {
+        guard let series = engine.taskCycleSeries[seriesID] else { return }
+        updateTaskCycleContent(
+            seriesID: seriesID,
+            title: series.title,
+            descriptionText: descriptionText,
+            plannedSubtasks: series.plannedSubtasks
+        )
+    }
+
+    func addTaskCyclePlannedSubtask(
+        seriesID: TaskCycleSeriesID,
+        title: String
+    ) {
+        let normalized = title.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard normalized.isEmpty == false else { return }
+        do {
+            try commitEngineMutation(undoPolicy: .invalidate) {
+                candidate,
+                moment in
+                guard let series = candidate.taskCycleSeries[seriesID]
+                else {
+                    throw NoonmarkError.notFound("task cycle series")
+                }
+                let subtask = PlannedSubtask(
+                    title: normalized,
+                    position: series.plannedSubtasks.count + 1,
+                    now: moment.instant
+                )
+                try candidate.updateTaskCycleTemplateContent(
+                    seriesID: seriesID,
+                    title: series.title,
+                    descriptionText: series.descriptionText,
+                    plannedSubtasks: series.plannedSubtasks + [subtask],
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            detailSubtaskText = ""
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
+    func removeTaskCyclePlannedSubtask(
+        seriesID: TaskCycleSeriesID,
+        subtaskID: PlannedSubtaskID
+    ) {
+        mutateTaskCyclePlannedSubtasks(seriesID: seriesID) {
+            $0.removeAll { $0.id == subtaskID }
+        }
+    }
+
+    func renameTaskCyclePlannedSubtask(
+        seriesID: TaskCycleSeriesID,
+        subtaskID: PlannedSubtaskID,
+        title: String
+    ) {
+        let normalized = title.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard normalized.isEmpty == false else { return }
+        mutateTaskCyclePlannedSubtasks(seriesID: seriesID) {
+            guard let index = $0.firstIndex(where: {
+                $0.id == subtaskID
+            }) else {
+                return
+            }
+            $0[index].title = normalized
+        }
+    }
+
+    func setTaskCyclePlannedSubtaskDifficulty(
+        seriesID: TaskCycleSeriesID,
+        subtaskID: PlannedSubtaskID,
+        difficulty: SubtaskDifficulty
+    ) {
+        mutateTaskCyclePlannedSubtasks(seriesID: seriesID) {
+            guard let index = $0.firstIndex(where: {
+                $0.id == subtaskID
+            }) else {
+                return
+            }
+            $0[index].difficulty = difficulty
+        }
+    }
+
+    func reviseTaskCycleSeries(
+        seriesID: TaskCycleSeriesID,
+        schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition
+    ) -> Bool {
+        do {
+            _ = try commitEngineMutation(
+                undoPolicy: .invalidate,
+                classificationCommitBoundaries: {
+                    (outcome: TaskCycleRevisionOutcome) in
+                    outcome.classificationCommitBoundaries.isEmpty
+                        ? nil
+                        : outcome.classificationCommitBoundaries
+                }
+            ) { candidate, moment in
+                try candidate.reviseTaskCycleSeries(
+                    seriesID: seriesID,
+                    schedule: schedule,
+                    endCondition: endCondition,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    private func updateTaskCycleContent(
+        seriesID: TaskCycleSeriesID,
+        title: String,
+        descriptionText: String?,
+        plannedSubtasks: [PlannedSubtask]
+    ) {
+        do {
+            try commitEngineMutation(undoPolicy: .invalidate) {
+                candidate,
+                moment in
+                try candidate.updateTaskCycleTemplateContent(
+                    seriesID: seriesID,
+                    title: title,
+                    descriptionText: descriptionText,
+                    plannedSubtasks: plannedSubtasks,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
+    private func mutateTaskCyclePlannedSubtasks(
+        seriesID: TaskCycleSeriesID,
+        mutation: (inout [PlannedSubtask]) -> Void
+    ) {
+        guard let series = engine.taskCycleSeries[seriesID] else { return }
+        var subtasks = series.plannedSubtasks
+        mutation(&subtasks)
+        updateTaskCycleContent(
+            seriesID: seriesID,
+            title: series.title,
+            descriptionText: series.descriptionText,
+            plannedSubtasks: subtasks
+        )
     }
 
     func addQuickTask() {

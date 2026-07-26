@@ -12,7 +12,7 @@ private func sqliteNonemptyInvariant(_ column: String) -> String {
 }
 
 public enum SQLiteSchema {
-    public static let version = 13
+    public static let version = 14
 
     public static let statements: [String] = [
         """
@@ -45,7 +45,27 @@ public enum SQLiteSchema {
             description_text TEXT,
             start_date TEXT NOT NULL,
             end_date TEXT NOT NULL CHECK (end_date >= start_date),
-            schedule TEXT NOT NULL CHECK (schedule IN ('daily', 'weekdays')),
+            schedule TEXT NOT NULL CHECK (
+                json_valid(schedule)
+                AND json_type(schedule) = 'object'
+            ),
+            end_condition_json TEXT NOT NULL CHECK (
+                json_valid(end_condition_json)
+                AND json_type(end_condition_json) = 'object'
+            ),
+            plan_revisions_json TEXT NOT NULL CHECK (
+                json_valid(plan_revisions_json)
+                AND json_type(plan_revisions_json) = 'array'
+            ),
+            planned_subtasks_json TEXT NOT NULL CHECK (
+                json_valid(planned_subtasks_json)
+                AND json_type(planned_subtasks_json) = 'array'
+            ),
+            category_id TEXT,
+            label_ids_json TEXT NOT NULL CHECK (
+                json_valid(label_ids_json)
+                AND json_type(label_ids_json) = 'array'
+            ),
             cancellation_facts_json TEXT NOT NULL CHECK (
                 json_valid(cancellation_facts_json)
                 AND json_type(cancellation_facts_json) = 'array'

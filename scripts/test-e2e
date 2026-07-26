@@ -3261,10 +3261,44 @@ run_task_cycle_mutation_probe() {
            ON task_definitions.id = day_traces.definition_id
          WHERE task_definitions.title = 'E2E UI 回池重复'
            AND day_traces.date = '2026-07-24'
-           AND day_traces.status = 'pending');
+           AND day_traces.status = 'pending'),
+        (SELECT count(*)
+         FROM day_traces
+         JOIN task_definitions
+           ON task_definitions.id = day_traces.definition_id
+         WHERE task_definitions.title = 'E2E 完整子任务层级'
+           AND day_traces.status = 'completed'),
+        (SELECT count(*)
+         FROM subtasks
+         JOIN day_traces
+           ON day_traces.id = subtasks.trace_id
+         JOIN task_definitions
+           ON task_definitions.id = day_traces.definition_id
+         WHERE task_definitions.title = 'E2E 完整子任务层级'
+           AND subtasks.status = 'completed'),
+        (SELECT count(*)
+         FROM day_traces
+         JOIN task_definitions
+           ON task_definitions.id = day_traces.definition_id
+         WHERE task_definitions.title = 'E2E 部分子任务层级'
+           AND day_traces.status = 'pending'),
+        (SELECT count(*)
+         FROM subtasks
+         JOIN day_traces
+           ON day_traces.id = subtasks.trace_id
+         JOIN task_definitions
+           ON task_definitions.id = day_traces.definition_id
+         WHERE task_definitions.title = 'E2E 部分子任务层级'
+           AND subtasks.status = 'completed'),
+        (SELECT count(*)
+         FROM day_traces
+         JOIN task_definitions
+           ON task_definitions.id = day_traces.definition_id
+         WHERE task_definitions.title = 'E2E 未完成分类可改'
+           AND day_traces.status = 'abandoned');
     "
   )"
-  if [[ "$cycle_sql_probe" != "7 1 1 1 1 1 1 1" ]]; then
+  if [[ "$cycle_sql_probe" != "7 1 1 1 1 1 1 1 1 3 1 1 1" ]]; then
     echo "task cycle mutation SQLite/restart probe failed: ${cycle_sql_probe:-missing}" >&2
     exit 1
   fi

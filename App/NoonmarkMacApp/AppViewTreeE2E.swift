@@ -264,9 +264,31 @@ enum AppViewTreeE2E {
     }
 
     static func click(_ view: NSView) -> Bool {
+        click(
+            view,
+            normalizedX: 0.5,
+            normalizedY: 0.5
+        )
+    }
+
+    static func click(
+        _ view: NSView,
+        normalizedX: CGFloat,
+        normalizedY: CGFloat
+    ) -> Bool {
+        guard (0 ... 1).contains(normalizedX),
+              (0 ... 1).contains(normalizedY)
+        else {
+            return false
+        }
         guard isVisible(view), let window = view.window else { return false }
         let point = view.convert(
-            NSPoint(x: view.bounds.midX, y: view.bounds.midY),
+            NSPoint(
+                x: view.bounds.minX
+                    + (view.bounds.width * normalizedX),
+                y: view.bounds.minY
+                    + (view.bounds.height * normalizedY)
+            ),
             to: nil
         )
         if view is NSControl {

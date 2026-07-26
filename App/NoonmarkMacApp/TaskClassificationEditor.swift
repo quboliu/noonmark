@@ -5,6 +5,20 @@ import NoonmarkMacUIContract
 import SwiftUI
 
 struct TaskClassificationEditor: View {
+    enum Target: Equatable {
+        case task(TaskChainID)
+        case taskCycle(TaskCycleSeriesID)
+
+        var identifier: String {
+            switch self {
+            case let .task(id):
+                id.description
+            case let .taskCycle(id):
+                "cycle-\(id.description)"
+            }
+        }
+    }
+
     private static let animationDuration = 0.18
     private static let newLabelColorHex = "#0E9488"
     private static let newGroupColorHex = "#D87831"
@@ -12,7 +26,7 @@ struct TaskClassificationEditor: View {
 
     @EnvironmentObject private var store: NoonmarkStore
 
-    let chainID: TaskChainID
+    let target: Target
     let taskTitle: String
 
     @State private var activeCategories: [ClassificationCatalogItemProjection] = []
@@ -27,6 +41,16 @@ struct TaskClassificationEditor: View {
     @State private var showsSavedStatus = false
     @State private var saveStatusGeneration = UUID()
     @FocusState private var isLabelInputFocused: Bool
+
+    init(chainID: TaskChainID, taskTitle: String) {
+        target = .task(chainID)
+        self.taskTitle = taskTitle
+    }
+
+    init(seriesID: TaskCycleSeriesID, taskTitle: String) {
+        target = .taskCycle(seriesID)
+        self.taskTitle = taskTitle
+    }
 
     private var presentation: AppPresentation {
         AppPresentation(language: store.engine.preferences.language)
@@ -50,10 +74,19 @@ struct TaskClassificationEditor: View {
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("classification.editor.\(chainID.description)")
+        .accessibilityIdentifier(
+            "classification.editor.\(target.identifier)"
+        )
+        .background {
+            AppE2EViewAnchor(
+                identifier:
+                "classification.editor.\(target.identifier)",
+                verificationText: accessibilityTaskTitle
+            )
+        }
         .accessibilityLabel(copy.editorAccessibilityLabel(taskTitle: accessibilityTaskTitle))
         .onAppear(perform: loadDraft)
-        .onChange(of: chainID) { _, _ in
+        .onChange(of: target) { _, _ in
             resetTransientEditorState()
             loadDraft()
         }
@@ -180,7 +213,7 @@ struct TaskClassificationEditor: View {
         )
         .background {
             AppE2EViewAnchor(
-                identifier: "classification.editor.category.\(chainID.description)",
+                identifier: "classification.editor.category.\(target.identifier)",
                 verificationText: selectedCategory?.name ?? copy.noGroup
             )
         }
@@ -279,7 +312,7 @@ struct TaskClassificationEditor: View {
                 isLabelInputFocused = false
             }
             .accessibilityIdentifier(
-                "classification.editor.label-input.\(chainID.description)"
+                "classification.editor.label-input.\(target.identifier)"
             )
             .accessibilityLabel(
                 copy.addTagAccessibilityLabel(
@@ -289,7 +322,7 @@ struct TaskClassificationEditor: View {
             .overlay {
                 AppE2EViewAnchor(
                     identifier:
-                    "classification.editor.label-input.\(chainID.description)",
+                    "classification.editor.label-input.\(target.identifier)",
                     verificationText: copy.tagNamePlaceholder
                 )
             }
@@ -341,12 +374,12 @@ struct TaskClassificationEditor: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier(
-                            "classification.editor.available-label.\(chainID.description).\(label.id)"
+                            "classification.editor.available-label.\(target.identifier).\(label.id)"
                         )
                         .background {
                             AppE2EViewAnchor(
                                 identifier:
-                                "classification.editor.available-label.\(chainID.description).\(label.id)",
+                                "classification.editor.available-label.\(target.identifier).\(label.id)",
                                 verificationText: label.name
                             )
                         }
@@ -364,12 +397,12 @@ struct TaskClassificationEditor: View {
             )
             .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
             .accessibilityIdentifier(
-                "classification.editor.label-suggestions.\(chainID.description)"
+                "classification.editor.label-suggestions.\(target.identifier)"
             )
             .overlay {
                 AppE2EViewAnchor(
                     identifier:
-                    "classification.editor.label-suggestions.\(chainID.description)"
+                    "classification.editor.label-suggestions.\(target.identifier)"
                 )
             }
             Spacer(minLength: 0)
@@ -392,7 +425,7 @@ struct TaskClassificationEditor: View {
             .font(.noonmarkSystem(size: 10, weight: .semibold))
             .foregroundStyle(Theme.ok)
             .frame(width: 14, height: 24)
-            .accessibilityIdentifier("classification.editor.save-status.\(chainID.description)")
+            .accessibilityIdentifier("classification.editor.save-status.\(target.identifier)")
             .accessibilityLabel(
                 copy.savedAccessibilityLabel(taskTitle: accessibilityTaskTitle)
             )
@@ -429,8 +462,7 @@ struct TaskClassificationEditor: View {
         }
         do {
             let labels = try selectedLabels.map { try $0.choice }
-            _ = try store.replaceTaskClassification(
-                chainID: chainID,
+            _ = try replaceClassification(
                 category: .new(name: name, colorHex: Self.newGroupColorHex),
                 labels: labels
             )
@@ -467,7 +499,7 @@ struct TaskClassificationEditor: View {
             .contentShape(Rectangle())
             .buttonStyle(.plain)
             .accessibilityIdentifier(
-                "classification.editor.remove-label.\(chainID.description).\(label.accessibilityIdentifierComponent)"
+                "classification.editor.remove-label.\(target.identifier).\(label.accessibilityIdentifierComponent)"
             )
             .accessibilityLabel(
                 copy.removeTagAccessibilityLabel(
@@ -490,7 +522,7 @@ struct TaskClassificationEditor: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(
-            "classification.editor.label-chip.\(chainID.description).\(label.accessibilityIdentifierComponent)"
+            "classification.editor.label-chip.\(target.identifier).\(label.accessibilityIdentifierComponent)"
         )
         .accessibilityLabel(
             copy.taskTagAccessibilityLabel(
@@ -508,8 +540,39 @@ struct TaskClassificationEditor: View {
             .accessibilityLabel(copy.saveFailedAccessibilityLabel(message))
     }
 
+    private var classificationProjection: TaskClassificationProjection? {
+        switch target {
+        case let .task(chainID):
+            store.currentClassification(for: chainID)
+        case let .taskCycle(seriesID):
+            try? store.engine.taskCycleTemplateClassification(
+                seriesID: seriesID
+            )
+        }
+    }
+
+    private func replaceClassification(
+        category: TaskCategoryChoice?,
+        labels: [TaskLabelChoice]
+    ) throws {
+        switch target {
+        case let .task(chainID):
+            _ = try store.replaceTaskClassification(
+                chainID: chainID,
+                category: category,
+                labels: labels
+            )
+        case let .taskCycle(seriesID):
+            try store.replaceTaskCycleClassification(
+                seriesID: seriesID,
+                category: category,
+                labels: labels
+            )
+        }
+    }
+
     private func loadDraft() {
-        guard let projection = store.currentClassification(for: chainID),
+        guard let projection = classificationProjection,
               let catalog = store.classificationCatalog()
         else {
             categoryError = presentation.message(
@@ -589,8 +652,7 @@ struct TaskClassificationEditor: View {
         do {
             let category = try selectedCategoryID.map(categoryChoice)
             let labels = try selectedLabels.map { try $0.choice }
-            _ = try store.replaceTaskClassification(
-                chainID: chainID,
+            _ = try replaceClassification(
                 category: category,
                 labels: labels
             )

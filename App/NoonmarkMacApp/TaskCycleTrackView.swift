@@ -81,46 +81,43 @@ private struct TaskCycleTrackDayButton: View {
     let collection: TaskCycleCollection
     let day: TaskCycleTrackDay
 
-    private var navigationTraceID: DayTraceID? {
-        if collection == .future {
-            return day.futurePlanTraceID
-        }
-        return day.traceID
+    private var navigationTarget: TaskCycleTraceTarget? {
+        day.navigationTarget(in: collection)
     }
 
-    private var navigationDate: LocalDate? {
-        if collection == .future {
-            return day.futurePlanDate
+    private var presentationState: TaskCycleTrackDayState {
+        day.presentationState(in: collection)
+    }
+
+    private var movedFutureTargetDate: LocalDate? {
+        guard collection == .future,
+              let targetDate = day.futurePlanTarget?.date,
+              targetDate != day.date
+        else {
+            return nil
         }
-        return day.traceDate
+        return targetDate
     }
 
     private var accessibilityLabel: String {
-        let state = store.copy.taskCycleState(day.state)
+        let state = store.copy.taskCycleState(presentationState)
         let base = "\(store.displayDate(day.date))，\(state)"
-        guard collection == .future,
-              let targetDate = day.futurePlanDate,
-              targetDate != day.date
-        else {
+        guard let targetDate = movedFutureTargetDate else {
             return base
         }
         return "\(base)，\(store.copy.taskCycleFutureTarget(store.displayDate(targetDate)))"
     }
 
     private var accessibilityIdentifier: String {
-        "task-cycle-day.\(collection.accessibilityName).\(seriesID.description).\(day.date.description).\(day.state.rawValue)"
+        "task-cycle-day.\(collection.accessibilityName).\(seriesID.description).\(day.date.description).\(presentationState.rawValue)"
     }
 
     var body: some View {
         Button {
-            guard let traceID = navigationTraceID,
-                  let targetDate = navigationDate
-            else {
-                return
-            }
-            store.selectedDate = targetDate
+            guard let navigationTarget else { return }
+            store.selectedDate = navigationTarget.date
             store.page = .day
-            store.selectTrace(traceID)
+            store.selectTrace(navigationTarget.traceID)
         } label: {
             VStack(spacing: 3) {
                 Text(store.weekdayNarrow(day.date))
@@ -129,19 +126,31 @@ private struct TaskCycleTrackDayButton: View {
                 Text("\(day.date.day)")
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(
-                        day.state == .pendingToday
+                        presentationState == .pendingToday
                             ? Theme.accent
                             : Theme.text2
                     )
                     .monospacedDigit()
-                Image(systemName: day.state.symbolName)
-                    .font(.noonmarkSystem(size: 7.5, weight: .bold))
-                    .foregroundStyle(day.state.color)
+                HStack(spacing: 1) {
+                    Image(systemName: presentationState.symbolName)
+                    if let movedFutureTargetDate {
+                        Text(
+                            "→\(movedFutureTargetDate.month)/\(movedFutureTargetDate.day)"
+                        )
+                        .monospacedDigit()
+                    }
+                }
+                .font(.noonmarkSystem(size: 7.5, weight: .bold))
+                .foregroundStyle(presentationState.color)
+                .lineLimit(1)
                     .frame(height: 8)
             }
-            .frame(width: 28, height: 36)
+            .frame(
+                width: movedFutureTargetDate == nil ? 28 : 48,
+                height: 36
+            )
             .background {
-                if day.state == .pendingToday {
+                if presentationState == .pendingToday {
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Theme.accentSoft)
                 }
@@ -149,7 +158,7 @@ private struct TaskCycleTrackDayButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(navigationTraceID == nil)
+        .disabled(navigationTarget == nil)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier(accessibilityIdentifier)
         .background {

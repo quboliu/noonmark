@@ -222,7 +222,7 @@ private struct DemoStory {
     }
 
     private func createCycleSeries() throws {
-        _ = try engine.createTaskCycleSeries(
+        let seriesID = try engine.createTaskCycleSeries(
             title: "每日产品复盘",
             descriptionText: "每天用十分钟记录完成、遗漏与下一步。",
             startDate: dates[0],
@@ -230,6 +230,27 @@ private struct DemoStory {
             schedule: .daily,
             today: dates[0],
             now: time(on: dates[0], hour: 6, minute: 45)
+        )
+        let movedOccurrenceDate = try DemoCalendar.offset(
+            dates[9],
+            by: 3
+        )
+        guard let movedChain = engine.chains.values.first(where: {
+            $0.cycleMembership?.seriesID == seriesID
+                && $0.cycleMembership?.occurrenceDate
+                == movedOccurrenceDate
+        }), let movedTrace = engine.traces.values.first(where: {
+            $0.chainID == movedChain.id
+        }) else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage([
+                "周期系列重新排期实例"
+            ])
+        }
+        try engine.rescheduleFuturePlan(
+            traceID: movedTrace.id,
+            targetDate: try DemoCalendar.offset(dates[9], by: 4),
+            today: dates[0],
+            now: time(on: dates[0], hour: 6, minute: 46)
         )
     }
 

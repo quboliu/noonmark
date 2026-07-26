@@ -464,7 +464,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let expectedTrackIdentifier =
             "task-cycle-track.\(verificationCase.accessibilityName).\(track.id.description)"
         let expectedDayIdentifiers = Set(track.days.map {
-            "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\($0.date.description).\($0.state.rawValue)"
+            "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\($0.date.description).\($0.presentationState(in: verificationCase.collection).rawValue)"
         })
         let trackIdentifiers = AppViewTreeE2E.identifiers(
             withPrefix:
@@ -492,6 +492,37 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             return
         }
 
+        if verificationCase.collection == .future {
+            guard let movedDay = track.days.first(where: {
+                guard let target = $0.futurePlanTarget else {
+                    return false
+                }
+                return target.date != $0.date
+            }), let movedTarget = movedDay.futurePlanTarget,
+            AppViewTreeE2E.click(
+                identifier: cycleDayIdentifier(
+                    day: movedDay,
+                    track: track,
+                    verificationCase: verificationCase
+                )
+            ) else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError.presentationContractFailed,
+                    on: context.store
+                )
+                return
+            }
+            retryTaskCycleNavigation(
+                context: context,
+                expectedTraceID: movedTarget.traceID,
+                expectedDate: movedTarget.date,
+                nextIndex: index + 1,
+                remainingAttempts: 100
+            )
+            return
+        }
+
         let nextIndex = index + 1
         if context.cases.indices.contains(nextIndex) {
             guard AppViewTreeE2E.click(
@@ -515,13 +546,18 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
         guard let anchorDay = track.days.first(where: {
             $0.date == context.fixture.anchorDate
-                && $0.traceID != nil
-                && $0.traceDate != nil
-        }), let expectedTraceID = anchorDay.traceID,
-        let expectedDate = anchorDay.traceDate,
+                && $0.navigationTarget(
+                    in: verificationCase.collection
+                ) != nil
+        }), let navigationTarget = anchorDay.navigationTarget(
+            in: verificationCase.collection
+        ),
         AppViewTreeE2E.click(
-            identifier:
-            "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\(anchorDay.date.description).\(anchorDay.state.rawValue)"
+            identifier: cycleDayIdentifier(
+                day: anchorDay,
+                track: track,
+                verificationCase: verificationCase
+            )
         ) else {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
@@ -532,10 +568,22 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         }
         retryTaskCycleNavigation(
             context: context,
-            expectedTraceID: expectedTraceID,
-            expectedDate: expectedDate,
+            expectedTraceID: navigationTarget.traceID,
+            expectedDate: navigationTarget.date,
+            nextIndex: nil,
             remainingAttempts: 100
         )
+    }
+
+    private func cycleDayIdentifier(
+        day: TaskCycleTrackDay,
+        track: TaskCycleTrack,
+        verificationCase: DemoCycleCheckCase
+    ) -> String {
+        let state = day.presentationState(
+            in: verificationCase.collection
+        )
+        return "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\(day.date.description).\(state.rawValue)"
     }
 
     @MainActor
@@ -558,6 +606,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         context: DemoCycleCheckContext,
         expectedTraceID: DayTraceID,
         expectedDate: LocalDate,
+        nextIndex: Int?,
         remainingAttempts: Int
     ) {
         guard remainingAttempts > 0 else {
@@ -577,9 +626,31 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                     context: context,
                     expectedTraceID: expectedTraceID,
                     expectedDate: expectedDate,
+                    nextIndex: nextIndex,
                     remainingAttempts: remainingAttempts - 1
                 )
             }
+            return
+        }
+        if let nextIndex {
+            guard context.cases.indices.contains(nextIndex),
+                  AppViewTreeE2E.click(
+                      identifier: context.cases[nextIndex]
+                          .sidebarNavigationIdentifier
+                  )
+            else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError.presentationContractFailed,
+                    on: context.store
+                )
+                return
+            }
+            retryTaskCyclePresentation(
+                context: context,
+                index: nextIndex,
+                remainingAttempts: 100
+            )
             return
         }
         do {

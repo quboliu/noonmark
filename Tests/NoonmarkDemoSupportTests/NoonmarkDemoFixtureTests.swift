@@ -29,6 +29,13 @@ struct NoonmarkDemoFixtureTests {
         #expect(track.appears(in: .completed))
         #expect(fixture.report.taskCycleSeriesCount == 1)
         #expect(fixture.report.taskCycleOccurrenceCount == 13)
+        let movedFutureTarget = try #require(
+            track.days.first {
+                $0.futurePlanTarget?.date != nil
+                    && $0.futurePlanTarget?.date != $0.date
+            }?.futurePlanTarget
+        )
+        #expect(movedFutureTarget.date == LocalDate("2026-07-28"))
         #expect(fixture.report.isComplete)
     }
 

@@ -128,6 +128,13 @@ final class TaskCycleSeriesTests: XCTestCase {
         XCTAssertEqual(track.completedCount, 1)
         XCTAssertEqual(track.unfinishedCount, 1)
         XCTAssertEqual(track.plannedCount, 2)
+        let completedDay = try XCTUnwrap(
+            track.days.first { $0.date == monday }
+        )
+        XCTAssertEqual(
+            completedDay.navigationTarget(in: .future)?.traceID,
+            mondayTrace.id
+        )
         for collection in [
             TaskCycleCollection.future,
             .unfinished,
@@ -177,10 +184,18 @@ final class TaskCycleSeriesTests: XCTestCase {
             track.days.first { $0.date == tuesday }
         )
         XCTAssertEqual(tuesdayDay.state, .planned)
-        XCTAssertEqual(tuesdayDay.traceID, tuesdayTrace.id)
-        XCTAssertEqual(tuesdayDay.traceDate, sunday)
-        XCTAssertEqual(tuesdayDay.futurePlanTraceID, tuesdayTrace.id)
-        XCTAssertEqual(tuesdayDay.futurePlanDate, sunday)
+        XCTAssertEqual(
+            tuesdayDay.occurrenceTarget,
+            TaskCycleTraceTarget(
+                traceID: tuesdayTrace.id,
+                date: sunday,
+                state: .planned
+            )
+        )
+        XCTAssertEqual(
+            tuesdayDay.futurePlanTarget,
+            tuesdayDay.occurrenceTarget
+        )
         XCTAssertTrue(track.appears(in: .future))
     }
 
@@ -214,9 +229,129 @@ final class TaskCycleSeriesTests: XCTestCase {
         )
         XCTAssertEqual(track.days.map(\.state), [.deferred])
         XCTAssertEqual(track.futurePlanCount, 1)
-        XCTAssertEqual(track.days.first?.futurePlanTraceID, futureTraceID)
-        XCTAssertEqual(track.days.first?.futurePlanDate, tuesday)
+        XCTAssertEqual(
+            track.days.first?.futurePlanTarget,
+            TaskCycleTraceTarget(
+                traceID: futureTraceID,
+                date: tuesday,
+                state: .planned
+            )
+        )
         XCTAssertTrue(track.appears(in: .future))
+        XCTAssertEqual(
+            track.days.first?.presentationState(in: .future),
+            .planned
+        )
+        XCTAssertEqual(
+            track.days.first?.navigationTarget(in: .future),
+            track.days.first?.futurePlanTarget
+        )
+    }
+
+    func testCompletedDeferredTargetKeepsTheOccurrenceVisible() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日复盘",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let mondayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+        let futureTraceID = try engine.deferCurrentTrace(
+            traceID: mondayTrace.id,
+            targetDate: tuesday,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+
+        try engine.markCompleted(
+            traceID: futureTraceID,
+            today: tuesday,
+            now: now.addingTimeInterval(2)
+        )
+
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: tuesday).first {
+                $0.id == seriesID
+            }
+        )
+        XCTAssertTrue(track.appears(in: .completed))
+        XCTAssertEqual(
+            track.days.first?.completedTarget,
+            TaskCycleTraceTarget(
+                traceID: futureTraceID,
+                date: tuesday,
+                state: .completed
+            )
+        )
+        XCTAssertEqual(
+            track.days.first?.navigationTarget(in: .completed),
+            track.days.first?.completedTarget
+        )
+        XCTAssertEqual(
+            engine.taskCycleTracks(
+                today: tuesday,
+                collection: .completed
+            ).map(\.id),
+            [seriesID]
+        )
+    }
+
+    func testUnfinishedDeferredTargetKeepsTheOccurrenceVisible() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日复盘",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let mondayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+        _ = try engine.deferCurrentTrace(
+            traceID: mondayTrace.id,
+            targetDate: tuesday,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+
+        try engine.settleDays(
+            upTo: wednesday,
+            now: now.addingTimeInterval(2)
+        )
+
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: wednesday).first {
+                $0.id == seriesID
+            }
+        )
+        XCTAssertTrue(track.appears(in: .unfinished))
+        let unfinishedTarget = try XCTUnwrap(
+            track.days.first?.unfinishedTarget
+        )
+        XCTAssertEqual(unfinishedTarget.date, tuesday)
+        XCTAssertEqual(unfinishedTarget.state, .unfinished)
+        XCTAssertEqual(
+            track.days.first?.navigationTarget(in: .unfinished),
+            unfinishedTarget
+        )
+        XCTAssertEqual(
+            engine.taskCycleTracks(
+                today: wednesday,
+                collection: .unfinished
+            ).map(\.id),
+            [seriesID]
+        )
     }
 
     func testSnapshotRejectsDivergentSeriesDescriptorsAndDuplicateOccurrences() throws {
@@ -292,6 +427,30 @@ final class TaskCycleSeriesTests: XCTestCase {
                     && $0.cycleMembership?.occurrenceDate == monday
             }?.id
         )
+        snapshot.traces.removeAll { $0.chainID == missingChainID }
+
+        XCTAssertThrowsError(try snapshot.validateIntegrity())
+    }
+
+    func testSnapshotRejectsAMissingScheduledOccurrence() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "缺失实例",
+            startDate: monday,
+            endDate: tuesday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        var snapshot = engine.snapshot()
+        let missingChainID = try XCTUnwrap(
+            snapshot.chains.first {
+                $0.cycleMembership?.seriesID == seriesID
+                    && $0.cycleMembership?.occurrenceDate == monday
+            }?.id
+        )
+        snapshot.chains.removeAll { $0.id == missingChainID }
+        snapshot.definitions.removeAll { $0.chainID == missingChainID }
         snapshot.traces.removeAll { $0.chainID == missingChainID }
 
         XCTAssertThrowsError(try snapshot.validateIntegrity())

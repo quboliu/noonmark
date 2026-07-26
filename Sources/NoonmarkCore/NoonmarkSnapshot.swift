@@ -231,6 +231,17 @@ public extension NoonmarkSnapshot {
                     "task cycle series contains divergent descriptors"
                 )
             }
+            let expectedDates = try TaskCycleCivilCalendar.dates(
+                from: descriptor.startDate,
+                through: descriptor.endDate
+            ).filter(descriptor.schedule.includes)
+            guard Set(seriesMemberships.map(\.occurrenceDate))
+                == Set(expectedDates)
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle series is missing a scheduled occurrence"
+                )
+            }
         }
     }
 

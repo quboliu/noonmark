@@ -354,6 +354,64 @@ final class TaskCycleSeriesTests: XCTestCase {
         )
     }
 
+    func testCompletedContinuationRemovesTheOccurrenceFromUnfinished() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日复盘",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let mondayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+        try engine.settleDays(
+            upTo: tuesday,
+            now: now.addingTimeInterval(1)
+        )
+        let continuedTraceID = try engine.continueUnfinishedTrace(
+            traceID: mondayTrace.id,
+            targetDate: tuesday,
+            today: tuesday,
+            now: now.addingTimeInterval(2)
+        )
+        try engine.markCompleted(
+            traceID: continuedTraceID,
+            today: tuesday,
+            now: now.addingTimeInterval(3)
+        )
+
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: tuesday).first {
+                $0.id == seriesID
+            }
+        )
+
+        XCTAssertTrue(track.appears(in: .completed))
+        XCTAssertFalse(track.appears(in: .unfinished))
+        XCTAssertEqual(track.completedCount, 1)
+        XCTAssertEqual(track.unfinishedCount, 0)
+        XCTAssertNil(track.days.first?.unfinishedTarget)
+        XCTAssertEqual(
+            engine.taskCycleTracks(
+                today: tuesday,
+                collection: .unfinished
+            ).map(\.id),
+            []
+        )
+        XCTAssertEqual(
+            engine.taskCycleTracks(
+                today: tuesday,
+                collection: .completed
+            ).map(\.id),
+            [seriesID]
+        )
+    }
+
     func testSnapshotRejectsDivergentSeriesDescriptorsAndDuplicateOccurrences() throws {
         let engine = NoonmarkEngine()
         let seriesID = try engine.createTaskCycleSeries(
@@ -408,6 +466,40 @@ final class TaskCycleSeriesTests: XCTestCase {
         )
         XCTAssertTrue(engine.chains.isEmpty)
         XCTAssertTrue(engine.traces.isEmpty)
+    }
+
+    func testSnapshotRejectsAnUnboundedSeriesBeforeCheckingOccurrences() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "导入的过长周期",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        var snapshot = engine.snapshot()
+        let chainIndex = try XCTUnwrap(
+            snapshot.chains.firstIndex {
+                $0.cycleMembership?.seriesID == seriesID
+            }
+        )
+        snapshot.chains[chainIndex].cycleMembership = TaskCycleMembership(
+            seriesID: seriesID,
+            occurrenceDate: monday,
+            startDate: monday,
+            endDate: LocalDate("2028-07-20"),
+            schedule: .daily
+        )
+
+        XCTAssertThrowsError(try snapshot.validateIntegrity()) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidInput(
+                    "task cycle cannot materialize more than 366 calendar days"
+                )
+            )
+        }
     }
 
     func testSnapshotRejectsCycleMembershipWithoutAnyTrace() throws {

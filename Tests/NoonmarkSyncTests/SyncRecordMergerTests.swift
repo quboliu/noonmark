@@ -31,6 +31,87 @@ final class SyncRecordMergerTests: XCTestCase {
         XCTAssertEqual(restored.getDayTodo(date: today).traces.first?.id, traceID)
     }
 
+    func testSyncAppliesANewCycleSeriesAsOneStructuralComponent() throws {
+        let source = NoonmarkEngine()
+        let seriesID = try source.createTaskCycleSeries(
+            title: "跨设备每日复盘",
+            startDate: today,
+            endDate: tomorrow,
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+        let mapper = SyncRecordMapper()
+        let records = try mapper.records(
+            from: source.snapshot(),
+            modifiedBy: SyncDeviceID("mac-cycle-source")
+        )
+
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: records.reversed(),
+            into: NoonmarkEngine().snapshot(),
+            detectedAt: now.addingTimeInterval(1)
+        )
+        let restored = try NoonmarkEngine(snapshot: result.snapshot)
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertTrue(result.waitingRecords.isEmpty)
+        XCTAssertEqual(
+            Set(result.appliedRecordIDs),
+            Set(records.filter {
+                $0.entityType != .appPreferences
+            }.map(\.id))
+        )
+        XCTAssertEqual(restored.snapshot(), source.snapshot())
+        XCTAssertEqual(
+            restored.taskCycleTracks(today: today).map(\.id),
+            [seriesID]
+        )
+    }
+
+    func testSyncRejectsAnUnboundedCycleDescriptorAtomically() throws {
+        let source = NoonmarkEngine()
+        let seriesID = try source.createTaskCycleSeries(
+            title: "非法超长周期",
+            startDate: today,
+            endDate: today,
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+        var malformed = source.snapshot()
+        let chainIndex = try XCTUnwrap(
+            malformed.chains.firstIndex {
+                $0.cycleMembership?.seriesID == seriesID
+            }
+        )
+        malformed.chains[chainIndex].cycleMembership = TaskCycleMembership(
+            seriesID: seriesID,
+            occurrenceDate: today,
+            startDate: today,
+            endDate: LocalDate("2028-07-05"),
+            schedule: .daily
+        )
+        let mapper = SyncRecordMapper()
+        let records = try mapper.records(
+            from: malformed,
+            modifiedBy: SyncDeviceID("malformed-cycle-source")
+        )
+        let original = NoonmarkEngine().snapshot()
+
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: records,
+            into: original,
+            detectedAt: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(result.snapshot, original)
+        XCTAssertTrue(result.appliedRecordIDs.isEmpty)
+        XCTAssertTrue(result.waitingRecords.isEmpty)
+        XCTAssertFalse(result.conflicts.isEmpty)
+        XCTAssertNoThrow(try result.snapshot.validateIntegrity())
+    }
+
     func testCurrentRecordBatchWaitsAndRollsBackWhenItWouldBreakSnapshotIntegrity() throws {
         let source = NoonmarkEngine()
         _ = try source.createPoolTask(

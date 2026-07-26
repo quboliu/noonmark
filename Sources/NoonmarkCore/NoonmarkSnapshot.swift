@@ -203,11 +203,8 @@ public extension NoonmarkSnapshot {
 
         for chain in chains {
             guard let membership = chain.cycleMembership else { continue }
-            guard membership.startDate <= membership.endDate,
-                  membership.occurrenceDate >= membership.startDate,
-                  membership.occurrenceDate <= membership.endDate,
-                  membership.schedule.includes(membership.occurrenceDate),
-                  traces.contains(where: {
+            try membership.validateSelfContainedFacts()
+            guard traces.contains(where: {
                       $0.chainID == chain.id
                   })
             else {
@@ -231,7 +228,7 @@ public extension NoonmarkSnapshot {
                     "task cycle series contains divergent descriptors"
                 )
             }
-            let expectedDates = try TaskCycleCivilCalendar.dates(
+            let expectedDates = try TaskCycleCivilCalendar.materializableDates(
                 from: descriptor.startDate,
                 through: descriptor.endDate
             ).filter(descriptor.schedule.includes)

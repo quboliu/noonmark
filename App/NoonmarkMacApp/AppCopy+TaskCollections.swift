@@ -55,7 +55,7 @@ extension AppCopy {
     ) -> String {
         switch (language, collection) {
         case (.chinese, .future):
-            "\(track.futurePlanCount) 天待计划 · \(track.completedCount) 天已完成"
+            "\(track.futurePlanCount) 个未来计划 · \(track.completedCount) 天已完成"
         case (.chinese, .unfinished):
             "\(track.unfinishedCount) 天未完成 · \(track.completedCount) 天已完成"
         case (.chinese, .completed):

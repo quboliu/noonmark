@@ -37,6 +37,21 @@ public struct TaskCycleMembership: Codable, Equatable, Hashable, Sendable {
         self.endDate = endDate
         self.schedule = schedule
     }
+
+    public func validateSelfContainedFacts() throws {
+        _ = try TaskCycleCivilCalendar.materializableDates(
+            from: startDate,
+            through: endDate
+        )
+        guard occurrenceDate >= startDate,
+              occurrenceDate <= endDate,
+              schedule.includes(occurrenceDate)
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle membership contains invalid schedule facts"
+            )
+        }
+    }
 }
 
 public enum TaskCycleTrackDayState: String, Codable, Equatable, Hashable, Sendable {
@@ -198,15 +213,10 @@ public extension NoonmarkEngine {
                 "task cycle end date must not precede its start date"
             )
         }
-        let dates = try TaskCycleCivilCalendar.dates(
+        let dates = try TaskCycleCivilCalendar.materializableDates(
             from: startDate,
             through: endDate
         )
-        guard dates.count <= 366 else {
-            throw NoonmarkError.invalidInput(
-                "task cycle cannot materialize more than 366 calendar days"
-            )
-        }
         let occurrenceDates = dates.filter(schedule.includes)
         guard occurrenceDates.isEmpty == false else {
             throw NoonmarkError.invalidInput(
@@ -241,7 +251,7 @@ public extension NoonmarkEngine {
         return Dictionary(grouping: members, by: { $0.1.seriesID })
             .compactMap { seriesID, entries -> TaskCycleTrack? in
                 guard let descriptor = entries.first?.1,
-                      let dates = try? TaskCycleCivilCalendar.dates(
+                      let dates = try? TaskCycleCivilCalendar.materializableDates(
                           from: descriptor.startDate,
                           through: descriptor.endDate
                       )
@@ -290,17 +300,19 @@ public extension NoonmarkEngine {
                             $0.status == .pending && $0.date > today
                         }
                     )
-                    let unfinishedTrace = latestTaskCycleTrace(
-                        chainTraces.filter {
-                            $0.status == .unfinished
-                                || $0.status == .abandoned
-                        }
-                    )
                     let completedTrace = latestTaskCycleTrace(
                         chainTraces.filter {
                             $0.status == .completed
                         }
                     )
+                    let unfinishedTrace = completedTrace == nil
+                        ? latestTaskCycleTrace(
+                            chainTraces.filter {
+                                $0.status == .unfinished
+                                    || $0.status == .abandoned
+                            }
+                        )
+                        : nil
                     return TaskCycleTrackDay(
                         date: date,
                         chainID: chain.id,
@@ -398,6 +410,8 @@ public extension NoonmarkEngine {
 }
 
 enum TaskCycleCivilCalendar {
+    static let maximumMaterializedDayCount = 366
+
     private static var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -409,7 +423,7 @@ enum TaskCycleCivilCalendar {
         return calendar.component(.weekday, from: instant)
     }
 
-    static func dates(
+    static func materializableDates(
         from startDate: LocalDate,
         through endDate: LocalDate
     ) throws -> [LocalDate] {
@@ -419,7 +433,20 @@ enum TaskCycleCivilCalendar {
         else {
             throw NoonmarkError.invalidInput("invalid task cycle date range")
         }
+        guard let distance = calendar.dateComponents(
+            [.day],
+            from: start,
+            to: end
+        ).day,
+            distance >= 0,
+            distance < maximumMaterializedDayCount
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle cannot materialize more than 366 calendar days"
+            )
+        }
         var dates: [LocalDate] = []
+        dates.reserveCapacity(distance + 1)
         var cursor = start
         while cursor <= end {
             let components = calendar.dateComponents(

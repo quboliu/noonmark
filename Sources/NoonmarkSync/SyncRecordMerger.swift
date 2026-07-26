@@ -744,7 +744,13 @@ public struct SyncRecordMerger: Sendable {
             switch record.entityType {
             case .taskChain:
                 let chain = try mapper.decodeTaskChain(record)
-                return [.taskChain(chain.id)]
+                var tokens: Set<CurrentStructuralToken> = [
+                    .taskChain(chain.id)
+                ]
+                if let seriesID = chain.cycleMembership?.seriesID {
+                    tokens.insert(.taskCycleSeries(seriesID))
+                }
+                return tokens
             case .taskDefinition:
                 return try taskDefinitionStructuralTokens(record)
             case .day:
@@ -1988,7 +1994,8 @@ public struct SyncRecordMerger: Sendable {
 
     private func apply(_ chain: TaskChain, record: SyncRecord, context: inout MergeContext) {
         guard TaskNoteEntryValidator.firstIssue(in: chain.noteEntries) == nil,
-              taskChainClockIsValid(chain)
+              taskChainClockIsValid(chain),
+              taskCycleMembershipIsValid(chain)
         else {
             context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task chain contains invalid current facts"))
             return
@@ -2366,6 +2373,15 @@ public struct SyncRecordMerger: Sendable {
         chain.createdAt.timeIntervalSinceReferenceDate.isFinite
             && chain.updatedAt.timeIntervalSinceReferenceDate.isFinite
             && chain.updatedAt >= chain.createdAt
+    }
+
+    private func taskCycleMembershipIsValid(_ chain: TaskChain) -> Bool {
+        do {
+            try chain.cycleMembership?.validateSelfContainedFacts()
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func dayTraceContentClockIsValid(_ trace: DayTrace) -> Bool {
@@ -3228,6 +3244,7 @@ private struct RecordDependencyEdge: Hashable {
 
 private enum CurrentStructuralToken: Hashable {
     case taskChain(TaskChainID)
+    case taskCycleSeries(TaskCycleSeriesID)
     case taskDefinition(TaskDefinitionID)
     case day(LocalDate)
     case dayIdentity(DayID)

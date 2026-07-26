@@ -186,7 +186,9 @@ struct AppCopy {
 
     var preferencesTitle: String { language == .chinese ? "偏好" : "Preferences" }
     var preferencesSubtitle: String {
-        language == .chinese ? "影响本机显示，不改变任务事实。" : "Affects local display only; task facts stay unchanged."
+        language == .chinese
+            ? "只影响本机偏好，不改变任务事实。"
+            : "Affects local preferences only; task facts stay unchanged."
     }
 
     var appearanceTitle: String { language == .chinese ? "外观" : "Appearance" }

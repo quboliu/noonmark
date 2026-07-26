@@ -136,6 +136,7 @@ struct SettingsPreferenceCard: View {
                         .foregroundStyle(Theme.text3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                GlobalQuickEntryShortcutSettingsSection()
                 DisclosureGroup(
                     store.copy.settingsPoemTitle,
                     isExpanded: $poemIsExpanded

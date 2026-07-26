@@ -22,8 +22,23 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     private let fixedNaturalDayEnvironment: FixedNaturalDayEnvironment?
     private let workspaceStateRepository: WorkspaceStateRepository
     private let windowStatePersistenceEnabled: Bool
+    private lazy var globalQuickEntryShortcutRegistrar =
+        CarbonGlobalQuickEntryShortcutRegistrar()
+    private lazy var globalQuickEntryShortcutCoordinator =
+        GlobalQuickEntryShortcutCoordinator(
+            repository: GlobalShortcutPreferenceRepository(),
+            registrar: globalQuickEntryShortcutRegistrar,
+            enabledSystemShortcuts: {
+                CarbonSystemShortcutInspector.enabledShortcuts()
+            },
+            onTrigger: { [weak self] in
+                self?.showGlobalQuickEntry()
+            }
+        )
     private lazy var settingsWindowController = NoonmarkSettingsWindowController(
-        store: store
+        store: store,
+        globalQuickEntryShortcutCoordinator:
+            globalQuickEntryShortcutCoordinator
     )
     private lazy var quickEntryWindowController = NoonmarkQuickEntryWindowController(
         store: store
@@ -173,6 +188,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
+        globalQuickEntryShortcutCoordinator.start()
         store.onLanguageChange = { [weak self] in
             self?.installMainMenu()
             self?.settingsWindowController.refreshLocalizedChrome()
@@ -227,6 +243,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         if Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e" {
             NSLog("Noonmark E2E applicationWillTerminate reached")
         }
+        globalQuickEntryShortcutCoordinator.stop()
         store.prepareForTermination()
     }
 
@@ -421,6 +438,25 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                 openMainWindow()
             }
             return didCreate
+        }
+    }
+
+    private func showGlobalQuickEntry() {
+        guard store.canPerformEngineMutation else {
+            NSSound.beep()
+            return
+        }
+        let currentProcessIdentifier = ProcessInfo.processInfo.processIdentifier
+        let previousApplication = NSWorkspace.shared.frontmostApplication
+            .flatMap { application in
+                application.processIdentifier == currentProcessIdentifier
+                    ? nil
+                    : application
+            }
+        quickEntryWindowController.showFromGlobalShortcut(
+            previousApplication: previousApplication
+        ) { [weak self] text in
+            self?.store.addQuickTaskForToday(text) == true
         }
     }
 

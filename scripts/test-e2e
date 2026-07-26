@@ -101,6 +101,7 @@ e2e_owned_artifact_roots=(
   artifacts/e2e-english
   artifacts/e2e-english-native-command-surface
   artifacts/e2e-english-native-command-stress
+  artifacts/e2e-global-quick-entry
   artifacts/e2e-header-navigation-hit-target
   artifacts/e2e-keyboard-date
   artifacts/e2e-lifecycle
@@ -221,6 +222,7 @@ only_mode_specs=(
   "NOONMARK_E2E_WINDOW_RESIZE_ONLY:window-resize"
   "NOONMARK_E2E_COMPLETION_SEQUENCE_ONLY:completion-sequence"
   "NOONMARK_E2E_WINDOW_STATE_ONLY:window-state"
+  "NOONMARK_E2E_GLOBAL_QUICK_ENTRY_ONLY:global-quick-entry"
   "NOONMARK_E2E_NATIVE_COMMANDS_ONLY:native-commands"
   "NOONMARK_E2E_ENGLISH_NATIVE_COMMANDS_ONLY:english-native-commands"
   "NOONMARK_E2E_COMPLETION_CONTROL_ONLY:completion-control"
@@ -3255,6 +3257,26 @@ run_window_close_behavior_probe() {
     --e2e-window-close-behavior-result-url "$PWD/$close_result"
 
   echo "E2E close-last-window and dock reopen: $close_result"
+}
+
+run_global_quick_entry_shortcut_probe() {
+  local shortcut_dir="artifacts/e2e-global-quick-entry"
+  local shortcut_result="$shortcut_dir/result.txt"
+  local shortcut_log="$shortcut_dir/launch.log"
+
+  rm -rf "$shortcut_dir"
+  mkdir -p "$shortcut_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "global Quick Entry shortcut" \
+    "$shortcut_result" \
+    "$shortcut_log" \
+    --ephemeral \
+    --page day \
+    --e2e-global-quick-entry-shortcut \
+    --e2e-global-quick-entry-result-url "$PWD/$shortcut_result"
+
+  echo "E2E global Quick Entry from Finder: $shortcut_result"
 }
 
 run_native_command_surface_probe() {
@@ -9025,6 +9047,7 @@ fi
 if [[ "${NOONMARK_E2E_COMPLETION_SEQUENCE_ONLY:-0}" == "1" ]]; then
   run_workspace_restoration_probe
   run_window_close_behavior_probe
+  run_global_quick_entry_shortcut_probe
   run_native_command_surface_probe
   run_completion_control_probe
   exit 0
@@ -9033,6 +9056,11 @@ fi
 if [[ "${NOONMARK_E2E_WINDOW_STATE_ONLY:-0}" == "1" ]]; then
   run_workspace_restoration_probe
   run_window_close_behavior_probe
+  exit 0
+fi
+
+if [[ "${NOONMARK_E2E_GLOBAL_QUICK_ENTRY_ONLY:-0}" == "1" ]]; then
+  run_global_quick_entry_shortcut_probe
   exit 0
 fi
 
@@ -9049,6 +9077,7 @@ if [[ "${NOONMARK_E2E_NATIVE_COMMANDS_ONLY:-0}" == "1" ]]; then
     echo "E2E native command stress iteration: $iteration_label/$native_command_stress_count"
   done
   run_window_close_behavior_probe
+  run_global_quick_entry_shortcut_probe
   exit 0
 fi
 
@@ -9342,6 +9371,8 @@ run_window_resize_probe
 run_workspace_restoration_probe
 
 run_window_close_behavior_probe
+
+run_global_quick_entry_shortcut_probe
 
 run_native_command_surface_probe
 

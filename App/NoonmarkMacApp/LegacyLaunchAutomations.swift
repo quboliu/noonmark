@@ -148,6 +148,10 @@ struct LaunchAutomation {
         append(ZhulongTitleGeometryE2EAutomation.fromCommandLine(), to: &actions)
         append(WorkspaceRestorationE2EAutomation.fromCommandLine(), to: &actions)
         append(NativeCommandSurfaceE2EAutomation.fromCommandLine(), to: &actions)
+        append(
+            GlobalQuickEntryShortcutE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
         append(CompletionControlE2EAutomation.fromCommandLine(), to: &actions)
         append(WorkspaceProductivityE2EAutomation.fromCommandLine(), to: &actions)
         append(SelectionFocusVisualE2EAutomation.fromCommandLine(), to: &actions)

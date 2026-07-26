@@ -1,0 +1,188 @@
+import Carbon.HIToolbox
+import Foundation
+import NoonmarkMacRuntime
+
+@MainActor
+final class CarbonGlobalQuickEntryShortcutRegistrar: GlobalQuickEntryShortcutRegistering {
+    private static let signature: UInt32 = 0x4E4D_5145
+
+    private var eventHandler: EventHandlerRef?
+    private var currentHotKey: EventHotKeyRef?
+    private var currentShortcut: GlobalQuickEntryShortcut?
+    private var currentIdentifier: UInt32 = 0
+    private var nextIdentifier: UInt32 = 1
+    private var onTrigger: (@MainActor () -> Void)?
+
+    init() {
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        let status = InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, event, userData in
+                guard let event, let userData else { return noErr }
+                let registrar = Unmanaged<
+                    CarbonGlobalQuickEntryShortcutRegistrar
+                >
+                .fromOpaque(userData)
+                .takeUnretainedValue()
+                return MainActor.assumeIsolated {
+                    registrar.handle(event)
+                }
+            },
+            1,
+            &eventType,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &eventHandler
+        )
+        precondition(status == noErr, "Unable to install global hotkey handler")
+    }
+
+    func register(
+        _ shortcut: GlobalQuickEntryShortcut,
+        onTrigger: @escaping @MainActor () -> Void
+    ) -> Bool {
+        if currentShortcut == shortcut {
+            self.onTrigger = onTrigger
+            return true
+        }
+
+        let identifier = nextIdentifier
+        nextIdentifier &+= 1
+        var candidateReference: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            UInt32(shortcut.key.virtualKeyCode),
+            carbonModifiers(for: shortcut.modifiers),
+            EventHotKeyID(
+                signature: Self.signature,
+                id: identifier
+            ),
+            GetApplicationEventTarget(),
+            OptionBits(kEventHotKeyNoOptions),
+            &candidateReference
+        )
+        guard status == noErr, let candidateReference else {
+            return false
+        }
+
+        if let currentHotKey {
+            UnregisterEventHotKey(currentHotKey)
+        }
+        currentHotKey = candidateReference
+        currentShortcut = shortcut
+        currentIdentifier = identifier
+        self.onTrigger = onTrigger
+        return true
+    }
+
+    func unregister() {
+        if let currentHotKey {
+            UnregisterEventHotKey(currentHotKey)
+        }
+        currentHotKey = nil
+        currentShortcut = nil
+        currentIdentifier = 0
+        onTrigger = nil
+    }
+
+    private func handle(_ event: EventRef) -> OSStatus {
+        var identifier = EventHotKeyID()
+        let status = GetEventParameter(
+            event,
+            EventParamName(kEventParamDirectObject),
+            EventParamType(typeEventHotKeyID),
+            nil,
+            MemoryLayout<EventHotKeyID>.size,
+            nil,
+            &identifier
+        )
+        guard status == noErr,
+              identifier.signature == Self.signature,
+              identifier.id == currentIdentifier
+        else {
+            return OSStatus(eventNotHandledErr)
+        }
+        onTrigger?()
+        return noErr
+    }
+
+    private func carbonModifiers(
+        for modifiers: GlobalShortcutModifiers
+    ) -> UInt32 {
+        var result: UInt32 = 0
+        if modifiers.contains(.command) {
+            result |= UInt32(cmdKey)
+        }
+        if modifiers.contains(.control) {
+            result |= UInt32(controlKey)
+        }
+        if modifiers.contains(.option) {
+            result |= UInt32(optionKey)
+        }
+        if modifiers.contains(.shift) {
+            result |= UInt32(shiftKey)
+        }
+        return result
+    }
+}
+
+enum CarbonSystemShortcutInspector {
+    @MainActor
+    static func enabledShortcuts() -> Set<GlobalQuickEntryShortcut> {
+        var unmanagedArray: Unmanaged<CFArray>?
+        guard CopySymbolicHotKeys(&unmanagedArray) == noErr,
+              let array = unmanagedArray?.takeRetainedValue()
+        else {
+            return []
+        }
+
+        var result: Set<GlobalQuickEntryShortcut> = []
+        for case let dictionary as NSDictionary in array as NSArray {
+            guard let enabled = dictionary[
+                "kHISymbolicHotKeyEnabled"
+            ] as? Bool,
+                enabled,
+                let keyCodeNumber = dictionary[
+                    "kHISymbolicHotKeyCode"
+                ] as? NSNumber,
+                let modifiersNumber = dictionary[
+                    "kHISymbolicHotKeyModifiers"
+                ] as? NSNumber,
+                let key = GlobalShortcutKey(
+                    virtualKeyCode: keyCodeNumber.uint16Value
+                )
+            else {
+                continue
+            }
+            result.insert(
+                GlobalQuickEntryShortcut(
+                    key: key,
+                    modifiers: modifiers(
+                        fromCarbonValue: modifiersNumber.uint32Value
+                    )
+                )
+            )
+        }
+        return result
+    }
+
+    private static func modifiers(
+        fromCarbonValue value: UInt32
+    ) -> GlobalShortcutModifiers {
+        var result: GlobalShortcutModifiers = []
+        if value & UInt32(cmdKey) != 0 {
+            result.insert(.command)
+        }
+        if value & UInt32(controlKey) != 0 {
+            result.insert(.control)
+        }
+        if value & UInt32(optionKey) != 0 {
+            result.insert(.option)
+        }
+        if value & UInt32(shiftKey) != 0 {
+            result.insert(.shift)
+        }
+        return result
+    }
+}

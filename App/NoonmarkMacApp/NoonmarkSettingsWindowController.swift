@@ -1,4 +1,5 @@
 import AppKit
+import NoonmarkMacRuntime
 import NoonmarkMacUIContract
 import SwiftUI
 
@@ -13,13 +14,18 @@ final class NoonmarkSettingsWindowController: NSWindowController, NSWindowDelega
 
     private let store: NoonmarkStore
 
-    init(store: NoonmarkStore) {
+    init(
+        store: NoonmarkStore,
+        globalQuickEntryShortcutCoordinator:
+            GlobalQuickEntryShortcutCoordinator
+    ) {
         self.store = store
 
         let root = NoonmarkSettingsWindowRoot(
             initialPane: Self.commandLineInitialPane
         )
             .environmentObject(store)
+            .environmentObject(globalQuickEntryShortcutCoordinator)
             .preferredColorScheme(.light)
 
         let window = NSWindow(

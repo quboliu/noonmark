@@ -5,12 +5,13 @@ import NoonmarkMacRuntime
 import SwiftUI
 
 @MainActor
-final class NoonmarkQuickEntryWindowController: NSWindowController {
+final class NoonmarkQuickEntryWindowController: NSWindowController, NSWindowDelegate {
     static let windowIdentifier = NSUserInterfaceItemIdentifier("Noonmark.QuickEntryWindow")
 
     private let store: NoonmarkStore
     private let model = NoonmarkQuickEntryWindowModel()
     private var contentHeightObservation: AnyCancellable?
+    private var onDismiss: (() -> Void)?
 
     init(store: NoonmarkStore) {
         self.store = store
@@ -38,7 +39,8 @@ final class NoonmarkQuickEntryWindowController: NSWindowController {
         panel.contentView = hostingView
 
         super.init(window: panel)
-        model.onClose = { [weak self] in self?.close() }
+        panel.delegate = self
+        model.onClose = { [weak self] in self?.finishPresentation() }
         contentHeightObservation = model.$contentHeight
             .removeDuplicates()
             .sink { [weak panel] contentHeight in
@@ -59,7 +61,42 @@ final class NoonmarkQuickEntryWindowController: NSWindowController {
     }
 
     func show(onSubmit: @escaping (String) -> Bool) {
+        present(
+            onSubmit: onSubmit,
+            onDismiss: nil
+        )
+    }
+
+    func showFromGlobalShortcut(
+        previousApplication: NSRunningApplication?,
+        onSubmit: @escaping (String) -> Bool
+    ) {
+        present(
+            onSubmit: onSubmit,
+            onDismiss: {
+                previousApplication?.activate(options: [])
+            }
+        )
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        finishPresentation()
+        return false
+    }
+
+    private func present(
+        onSubmit: @escaping (String) -> Bool,
+        onDismiss: (() -> Void)?
+    ) {
+        if window?.isVisible == true {
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            model.requestFocus()
+            return
+        }
+
         model.onSubmit = onSubmit
+        self.onDismiss = onDismiss
         model.prepareForPresentation()
         window?.title = store.copy.quickEntryTitle
         positionOverMainWindow()
@@ -70,6 +107,15 @@ final class NoonmarkQuickEntryWindowController: NSWindowController {
 
     func refreshLocalizedChrome() {
         window?.title = store.copy.quickEntryTitle
+    }
+
+    private func finishPresentation() {
+        guard window?.isVisible == true else { return }
+        window?.orderOut(nil)
+        model.onSubmit = nil
+        let dismiss = onDismiss
+        onDismiss = nil
+        dismiss?()
     }
 
     private func positionOverMainWindow() {
@@ -98,6 +144,10 @@ final class NoonmarkQuickEntryWindowModel: ObservableObject {
     func prepareForPresentation() {
         text = ""
         contentHeight = 168
+        focusRequest &+= 1
+    }
+
+    func requestFocus() {
         focusRequest &+= 1
     }
 

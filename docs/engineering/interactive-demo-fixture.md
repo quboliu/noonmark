@@ -18,6 +18,8 @@ make run-demo-app
 6. 写入五场真实加密烛龙会话，并回读 SQLite 与 sidecar 对账。
 7. 只有 `fixture-manifest.json` 报告 `ready` 且 App 仍存活时，命令才成功返回。
 
+Demo App 运行后会按本机默认偏好注册全局 `⌃⇧N`。可以关闭主窗口、切到其他 App 后直接体验快速记录；设置页也可录制新组合。快捷键偏好是本机壳层状态，不属于十天任务 fixture，也不进入 manifest、SQLite 或烛龙 sidecar。
+
 无 Provider 凭证的自动验证使用：
 
 ```bash
@@ -76,6 +78,7 @@ make test-demo-fixture
 - 自动打开“延期模式复盘”历史会话并检查真实 SwiftUI 视图，`zhulong-authorize-scope` 操作区必须不可见；
 - 烛龙会话头部只承担全部会话与视图导航；运行中的底部 Composer 以停止替换发送，暂停／继续收进视图菜单，不再与居中品牌标题竞争；
 - App 写入后 SQLite snapshot 与全部加密 sidecar 会话可以精确回读。
+- 全局快速记录不依赖 fixture 数据；独立真实 App E2E 负责从 Finder 改键、触发、提交和恢复焦点，Demo 只提供交互体验入口。
 
 manifest 记录语义计数而非随机 UUID，因此相同锚点可以跨运行比较覆盖，不要求数据库字节完全相同。
 

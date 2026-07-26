@@ -36,7 +36,10 @@ let package = Package(
                 "NoonmarkMacE2ESupport", "NoonmarkDemoSupport", "NoonmarkStorage", "NoonmarkSync"
             ],
             path: "App/NoonmarkMacApp",
-            exclude: ["Resources"]
+            exclude: ["Resources"],
+            linkerSettings: [
+                .linkedFramework("Carbon")
+            ]
         ),
         .executableTarget(
             name: "NoonmarkDMGInstallHarness",

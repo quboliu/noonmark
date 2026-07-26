@@ -1397,10 +1397,24 @@ Todo 写入涉及两套存储：
       ├── 创建 NoonmarkStore
       ├── 安装 NSMenu
       ├── 创建 NoonmarkWindow
+      ├── 注册本机全局 Quick Entry hotkey
       ├── NSHostingView(NoonmarkRootView)
       ├── 注册 CloudKit remote notification
       └── 管理 Settings / Quick Entry / Search / Help windows
 ```
+
+### 13.2.1 全局 Quick Entry 边界
+
+`NoonmarkMacRuntime` 定义快捷键值、偏好仓库、安全策略和切换 coordinator；App target 只实现 Carbon adapter、系统快捷键读取和窗口调用。这个边界让注册失败、冲突和偏好损坏可以脱离 WindowServer 做确定性测试。
+
+生产 adapter 使用非独占 `RegisterEventHotKey`，不使用 Accessibility、Input Monitoring 或 event tap。切换顺序固定为“校验候选 → 注册候选 → 注销旧引用 → 写入偏好”，避免失败后把用户最后一个可用入口一并删除。
+
+系统冲突分两层：
+
+- 晷迹自身命令和 `CopySymbolicHotKeys` 的 macOS 系统组合可以硬拦截；
+- 第三方 App 自定义组合无法完整枚举，只能在设置中披露并要求用户在常用 App 中试按。
+
+全局触发记录先前 `NSRunningApplication`，只呈现 Quick Entry panel。提交或取消后恢复先前 App；主窗口关闭时保持关闭。应用内 `⌘N` 仍走菜单命令并保留原有行为。
 
 ### 13.3 三栏工作区
 

@@ -339,7 +339,7 @@ public struct SyncRecordMerger: Sendable {
             return .classificationCommitRejected
         case .traceClassificationEvent:
             return .traceClassificationEventRejected
-        case .day, .taskChain, .taskDefinition, .dayTrace, .subtask,
+        case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace, .subtask,
              .appPreferences:
             return .invalidRecordPayload
         }
@@ -349,17 +349,25 @@ public struct SyncRecordMerger: Sendable {
         from snapshot: NoonmarkSnapshot
     ) -> [SyncRecord] {
         let localDeviceID = SyncDeviceID("local-materialized")
-        return snapshot.days.compactMap {
+        var records = snapshot.days.compactMap {
             try? mapper.record(for: $0, modifiedBy: localDeviceID)
-        } + snapshot.chains.compactMap {
+        }
+        records += snapshot.taskCycleSeries.compactMap {
             try? mapper.record(for: $0, modifiedBy: localDeviceID)
-        } + snapshot.definitions.compactMap {
+        }
+        records += snapshot.chains.compactMap {
             try? mapper.record(for: $0, modifiedBy: localDeviceID)
-        } + snapshot.traces.compactMap {
+        }
+        records += snapshot.definitions.compactMap {
             try? mapper.record(for: $0, modifiedBy: localDeviceID)
-        } + snapshot.subtasks.compactMap {
+        }
+        records += snapshot.traces.compactMap {
             try? mapper.record(for: $0, modifiedBy: localDeviceID)
-        } + [
+        }
+        records += snapshot.subtasks.compactMap {
+            try? mapper.record(for: $0, modifiedBy: localDeviceID)
+        }
+        records += [
             try? mapper.record(
                 for: AppPreferencesEnvelope(preferences: snapshot.preferences),
                 modifiedBy: SyncDeviceID(
@@ -367,6 +375,7 @@ public struct SyncRecordMerger: Sendable {
                 )
             )
         ].compactMap { $0 }
+        return records
     }
 
     private func uniqueExactRecords(
@@ -742,6 +751,9 @@ public struct SyncRecordMerger: Sendable {
     ) -> Set<CurrentStructuralToken> {
         do {
             switch record.entityType {
+            case .taskCycleSeries:
+                let series = try mapper.decodeTaskCycleSeries(record)
+                return [.taskCycleSeries(series.id)]
             case .taskChain:
                 let chain = try mapper.decodeTaskChain(record)
                 var tokens: Set<CurrentStructuralToken> = [
@@ -963,7 +975,7 @@ public struct SyncRecordMerger: Sendable {
                     } else {
                         projection.definitions[incoming.id] = incoming
                     }
-                case .day, .dayTrace, .subtask, .appPreferences,
+                case .day, .taskCycleSeries, .dayTrace, .subtask, .appPreferences,
                      .classificationCommit, .traceClassificationEvent:
                     break
                 }
@@ -1012,7 +1024,7 @@ public struct SyncRecordMerger: Sendable {
                 case .subtask:
                     let subtask = try mapper.decodeSubtask(record)
                     projection.subtasks[subtask.id] = subtask
-                case .day, .taskChain, .taskDefinition, .appPreferences,
+                case .day, .taskCycleSeries, .taskChain, .taskDefinition, .appPreferences,
                      .classificationCommit, .traceClassificationEvent:
                     break
                 }
@@ -1106,7 +1118,7 @@ public struct SyncRecordMerger: Sendable {
                 && issues.allSatisfy(
                     trajectoryIssueIsMissingDependency
                 )
-        case .day, .appPreferences,
+        case .day, .taskCycleSeries, .appPreferences,
              .classificationCommit, .traceClassificationEvent:
             return false
         }
@@ -1212,6 +1224,8 @@ public struct SyncRecordMerger: Sendable {
         switch payload {
         case let .day(day):
             apply(day, record: record, context: &context)
+        case let .taskCycleSeries(series):
+            apply(series, record: record, context: &context)
         case let .taskChain(chain):
             apply(chain, record: record, context: &context)
         case let .taskDefinition(definition):
@@ -1992,10 +2006,60 @@ public struct SyncRecordMerger: Sendable {
         markApplied(record, context: &context)
     }
 
+    private func apply(
+        _ series: TaskCycleSeries,
+        record: SyncRecord,
+        context: inout MergeContext
+    ) {
+        do {
+            try series.validateIntegrity()
+            try currentRecordMerger.validate(record)
+        } catch {
+            context.conflicts.append(
+                conflict(
+                    .invalidRecordPayload,
+                    record: record,
+                    detectedAt: context.detectedAt,
+                    message: "task cycle series contains invalid current facts"
+                )
+            )
+            return
+        }
+        guard let existing = context.working.taskCycleSeries[series.id]
+        else {
+            context.working.taskCycleSeries[series.id] = series
+            markApplied(record, context: &context)
+            return
+        }
+        guard existing != series else { return }
+        do {
+            let localRecord = try mapper.record(
+                for: existing,
+                modifiedBy: SyncDeviceID("local-materialized")
+            )
+            let mergedRecord = try currentRecordMerger.merge(
+                existing: localRecord,
+                incoming: record
+            )
+            let merged = try mapper.decodeTaskCycleSeries(mergedRecord)
+            guard merged != existing else { return }
+            context.working.taskCycleSeries[series.id] = merged
+            markApplied(record, context: &context)
+        } catch {
+            context.conflicts.append(
+                conflict(
+                    .invalidRecordPayload,
+                    record: record,
+                    detectedAt: context.detectedAt,
+                    message: "task cycle series contains colliding current facts"
+                )
+            )
+        }
+    }
+
     private func apply(_ chain: TaskChain, record: SyncRecord, context: inout MergeContext) {
         guard TaskNoteEntryValidator.firstIssue(in: chain.noteEntries) == nil,
-              taskChainClockIsValid(chain),
-              taskCycleMembershipIsValid(chain)
+              taskChainClockIsValid(chain)
         else {
             context.conflicts.append(conflict(.invalidRecordPayload, record: record, detectedAt: context.detectedAt, message: "task chain contains invalid current facts"))
             return
@@ -2373,15 +2437,6 @@ public struct SyncRecordMerger: Sendable {
         chain.createdAt.timeIntervalSinceReferenceDate.isFinite
             && chain.updatedAt.timeIntervalSinceReferenceDate.isFinite
             && chain.updatedAt >= chain.createdAt
-    }
-
-    private func taskCycleMembershipIsValid(_ chain: TaskChain) -> Bool {
-        do {
-            try chain.cycleMembership?.validateSelfContainedFacts()
-            return true
-        } catch {
-            return false
-        }
     }
 
     private func dayTraceContentClockIsValid(_ trace: DayTrace) -> Bool {
@@ -3199,7 +3254,7 @@ public struct SyncRecordMerger: Sendable {
             guard let envelope = try? mapper.decodeTraceClassificationEvent(record)
             else { return [] }
             return [.classificationEvent(envelope.event.id)]
-        case .day, .taskChain, .taskDefinition, .dayTrace, .subtask,
+        case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace, .subtask,
              .appPreferences:
             return []
         }
@@ -3299,6 +3354,7 @@ private struct MergeContext {
 
 private struct SnapshotIndex {
     var days: [LocalDate: Day]
+    var taskCycleSeries: [TaskCycleSeriesID: TaskCycleSeries]
     var chains: [TaskChainID: TaskChain]
     var definitions: [TaskDefinitionID: TaskDefinition]
     var traces: [DayTraceID: DayTrace]
@@ -3308,6 +3364,11 @@ private struct SnapshotIndex {
 
     init(_ snapshot: NoonmarkSnapshot) {
         days = Dictionary(uniqueKeysWithValues: snapshot.days.map { ($0.date, $0) })
+        taskCycleSeries = Dictionary(
+            uniqueKeysWithValues: snapshot.taskCycleSeries.map {
+                ($0.id, $0)
+            }
+        )
         chains = Dictionary(uniqueKeysWithValues: snapshot.chains.map { ($0.id, $0) })
         definitions = Dictionary(uniqueKeysWithValues: snapshot.definitions.map { ($0.id, $0) })
         traces = Dictionary(uniqueKeysWithValues: snapshot.traces.map { ($0.id, $0) })
@@ -3319,6 +3380,12 @@ private struct SnapshotIndex {
     func snapshot() -> NoonmarkSnapshot {
         NoonmarkSnapshot(
             days: days.values.sorted { $0.date < $1.date },
+            taskCycleSeries: taskCycleSeries.values.sorted {
+                if $0.createdAt != $1.createdAt {
+                    return $0.createdAt < $1.createdAt
+                }
+                return $0.id.description < $1.id.description
+            },
             chains: chains.values.sorted {
                 if $0.createdAt == $1.createdAt {
                     return $0.id.description < $1.id.description

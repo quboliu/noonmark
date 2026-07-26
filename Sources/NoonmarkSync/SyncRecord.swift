@@ -40,6 +40,7 @@ public struct SyncDeviceID: Codable, Hashable, Sendable, CustomStringConvertible
 
 public enum SyncEntityType: String, Codable, CaseIterable, Hashable, Sendable {
     case day
+    case taskCycleSeries
     case taskChain
     case taskDefinition
     case dayTrace
@@ -55,22 +56,24 @@ public enum SyncEntityType: String, Codable, CaseIterable, Hashable, Sendable {
 
     public var dependencyOrder: Int {
         switch self {
-        case .taskChain:
+        case .taskCycleSeries:
             0
-        case .taskDefinition:
+        case .taskChain:
             1
-        case .day:
+        case .taskDefinition:
             2
-        case .classificationCommit:
+        case .day:
             3
-        case .dayTrace:
+        case .classificationCommit:
             4
-        case .traceClassificationEvent:
+        case .dayTrace:
             5
-        case .subtask:
+        case .traceClassificationEvent:
             6
-        case .appPreferences:
+        case .subtask:
             7
+        case .appPreferences:
+            8
         }
     }
 }
@@ -261,6 +264,7 @@ public struct SyncRecord: Codable, Equatable, Sendable {
 
 public enum SyncRecordPayload: Equatable, Sendable {
     case day(Day)
+    case taskCycleSeries(TaskCycleSeries)
     case taskChain(TaskChain)
     case taskDefinition(TaskDefinition)
     case dayTrace(DayTrace)

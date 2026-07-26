@@ -344,6 +344,10 @@ struct NewTaskInlineField: View {
         store.shouldShowNewTaskClassificationSuggestions(for: text)
     }
 
+    var showsSlashCommand: Bool {
+        store.newTaskSlashCommandMatches(text)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             MarkdownEditor(
@@ -358,7 +362,11 @@ struct NewTaskInlineField: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line.opacity(0.72)))
 
-            if showsSuggestions, let activeToken {
+            if showsSlashCommand {
+                NewTaskSlashCommandSuggestion {
+                    text = store.completeNewTaskSlashCommand()
+                }
+            } else if showsSuggestions, let activeToken {
                 NewTaskClassificationSuggestionList(
                     tokenKind: activeToken.kind,
                     suggestions: Array(suggestions.prefix(6))
@@ -377,6 +385,58 @@ struct NewTaskInlineField: View {
             }
         }
         .layoutPriority(1)
+    }
+}
+
+struct NewTaskSlashCommandSuggestion: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 7) {
+                Text("/")
+                    .font(.noonmarkSystem(
+                        size: 10,
+                        weight: .black,
+                        design: .rounded
+                    ))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 18, height: 18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Theme.accent.opacity(0.10))
+                    )
+                Text(store.copy.recurringSlashCommand)
+                    .font(.noonmarkSystem(
+                        size: 11.5,
+                        weight: .semibold
+                    ))
+                    .foregroundStyle(Theme.text1)
+                Text(store.copy.recurringSlashCommandDescription)
+                    .font(.noonmarkSystem(size: 11))
+                    .foregroundStyle(Theme.text3)
+                Spacer()
+            }
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Theme.line.opacity(0.72))
+        )
+        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+        .accessibilityIdentifier("new-task.slash-command.recurring")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "new-task.slash-command.recurring",
+                verificationText: store.copy.recurringSlashCommand
+            )
+        }
     }
 }
 
@@ -561,6 +621,15 @@ struct TaskRow: View {
     var definition: TaskDefinition? { store.definition(for: trace) }
     var progress: TraceProgress { store.engine.traceProgress(for: trace.id) }
     var subtasks: [Subtask] { store.subtasks(for: trace.id) }
+    var taskCycleSeries: TaskCycleSeries? {
+        guard let seriesID = store.engine.chains[
+            trace.chainID
+        ]?.cycleMembership?.seriesID else {
+            return nil
+        }
+        return store.engine.taskCycleSeries[seriesID]
+    }
+
     var selected: Bool {
         store.isWorkspaceItemSelected(.dayTrace(trace.id))
     }
@@ -573,10 +642,40 @@ struct TaskRow: View {
                 completionControl
 
                 VStack(alignment: .leading, spacing: 0) {
-                    MarkdownInlineText(store.copy.displayTaskTitle(definition?.title))
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        MarkdownInlineText(
+                            store.copy.displayTaskTitle(definition?.title)
+                        )
                         .font(.noonmarkSystem(size: 13, weight: .medium))
                         .foregroundStyle(trace.status.uiStyle.titleColor)
-                        .strikethrough(trace.status.uiStyle.strikethrough)
+                        .strikethrough(
+                            trace.status.uiStyle.strikethrough
+                        )
+
+                        if let taskCycleSeries {
+                            Text(
+                                store.copy.taskCycleDayMarker(
+                                    taskCycleSeries.schedule
+                                )
+                            )
+                            .font(.noonmarkSystem(size: 10.5, weight: .medium))
+                            .foregroundStyle(Theme.text3)
+                            .lineLimit(1)
+                            .accessibilityIdentifier(
+                                "day-row.task-cycle.\(trace.id.description)"
+                            )
+                            .background {
+                                AppE2EViewAnchor(
+                                    identifier:
+                                    "day-row.task-cycle.\(trace.id.description)",
+                                    verificationText:
+                                    store.copy.taskCycleDayMarker(
+                                        taskCycleSeries.schedule
+                                    )
+                                )
+                            }
+                        }
+                    }
 
                     if let classification = store.displayableClassification(for: trace) {
                         TaskClassificationBadges(
@@ -1084,6 +1183,9 @@ struct TaskContextMenu: View {
     @EnvironmentObject private var store: NoonmarkStore
     let trace: DayTrace
     var actions: [NoonmarkStore.TraceContextAction] { store.contextMenuActions(for: trace) }
+    var canConvertToRecurring: Bool {
+        store.engine.chains[trace.chainID]?.cycleMembership == nil
+    }
 
     var body: some View {
         ForEach(actions, id: \.self) { action in
@@ -1128,6 +1230,15 @@ struct TaskContextMenu: View {
                 }
             case .abandonChain:
                 Button(store.copy.abandonChain, role: .destructive) { store.abandon(trace.id) }
+            }
+        }
+        if canConvertToRecurring {
+            Divider()
+            Button(store.copy.convertToRecurringTask) {
+                store.beginTaskCycleConversion(
+                    chainID: trace.chainID,
+                    traceID: trace.id
+                )
             }
         }
     }

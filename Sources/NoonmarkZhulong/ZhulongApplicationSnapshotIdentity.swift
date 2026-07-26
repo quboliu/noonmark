@@ -70,8 +70,9 @@ public enum ZhulongEnginePersistenceInspector {
 }
 
 private struct ApplicationSnapshotMaterial: Encodable {
-    let formatVersion = 1
+    let formatVersion = 2
     let days: [Day]
+    let taskCycleSeries: [TaskCycleSeries]
     let chains: [TaskChain]
     let definitions: [TaskDefinition]
     let traces: [DayTrace]
@@ -81,6 +82,9 @@ private struct ApplicationSnapshotMaterial: Encodable {
 
     init(_ snapshot: NoonmarkSnapshot) {
         days = snapshot.days.sorted {
+            $0.id.description < $1.id.description
+        }
+        taskCycleSeries = snapshot.taskCycleSeries.sorted {
             $0.id.description < $1.id.description
         }
         chains = snapshot.chains.sorted {

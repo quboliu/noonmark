@@ -33,6 +33,11 @@ public struct SyncRecordMaterializer: Sendable {
         switch entry.entityType {
         case .day:
             return try dayRecord(for: entry, in: snapshot)
+        case .taskCycleSeries:
+            return try taskCycleSeriesRecord(
+                for: entry,
+                in: snapshot
+            )
         case .taskChain:
             return try chainRecord(for: entry, in: snapshot)
         case .taskDefinition:
@@ -55,6 +60,24 @@ public struct SyncRecordMaterializer: Sendable {
             throw SyncRecordMaterializerError.missingEntity(entry.entityType, entry.entityID)
         }
         return try mapper.record(for: day, modifiedBy: entry.deviceID)
+    }
+
+    private func taskCycleSeriesRecord(
+        for entry: SyncJournalEntry,
+        in snapshot: NoonmarkSnapshot
+    ) throws -> SyncRecord {
+        guard let series = snapshot.taskCycleSeries.first(where: {
+            $0.id.description == entry.entityID
+        }) else {
+            throw SyncRecordMaterializerError.missingEntity(
+                entry.entityType,
+                entry.entityID
+            )
+        }
+        return try mapper.record(
+            for: series,
+            modifiedBy: entry.deviceID
+        )
     }
 
     private func chainRecord(for entry: SyncJournalEntry, in snapshot: NoonmarkSnapshot) throws -> SyncRecord {

@@ -104,7 +104,7 @@ public struct SyncSnapshotDiffer: Sendable {
             reactivationPayloads[entity.id]
         case .appPreferences:
             preferencesPayload
-        case .day, .taskDefinition, .dayTrace, .subtask,
+        case .day, .taskCycleSeries, .taskDefinition, .dayTrace, .subtask,
              .classificationCommit, .traceClassificationEvent:
             nil
         }
@@ -425,6 +425,10 @@ public struct SyncSnapshotDiffer: Sendable {
     ) -> [ChangedEntity] {
         var entities: [ChangedEntity] = []
         entities += changedDays(from: oldSnapshot.days, to: newSnapshot.days)
+        entities += changedTaskCycleSeries(
+            from: oldSnapshot.taskCycleSeries,
+            to: newSnapshot.taskCycleSeries
+        )
         entities += changedChains(from: oldSnapshot.chains, to: newSnapshot.chains)
         entities += changedDefinitions(from: oldSnapshot.definitions, to: newSnapshot.definitions)
         entities += changedTraces(
@@ -446,6 +450,23 @@ public struct SyncSnapshotDiffer: Sendable {
         let oldByDate = Dictionary(uniqueKeysWithValues: oldDays.map { ($0.date, $0) })
         return newDays.compactMap { day in
             oldByDate[day.date] == day ? nil : ChangedEntity(type: .day, id: day.date.description)
+        }
+    }
+
+    private func changedTaskCycleSeries(
+        from oldSeries: [TaskCycleSeries],
+        to newSeries: [TaskCycleSeries]
+    ) -> [ChangedEntity] {
+        let oldByID = Dictionary(
+            uniqueKeysWithValues: oldSeries.map { ($0.id, $0) }
+        )
+        return newSeries.compactMap { series in
+            oldByID[series.id] == series
+                ? nil
+                : ChangedEntity(
+                    type: .taskCycleSeries,
+                    id: series.id.description
+                )
         }
     }
 

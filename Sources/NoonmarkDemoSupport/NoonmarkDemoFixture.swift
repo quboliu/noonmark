@@ -59,6 +59,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let categoryCount: Int
     public let labelCount: Int
     public let classifiedTaskCount: Int
+    public let deletableCategoryBoundaryCount: Int
     public let poolTaskWithPlannedSubtasksCount: Int
     public let taskWithNotesCount: Int
     public let taskWithDescriptionCount: Int
@@ -110,6 +111,11 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         require(categoryCount >= 4, "至少四个彩色分组", into: &missing)
         require(labelCount >= 4, "至少四个彩色标签", into: &missing)
         require(classifiedTaskCount >= 8, "跨页面分类任务", into: &missing)
+        require(
+            deletableCategoryBoundaryCount > 0,
+            "同时具有当前与历史引用的可删除分组",
+            into: &missing
+        )
         require(
             poolTaskWithPlannedSubtasksCount > 0,
             "含规划子任务的任务池任务",
@@ -175,6 +181,17 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             .filter {
                 $0.category != nil || $0.labels.isEmpty == false
             }.count
+        if let projection = try? engine.classification(.catalog),
+           case let .catalog(catalog) = projection
+        {
+            deletableCategoryBoundaryCount = catalog.categories.count {
+                $0.lifecycle == .active
+                    && $0.currentUsageCount > 0
+                    && $0.historicalUsageCount > 0
+            }
+        } else {
+            deletableCategoryBoundaryCount = 0
+        }
         poolTaskWithPlannedSubtasksCount = engine.taskPool().filter {
             $0.definition.plannedSubtasks.isEmpty == false
         }.count
@@ -185,7 +202,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             $0.descriptionText?.isEmpty == false
         }.count
         let cycleMemberships = snapshot.chains.compactMap(\.cycleMembership)
-        taskCycleSeriesCount = Set(cycleMemberships.map(\.seriesID)).count
+        taskCycleSeriesCount = snapshot.taskCycleSeries.count
         taskCycleOccurrenceCount = cycleMemberships.count
     }
 
@@ -251,6 +268,12 @@ private struct DemoStory {
             targetDate: try DemoCalendar.offset(dates[9], by: 4),
             today: dates[0],
             now: time(on: dates[0], hour: 6, minute: 46)
+        )
+        try engine.skipTaskCycleOccurrence(
+            seriesID: seriesID,
+            occurrenceDate: try DemoCalendar.offset(dates[9], by: 2),
+            today: dates[0],
+            now: time(on: dates[0], hour: 6, minute: 47)
         )
     }
 

@@ -16,7 +16,271 @@ private enum TaskNoteMutationTargetError: LocalizedError {
     }
 }
 
+private struct TaskCycleCreationMutation {
+    let seriesID: TaskCycleSeriesID
+    let classificationCommitBoundaries: [NoonmarkSnapshot]
+}
+
 extension NoonmarkStore {
+    func beginTaskCycleCreation(
+        draft: NewTaskDraft? = nil,
+        startDate: LocalDate? = nil
+    ) {
+        taskCycleCreationRequest = TaskCycleCreationRequest(
+            origin: .newTask,
+            title: draft?.title ?? "",
+            descriptionText: nil,
+            plannedSubtasks: [],
+            categoryName: draft?.categoryName,
+            labelNames: draft?.labelNames ?? [],
+            startDate: startDate ?? today,
+            locksStartDate: false
+        )
+        showingTaskCycleCreation = true
+    }
+
+    func beginTaskCycleConversion(
+        chainID: TaskChainID,
+        traceID: DayTraceID? = nil
+    ) {
+        guard engine.chains[chainID]?.cycleMembership == nil,
+              let definition = engine.definitions.values
+              .filter({
+                  $0.chainID == chainID
+                      && $0.supersededAt == nil
+              })
+              .max(by: { $0.sequence < $1.sequence })
+        else {
+            return
+        }
+        let sourceTrace = traceID.flatMap { engine.traces[$0] }
+        let pendingSource = sourceTrace.flatMap {
+            $0.status == .pending && $0.date >= today ? $0 : nil
+        }
+        let isPooled = engine.taskPool().contains {
+            $0.chain.id == chainID
+        }
+        let classification = currentClassification(for: chainID)
+        taskCycleCreationRequest = TaskCycleCreationRequest(
+            origin: .existingTask(
+                sourceChainID: chainID,
+                adoptsSourceChain: pendingSource != nil || isPooled
+            ),
+            title: definition.title,
+            descriptionText:
+            sourceTrace?.descriptionText
+                ?? definition.descriptionText,
+            plannedSubtasks: definition.plannedSubtasks,
+            categoryName: classification?.category?.name,
+            labelNames: classification?.labels.map(\.name) ?? [],
+            startDate: pendingSource?.date ?? today,
+            locksStartDate: pendingSource != nil
+        )
+        showingTaskCycleCreation = true
+    }
+
+    func cancelTaskCycleCreation() {
+        showingTaskCycleCreation = false
+        taskCycleCreationRequest = nil
+    }
+
+    @discardableResult
+    func createTaskCycleSeries(
+        title: String,
+        startDate: LocalDate,
+        endDate: LocalDate,
+        schedule: TaskCycleSchedule
+    ) -> Bool {
+        let request = taskCycleCreationRequest
+            ?? TaskCycleCreationRequest(
+                origin: .newTask,
+                title: title,
+                descriptionText: nil,
+                plannedSubtasks: [],
+                categoryName: nil,
+                labelNames: [],
+                startDate: startDate,
+                locksStartDate: false
+            )
+        do {
+            let mutation = try commitEngineMutation(
+                undoPolicy: .invalidate,
+                automaticClassificationPolicy:
+                .newlyCreatedTaskChains,
+                classificationCommitBoundaries: {
+                    $0.classificationCommitBoundaries.isEmpty
+                        ? nil
+                        : $0.classificationCommitBoundaries
+                }
+            ) { candidate, moment in
+                let seriesID: TaskCycleSeriesID
+                switch request.origin {
+                case .newTask:
+                    seriesID = try candidate.createTaskCycleSeries(
+                        title: title,
+                        descriptionText:
+                        request.descriptionText,
+                        plannedSubtasks:
+                        request.plannedSubtasks,
+                        startDate: startDate,
+                        endDate: endDate,
+                        schedule: schedule,
+                        today: moment.today,
+                        now: moment.instant
+                    )
+                case let .existingTask(
+                    sourceChainID,
+                    adoptsSourceChain
+                ):
+                    if adoptsSourceChain {
+                        if request.title.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        ).isEmpty {
+                            try candidate.renameTaskTitle(
+                                chainID: sourceChainID,
+                                title: title,
+                                today: moment.today,
+                                now: moment.instant
+                            )
+                        }
+                        seriesID = try candidate
+                            .convertTaskToCycleSeries(
+                                chainID: sourceChainID,
+                                startDate: startDate,
+                                endDate: endDate,
+                                schedule: schedule,
+                                today: moment.today,
+                                now: moment.instant
+                            )
+                    } else {
+                        seriesID = try candidate
+                            .createTaskCycleSeries(
+                                title: title,
+                                descriptionText:
+                            request.descriptionText,
+                                plannedSubtasks:
+                            request.plannedSubtasks,
+                                startDate: startDate,
+                                endDate: endDate,
+                                schedule: schedule,
+                                today: moment.today,
+                                now: moment.instant
+                            )
+                    }
+                }
+                let adoptedSourceID: TaskChainID? =
+                    if case let .existingTask(
+                        sourceChainID,
+                        true
+                    ) = request.origin {
+                        sourceChainID
+                    } else {
+                        nil
+                    }
+                let targetChainIDs = candidate.chains.values
+                    .filter {
+                        $0.cycleMembership?.seriesID == seriesID
+                            && $0.id != adoptedSourceID
+                    }
+                    .sorted {
+                        guard let lhs = $0.cycleMembership,
+                              let rhs = $1.cycleMembership
+                        else {
+                            return $0.id.description
+                                < $1.id.description
+                        }
+                        return lhs.occurrenceDate
+                            < rhs.occurrenceDate
+                    }
+                    .map(\.id)
+                let classificationSourceChainID: TaskChainID? =
+                    if case let .existingTask(
+                        sourceChainID,
+                        _
+                    ) = request.origin {
+                        sourceChainID
+                    } else {
+                        nil
+                    }
+                var boundaries: [NoonmarkSnapshot] = []
+                for chainID in targetChainIDs {
+                    let didClassify = if let classificationSourceChainID {
+                        try candidate.inheritCurrentClassification(
+                            from: classificationSourceChainID,
+                            to: chainID,
+                            now: moment.instant
+                        )
+                    } else {
+                        try applyTaskDraftClassification(
+                            to: candidate,
+                            chainID: chainID,
+                            categoryName: request.categoryName,
+                            labelNames: request.labelNames,
+                            now: moment.instant
+                        )
+                    }
+                    if didClassify {
+                        boundaries.append(candidate.snapshot())
+                    }
+                }
+                return TaskCycleCreationMutation(
+                    seriesID: seriesID,
+                    classificationCommitBoundaries: boundaries
+                )
+            }
+            showingTaskCycleCreation = false
+            taskCycleCreationRequest = nil
+            if case .existingTask = request.origin {
+                showToast(copy.taskConvertedToCycle)
+            } else {
+                showToast(copy.taskCycleCreated)
+            }
+            _ = mutation.seriesID
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    func skipTaskCycleOccurrence(
+        seriesID: TaskCycleSeriesID,
+        occurrenceDate: LocalDate
+    ) {
+        do {
+            try commitEngineMutation(undoPolicy: .invalidate) {
+                candidate,
+                moment in
+                try candidate.skipTaskCycleOccurrence(
+                    seriesID: seriesID,
+                    occurrenceDate: occurrenceDate,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            showToast(copy.taskCycleOccurrenceSkipped)
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
+    func stopTaskCycleSeries(_ seriesID: TaskCycleSeriesID) {
+        do {
+            let count = try commitEngineMutation(
+                undoPolicy: .invalidate
+            ) { candidate, moment in
+                try candidate.stopTaskCycleSeries(
+                    seriesID: seriesID,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            showToast(copy.taskCycleStopped(count))
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+        }
+    }
+
     func addQuickTask() {
         let submittedText = quickText
         guard addQuickTask(submittedText, target: .selectedDate) else { return }
@@ -37,6 +301,19 @@ extension NoonmarkStore {
         guard draft.issue == nil else {
             showToast(copy.newTaskMultipleCategories)
             return false
+        }
+        if draft.command == .recurring {
+            let targetDate = switch target {
+            case .selectedDate:
+                selectedDate
+            case .today:
+                today
+            }
+            beginTaskCycleCreation(
+                draft: draft,
+                startDate: targetDate
+            )
+            return true
         }
         guard draft.title.isEmpty == false else { return false }
         let originDescription = copy.quickTaskOriginDescription
@@ -82,6 +359,11 @@ extension NoonmarkStore {
         let draft = parsedTaskDraft(poolText)
         guard draft.issue == nil else {
             showToast(copy.newTaskMultipleCategories)
+            return
+        }
+        if draft.command == .recurring {
+            beginTaskCycleCreation(draft: draft)
+            poolText = ""
             return
         }
         guard draft.title.isEmpty == false else { return }

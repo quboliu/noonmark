@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import NoonmarkCore
+import NoonmarkMacRuntime
 
 struct UIEntryE2EStartGate {
     enum Configuration {
@@ -273,12 +274,14 @@ struct UIEntryE2EStartGate {
 @MainActor
 enum ClassificationLabelMenuUIE2EDriver {
     static func start(
+        store: NoonmarkStore,
         chainIdentifier: String,
         availableLabelIdentifier: String,
         resultURL: URL,
         keepsAppOpen: Bool
     ) {
         Session(
+            store: store,
             chainIdentifier: chainIdentifier,
             availableLabelIdentifier: availableLabelIdentifier,
             resultURL: resultURL,
@@ -288,17 +291,21 @@ enum ClassificationLabelMenuUIE2EDriver {
 
     @MainActor
     private final class Session {
+        private let store: NoonmarkStore
         private let chainIdentifier: String
         private let availableLabelIdentifier: String
         private let resultURL: URL
         private let keepsAppOpen: Bool
+        private let newLabelName = "E2E详情新标签"
 
         init(
+            store: NoonmarkStore,
             chainIdentifier: String,
             availableLabelIdentifier: String,
             resultURL: URL,
             keepsAppOpen: Bool
         ) {
+            self.store = store
             self.chainIdentifier = chainIdentifier
             self.availableLabelIdentifier = availableLabelIdentifier
             self.resultURL = resultURL
@@ -306,18 +313,94 @@ enum ClassificationLabelMenuUIE2EDriver {
         }
 
         func start() {
-            let addIdentifier = "classification.editor.add-label.\(chainIdentifier)"
-            waitFor("添加标签菜单入口") {
-                AppViewTreeE2E.click(identifier: addIdentifier)
+            let inputIdentifier =
+                "classification.editor.label-input.\(chainIdentifier)"
+            waitFor("# 标签输入入口") {
+                AppViewTreeE2E.click(identifier: inputIdentifier)
+            } onSuccess: { [self] in
+                typeSuggestionTrigger()
+            }
+        }
+
+        private func typeSuggestionTrigger() {
+            guard AppViewTreeE2E.typeUnicode("#") else {
+                finish(
+                    with: "failed: 无法向真实详情输入框发送 #"
+                )
+                return
+            }
+            waitFor("# 标签候选下拉框") {
+                AppViewTreeE2E.view(
+                    identifier:
+                    "classification.editor.label-suggestions.\(self.chainIdentifier)"
+                ) != nil
             } onSuccess: { [self] in
                 let itemIdentifier =
                     "classification.editor.available-label.\(chainIdentifier).\(availableLabelIdentifier)"
-                waitFor("未选标签候选项") {
+                waitFor("# 标签候选项") {
                     AppViewTreeE2E.view(identifier: itemIdentifier) != nil
+                } onSuccess: { [self] in
+                    selectExistingLabel(
+                        identifier: itemIdentifier
+                    )
+                }
+            }
+        }
+
+        private func selectExistingLabel(identifier: String) {
+            waitFor("选择已有标签候选") {
+                AppViewTreeE2E.click(identifier: identifier)
+            } onSuccess: { [self] in
+                waitFor("已有标签保存") {
+                    self.currentLabelIDs.contains(
+                        self.availableLabelIdentifier
+                    )
+                } onSuccess: { [self] in
+                    createNewLabel()
+                }
+            }
+        }
+
+        private func createNewLabel() {
+            let inputIdentifier =
+                "classification.editor.label-input.\(chainIdentifier)"
+            waitFor("重新聚焦 # 标签输入") {
+                AppViewTreeE2E.click(identifier: inputIdentifier)
+            } onSuccess: { [self] in
+                guard AppViewTreeE2E.typeUnicode(newLabelName),
+                      AppViewTreeE2E.sendReturnKey()
+                else {
+                    finish(
+                        with: "failed: 无法通过真实详情输入框创建标签"
+                    )
+                    return
+                }
+                waitFor("回车新建并加入标签") {
+                    guard let item = self.store.classificationCatalog()?
+                        .labels.first(where: {
+                            $0.name == self.newLabelName
+                        })
+                    else {
+                        return false
+                    }
+                    return self.currentLabelIDs.contains(item.id)
                 } onSuccess: { [self] in
                     finish(with: "ok")
                 }
             }
+        }
+
+        private var currentLabelIDs: Set<String> {
+            guard let rawChainID = UUID(
+                uuidString: chainIdentifier
+            ) else {
+                return []
+            }
+            return Set(
+                store.currentClassification(
+                    for: TaskChainID(rawChainID)
+                )?.labels.map(\.id) ?? []
+            )
         }
 
         private func waitFor(
@@ -620,8 +703,14 @@ enum PoolListLayoutUIE2EDriver {
 
 @MainActor
 enum ClassificationManagerUIE2EDriver {
-    static func start(resultURL: URL, keepsAppOpen: Bool, selectsLabels: Bool) {
+    static func start(
+        store: NoonmarkStore,
+        resultURL: URL,
+        keepsAppOpen: Bool,
+        selectsLabels: Bool
+    ) {
         Session(
+            store: store,
             resultURL: resultURL,
             keepsAppOpen: keepsAppOpen,
             selectsLabels: selectsLabels
@@ -630,11 +719,95 @@ enum ClassificationManagerUIE2EDriver {
 
     @MainActor
     private final class Session {
+        private final class MenuTrackingProbe: @unchecked Sendable {
+            private(set) var didBeginTracking = false
+            private var observer: NSObjectProtocol?
+
+            init(downArrowCount: Int) {
+                observer = NotificationCenter.default.addObserver(
+                    forName: NSMenu.didBeginTrackingNotification,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.didBeginTracking = true
+                        Self.postSelection(
+                            downArrowCount: downArrowCount
+                        )
+                    }
+                }
+            }
+
+            @MainActor
+            private static func postSelection(downArrowCount: Int) {
+                guard downArrowCount > 0,
+                      let window = NSApp.keyWindow ?? NSApp.mainWindow
+                else {
+                    return
+                }
+                let timestamp = ProcessInfo.processInfo.systemUptime
+                let keyCodes = Array(
+                    repeating: UInt16(125),
+                    count: downArrowCount
+                ) + [UInt16(36)]
+                for (index, keyCode) in keyCodes.enumerated() {
+                    let characters = if keyCode == 125 {
+                        String(
+                            UnicodeScalar(NSDownArrowFunctionKey)!
+                        )
+                    } else {
+                        "\r"
+                    }
+                    guard let keyDown = NSEvent.keyEvent(
+                        with: .keyDown,
+                        location: .zero,
+                        modifierFlags: [],
+                        timestamp: timestamp + (Double(index) * 0.01),
+                        windowNumber: window.windowNumber,
+                        context: nil,
+                        characters: characters,
+                        charactersIgnoringModifiers: characters,
+                        isARepeat: false,
+                        keyCode: keyCode
+                    ), let keyUp = NSEvent.keyEvent(
+                        with: .keyUp,
+                        location: .zero,
+                        modifierFlags: [],
+                        timestamp: timestamp + (Double(index) * 0.01) + 0.005,
+                        windowNumber: window.windowNumber,
+                        context: nil,
+                        characters: characters,
+                        charactersIgnoringModifiers: characters,
+                        isARepeat: false,
+                        keyCode: keyCode
+                    ) else {
+                        return
+                    }
+                    NSApp.postEvent(keyDown, atStart: false)
+                    NSApp.postEvent(keyUp, atStart: false)
+                }
+            }
+
+            func stop() {
+                guard let observer else { return }
+                NotificationCenter.default.removeObserver(observer)
+                self.observer = nil
+            }
+        }
+
+        private let store: NoonmarkStore
         private let resultURL: URL
         private let keepsAppOpen: Bool
         private let selectsLabels: Bool
+        private var menuTrackingProbe: MenuTrackingProbe?
 
-        init(resultURL: URL, keepsAppOpen: Bool, selectsLabels: Bool) {
+        init(
+            store: NoonmarkStore,
+            resultURL: URL,
+            keepsAppOpen: Bool,
+            selectsLabels: Bool
+        ) {
+            self.store = store
             self.resultURL = resultURL
             self.keepsAppOpen = keepsAppOpen
             self.selectsLabels = selectsLabels
@@ -666,7 +839,11 @@ enum ClassificationManagerUIE2EDriver {
 
         private func selectLabelsIfNeeded() {
             guard selectsLabels else {
-                completeInteraction()
+                if keepsAppOpen {
+                    completeInteraction()
+                } else {
+                    exerciseCategoryDeletion()
+                }
                 return
             }
             waitFor("标签分段入口") {
@@ -676,6 +853,155 @@ enum ClassificationManagerUIE2EDriver {
                     AppViewTreeE2E.view(
                         identifier: "classification.manager.kind.selected.label"
                     ) != nil
+                } onSuccess: { [self] in
+                    completeInteraction()
+                }
+            }
+        }
+
+        private func exerciseCategoryDeletion() {
+            guard let target = store.classificationCatalog()?
+                .categories.first(where: {
+                    $0.lifecycle == .active
+                        && $0.currentUsageCount > 0
+                        && $0.historicalUsageCount > 0
+                })
+            else {
+                finish(
+                    with: "failed: fixture 缺少同时具有当前与历史引用的分组"
+                )
+                return
+            }
+            let before = store.engine.snapshot().classifications
+            let currentChainIDs = before.currentByChainID.compactMap {
+                chainID,
+                current in
+                current.categoryID?.description == target.id
+                    ? chainID
+                    : nil
+            }
+            let historicalEventIDs = Set(
+                before.snapshotEventsByTraceID.values
+                    .flatMap { $0 }
+                    .filter {
+                        $0.category?.id.description == target.id
+                    }
+                    .map(\.id)
+            )
+            prepareCategoryDeletion(
+                target: target,
+                currentChainIDs: currentChainIDs,
+                historicalEventIDs: historicalEventIDs
+            )
+        }
+
+        private func prepareCategoryDeletion(
+            target: ClassificationCatalogItemProjection,
+            currentChainIDs: [TaskChainID],
+            historicalEventIDs: Set<UUID>
+        ) {
+            waitFor("清除分组搜索条件") {
+                guard let clearSearch = AppViewTreeE2E.view(
+                    identifier: "classification.manager.search.clear"
+                ) else {
+                    return true
+                }
+                return AppViewTreeE2E.click(clearSearch)
+            } onSuccess: { [self] in
+                waitFor("分组列表恢复") {
+                    AppViewTreeE2E.view(
+                        identifier:
+                        "classification.manager.actions.\(target.id)"
+                    ) != nil
+                } onSuccess: { [self] in
+                    waitFor("分组管理窗口重新激活") {
+                        AppViewTreeE2E.activateWindow(
+                            containing: "classification.manager.dialog"
+                        )
+                    } onSuccess: { [self] in
+                        openDeleteGroupMenu(
+                            target: target,
+                            currentChainIDs: currentChainIDs,
+                            historicalEventIDs: historicalEventIDs
+                        )
+                    }
+                }
+            }
+        }
+
+        private func openDeleteGroupMenu(
+            target: ClassificationCatalogItemProjection,
+            currentChainIDs: [TaskChainID],
+            historicalEventIDs: Set<UUID>
+        ) {
+            let deleteItemPosition =
+                target.presentationApproval == .pendingAIReview ? 4 : 3
+            let probe = MenuTrackingProbe(
+                downArrowCount: deleteItemPosition
+            )
+            menuTrackingProbe = probe
+            waitFor("删除分组菜单项") {
+                AppViewTreeE2E.click(
+                    identifier:
+                    "classification.manager.actions.\(target.id)"
+                )
+            } onSuccess: { [self] in
+                waitFor("原生分组菜单开始跟踪") {
+                    probe.didBeginTracking
+                } onSuccess: { [self] in
+                    probe.stop()
+                    menuTrackingProbe = nil
+                    waitForDeletionConfirmation(
+                        target: target,
+                        currentChainIDs: currentChainIDs,
+                        historicalEventIDs: historicalEventIDs
+                    )
+                }
+            }
+        }
+
+        private func waitForDeletionConfirmation(
+            target: ClassificationCatalogItemProjection,
+            currentChainIDs: [TaskChainID],
+            historicalEventIDs: Set<UUID>
+        ) {
+            let copy = AppPresentation(
+                language: store.engine.preferences.language
+            ).classificationManager
+            waitFor("删除分组确认") {
+                guard let confirmButton = AppViewTreeE2E.button(
+                    label: copy.deleteGroupConfirmAction
+                ) else {
+                    return false
+                }
+                return AppViewTreeE2E.click(confirmButton)
+            } onSuccess: { [self] in
+                waitFor("删除分组领域结果") {
+                    guard self.store.classificationCatalog()?
+                        .categories.first(where: {
+                            $0.id == target.id
+                        })?.lifecycle == .archived
+                    else {
+                        return false
+                    }
+                    let after = self.store.engine.snapshot()
+                        .classifications
+                    guard currentChainIDs.allSatisfy({
+                        after.currentByChainID[$0]?.category == nil
+                    }) else {
+                        return false
+                    }
+                    let retainedEventIDs = Set(
+                        after.snapshotEventsByTraceID.values
+                            .flatMap { $0 }
+                            .filter {
+                                $0.category?.id.description == target.id
+                            }
+                            .map(\.id)
+                    )
+                    return retainedEventIDs.isSuperset(
+                        of: historicalEventIDs
+                    )
                 } onSuccess: { [self] in
                     completeInteraction()
                 }

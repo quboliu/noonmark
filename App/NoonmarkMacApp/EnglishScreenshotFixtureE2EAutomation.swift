@@ -523,6 +523,13 @@ struct EnglishScreenshotFixtureE2EAutomation: LaunchAutomationRunnable {
                 [day.createdAt, day.updatedAt]
                     + [day.lockedAt].compactMap { $0 }
             }
+        case .taskCycleSeries:
+            snapshot.taskCycleSeries.first(where: {
+                $0.id.description == entry.entityID
+            }).map { series in
+                [series.createdAt, series.updatedAt]
+                    + series.cancellationFacts.map(\.recordedAt)
+            }
         case .taskChain:
             snapshot.chains.first(where: {
                 $0.id.description == entry.entityID

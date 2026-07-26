@@ -13,7 +13,7 @@ public struct DataPackageWriteReceipt: Equatable, Sendable {
 }
 
 public enum NoonmarkDataPackage {
-    public static let currentFormatVersion = 5
+    public static let currentFormatVersion = 6
 
     public static func encode(_ snapshot: NoonmarkSnapshot) throws -> Data {
         try validate(snapshot)
@@ -36,7 +36,7 @@ public enum NoonmarkDataPackage {
               try jsonShape(of: inputJSON.object) == jsonShape(of: encodedJSON.object)
         else {
             throw DataPackageError.malformedDataPackage(
-                "数据包不符合 current v5 的 canonical 结构与编码"
+                "数据包不符合 current v6 的 canonical 结构与编码"
             )
         }
         return snapshot
@@ -200,6 +200,7 @@ private struct DataPackageEnvelope: Codable {
 private struct DataPackageSnapshot: Decodable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case days
+        case taskCycleSeries
         case chains
         case definitions
         case traces
@@ -219,6 +220,10 @@ private struct DataPackageSnapshot: Decodable {
         }
         snapshot = try NoonmarkSnapshot(
             days: container.decode([Day].self, forKey: .days),
+            taskCycleSeries: container.decode(
+                [TaskCycleSeries].self,
+                forKey: .taskCycleSeries
+            ),
             chains: container.decode([TaskChain].self, forKey: .chains),
             definitions: container.decode([TaskDefinition].self, forKey: .definitions),
             traces: container.decode([DayTrace].self, forKey: .traces),
@@ -252,6 +257,10 @@ private extension NoonmarkDataPackage {
 
     static func validateUniqueFields(_ snapshot: NoonmarkSnapshot) throws {
         try requireUnique(snapshot.days.map(\.date), label: "days.date")
+        try requireUnique(
+            snapshot.taskCycleSeries.map(\.id),
+            label: "task_cycle_series.id"
+        )
         try requireUnique(snapshot.chains.map(\.id), label: "task_chains.id")
         try requireUnique(snapshot.definitions.map(\.id), label: "task_definitions.id")
         try requireUnique(snapshot.traces.map(\.id), label: "day_traces.id")

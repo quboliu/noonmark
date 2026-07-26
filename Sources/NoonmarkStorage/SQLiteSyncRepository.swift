@@ -1052,7 +1052,7 @@ private extension SQLiteSyncRepository {
             return false
         }
         switch payload {
-        case .day, .taskChain, .taskDefinition, .dayTrace, .subtask,
+        case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace, .subtask,
              .appPreferences, .classificationCommit,
              .traceClassificationEvent:
             return true

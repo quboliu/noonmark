@@ -24,9 +24,10 @@ struct FuturePlansPage: View {
     }
 
     var plans: [FuturePlanItem] {
-        store.engine.futurePlans(today: store.today).filter {
-            store.engine.chains[$0.trace.chainID]?.cycleMembership == nil
-        }
+        store.standaloneCollectionItems(
+            store.engine.futurePlans(today: store.today),
+            chainID: \.trace.chainID
+        )
     }
 
     var grouped: [(LocalDate, [FuturePlanItem])] {
@@ -41,12 +42,10 @@ struct FuturePlansPage: View {
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    ForEach(cycleTracks) { track in
-                        TaskCycleTrackRow(
-                            track: track,
-                            collection: .future
-                        )
-                    }
+                    TaskCycleSection(
+                        tracks: cycleTracks,
+                        collection: .future
+                    )
                     ForEach(grouped, id: \.0) { date, items in
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 10) {

@@ -82,6 +82,8 @@ struct ClassificationManagementDialog: View {
     @State private var isCreateButtonHovered = false
     @State private var isArchivedHeaderHovered = false
     @State private var message: String?
+    @State private var pendingCategoryDeletion:
+        ClassificationCatalogItemProjection?
     @FocusState private var isSearchFocused: Bool
 
     private var catalog: ClassificationCatalogProjection? {
@@ -159,6 +161,32 @@ struct ClassificationManagementDialog: View {
         .onChange(of: kind) { _, _ in
             editingID = nil
             message = nil
+        }
+        .alert(
+            pendingCategoryDeletion.map {
+                copy.deleteGroupConfirmationTitle($0.name)
+            } ?? "",
+            isPresented: Binding(
+                get: { pendingCategoryDeletion != nil },
+                set: { isPresented in
+                    if isPresented == false {
+                        pendingCategoryDeletion = nil
+                    }
+                }
+            ),
+            presenting: pendingCategoryDeletion
+        ) { item in
+            Button(copy.cancelAction, role: .cancel) {
+                pendingCategoryDeletion = nil
+            }
+            Button(copy.deleteGroupConfirmAction, role: .destructive) {
+                deleteCategory(item)
+            }
+            .accessibilityIdentifier(
+                "classification.manager.delete-category.confirm"
+            )
+        } message: { _ in
+            Text(copy.deleteGroupConfirmationMessage)
         }
     }
 
@@ -276,6 +304,12 @@ struct ClassificationManagementDialog: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(copy.clearSearchAccessibilityLabel)
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "classification.manager.search.clear",
+                            verificationText: copy.clearSearchAccessibilityLabel
+                        )
+                    }
                 }
             }
             .padding(.horizontal, 9)
@@ -527,28 +561,45 @@ struct ClassificationManagementDialog: View {
                         Button(copy.archiveAction, systemImage: "archivebox") {
                             archive(item)
                         }
+                        .accessibilityIdentifier(
+                            "\(MacUIClassificationAccessibility.archiveActionPrefix).\(item.id)"
+                        )
+                        if kind == .category {
+                            Button(role: .destructive) {
+                                pendingCategoryDeletion = item
+                            } label: {
+                                Label(
+                                    copy.deleteGroupAction,
+                                    systemImage: "trash"
+                                )
+                            }
                             .accessibilityIdentifier(
-                                "\(MacUIClassificationAccessibility.archiveActionPrefix).\(item.id)"
+                                "classification.manager.delete-category.\(item.id)"
                             )
+                        }
                     } else {
                         Button(copy.restoreAction, systemImage: "arrow.uturn.backward") {
                             restore(item)
                         }
-                            .accessibilityIdentifier(
-                                "\(MacUIClassificationAccessibility.restoreActionPrefix).\(item.id)"
-                            )
+                        .accessibilityIdentifier(
+                            "\(MacUIClassificationAccessibility.restoreActionPrefix).\(item.id)"
+                        )
                     }
-                    Divider()
-                    if canDiscard == false {
-                        Text(copy.referencedItemsArchiveOnlyNotice)
+                    if kind == .label || item.lifecycle != .active {
+                        Divider()
+                        if canDiscard == false {
+                            Text(copy.referencedItemsArchiveOnlyNotice)
+                        }
+                        Button(role: .destructive) {
+                            discard(item)
+                        } label: {
+                            Label(copy.discardAction, systemImage: "trash")
+                        }
+                        .disabled(canDiscard == false)
+                        .accessibilityIdentifier(
+                            "\(MacUIClassificationAccessibility.discardActionPrefix).\(item.id)"
+                        )
                     }
-                    Button(role: .destructive) { discard(item) } label: {
-                        Label(copy.discardAction, systemImage: "trash")
-                    }
-                    .disabled(canDiscard == false)
-                    .accessibilityIdentifier(
-                        "\(MacUIClassificationAccessibility.discardActionPrefix).\(item.id)"
-                    )
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.noonmarkSystem(size: 11, weight: .bold))
@@ -562,6 +613,14 @@ struct ClassificationManagementDialog: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .overlay {
+                    AppE2EViewAnchor(
+                        identifier: "classification.manager.actions.\(item.id)"
+                    )
+                }
+                .accessibilityIdentifier(
+                    "classification.manager.actions.\(item.id)"
+                )
             }
         }
         .padding(.horizontal, 14)
@@ -673,6 +732,25 @@ struct ClassificationManagementDialog: View {
     private func discard(_ item: ClassificationCatalogItemProjection) {
         guard let id = UUID(uuidString: item.id) else { return }
         mutate(kind == .category ? .hardDeleteCategory(TaskCategoryID(id)) : .hardDeleteLabel(TaskLabelID(id)))
+    }
+
+    private func deleteCategory(
+        _ item: ClassificationCatalogItemProjection
+    ) {
+        defer { pendingCategoryDeletion = nil }
+        guard let id = UUID(uuidString: item.id) else { return }
+        do {
+            _ = try store.deleteTaskCategoryFromToday(
+                TaskCategoryID(id)
+            )
+            message = nil
+        } catch {
+            let failure = AppPresentation.classify(
+                error,
+                for: .classificationMutation
+            )
+            message = presentation.message(for: failure)
+        }
     }
 
     private func mutate(_ intent: ClassificationIntent) {

@@ -30,6 +30,166 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: folderURL.appendingPathComponent("refs/latest").path))
     }
 
+    func testRecurringBatchPublicationIsAllOrNothingAcrossInjectedFailures() async throws {
+        let engine = NoonmarkEngine()
+        _ = try engine.createTaskCycleSeries(
+            title: "四十天复盘",
+            startDate: today,
+            endDate: LocalDate("2026-08-13"),
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+        let records = try SyncRecordMapper().records(
+            from: engine.snapshot(),
+            modifiedBy: SyncDeviceID("mac-cycle")
+        )
+        XCTAssertGreaterThan(records.count, 100)
+
+        for failurePoint in [
+            LocalFolderSyncPublicationPoint.willPublishBatch,
+            .didPublishBatch
+        ] {
+            let folderURL = makeFolderURL()
+            let transport = LocalFolderSyncTransport(
+                rootURL: folderURL
+            ) { point in
+                if point == failurePoint {
+                    throw InjectedPublicationError.interrupted
+                }
+            }
+
+            do {
+                try await transport.push(records)
+                XCTFail("injected publication failure must remain visible")
+            } catch {
+                XCTAssertEqual(
+                    error as? InjectedPublicationError,
+                    .interrupted
+                )
+            }
+
+            let fetched = try await LocalFolderSyncTransport(
+                rootURL: folderURL
+            ).fetchAll()
+            if failurePoint == .willPublishBatch {
+                XCTAssertTrue(fetched.isEmpty)
+            } else {
+                XCTAssertEqual(
+                    Set(fetched.map(\.id)),
+                    Set(records.map(\.id))
+                )
+                let mergeResult = SyncRecordMerger().merge(
+                    records: fetched,
+                    into: try ValidatedSyncSnapshot(
+                        NoonmarkEngine().snapshot()
+                    ),
+                    detectedAt: now.addingTimeInterval(1)
+                )
+                XCTAssertTrue(mergeResult.conflicts.isEmpty)
+                XCTAssertTrue(mergeResult.waitingRecords.isEmpty)
+                XCTAssertNoThrow(
+                    try mergeResult.snapshot.validateIntegrity()
+                )
+            }
+
+            let recoveringTransport = LocalFolderSyncTransport(
+                rootURL: folderURL
+            )
+            let snapshotsBeforeRecovery = try await recoveringTransport
+                .fetchSnapshots()
+            XCTAssertTrue(snapshotsBeforeRecovery.isEmpty)
+            try await recoveringTransport.push(records)
+
+            let repaired = try await recoveringTransport.fetchAll()
+            let snapshots = try await recoveringTransport.fetchSnapshots()
+            XCTAssertEqual(
+                Set(repaired.map(\.id)),
+                Set(records.map(\.id))
+            )
+            XCTAssertEqual(snapshots.count, 1)
+            XCTAssertEqual(snapshots.first?.recordCount, records.count)
+            XCTAssertEqual(try batchURLs(in: folderURL).count, 1)
+            XCTAssertEqual(
+                try FileManager.default.contentsOfDirectory(
+                    at: folderURL.appendingPathComponent(
+                        "records",
+                        isDirectory: true
+                    ),
+                    includingPropertiesForKeys: nil
+                )
+                .filter { $0.pathExtension == "json" }
+                .count,
+                records.count
+            )
+            XCTAssertEqual(
+                try String(
+                    contentsOf: folderURL
+                        .appendingPathComponent("refs", isDirectory: true)
+                        .appendingPathComponent("latest"),
+                    encoding: .utf8
+                ),
+                snapshots.first?.id
+            )
+        }
+    }
+
+    func testConcurrentCommitHeadsMergeAndTheNextPushJoinsThem() async throws {
+        let first = try ordinaryRecord(variant: "first")
+        let second = try ordinaryRecord(variant: "second")
+        let firstRoot = makeFolderURL()
+        let secondRoot = makeFolderURL()
+        try await LocalFolderSyncTransport(rootURL: firstRoot)
+            .push([first])
+        try await LocalFolderSyncTransport(rootURL: secondRoot)
+            .push([second])
+
+        let mergedRoot = makeFolderURL()
+        let mergedBatches = mergedRoot.appendingPathComponent(
+            "batches",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: mergedBatches,
+            withIntermediateDirectories: true
+        )
+        for sourceRoot in [firstRoot, secondRoot] {
+            for source in try batchURLs(in: sourceRoot) {
+                try FileManager.default.copyItem(
+                    at: source,
+                    to: mergedBatches.appendingPathComponent(
+                        source.lastPathComponent
+                    )
+                )
+            }
+        }
+
+        let transport = LocalFolderSyncTransport(rootURL: mergedRoot)
+        let merged = try await transport.fetchAll()
+        XCTAssertEqual(merged, [second])
+
+        let final = try ordinaryRecord(
+            modifiedAt: now.addingTimeInterval(100),
+            deviceID: "device-final",
+            payload: Data([0xFF])
+        )
+        try await transport.push([final])
+
+        let converged = try await transport.fetchAll()
+        XCTAssertEqual(converged, [final])
+        let commits = try batchURLs(in: mergedRoot).map {
+            try XCTUnwrap(
+                JSONSerialization.jsonObject(
+                    with: Data(contentsOf: $0)
+                ) as? [String: Any]
+            )
+        }
+        XCTAssertEqual(commits.count, 3)
+        XCTAssertTrue(commits.contains {
+            ($0["parentIDs"] as? [Any])?.count == 2
+        })
+    }
+
     func testLocalFolderTransportPreservesModifiedAtBitPatternExactly() async throws {
         let folderURL = makeFolderURL()
         let exactDate = Date(
@@ -2173,6 +2333,17 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         try Data(contentsOf: storedRecordURL(in: folderURL))
     }
 
+    private func batchURLs(in folderURL: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(
+            at: folderURL.appendingPathComponent(
+                "batches",
+                isDirectory: true
+            ),
+            includingPropertiesForKeys: nil
+        )
+        .filter { $0.pathExtension == "json" }
+    }
+
     private func storedRecordURL(in folderURL: URL) throws -> URL {
         let recordURLs = try FileManager.default.contentsOfDirectory(
             at: folderURL.appendingPathComponent("records", isDirectory: true),
@@ -2227,6 +2398,10 @@ private func immutablePushOutcome(
     } catch {
         return .unexpected(String(describing: error))
     }
+}
+
+private enum InjectedPublicationError: Error {
+    case interrupted
 }
 
 private extension Collection {

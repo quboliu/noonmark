@@ -72,6 +72,38 @@ final class ZhulongApplicationRecoveryIdentityTests: XCTestCase {
         )
     }
 
+    func testApplicationIdentityIncludesRecurringTaskParents() throws {
+        let recurring = NoonmarkEngine()
+        _ = try recurring.createTaskCycleSeries(
+            title: "每日复盘",
+            startDate: LocalDate(year: 2026, month: 7, day: 26),
+            endDate: LocalDate(year: 2026, month: 7, day: 28),
+            schedule: .daily,
+            today: LocalDate(year: 2026, month: 7, day: 26),
+            now: baseInstant
+        )
+        let original = recurring.snapshot()
+        var renamedParent = original
+        let parent = renamedParent.taskCycleSeries[0]
+        renamedParent.taskCycleSeries[0] = TaskCycleSeries(
+            id: parent.id,
+            title: "晚间复盘",
+            descriptionText: parent.descriptionText,
+            startDate: parent.startDate,
+            endDate: parent.endDate,
+            schedule: parent.schedule,
+            cancellationFacts: parent.cancellationFacts,
+            createdAt: parent.createdAt,
+            updatedAt: parent.updatedAt
+        )
+        try renamedParent.validateIntegrity()
+
+        XCTAssertNotEqual(
+            try ZhulongApplicationSnapshotDigest.value(original),
+            try ZhulongApplicationSnapshotDigest.value(renamedParent)
+        )
+    }
+
     func testApplicationIdentityCanonicalizesTopLevelFactOrder() throws {
         let engine = NoonmarkEngine()
         _ = try engine.createPoolTask(

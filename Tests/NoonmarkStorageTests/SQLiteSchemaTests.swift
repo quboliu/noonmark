@@ -10,6 +10,11 @@ final class SQLiteSchemaTests: XCTestCase {
         let taskChainTable = try XCTUnwrap(
             SQLiteSchema.statements.first { $0.contains("CREATE TABLE IF NOT EXISTS task_chains") }
         )
+        let taskCycleSeriesTable = try XCTUnwrap(
+            SQLiteSchema.statements.first {
+                $0.contains("CREATE TABLE IF NOT EXISTS task_cycle_series")
+            }
+        )
         let dayTable = try XCTUnwrap(
             SQLiteSchema.statements.first { $0.contains("CREATE TABLE IF NOT EXISTS days") }
         )
@@ -59,7 +64,7 @@ final class SQLiteSchemaTests: XCTestCase {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
 
-        XCTAssertEqual(SQLiteSchema.version, 12)
+        XCTAssertEqual(SQLiteSchema.version, 13)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_canonical_name_ownership"))
@@ -78,6 +83,7 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_events"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_event_finalizations"))
         XCTAssertTrue(taskChainTable.contains("note_entries_json TEXT NOT NULL"))
+        XCTAssertTrue(taskCycleSeriesTable.contains("cancellation_facts_json TEXT NOT NULL"))
         XCTAssertTrue(taskChainTable.contains("cycle_membership_json TEXT"))
         XCTAssertFalse(
             taskDefinitionTable.contains("CHECK (length(trim(title)) > 0)")
@@ -154,7 +160,7 @@ final class SQLiteSchemaTests: XCTestCase {
             )
         )
         XCTAssertTrue(compactPendingDownloadTable.contains(
-            "entity_type IN ( 'day', 'taskChain', 'taskDefinition', 'dayTrace', 'subtask', 'appPreferences', 'classificationCommit', 'traceClassificationEvent' )"
+            "entity_type IN ( 'day', 'taskCycleSeries', 'taskChain', 'taskDefinition', 'dayTrace', 'subtask', 'appPreferences', 'classificationCommit', 'traceClassificationEvent' )"
         ))
         XCTAssertTrue(schema.contains("operation TEXT NOT NULL CHECK (operation = 'upsert')"))
         XCTAssertTrue(schema.contains("modified_at_bits INTEGER NOT NULL CHECK (typeof(modified_at_bits) = 'integer')"))

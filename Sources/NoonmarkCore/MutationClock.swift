@@ -37,12 +37,20 @@ public extension NoonmarkEngine {
 
     private func persistedMutationDates() -> [Date] {
         dayMutationDates()
+            + taskCycleSeriesMutationDates()
             + chainMutationDates()
             + definitionMutationDates()
             + traceMutationDates()
             + subtaskMutationDates()
             + classificationMutationDates()
             + [preferences.themeLanguageUpdatedAt]
+    }
+
+    private func taskCycleSeriesMutationDates() -> [Date] {
+        taskCycleSeries.values.flatMap { series in
+            [series.createdAt, series.updatedAt]
+                + series.cancellationFacts.map(\.recordedAt)
+        }
     }
 
     private func dayMutationDates() -> [Date] {

@@ -530,6 +530,30 @@ extension NoonmarkStore {
 
     func save(
         _ candidate: NoonmarkEngine,
+        classificationCommitBoundaries: [NoonmarkSnapshot],
+        mutationAt mutationInstant: Date
+    ) throws {
+        try assertEngineWriteAllowed()
+        guard let repository else { return }
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
+        if let syncDeviceIdentity {
+            try repository.save(
+                candidate.snapshot(),
+                classificationCommitBoundaries:
+                classificationCommitBoundaries,
+                recordingChangesFor: syncDeviceIdentity.deviceID,
+                changedAt: mutationInstant
+            )
+        } else {
+            try repository.save(candidate)
+        }
+    }
+
+    func save(
+        _ candidate: NoonmarkEngine,
         mutationAt mutationInstant: Date,
         enqueuingAutomaticClassificationJobs jobs: [
             AutomaticClassificationJobEnqueue
@@ -574,6 +598,44 @@ extension NoonmarkStore {
         }
         try repository.save(
             candidate.snapshot(),
+            recordingChangesFor: syncDeviceIdentity.deviceID,
+            changedAt: mutationInstant,
+            enqueuingAutomaticClassificationJobs: plan.enqueues,
+            applyingAutomaticClassificationJobMutations: plan.mutations,
+            automaticClassificationTransitionAt:
+            automaticClassificationOperationalClock.now()
+        )
+        recordAutomaticClassificationMutationDiagnostics(plan)
+    }
+
+    func save(
+        _ candidate: NoonmarkEngine,
+        classificationCommitBoundaries: [NoonmarkSnapshot],
+        mutationAt mutationInstant: Date,
+        applyingAutomaticClassificationPlan plan:
+        AutomaticClassificationJobMutationPlan
+    ) throws {
+        guard plan.isEmpty == false else {
+            try save(
+                candidate,
+                classificationCommitBoundaries:
+                classificationCommitBoundaries,
+                mutationAt: mutationInstant
+            )
+            return
+        }
+        try assertEngineWriteAllowed()
+        guard let repository, let syncDeviceIdentity else {
+            throw AutomaticClassificationAppError.persistenceUnavailable
+        }
+        if persistenceFailuresRemainingForE2E > 0 {
+            persistenceFailuresRemainingForE2E -= 1
+            throw PersistenceFailureE2EError.injectedSaveFailure
+        }
+        try repository.save(
+            candidate.snapshot(),
+            classificationCommitBoundaries:
+            classificationCommitBoundaries,
             recordingChangesFor: syncDeviceIdentity.deviceID,
             changedAt: mutationInstant,
             enqueuingAutomaticClassificationJobs: plan.enqueues,
@@ -753,6 +815,8 @@ extension NoonmarkStore {
     func commitEngineMutation<Result>(
         undoPolicy: EngineMutationUndoPolicy = .preserve,
         automaticClassificationPolicy: EngineMutationAutomaticClassificationPolicy = .none,
+        classificationCommitBoundaries:
+        ((Result) -> [NoonmarkSnapshot]?)? = nil,
         _ mutation: (NoonmarkEngine, StoreMutationMoment) throws -> Result
     ) throws -> Result {
         let moment = try prepareStoreMutation()
@@ -770,20 +834,39 @@ extension NoonmarkStore {
             originalSnapshot: originalSnapshot
         )
         do {
+            let boundaries = classificationCommitBoundaries?(result)
             switch automaticClassificationPolicy {
             case .none:
-                try save(candidate, mutationAt: moment.instant)
+                if let boundaries {
+                    try save(
+                        candidate,
+                        classificationCommitBoundaries: boundaries,
+                        mutationAt: moment.instant
+                    )
+                } else {
+                    try save(candidate, mutationAt: moment.instant)
+                }
             case .taskDefinitionChanged, .classificationCatalogChanged,
                  .newlyCreatedTaskChains,
                  .taskBecameIneligible,
                  .taskBecameEligible,
                  .userClassificationWins:
-                try save(
-                    candidate,
-                    mutationAt: moment.instant,
-                    applyingAutomaticClassificationPlan:
-                    automaticClassificationPlan
-                )
+                if let boundaries {
+                    try save(
+                        candidate,
+                        classificationCommitBoundaries: boundaries,
+                        mutationAt: moment.instant,
+                        applyingAutomaticClassificationPlan:
+                        automaticClassificationPlan
+                    )
+                } else {
+                    try save(
+                        candidate,
+                        mutationAt: moment.instant,
+                        applyingAutomaticClassificationPlan:
+                        automaticClassificationPlan
+                    )
+                }
             }
         } catch let gateError as StoreMutationGateError {
             throw gateError

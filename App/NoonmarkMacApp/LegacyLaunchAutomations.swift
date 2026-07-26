@@ -158,8 +158,18 @@ struct LaunchAutomation {
         append(DataImportUIE2EAutomation.fromCommandLine(), to: &actions)
         append(PreferencesClockE2EAutomation.fromCommandLine(), to: &actions)
         append(EnglishScreenshotFixtureE2EAutomation.fromCommandLine(), to: &actions)
+        append(DefaultStateE2ESeedAutomation.fromCommandLine(), to: &actions)
         append(LaunchSelectionE2EAutomation.fromCommandLine(), to: &actions)
         append(EnglishScreenshotUIE2EAutomation.fromCommandLine(), to: &actions)
+        append(TaskCycleMutationE2EAutomation.fromCommandLine(), to: &actions)
+        append(
+            TaskCycleMutationRestartE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
+        append(
+            ClassificationDeletionRestartE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
         append(UIEntryE2EAutomation.fromCommandLine(), to: &actions)
 
         if let seedClockResultPath = AppLaunchArguments.value(

@@ -10,10 +10,7 @@ final class SyncRecordMapperTests: XCTestCase {
         let seriesID = TaskCycleSeriesID()
         let membership = TaskCycleMembership(
             seriesID: seriesID,
-            occurrenceDate: today,
-            startDate: today,
-            endDate: LocalDate("2026-07-09"),
-            schedule: .daily
+            occurrenceDate: today
         )
         let chain = TaskChain(
             cycleMembership: membership,
@@ -30,6 +27,34 @@ final class SyncRecordMapperTests: XCTestCase {
             try mapper.decodeTaskChain(record).cycleMembership,
             membership
         )
+    }
+
+    func testTaskCycleSeriesRecordPreservesParentAndCancellationFacts() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "跨设备复盘",
+            startDate: today,
+            endDate: LocalDate("2026-07-07"),
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+        try engine.skipTaskCycleOccurrence(
+            seriesID: seriesID,
+            occurrenceDate: LocalDate("2026-07-06"),
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let series = try XCTUnwrap(engine.taskCycleSeries[seriesID])
+        let mapper = SyncRecordMapper()
+
+        let record = try mapper.record(
+            for: series,
+            modifiedBy: SyncDeviceID("mac-cycle")
+        )
+
+        XCTAssertEqual(record.entityType, .taskCycleSeries)
+        XCTAssertEqual(try mapper.decodeTaskCycleSeries(record), series)
     }
 
     func testSnapshotRecordsRoundTripThroughGenericPayloads() throws {
@@ -287,7 +312,7 @@ final class SyncRecordMapperTests: XCTestCase {
             JSONSerialization.jsonObject(with: record.payload) as? [String: Any]
         )
         XCTAssertEqual(Set(object.keys), ["formatVersion", "payload"])
-        XCTAssertEqual(object["formatVersion"] as? Int, 5)
+        XCTAssertEqual(object["formatVersion"] as? Int, 6)
 
         let restored = try mapper.decodeTaskChain(record)
         XCTAssertEqual(

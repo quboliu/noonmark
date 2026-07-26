@@ -462,7 +462,12 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         quickEntryWindowController.showFromGlobalShortcut(
             previousApplication: previousApplication
         ) { [weak self] text in
-            self?.store.addQuickTaskForToday(text) == true
+            guard let self else { return false }
+            let didHandle = store.addQuickTaskForToday(text)
+            if didHandle, store.showingTaskCycleCreation {
+                openMainWindow()
+            }
+            return didHandle
         }
     }
 

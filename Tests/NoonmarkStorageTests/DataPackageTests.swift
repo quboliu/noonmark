@@ -15,7 +15,7 @@ final class DataPackageTests: XCTestCase {
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
         XCTAssertEqual(Set(object.keys), ["formatVersion", "snapshot"])
-        XCTAssertEqual(object["formatVersion"] as? Int, 5)
+        XCTAssertEqual(object["formatVersion"] as? Int, 6)
         let snapshotObject = try XCTUnwrap(
             object["snapshot"] as? [String: Any]
         )
@@ -30,7 +30,7 @@ final class DataPackageTests: XCTestCase {
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
     }
 
-    func testDataPackagePreservesTaskCycleMembershipAndFullTrack() throws {
+    func testDataPackagePreservesTaskCycleParentCancellationAndFullTrack() throws {
         let engine = NoonmarkEngine()
         let endDate = LocalDate("2026-07-09")
         let seriesID = try engine.createTaskCycleSeries(
@@ -40,6 +40,12 @@ final class DataPackageTests: XCTestCase {
             schedule: .daily,
             today: today,
             now: now
+        )
+        try engine.skipTaskCycleOccurrence(
+            seriesID: seriesID,
+            occurrenceDate: LocalDate("2026-07-06"),
+            today: today,
+            now: now.addingTimeInterval(1)
         )
 
         let restored = try NoonmarkEngine(
@@ -55,7 +61,90 @@ final class DataPackageTests: XCTestCase {
 
         XCTAssertEqual(track.days.count, 5)
         XCTAssertEqual(track.scheduledCount, 5)
+        XCTAssertEqual(
+            restored.taskCycleSeries[seriesID]?.cancellationFacts.count,
+            1
+        )
+        XCTAssertTrue(
+            restored.taskCycleSeries[seriesID]?
+                .isOccurrenceSkipped(LocalDate("2026-07-06")) == true
+        )
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
+    }
+
+    func testDataPackagePreservesForwardGroupDeletionAndHistoricalFacts() throws {
+        let engine = NoonmarkEngine()
+        let pastChainID = try engine.createPoolTask(
+            title: "导出历史分组",
+            now: now
+        )
+        _ = try commit(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: pastChainID,
+                    category: .new(name: "导出前删除", colorHex: "#2A6FDB"),
+                    labels: []
+                )
+            ),
+            to: engine,
+            at: now
+        )
+        let categoryID = try XCTUnwrap(
+            engine.snapshot().classifications.categories.keys.first
+        )
+        let pastTraceID = try engine.scheduleFromPool(
+            chainID: pastChainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.abandonChain(
+            from: pastTraceID,
+            now: now.addingTimeInterval(2)
+        )
+
+        let deletionDay = LocalDate("2026-07-06")
+        let currentChainID = try engine.createPoolTask(
+            title: "导出当前未分组",
+            now: now.addingTimeInterval(3)
+        )
+        _ = try commit(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: currentChainID,
+                    category: .existing(categoryID),
+                    labels: []
+                )
+            ),
+            to: engine,
+            at: now.addingTimeInterval(3)
+        )
+        _ = try engine.deleteTaskCategoryFromToday(
+            categoryID,
+            today: deletionDay,
+            decisionID: UUID(),
+            now: now.addingTimeInterval(4)
+        )
+
+        let restored = try NoonmarkDataPackage.decode(
+            NoonmarkDataPackage.encode(engine.snapshot())
+        )
+
+        XCTAssertEqual(restored, engine.snapshot())
+        XCTAssertEqual(
+            restored.classifications.categories[categoryID]?.lifecycle,
+            .archived
+        )
+        XCTAssertNil(
+            restored.classifications.currentByChainID[currentChainID]?
+                .categoryID
+        )
+        XCTAssertEqual(
+            restored.classifications.snapshotEventsByTraceID[pastTraceID]?
+                .first?.category?.id,
+            categoryID
+        )
+        XCTAssertNoThrow(try restored.validateIntegrity())
     }
 
     func testDataPackagePreservesSnapshotUndoCancellationWitnesses() throws {
@@ -212,17 +301,17 @@ final class DataPackageTests: XCTestCase {
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
                 error as? DataPackageError,
-                .malformedDataPackage("数据包不符合 current v5 的 canonical 结构与编码")
+                .malformedDataPackage("数据包不符合 current v6 的 canonical 结构与编码")
             )
         }
     }
 
     func testJSONDataPackageRejectsUnsupportedFormatVersionBeforePayloadDecode() {
-        let data = Data(#"{"formatVersion":6,"snapshot":{}}"#.utf8)
+        let data = Data(#"{"formatVersion":7,"snapshot":{}}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
-            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(6))
-            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 6。")
+            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(7))
+            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 7。")
         }
     }
 
@@ -255,7 +344,7 @@ final class DataPackageTests: XCTestCase {
     }
 
     func testJSONDataPackageRejectsCurrentEnvelopeWithoutSnapshot() {
-        let data = Data(#"{"formatVersion":5}"#.utf8)
+        let data = Data(#"{"formatVersion":6}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
@@ -625,7 +714,7 @@ final class DataPackageTests: XCTestCase {
             var container = encoder.singleValueContainer()
             try container.encode(date.timeIntervalSinceReferenceDate.bitPattern)
         }
-        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 5, snapshot: snapshot))
+        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 6, snapshot: snapshot))
     }
 
     private func canonicalJSON(_ data: Data) throws -> Data {
@@ -680,6 +769,25 @@ final class DataPackageTests: XCTestCase {
         )
         try engine.settleDays(upTo: LocalDate("2026-07-06"), now: now)
         return engine
+    }
+
+    @discardableResult
+    private func commit(
+        _ intent: ClassificationIntent,
+        to engine: NoonmarkEngine,
+        at date: Date
+    ) throws -> ClassificationReceipt {
+        let plan = try engine.prepareClassification(
+            intent,
+            source: .userDirect,
+            interactionID: UUID(),
+            now: date
+        )
+        return try engine.commitClassification(
+            plan,
+            confirmation: .user(decisionID: UUID()),
+            now: date
+        )
     }
 }
 

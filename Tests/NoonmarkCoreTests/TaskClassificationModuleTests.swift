@@ -1394,6 +1394,312 @@ final class TaskClassificationModuleTests: XCTestCase {
         XCTAssertEqual(historical.events.first?.status, .completed)
     }
 
+    func testDeletingCategoryUngroupsCurrentAndFutureTasksButPreservesPastFacts() throws {
+        let engine = NoonmarkEngine()
+        let day3 = LocalDate("2026-07-07")
+        let pastChainID = try engine.createPoolTask(
+            title: "历史任务",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: pastChainID,
+                category: .new(name: "发布", colorHex: "#2A6FDB"),
+                labels: [.new(name: "保留标签", colorHex: "#0E9488")]
+            ),
+            to: engine,
+            interactionID: "A1000000-0000-0000-0000-000000000001",
+            decisionID: "A1000000-0000-0000-0000-000000000002"
+        )
+        let categoryID = try XCTUnwrap(
+            engine.snapshot().classifications.categories.keys.first
+        )
+        let labelID = try XCTUnwrap(
+            engine.snapshot().classifications.labels.keys.first
+        )
+        let pastTraceID = try engine.scheduleFromPool(
+            chainID: pastChainID,
+            date: day1,
+            today: day1,
+            now: now
+        )
+        try engine.markCompleted(
+            traceID: pastTraceID,
+            today: day1,
+            now: now.addingTimeInterval(10)
+        )
+
+        let todayChainID = try engine.createPoolTask(
+            title: "当天任务",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: todayChainID,
+                category: .existing(categoryID),
+                labels: [.existing(labelID)]
+            ),
+            to: engine,
+            interactionID: "A1000000-0000-0000-0000-000000000003",
+            decisionID: "A1000000-0000-0000-0000-000000000004"
+        )
+        let todayTraceID = try engine.scheduleFromPool(
+            chainID: todayChainID,
+            date: day2,
+            today: day2,
+            now: now
+        )
+        try engine.abandonChain(
+            from: todayTraceID,
+            now: now.addingTimeInterval(20)
+        )
+
+        let futureChainID = try engine.createPoolTask(
+            title: "未来任务",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: futureChainID,
+                category: .existing(categoryID),
+                labels: [.existing(labelID)]
+            ),
+            to: engine,
+            interactionID: "A1000000-0000-0000-0000-000000000005",
+            decisionID: "A1000000-0000-0000-0000-000000000006"
+        )
+        _ = try engine.scheduleFromPool(
+            chainID: futureChainID,
+            date: day3,
+            today: day2,
+            now: now
+        )
+
+        let poolChainID = try engine.createPoolTask(
+            title: "池中任务",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: poolChainID,
+                category: .existing(categoryID),
+                labels: [.existing(labelID)]
+            ),
+            to: engine,
+            interactionID: "A1000000-0000-0000-0000-000000000007",
+            decisionID: "A1000000-0000-0000-0000-000000000008"
+        )
+        try engine.settleDays(
+            upTo: day2,
+            now: now.addingTimeInterval(30)
+        )
+
+        let outcome = try engine.deleteTaskCategoryFromToday(
+            categoryID,
+            today: day2,
+            interactionID: UUID(
+                uuidString: "A1000000-0000-0000-0000-000000000009"
+            )!,
+            decisionID: UUID(
+                uuidString: "A1000000-0000-0000-0000-000000000010"
+            )!,
+            now: now.addingTimeInterval(40)
+        )
+
+        XCTAssertEqual(outcome.ungroupedTaskCount, 4)
+        XCTAssertEqual(outcome.updatedTodaySnapshotCount, 1)
+        XCTAssertEqual(
+            engine.snapshot().classifications.categories[categoryID]?.lifecycle,
+            .archived
+        )
+        for chainID in [
+            pastChainID,
+            todayChainID,
+            futureChainID,
+            poolChainID
+        ] {
+            let current = try taskProjection(
+                from: engine.classification(.task(chainID))
+            )
+            XCTAssertNil(current.category)
+            XCTAssertEqual(current.labels.map(\.name), ["保留标签"])
+        }
+
+        let past = try historyProjection(
+            from: engine.classification(.history(pastTraceID))
+        )
+        XCTAssertEqual(past.category?.name, "发布")
+        XCTAssertEqual(past.labels.map(\.name), ["保留标签"])
+        XCTAssertEqual(past.events.count, 1)
+
+        let today = try historyProjection(
+            from: engine.classification(.history(todayTraceID))
+        )
+        XCTAssertNil(today.category)
+        XCTAssertEqual(today.labels.map(\.name), ["保留标签"])
+        XCTAssertEqual(today.events.count, 2)
+        XCTAssertEqual(today.events.first?.category?.name, "发布")
+        XCTAssertNil(today.events.last?.category)
+    }
+
+    func testDeletingCategoryIsAtomicWhenRemovalTimeIsStale() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "原子删除",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: chainID,
+                category: .new(name: "不可半删", colorHex: "#2A6FDB"),
+                labels: []
+            ),
+            to: engine,
+            interactionID: "A2000000-0000-0000-0000-000000000001",
+            decisionID: "A2000000-0000-0000-0000-000000000002"
+        )
+        let before = engine.snapshot()
+        let categoryID = try XCTUnwrap(
+            before.classifications.categories.keys.first
+        )
+
+        XCTAssertThrowsError(
+            try engine.deleteTaskCategoryFromToday(
+                categoryID,
+                today: day1,
+                interactionID: UUID(
+                    uuidString: "A2000000-0000-0000-0000-000000000003"
+                )!,
+                decisionID: UUID(
+                    uuidString: "A2000000-0000-0000-0000-000000000004"
+                )!,
+                now: now.addingTimeInterval(-1)
+            )
+        )
+        XCTAssertEqual(engine.snapshot(), before)
+    }
+
+    func testDeletingCategoryRecordsOnePersistenceBoundaryPerClassificationCommit() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "逐笔同步删除分组",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: chainID,
+                category: .new(name: "待删除分组", colorHex: "#2A6FDB"),
+                labels: []
+            ),
+            to: engine,
+            interactionID: "A2500000-0000-0000-0000-000000000001",
+            decisionID: "A2500000-0000-0000-0000-000000000002"
+        )
+        let before = engine.snapshot()
+        let categoryID = try XCTUnwrap(
+            before.classifications.categories.keys.first
+        )
+
+        let sequence = try engine
+            .deleteTaskCategoryFromTodayRecordingCommitBoundaries(
+                categoryID,
+                today: day1,
+                interactionID: UUID(
+                    uuidString: "A2500000-0000-0000-0000-000000000003"
+                )!,
+                decisionID: UUID(
+                    uuidString: "A2500000-0000-0000-0000-000000000004"
+                )!,
+                now: now.addingTimeInterval(1)
+            )
+
+        XCTAssertEqual(sequence.outcome.ungroupedTaskCount, 1)
+        XCTAssertEqual(sequence.commitBoundaries.count, 2)
+        XCTAssertEqual(sequence.commitBoundaries.last, engine.snapshot())
+        var previous = before
+        for boundary in sequence.commitBoundaries {
+            let previousIDs = Set(
+                previous.classifications.changeRecords.map(\.id)
+            )
+            XCTAssertEqual(
+                boundary.classifications.changeRecords.filter {
+                    previousIDs.contains($0.id) == false
+                }.count,
+                1
+            )
+            previous = boundary
+        }
+    }
+
+    func testDeletingCategoryDoesNotRewriteTodayTraceWhoseCurrentCategoryChanged() throws {
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "当天已经改组",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: chainID,
+                category: .new(name: "原分组", colorHex: "#2A6FDB"),
+                labels: []
+            ),
+            to: engine,
+            interactionID: "A3000000-0000-0000-0000-000000000001",
+            decisionID: "A3000000-0000-0000-0000-000000000002"
+        )
+        let originalCategoryID = try XCTUnwrap(
+            engine.snapshot().classifications.categories.keys.first
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day2,
+            today: day2,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.returnToPool(
+            traceID: traceID,
+            today: day2,
+            now: now.addingTimeInterval(2)
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: chainID,
+                category: .new(name: "现分组", colorHex: "#D1477A"),
+                labels: []
+            ),
+            to: engine,
+            interactionID: "A3000000-0000-0000-0000-000000000003",
+            decisionID: "A3000000-0000-0000-0000-000000000004",
+            at: now.addingTimeInterval(3)
+        )
+
+        let outcome = try engine.deleteTaskCategoryFromToday(
+            originalCategoryID,
+            today: day2,
+            interactionID: UUID(
+                uuidString: "A3000000-0000-0000-0000-000000000005"
+            )!,
+            decisionID: UUID(
+                uuidString: "A3000000-0000-0000-0000-000000000006"
+            )!,
+            now: now.addingTimeInterval(4)
+        )
+
+        XCTAssertEqual(outcome.ungroupedTaskCount, 0)
+        XCTAssertEqual(outcome.updatedTodaySnapshotCount, 0)
+        XCTAssertEqual(
+            try taskProjection(
+                from: engine.classification(.task(chainID))
+            ).category?.name,
+            "现分组"
+        )
+        let history = try historyProjection(
+            from: engine.classification(.history(traceID))
+        )
+        XCTAssertEqual(history.category?.name, "原分组")
+        XCTAssertEqual(history.events.count, 1)
+    }
+
     func testReturningCurrentTraceToPoolFreezesItsClassification() throws {
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(title: "退回任务池", now: now)
@@ -1605,6 +1911,80 @@ final class TaskClassificationModuleTests: XCTestCase {
         XCTAssertEqual(inheritanceRecord.source, .inherited(fromChainID: sourceChainID))
         XCTAssertNil(inheritanceRecord.decisionID)
         XCTAssertEqual(inheritanceRecord.planDigest.count, 64)
+    }
+
+    func testInheritancePreservesArchivedClassificationIdentities() throws {
+        let engine = NoonmarkEngine()
+        let sourceChainID = try engine.createPoolTask(
+            title: "归档分类模板",
+            now: now
+        )
+        let targetChainID = try engine.createPoolTask(
+            title: "继承目标",
+            now: now
+        )
+        try commit(
+            TaskClassificationDraft(
+                chainID: sourceChainID,
+                category: .new(name: "旧分组", colorHex: "#2A6FDB"),
+                labels: [.new(name: "旧标签", colorHex: "#0E9488")]
+            ),
+            to: engine,
+            interactionID: "D1D1D1D1-D1D1-D1D1-D1D1-D1D1D1D1D1D1",
+            decisionID: "E1E1E1E1-E1E1-E1E1-E1E1-E1E1E1E1E1E1"
+        )
+        let assigned = try taskProjection(
+            from: engine.classification(.task(sourceChainID))
+        )
+        let categoryID = TaskCategoryID(
+            try XCTUnwrap(UUID(uuidString: try XCTUnwrap(assigned.category).id))
+        )
+        let labelID = TaskLabelID(
+            try XCTUnwrap(
+                UUID(uuidString: try XCTUnwrap(assigned.labels.first).id)
+            )
+        )
+        try commitIntent(
+            .archiveCategory(categoryID),
+            to: engine,
+            interactionID: "D2D2D2D2-D2D2-D2D2-D2D2-D2D2D2D2D2D2",
+            decisionID: "E2E2E2E2-E2E2-E2E2-E2E2-E2E2E2E2E2E2"
+        )
+        try commitIntent(
+            .archiveLabel(labelID),
+            to: engine,
+            interactionID: "D3D3D3D3-D3D3-D3D3-D3D3-D3D3D3D3D3D3",
+            decisionID: "E3E3E3E3-E3E3-E3E3-E3E3-E3E3E3E3E3E3"
+        )
+
+        XCTAssertTrue(
+            try engine.inheritCurrentClassification(
+                from: sourceChainID,
+                to: targetChainID,
+                now: now.addingTimeInterval(1)
+            )
+        )
+
+        let inherited = try taskProjection(
+            from: engine.classification(.task(targetChainID))
+        )
+        XCTAssertEqual(inherited.category?.id, categoryID.description)
+        XCTAssertEqual(inherited.labels.map(\.id), [labelID.description])
+        guard case let .catalog(catalog) = try engine.classification(
+            .catalog
+        ) else {
+            return XCTFail("预期分类目录")
+        }
+        XCTAssertEqual(
+            catalog.categories.first { $0.id == categoryID.description }?
+                .lifecycle,
+            .archived
+        )
+        XCTAssertEqual(
+            catalog.labels.first { $0.id == labelID.description }?
+                .lifecycle,
+            .archived
+        )
     }
 
     func testRenamingCategoryKeepsIdentityHistoryAndReservesTheOldName() throws {
@@ -2682,18 +3062,20 @@ final class TaskClassificationModuleTests: XCTestCase {
         _ draft: TaskClassificationDraft,
         to engine: NoonmarkEngine,
         interactionID: String,
-        decisionID: String
+        decisionID: String,
+        at moment: Date? = nil
     ) throws {
+        let mutationTime = moment ?? now
         let plan = try engine.prepareClassification(
             .setCurrent(draft),
             source: .userDirect,
             interactionID: UUID(uuidString: interactionID)!,
-            now: now
+            now: mutationTime
         )
         _ = try engine.commitClassification(
             plan,
             confirmation: .user(decisionID: UUID(uuidString: decisionID)!),
-            now: now
+            now: mutationTime
         )
     }
 

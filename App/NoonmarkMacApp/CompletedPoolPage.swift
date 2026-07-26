@@ -37,9 +37,10 @@ struct CompletedPoolPage: View {
     }
 
     var items: [CompletedPoolItem] {
-        store.engine.completedPool().filter {
-            store.engine.chains[$0.trace.chainID]?.cycleMembership == nil
-        }
+        store.standaloneCollectionItems(
+            store.engine.completedPool(),
+            chainID: \.trace.chainID
+        )
     }
 
     var subtaskRecords: [CompletedSubtaskRecord] { store.engine.completedSubtaskRecords() }
@@ -86,12 +87,10 @@ struct CompletedPoolPage: View {
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(cycleTracks) { track in
-                        TaskCycleTrackRow(
-                            track: track,
-                            collection: .completed
-                        )
-                    }
+                    TaskCycleSection(
+                        tracks: cycleTracks,
+                        collection: .completed
+                    )
                     ForEach(presentationSections, id: \.id) { section in
                         if presentationPreference.organization == .grouped {
                             TaskCollectionSectionHeader(section: section, count: section.items.count)
@@ -315,6 +314,17 @@ struct CompletedTaskContextMenu: View {
         }
         Button(store.copy.copyAsNewTask) {
             store.copyAsNewTask(item.trace.id)
+        }
+        if store.engine.chains[
+            item.trace.chainID
+        ]?.cycleMembership == nil {
+            Divider()
+            Button(store.copy.convertToRecurringTask) {
+                store.beginTaskCycleConversion(
+                    chainID: item.trace.chainID,
+                    traceID: item.trace.id
+                )
+            }
         }
     }
 }

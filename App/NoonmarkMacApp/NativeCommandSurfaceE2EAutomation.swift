@@ -1223,7 +1223,9 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             ),
             taskChanges: SQLiteSyncTaskChanges(
                 newTaskCount: 3,
-                updatedTaskCount: 1
+                updatedTaskCount: 1,
+                newRecurringTaskCount: 1,
+                updatedRecurringTaskCount: 1
             ),
             syncedAt: Date(timeIntervalSince1970: 0)
         )
@@ -1240,7 +1242,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             (english.organizationTitle, "Organisation"),
             (
                 english.localFirstSyncResult(syncResult),
-                "Sync complete: 3 new tasks, 1 updated task"
+                "Sync complete: 3 new tasks (including 1 recurring task), "
+                    + "1 updated task (including 1 recurring task)"
             )
         ]
         let chineseContract: [(String, String)] = [
@@ -1248,7 +1251,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             (chinese.settingsPoemDisplay, "在“关于晷迹”中展示诗文"),
             (
                 chinese.localFirstSyncResult(syncResult),
-                "同步完成：新增任务 3 条，更新任务 1 条"
+                "同步完成：新增任务 3 条（其中重复任务 1 条），"
+                    + "更新任务 1 条（其中重复任务 1 条）"
             )
         ]
         guard (englishContract + chineseContract).allSatisfy({ $0.0 == $0.1 })

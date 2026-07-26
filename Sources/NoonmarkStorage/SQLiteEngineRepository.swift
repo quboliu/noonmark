@@ -471,6 +471,21 @@ public final class SQLiteEngineRepository {
 
     public func save(
         _ snapshot: NoonmarkSnapshot,
+        classificationCommitBoundaries: [NoonmarkSnapshot],
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date
+    ) throws {
+        try saveWithAutomaticClassificationMutation(
+            snapshot,
+            classificationCommitBoundaries:
+            classificationCommitBoundaries,
+            recordingChangesFor: deviceID,
+            changedAt: changedAt
+        ) { _ in }
+    }
+
+    public func save(
+        _ snapshot: NoonmarkSnapshot,
         recordingChangesFor deviceID: SyncDeviceID,
         changedAt: Date,
         enqueuingAutomaticClassificationJobs jobs: [AutomaticClassificationJobEnqueue]
@@ -482,6 +497,84 @@ public final class SQLiteEngineRepository {
         ) { database in
             for job in jobs {
                 try SQLiteAutomaticClassificationJobSQL.enqueue(job, into: database)
+            }
+        }
+    }
+
+    public func save(
+        _ snapshot: NoonmarkSnapshot,
+        classificationCommitBoundaries: [NoonmarkSnapshot],
+        recordingChangesFor deviceID: SyncDeviceID,
+        changedAt: Date,
+        enqueuingAutomaticClassificationJobs jobs: [
+            AutomaticClassificationJobEnqueue
+        ],
+        applyingAutomaticClassificationJobMutations mutations: [
+            AutomaticClassificationJobMutation
+        ],
+        automaticClassificationTransitionAt transitionAt: Date
+    ) throws {
+        try SQLiteAutomaticClassificationJobSQL.validateDate(
+            transitionAt,
+            label: "automatic classification reconciliation transitionAt"
+        )
+        try saveWithAutomaticClassificationMutation(
+            snapshot,
+            classificationCommitBoundaries:
+            classificationCommitBoundaries,
+            recordingChangesFor: deviceID,
+            changedAt: changedAt
+        ) { database in
+            for mutation in mutations {
+                switch mutation {
+                case let .replace(fence, replacement):
+                    try SQLiteAutomaticClassificationJobSQL.replace(
+                        fence,
+                        with: replacement,
+                        now: transitionAt,
+                        in: database
+                    )
+                case let .invalidateChain(chainID):
+                    _ = try SQLiteAutomaticClassificationJobSQL
+                        .invalidateJobs(
+                            forChain: chainID,
+                            now: transitionAt,
+                            in: database
+                        )
+                case let .supersedeChain(chainID):
+                    _ = try SQLiteAutomaticClassificationJobSQL
+                        .supersedeJobs(
+                            forChain: chainID,
+                            now: transitionAt,
+                            in: database
+                        )
+                case let .restoreEligibility(fence, replacement):
+                    try SQLiteAutomaticClassificationJobSQL
+                        .restoreEligibility(
+                            fence,
+                            with: replacement,
+                            in: database
+                        )
+                case let .cancelForUndo(chainID):
+                    _ = try SQLiteAutomaticClassificationJobSQL
+                        .cancelJobs(
+                            forUndoneChain: chainID,
+                            now: transitionAt,
+                            in: database
+                        )
+                case let .requeueCancelledByUndo(redo):
+                    try SQLiteAutomaticClassificationJobSQL
+                        .requeueCancelledByUndo(
+                            redo,
+                            in: database
+                        )
+                }
+            }
+            for job in jobs {
+                try SQLiteAutomaticClassificationJobSQL.enqueue(
+                    job,
+                    into: database
+                )
             }
         }
     }
@@ -643,6 +736,7 @@ public final class SQLiteEngineRepository {
 
     private func saveWithAutomaticClassificationMutation(
         _ snapshot: NoonmarkSnapshot,
+        classificationCommitBoundaries: [NoonmarkSnapshot]? = nil,
         recordingChangesFor deviceID: SyncDeviceID,
         changedAt: Date,
         mutation: (OpaquePointer?) throws -> Void
@@ -653,6 +747,18 @@ public final class SQLiteEngineRepository {
             )
         }
         try validateSnapshotForPersistence(snapshot)
+        let journalBoundaries =
+            classificationCommitBoundaries ?? [snapshot]
+        guard journalBoundaries.isEmpty == false,
+              journalBoundaries.last == snapshot
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "classification commit boundaries must end at the final snapshot"
+            )
+        }
+        for boundary in journalBoundaries {
+            try validateSnapshotForPersistence(boundary)
+        }
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
@@ -660,12 +766,27 @@ public final class SQLiteEngineRepository {
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             let oldSnapshot = try loadSnapshot(from: database)
-            var journalEntries = try SyncSnapshotDiffer().journalEntries(
-                from: oldSnapshot,
-                to: snapshot,
-                changedAt: changedAt,
-                deviceID: deviceID
-            )
+            var journalEntries: [SyncJournalEntry] = []
+            var precedingSnapshot = oldSnapshot
+            for boundary in journalBoundaries {
+                let entries = try SyncSnapshotDiffer().journalEntries(
+                    from: precedingSnapshot,
+                    to: boundary,
+                    changedAt: changedAt,
+                    deviceID: deviceID
+                )
+                if classificationCommitBoundaries != nil {
+                    guard entries.filter({
+                        $0.entityType == .classificationCommit
+                    }).count == 1 else {
+                        throw SQLiteRepositoryError.invalidStoredValue(
+                            "each classification persistence boundary must contain exactly one commit"
+                        )
+                    }
+                }
+                journalEntries.append(contentsOf: entries)
+                precedingSnapshot = boundary
+            }
             for index in journalEntries.indices {
                 journalEntries[index].id = journalEntryIDGenerator()
             }
@@ -698,6 +819,7 @@ public final class SQLiteEngineRepository {
             into: database
         )
         try upsertClassificationCatalog(snapshot.classifications, into: database)
+        try upsert(snapshot.taskCycleSeries, into: database)
         try upsert(snapshot.chains, into: database)
         try upsert(snapshot.definitions, into: database)
         try upsert(snapshot.traces, into: database)
@@ -880,6 +1002,39 @@ private extension SQLiteEngineRepository {
             )
         }
         return string
+    }
+
+    func taskCycleCancellationFactsJSON(
+        _ facts: [TaskCycleCancellationFact]
+    ) throws -> String {
+        let data = try ExactDateJSONCoding.encoder(
+            nonFiniteDateDescription: "domain JSON date must be finite"
+        ).encode(facts)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "task cycle cancellation facts JSON encoding failed"
+            )
+        }
+        return string
+    }
+
+    func taskCycleCancellationFacts(
+        from json: String
+    ) throws -> [TaskCycleCancellationFact] {
+        guard let data = json.data(using: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "task cycle cancellation facts JSON is not UTF-8"
+            )
+        }
+        do {
+            return try ExactDateJSONCoding.decoder(
+                nonFiniteDateDescription: "domain JSON date must be finite"
+            ).decode([TaskCycleCancellationFact].self, from: data)
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid task cycle cancellation facts JSON: \(error.localizedDescription)"
+            )
+        }
     }
 
     func taskCycleMembership(
@@ -1292,6 +1447,7 @@ private extension SQLiteEngineRepository {
     func loadSnapshot(from database: Database?) throws -> NoonmarkSnapshot {
         return NoonmarkSnapshot(
             days: try loadDays(from: database),
+            taskCycleSeries: try loadTaskCycleSeries(from: database),
             chains: try loadChains(from: database),
             definitions: try loadDefinitions(from: database),
             traces: try loadTraces(from: database),
@@ -1334,6 +1490,52 @@ private extension SQLiteEngineRepository {
                 try bindExactDate(day.createdAt, to: 9, in: statement)
                 bind(day.updatedAt, to: 10, in: statement)
                 try bindExactDate(day.updatedAt, to: 11, in: statement)
+            }
+        }
+    }
+
+    func upsert(
+        _ seriesValues: [TaskCycleSeries],
+        into database: Database?
+    ) throws {
+        let sql = """
+        INSERT INTO task_cycle_series(
+            id, title, description_text, start_date, end_date, schedule,
+            cancellation_facts_json,
+            created_at, created_at_bits, updated_at, updated_at_bits
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            description_text = excluded.description_text,
+            start_date = excluded.start_date,
+            end_date = excluded.end_date,
+            schedule = excluded.schedule,
+            cancellation_facts_json = excluded.cancellation_facts_json,
+            created_at = excluded.created_at,
+            created_at_bits = excluded.created_at_bits,
+            updated_at = excluded.updated_at,
+            updated_at_bits = excluded.updated_at_bits
+        """
+        for series in seriesValues {
+            try run(sql, on: database) { statement in
+                bind(series.id.rawValue, to: 1, in: statement)
+                bind(series.title, to: 2, in: statement)
+                bind(series.descriptionText, to: 3, in: statement)
+                bind(series.startDate, to: 4, in: statement)
+                bind(series.endDate, to: 5, in: statement)
+                bind(series.schedule.rawValue, to: 6, in: statement)
+                bind(
+                    try taskCycleCancellationFactsJSON(
+                        series.cancellationFacts
+                    ),
+                    to: 7,
+                    in: statement
+                )
+                bind(series.createdAt, to: 8, in: statement)
+                try bindExactDate(series.createdAt, to: 9, in: statement)
+                bind(series.updatedAt, to: 10, in: statement)
+                try bindExactDate(series.updatedAt, to: 11, in: statement)
             }
         }
     }
@@ -3459,6 +3661,51 @@ private extension SQLiteEngineRepository {
                 bitsIndex: 10
             )
             return day
+        }
+    }
+
+    func loadTaskCycleSeries(
+        from database: Database?
+    ) throws -> [TaskCycleSeries] {
+        try query(
+            """
+            SELECT
+                id, title, description_text, start_date, end_date, schedule,
+                cancellation_facts_json,
+                created_at, created_at_bits, updated_at, updated_at_bits
+            FROM task_cycle_series
+            ORDER BY created_at, id
+            """,
+            on: database
+        ) { statement in
+            guard let schedule = TaskCycleSchedule(
+                rawValue: try string(statement, 5)
+            ) else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "invalid task cycle schedule"
+                )
+            }
+            return TaskCycleSeries(
+                id: TaskCycleSeriesID(try uuid(statement, 0)),
+                title: try string(statement, 1),
+                descriptionText: optionalString(statement, 2),
+                startDate: LocalDate(try string(statement, 3)),
+                endDate: LocalDate(try string(statement, 4)),
+                schedule: schedule,
+                cancellationFacts: try taskCycleCancellationFacts(
+                    from: string(statement, 6)
+                ),
+                createdAt: try validatedExactDate(
+                    statement,
+                    textIndex: 7,
+                    bitsIndex: 8
+                ),
+                updatedAt: try validatedExactDate(
+                    statement,
+                    textIndex: 9,
+                    bitsIndex: 10
+                )
+            )
         }
     }
 

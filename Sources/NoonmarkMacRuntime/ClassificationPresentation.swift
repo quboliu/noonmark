@@ -138,6 +138,24 @@ public struct ClassificationManagerCopy: Equatable, Sendable {
 
     public var archiveAction: String { localized("归档", "Archive") }
     public var restoreAction: String { localized("恢复使用", "Restore") }
+    public var deleteGroupAction: String {
+        localized("删除分组…", "Delete Group…")
+    }
+
+    public func deleteGroupConfirmationTitle(_ name: String) -> String {
+        localized("删除分组“\(name)”？", "Delete “\(name)”?")
+    }
+
+    public var deleteGroupConfirmationMessage: String {
+        localized(
+            "今天及未来使用此分组的任务将转为未分组；历史任务仍保留原分组信息。",
+            "Tasks using this group today or in the future will become ungrouped. Historical tasks keep the group."
+        )
+    }
+
+    public var deleteGroupConfirmAction: String {
+        localized("删除分组", "Delete Group")
+    }
 
     public var referencedItemsArchiveOnlyNotice: String {
         localized(
@@ -181,12 +199,28 @@ public struct TaskClassificationEditorCopy: Equatable, Sendable {
         localized("所有标签均已选择", "All tags are selected")
     }
 
-    public var tagNamePlaceholder: String { localized("输入标签名称", "Enter a tag name") }
+    public var tagNamePlaceholder: String {
+        localized("输入 # 添加标签", "Type # to add a tag")
+    }
+
     public var emptyGroupNameError: String { localized("请输入分组名称。", "Enter a group name.") }
     public var emptyTagNameError: String { localized("请输入标签名称。", "Enter a tag name.") }
 
     public func duplicateTagError(_ name: String) -> String {
         localized("标签「\(name)」已经添加。", "The tag “\(name)” is already added.")
+    }
+
+    public func createTagFromInput(_ name: String) -> String {
+        guard name.isEmpty == false else {
+            return localized(
+                "输入名称后回车新建标签",
+                "Enter a name, then press Return to create a tag"
+            )
+        }
+        return localized(
+            "回车新建 #\(name)",
+            "Press Return to create #\(name)"
+        )
     }
 
     public func editorAccessibilityLabel(taskTitle: String) -> String {

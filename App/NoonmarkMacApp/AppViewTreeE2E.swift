@@ -106,6 +106,16 @@ enum AppViewTreeE2E {
         return true
     }
 
+    static func activateWindow(containing identifier: String) -> Bool {
+        guard let window = view(identifier: identifier)?.window else {
+            return false
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        return NSApp.isActive && window.isKeyWindow
+    }
+
     static func mappedPresentationWindow(
         identifier: String
     ) -> PresentationWindowIdentity? {
@@ -196,6 +206,20 @@ enum AppViewTreeE2E {
         })
     }
 
+    static func button(label: String) -> NSButton? {
+        let matches = currentVisibleViews().compactMap { view -> NSButton? in
+            guard let button = view as? NSButton else { return nil }
+            let labels = [
+                button.title,
+                button.toolTip,
+                button.accessibilityLabel()
+            ].compactMap { $0 }
+            return labels.contains(label) ? button : nil
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
     static func button(overlapping anchor: NSView) -> NSButton? {
         let anchorFrame = frameInWindow(for: anchor)
         let anchorArea = anchorFrame.width * anchorFrame.height
@@ -205,6 +229,31 @@ enum AppViewTreeE2E {
             let intersection = anchorFrame.intersection(frameInWindow(for: button))
             let intersectionArea = intersection.width * intersection.height
             return intersectionArea >= anchorArea * 0.8 ? button : nil
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
+    static func textField(overlapping anchor: NSView) -> NSTextField? {
+        let anchorFrame = frameInWindow(for: anchor)
+        let anchorArea = anchorFrame.width * anchorFrame.height
+        guard anchorArea > 0 else { return nil }
+        let matches = currentVisibleViews().compactMap {
+            view -> NSTextField? in
+            guard let textField = view as? NSTextField else {
+                return nil
+            }
+            let intersection = anchorFrame.intersection(
+                frameInWindow(for: textField)
+            )
+            let intersectionArea = intersection.width * intersection.height
+            let textFieldFrame = frameInWindow(for: textField)
+            let textFieldArea =
+                textFieldFrame.width * textFieldFrame.height
+            return intersectionArea
+                >= min(anchorArea, textFieldArea) * 0.7
+                ? textField
+                : nil
         }
         guard matches.count == 1 else { return nil }
         return matches[0]
@@ -344,6 +393,82 @@ enum AppViewTreeE2E {
         return true
     }
 
+    static func typeUnicode(_ text: String) -> Bool {
+        guard text.isEmpty == false,
+              let window = NSApp.keyWindow ?? NSApp.mainWindow
+        else {
+            return false
+        }
+        var timestamp = ProcessInfo.processInfo.systemUptime
+        for character in text {
+            let characters = String(character)
+            guard let keyDown = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: timestamp,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: 0
+            ), let keyUp = NSEvent.keyEvent(
+                with: .keyUp,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: timestamp + 0.005,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: 0
+            ) else {
+                return false
+            }
+            window.sendEvent(keyDown)
+            window.sendEvent(keyUp)
+            timestamp += 0.01
+        }
+        return true
+    }
+
+    static func sendReturnKey() -> Bool {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else {
+            return false
+        }
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        guard let keyDown = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: timestamp,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36
+        ), let keyUp = NSEvent.keyEvent(
+            with: .keyUp,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: timestamp + 0.005,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36
+        ) else {
+            return false
+        }
+        window.sendEvent(keyDown)
+        window.sendEvent(keyUp)
+        return true
+    }
+
     static func rightClick(_ view: NSView) -> Bool {
         guard let events = rightClickEvents(for: view),
               let window = view.window
@@ -357,35 +482,46 @@ enum AppViewTreeE2E {
     }
 
     static func selectFirstContextMenuItem(of view: NSView) -> Bool {
+        selectContextMenuItem(of: view, downArrowCount: 1)
+    }
+
+    static func selectContextMenuItem(
+        of view: NSView,
+        downArrowCount: Int
+    ) -> Bool {
+        guard downArrowCount > 0 else { return false }
         guard let events = rightClickEvents(for: view),
-              let window = view.window,
-              let downArrow = NSEvent.keyEvent(
-                  with: .keyDown,
-                  location: .zero,
-                  modifierFlags: [],
-                  timestamp: ProcessInfo.processInfo.systemUptime + 0.04,
-                  windowNumber: window.windowNumber,
-                  context: nil,
-                  characters: String(UnicodeScalar(NSDownArrowFunctionKey)!),
-                  charactersIgnoringModifiers: String(UnicodeScalar(NSDownArrowFunctionKey)!),
-                  isARepeat: false,
-                  keyCode: 125
-              ), let confirm = NSEvent.keyEvent(
-                  with: .keyDown,
-                  location: .zero,
-                  modifierFlags: [],
-                  timestamp: ProcessInfo.processInfo.systemUptime + 0.05,
-                  windowNumber: window.windowNumber,
-                  context: nil,
-                  characters: "\r",
-                  charactersIgnoringModifiers: "\r",
-                  isARepeat: false,
-                  keyCode: 36
-              )
+              let window = view.window
         else {
             return false
         }
-        for event in [events.mouseUp, downArrow, confirm] {
+        let timestamp = ProcessInfo.processInfo.systemUptime + 0.04
+        let keyCodes = Array(
+            repeating: UInt16(125),
+            count: downArrowCount
+        ) + [UInt16(36)]
+        var selectionEvents: [NSEvent] = []
+        for (index, keyCode) in keyCodes.enumerated() {
+            let characters = keyCode == 125
+                ? String(UnicodeScalar(NSDownArrowFunctionKey)!)
+                : "\r"
+            guard let event = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: timestamp + (Double(index) * 0.01),
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: keyCode
+            ) else {
+                return false
+            }
+            selectionEvents.append(event)
+        }
+        for event in [events.mouseUp] + selectionEvents {
             NSApp.postEvent(event, atStart: false)
         }
         window.sendEvent(events.mouseDown)

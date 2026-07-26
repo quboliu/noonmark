@@ -644,6 +644,32 @@ public struct ClassificationReferenceSummary: Codable, Equatable, Sendable {
     }
 }
 
+public struct TaskCategoryDeletionOutcome: Equatable, Sendable {
+    public let ungroupedTaskCount: Int
+    public let updatedTodaySnapshotCount: Int
+
+    public init(
+        ungroupedTaskCount: Int,
+        updatedTodaySnapshotCount: Int
+    ) {
+        self.ungroupedTaskCount = ungroupedTaskCount
+        self.updatedTodaySnapshotCount = updatedTodaySnapshotCount
+    }
+}
+
+public struct TaskCategoryDeletionCommitSequence: Equatable, Sendable {
+    public let outcome: TaskCategoryDeletionOutcome
+    public let commitBoundaries: [NoonmarkSnapshot]
+
+    public init(
+        outcome: TaskCategoryDeletionOutcome,
+        commitBoundaries: [NoonmarkSnapshot]
+    ) {
+        self.outcome = outcome
+        self.commitBoundaries = commitBoundaries
+    }
+}
+
 public enum ClassificationPlanChange: Codable, Equatable, Sendable {
     case create(
         kind: ClassificationItemKind,
@@ -3652,15 +3678,65 @@ extension NoonmarkEngine {
         classificationState.revision += 1
     }
 
-    func inheritCurrentClassification(
+    func appendTodayCategoryRemovalSnapshot(
+        traceID: DayTraceID,
+        categoryID: TaskCategoryID,
+        today: LocalDate,
+        now: Date
+    ) throws -> Bool {
+        guard let trace = traces[traceID] else {
+            throw NoonmarkError.notFound("day trace")
+        }
+        guard trace.date == today else {
+            throw NoonmarkError.immutableHistory
+        }
+        guard now.timeIntervalSinceReferenceDate.isFinite else {
+            throw NoonmarkError.invalidInput(
+                "classification audit time must be finite"
+            )
+        }
+        guard let latest = classificationState
+            .snapshotsByTraceID[traceID],
+            latest.category?.id == categoryID
+        else {
+            return false
+        }
+        guard now >= latest.capturedAt else {
+            throw NoonmarkError.invalidTransition(
+                "classification snapshot time moved backwards"
+            )
+        }
+        let snapshot = TraceClassificationSnapshot(
+            traceID: traceID,
+            status: trace.status,
+            category: nil,
+            labels: latest.labels,
+            capturedAt: now,
+            revision: classificationState.revision + 1
+        )
+        classificationState.snapshotEventsByTraceID[
+            traceID,
+            default: []
+        ].append(snapshot)
+        classificationState.snapshotsByTraceID[traceID] = snapshot
+        classificationState.revision += 1
+        return true
+    }
+
+    @discardableResult
+    package func inheritCurrentClassification(
         from sourceChainID: TaskChainID,
         to targetChainID: TaskChainID,
         now: Date
-    ) throws {
+    ) throws -> Bool {
         guard now.timeIntervalSinceReferenceDate.isFinite else {
             throw NoonmarkError.invalidInput("classification audit time must be finite")
         }
-        guard let current = classificationState.currentByChainID[sourceChainID] else { return }
+        guard let current = classificationState
+            .currentByChainID[sourceChainID]
+        else {
+            return false
+        }
         let before = currentClassificationPreview(for: targetChainID)
         let changeRecordID = UUID()
         let planID = UUID()
@@ -3718,6 +3794,7 @@ extension NoonmarkEngine {
         classificationState.changeRecords = try ClassificationAuditCanonicalOrder.changeRecords(
             classificationState.changeRecords + [record]
         )
+        return true
     }
 }
 

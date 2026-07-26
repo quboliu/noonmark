@@ -123,6 +123,104 @@ final class SQLiteTaskClassificationTests: XCTestCase {
         XCTAssertEqual(restored, expected)
     }
 
+    func testRepositoryRoundTripPreservesForwardGroupDeletionAndHistoricalFacts() throws {
+        let databaseURL = makeDatabaseURL("forward-group-deletion")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let engine = NoonmarkEngine()
+        let pastChainID = try engine.createPoolTask(
+            title: "保留历史分组",
+            now: now
+        )
+        _ = try commit(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: pastChainID,
+                    category: .new(name: "待删除分组", colorHex: "#2A6FDB"),
+                    labels: [.new(name: "历史标签", colorHex: "#0E9488")]
+                )
+            ),
+            to: engine,
+            at: now
+        )
+        let categoryID = try XCTUnwrap(
+            engine.snapshot().classifications.categories.keys.first
+        )
+        let pastTraceID = try engine.scheduleFromPool(
+            chainID: pastChainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.abandonChain(
+            from: pastTraceID,
+            now: now.addingTimeInterval(2)
+        )
+
+        let today = LocalDate("2026-07-06")
+        let todayChainID = try engine.createPoolTask(
+            title: "当天转为未分组",
+            now: now.addingTimeInterval(3)
+        )
+        _ = try commit(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: todayChainID,
+                    category: .existing(categoryID),
+                    labels: []
+                )
+            ),
+            to: engine,
+            at: now.addingTimeInterval(3)
+        )
+        let todayTraceID = try engine.scheduleFromPool(
+            chainID: todayChainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(4)
+        )
+        try engine.abandonChain(
+            from: todayTraceID,
+            now: now.addingTimeInterval(5)
+        )
+        _ = try engine.deleteTaskCategoryFromToday(
+            categoryID,
+            today: today,
+            decisionID: UUID(),
+            now: now.addingTimeInterval(6)
+        )
+
+        let expected = engine.snapshot()
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        try repository.save(engine)
+        let restored = try repository.load().snapshot()
+
+        XCTAssertEqual(restored, expected)
+        XCTAssertEqual(
+            restored.classifications.categories[categoryID]?.lifecycle,
+            .archived
+        )
+        XCTAssertNil(
+            restored.classifications.currentByChainID[todayChainID]?
+                .categoryID
+        )
+        XCTAssertEqual(
+            restored.classifications.snapshotEventsByTraceID[pastTraceID]?
+                .first?.category?.id,
+            categoryID
+        )
+        XCTAssertEqual(
+            restored.classifications.snapshotEventsByTraceID[todayTraceID]?
+                .count,
+            2
+        )
+        XCTAssertNil(
+            restored.classifications.snapshotEventsByTraceID[todayTraceID]?
+                .last?.category
+        )
+        XCTAssertNoThrow(try restored.validateIntegrity())
+    }
+
     func testRepositoryRejectsCurrentClassificationCatalogMissingRequiredNameVersions() throws {
         let databaseURL = makeDatabaseURL("classification-missing-name-versions")
         defer { try? FileManager.default.removeItem(at: databaseURL) }
@@ -243,6 +341,79 @@ final class SQLiteTaskClassificationTests: XCTestCase {
         let thirdRestart = try repository.load().snapshot()
         XCTAssertEqual(thirdRestart, secondRestart.snapshot())
         XCTAssertFalse(try repository.load().taskPool().contains { $0.chain.id == chainID })
+    }
+
+    func testClassificationCommitBoundariesPersistAtomicallyInOneSave() throws {
+        let databaseURL = makeDatabaseURL(
+            "classification-commit-boundaries"
+        )
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "分类边界原子落盘",
+            now: now
+        )
+        try repository.save(engine.snapshot())
+
+        _ = try commit(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: .new(
+                        name: "工程",
+                        colorHex: "#2A6FDB"
+                    ),
+                    labels: []
+                )
+            ),
+            to: engine,
+            at: now.addingTimeInterval(1)
+        )
+        let firstBoundary = engine.snapshot()
+        _ = try commit(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: nil,
+                    labels: []
+                )
+            ),
+            to: engine,
+            at: now.addingTimeInterval(2)
+        )
+        let secondBoundary = engine.snapshot()
+
+        try repository.save(
+            secondBoundary,
+            classificationCommitBoundaries: [
+                firstBoundary,
+                secondBoundary
+            ],
+            recordingChangesFor: SyncDeviceID(
+                "classification-boundary-device"
+            ),
+            changedAt: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(
+            try repository.load().snapshot(),
+            secondBoundary
+        )
+        let entries = try SQLiteSyncRepository(
+            databaseURL: databaseURL
+        ).journalEntries().filter {
+            $0.entityType == .classificationCommit
+        }
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(
+            Set(try entries.compactMap { entry in
+                try entry.recordPayload.map(
+                    ClassificationCommitEnvelope.decode
+                )?.changeRecord.id
+            }),
+            Set(secondBoundary.classifications.changeRecords.map(\.id))
+        )
     }
 
     func testRepositoryRoundTripPreservesEveryCurrentClassificationSource() throws {

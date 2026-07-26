@@ -21,9 +21,13 @@ struct PoolDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader(store.copy.navPool, onClose: { store.clearSelection() }, trailing: {
-                IconMenuButton(menuContent: {
+                IconMenuButton(
+                    accessibilityIdentifier:
+                    "pool.detail-overflow.\(task.chain.id.description)",
+                    menuContent: {
                     PoolTaskContextMenu(task: task, surface: "detail-overflow")
-                })
+                    }
+                )
             })
             DetailPrimaryText {
                 EditableDetailTitleRow(task.definition.title, editable: true) {

@@ -32,13 +32,20 @@ public final class SQLiteSyncUploadCoordinator {
     }
 
     public func uploadPending(limit: Int = 100) async throws -> SQLiteSyncUploadResult {
-        let pendingEntries = try uploadCandidates(limit: limit)
+        let snapshot = try engineRepository.load().snapshot()
+        let candidateUnits = try uploadCandidateUnits(
+            limit: limit,
+            snapshot: snapshot
+        )
+        let pendingEntries = candidateUnits.flatMap(\.entries)
         guard pendingEntries.isEmpty == false else {
             return SQLiteSyncUploadResult(pendingCount: 0, uploadedCount: 0, failedCount: 0)
         }
 
-        let snapshot = try engineRepository.load().snapshot()
-        let materialized = try materialize(pendingEntries, snapshot: snapshot)
+        let materialized = try materialize(
+            candidateUnits,
+            snapshot: snapshot
+        )
         guard materialized.records.isEmpty == false else {
             return SQLiteSyncUploadResult(
                 pendingCount: pendingEntries.count,
@@ -62,7 +69,10 @@ public final class SQLiteSyncUploadCoordinator {
         }
     }
 
-    private func uploadCandidates(limit: Int) throws -> [SyncJournalEntry] {
+    private func uploadCandidateUnits(
+        limit: Int,
+        snapshot: NoonmarkSnapshot
+    ) throws -> [UploadCandidateUnit] {
         guard limit > 0 else { return [] }
         var retryableEntries: [SyncJournalEntry] = []
         for state in [SyncChangeState.pendingUpload, .failed] {
@@ -70,11 +80,120 @@ public final class SQLiteSyncUploadCoordinator {
                 contentsOf: try syncRepository.journalEntries(state: state)
             )
         }
-        return Array(
-            retryableEntries
-                .sorted(by: uploadCandidateComesBefore)
-                .prefix(limit)
+        let orderedEntries = retryableEntries.sorted(
+            by: uploadCandidateComesBefore
         )
+        var selectedIDs: Set<UUID> = []
+        var units: [UploadCandidateUnit] = []
+        for entry in orderedEntries where selectedIDs.contains(entry.id) == false {
+            let atomicIDs = recurringAtomicEntryIDs(
+                anchoredBy: entry,
+                entries: orderedEntries,
+                snapshot: snapshot
+            ).subtracting(selectedIDs)
+            let unitEntries = orderedEntries.filter {
+                atomicIDs.contains($0.id)
+            }
+            guard unitEntries.isEmpty == false else { continue }
+            if selectedIDs.isEmpty == false,
+               selectedIDs.count + unitEntries.count > limit
+            {
+                break
+            }
+            units.append(UploadCandidateUnit(entries: unitEntries))
+            selectedIDs.formUnion(atomicIDs)
+            if selectedIDs.count >= limit {
+                break
+            }
+        }
+        return units
+    }
+
+    private func recurringAtomicEntryIDs(
+        anchoredBy entry: SyncJournalEntry,
+        entries: [SyncJournalEntry],
+        snapshot: NoonmarkSnapshot
+    ) -> Set<UUID> {
+        guard entry.entityType == .taskCycleSeries,
+              let series = snapshot.taskCycleSeries.first(where: {
+                  $0.id.description == entry.entityID
+              })
+        else {
+            return [entry.id]
+        }
+        let entityKeys = taskCycleEntityKeys(
+            seriesID: series.id,
+            snapshot: snapshot
+        )
+        return Set(entries.compactMap { candidate in
+            entityKeys.contains(
+                UploadEntityKey(
+                    type: candidate.entityType,
+                    id: candidate.entityID
+                )
+            ) ? candidate.id : nil
+        })
+    }
+
+    private func taskCycleEntityKeys(
+        seriesID: TaskCycleSeriesID,
+        snapshot: NoonmarkSnapshot
+    ) -> Set<UploadEntityKey> {
+        var keys: Set<UploadEntityKey> = [
+            UploadEntityKey(
+                type: .taskCycleSeries,
+                id: seriesID.description
+            )
+        ]
+        let chainIDs = Set(snapshot.chains.compactMap { chain in
+            chain.cycleMembership?.seriesID == seriesID
+                ? chain.id
+                : nil
+        })
+        let definitionIDs = Set(snapshot.definitions.compactMap {
+            definition in
+            chainIDs.contains(definition.chainID)
+                ? definition.id
+                : nil
+        })
+        let traces = snapshot.traces.filter {
+            chainIDs.contains($0.chainID)
+        }
+        let traceIDs = Set(traces.map(\.id))
+
+        keys.formUnion(chainIDs.map {
+            UploadEntityKey(
+                type: .taskChain,
+                id: $0.rawValue.uuidString
+            )
+        })
+        keys.formUnion(definitionIDs.map {
+            UploadEntityKey(
+                type: .taskDefinition,
+                id: $0.rawValue.uuidString
+            )
+        })
+        keys.formUnion(traces.map {
+            UploadEntityKey(
+                type: .dayTrace,
+                id: $0.id.rawValue.uuidString
+            )
+        })
+        keys.formUnion(traces.map {
+            UploadEntityKey(
+                type: .day,
+                id: $0.date.description
+            )
+        })
+        keys.formUnion(snapshot.subtasks.compactMap { subtask in
+            traceIDs.contains(subtask.traceID)
+                ? UploadEntityKey(
+                    type: .subtask,
+                    id: subtask.id.rawValue.uuidString
+                )
+                : nil
+        })
+        return keys
     }
 
     private func uploadCandidateComesBefore(
@@ -103,28 +222,11 @@ public final class SQLiteSyncUploadCoordinator {
     }
 
     private func uploadDependencyOrder(_ entityType: SyncEntityType) -> Int {
-        switch entityType {
-        case .taskChain:
-            0
-        case .taskDefinition:
-            1
-        case .day:
-            2
-        case .classificationCommit:
-            3
-        case .dayTrace:
-            4
-        case .traceClassificationEvent:
-            5
-        case .subtask:
-            6
-        case .appPreferences:
-            7
-        }
+        entityType.dependencyOrder
     }
 
     private func materialize(
-        _ entries: [SyncJournalEntry],
+        _ units: [UploadCandidateUnit],
         snapshot: NoonmarkSnapshot
     ) throws -> MaterializedUploadBatch {
         var records: [SyncRecord] = []
@@ -132,14 +234,23 @@ public final class SQLiteSyncUploadCoordinator {
         var uploadableEntries: [SyncJournalEntry] = []
         var failedCount = 0
 
-        for entry in entries {
+        for unit in units {
             do {
-                records.append(try materializer.record(for: entry, in: snapshot))
-                uploadedIDs.append(entry.id)
-                uploadableEntries.append(entry)
+                records.append(
+                    contentsOf: try materializer.records(
+                        for: unit.entries,
+                        in: snapshot
+                    )
+                )
+                uploadedIDs.append(contentsOf: unit.entries.map(\.id))
+                uploadableEntries.append(contentsOf: unit.entries)
             } catch {
-                failedCount += 1
-                try markFailed([entry], action: "materializationFailed", error: error)
+                failedCount += unit.entries.count
+                try markFailed(
+                    unit.entries,
+                    action: "materializationFailed",
+                    error: error
+                )
             }
         }
 
@@ -183,6 +294,15 @@ public final class SQLiteSyncUploadCoordinator {
     private func message(for error: Error) -> String {
         String(describing: error)
     }
+}
+
+private struct UploadCandidateUnit {
+    let entries: [SyncJournalEntry]
+}
+
+private struct UploadEntityKey: Hashable {
+    let type: SyncEntityType
+    let id: String
 }
 
 private struct MaterializedUploadBatch {

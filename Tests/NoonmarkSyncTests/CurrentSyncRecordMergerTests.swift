@@ -189,20 +189,14 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
         var daily = TaskChain(
             cycleMembership: TaskCycleMembership(
                 seriesID: seriesID,
-                occurrenceDate: today,
-                startDate: today,
-                endDate: LocalDate("2026-07-20"),
-                schedule: .daily
+                occurrenceDate: today
             ),
             now: now
         )
         var weekdays = daily
         weekdays.cycleMembership = TaskCycleMembership(
             seriesID: seriesID,
-            occurrenceDate: today,
-            startDate: today,
-            endDate: LocalDate("2026-07-20"),
-            schedule: .weekdays
+            occurrenceDate: LocalDate("2026-07-06")
         )
         daily.updatedAt = now.addingTimeInterval(1)
         weekdays.updatedAt = now.addingTimeInterval(1)
@@ -227,6 +221,55 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
                 .invalidCurrentRecordMerge(recordID: first.id)
             )
         }
+    }
+
+    func testCycleMembershipAssignmentIsMonotonicAcrossCurrentMerges() throws {
+        let seriesID = TaskCycleSeriesID()
+        let chainID = TaskChainID()
+        var recurring = TaskChain(
+            id: chainID,
+            cycleMembership: TaskCycleMembership(
+                seriesID: seriesID,
+                occurrenceDate: today
+            ),
+            now: now
+        )
+        recurring.updatedAt = now.addingTimeInterval(1)
+        var laterStandalone = TaskChain(
+            id: chainID,
+            now: now
+        )
+        laterStandalone.updatedAt = now.addingTimeInterval(2)
+        let mapper = SyncRecordMapper()
+        let recurringRecord = try mapper.record(
+            for: recurring,
+            modifiedBy: SyncDeviceID("mac-recurring")
+        )
+        let standaloneRecord = try mapper.record(
+            for: laterStandalone,
+            modifiedBy: SyncDeviceID("mac-stale-standalone")
+        )
+        let merger = CurrentSyncRecordMerger()
+
+        let forward = try mapper.decodeTaskChain(
+            merger.merge(
+                existing: recurringRecord,
+                incoming: standaloneRecord
+            )
+        )
+        let reverse = try mapper.decodeTaskChain(
+            merger.merge(
+                existing: standaloneRecord,
+                incoming: recurringRecord
+            )
+        )
+
+        XCTAssertEqual(
+            forward.cycleMembership,
+            recurring.cycleMembership
+        )
+        XCTAssertEqual(reverse, forward)
+        XCTAssertEqual(forward.updatedAt, laterStandalone.updatedAt)
     }
 
     func testThreeVariantFoldKeepsOnlyLiveSyntheticContributors() throws {
@@ -556,6 +599,14 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
         _ = try engine.addSubtask(
             traceID: traceID,
             title: "覆盖全部 current 类型",
+            now: now
+        )
+        _ = try engine.createTaskCycleSeries(
+            title: "重复见证边界",
+            startDate: today,
+            endDate: today,
+            schedule: .daily,
+            today: today,
             now: now
         )
         let deviceID = SyncDeviceID("witness-boundary")

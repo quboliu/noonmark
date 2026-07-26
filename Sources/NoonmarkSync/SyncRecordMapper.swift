@@ -8,7 +8,7 @@ public enum SyncRecordMapperError: Error, Equatable, Sendable {
 }
 
 public struct SyncRecordMapper: Sendable {
-    public static let currentOrdinaryPayloadFormatVersion = 5
+    public static let currentOrdinaryPayloadFormatVersion = 6
 
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -44,6 +44,9 @@ public struct SyncRecordMapper: Sendable {
             throw SyncRecordMapperError.classificationStateRequiresCommitRecords
         }
         return try snapshot.days.map { try record(for: $0, modifiedBy: deviceID) }
+            + snapshot.taskCycleSeries.map {
+                try record(for: $0, modifiedBy: deviceID)
+            }
             + snapshot.chains.map { try record(for: $0, modifiedBy: deviceID) }
             + snapshot.definitions.map { try record(for: $0, modifiedBy: deviceID) }
             + snapshot.traces.map { try record(for: $0, modifiedBy: deviceID) }
@@ -70,6 +73,22 @@ public struct SyncRecordMapper: Sendable {
                 deviceID: deviceID
             ),
             payload: day
+        )
+    }
+
+    public func record(
+        for series: TaskCycleSeries,
+        modifiedBy deviceID: SyncDeviceID
+    ) throws -> SyncRecord {
+        try makeRecord(
+            header: RecordHeader(
+                id: "task-cycle-series:\(series.id.description)",
+                type: .taskCycleSeries,
+                entityID: series.id.description,
+                modifiedAt: series.updatedAt,
+                deviceID: deviceID
+            ),
+            payload: series
         )
     }
 
@@ -209,6 +228,10 @@ public struct SyncRecordMapper: Sendable {
         switch record.entityType {
         case .day:
             return .day(try decodeDay(record))
+        case .taskCycleSeries:
+            return .taskCycleSeries(
+                try decodeTaskCycleSeries(record)
+            )
         case .taskChain:
             return .taskChain(try decodeTaskChain(record))
         case .taskDefinition:
@@ -237,6 +260,19 @@ public struct SyncRecordMapper: Sendable {
             entityID: day.date.description
         )
         return day
+    }
+
+    public func decodeTaskCycleSeries(
+        _ record: SyncRecord
+    ) throws -> TaskCycleSeries {
+        try require(record, type: .taskCycleSeries)
+        let series = try decode(TaskCycleSeries.self, from: record)
+        try requireIdentity(
+            record,
+            id: "task-cycle-series:\(series.id.description)",
+            entityID: series.id.description
+        )
+        return series
     }
 
     public func decodeTaskChain(_ record: SyncRecord) throws -> TaskChain {

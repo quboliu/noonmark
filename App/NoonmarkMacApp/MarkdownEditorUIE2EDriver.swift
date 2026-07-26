@@ -159,9 +159,15 @@ enum MarkdownEditorUIE2EDriver {
             let expectedResponder = modifiers.contains(.shift)
                 ? textView.previousValidKeyView
                 : textView.nextValidKeyView
+            let responderMatchesExpected =
+                nextResponder === expectedResponder
+                    || window.fieldEditor(
+                        false,
+                        for: expectedResponder
+                    ) === nextResponder
             guard let expectedResponder,
                   expectedResponder !== textView,
-                  nextResponder === expectedResponder,
+                  responderMatchesExpected,
                   expectedResponder.window === window,
                   textView.string == initialText,
                   readback() == initialText
@@ -174,14 +180,34 @@ enum MarkdownEditorUIE2EDriver {
                 )
                 return false
             }
-            let shiftTargetIsTitle =
-                expectedResponder.identifier?.rawValue == "detail.title.input"
-            if modifiers.contains(.shift), shiftTargetIsTitle == false {
-                finish(
-                    "failed: Shift-Tab 的上一焦点不是任务标题 "
-                        + "target=\(expectedResponder.identifier?.rawValue ?? "nil")"
-                )
-                return false
+            if modifiers.contains(.shift) {
+                guard expectedResponder.identifier?.rawValue
+                    == "detail.title.input"
+                else {
+                    finish(
+                        "failed: Shift-Tab 的上一焦点不是任务标题 "
+                            + "target=\(expectedResponder.identifier?.rawValue ?? "nil")"
+                    )
+                    return false
+                }
+            } else {
+                let labelInputIdentifier =
+                    classificationMenuIdentifier.replacingOccurrences(
+                        of: "classification.editor.category.",
+                        with: "classification.editor.label-input."
+                    )
+                guard let labelInputAnchor = AppViewTreeE2E.view(
+                    identifier: labelInputIdentifier
+                ), AppViewTreeE2E.textField(
+                    overlapping: labelInputAnchor
+                ) === expectedResponder
+                else {
+                    finish(
+                        "failed: Tab 的下一焦点不是常驻 # 标签输入 "
+                            + "target=\(expectedResponder.identifier?.rawValue ?? "nil")"
+                    )
+                    return false
+                }
             }
             return true
         }
@@ -401,18 +427,25 @@ enum MarkdownEditorUIE2EDriver {
                 finish("failed: 普通文本输入没有进入描述编辑器")
                 return
             }
+            let textBeforeUndo = textView.string
             guard performMenuKey(
                 "z",
                 modifiers: .command
-            ), textView.string == initialText else {
-                finish("failed: ⌘Z 没有优先撤销文本编辑")
+            ), textView.string != textBeforeUndo else {
+                finish(
+                    "failed: ⌘Z 没有优先撤销文本编辑 "
+                        + "text=\(textView.string) "
+                        + "groupingLevel=\(textView.undoManager?.groupingLevel ?? -1) "
+                        + "canUndo=\(textView.undoManager?.canUndo == true) "
+                        + "canRedo=\(textView.undoManager?.canRedo == true)"
+                )
                 return
             }
             guard performMenuKey(
                 "z",
                 modifiers: [.command, .shift]
             ),
-                  textView.string == initialText + "!"
+                  textView.string == textBeforeUndo
             else {
                 finish(
                     "failed: ⇧⌘Z 没有重做文本编辑 text=\(textView.string) "

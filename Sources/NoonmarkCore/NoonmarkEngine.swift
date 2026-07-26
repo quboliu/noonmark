@@ -17,6 +17,9 @@ public struct SnapshotUndoOutcome: Equatable, Sendable {
 
 public final class NoonmarkEngine {
     public private(set) var days: [LocalDate: Day]
+    public private(set) var taskCycleSeries: [
+        TaskCycleSeriesID: TaskCycleSeries
+    ]
     public private(set) var chains: [TaskChainID: TaskChain]
     public private(set) var definitions: [TaskDefinitionID: TaskDefinition]
     public private(set) var traces: [DayTraceID: DayTrace]
@@ -26,6 +29,7 @@ public final class NoonmarkEngine {
 
     public init() {
         self.days = [:]
+        self.taskCycleSeries = [:]
         self.chains = [:]
         self.definitions = [:]
         self.traces = [:]
@@ -38,6 +42,11 @@ public final class NoonmarkEngine {
         self.init()
         try snapshot.validateIntegrity()
         days = Dictionary(uniqueKeysWithValues: snapshot.days.map { ($0.date, $0) })
+        taskCycleSeries = Dictionary(
+            uniqueKeysWithValues: snapshot.taskCycleSeries.map {
+                ($0.id, $0)
+            }
+        )
         chains = Dictionary(uniqueKeysWithValues: snapshot.chains.map { ($0.id, $0) })
         definitions = Dictionary(uniqueKeysWithValues: snapshot.definitions.map { ($0.id, $0) })
         traces = Dictionary(uniqueKeysWithValues: snapshot.traces.map { ($0.id, $0) })
@@ -50,6 +59,12 @@ public final class NoonmarkEngine {
         let traceByID = traces
         return NoonmarkSnapshot(
             days: days.values.sorted { $0.date < $1.date },
+            taskCycleSeries: taskCycleSeries.values.sorted {
+                if $0.createdAt != $1.createdAt {
+                    return $0.createdAt < $1.createdAt
+                }
+                return $0.id.description < $1.id.description
+            },
             chains: chains.values.sorted {
                 if $0.createdAt == $1.createdAt {
                     return $0.id.description < $1.id.description
@@ -123,12 +138,145 @@ public final class NoonmarkEngine {
 
     private func adoptState(from candidate: NoonmarkEngine) {
         days = candidate.days
+        taskCycleSeries = candidate.taskCycleSeries
         chains = candidate.chains
         definitions = candidate.definitions
         traces = candidate.traces
         subtasks = candidate.subtasks
         preferences = candidate.preferences
         classificationState = candidate.classificationState
+    }
+
+    @discardableResult
+    public func deleteTaskCategoryFromToday(
+        _ categoryID: TaskCategoryID,
+        today: LocalDate,
+        interactionID: UUID = UUID(),
+        decisionID: UUID,
+        now: Date = Date()
+    ) throws -> TaskCategoryDeletionOutcome {
+        try deleteTaskCategoryFromTodayRecordingCommitBoundaries(
+            categoryID,
+            today: today,
+            interactionID: interactionID,
+            decisionID: decisionID,
+            now: now
+        ).outcome
+    }
+
+    @discardableResult
+    public func deleteTaskCategoryFromTodayRecordingCommitBoundaries(
+        _ categoryID: TaskCategoryID,
+        today: LocalDate,
+        interactionID: UUID = UUID(),
+        decisionID: UUID,
+        now: Date = Date()
+    ) throws -> TaskCategoryDeletionCommitSequence {
+        let candidate = try NoonmarkEngine(snapshot: snapshot())
+        let sequence = try candidate.deleteTaskCategoryFromTodayInPlace(
+            categoryID,
+            today: today,
+            interactionID: interactionID,
+            decisionID: decisionID,
+            now: now
+        )
+        try candidate.snapshot().validateIntegrity()
+        adoptState(from: candidate)
+        return sequence
+    }
+
+    private func deleteTaskCategoryFromTodayInPlace(
+        _ categoryID: TaskCategoryID,
+        today: LocalDate,
+        interactionID: UUID,
+        decisionID: UUID,
+        now: Date
+    ) throws -> TaskCategoryDeletionCommitSequence {
+        guard classificationState.categories[categoryID]?.lifecycle
+            == .active
+        else {
+            throw NoonmarkError.invalidTransition(
+                "only an active task category can be deleted"
+            )
+        }
+
+        let affectedChainIDs = classificationState.currentByChainID
+            .compactMap { chainID, current in
+                current.categoryID == categoryID ? chainID : nil
+            }
+            .sorted { $0.description < $1.description }
+        var commitBoundaries: [NoonmarkSnapshot] = []
+        for chainID in affectedChainIDs {
+            guard let current = classificationState
+                .currentByChainID[chainID]
+            else {
+                continue
+            }
+            let plan = try prepareClassification(
+                .setCurrent(
+                    TaskClassificationDraft(
+                        chainID: chainID,
+                        category: nil,
+                        labels: current.labelIDs
+                            .sorted { $0.description < $1.description }
+                            .map(TaskLabelChoice.existing)
+                    )
+                ),
+                source: .deterministicDomainAction(
+                    reason: "task category deleted from today onward"
+                ),
+                interactionID: UUID(),
+                now: now
+            )
+            try commitDeterministicDomainClassification(plan, now: now)
+            commitBoundaries.append(snapshot())
+        }
+
+        let affectedChainIDSet = Set(affectedChainIDs)
+        var updatedTodaySnapshotCount = 0
+        let todayTraceIDs = traces.values
+            .filter { trace in
+                trace.date == today
+                    && affectedChainIDSet.contains(trace.chainID)
+                    && classificationState.snapshotsByTraceID[
+                        trace.id
+                    ]?.category?.id == categoryID
+            }
+            .map(\.id)
+            .sorted { $0.description < $1.description }
+        for traceID in todayTraceIDs {
+            if try appendTodayCategoryRemovalSnapshot(
+                traceID: traceID,
+                categoryID: categoryID,
+                today: today,
+                now: now
+            ) {
+                updatedTodaySnapshotCount += 1
+            }
+        }
+
+        let archivePlan = try prepareClassification(
+            .archiveCategory(categoryID),
+            source: .userDirect,
+            interactionID: interactionID,
+            now: now
+        )
+        _ = try commitClassification(
+            archivePlan,
+            confirmation: .confirmedByUser(
+                confirming: archivePlan,
+                decisionID: decisionID
+            ),
+            now: now
+        )
+        commitBoundaries.append(snapshot())
+        return TaskCategoryDeletionCommitSequence(
+            outcome: TaskCategoryDeletionOutcome(
+                ungroupedTaskCount: affectedChainIDs.count,
+                updatedTodaySnapshotCount: updatedTodaySnapshotCount
+            ),
+            commitBoundaries: commitBoundaries
+        )
     }
 
     @discardableResult
@@ -159,9 +307,108 @@ public final class NoonmarkEngine {
         try normalizeTitle(title)
     }
 
+    func storeTaskCycleSeries(_ series: TaskCycleSeries) {
+        taskCycleSeries[series.id] = series
+    }
+
+    func ensureTaskCycleDatesUnlocked(
+        _ dates: [LocalDate]
+    ) throws {
+        for date in Set(dates) {
+            try ensureUnlockedDay(date)
+        }
+    }
+
+    func taskCycleConversionSource(
+        chainID: TaskChainID
+    ) throws -> (
+        chain: TaskChain,
+        definition: TaskDefinition,
+        activeTrace: DayTrace?,
+        isInTaskPool: Bool
+    ) {
+        (
+            try chain(chainID),
+            try currentDefinition(for: chainID),
+            activeTrace(for: chainID),
+            isInTaskPool(chainID)
+        )
+    }
+
+    func prepareTaskCycleAdoption(
+        chainID: TaskChainID,
+        membership: TaskCycleMembership,
+        descriptionText: String?,
+        now: Date
+    ) throws -> (
+        chain: TaskChain,
+        insertedTrace: DayTrace?
+    ) {
+        var adoptedChain = try chain(chainID)
+        try adoptedChain.markContentModified(at: now)
+        adoptedChain.cycleMembership = membership
+
+        guard activeTrace(for: chainID) == nil else {
+            return (adoptedChain, nil)
+        }
+        let definition = try currentDefinition(for: chainID)
+        return (
+            adoptedChain,
+            DayTrace(
+                chainID: chainID,
+                definitionID: definition.id,
+                date: membership.occurrenceDate,
+                priority: nextPriority(on: membership.occurrenceDate),
+                descriptionText: descriptionText,
+                now: now
+            )
+        )
+    }
+
+    func storePreparedTaskCycleAdoption(
+        chain: TaskChain,
+        insertedTrace: DayTrace?,
+        now: Date
+    ) {
+        chains[chain.id] = chain
+        if let insertedTrace {
+            traces[insertedTrace.id] = insertedTrace
+            ensureDay(insertedTrace.date, now: now)
+        }
+    }
+
+    func prepareTaskCycleTraceCancellation(
+        _ value: DayTrace,
+        today: LocalDate,
+        now: Date
+    ) throws -> DayTrace {
+        var trace = value
+        try trace.markContentModified(at: now)
+        trace.status = .cancelledDraft
+        trace.pinOrder = nil
+        trace.completedAt = nil
+        trace.settledAt = now
+        trace.draftCancellationID = UUID()
+        trace.draftCancelledOn = today
+        return trace
+    }
+
+    func storePreparedTaskCycleTraceCancellations(
+        _ preparedTraces: [DayTrace],
+        now: Date
+    ) {
+        for trace in preparedTraces {
+            traces[trace.id] = trace
+            if let updatedAt = chains[trace.chainID]?.updatedAt {
+                chains[trace.chainID]?.updatedAt = max(updatedAt, now)
+            }
+        }
+    }
+
     func installTaskCycleOccurrence(
         normalizedTitle: String,
         descriptionText: String?,
+        plannedSubtasks: [PlannedSubtask] = [],
         membership: TaskCycleMembership,
         now: Date
     ) {
@@ -174,6 +421,15 @@ public final class NoonmarkEngine {
             sequence: 1,
             title: normalizedTitle,
             descriptionText: descriptionText,
+            plannedSubtasks: plannedSubtasks.map {
+                PlannedSubtask(
+                    lineageID: $0.lineageID,
+                    title: $0.title,
+                    difficulty: $0.difficulty,
+                    position: $0.position,
+                    now: now
+                )
+            },
             now: now
         )
         let trace = DayTrace(

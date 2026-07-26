@@ -70,4 +70,42 @@ final class NewTaskDraftParserTests: XCTestCase {
             #"Prepare @"Client Work" "#
         )
     }
+
+    func testRecurringSlashCommandIsRemovedFromTaskTitle() {
+        let chinese = NewTaskDraftParser.parse(
+            "/重复 晨跑五公里 @生活 #健康"
+        )
+        let english = NewTaskDraftParser.parse(
+            "/repeat Write weekly report #review"
+        )
+
+        XCTAssertEqual(chinese.command, .recurring)
+        XCTAssertEqual(chinese.title, "晨跑五公里")
+        XCTAssertEqual(chinese.categoryName, "生活")
+        XCTAssertEqual(chinese.labelNames, ["健康"])
+        XCTAssertEqual(english.command, .recurring)
+        XCTAssertEqual(english.title, "Write weekly report")
+        XCTAssertEqual(english.labelNames, ["review"])
+    }
+
+    func testSlashCommandQueryOnlyActivatesAtDraftStart() {
+        XCTAssertEqual(
+            NewTaskDraftParser.activeCommandQuery(in: "/重"),
+            "重"
+        )
+        XCTAssertEqual(
+            NewTaskDraftParser.activeCommandQuery(in: "/rep"),
+            "rep"
+        )
+        XCTAssertNil(
+            NewTaskDraftParser.activeCommandQuery(
+                in: "整理 /repeat 文档"
+            )
+        )
+        XCTAssertNil(
+            NewTaskDraftParser.activeCommandQuery(
+                in: "/repeat 晨跑"
+            )
+        )
+    }
 }

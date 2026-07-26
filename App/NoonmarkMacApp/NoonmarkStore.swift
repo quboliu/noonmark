@@ -14,6 +14,25 @@ import NoonmarkZhulongAI
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct TaskCycleCreationRequest: Equatable {
+    enum Origin: Equatable {
+        case newTask
+        case existingTask(
+            sourceChainID: TaskChainID,
+            adoptsSourceChain: Bool
+        )
+    }
+
+    let origin: Origin
+    let title: String
+    let descriptionText: String?
+    let plannedSubtasks: [PlannedSubtask]
+    let categoryName: String?
+    let labelNames: [String]
+    let startDate: LocalDate
+    let locksStartDate: Bool
+}
+
 enum PersistenceFailureE2EError: LocalizedError {
     case injectedSaveFailure
     case unsafeFailpointRequest
@@ -609,6 +628,7 @@ final class NoonmarkStore: ObservableObject {
     @Published var workspaceSelection = WorkspaceSelection<WorkspaceSelectionItem>()
     @Published var expandedTraceIDs: Set<DayTraceID> = []
     @Published var expandedUnfinishedChainIDs: Set<TaskChainID> = []
+    @Published var expandedTaskCycleSeriesIDs: Set<TaskCycleSeriesID> = []
     @Published var quickText = ""
     @Published var poolText = ""
     @Published var showingPicker: DatePickerPurpose?
@@ -616,6 +636,9 @@ final class NoonmarkStore: ObservableObject {
     @Published var showingChangeDialog = false
     @Published var preparedDataImport: PreparedDataImport?
     @Published var showingClassificationManager = false
+    @Published var showingTaskCycleCreation = false
+    @Published var taskCycleCreationRequest:
+        TaskCycleCreationRequest?
     @Published var isSidebarExpanded = MacUIShellLayout.sidebarExpandedByDefault
     @Published var isDetailRailExpanded = !MacUIShellLayout.detailRailCollapsedByDefault
     @Published var changeText = ""

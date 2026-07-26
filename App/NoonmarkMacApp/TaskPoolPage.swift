@@ -40,6 +40,15 @@ struct PoolTaskContextMenu: View {
         }
         .accessibilityIdentifier("\(accessibilityPrefix).schedule-date")
         Divider()
+        Button(store.copy.convertToRecurringTask) {
+            store.beginTaskCycleConversion(
+                chainID: task.chain.id
+            )
+        }
+        .accessibilityIdentifier(
+            "\(accessibilityPrefix).convert-recurring"
+        )
+        Divider()
         Button(store.copy.deleteTask, role: .destructive) {
             store.deletePoolTask(task.chain.id)
         }
@@ -63,7 +72,20 @@ struct TaskPoolPage: View {
         )
     }
 
-    var tasks: [PoolTask] { store.engine.taskPool() }
+    var cycleTracks: [TaskCycleTrack] {
+        store.engine.taskCycleTracks(
+            today: store.today,
+            collection: .pool
+        )
+    }
+
+    var tasks: [PoolTask] {
+        store.standaloneCollectionItems(
+            store.engine.taskPool(),
+            chainID: \.chain.id
+        )
+    }
+
     private var tasksByID: [String: PoolTask] {
         Dictionary(uniqueKeysWithValues: tasks.map { ($0.chain.id.description, $0) })
     }
@@ -90,7 +112,8 @@ struct TaskPoolPage: View {
             PageHeader(title: store.copy.navPool, subtitle: store.copy.poolSubtitle) {
                 TaskCollectionPresentationMenu(
                     copy: store.copy,
-                    accessibilityIdentifier: "task-collection-view.pool",
+                    accessibilityIdentifier:
+                    "task-collection-view.pool",
                     preference: $presentationPreference
                 )
             }
@@ -101,6 +124,10 @@ struct TaskPoolPage: View {
                         .padding(.bottom, 12)
 
                     LazyVStack(spacing: 0) {
+                        TaskCycleSection(
+                            tracks: cycleTracks,
+                            collection: .pool
+                        )
                         ForEach(presentationSections, id: \.id) { section in
                             if presentationPreference.organization == .grouped {
                                 VStack(alignment: .leading, spacing: 0) {
@@ -122,7 +149,7 @@ struct TaskPoolPage: View {
                                 }
                             }
                         }
-                        if tasks.isEmpty {
+                        if tasks.isEmpty && cycleTracks.isEmpty {
                             EmptyState(
                                 kind: .taskPool,
                                 text: store.copy.emptyPool,

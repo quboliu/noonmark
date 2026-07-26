@@ -148,6 +148,125 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
     }
 
+    func testRecurringSeriesCountsAsOneUserTaskWithRecurringBreakdown() async throws {
+        let databaseURL = makeDatabaseURL("recurring-task-summary")
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let transport = InMemorySyncTransport()
+        let deviceID = SyncDeviceID("mac-recurring-task-summary")
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "连续三天复盘",
+            startDate: today,
+            endDate: LocalDate("2026-07-07"),
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+        try repository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+
+        let created = try await coordinator.sync(
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(
+            created.taskChanges,
+            SQLiteSyncTaskChanges(
+                newTaskCount: 1,
+                updatedTaskCount: 0,
+                newRecurringTaskCount: 1,
+                updatedRecurringTaskCount: 0
+            )
+        )
+
+        let changedEngine = try repository.load()
+        try changedEngine.skipTaskCycleOccurrence(
+            seriesID: seriesID,
+            occurrenceDate: LocalDate("2026-07-07"),
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        try repository.save(
+            changedEngine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now.addingTimeInterval(2)
+        )
+
+        let updated = try await coordinator.sync(
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(
+            updated.taskChanges,
+            SQLiteSyncTaskChanges(
+                newTaskCount: 0,
+                updatedTaskCount: 1,
+                newRecurringTaskCount: 0,
+                updatedRecurringTaskCount: 1
+            )
+        )
+    }
+
+    func testConvertingExistingTaskCountsAsOneRecurringTaskUpdate() async throws {
+        let databaseURL = makeDatabaseURL("recurring-conversion-summary")
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let transport = InMemorySyncTransport()
+        let deviceID = SyncDeviceID("mac-recurring-conversion-summary")
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "既有任务",
+            now: now
+        )
+        try repository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        _ = try await coordinator.sync(
+            now: now.addingTimeInterval(1)
+        )
+
+        let changedEngine = try repository.load()
+        _ = try changedEngine.convertTaskToCycleSeries(
+            chainID: chainID,
+            startDate: today,
+            endDate: LocalDate("2026-07-07"),
+            schedule: .daily,
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        try repository.save(
+            changedEngine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now.addingTimeInterval(2)
+        )
+
+        let converted = try await coordinator.sync(
+            now: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(
+            converted.taskChanges,
+            SQLiteSyncTaskChanges(
+                newTaskCount: 0,
+                updatedTaskCount: 1,
+                newRecurringTaskCount: 0,
+                updatedRecurringTaskCount: 1
+            )
+        )
+    }
+
     func testSyncReportsUniqueNewAndUpdatedTasksAcrossUploadAndDownload() async throws {
         let macURL = makeDatabaseURL("task-summary-mac")
         let phoneURL = makeDatabaseURL("task-summary-phone")

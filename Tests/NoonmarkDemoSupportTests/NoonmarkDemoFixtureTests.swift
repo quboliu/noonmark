@@ -27,8 +27,15 @@ struct NoonmarkDemoFixtureTests {
         #expect(track.appears(in: .future))
         #expect(track.appears(in: .unfinished))
         #expect(track.appears(in: .completed))
+        #expect(track.appears(in: .pool))
         #expect(fixture.report.taskCycleSeriesCount == 1)
         #expect(fixture.report.taskCycleOccurrenceCount == 13)
+        #expect(fixture.report.deletableCategoryBoundaryCount > 0)
+        #expect(
+            track.days.first {
+                $0.date == LocalDate("2026-07-26")
+            }?.state == .skipped
+        )
         let movedFutureTarget = try #require(
             track.days.first {
                 $0.futurePlanTarget?.date != nil

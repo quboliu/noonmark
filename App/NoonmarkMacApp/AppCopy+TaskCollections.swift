@@ -29,6 +29,114 @@ private let englishTaskCycleStateNames: [TaskCycleTrackDayState: String] = [
 ]
 
 extension AppCopy {
+    var recurringTasks: String {
+        language == .chinese ? "重复任务" : "Recurring tasks"
+    }
+
+    var newRecurringTask: String {
+        language == .chinese ? "新建重复任务…" : "New Recurring Task…"
+    }
+
+    var convertToRecurringTask: String {
+        language == .chinese
+            ? "转为重复任务…"
+            : "Convert to Recurring Task…"
+    }
+
+    var recurringSlashCommand: String {
+        language == .chinese ? "/重复" : "/repeat"
+    }
+
+    var recurringSlashCommandDescription: String {
+        language == .chinese
+            ? "创建重复任务"
+            : "Create a recurring task"
+    }
+
+    var recurringTaskTitle: String {
+        language == .chinese ? "任务名称" : "Task name"
+    }
+
+    var recurringTaskSchedule: String {
+        language == .chinese ? "重复方式" : "Schedule"
+    }
+
+    var recurringTaskStartDate: String {
+        language == .chinese ? "开始日期" : "Start date"
+    }
+
+    var recurringTaskEndDate: String {
+        language == .chinese ? "结束日期" : "End date"
+    }
+
+    var createRecurringTask: String {
+        language == .chinese ? "创建" : "Create"
+    }
+
+    var confirmRecurringTaskConversion: String {
+        language == .chinese ? "转为重复任务" : "Convert"
+    }
+
+    var cancelRecurringTaskCreation: String {
+        language == .chinese ? "取消" : "Cancel"
+    }
+
+    var recurringTaskTrack: String {
+        language == .chinese ? "轨迹" : "Track"
+    }
+
+    var skipRecurringOccurrence: String {
+        language == .chinese ? "跳过本次" : "Skip this occurrence"
+    }
+
+    var stopRecurringTask: String {
+        language == .chinese ? "停止重复…" : "Stop repeating…"
+    }
+
+    var stopRecurringTaskConfirmation: String {
+        language == .chinese
+            ? "今天和历史记录会保留，只取消今天之后仍待执行的实例。"
+            : "Today and history remain; only pending occurrences after today are cancelled."
+    }
+
+    var taskCycleCreated: String {
+        language == .chinese ? "重复任务已创建。" : "Recurring task created."
+    }
+
+    var taskConvertedToCycle: String {
+        language == .chinese
+            ? "任务已转为重复任务。"
+            : "Task converted to a recurring task."
+    }
+
+    var taskCycleOccurrenceSkipped: String {
+        language == .chinese ? "本次已跳过。" : "Occurrence skipped."
+    }
+
+    var taskCategoryDeletedFromToday: String {
+        language == .chinese
+            ? "分组已删除；今天和未来的任务已转为未分组。"
+            : "Group deleted; current and future tasks are now ungrouped."
+    }
+
+    func taskCycleStopped(_ count: Int) -> String {
+        language == .chinese
+            ? "已停止重复，取消 \(count) 个未来实例。"
+            : "Repeating stopped; \(count) future occurrence\(count == 1 ? "" : "s") cancelled."
+    }
+
+    func taskCycleOccurrencePreview(_ count: Int) -> String {
+        language == .chinese
+            ? "将创建 \(count) 个计划日"
+            : "\(count) scheduled occurrence\(count == 1 ? "" : "s") will be created"
+    }
+
+    func taskCycleDayMarker(_ schedule: TaskCycleSchedule) -> String {
+        language == .chinese
+            ? "重复 · \(taskCycleSchedule(schedule))"
+            : "Recurring · \(taskCycleSchedule(schedule))"
+    }
+
     var taskCollectionView: String { language == .chinese ? "视图" : "View" }
     var taskCollectionOrganization: String { language == .chinese ? "组织方式" : "Organization" }
     var taskCollectionFlat: String { language == .chinese ? "不分组" : "Flat" }
@@ -54,6 +162,8 @@ extension AppCopy {
         collection: TaskCycleCollection
     ) -> String {
         switch (language, collection) {
+        case (.chinese, .pool):
+            "\(track.scheduledCount) 个计划日 · \(track.completedCount) 天已完成"
         case (.chinese, .future):
             "\(track.futurePlanCount) 个未来计划 · \(track.completedCount) 天已完成"
         case (.chinese, .unfinished):
@@ -66,6 +176,8 @@ extension AppCopy {
             "\(track.unfinishedCount) unfinished · \(track.completedCount) completed"
         case (.english, .completed):
             "\(track.completedCount) completed · \(track.scheduledCount) scheduled days"
+        case (.english, .pool):
+            "\(track.scheduledCount) scheduled · \(track.completedCount) completed"
         }
     }
 

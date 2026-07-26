@@ -28,21 +28,28 @@ public enum NewTaskDraftIssue: Equatable, Sendable {
     case multipleCategories([String])
 }
 
+public enum NewTaskCreationCommand: Equatable, Sendable {
+    case recurring
+}
+
 public struct NewTaskDraft: Equatable, Sendable {
     public let title: String
     public let categoryName: String?
     public let labelNames: [String]
+    public let command: NewTaskCreationCommand?
     public let issue: NewTaskDraftIssue?
 
     public init(
         title: String,
         categoryName: String?,
         labelNames: [String],
+        command: NewTaskCreationCommand? = nil,
         issue: NewTaskDraftIssue?
     ) {
         self.title = title
         self.categoryName = categoryName
         self.labelNames = labelNames
+        self.command = command
         self.issue = issue
     }
 }
@@ -55,11 +62,18 @@ public enum NewTaskDraftParser {
                 title: "",
                 categoryName: nil,
                 labelNames: [],
+                command: nil,
                 issue: nil
             )
         }
 
-        let occurrences = tokenOccurrences(in: raw)
+        let commandPrefix = recurringCommandPrefix(in: raw)
+        let taskContent = commandPrefix.map {
+            String(raw[$0.upperBound...]).trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+        } ?? raw
+        let occurrences = tokenOccurrences(in: taskContent)
         let categoryNames = occurrences
             .filter { $0.kind == .category }
             .map(\.name)
@@ -67,7 +81,7 @@ public enum NewTaskDraftParser {
             ? .multipleCategories(categoryNames)
             : nil
 
-        var title = raw
+        var title = taskContent
         for occurrence in occurrences.reversed() {
             title.replaceSubrange(occurrence.range, with: " ")
         }
@@ -78,8 +92,23 @@ public enum NewTaskDraftParser {
             labelNames: occurrences
                 .filter { $0.kind == .label }
                 .map(\.name),
+            command: commandPrefix == nil ? nil : .recurring,
             issue: issue
         )
+    }
+
+    public static func activeCommandQuery(
+        in rawText: String
+    ) -> String? {
+        let raw = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard raw.first == "/",
+              raw.dropFirst().allSatisfy({
+                  $0.isWhitespace == false
+              })
+        else {
+            return nil
+        }
+        return String(raw.dropFirst())
     }
 
     public static func activeToken(in rawText: String) -> NewTaskClassificationToken? {
@@ -139,6 +168,28 @@ public enum NewTaskDraftParser {
             index = occurrence.range.upperBound
         }
         return occurrences
+    }
+
+    private static func recurringCommandPrefix(
+        in raw: String
+    ) -> Range<String.Index>? {
+        for command in ["/重复", "/repeat"] {
+            guard raw.lowercased().hasPrefix(command.lowercased())
+            else {
+                continue
+            }
+            let upperBound = raw.index(
+                raw.startIndex,
+                offsetBy: command.count
+            )
+            guard upperBound == raw.endIndex
+                || raw[upperBound].isWhitespace
+            else {
+                continue
+            }
+            return raw.startIndex ..< upperBound
+        }
+        return nil
     }
 
     private static func tokenOccurrence(

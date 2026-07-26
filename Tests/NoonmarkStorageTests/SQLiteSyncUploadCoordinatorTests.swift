@@ -33,6 +33,64 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         XCTAssertEqual(Set(try syncRepository.auditLog().map(\.action)), ["uploaded"])
     }
 
+    func testUploadSoftLimitNeverSplitsANewRecurringSeries() async throws {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let transport = InMemorySyncTransport()
+        let deviceID = SyncDeviceID("mac-cycle")
+        let engine = NoonmarkEngine()
+        try engineRepository.save(engine.snapshot())
+
+        _ = try engine.createTaskCycleSeries(
+            title: "四十天复盘",
+            startDate: today,
+            endDate: LocalDate("2026-08-13"),
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+        let journalCount = try syncRepository.journalEntries(
+            state: .pendingUpload
+        ).count
+        XCTAssertGreaterThan(journalCount, 100)
+
+        let coordinator = SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        let result = try await coordinator.uploadPending(limit: 100)
+        let records = try await transport.fetchAll()
+        let mergeResult = SyncRecordMerger().merge(
+            records: records,
+            into: try ValidatedSyncSnapshot(
+                NoonmarkEngine().snapshot()
+            ),
+            detectedAt: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(result.pendingCount, journalCount)
+        XCTAssertEqual(result.uploadedCount, journalCount)
+        XCTAssertEqual(result.failedCount, 0)
+        XCTAssertTrue(
+            try syncRepository.journalEntries(
+                state: .pendingUpload
+            ).isEmpty
+        )
+        XCTAssertTrue(mergeResult.conflicts.isEmpty)
+        XCTAssertTrue(mergeResult.waitingRecords.isEmpty)
+        XCTAssertNoThrow(try mergeResult.snapshot.validateIntegrity())
+        XCTAssertEqual(mergeResult.snapshot.taskCycleSeries.count, 1)
+        XCTAssertEqual(mergeResult.snapshot.chains.count, 40)
+    }
+
     func testMissingEntityJournalEntryFailsClosedWithoutPushing() async throws {
         let databaseURL = makeDatabaseURL()
         let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)

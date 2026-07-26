@@ -475,9 +475,41 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description)."
         )
         guard AppViewTreeE2E.activateMainWindow(),
+              AppViewTreeE2E.view(
+                  identifier:
+                  "task-cycle-section.\(verificationCase.accessibilityName)"
+              ) != nil,
               trackIdentifiers == Set([expectedTrackIdentifier]),
-              dayIdentifiers == expectedDayIdentifiers
+              AppViewTreeE2E.view(
+                  identifier: "task-cycle-create.open"
+              ) == nil
         else {
+            retryTaskCyclePresentation(
+                context: context,
+                index: index,
+                remainingAttempts: remainingAttempts - 1
+            )
+            return
+        }
+        if dayIdentifiers?.isEmpty == true {
+            guard AppViewTreeE2E.click(
+                identifier: expectedTrackIdentifier
+            ) else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError.presentationContractFailed,
+                    on: context.store
+                )
+                return
+            }
+            retryTaskCyclePresentation(
+                context: context,
+                index: index,
+                remainingAttempts: 100
+            )
+            return
+        }
+        guard dayIdentifiers == expectedDayIdentifiers else {
             retryTaskCyclePresentation(
                 context: context,
                 index: index,
@@ -619,7 +651,12 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         }
         guard context.store.page == .day,
               context.store.selectedDate == expectedDate,
-              context.store.selectedTraceID == expectedTraceID
+              context.store.selectedTraceID == expectedTraceID,
+              nextIndex == nil
+              || AppViewTreeE2E.view(
+                  identifier:
+                  "day-row.task-cycle.\(expectedTraceID.description)"
+              ) != nil
         else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 retryTaskCycleNavigation(
@@ -770,6 +807,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
     private var cycleVerificationCases: [DemoCycleCheckCase] {
         [
+            DemoCycleCheckCase(page: .pool, collection: .pool),
             DemoCycleCheckCase(page: .future, collection: .future),
             DemoCycleCheckCase(page: .unfinished, collection: .unfinished),
             DemoCycleCheckCase(page: .completed, collection: .completed)
@@ -1673,6 +1711,7 @@ private struct DemoCycleCheckCase {
 
     var accessibilityName: String {
         switch collection {
+        case .pool: "pool"
         case .future: "future"
         case .unfinished: "unfinished"
         case .completed: "completed"

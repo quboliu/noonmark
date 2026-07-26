@@ -190,6 +190,10 @@ private struct NoonmarkQuickEntryView: View {
         store.newTaskDraftIssueMessage(for: model.text)
     }
 
+    private var showsSlashCommand: Bool {
+        store.newTaskSlashCommandMatches(model.text)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
@@ -213,7 +217,11 @@ private struct NoonmarkQuickEntryView: View {
                     AppE2EViewAnchor(identifier: "quick-entry.field")
                 }
 
-            if suggestions.isEmpty == false, let activeToken {
+            if showsSlashCommand {
+                NewTaskSlashCommandSuggestion {
+                    model.text = store.completeNewTaskSlashCommand()
+                }
+            } else if suggestions.isEmpty == false, let activeToken {
                 NewTaskClassificationSuggestionList(
                     tokenKind: activeToken.kind,
                     suggestions: suggestions
@@ -260,7 +268,8 @@ private struct NoonmarkQuickEntryView: View {
         .onChange(of: model.focusRequest) { _, _ in inputIsFocused = true }
         .onChange(of: model.text, initial: true) { _, _ in
             model.updatePresentation(
-                suggestionCount: suggestions.count,
+                suggestionCount:
+                showsSlashCommand ? 1 : suggestions.count,
                 showsIssue: issueMessage != nil
             )
         }

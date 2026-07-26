@@ -71,7 +71,16 @@ struct IconButton: View {
 }
 
 struct IconMenuButton<Content: View>: View {
+    let accessibilityIdentifier: String?
     @ViewBuilder let menuContent: Content
+
+    init(
+        accessibilityIdentifier: String? = nil,
+        @ViewBuilder menuContent: () -> Content
+    ) {
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.menuContent = menuContent()
+    }
 
     var body: some View {
         Menu {
@@ -88,6 +97,13 @@ struct IconMenuButton<Content: View>: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .foregroundStyle(Theme.text3)
+        .background {
+            if let accessibilityIdentifier {
+                AppE2EViewAnchor(
+                    identifier: accessibilityIdentifier
+                )
+            }
+        }
     }
 }
 

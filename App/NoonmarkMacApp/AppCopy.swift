@@ -447,17 +447,32 @@ struct AppCopy {
         let taskChanges = result.taskChanges
         return switch language {
         case .chinese:
-            "\(requiresAttention ? "同步需处理" : "同步完成")：新增任务 \(taskChanges.newTaskCount) 条，更新任务 \(taskChanges.updatedTaskCount) 条\(syncAttentionSuffix(attentionIssues))"
+            "\(requiresAttention ? "同步需处理" : "同步完成")：\(chineseTaskCount(taskChanges.newTaskCount, recurringCount: taskChanges.newRecurringTaskCount, action: "新增"))，\(chineseTaskCount(taskChanges.updatedTaskCount, recurringCount: taskChanges.updatedRecurringTaskCount, action: "更新"))\(syncAttentionSuffix(attentionIssues))"
         case .english:
-            "\(requiresAttention ? "Sync needs attention" : "Sync complete"): \(englishTaskCount(taskChanges.newTaskCount, adjective: "new")), \(englishTaskCount(taskChanges.updatedTaskCount, adjective: "updated"))\(syncAttentionSuffix(attentionIssues))"
+            "\(requiresAttention ? "Sync needs attention" : "Sync complete"): \(englishTaskCount(taskChanges.newTaskCount, recurringCount: taskChanges.newRecurringTaskCount, adjective: "new")), \(englishTaskCount(taskChanges.updatedTaskCount, recurringCount: taskChanges.updatedRecurringTaskCount, adjective: "updated"))\(syncAttentionSuffix(attentionIssues))"
         }
+    }
+
+    private func chineseTaskCount(
+        _ count: Int,
+        recurringCount: Int,
+        action: String
+    ) -> String {
+        let recurring = recurringCount > 0
+            ? "（其中重复任务 \(recurringCount) 条）"
+            : ""
+        return "\(action)任务 \(count) 条\(recurring)"
     }
 
     private func englishTaskCount(
         _ count: Int,
+        recurringCount: Int,
         adjective: String
     ) -> String {
-        "\(count) \(adjective) \(count == 1 ? "task" : "tasks")"
+        let recurring = recurringCount > 0
+            ? " (including \(recurringCount) recurring \(recurringCount == 1 ? "task" : "tasks"))"
+            : ""
+        return "\(count) \(adjective) \(count == 1 ? "task" : "tasks")\(recurring)"
     }
 
     private func syncAttentionIssues(

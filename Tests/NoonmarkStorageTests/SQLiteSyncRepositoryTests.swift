@@ -51,7 +51,7 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         )
     }
 
-    func testTaskCycleMembershipRoundTripsThroughCurrentSQLiteSchema() throws {
+    func testTaskCycleParentMembershipAndCancellationRoundTripThroughSQLite() throws {
         let databaseURL = makeDatabaseURL()
         let repository = SQLiteEngineRepository(databaseURL: databaseURL)
         let engine = NoonmarkEngine()
@@ -64,6 +64,12 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
             today: today,
             now: now
         )
+        try engine.skipTaskCycleOccurrence(
+            seriesID: seriesID,
+            occurrenceDate: LocalDate("2026-07-06"),
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
 
         try repository.save(engine.snapshot())
         let restored = try repository.load()
@@ -75,6 +81,10 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
 
         XCTAssertEqual(track.days.count, 5)
         XCTAssertEqual(track.scheduledCount, 5)
+        XCTAssertEqual(
+            restored.taskCycleSeries[seriesID]?.cancellationFacts.count,
+            1
+        )
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
     }
 

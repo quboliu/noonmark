@@ -20,7 +20,6 @@ struct TaskClassificationEditor: View {
     @State private var selectedCategoryID: String?
     @State private var selectedLabels: [EditorLabel] = []
     @State private var labelInput = ""
-    @State private var isAddingLabel = AppLaunchArguments.contains("--e2e-open-classification-label-editor")
     @State private var isCreatingGroup = false
     @State private var newGroupName = ""
     @State private var categoryError: String?
@@ -125,6 +124,25 @@ struct TaskClassificationEditor: View {
         }
     }
 
+    private var labelInputQuery: TaskLabelInputQuery {
+        TaskLabelInputQuery(labelInput)
+    }
+
+    private var matchingLabelSuggestions:
+        [ClassificationCatalogItemProjection]
+    {
+        let matchingIDs = Set(
+            labelInputQuery.matchingCandidates(
+                in: availableLabels.map {
+                    TaskLabelInputCandidate(id: $0.id, name: $0.name)
+                }
+            ).map(\.id)
+        )
+        return availableLabels.filter {
+            matchingIDs.contains($0.id)
+        }
+    }
+
     private var categoryMenu: some View {
         Menu {
             Button(copy.noGroupAction) { selectCategory(nil) }
@@ -209,94 +227,164 @@ struct TaskClassificationEditor: View {
                     ForEach(selectedLabels) { label in
                         labelChip(label)
                     }
-
-                    if isAddingLabel == false {
-                        Menu {
-                            if availableLabels.isEmpty {
-                                Text(copy.allTagsSelected)
-                            } else {
-                                ForEach(availableLabels) { label in
-                                    Button(label.name) {
-                                        addExistingLabel(label)
-                                    }
-                                    .accessibilityIdentifier(
-                                        "classification.editor.available-label.\(chainID.description).\(label.id)"
-                                    )
-                                }
-                            }
-                            Divider()
-                            Button(copy.createTagAction, systemImage: "plus") {
-                                isAddingLabel = true
-                                Task { @MainActor in isLabelInputFocused = true }
-                            }
-                        } label: {
-                            Label(copy.addAction, systemImage: "plus")
-                                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                                .foregroundStyle(Theme.accent)
-                                .padding(.horizontal, 7)
-                                .frame(
-                                    minHeight: CGFloat(
-                                        MacUIAccessibilityLayout.minimumInteractiveTargetSize
-                                    )
-                                )
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(Theme.accentSoft.opacity(0.46))
-                                )
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .accessibilityIdentifier("classification.editor.add-label.\(chainID.description)")
-                    }
+                    labelInputField
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if isAddingLabel {
-                HStack(spacing: 7) {
-                    Color.clear.frame(width: Self.fieldLabelWidth, height: 1)
-                    TextField(copy.tagNamePlaceholder, text: $labelInput)
-                        .textFieldStyle(.plain)
-                        .font(.noonmarkSystem(size: 11.5))
-                        .foregroundStyle(Theme.text1)
-                        .padding(.horizontal, 8)
-                        .frame(height: 28)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.controlFill))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(labelError == nil ? Theme.line.opacity(0.8) : Theme.warn, lineWidth: 1)
-                        )
-                        .focused($isLabelInputFocused)
-                        .onSubmit(addLabelFromInput)
-                        .accessibilityIdentifier("classification.editor.label-input.\(chainID.description)")
-                        .accessibilityLabel(
-                            copy.addTagAccessibilityLabel(taskTitle: accessibilityTaskTitle)
-                        )
-                    Button(copy.cancelAction) {
-                        labelInput = ""
-                        labelError = nil
-                        isAddingLabel = false
-                    }
-                    .buttonStyle(.plain)
-                    .font(.noonmarkSystem(size: 10.5))
-                    .foregroundStyle(Theme.text3)
-                    Button(copy.addAction, action: addLabelFromInput)
-                        .buttonStyle(.plain)
-                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .frame(
-                            minHeight: CGFloat(
-                                MacUIAccessibilityLayout.minimumInteractiveTargetSize
-                            )
-                        )
-                }
+            if labelInputQuery.requestsSuggestions {
+                labelSuggestionDropdown
             }
 
             if let labelError {
                 editorError(labelError)
             }
         }
+    }
+
+    private var labelInputField: some View {
+        TextField(copy.tagNamePlaceholder, text: $labelInput)
+            .textFieldStyle(.plain)
+            .font(.noonmarkSystem(size: 10.5, weight: .medium))
+            .foregroundStyle(Theme.text1)
+            .padding(.horizontal, 8)
+            .frame(minWidth: 112, maxWidth: 164)
+            .frame(
+                minHeight: CGFloat(
+                    MacUIAccessibilityLayout.minimumInteractiveTargetSize
+                )
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Theme.controlFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(
+                        labelError == nil
+                            ? (
+                                isLabelInputFocused
+                                    ? Theme.accent.opacity(0.42)
+                                    : Theme.line.opacity(0.8)
+                            )
+                            : Theme.warn,
+                        lineWidth: 1
+                    )
+            )
+            .focused($isLabelInputFocused)
+            .onSubmit(addLabelFromInput)
+            .onExitCommand {
+                labelInput = ""
+                labelError = nil
+                isLabelInputFocused = false
+            }
+            .accessibilityIdentifier(
+                "classification.editor.label-input.\(chainID.description)"
+            )
+            .accessibilityLabel(
+                copy.addTagAccessibilityLabel(
+                    taskTitle: accessibilityTaskTitle
+                )
+            )
+            .overlay {
+                AppE2EViewAnchor(
+                    identifier:
+                    "classification.editor.label-input.\(chainID.description)",
+                    verificationText: copy.tagNamePlaceholder
+                )
+            }
+    }
+
+    private var labelSuggestionDropdown: some View {
+        HStack(alignment: .top, spacing: 7) {
+            Color.clear.frame(width: Self.fieldLabelWidth, height: 1)
+            VStack(alignment: .leading, spacing: 0) {
+                if matchingLabelSuggestions.isEmpty {
+                    Text(labelSuggestionEmptyText)
+                        .font(.noonmarkSystem(size: 10.5))
+                        .foregroundStyle(Theme.text3)
+                        .padding(.horizontal, 10)
+                        .frame(height: 32)
+                } else {
+                    ForEach(matchingLabelSuggestions.prefix(6)) {
+                        label in
+                        Button {
+                            addExistingLabel(label)
+                        } label: {
+                            HStack(spacing: 7) {
+                                Text("#")
+                                    .font(
+                                        .noonmarkSystem(
+                                            size: 10,
+                                            weight: .black,
+                                            design: .rounded
+                                        )
+                                    )
+                                    .foregroundStyle(
+                                        classificationUIColor(
+                                            label.colorHex
+                                        )
+                                    )
+                                Text(label.name)
+                                    .font(
+                                        .noonmarkSystem(
+                                            size: 10.5,
+                                            weight: .medium
+                                        )
+                                    )
+                                    .foregroundStyle(Theme.text1)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 10)
+                            .frame(height: 32)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier(
+                            "classification.editor.available-label.\(chainID.description).\(label.id)"
+                        )
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier:
+                                "classification.editor.available-label.\(chainID.description).\(label.id)",
+                                verificationText: label.name
+                            )
+                        }
+                    }
+                }
+            }
+            .frame(width: 190)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Theme.panel)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(Theme.line.opacity(0.86))
+            )
+            .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
+            .accessibilityIdentifier(
+                "classification.editor.label-suggestions.\(chainID.description)"
+            )
+            .overlay {
+                AppE2EViewAnchor(
+                    identifier:
+                    "classification.editor.label-suggestions.\(chainID.description)"
+                )
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var labelSuggestionEmptyText: String {
+        if availableLabels.isEmpty
+            && labelInputQuery.normalizedName.isEmpty
+        {
+            return copy.allTagsSelected
+        }
+        return copy.createTagFromInput(
+            labelInputQuery.normalizedName
+        )
     }
 
     private var savedStatus: some View {
@@ -319,7 +407,6 @@ struct TaskClassificationEditor: View {
 
     private func resetTransientEditorState() {
         labelInput = ""
-        isAddingLabel = false
         newGroupName = ""
         isCreatingGroup = false
         categoryError = nil
@@ -440,32 +527,39 @@ struct TaskClassificationEditor: View {
     }
 
     private func addLabelFromInput() {
-        let name = normalizedLabelName(labelInput)
-        guard name.isEmpty == false else {
+        let candidates = activeLabels.map {
+            TaskLabelInputCandidate(id: $0.id, name: $0.name)
+        }
+        let candidate: EditorLabel
+        switch labelInputQuery.submission(in: candidates) {
+        case .empty:
             labelError = copy.emptyTagNameError
             return
-        }
-
-        let key = ClassificationNameCanonicalizer.canonicalKey(name)
-        let candidate: EditorLabel = if let existing = activeLabels.first(where: {
-            ClassificationNameCanonicalizer.canonicalKey($0.name) == key
-        }) {
-            .existing(existing)
-        } else {
-            .new(name: name, colorHex: Self.newLabelColorHex)
+        case let .existing(id):
+            guard let existing = activeLabels.first(where: {
+                $0.id == id
+            }) else {
+                labelError = presentation.message(
+                    for: .classificationResourceUnavailable
+                )
+                return
+            }
+            candidate = .existing(existing)
+        case let .new(name):
+            candidate = .new(
+                name: name,
+                colorHex: Self.newLabelColorHex
+            )
         }
 
         guard selectedLabels.contains(where: { $0.matches(candidate) }) == false else {
-            labelError = copy.duplicateTagError(name)
+            labelError = copy.duplicateTagError(candidate.name)
             return
         }
 
         selectedLabels.append(candidate)
         labelError = nil
         saveDraft(errorPlacement: .label, clearsLabelInputOnSuccess: true)
-        if labelError == nil {
-            isAddingLabel = false
-        }
     }
 
     private func addExistingLabel(_ item: ClassificationCatalogItemProjection) {
@@ -476,7 +570,10 @@ struct TaskClassificationEditor: View {
         }
         selectedLabels.append(candidate)
         labelError = nil
-        saveDraft(errorPlacement: .label)
+        saveDraft(
+            errorPlacement: .label,
+            clearsLabelInputOnSuccess: true
+        )
     }
 
     private func removeLabel(_ label: EditorLabel) {
@@ -537,10 +634,6 @@ struct TaskClassificationEditor: View {
                 showsSavedStatus = false
             }
         }
-    }
-
-    private func normalizedLabelName(_ name: String) -> String {
-        ClassificationNameCanonicalizer.displayName(name)
     }
 
     private func editorErrorMessage(_ error: Error) -> String {

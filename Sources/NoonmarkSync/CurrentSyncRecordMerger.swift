@@ -2,6 +2,7 @@ import Foundation
 import NoonmarkCore
 
 enum CurrentSyncRecordMergeError: Error, Equatable {
+    case taskCycleSeriesIdentityCollision
     case taskChainIdentityCollision
     case taskDefinitionIdentityCollision
     case dayTraceIdentityCollision
@@ -118,6 +119,8 @@ struct CurrentSyncRecordMerger {
         switch record.entityType {
         case .day:
             try validateDayRecord(record)
+        case .taskCycleSeries:
+            try validateTaskCycleSeriesRecord(record)
         case .taskChain:
             try validateTaskChainRecord(record)
         case .taskDefinition:
@@ -141,6 +144,19 @@ struct CurrentSyncRecordMerger {
         try validateRecordMutationClock(
             record,
             canonicalMutationClock: day.updatedAt
+        )
+    }
+
+    private func validateTaskCycleSeriesRecord(
+        _ record: SyncRecord
+    ) throws {
+        let series = try mapper.decodeTaskCycleSeries(record)
+        // Whole-series schedule integrity is checked after the parent and all
+        // occurrence records enter one structural component. Rejecting the
+        // parent here would strand otherwise related children as waiting.
+        try validateRecordMutationClock(
+            record,
+            canonicalMutationClock: series.updatedAt
         )
     }
 
@@ -202,7 +218,7 @@ struct CurrentSyncRecordMerger {
             try validateSubtaskRecord(record)
         case .appPreferences:
             _ = try mapper.decodeAppPreferences(record)
-        case .day, .taskChain, .taskDefinition, .dayTrace,
+        case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace,
              .classificationCommit, .traceClassificationEvent:
             preconditionFailure("unexpected current record validation type")
         }
@@ -564,7 +580,7 @@ struct CurrentSyncRecordMerger {
                     ))
                 case .dayTrace:
                     evidence.traces.append(try mapper.decodeDayTrace(record))
-                case .day, .taskDefinition, .subtask, .appPreferences,
+                case .day, .taskCycleSeries, .taskDefinition, .subtask, .appPreferences,
                      .classificationCommit, .traceClassificationEvent:
                     break
                 }
@@ -625,7 +641,7 @@ struct CurrentSyncRecordMerger {
                 case .taskChain:
                     let chain = try mapper.decodeTaskChain(record)
                     context.chainsByID[chain.id] = chain
-                case .taskDefinition, .dayTrace, .subtask, .appPreferences,
+                case .taskCycleSeries, .taskDefinition, .dayTrace, .subtask, .appPreferences,
                      .classificationCommit, .traceClassificationEvent:
                     break
                 }
@@ -660,6 +676,11 @@ struct CurrentSyncRecordMerger {
         switch existing.entityType {
         case .day:
             return try mergeDay(existing: existing, incoming: incoming)
+        case .taskCycleSeries:
+            return try mergeTaskCycleSeries(
+                existing: existing,
+                incoming: incoming
+            )
         case .taskChain:
             return try mergeTaskChain(
                 existing: existing,
@@ -687,6 +708,75 @@ struct CurrentSyncRecordMerger {
         case .classificationCommit, .traceClassificationEvent:
             return lwwWinner(existing, incoming)
         }
+    }
+
+    private func mergeTaskCycleSeries(
+        existing: SyncRecord,
+        incoming: SyncRecord
+    ) throws -> SyncRecord {
+        let existingSeries = try mapper.decodeTaskCycleSeries(existing)
+        let incomingSeries = try mapper.decodeTaskCycleSeries(incoming)
+        guard existingSeries.id == incomingSeries.id,
+              existingSeries.startDate == incomingSeries.startDate,
+              existingSeries.endDate == incomingSeries.endDate,
+              existingSeries.schedule == incomingSeries.schedule,
+              existingSeries.createdAt.timeIntervalSinceReferenceDate.bitPattern
+              == incomingSeries.createdAt.timeIntervalSinceReferenceDate.bitPattern
+        else {
+            throw CurrentSyncRecordMergeError
+                .taskCycleSeriesIdentityCollision
+        }
+        let sameVersion =
+            existingSeries.updatedAt.timeIntervalSinceReferenceDate.bitPattern
+                == incomingSeries.updatedAt
+                .timeIntervalSinceReferenceDate.bitPattern
+        if sameVersion {
+            guard existingSeries.title == incomingSeries.title,
+                  existingSeries.descriptionText
+                  == incomingSeries.descriptionText
+            else {
+                throw CurrentSyncRecordMergeError.invalidContentClock
+            }
+        }
+        var factsByID = Dictionary(
+            uniqueKeysWithValues: existingSeries.cancellationFacts.map {
+                ($0.id, $0)
+            }
+        )
+        for fact in incomingSeries.cancellationFacts {
+            if let existingFact = factsByID[fact.id],
+               existingFact != fact
+            {
+                throw CurrentSyncRecordMergeError
+                    .taskCycleSeriesIdentityCollision
+            }
+            factsByID[fact.id] = fact
+        }
+        let winner = lwwWinner(existing, incoming)
+        let winnerSeries = try mapper.decodeTaskCycleSeries(winner)
+        let mergedSeries = TaskCycleSeries(
+            id: winnerSeries.id,
+            title: winnerSeries.title,
+            descriptionText: winnerSeries.descriptionText,
+            startDate: winnerSeries.startDate,
+            endDate: winnerSeries.endDate,
+            schedule: winnerSeries.schedule,
+            cancellationFacts: factsByID.values.sorted {
+                if $0.recordedAt != $1.recordedAt {
+                    return $0.recordedAt < $1.recordedAt
+                }
+                return $0.id.uuidString < $1.id.uuidString
+            },
+            createdAt: winnerSeries.createdAt,
+            updatedAt: max(
+                existingSeries.updatedAt,
+                incomingSeries.updatedAt
+            )
+        )
+        return try mapper.record(
+            for: mergedSeries,
+            modifiedBy: winner.modifiedByDeviceID
+        )
     }
 
     private func mergeAppPreferences(
@@ -759,11 +849,13 @@ struct CurrentSyncRecordMerger {
     ) throws -> SyncRecord {
         let existingChain = try mapper.decodeTaskChain(existing)
         let incomingChain = try mapper.decodeTaskChain(incoming)
-        guard existingChain.createdAt == incomingChain.createdAt,
-              existingChain.cycleMembership == incomingChain.cycleMembership
-        else {
+        guard existingChain.createdAt == incomingChain.createdAt else {
             throw CurrentSyncRecordMergeError.taskChainIdentityCollision
         }
+        let cycleMembership = try mergedCycleMembership(
+            existingChain.cycleMembership,
+            incomingChain.cycleMembership
+        )
         try validateContentClock(
             createdAt: existingChain.createdAt,
             contentUpdatedAt: existingChain.updatedAt,
@@ -795,6 +887,7 @@ struct CurrentSyncRecordMerger {
         )
         var mergedChain = winner.chain
         mergedChain.noteEntries = noteEntries
+        mergedChain.cycleMembership = cycleMembership
         let witnesses = try reactivationWitnesses(
             in: existing,
             for: existingChain
@@ -807,6 +900,24 @@ struct CurrentSyncRecordMerger {
             modifiedBy: winner.record.modifiedByDeviceID,
             reactivationWitnesses: witnesses
         )
+    }
+
+    private func mergedCycleMembership(
+        _ existing: TaskCycleMembership?,
+        _ incoming: TaskCycleMembership?
+    ) throws -> TaskCycleMembership? {
+        switch (existing, incoming) {
+        case (nil, nil):
+            nil
+        case let (membership?, nil), let (nil, membership?):
+            membership
+        case let (existing?, incoming?)
+            where existing == incoming:
+            existing
+        case (.some, .some):
+            throw CurrentSyncRecordMergeError
+                .taskChainIdentityCollision
+        }
     }
 
     private func mergeTaskDefinition(

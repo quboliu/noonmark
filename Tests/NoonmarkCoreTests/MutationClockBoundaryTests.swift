@@ -34,6 +34,48 @@ final class MutationClockBoundaryTests: XCTestCase {
         )
     }
 
+    func testTaskCycleSeriesClockParticipatesInPersistedFrontier() throws {
+        let source = NoonmarkEngine()
+        let today = LocalDate("2026-07-20")
+        let seriesID = try source.createTaskCycleSeries(
+            title: "远端周期计划",
+            startDate: today,
+            endDate: LocalDate("2026-07-21"),
+            schedule: .daily,
+            today: today,
+            now: base
+        )
+        let remoteFuture = base.addingTimeInterval(1000)
+        var snapshot = source.snapshot()
+        let index = try XCTUnwrap(
+            snapshot.taskCycleSeries.firstIndex {
+                $0.id == seriesID
+            }
+        )
+        let series = snapshot.taskCycleSeries[index]
+        snapshot.taskCycleSeries[index] = TaskCycleSeries(
+            id: series.id,
+            title: series.title,
+            descriptionText: series.descriptionText,
+            startDate: series.startDate,
+            endDate: series.endDate,
+            schedule: series.schedule,
+            cancellationFacts: series.cancellationFacts,
+            createdAt: series.createdAt,
+            updatedAt: remoteFuture
+        )
+        let engine = try NoonmarkEngine(snapshot: snapshot)
+
+        let localMutation = try engine.nextMutationDate(
+            reference: base.addingTimeInterval(500)
+        )
+
+        XCTAssertEqual(
+            localMutation.timeIntervalSinceReferenceDate.bitPattern,
+            remoteFuture.timeIntervalSinceReferenceDate.nextUp.bitPattern
+        )
+    }
+
     func testEveryNonFiniteReferenceFailsClosed() {
         let engine = NoonmarkEngine()
 

@@ -80,17 +80,18 @@ final class SyncRecordMergerTests: XCTestCase {
             now: now
         )
         var malformed = source.snapshot()
-        let chainIndex = try XCTUnwrap(
-            malformed.chains.firstIndex {
-                $0.cycleMembership?.seriesID == seriesID
+        let seriesIndex = try XCTUnwrap(
+            malformed.taskCycleSeries.firstIndex {
+                $0.id == seriesID
             }
         )
-        malformed.chains[chainIndex].cycleMembership = TaskCycleMembership(
-            seriesID: seriesID,
-            occurrenceDate: today,
+        malformed.taskCycleSeries[seriesIndex] = TaskCycleSeries(
+            id: seriesID,
+            title: "非法超长周期",
             startDate: today,
             endDate: LocalDate("2028-07-05"),
-            schedule: .daily
+            schedule: .daily,
+            createdAt: now
         )
         let mapper = SyncRecordMapper()
         let records = try mapper.records(
@@ -110,6 +111,56 @@ final class SyncRecordMergerTests: XCTestCase {
         XCTAssertTrue(result.waitingRecords.isEmpty)
         XCTAssertFalse(result.conflicts.isEmpty)
         XCTAssertNoThrow(try result.snapshot.validateIntegrity())
+    }
+
+    func testConcurrentCycleSkipsMergeWithoutLosingEitherCancellation() throws {
+        let baselineEngine = NoonmarkEngine()
+        let seriesID = try baselineEngine.createTaskCycleSeries(
+            title: "并发每日复盘",
+            startDate: today,
+            endDate: LocalDate("2026-07-08"),
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+        let baseline = baselineEngine.snapshot()
+        let first = try NoonmarkEngine(snapshot: baseline)
+        let second = try NoonmarkEngine(snapshot: baseline)
+        try first.skipTaskCycleOccurrence(
+            seriesID: seriesID,
+            occurrenceDate: tomorrow,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        try second.skipTaskCycleOccurrence(
+            seriesID: seriesID,
+            occurrenceDate: LocalDate("2026-07-07"),
+            today: today,
+            now: now.addingTimeInterval(2)
+        )
+        let mapper = SyncRecordMapper()
+        let records = try mapper.records(
+            from: first.snapshot(),
+            modifiedBy: SyncDeviceID("cycle-a")
+        ) + mapper.records(
+            from: second.snapshot(),
+            modifiedBy: SyncDeviceID("cycle-b")
+        )
+
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: records,
+            into: baseline,
+            detectedAt: now.addingTimeInterval(3)
+        )
+        let merged = try NoonmarkEngine(snapshot: result.snapshot)
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        let series = try XCTUnwrap(merged.taskCycleSeries[seriesID])
+        XCTAssertTrue(series.isOccurrenceSkipped(tomorrow))
+        XCTAssertTrue(
+            series.isOccurrenceSkipped(LocalDate("2026-07-07"))
+        )
+        XCTAssertEqual(series.cancellationFacts.count, 2)
     }
 
     func testCurrentRecordBatchWaitsAndRollsBackWhenItWouldBreakSnapshotIntegrity() throws {

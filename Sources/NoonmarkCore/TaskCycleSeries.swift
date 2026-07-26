@@ -15,42 +15,172 @@ public enum TaskCycleSchedule: String, Codable, CaseIterable, Equatable, Hashabl
             return weekday != 1 && weekday != 7
         }
     }
+
+    public func occurrenceCount(
+        from startDate: LocalDate,
+        through endDate: LocalDate
+    ) throws -> Int {
+        try TaskCycleCivilCalendar.materializableDates(
+            from: startDate,
+            through: endDate
+        ).count(where: includes)
+    }
+}
+
+public enum TaskCycleCancellationScope: Codable, Equatable, Hashable, Sendable {
+    case occurrence(LocalDate)
+    case followingDates(after: LocalDate)
+}
+
+public struct TaskCycleCancellationFact: Codable, Equatable, Hashable, Sendable {
+    public let id: UUID
+    public let scope: TaskCycleCancellationScope
+    public let recordedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        scope: TaskCycleCancellationScope,
+        recordedAt: Date
+    ) {
+        self.id = id
+        self.scope = scope
+        self.recordedAt = recordedAt
+    }
+}
+
+public struct TaskCycleSeries: Codable, Equatable, Sendable {
+    public let id: TaskCycleSeriesID
+    public private(set) var title: String
+    public private(set) var descriptionText: String?
+    public let startDate: LocalDate
+    public let endDate: LocalDate
+    public let schedule: TaskCycleSchedule
+    public private(set) var cancellationFacts: [TaskCycleCancellationFact]
+    public let createdAt: Date
+    public private(set) var updatedAt: Date
+
+    public init(
+        id: TaskCycleSeriesID = TaskCycleSeriesID(),
+        title: String,
+        descriptionText: String? = nil,
+        startDate: LocalDate,
+        endDate: LocalDate,
+        schedule: TaskCycleSchedule,
+        cancellationFacts: [TaskCycleCancellationFact] = [],
+        createdAt: Date,
+        updatedAt: Date? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.descriptionText = descriptionText
+        self.startDate = startDate
+        self.endDate = endDate
+        self.schedule = schedule
+        self.cancellationFacts = cancellationFacts
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt ?? createdAt
+    }
+
+    public var stoppedAfterDate: LocalDate? {
+        cancellationFacts.compactMap { fact in
+            if case let .followingDates(after: date) = fact.scope {
+                return date
+            }
+            return nil
+        }.min()
+    }
+
+    public func isOccurrenceSkipped(_ date: LocalDate) -> Bool {
+        cancellationFacts.contains { fact in
+            if case let .occurrence(skippedDate) = fact.scope {
+                return skippedDate == date
+            }
+            return false
+        }
+    }
+
+    mutating func appendCancellation(
+        _ scope: TaskCycleCancellationScope,
+        now: Date
+    ) throws {
+        guard updatedAt.timeIntervalSinceReferenceDate.isFinite,
+              now.timeIntervalSinceReferenceDate.isFinite,
+              now >= updatedAt
+        else {
+            throw NoonmarkError.invalidInput(
+                "content mutation time cannot move backwards"
+            )
+        }
+        updatedAt = now
+        cancellationFacts.append(
+            TaskCycleCancellationFact(scope: scope, recordedAt: now)
+        )
+    }
+
+    public func validateIntegrity() throws {
+        let normalizedTitle = title.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard normalizedTitle.isEmpty == false,
+              normalizedTitle == title,
+              createdAt.timeIntervalSinceReferenceDate.isFinite,
+              updatedAt.timeIntervalSinceReferenceDate.isFinite,
+              updatedAt >= createdAt
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle series contains invalid content facts"
+            )
+        }
+        let dates = try TaskCycleCivilCalendar.materializableDates(
+            from: startDate,
+            through: endDate
+        )
+        let scheduledDates = Set(dates.filter(schedule.includes))
+        guard scheduledDates.isEmpty == false,
+              Set(cancellationFacts.map(\.id)).count
+              == cancellationFacts.count
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle series contains invalid schedule facts"
+            )
+        }
+        for fact in cancellationFacts {
+            guard fact.recordedAt.timeIntervalSinceReferenceDate.isFinite,
+                  fact.recordedAt >= createdAt,
+                  fact.recordedAt <= updatedAt
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle series contains invalid cancellation facts"
+                )
+            }
+            switch fact.scope {
+            case let .occurrence(date):
+                guard scheduledDates.contains(date) else {
+                    throw NoonmarkError.invalidInput(
+                        "task cycle series contains invalid cancellation facts"
+                    )
+                }
+            case let .followingDates(after: date):
+                guard date < endDate else {
+                    throw NoonmarkError.invalidInput(
+                        "task cycle series contains invalid cancellation facts"
+                    )
+                }
+            }
+        }
+    }
 }
 
 public struct TaskCycleMembership: Codable, Equatable, Hashable, Sendable {
     public let seriesID: TaskCycleSeriesID
     public let occurrenceDate: LocalDate
-    public let startDate: LocalDate
-    public let endDate: LocalDate
-    public let schedule: TaskCycleSchedule
 
     public init(
         seriesID: TaskCycleSeriesID,
-        occurrenceDate: LocalDate,
-        startDate: LocalDate,
-        endDate: LocalDate,
-        schedule: TaskCycleSchedule
+        occurrenceDate: LocalDate
     ) {
         self.seriesID = seriesID
         self.occurrenceDate = occurrenceDate
-        self.startDate = startDate
-        self.endDate = endDate
-        self.schedule = schedule
-    }
-
-    public func validateSelfContainedFacts() throws {
-        _ = try TaskCycleCivilCalendar.materializableDates(
-            from: startDate,
-            through: endDate
-        )
-        guard occurrenceDate >= startDate,
-              occurrenceDate <= endDate,
-              schedule.includes(occurrenceDate)
-        else {
-            throw NoonmarkError.invalidInput(
-                "task cycle membership contains invalid schedule facts"
-            )
-        }
     }
 }
 
@@ -107,6 +237,8 @@ public struct TaskCycleTrackDay: Equatable, Identifiable, Sendable {
         in collection: TaskCycleCollection
     ) -> TaskCycleTraceTarget? {
         switch collection {
+        case .pool:
+            occurrenceTarget
         case .future:
             futurePlanTarget
         case .unfinished:
@@ -119,7 +251,10 @@ public struct TaskCycleTrackDay: Equatable, Identifiable, Sendable {
     public func navigationTarget(
         in collection: TaskCycleCollection
     ) -> TaskCycleTraceTarget? {
-        semanticTarget(in: collection) ?? occurrenceTarget
+        guard state != .skipped, state != .returnedToPool else {
+            return nil
+        }
+        return semanticTarget(in: collection) ?? occurrenceTarget
     }
 
     public func presentationState(
@@ -130,6 +265,7 @@ public struct TaskCycleTrackDay: Equatable, Identifiable, Sendable {
 }
 
 public enum TaskCycleCollection: Equatable, Hashable, Sendable {
+    case pool
     case future
     case unfinished
     case completed
@@ -181,6 +317,8 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
 
     public func appears(in collection: TaskCycleCollection) -> Bool {
         switch collection {
+        case .pool:
+            true
         case .future:
             futurePlanCount > 0
         case .unfinished:
@@ -196,6 +334,29 @@ public extension NoonmarkEngine {
     func createTaskCycleSeries(
         title: String,
         descriptionText: String? = nil,
+        startDate: LocalDate,
+        endDate: LocalDate,
+        schedule: TaskCycleSchedule,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> TaskCycleSeriesID {
+        try createTaskCycleSeries(
+            title: title,
+            descriptionText: descriptionText,
+            plannedSubtasks: [],
+            startDate: startDate,
+            endDate: endDate,
+            schedule: schedule,
+            today: today,
+            now: now
+        )
+    }
+
+    @discardableResult
+    func createTaskCycleSeries(
+        title: String,
+        descriptionText: String? = nil,
+        plannedSubtasks: [PlannedSubtask],
         startDate: LocalDate,
         endDate: LocalDate,
         schedule: TaskCycleSchedule,
@@ -224,57 +385,151 @@ public extension NoonmarkEngine {
             )
         }
 
-        let seriesID = TaskCycleSeriesID()
+        let series = TaskCycleSeries(
+            title: normalizedTitle,
+            descriptionText: descriptionText,
+            startDate: startDate,
+            endDate: endDate,
+            schedule: schedule,
+            createdAt: now
+        )
+        storeTaskCycleSeries(series)
         for occurrenceDate in occurrenceDates {
             let membership = TaskCycleMembership(
-                seriesID: seriesID,
-                occurrenceDate: occurrenceDate,
-                startDate: startDate,
-                endDate: endDate,
-                schedule: schedule
+                seriesID: series.id,
+                occurrenceDate: occurrenceDate
             )
             installTaskCycleOccurrence(
                 normalizedTitle: normalizedTitle,
                 descriptionText: descriptionText,
+                plannedSubtasks: plannedSubtasks,
                 membership: membership,
                 now: now
             )
         }
-        return seriesID
+        return series.id
+    }
+
+    @discardableResult
+    func convertTaskToCycleSeries(
+        chainID: TaskChainID,
+        startDate: LocalDate,
+        endDate: LocalDate,
+        schedule: TaskCycleSchedule,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> TaskCycleSeriesID {
+        let source = try taskCycleConversionSource(chainID: chainID)
+        let sourceChain = source.chain
+        guard sourceChain.state == .active,
+              sourceChain.cycleMembership == nil
+        else {
+            throw NoonmarkError.invalidTransition(
+                "only a standalone active task can become recurring"
+            )
+        }
+        let definition = source.definition
+        let normalizedTitle = try normalizedTaskCycleTitle(
+            definition.title
+        )
+        guard startDate >= today, startDate <= endDate else {
+            throw NoonmarkError.invalidTransition(
+                "task cycle cannot begin in the past"
+            )
+        }
+        let dates = try TaskCycleCivilCalendar.materializableDates(
+            from: startDate,
+            through: endDate
+        )
+        let occurrenceDates = dates.filter(schedule.includes)
+        guard let firstOccurrenceDate = occurrenceDates.first else {
+            throw NoonmarkError.invalidInput(
+                "task cycle schedule contains no occurrences"
+            )
+        }
+        let active = source.activeTrace
+        if let active {
+            guard active.status == .pending,
+                  active.date == firstOccurrenceDate
+            else {
+                throw NoonmarkError.invalidTransition(
+                    "an active task must keep its scheduled date when becoming recurring"
+                )
+            }
+        } else {
+            guard source.isInTaskPool else {
+                throw NoonmarkError.invalidTransition(
+                    "historical tasks cannot be rewritten as recurring occurrences"
+                )
+            }
+        }
+        try ensureTaskCycleDatesUnlocked(occurrenceDates)
+
+        let descriptionText = active?.descriptionText
+            ?? definition.descriptionText
+        let series = TaskCycleSeries(
+            title: normalizedTitle,
+            descriptionText: descriptionText,
+            startDate: startDate,
+            endDate: endDate,
+            schedule: schedule,
+            createdAt: now
+        )
+        let adoption = try prepareTaskCycleAdoption(
+            chainID: chainID,
+            membership: TaskCycleMembership(
+                seriesID: series.id,
+                occurrenceDate: firstOccurrenceDate
+            ),
+            descriptionText: descriptionText,
+            now: now
+        )
+        storeTaskCycleSeries(series)
+        storePreparedTaskCycleAdoption(
+            chain: adoption.chain,
+            insertedTrace: adoption.insertedTrace,
+            now: now
+        )
+        for occurrenceDate in occurrenceDates.dropFirst() {
+            installTaskCycleOccurrence(
+                normalizedTitle: normalizedTitle,
+                descriptionText: descriptionText,
+                plannedSubtasks: definition.plannedSubtasks,
+                membership: TaskCycleMembership(
+                    seriesID: series.id,
+                    occurrenceDate: occurrenceDate
+                ),
+                now: now
+            )
+        }
+        return series.id
     }
 
     func taskCycleTracks(today: LocalDate) -> [TaskCycleTrack] {
-        let members = chains.values.compactMap { chain -> (TaskChain, TaskCycleMembership)? in
-            guard let membership = chain.cycleMembership else { return nil }
-            return (chain, membership)
-        }
-        return Dictionary(grouping: members, by: { $0.1.seriesID })
-            .compactMap { seriesID, entries -> TaskCycleTrack? in
-                guard let descriptor = entries.first?.1,
-                      let dates = try? TaskCycleCivilCalendar.materializableDates(
-                          from: descriptor.startDate,
-                          through: descriptor.endDate
-                      )
-                else {
+        let membersBySeries = Dictionary(
+            grouping: chains.values.compactMap {
+                chain -> (TaskChain, TaskCycleMembership)? in
+                guard let membership = chain.cycleMembership else {
                     return nil
                 }
+                return (chain, membership)
+            },
+            by: { $0.1.seriesID }
+        )
+        return taskCycleSeries.values
+            .compactMap { series -> TaskCycleTrack? in
+                guard let dates = try? TaskCycleCivilCalendar.materializableDates(
+                    from: series.startDate,
+                    through: series.endDate
+                ) else {
+                    return nil
+                }
+                let entries = membersBySeries[series.id] ?? []
                 let entriesByDate = Dictionary(
                     uniqueKeysWithValues: entries.map {
                         ($0.1.occurrenceDate, $0.0)
                     }
                 )
-                let firstEntry = entries.min {
-                    $0.1.occurrenceDate < $1.1.occurrenceDate
-                }
-                let title = firstEntry.flatMap { firstEntry in
-                    definitions.values
-                        .filter {
-                            $0.chainID == firstEntry.0.id
-                                && $0.supersededAt == nil
-                        }
-                        .max { $0.sequence < $1.sequence }?
-                        .title
-                } ?? ""
                 let days = dates.map { date in
                     guard let chain = entriesByDate[date] else {
                         return TaskCycleTrackDay(
@@ -292,9 +547,15 @@ public extension NoonmarkEngine {
                     let scheduledTrace = latestTaskCycleTrace(
                         chainTraces.filter { $0.date == date }
                     )
+                    let latestTrace = latestTaskCycleTrace(chainTraces)
                     let representativeTrace =
-                        scheduledTrace
-                        ?? latestTaskCycleTrace(chainTraces)
+                        if scheduledTrace?.status == .cancelledDraft,
+                           latestTrace?.id != scheduledTrace?.id
+                        {
+                            latestTrace
+                        } else {
+                            scheduledTrace ?? latestTrace
+                        }
                     let futurePlanTrace = latestTaskCycleTrace(
                         chainTraces.filter {
                             $0.status == .pending && $0.date > today
@@ -318,7 +579,11 @@ public extension NoonmarkEngine {
                         chainID: chain.id,
                         occurrenceTarget: taskCycleTraceTarget(
                             representativeTrace,
-                            today: today
+                            today: today,
+                            cancelledState: series
+                                .isOccurrenceSkipped(date)
+                                ? .skipped
+                                : .returnedToPool
                         ),
                         futurePlanTarget: taskCycleTraceTarget(
                             futurePlanTrace,
@@ -335,11 +600,11 @@ public extension NoonmarkEngine {
                     )
                 }
                 return TaskCycleTrack(
-                    id: seriesID,
-                    title: title,
-                    startDate: descriptor.startDate,
-                    endDate: descriptor.endDate,
-                    schedule: descriptor.schedule,
+                    id: series.id,
+                    title: series.title,
+                    startDate: series.startDate,
+                    endDate: series.endDate,
+                    schedule: series.schedule,
                     days: days
                 )
             }
@@ -360,6 +625,115 @@ public extension NoonmarkEngine {
         }
     }
 
+    func skipTaskCycleOccurrence(
+        seriesID: TaskCycleSeriesID,
+        occurrenceDate: LocalDate,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws {
+        var series = try taskCycleSeriesValue(seriesID)
+        guard let chain = chains.values.first(where: {
+            $0.cycleMembership?.seriesID == seriesID
+                && $0.cycleMembership?.occurrenceDate == occurrenceDate
+        }),
+            let trace = traces.values.first(where: {
+                $0.chainID == chain.id
+                    && $0.status == .pending
+                    && $0.date > today
+            }),
+            occurrenceDate > today
+        else {
+            throw NoonmarkError.invalidTransition(
+                "only a future pending task cycle occurrence can be skipped"
+            )
+        }
+        try ensureTaskCycleDatesUnlocked([trace.date])
+        try series.appendCancellation(
+            .occurrence(occurrenceDate),
+            now: now
+        )
+        let preparedTrace = try prepareTaskCycleTraceCancellation(
+            trace,
+            today: today,
+            now: now
+        )
+        storeTaskCycleSeries(series)
+        storePreparedTaskCycleTraceCancellations(
+            [preparedTrace],
+            now: now
+        )
+    }
+
+    @discardableResult
+    func stopTaskCycleSeries(
+        seriesID: TaskCycleSeriesID,
+        today: LocalDate,
+        now: Date = Date()
+    ) throws -> Int {
+        var series = try taskCycleSeriesValue(seriesID)
+        guard today < series.endDate else { return 0 }
+        if let stoppedAfterDate = series.stoppedAfterDate,
+           stoppedAfterDate <= today
+        {
+            return 0
+        }
+        let futurePendingOccurrences = chains.values.compactMap {
+            chain -> (occurrenceDate: LocalDate, trace: DayTrace)? in
+            guard chain.cycleMembership?.seriesID == seriesID,
+                  let membership = chain.cycleMembership,
+                  membership.occurrenceDate > today
+            else {
+                return nil
+            }
+            guard let trace = traces.values.first(where: {
+                $0.chainID == chain.id
+                    && $0.status == .pending
+                    && $0.date > today
+            }) else {
+                return nil
+            }
+            return (membership.occurrenceDate, trace)
+        }
+        .sorted {
+            $0.occurrenceDate < $1.occurrenceDate
+        }
+        try ensureTaskCycleDatesUnlocked(
+            futurePendingOccurrences.map(\.trace.date)
+        )
+        for occurrence in futurePendingOccurrences {
+            try series.appendCancellation(
+                .occurrence(occurrence.occurrenceDate),
+                now: now
+            )
+        }
+        try series.appendCancellation(
+            .followingDates(after: today),
+            now: now
+        )
+        let preparedTraces = try futurePendingOccurrences.map {
+            try prepareTaskCycleTraceCancellation(
+                $0.trace,
+                today: today,
+                now: now
+            )
+        }
+        storeTaskCycleSeries(series)
+        storePreparedTaskCycleTraceCancellations(
+            preparedTraces,
+            now: now
+        )
+        return futurePendingOccurrences.count
+    }
+
+    private func taskCycleSeriesValue(
+        _ id: TaskCycleSeriesID
+    ) throws -> TaskCycleSeries {
+        guard let series = taskCycleSeries[id] else {
+            throw NoonmarkError.notFound("task cycle series")
+        }
+        return series
+    }
+
     private func latestTaskCycleTrace(
         _ candidates: [DayTrace]
     ) -> DayTrace? {
@@ -374,7 +748,8 @@ public extension NoonmarkEngine {
     private func taskCycleTrackState(
         trace: DayTrace,
         date: LocalDate,
-        today: LocalDate
+        today: LocalDate,
+        cancelledState: TaskCycleTrackDayState
     ) -> TaskCycleTrackDayState {
         if trace.status == .pending {
             if date < today { return .pendingPast }
@@ -382,7 +757,7 @@ public extension NoonmarkEngine {
             return .planned
         }
         if trace.status == .cancelledDraft {
-            return .skipped
+            return cancelledState
         }
         guard let state = TaskCycleTrackDayState(
             rawValue: trace.status.rawValue
@@ -394,7 +769,8 @@ public extension NoonmarkEngine {
 
     private func taskCycleTraceTarget(
         _ trace: DayTrace?,
-        today: LocalDate
+        today: LocalDate,
+        cancelledState: TaskCycleTrackDayState = .returnedToPool
     ) -> TaskCycleTraceTarget? {
         guard let trace else { return nil }
         return TaskCycleTraceTarget(
@@ -403,7 +779,8 @@ public extension NoonmarkEngine {
             state: taskCycleTrackState(
                 trace: trace,
                 date: trace.date,
-                today: today
+                today: today,
+                cancelledState: cancelledState
             )
         )
     }

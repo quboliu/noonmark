@@ -12,7 +12,7 @@ private func sqliteNonemptyInvariant(_ column: String) -> String {
 }
 
 public enum SQLiteSchema {
-    public static let version = 12
+    public static let version = 13
 
     public static let statements: [String] = [
         """
@@ -34,6 +34,26 @@ public enum SQLiteSchema {
             updated_at TEXT NOT NULL,
             updated_at_bits INTEGER NOT NULL CHECK (typeof(updated_at_bits) = 'integer'),
             CHECK ((locked_at IS NULL) = (locked_at_bits IS NULL))
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS task_cycle_series (
+            id TEXT PRIMARY KEY NOT NULL,
+            title TEXT NOT NULL CHECK (
+                \(sqliteNonemptyInvariant("title"))
+            ),
+            description_text TEXT,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL CHECK (end_date >= start_date),
+            schedule TEXT NOT NULL CHECK (schedule IN ('daily', 'weekdays')),
+            cancellation_facts_json TEXT NOT NULL CHECK (
+                json_valid(cancellation_facts_json)
+                AND json_type(cancellation_facts_json) = 'array'
+            ),
+            created_at TEXT NOT NULL,
+            created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
+            updated_at TEXT NOT NULL,
+            updated_at_bits INTEGER NOT NULL CHECK (typeof(updated_at_bits) = 'integer')
         )
         """,
         """
@@ -2241,9 +2261,9 @@ public enum SQLiteSchema {
             id TEXT PRIMARY KEY NOT NULL,
             entity_type TEXT NOT NULL CHECK (
                 entity_type IN (
-                    'day', 'taskChain', 'taskDefinition', 'dayTrace',
-                    'subtask', 'appPreferences', 'classificationCommit',
-                    'traceClassificationEvent'
+                    'day', 'taskCycleSeries', 'taskChain', 'taskDefinition',
+                    'dayTrace', 'subtask', 'appPreferences',
+                    'classificationCommit', 'traceClassificationEvent'
                 )
             ),
             entity_id TEXT NOT NULL,
@@ -2293,9 +2313,9 @@ public enum SQLiteSchema {
             generation_id TEXT NOT NULL UNIQUE CHECK (length(generation_id) = 36),
             entity_type TEXT NOT NULL CHECK (
                 entity_type IN (
-                    'day', 'taskChain', 'taskDefinition', 'dayTrace',
-                    'subtask', 'appPreferences', 'classificationCommit',
-                    'traceClassificationEvent'
+                    'day', 'taskCycleSeries', 'taskChain', 'taskDefinition',
+                    'dayTrace', 'subtask', 'appPreferences',
+                    'classificationCommit', 'traceClassificationEvent'
                 )
             ),
             entity_id TEXT NOT NULL CHECK (length(entity_id) > 0),

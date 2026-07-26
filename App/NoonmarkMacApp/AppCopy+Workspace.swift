@@ -228,20 +228,20 @@ extension AppCopy {
     var nextMonth: String { language == .chinese ? "下个月" : "Next month" }
     var dayQuickAddTodayPlaceholder: String {
         language == .chinese
-            ? "添加今日任务，可用 #标签、@分组"
-            : "Add a task; use #labels and @group"
+            ? "添加今日任务，可用 #标签、@分组、/重复"
+            : "Add a task; use #labels, @group, or /repeat"
     }
 
     var dayQuickAddFuturePlaceholder: String {
         language == .chinese
-            ? "为这一天排期，可用 #标签、@分组"
-            : "Schedule a task; use #labels and @group"
+            ? "为这一天排期，可用 #标签、@分组、/重复"
+            : "Schedule a task; use #labels, @group, or /repeat"
     }
 
     var poolQuickAddPlaceholder: String {
         language == .chinese
-            ? "新建到任务池，可用 #标签、@分组"
-            : "Add to the pool; use #labels and @group"
+            ? "新建到任务池，可用 #标签、@分组、/重复"
+            : "Add to the pool; use #labels, @group, or /repeat"
     }
 
     var newTaskMultipleCategories: String {

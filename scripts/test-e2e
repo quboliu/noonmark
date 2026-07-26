@@ -208,6 +208,7 @@ only_mode_specs=(
   "NOONMARK_E2E_AUTOMATIC_CLASSIFICATION_PROVIDER_BLOCK_RETRY_ONLY:automatic-classification-provider-block-retry"
   "NOONMARK_E2E_CONTEXT_MENU_ACTIONS_ONLY:context-menu-actions"
   "NOONMARK_E2E_UI_ENTRY_ONLY:ui-entry"
+  "NOONMARK_E2E_TASK_CYCLE_MUTATION_ONLY:task-cycle-mutation"
   "NOONMARK_E2E_SEED_CLOCK_ONLY:seed-clock"
   "NOONMARK_E2E_TASK_NOTE_ONLY:task-note"
   "NOONMARK_E2E_TASK_NOTE_ATOMICITY_ONLY:task-note-atomicity"
@@ -3077,12 +3078,17 @@ run_reactivation_atomicity_probe() {
 
 run_ui_entry_probes() {
   local entry_dir="artifacts/e2e-ui-entry"
+  local classification_db="${entry_dir}/classification-manager.sqlite"
   local classification_result="${entry_dir}/classification-manager-result.txt"
+  local classification_restart_result="${entry_dir}/classification-manager-restart-result.txt"
   local classification_labels_result="${entry_dir}/classification-manager-labels-result.txt"
+  local classification_label_input_result="${entry_dir}/classification-label-input-result.txt"
   local classification_overflow_result="${entry_dir}/classification-overflow-result.txt"
   local zhulong_result="${entry_dir}/zhulong-workflows-result.txt"
   local classification_log="${entry_dir}/classification-manager.log"
+  local classification_restart_log="${entry_dir}/classification-manager-restart.log"
   local classification_labels_log="${entry_dir}/classification-manager-labels.log"
+  local classification_label_input_log="${entry_dir}/classification-label-input.log"
   local classification_overflow_log="${entry_dir}/classification-overflow.log"
   local zhulong_log="${entry_dir}/zhulong-workflows.log"
 
@@ -3093,11 +3099,49 @@ run_ui_entry_probes() {
     "classification manager UI entry" \
     "$classification_result" \
     "$classification_log" \
-    --ephemeral \
+    --data-url "$PWD/$classification_db" \
     --page pool \
     --select first \
+    --e2e-seed-default-state \
     --e2e-classification-manager-via-ui \
     --e2e-classification-manager-ui-result-url "$PWD/$classification_result"
+
+  run_terminating_ui_probe \
+    "classification manager deletion restart" \
+    "$classification_restart_result" \
+    "$classification_restart_log" \
+    --data-url "$PWD/$classification_db" \
+    --page pool \
+    --e2e-classification-deletion-restart-result-url "$PWD/$classification_restart_result"
+
+  read -r archived_categories archived_current_relations historical_category_events < <(
+    sqlite3 -noheader -separator " " "$classification_db" "
+      SELECT
+        (SELECT count(*)
+         FROM classification_item_metadata
+         WHERE kind = 'category'
+           AND lifecycle = 'archived'),
+        (SELECT count(*)
+         FROM classification_current_relation_facts AS relation
+         JOIN classification_item_metadata AS metadata
+           ON metadata.kind = relation.kind
+          AND metadata.item_id = relation.item_id
+         WHERE relation.kind = 'category'
+           AND metadata.lifecycle = 'archived'),
+        (SELECT count(*)
+         FROM trace_classification_event_categories AS event_category
+         JOIN classification_item_metadata AS metadata
+           ON metadata.kind = 'category'
+          AND metadata.item_id = event_category.category_id
+         WHERE metadata.lifecycle = 'archived');
+    "
+  )
+  if [[ "$archived_categories" -lt 1 ||
+    "$archived_current_relations" -ne 0 ||
+    "$historical_category_events" -lt 1 ]]; then
+    echo "classification deletion restart SQLite probe failed: archived=$archived_categories current=$archived_current_relations history=$historical_category_events" >&2
+    exit 1
+  fi
 
   run_terminating_ui_probe \
     "classification manager labels UI entry" \
@@ -3108,6 +3152,16 @@ run_ui_entry_probes() {
     --select first \
     --e2e-classification-manager-labels-via-ui \
     --e2e-classification-manager-ui-result-url "$PWD/$classification_labels_result"
+
+  run_terminating_ui_probe \
+    "classification # label input UI entry" \
+    "$classification_label_input_result" \
+    "$classification_label_input_log" \
+    --ephemeral \
+    --page pool \
+    --select first \
+    --e2e-classification-label-menu-via-ui \
+    --e2e-classification-label-menu-ui-result-url "$PWD/$classification_label_input_result"
 
   run_terminating_ui_probe \
     "classification overflow UI entry" \
@@ -3129,7 +3183,93 @@ run_ui_entry_probes() {
     --e2e-zhulong-workflows-via-ui \
     --e2e-zhulong-workflows-ui-result-url "$PWD/$zhulong_result"
 
-  echo "E2E real UI entries: $classification_result $classification_labels_result $classification_overflow_result $zhulong_result"
+  echo "E2E real UI entries and classification restart: $classification_result $classification_restart_result $classification_labels_result $classification_overflow_result $zhulong_result"
+}
+
+run_task_cycle_mutation_probe() {
+  local cycle_dir="artifacts/e2e-task-cycle-mutation"
+  local cycle_db="${cycle_dir}/Noonmark.sqlite"
+  local cycle_result="${cycle_dir}/mutation-result.txt"
+  local cycle_restart_result="${cycle_dir}/restart-result.txt"
+  local cycle_log="${cycle_dir}/mutation.log"
+  local cycle_restart_log="${cycle_dir}/restart.log"
+  local cycle_sql_probe
+
+  rm -rf "$cycle_dir"
+  mkdir -p "$cycle_dir"
+
+  run_terminating_ui_probe \
+    "task cycle real UI mutation" \
+    "$cycle_result" \
+    "$cycle_log" \
+    --data-url "$PWD/$cycle_db" \
+    --page pool \
+    --e2e-fixed-instant 2026-07-24T22:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-persistence-failure-automation \
+    --e2e-task-cycle-mutation-result-url "$PWD/$cycle_result"
+
+  local cycle_failure_marker_count
+  cycle_failure_marker_count="$(
+    grep -cF 'Noonmark E2E injected persistence save failure' \
+      "$cycle_log" || true
+  )"
+  if [[ "$cycle_failure_marker_count" != "1" ]]; then
+    echo "task cycle conversion did not inject exactly one save failure: $cycle_failure_marker_count" >&2
+    exit 1
+  fi
+
+  run_terminating_ui_probe \
+    "task cycle mutation restart" \
+    "$cycle_restart_result" \
+    "$cycle_restart_log" \
+    --data-url "$PWD/$cycle_db" \
+    --page pool \
+    --e2e-fixed-instant 2026-07-24T22:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-task-cycle-mutation-restart-result-url "$PWD/$cycle_restart_result"
+
+  cycle_sql_probe="$(
+    sqlite3 -noheader -separator " " "$cycle_db" "
+      SELECT
+        (SELECT count(*) FROM task_cycle_series),
+        (SELECT count(*)
+         FROM task_cycle_series
+         WHERE title = 'E2E UI 新建重复'),
+        (SELECT count(*)
+         FROM task_cycle_series
+         WHERE title = 'E2E UI 右键转重复'),
+        (SELECT count(*)
+         FROM task_cycle_series
+         WHERE title = 'E2E UI 详情转重复'),
+        (SELECT count(*)
+         FROM task_cycle_series
+         WHERE title = 'E2E UI 空标题转重复'),
+        (SELECT count(*)
+         FROM task_cycle_series
+         WHERE title = 'E2E UI 跳过重复'
+           AND json_array_length(cancellation_facts_json) >= 1),
+        (SELECT count(*)
+         FROM task_cycle_series
+         WHERE title = 'E2E UI 停止重复'
+           AND json_array_length(cancellation_facts_json) >= 1),
+        (SELECT count(*)
+         FROM day_traces
+         JOIN task_definitions
+           ON task_definitions.id = day_traces.definition_id
+         WHERE task_definitions.title = 'E2E UI 回池重复'
+           AND day_traces.date = '2026-07-24'
+           AND day_traces.status = 'pending');
+    "
+  )"
+  if [[ "$cycle_sql_probe" != "7 1 1 1 1 1 1 1" ]]; then
+    echo "task cycle mutation SQLite/restart probe failed: ${cycle_sql_probe:-missing}" >&2
+    exit 1
+  fi
+
+  echo "E2E task cycle real UI mutation and restart: $cycle_db (probe=$cycle_sql_probe)"
 }
 
 run_seed_clock_probe() {
@@ -4291,12 +4431,17 @@ run_immediate_task_mutation_probe() {
   local mutation_db="$mutation_dir/Noonmark.sqlite"
   local mutation_result="$mutation_dir/result.txt"
   local mutation_log="$mutation_dir/app.log"
-  local mutation_screenshot="$mutation_dir/day-return-reschedule.png"
+  local mutation_screenshot="$mutation_dir/immediate-edit-delete.png"
+  local return_dir="artifacts/e2e-return-reschedule"
+  local return_db="$return_dir/Noonmark.sqlite"
+  local return_result="$return_dir/result.txt"
+  local return_log="$return_dir/app.log"
+  local return_screenshot="$return_dir/day-return-reschedule.png"
 
   rm -rf "$mutation_dir"
   mkdir -p "$mutation_dir"
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
-    "immediate task title persistence and current-day deletion" \
+    "immediate task title, description, and current-day deletion" \
     "$mutation_result" \
     "$mutation_log" \
     --data-url "$PWD/$mutation_db" \
@@ -4308,7 +4453,25 @@ run_immediate_task_mutation_probe() {
     echo "immediate task mutation screenshot was not created" >&2
     exit 1
   fi
-  echo "E2E immediate task persistence, deletion, and return/reschedule: $mutation_db"
+
+  rm -rf "$return_dir"
+  mkdir -p "$return_dir"
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "task defer, return-to-pool, reschedule, and completion" \
+    "$return_result" \
+    "$return_log" \
+    --data-url "$PWD/$return_db" \
+    --page day \
+    --e2e-immediate-task-return-lifecycle \
+    --e2e-immediate-task-mutation-result-url "$PWD/$return_result" \
+    --e2e-immediate-task-mutation-screenshot-url "$PWD/$return_screenshot"
+
+  if [[ ! -s "$return_screenshot" ]]; then
+    echo "return and reschedule screenshot was not created" >&2
+    exit 1
+  fi
+  echo "E2E immediate task persistence and deletion: $mutation_db"
+  echo "E2E defer, return, reschedule, completion, and restart: $return_db"
 }
 
 run_review_detail_ux_probe() {
@@ -8987,6 +9150,11 @@ if [[ "${NOONMARK_E2E_UI_ENTRY_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_TASK_CYCLE_MUTATION_ONLY:-0}" == "1" ]]; then
+  run_task_cycle_mutation_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_SEED_CLOCK_ONLY:-0}" == "1" ]]; then
   run_seed_clock_probe
   exit 0
@@ -9343,6 +9511,8 @@ run_reactivation_atomicity_probe
 run_copy_undo_persistence_probe
 
 run_ui_entry_probes
+
+run_task_cycle_mutation_probe
 
 run_quick_add_ui_probe
 

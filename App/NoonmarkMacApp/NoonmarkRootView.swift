@@ -192,6 +192,10 @@ struct NoonmarkRootView: View {
             }
             .environmentObject(store)
         }
+        .sheet(isPresented: $store.showingTaskCycleCreation) {
+            TaskCycleCreationSheet()
+                .environmentObject(store)
+        }
         .sheet(item: $store.showingPicker) { purpose in
             DatePickerSheet(purpose: purpose)
                 .environmentObject(store)

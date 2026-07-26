@@ -1735,6 +1735,9 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
         _ expected: [ExpectedStatusAccessibility],
         in window: NSWindow
     ) async throws -> Set<String> {
+        try await AutomaticClassificationSettingsE2EInteraction.activate(
+            window
+        )
         let expectedByIdentifier = Dictionary(
             uniqueKeysWithValues: expected.map { ($0.identifier, $0) }
         )
@@ -1823,6 +1826,9 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
         in window: NSWindow,
         input: WindowServerInputDriver
     ) async throws {
+        try await AutomaticClassificationSettingsE2EInteraction.activate(
+            window
+        )
         var initialPoint: CGPoint?
         try await waitUntil("visible automatic classification retry") {
             guard let frame = ReadOnlyAccessibilityTarget.uniqueButton(
@@ -1887,6 +1893,9 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
         in window: NSWindow,
         input: WindowServerInputDriver
     ) async throws {
+        try await AutomaticClassificationSettingsE2EInteraction.activate(
+            window
+        )
         let resolveTarget = {
             () throws -> WindowServerInputDriver.PointerCoordinate in
             guard NSApp.isActive,
@@ -2606,7 +2615,7 @@ private enum AutomaticClassificationSettingsE2EInteraction {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         NSRunningApplication.current.activate(options: [.activateAllWindows])
-        try await waitUntil("native Settings window activation") {
+        try await waitUntil("native window activation") {
             NSApp.isActive
                 && NSApp.keyWindow === window
                 && window.isKeyWindow

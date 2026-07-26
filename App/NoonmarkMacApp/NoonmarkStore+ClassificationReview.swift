@@ -14,6 +14,22 @@ extension NoonmarkStore {
         NewTaskDraftParser.activeToken(in: draft)
     }
 
+    func newTaskSlashCommandMatches(_ draft: String) -> Bool {
+        guard let query = NewTaskDraftParser.activeCommandQuery(
+            in: draft
+        ) else {
+            return false
+        }
+        let normalized = query.lowercased()
+        return normalized.isEmpty
+            || "重复".hasPrefix(normalized)
+            || "repeat".hasPrefix(normalized)
+    }
+
+    func completeNewTaskSlashCommand() -> String {
+        "\(copy.recurringSlashCommand) "
+    }
+
     func newTaskClassificationSuggestions(
         for draft: String
     ) -> [ClassificationCatalogItemProjection] {
@@ -327,5 +343,31 @@ extension NoonmarkStore {
         }
         automaticClassificationJobsDidChange()
         return receipt
+    }
+
+    @discardableResult
+    func deleteTaskCategoryFromToday(
+        _ categoryID: TaskCategoryID,
+        interactionID: UUID = UUID()
+    ) throws -> TaskCategoryDeletionOutcome {
+        let sequence = try commitEngineMutation(
+            undoPolicy: .invalidate,
+            automaticClassificationPolicy: .classificationCatalogChanged,
+            classificationCommitBoundaries: {
+                $0.commitBoundaries
+            }
+        ) { candidate, moment in
+            try candidate
+                .deleteTaskCategoryFromTodayRecordingCommitBoundaries(
+                    categoryID,
+                    today: moment.today,
+                    interactionID: interactionID,
+                    decisionID: interactionID,
+                    now: moment.instant
+                )
+        }
+        automaticClassificationJobsDidChange()
+        showToast(copy.taskCategoryDeletedFromToday)
+        return sequence.outcome
     }
 }

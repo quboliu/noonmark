@@ -380,6 +380,7 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
         switch mode {
         case let .classificationManager(selectsLabels):
             ClassificationManagerUIE2EDriver.start(
+                store: store,
                 resultURL: resultURL,
                 keepsAppOpen: keepsAppOpen,
                 selectsLabels: selectsLabels
@@ -409,6 +410,7 @@ struct UIEntryE2EAutomation: LaunchAutomationRunnable {
                 return
             }
             ClassificationLabelMenuUIE2EDriver.start(
+                store: store,
                 chainIdentifier: task.chain.id.description,
                 availableLabelIdentifier: availableLabel.id,
                 resultURL: resultURL,

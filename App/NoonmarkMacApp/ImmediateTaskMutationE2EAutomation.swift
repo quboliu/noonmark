@@ -7,6 +7,11 @@ import NoonmarkStorage
 /// the native title editor and immediately click another workspace row.
 @MainActor
 struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode: Equatable {
+        case immediateEdits
+        case returnLifecycle
+    }
+
     private static let dayInitialTitle = "E2E Day original title"
     private static let dayInitialDescription = "快速记录自 Day Todo。"
     private static let daySavedTitle = "E2E Day saved immediately"
@@ -28,6 +33,7 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
 
     let resultURL: URL
     let screenshotURL: URL
+    private let mode: Mode
 
     static func fromCommandLine() -> Self? {
         guard let resultPath = AppLaunchArguments.value(
@@ -39,7 +45,10 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         }
         return Self(
             resultURL: URL(fileURLWithPath: resultPath),
-            screenshotURL: URL(fileURLWithPath: screenshotPath)
+            screenshotURL: URL(fileURLWithPath: screenshotPath),
+            mode: AppLaunchArguments.contains(
+                "--e2e-immediate-task-return-lifecycle"
+            ) ? .returnLifecycle : .immediateEdits
         )
     }
 
@@ -69,84 +78,125 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("main window could not become active")
         }
 
-        try await editTitle(
-            TitleEdit(
-                initialTitle: Self.dayInitialTitle,
-                savedTitle: Self.daySavedTitle,
-                clickAwayIdentifier: dayIdentifier(fixture.daySiblingTraceID),
-                selectedAfterClick: { store.selectedTraceID == fixture.daySiblingTraceID },
+        if mode == .immediateEdits {
+            try await editTitle(
+                TitleEdit(
+                    initialTitle: Self.dayInitialTitle,
+                    savedTitle: Self.daySavedTitle,
+                    clickAwayIdentifier: dayIdentifier(fixture.daySiblingTraceID),
+                    selectedAfterClick: {
+                        store.selectedTraceID == fixture.daySiblingTraceID
+                    },
+                    readback: {
+                        guard let trace = store.engine.traces[fixture.dayTraceID] else {
+                            return nil
+                        }
+                        return store.engine.definitions[trace.definitionID]?.title
+                    }
+                ),
+                input: input
+            )
+            store.selectTrace(fixture.dayTraceID)
+            try await clearTitleAndRestore(
+                restoredTitle: Self.daySavedTitle,
                 readback: {
-                guard let trace = store.engine.traces[fixture.dayTraceID] else {
-                    return nil
-                }
-                return store.engine.definitions[trace.definitionID]?.title
-            }
-            ),
-            input: input
-        )
-        store.selectTrace(fixture.dayTraceID)
-        try await clearTitleAndRestore(
-            restoredTitle: Self.daySavedTitle,
-            readback: {
-                guard let trace = store.engine.traces[fixture.dayTraceID] else {
-                    return nil
-                }
-                return store.engine.definitions[trace.definitionID]?.title
-            },
-            placeholder: store.copy.taskTitlePlaceholder,
-            input: input
-        )
+                    guard let trace = store.engine.traces[fixture.dayTraceID] else {
+                        return nil
+                    }
+                    return store.engine.definitions[trace.definitionID]?.title
+                },
+                placeholder: store.copy.taskTitlePlaceholder,
+                input: input
+            )
 
-        store.selectTrace(fixture.dayTraceID)
-        try await clearDescriptionAndKeepEmpty(
-            initialText: Self.dayInitialDescription,
-            readback: {
-                store.engine.traces[fixture.dayTraceID]?.descriptionText
-            },
-            input: input
-        )
-        try await editDescription(
-            TextEdit(
-                initialText: "",
-                savedText: Self.daySavedDescription,
-                clickAwayIdentifier: dayIdentifier(fixture.daySiblingTraceID),
-                selectedAfterClick: { store.selectedTraceID == fixture.daySiblingTraceID },
-                readback: { store.engine.traces[fixture.dayTraceID]?.descriptionText },
-                failureContext: { store.operationFailureNotice?.message ?? "none" }
-            ),
-            input: input
-        )
-
-        store.page = .pool
-        store.clearSelection()
-        store.selectPool(fixture.poolChainID)
-        try await editTitle(
-            TitleEdit(
-                initialTitle: Self.poolInitialTitle,
-                savedTitle: Self.poolSavedTitle,
-                clickAwayIdentifier: poolIdentifier(fixture.poolSiblingChainID),
-                selectedAfterClick: {
-                store.selectedPoolChainID == fixture.poolSiblingChainID
-            },
+            store.selectTrace(fixture.dayTraceID)
+            try await clearDescriptionAndKeepEmpty(
+                initialText: Self.dayInitialDescription,
                 readback: {
-                store.currentDefinition(for: fixture.poolChainID)?.title
-            }
-            ),
-            input: input
-        )
+                    store.engine.traces[fixture.dayTraceID]?.descriptionText
+                },
+                input: input
+            )
+            try await editDescription(
+                TextEdit(
+                    initialText: "",
+                    savedText: Self.daySavedDescription,
+                    clickAwayIdentifier: dayIdentifier(fixture.daySiblingTraceID),
+                    selectedAfterClick: {
+                        store.selectedTraceID == fixture.daySiblingTraceID
+                    },
+                    readback: {
+                        store.engine.traces[fixture.dayTraceID]?.descriptionText
+                    },
+                    failureContext: {
+                        store.operationFailureNotice?.message ?? "none"
+                    }
+                ),
+                input: input
+            )
 
-        store.selectPool(fixture.poolChainID)
-        try await editDescription(
-            TextEdit(
-                initialText: "",
-                savedText: Self.poolSavedDescription,
-                clickAwayIdentifier: poolIdentifier(fixture.poolSiblingChainID),
-                selectedAfterClick: { store.selectedPoolChainID == fixture.poolSiblingChainID },
-                readback: { store.currentDefinition(for: fixture.poolChainID)?.descriptionText },
-                failureContext: { store.operationFailureNotice?.message ?? "none" }
-            ),
-            input: input
-        )
+            store.page = .pool
+            store.clearSelection()
+            store.selectPool(fixture.poolChainID)
+            try await editTitle(
+                TitleEdit(
+                    initialTitle: Self.poolInitialTitle,
+                    savedTitle: Self.poolSavedTitle,
+                    clickAwayIdentifier: poolIdentifier(fixture.poolSiblingChainID),
+                    selectedAfterClick: {
+                        store.selectedPoolChainID == fixture.poolSiblingChainID
+                    },
+                    readback: {
+                        store.currentDefinition(for: fixture.poolChainID)?.title
+                    }
+                ),
+                input: input
+            )
+
+            store.selectPool(fixture.poolChainID)
+            try await editDescription(
+                TextEdit(
+                    initialText: "",
+                    savedText: Self.poolSavedDescription,
+                    clickAwayIdentifier: poolIdentifier(fixture.poolSiblingChainID),
+                    selectedAfterClick: {
+                        store.selectedPoolChainID == fixture.poolSiblingChainID
+                    },
+                    readback: {
+                        store.currentDefinition(for: fixture.poolChainID)?.descriptionText
+                    },
+                    failureContext: {
+                        store.operationFailureNotice?.message ?? "none"
+                    }
+                ),
+                input: input
+            )
+
+            store.page = .day
+            store.selectedDate = fixture.today
+            store.selectedCalendarDate = fixture.today
+            store.clearSelection()
+            try await chooseMenuAction(
+                .deleteNewCurrentDayTask,
+                for: fixture.deletedTraceID,
+                from: dayIdentifier(fixture.deletedTraceID),
+                store: store,
+                input: input
+            )
+            try await waitUntil("today's newly added task was not deleted through its menu") {
+                store.engine.traces[fixture.deletedTraceID]?.status == .cancelledDraft
+                    && store.engine.chains[fixture.deletedChainID]?.state == .abandoned
+                    && store.engine.getDayTodo(date: fixture.today).traces.contains(where: {
+                        $0.id == fixture.deletedTraceID
+                    }) == false
+                    && store.engine.taskPool().contains(where: {
+                        $0.chain.id == fixture.deletedChainID
+                    }) == false
+            }
+            try assertImmediateEditsPersisted(fixture, store: store)
+            try captureMainWindow()
+            return
+        }
 
         store.page = .day
         store.selectedDate = fixture.today
@@ -178,30 +228,8 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                     $0.id != fixture.deletedDaySubtaskID
                 }
         }
-
-        store.page = .day
-        store.selectedDate = fixture.today
-        store.selectedCalendarDate = fixture.today
-        store.clearSelection()
-        try await chooseMenuAction(
-            .deleteNewCurrentDayTask,
-            for: fixture.deletedTraceID,
-            from: dayIdentifier(fixture.deletedTraceID),
-            store: store,
-            input: input
-        )
-        try await waitUntil("today's newly added task was not deleted through its menu") {
-            store.engine.traces[fixture.deletedTraceID]?.status == .cancelledDraft
-                && store.engine.chains[fixture.deletedChainID]?.state == .abandoned
-                && store.engine.getDayTodo(date: fixture.today).traces.contains(where: {
-                    $0.id == fixture.deletedTraceID
-                }) == false
-                && store.engine.taskPool().contains(where: {
-                    $0.chain.id == fixture.deletedChainID
-                }) == false
-        }
         try await exerciseReturnAndReschedule(fixture, store: store, input: input)
-        try assertPersisted(fixture, store: store)
+        try assertReturnLifecyclePersisted(fixture, store: store)
     }
 
     private func installFixture(on store: NoonmarkStore) throws -> Fixture {
@@ -999,7 +1027,44 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         )
     }
 
-    private func assertPersisted(
+    private func assertImmediateEditsPersisted(
+        _ fixture: Fixture,
+        store: NoonmarkStore
+    ) throws {
+        guard let databaseURL = store.databaseURL else {
+            throw Failure.failed(
+                "immediate task mutation persistence probe requires --data-url"
+            )
+        }
+        let restored = try SQLiteEngineRepository(databaseURL: databaseURL).load()
+        guard let dayTrace = restored.traces[fixture.dayTraceID],
+              restored.definitions[dayTrace.definitionID]?.title == Self.daySavedTitle,
+              dayTrace.descriptionText == Self.daySavedDescription,
+              restored.definitions.values.contains(where: {
+                  $0.chainID == fixture.poolChainID
+                      && $0.supersededAt == nil
+                      && $0.title == Self.poolSavedTitle
+                      && $0.descriptionText == Self.poolSavedDescription
+              }),
+              let deletedTrace = restored.traces[fixture.deletedTraceID],
+              deletedTrace.status == .cancelledDraft,
+              deletedTrace.draftCancellationID != nil,
+              deletedTrace.draftCancelledOn == fixture.today,
+              restored.chains[fixture.deletedChainID]?.state == .abandoned,
+              restored.getDayTodo(date: fixture.today).traces.contains(where: {
+                  $0.id == fixture.deletedTraceID
+              }) == false,
+              restored.taskPool().contains(where: {
+                  $0.chain.id == fixture.deletedChainID
+              }) == false
+        else {
+            throw Failure.failed(
+                "immediate title, description, or deletion mutations did not persist exactly"
+            )
+        }
+    }
+
+    private func assertReturnLifecyclePersisted(
         _ fixture: Fixture,
         store: NoonmarkStore
     ) throws {
@@ -1025,27 +1090,7 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         let returnedTrailKinds = try restored.taskTrail(
             chainID: fixture.returnedChainID
         ).map(\.kind)
-        guard let dayTrace = restored.traces[fixture.dayTraceID],
-              restored.definitions[dayTrace.definitionID]?.title == Self.daySavedTitle,
-              dayTrace.descriptionText == Self.daySavedDescription,
-              restored.definitions.values.contains(where: {
-                  $0.chainID == fixture.poolChainID
-                      && $0.supersededAt == nil
-                      && $0.title == Self.poolSavedTitle
-                      && $0.descriptionText == Self.poolSavedDescription
-              }),
-              let deletedTrace = restored.traces[fixture.deletedTraceID],
-              deletedTrace.status == .cancelledDraft,
-              deletedTrace.draftCancellationID != nil,
-              deletedTrace.draftCancelledOn == fixture.today,
-              restored.chains[fixture.deletedChainID]?.state == .abandoned,
-              restored.getDayTodo(date: fixture.today).traces.contains(where: {
-                  $0.id == fixture.deletedTraceID
-              }) == false,
-              restored.taskPool().contains(where: {
-                  $0.chain.id == fixture.deletedChainID
-              }) == false,
-              restored.traces[fixture.returnedTraceID]?.status == .deferred,
+        guard restored.traces[fixture.returnedTraceID]?.status == .deferred,
               restored.traces.values.contains(where: {
                   $0.chainID == fixture.returnedChainID
                       && $0.date == NoonmarkStore.offset(
@@ -1083,7 +1128,7 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                   ]
         else {
             throw Failure.failed(
-                "immediate mutations or return/reschedule projection did not persist exactly"
+                "return/reschedule projection did not persist exactly"
             )
         }
     }

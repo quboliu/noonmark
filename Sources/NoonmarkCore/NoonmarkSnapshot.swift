@@ -3,6 +3,7 @@ import Foundation
 public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case days
+        case taskCycleSeries
         case chains
         case definitions
         case traces
@@ -12,6 +13,7 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
     }
 
     public var days: [Day]
+    public var taskCycleSeries: [TaskCycleSeries]
     public var chains: [TaskChain]
     public var definitions: [TaskDefinition]
     public var traces: [DayTrace]
@@ -21,6 +23,7 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
 
     public init(
         days: [Day],
+        taskCycleSeries: [TaskCycleSeries] = [],
         chains: [TaskChain],
         definitions: [TaskDefinition],
         traces: [DayTrace],
@@ -29,6 +32,7 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
         classifications: TaskClassificationState
     ) {
         self.days = days
+        self.taskCycleSeries = taskCycleSeries
         self.chains = chains
         self.definitions = definitions
         self.traces = traces
@@ -40,6 +44,10 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         days = try container.decode([Day].self, forKey: .days)
+        taskCycleSeries = try container.decode(
+            [TaskCycleSeries].self,
+            forKey: .taskCycleSeries
+        )
         chains = try container.decode([TaskChain].self, forKey: .chains)
         definitions = try container.decode([TaskDefinition].self, forKey: .definitions)
         traces = try container.decode([DayTrace].self, forKey: .traces)
@@ -54,6 +62,7 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(days, forKey: .days)
+        try container.encode(taskCycleSeries, forKey: .taskCycleSeries)
         try container.encode(chains, forKey: .chains)
         try container.encode(definitions, forKey: .definitions)
         try container.encode(traces, forKey: .traces)
@@ -78,6 +87,7 @@ public extension NoonmarkSnapshot {
         }
 
         let dayDates = Set(days.map(\.date))
+        let taskCycleSeriesIDs = Set(taskCycleSeries.map(\.id))
         let chainIDs = Set(chains.map(\.id))
         let traceIDs = Set(traces.map(\.id))
         try validateUniqueIdentities()
@@ -86,6 +96,9 @@ public extension NoonmarkSnapshot {
         )
         for day in days {
             try validateDayTodoClock(day)
+        }
+        for series in taskCycleSeries {
+            try series.validateIntegrity()
         }
         for chain in chains {
             guard chain.createdAt.timeIntervalSinceReferenceDate.isFinite,
@@ -98,7 +111,9 @@ public extension NoonmarkSnapshot {
             }
             try validateTaskNoteEntries(chain.noteEntries, owner: "task chain")
         }
-        try validateTaskCycleMemberships()
+        try validateTaskCycleMemberships(
+            seriesIDs: taskCycleSeriesIDs
+        )
         for definition in definitions {
             try validateContentClock(
                 createdAt: definition.createdAt,
@@ -158,6 +173,7 @@ public extension NoonmarkSnapshot {
     private func validateUniqueIdentities() throws {
         let dayDates = Set(days.map(\.date))
         let dayIDs = Set(days.map(\.id))
+        let taskCycleSeriesIDs = Set(taskCycleSeries.map(\.id))
         let chainIDs = Set(chains.map(\.id))
         let definitionIDs = Set(definitions.map(\.id))
         let traceIDs = Set(traces.map(\.id))
@@ -170,6 +186,11 @@ public extension NoonmarkSnapshot {
         guard dayIDs.count == days.count else {
             throw NoonmarkError.invalidInput(
                 "snapshot contains duplicate Day Todo identities"
+            )
+        }
+        guard taskCycleSeriesIDs.count == taskCycleSeries.count else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains duplicate task cycle series identities"
             )
         }
         guard chainIDs.count == chains.count else {
@@ -190,7 +211,9 @@ public extension NoonmarkSnapshot {
         }
     }
 
-    private func validateTaskCycleMemberships() throws {
+    private func validateTaskCycleMemberships(
+        seriesIDs: Set<TaskCycleSeriesID>
+    ) throws {
         let memberships = chains.compactMap(\.cycleMembership)
         let occurrenceKeys = memberships.map {
             "\($0.seriesID.description):\($0.occurrenceDate.description)"
@@ -203,7 +226,11 @@ public extension NoonmarkSnapshot {
 
         for chain in chains {
             guard let membership = chain.cycleMembership else { continue }
-            try membership.validateSelfContainedFacts()
+            guard seriesIDs.contains(membership.seriesID) else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle membership references a missing series"
+                )
+            }
             guard traces.contains(where: {
                       $0.chainID == chain.id
                   })
@@ -214,24 +241,16 @@ public extension NoonmarkSnapshot {
             }
         }
 
-        for (_, seriesMemberships) in Dictionary(
+        let membershipsBySeries = Dictionary(
             grouping: memberships,
             by: \.seriesID
-        ) {
-            guard let descriptor = seriesMemberships.first else { continue }
-            guard seriesMemberships.allSatisfy({
-                $0.startDate == descriptor.startDate
-                    && $0.endDate == descriptor.endDate
-                    && $0.schedule == descriptor.schedule
-            }) else {
-                throw NoonmarkError.invalidInput(
-                    "task cycle series contains divergent descriptors"
-                )
-            }
+        )
+        for series in taskCycleSeries {
+            let seriesMemberships = membershipsBySeries[series.id] ?? []
             let expectedDates = try TaskCycleCivilCalendar.materializableDates(
-                from: descriptor.startDate,
-                through: descriptor.endDate
-            ).filter(descriptor.schedule.includes)
+                from: series.startDate,
+                through: series.endDate
+            ).filter(series.schedule.includes)
             guard Set(seriesMemberships.map(\.occurrenceDate))
                 == Set(expectedDates)
             else {

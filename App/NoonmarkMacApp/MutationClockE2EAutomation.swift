@@ -584,7 +584,7 @@ struct MutationClockE2EAutomation {
             switch type {
             case .classificationCommit, .traceClassificationEvent:
                 entry.recordPayload?.isEmpty == false
-            case .day, .taskChain, .taskDefinition, .dayTrace, .subtask,
+            case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace, .subtask,
                  .appPreferences:
                 entry.recordPayload == nil
             }

@@ -216,7 +216,11 @@ enum CarbonKeyboardLayoutResolver {
             ) else {
                 return nil
             }
-            result[character.lowercased()] = key
+            let normalizedCharacter = character.lowercased()
+            guard result[normalizedCharacter] == nil else {
+                return nil
+            }
+            result[normalizedCharacter] = key
         }
         return result
     }

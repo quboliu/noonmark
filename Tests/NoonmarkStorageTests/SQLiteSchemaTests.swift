@@ -59,7 +59,7 @@ final class SQLiteSchemaTests: XCTestCase {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
 
-        XCTAssertEqual(SQLiteSchema.version, 11)
+        XCTAssertEqual(SQLiteSchema.version, 12)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_canonical_name_ownership"))
@@ -78,6 +78,7 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_events"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS trace_classification_snapshot_event_finalizations"))
         XCTAssertTrue(taskChainTable.contains("note_entries_json TEXT NOT NULL"))
+        XCTAssertTrue(taskChainTable.contains("cycle_membership_json TEXT"))
         XCTAssertFalse(
             taskDefinitionTable.contains("CHECK (length(trim(title)) > 0)")
         )

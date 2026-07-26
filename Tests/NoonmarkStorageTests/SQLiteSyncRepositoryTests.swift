@@ -51,6 +51,33 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         )
     }
 
+    func testTaskCycleMembershipRoundTripsThroughCurrentSQLiteSchema() throws {
+        let databaseURL = makeDatabaseURL()
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        let endDate = LocalDate("2026-07-09")
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日 SQLite 对账",
+            startDate: today,
+            endDate: endDate,
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+
+        try repository.save(engine.snapshot())
+        let restored = try repository.load()
+        let track = try XCTUnwrap(
+            restored.taskCycleTracks(today: today).first {
+                $0.id == seriesID
+            }
+        )
+
+        XCTAssertEqual(track.days.count, 5)
+        XCTAssertEqual(track.scheduledCount, 5)
+        XCTAssertEqual(restored.snapshot(), engine.snapshot())
+    }
+
     func testSyncRepositoryRejectsANonemptyUnversionedStoreWithoutChangingIt() throws {
         let databaseURL = makeDatabaseURL()
         try executeProbeSQL(

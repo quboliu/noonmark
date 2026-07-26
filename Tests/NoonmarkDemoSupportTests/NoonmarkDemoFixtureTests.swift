@@ -20,6 +20,13 @@ struct NoonmarkDemoFixtureTests {
         #expect(fixture.engine.futurePlans(today: anchorDate).isEmpty == false)
         #expect(fixture.engine.unfinishedPool().isEmpty == false)
         #expect(fixture.engine.completedPool().isEmpty == false)
+        let track = try #require(
+            fixture.engine.taskCycleTracks(today: anchorDate).first
+        )
+        #expect(track.days.count == 13)
+        #expect(track.appears(in: .future))
+        #expect(track.appears(in: .unfinished))
+        #expect(track.appears(in: .completed))
         #expect(fixture.report.isComplete)
     }
 

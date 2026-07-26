@@ -184,6 +184,51 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
         })
     }
 
+    func testTransportBatchRejectsDivergentCycleMembershipForSameChain() throws {
+        let seriesID = TaskCycleSeriesID()
+        var daily = TaskChain(
+            cycleMembership: TaskCycleMembership(
+                seriesID: seriesID,
+                occurrenceDate: today,
+                startDate: today,
+                endDate: LocalDate("2026-07-20"),
+                schedule: .daily
+            ),
+            now: now
+        )
+        var weekdays = daily
+        weekdays.cycleMembership = TaskCycleMembership(
+            seriesID: seriesID,
+            occurrenceDate: today,
+            startDate: today,
+            endDate: LocalDate("2026-07-20"),
+            schedule: .weekdays
+        )
+        daily.updatedAt = now.addingTimeInterval(1)
+        weekdays.updatedAt = now.addingTimeInterval(1)
+        let mapper = SyncRecordMapper()
+        let first = try mapper.record(
+            for: daily,
+            modifiedBy: SyncDeviceID("mac-cycle-a")
+        )
+        let divergent = try mapper.record(
+            for: weekdays,
+            modifiedBy: SyncDeviceID("mac-cycle-b")
+        )
+
+        XCTAssertThrowsError(
+            try CurrentSyncRecordMerger().prepareTransportBatch(
+                existingRecords: [],
+                incomingRecords: [first, divergent]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .invalidCurrentRecordMerge(recordID: first.id)
+            )
+        }
+    }
+
     func testThreeVariantFoldKeepsOnlyLiveSyntheticContributors() throws {
         let base = NoonmarkEngine()
         let chainID = try base.createPoolTask(

@@ -15,7 +15,7 @@ final class DataPackageTests: XCTestCase {
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
         XCTAssertEqual(Set(object.keys), ["formatVersion", "snapshot"])
-        XCTAssertEqual(object["formatVersion"] as? Int, 4)
+        XCTAssertEqual(object["formatVersion"] as? Int, 5)
         let snapshotObject = try XCTUnwrap(
             object["snapshot"] as? [String: Any]
         )
@@ -27,6 +27,34 @@ final class DataPackageTests: XCTestCase {
 
         let restored = try NoonmarkEngine(snapshot: NoonmarkDataPackage.decode(data))
 
+        XCTAssertEqual(restored.snapshot(), engine.snapshot())
+    }
+
+    func testDataPackagePreservesTaskCycleMembershipAndFullTrack() throws {
+        let engine = NoonmarkEngine()
+        let endDate = LocalDate("2026-07-09")
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日导出复盘",
+            startDate: today,
+            endDate: endDate,
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+
+        let restored = try NoonmarkEngine(
+            snapshot: NoonmarkDataPackage.decode(
+                NoonmarkDataPackage.encode(engine.snapshot())
+            )
+        )
+        let track = try XCTUnwrap(
+            restored.taskCycleTracks(today: today).first {
+                $0.id == seriesID
+            }
+        )
+
+        XCTAssertEqual(track.days.count, 5)
+        XCTAssertEqual(track.scheduledCount, 5)
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
     }
 
@@ -184,17 +212,17 @@ final class DataPackageTests: XCTestCase {
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
                 error as? DataPackageError,
-                .malformedDataPackage("数据包不符合 current v4 的 canonical 结构与编码")
+                .malformedDataPackage("数据包不符合 current v5 的 canonical 结构与编码")
             )
         }
     }
 
     func testJSONDataPackageRejectsUnsupportedFormatVersionBeforePayloadDecode() {
-        let data = Data(#"{"formatVersion":5,"snapshot":{}}"#.utf8)
+        let data = Data(#"{"formatVersion":6,"snapshot":{}}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
-            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(5))
-            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 5。")
+            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(6))
+            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 6。")
         }
     }
 
@@ -227,7 +255,7 @@ final class DataPackageTests: XCTestCase {
     }
 
     func testJSONDataPackageRejectsCurrentEnvelopeWithoutSnapshot() {
-        let data = Data(#"{"formatVersion":4}"#.utf8)
+        let data = Data(#"{"formatVersion":5}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
@@ -597,7 +625,7 @@ final class DataPackageTests: XCTestCase {
             var container = encoder.singleValueContainer()
             try container.encode(date.timeIntervalSinceReferenceDate.bitPattern)
         }
-        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 4, snapshot: snapshot))
+        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 5, snapshot: snapshot))
     }
 
     private func canonicalJSON(_ data: Data) throws -> Data {

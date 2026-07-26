@@ -29,7 +29,19 @@ struct CompletedPoolPage: View {
         )
     }
 
-    var items: [CompletedPoolItem] { store.engine.completedPool() }
+    var cycleTracks: [TaskCycleTrack] {
+        TaskCycleCollectionProjector().tracks(
+            store.engine.taskCycleTracks(today: store.today),
+            for: .completed
+        )
+    }
+
+    var items: [CompletedPoolItem] {
+        store.engine.completedPool().filter {
+            store.engine.chains[$0.trace.chainID]?.cycleMembership == nil
+        }
+    }
+
     var subtaskRecords: [CompletedSubtaskRecord] { store.engine.completedSubtaskRecords() }
 
     private var entries: [CompletedCollectionEntry] {
@@ -74,6 +86,12 @@ struct CompletedPoolPage: View {
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(cycleTracks) { track in
+                        TaskCycleTrackRow(
+                            track: track,
+                            collection: .completed
+                        )
+                    }
                     ForEach(presentationSections, id: \.id) { section in
                         if presentationPreference.organization == .grouped {
                             TaskCollectionSectionHeader(section: section, count: section.items.count)
@@ -89,7 +107,9 @@ struct CompletedPoolPage: View {
                             }
                         }
                     }
-                    if items.isEmpty && subtaskRecords.isEmpty {
+                    if items.isEmpty && subtaskRecords.isEmpty
+                        && cycleTracks.isEmpty
+                    {
                         EmptyState(kind: .completedPool, text: store.copy.emptyCompleted)
                             .padding(.top, 40)
                     }

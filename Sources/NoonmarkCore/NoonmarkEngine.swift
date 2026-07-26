@@ -155,6 +155,41 @@ public final class NoonmarkEngine {
         return chain.id
     }
 
+    func normalizedTaskCycleTitle(_ title: String) throws -> String {
+        try normalizeTitle(title)
+    }
+
+    func installTaskCycleOccurrence(
+        normalizedTitle: String,
+        descriptionText: String?,
+        membership: TaskCycleMembership,
+        now: Date
+    ) {
+        let chain = TaskChain(
+            cycleMembership: membership,
+            now: now
+        )
+        let definition = TaskDefinition(
+            chainID: chain.id,
+            sequence: 1,
+            title: normalizedTitle,
+            descriptionText: descriptionText,
+            now: now
+        )
+        let trace = DayTrace(
+            chainID: chain.id,
+            definitionID: definition.id,
+            date: membership.occurrenceDate,
+            priority: nextPriority(on: membership.occurrenceDate),
+            descriptionText: descriptionText,
+            now: now
+        )
+        chains[chain.id] = chain
+        definitions[definition.id] = definition
+        traces[trace.id] = trace
+        ensureDay(membership.occurrenceDate, now: now)
+    }
+
     public func updatePoolTask(
         chainID: TaskChainID,
         title: String,

@@ -6,6 +6,32 @@ final class SyncRecordMapperTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let today = LocalDate("2026-07-05")
 
+    func testTaskChainRecordPreservesCycleMembership() throws {
+        let seriesID = TaskCycleSeriesID()
+        let membership = TaskCycleMembership(
+            seriesID: seriesID,
+            occurrenceDate: today,
+            startDate: today,
+            endDate: LocalDate("2026-07-09"),
+            schedule: .daily
+        )
+        let chain = TaskChain(
+            cycleMembership: membership,
+            now: now
+        )
+        let mapper = SyncRecordMapper()
+
+        let record = try mapper.record(
+            for: chain,
+            modifiedBy: SyncDeviceID("mac-cycle")
+        )
+
+        XCTAssertEqual(
+            try mapper.decodeTaskChain(record).cycleMembership,
+            membership
+        )
+    }
+
     func testSnapshotRecordsRoundTripThroughGenericPayloads() throws {
         let engine = try makeEngine()
         try engine.updateTheme(

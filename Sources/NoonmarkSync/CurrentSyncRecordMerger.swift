@@ -759,7 +759,9 @@ struct CurrentSyncRecordMerger {
     ) throws -> SyncRecord {
         let existingChain = try mapper.decodeTaskChain(existing)
         let incomingChain = try mapper.decodeTaskChain(incoming)
-        guard existingChain.createdAt == incomingChain.createdAt else {
+        guard existingChain.createdAt == incomingChain.createdAt,
+              existingChain.cycleMembership == incomingChain.cycleMembership
+        else {
             throw CurrentSyncRecordMergeError.taskChainIdentityCollision
         }
         try validateContentClock(

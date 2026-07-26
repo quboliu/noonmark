@@ -1,0 +1,226 @@
+@testable import NoonmarkCore
+import XCTest
+
+final class TaskCycleSeriesTests: XCTestCase {
+    private let monday = LocalDate("2026-07-20")
+    private let tuesday = LocalDate("2026-07-21")
+    private let wednesday = LocalDate("2026-07-22")
+    private let thursday = LocalDate("2026-07-23")
+    private let friday = LocalDate("2026-07-24")
+    private let saturday = LocalDate("2026-07-25")
+    private let sunday = LocalDate("2026-07-26")
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testCreatingDailySeriesMaterializesIndependentTaskChains() throws {
+        let engine = NoonmarkEngine()
+
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日站立伸展",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+
+        let members = engine.chains.values
+            .filter { $0.cycleMembership?.seriesID == seriesID }
+            .sorted {
+                $0.cycleMembership!.occurrenceDate
+                    < $1.cycleMembership!.occurrenceDate
+            }
+
+        XCTAssertEqual(members.count, 5)
+        XCTAssertEqual(Set(members.map(\.id)).count, 5)
+        XCTAssertEqual(
+            members.compactMap(\.cycleMembership?.occurrenceDate),
+            [monday, tuesday, wednesday, thursday, friday]
+        )
+        XCTAssertTrue(members.allSatisfy { member in
+            engine.traces.values.filter { $0.chainID == member.id }.count == 1
+        })
+        XCTAssertEqual(engine.getDayTodo(date: monday).traces.count, 1)
+        XCTAssertEqual(engine.futurePlans(today: monday).count, 4)
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testWeekdaySeriesTrackShowsEveryCalendarDayIncludingOffScheduleDays() throws {
+        let engine = NoonmarkEngine()
+
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "工作日收件箱清理",
+            startDate: monday,
+            endDate: sunday,
+            schedule: .weekdays,
+            today: monday,
+            now: now
+        )
+
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: monday).first {
+                $0.id == seriesID
+            }
+        )
+
+        XCTAssertEqual(track.days.map(\.date), [
+            monday,
+            tuesday,
+            wednesday,
+            thursday,
+            friday,
+            saturday,
+            sunday,
+        ])
+        XCTAssertEqual(
+            track.days.map(\.state),
+            [
+                .pendingToday,
+                .planned,
+                .planned,
+                .planned,
+                .planned,
+                .notScheduled,
+                .notScheduled,
+            ]
+        )
+        XCTAssertEqual(track.scheduledCount, 5)
+        XCTAssertEqual(track.days.count, 7)
+    }
+
+    func testOneFullTrackIsSharedAcrossFutureUnfinishedAndCompletedSemantics() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日复盘",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let mondayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+        try engine.markCompleted(
+            traceID: mondayTrace.id,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+        try engine.settleDays(
+            upTo: wednesday,
+            now: now.addingTimeInterval(2)
+        )
+
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: wednesday).first {
+                $0.id == seriesID
+            }
+        )
+
+        XCTAssertEqual(
+            track.days.map(\.state),
+            [.completed, .unfinished, .pendingToday, .planned, .planned]
+        )
+        XCTAssertTrue(track.appears(in: .future))
+        XCTAssertTrue(track.appears(in: .unfinished))
+        XCTAssertTrue(track.appears(in: .completed))
+        XCTAssertEqual(track.completedCount, 1)
+        XCTAssertEqual(track.unfinishedCount, 1)
+        XCTAssertEqual(track.plannedCount, 2)
+    }
+
+    func testSnapshotRejectsDivergentSeriesDescriptorsAndDuplicateOccurrences() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日阅读",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        var snapshot = engine.snapshot()
+        let indexes = snapshot.chains.indices.filter {
+            snapshot.chains[$0].cycleMembership?.seriesID == seriesID
+        }
+        XCTAssertGreaterThanOrEqual(indexes.count, 2)
+
+        var divergent = snapshot
+        divergent.chains[indexes[1]].cycleMembership = TaskCycleMembership(
+            seriesID: seriesID,
+            occurrenceDate: tuesday,
+            startDate: monday,
+            endDate: friday,
+            schedule: .weekdays
+        )
+        XCTAssertThrowsError(try divergent.validateIntegrity())
+
+        let duplicateDate = try XCTUnwrap(
+            snapshot.chains[indexes[0]].cycleMembership?.occurrenceDate
+        )
+        snapshot.chains[indexes[1]].cycleMembership = TaskCycleMembership(
+            seriesID: seriesID,
+            occurrenceDate: duplicateDate,
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily
+        )
+        XCTAssertThrowsError(try snapshot.validateIntegrity())
+    }
+
+    func testSeriesCreationRejectsAnUnboundedMaterializationWindow() {
+        let engine = NoonmarkEngine()
+
+        XCTAssertThrowsError(
+            try engine.createTaskCycleSeries(
+                title: "过长周期",
+                startDate: monday,
+                endDate: LocalDate("2027-07-21"),
+                schedule: .daily,
+                today: monday,
+                now: now
+            )
+        )
+        XCTAssertTrue(engine.chains.isEmpty)
+        XCTAssertTrue(engine.traces.isEmpty)
+    }
+
+    func testSnapshotRejectsCycleMembershipWithoutItsScheduledTrace() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "缺失实例",
+            startDate: monday,
+            endDate: tuesday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        var snapshot = engine.snapshot()
+        let missingChainID = try XCTUnwrap(
+            snapshot.chains.first {
+                $0.cycleMembership?.seriesID == seriesID
+                    && $0.cycleMembership?.occurrenceDate == monday
+            }?.id
+        )
+        snapshot.traces.removeAll { $0.chainID == missingChainID }
+
+        XCTAssertThrowsError(try snapshot.validateIntegrity())
+    }
+
+    private func trace(
+        in engine: NoonmarkEngine,
+        seriesID: TaskCycleSeriesID,
+        occurrenceDate: LocalDate
+    ) throws -> DayTrace {
+        let chainID = try XCTUnwrap(
+            engine.chains.values.first {
+                $0.cycleMembership?.seriesID == seriesID
+                    && $0.cycleMembership?.occurrenceDate == occurrenceDate
+            }?.id
+        )
+        return try XCTUnwrap(
+            engine.traces.values.first { $0.chainID == chainID }
+        )
+    }
+}

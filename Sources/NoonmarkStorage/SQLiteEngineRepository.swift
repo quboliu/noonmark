@@ -869,6 +869,40 @@ private extension SQLiteEngineRepository {
         }
     }
 
+    func taskCycleMembershipJSON(
+        _ membership: TaskCycleMembership?
+    ) throws -> String? {
+        guard let membership else { return nil }
+        let data = try JSONEncoder().encode(membership)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "task cycle membership JSON encoding failed"
+            )
+        }
+        return string
+    }
+
+    func taskCycleMembership(
+        from json: String?
+    ) throws -> TaskCycleMembership? {
+        guard let json else { return nil }
+        guard let data = json.data(using: .utf8) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "task cycle membership JSON is not UTF-8"
+            )
+        }
+        do {
+            return try JSONDecoder().decode(
+                TaskCycleMembership.self,
+                from: data
+            )
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "invalid task cycle membership JSON: \(error.localizedDescription)"
+            )
+        }
+    }
+
     func validateClassificationStateIntegrity(_ state: TaskClassificationState) throws {
         do {
             let data = try JSONEncoder().encode(state)
@@ -1307,12 +1341,13 @@ private extension SQLiteEngineRepository {
     func upsert(_ chains: [TaskChain], into database: Database?) throws {
         let chainSQL = """
         INSERT INTO task_chains(
-            id, state, note_entries_json,
+            id, state, cycle_membership_json, note_entries_json,
             created_at, created_at_bits, updated_at, updated_at_bits
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             state = excluded.state,
+            cycle_membership_json = excluded.cycle_membership_json,
             note_entries_json = excluded.note_entries_json,
             created_at = excluded.created_at,
             created_at_bits = excluded.created_at_bits,
@@ -1323,11 +1358,16 @@ private extension SQLiteEngineRepository {
             try run(chainSQL, on: database) { statement in
                 bind(chain.id.rawValue, to: 1, in: statement)
                 bind(chain.state.rawValue, to: 2, in: statement)
-                bind(try noteEntriesJSON(chain.noteEntries), to: 3, in: statement)
-                bind(chain.createdAt, to: 4, in: statement)
-                try bindExactDate(chain.createdAt, to: 5, in: statement)
-                bind(chain.updatedAt, to: 6, in: statement)
-                try bindExactDate(chain.updatedAt, to: 7, in: statement)
+                bind(
+                    try taskCycleMembershipJSON(chain.cycleMembership),
+                    to: 3,
+                    in: statement
+                )
+                bind(try noteEntriesJSON(chain.noteEntries), to: 4, in: statement)
+                bind(chain.createdAt, to: 5, in: statement)
+                try bindExactDate(chain.createdAt, to: 6, in: statement)
+                bind(chain.updatedAt, to: 7, in: statement)
+                try bindExactDate(chain.updatedAt, to: 8, in: statement)
             }
         }
     }
@@ -3426,7 +3466,7 @@ private extension SQLiteEngineRepository {
         try query(
             """
             SELECT
-                c.id, c.state, c.note_entries_json,
+                c.id, c.state, c.cycle_membership_json, c.note_entries_json,
                 c.created_at, c.created_at_bits,
                 c.updated_at, c.updated_at_bits
             FROM task_chains c
@@ -3440,17 +3480,20 @@ private extension SQLiteEngineRepository {
             var chain = TaskChain(
                 id: TaskChainID(try uuid(statement, 0)),
                 state: state,
-                noteEntries: try noteEntries(from: string(statement, 2)),
+                cycleMembership: try taskCycleMembership(
+                    from: optionalString(statement, 2)
+                ),
+                noteEntries: try noteEntries(from: string(statement, 3)),
                 now: try validatedExactDate(
                     statement,
-                    textIndex: 3,
-                    bitsIndex: 4
+                    textIndex: 4,
+                    bitsIndex: 5
                 )
             )
             chain.updatedAt = try validatedExactDate(
                 statement,
-                textIndex: 5,
-                bitsIndex: 6
+                textIndex: 6,
+                bitsIndex: 7
             )
             return chain
         }

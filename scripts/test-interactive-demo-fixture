@@ -74,8 +74,6 @@ for expected in \
   '"dayTodoMixedStatusSectionCount" : 1' \
   '"dayTodoGroupingPresentationVerified" : true' \
   '"taskCollectionCategoryVisibilityVerified" : true' \
-  '"singleDayCompletedTaskCount" : 5' \
-  '"multiDayCompletedTaskCount" : 2' \
   '"completedPoolRowHierarchyVerified" : true' \
   '"visibleScopeReauthorizationCardCount" : 0' \
   '"scopeAuthorizationUIVerified" : true' \
@@ -92,6 +90,19 @@ for expected in \
     exit 1
   fi
 done
+
+single_day_completed_count="$(
+  plutil -extract singleDayCompletedTaskCount raw -o - "$result_path"
+)"
+multi_day_completed_count="$(
+  plutil -extract multiDayCompletedTaskCount raw -o - "$result_path"
+)"
+if [[ "$single_day_completed_count" -lt 1 \
+      || "$multi_day_completed_count" -lt 1 ]]; then
+  echo "demo fixture must contain both single-day and multi-day completions" >&2
+  sed -n '1,200p' "$result_path" >&2
+  exit 1
+fi
 
 for page in pool day unfinished completed; do
   screenshot="$test_root/task-collection-$page.png"

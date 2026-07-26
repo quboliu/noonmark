@@ -29,7 +29,19 @@ struct UnfinishedPoolPage: View {
         )
     }
 
-    var items: [UnfinishedPoolItem] { store.engine.unfinishedPool() }
+    var cycleTracks: [TaskCycleTrack] {
+        TaskCycleCollectionProjector().tracks(
+            store.engine.taskCycleTracks(today: store.today),
+            for: .unfinished
+        )
+    }
+
+    var items: [UnfinishedPoolItem] {
+        store.engine.unfinishedPool().filter {
+            $0.chain.cycleMembership == nil
+        }
+    }
+
     private var itemsByID: [String: UnfinishedPoolItem] {
         Dictionary(uniqueKeysWithValues: items.map { ($0.chain.id.description, $0) })
     }
@@ -66,6 +78,12 @@ struct UnfinishedPoolPage: View {
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
                 LazyVStack(spacing: 0) {
+                    ForEach(cycleTracks) { track in
+                        TaskCycleTrackRow(
+                            track: track,
+                            collection: .unfinished
+                        )
+                    }
                     ForEach(presentationSections, id: \.id) { section in
                         if presentationPreference.organization == .grouped {
                             TaskCollectionSectionHeader(section: section, count: section.items.count)
@@ -76,7 +94,7 @@ struct UnfinishedPoolPage: View {
                             }
                         }
                     }
-                    if items.isEmpty {
+                    if items.isEmpty && cycleTracks.isEmpty {
                         EmptyState(kind: .unfinishedPool, text: store.copy.emptyUnfinished)
                             .padding(.top, 40)
                     }

@@ -12,7 +12,7 @@ private func sqliteNonemptyInvariant(_ column: String) -> String {
 }
 
 public enum SQLiteSchema {
-    public static let version = 11
+    public static let version = 12
 
     public static let statements: [String] = [
         """
@@ -40,6 +40,13 @@ public enum SQLiteSchema {
         CREATE TABLE IF NOT EXISTS task_chains (
             id TEXT PRIMARY KEY NOT NULL,
             state TEXT NOT NULL CHECK (state IN ('active', 'abandoned')),
+            cycle_membership_json TEXT CHECK (
+                cycle_membership_json IS NULL
+                OR (
+                    json_valid(cycle_membership_json)
+                    AND json_type(cycle_membership_json) = 'object'
+                )
+            ),
             note_entries_json TEXT NOT NULL CHECK (
                 json_valid(note_entries_json)
                 AND json_type(note_entries_json) = 'array'

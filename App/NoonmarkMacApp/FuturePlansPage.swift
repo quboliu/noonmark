@@ -16,7 +16,19 @@ import UniformTypeIdentifiers
 
 struct FuturePlansPage: View {
     @EnvironmentObject private var store: NoonmarkStore
-    var plans: [FuturePlanItem] { store.engine.futurePlans(today: store.today) }
+    var cycleTracks: [TaskCycleTrack] {
+        TaskCycleCollectionProjector().tracks(
+            store.engine.taskCycleTracks(today: store.today),
+            for: .future
+        )
+    }
+
+    var plans: [FuturePlanItem] {
+        store.engine.futurePlans(today: store.today).filter {
+            store.engine.chains[$0.trace.chainID]?.cycleMembership == nil
+        }
+    }
+
     var grouped: [(LocalDate, [FuturePlanItem])] {
         Dictionary(grouping: plans) { $0.trace.date }
             .map { ($0.key, $0.value.sorted { $0.trace.priority < $1.trace.priority }) }
@@ -29,6 +41,12 @@ struct FuturePlansPage: View {
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
+                    ForEach(cycleTracks) { track in
+                        TaskCycleTrackRow(
+                            track: track,
+                            collection: .future
+                        )
+                    }
                     ForEach(grouped, id: \.0) { date, items in
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 10) {
@@ -50,7 +68,7 @@ struct FuturePlansPage: View {
                             }
                         }
                     }
-                    if plans.isEmpty {
+                    if plans.isEmpty && cycleTracks.isEmpty {
                         EmptyState(
                             kind: .futurePlans,
                             text: store.copy.emptyFuture,

@@ -13,7 +13,7 @@ public struct DataPackageWriteReceipt: Equatable, Sendable {
 }
 
 public enum NoonmarkDataPackage {
-    public static let currentFormatVersion = 4
+    public static let currentFormatVersion = 5
 
     public static func encode(_ snapshot: NoonmarkSnapshot) throws -> Data {
         try validate(snapshot)
@@ -36,7 +36,7 @@ public enum NoonmarkDataPackage {
               try jsonShape(of: inputJSON.object) == jsonShape(of: encodedJSON.object)
         else {
             throw DataPackageError.malformedDataPackage(
-                "数据包不符合 current v4 的 canonical 结构与编码"
+                "数据包不符合 current v5 的 canonical 结构与编码"
             )
         }
         return snapshot

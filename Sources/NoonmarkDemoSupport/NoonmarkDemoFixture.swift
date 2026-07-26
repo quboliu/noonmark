@@ -62,6 +62,8 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let poolTaskWithPlannedSubtasksCount: Int
     public let taskWithNotesCount: Int
     public let taskWithDescriptionCount: Int
+    public let taskCycleSeriesCount: Int
+    public let taskCycleOccurrenceCount: Int
 
     public var missingRequirements: [String] {
         var missing: [String] = []
@@ -117,6 +119,12 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         require(
             taskWithDescriptionCount >= 6,
             "跨页面任务描述",
+            into: &missing
+        )
+        require(taskCycleSeriesCount > 0, "周期系列非空", into: &missing)
+        require(
+            taskCycleOccurrenceCount >= 10,
+            "周期系列覆盖完整十天轨迹",
             into: &missing
         )
         return missing
@@ -176,6 +184,9 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         taskWithDescriptionCount = snapshot.definitions.filter {
             $0.descriptionText?.isEmpty == false
         }.count
+        let cycleMemberships = snapshot.chains.compactMap(\.cycleMembership)
+        taskCycleSeriesCount = Set(cycleMemberships.map(\.seriesID)).count
+        taskCycleOccurrenceCount = cycleMemberships.count
     }
 
     private func require(
@@ -202,11 +213,24 @@ private struct DemoStory {
 
     mutating func replay() throws {
         let taskIDs = try createTaskPool()
+        try createCycleSeries()
         try replayFirstFiveDays(taskIDs)
         try replayLastFiveDays(taskIDs)
         try addTodayAndFutureState(taskIDs)
         try addReviews()
         try engine.snapshot().validateIntegrity()
+    }
+
+    private func createCycleSeries() throws {
+        _ = try engine.createTaskCycleSeries(
+            title: "每日产品复盘",
+            descriptionText: "每天用十分钟记录完成、遗漏与下一步。",
+            startDate: dates[0],
+            endDate: try DemoCalendar.offset(dates[9], by: 3),
+            schedule: .daily,
+            today: dates[0],
+            now: time(on: dates[0], hour: 6, minute: 45)
+        )
     }
 
     private mutating func createTaskPool() throws -> DemoTaskIDs {
@@ -408,6 +432,7 @@ private struct DemoStory {
             on: dates[0],
             hour: 9
         )
+        try completeCycleOccurrence(on: dates[0], hour: 18)
 
         try settle(atStartOf: dates[1])
         guard let interview = engine.snapshot().traces.first(where: {
@@ -448,6 +473,7 @@ private struct DemoStory {
             today: dates[2],
             now: time(on: dates[2], hour: 17)
         )
+        try completeCycleOccurrence(on: dates[2], hour: 18)
 
         try settle(atStartOf: dates[3])
         let expense = try schedule(
@@ -490,6 +516,7 @@ private struct DemoStory {
             today: dates[4],
             now: time(on: dates[4], hour: 16)
         )
+        try completeCycleOccurrence(on: dates[4], hour: 18)
     }
 
     private mutating func replayLastFiveDays(
@@ -547,6 +574,7 @@ private struct DemoStory {
             today: dates[6],
             now: time(on: dates[6], hour: 13)
         )
+        try completeCycleOccurrence(on: dates[6], hour: 18)
 
         try settle(atStartOf: dates[7])
         let handoff = try schedule(
@@ -580,6 +608,7 @@ private struct DemoStory {
             today: dates[8],
             now: time(on: dates[8], hour: 15)
         )
+        try completeCycleOccurrence(on: dates[8], hour: 18)
 
         try settle(atStartOf: dates[9])
     }
@@ -767,6 +796,28 @@ private struct DemoStory {
         try engine.settleDays(
             upTo: date,
             now: time(on: date, hour: 0, minute: 1)
+        )
+    }
+
+    private func completeCycleOccurrence(
+        on date: LocalDate,
+        hour: Int
+    ) throws {
+        guard let chainID = engine.chains.values.first(where: {
+            $0.cycleMembership?.occurrenceDate == date
+        })?.id,
+            let trace = engine.traces.values.first(where: {
+                $0.chainID == chainID && $0.date == date
+            })
+        else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage(
+                ["周期实例 \(date.description) 缺失"]
+            )
+        }
+        try engine.markCompleted(
+            traceID: trace.id,
+            today: date,
+            now: time(on: date, hour: hour)
         )
     }
 

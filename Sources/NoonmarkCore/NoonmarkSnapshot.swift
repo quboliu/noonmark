@@ -98,6 +98,7 @@ public extension NoonmarkSnapshot {
             }
             try validateTaskNoteEntries(chain.noteEntries, owner: "task chain")
         }
+        try validateTaskCycleMemberships()
         for definition in definitions {
             try validateContentClock(
                 createdAt: definition.createdAt,
@@ -186,6 +187,51 @@ public extension NoonmarkSnapshot {
             throw NoonmarkError.invalidInput(
                 "snapshot contains duplicate subtask identities"
             )
+        }
+    }
+
+    private func validateTaskCycleMemberships() throws {
+        let memberships = chains.compactMap(\.cycleMembership)
+        let occurrenceKeys = memberships.map {
+            "\($0.seriesID.description):\($0.occurrenceDate.description)"
+        }
+        guard Set(occurrenceKeys).count == occurrenceKeys.count else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains duplicate task cycle occurrences"
+            )
+        }
+
+        for chain in chains {
+            guard let membership = chain.cycleMembership else { continue }
+            guard membership.startDate <= membership.endDate,
+                  membership.occurrenceDate >= membership.startDate,
+                  membership.occurrenceDate <= membership.endDate,
+                  membership.schedule.includes(membership.occurrenceDate),
+                  traces.contains(where: {
+                      $0.chainID == chain.id
+                          && $0.date == membership.occurrenceDate
+                  })
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle membership contains invalid schedule facts"
+                )
+            }
+        }
+
+        for (_, seriesMemberships) in Dictionary(
+            grouping: memberships,
+            by: \.seriesID
+        ) {
+            guard let descriptor = seriesMemberships.first else { continue }
+            guard seriesMemberships.allSatisfy({
+                $0.startDate == descriptor.startDate
+                    && $0.endDate == descriptor.endDate
+                    && $0.schedule == descriptor.schedule
+            }) else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle series contains divergent descriptors"
+                )
+            }
         }
     }
 

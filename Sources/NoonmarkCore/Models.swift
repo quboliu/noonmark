@@ -431,6 +431,7 @@ public struct Day: Codable, Equatable, Sendable {
 public struct TaskChain: Codable, Equatable, Sendable {
     public var id: TaskChainID
     public var state: TaskChainState
+    public var cycleMembership: TaskCycleMembership?
     public var noteEntries: [TaskNoteEntry]
     public var createdAt: Date
     public var updatedAt: Date
@@ -442,11 +443,13 @@ public struct TaskChain: Codable, Equatable, Sendable {
     public init(
         id: TaskChainID = TaskChainID(),
         state: TaskChainState = .active,
+        cycleMembership: TaskCycleMembership? = nil,
         noteEntries: [TaskNoteEntry] = [],
         now: Date
     ) {
         self.id = id
         self.state = state
+        self.cycleMembership = cycleMembership
         self.noteEntries = noteEntries
         self.createdAt = now
         self.updatedAt = now

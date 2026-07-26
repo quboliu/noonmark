@@ -36,13 +36,16 @@ final class CarbonGlobalQuickEntryShortcutRegistrar: GlobalQuickEntryShortcutReg
             Unmanaged.passUnretained(self).toOpaque(),
             &eventHandler
         )
-        precondition(status == noErr, "Unable to install global hotkey handler")
+        if status != noErr {
+            eventHandler = nil
+        }
     }
 
     func register(
         _ shortcut: GlobalQuickEntryShortcut,
         onTrigger: @escaping @MainActor () -> Void
     ) -> Bool {
+        guard eventHandler != nil else { return false }
         if currentShortcut == shortcut {
             self.onTrigger = onTrigger
             return true
@@ -129,12 +132,12 @@ final class CarbonGlobalQuickEntryShortcutRegistrar: GlobalQuickEntryShortcutReg
 
 enum CarbonSystemShortcutInspector {
     @MainActor
-    static func enabledShortcuts() -> Set<GlobalQuickEntryShortcut> {
+    static func snapshot() -> GlobalSystemShortcutSnapshot {
         var unmanagedArray: Unmanaged<CFArray>?
         guard CopySymbolicHotKeys(&unmanagedArray) == noErr,
               let array = unmanagedArray?.takeRetainedValue()
         else {
-            return []
+            return .unavailable
         }
 
         var result: Set<GlobalQuickEntryShortcut> = []
@@ -164,7 +167,7 @@ enum CarbonSystemShortcutInspector {
                 )
             )
         }
-        return result
+        return .available(result)
     }
 
     private static func modifiers(

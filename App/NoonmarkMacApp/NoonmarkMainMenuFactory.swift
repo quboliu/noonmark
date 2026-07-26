@@ -1,4 +1,5 @@
 import AppKit
+import NoonmarkMacRuntime
 
 @MainActor
 @objc protocol NoonmarkMenuCommandTarget: AnyObject {
@@ -276,6 +277,41 @@ enum NoonmarkMainMenuFactory {
         return mainMenu
     }
 
+    static func globalQuickEntryReservedShortcuts(
+        in menu: NSMenu?
+    ) -> Set<GlobalQuickEntryShortcut> {
+        guard let menu else { return [] }
+        return Set(
+            menu.items.compactMap(globalQuickEntryShortcut)
+                + menu.items.flatMap { item in
+                    globalQuickEntryReservedShortcuts(in: item.submenu)
+                }
+        )
+    }
+
+    private static func globalQuickEntryShortcut(
+        for item: NSMenuItem
+    ) -> GlobalQuickEntryShortcut? {
+        guard item.keyEquivalent.isEmpty == false,
+              let key = GlobalShortcutKey(
+                  charactersIgnoringModifiers: item.keyEquivalent
+              )
+        else {
+            return nil
+        }
+        var flags = item.keyEquivalentModifierMask
+            .intersection(.deviceIndependentFlagsMask)
+        if item.keyEquivalent != item.keyEquivalent.lowercased() {
+            flags.insert(.shift)
+        }
+        return GlobalQuickEntryShortcut(
+            key: key,
+            modifiers: GlobalShortcutModifiers(
+                appKitFlags: flags
+            )
+        )
+    }
+
     private static func addTopLevelMenu(
         _ menu: NSMenu,
         title: String,
@@ -328,5 +364,25 @@ enum NoonmarkMainMenuFactory {
         item.target = target
         menu.addItem(item)
         return item
+    }
+}
+
+extension GlobalShortcutModifiers {
+    init(appKitFlags flags: NSEvent.ModifierFlags) {
+        let flags = flags.intersection(.deviceIndependentFlagsMask)
+        var result: Self = []
+        if flags.contains(.command) {
+            result.insert(.command)
+        }
+        if flags.contains(.control) {
+            result.insert(.control)
+        }
+        if flags.contains(.option) {
+            result.insert(.option)
+        }
+        if flags.contains(.shift) {
+            result.insert(.shift)
+        }
+        self = result
     }
 }

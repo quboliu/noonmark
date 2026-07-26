@@ -167,7 +167,7 @@ Nightly：
 - 2026-07-16：原 release workflow 会把 Apple Development 签名、未公证产物直接发布到 GitHub Release，已改为仅限 `main` 手动触发的开发签名发行验收：权限降为只读、移除 tag 与 `gh release` 路径、artifact 明确标记 `not-for-distribution`。正式发行在 Developer ID、Hardened Runtime、secure timestamp、公证、staple 和 Gatekeeper 验收齐备前保持 fail-closed。
 - 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，新用户空库只初始化并写入 1 条 preferences，不自动灌入演示任务；局部截图数据只在 `--ephemeral` 测试路径使用，交互式演示另由 2026-07-24 建立的隔离十天 fixture 提供。
 - 2026-07-24：固化 `NoonmarkDemoSupport`、`make test-demo-fixture` 与 `make run-demo-app`。真实 Demo App 探针已验证固定十天任务状态、SQLite 完整 snapshot、四份加密烛龙会话、已提交和可编辑任务产物，以及日终复盘回执。
-- 2026-07-25：全局 Quick Entry 快捷键落地后，`make check` exit 0，完整 SwiftPM 系统套件执行 1112 项测试，1 项明确 opt-in 的 live iCloud 测试按设计跳过，0 失败；确定性仿真、运行证据、签名策略、DMG observer、SwiftLint 和 SwiftFormat 门禁均通过。完整 `scripts/test-e2e` exit 0，并通过真实 Settings 录制器把默认 `⌃⇧N` 改为 `⌃⇧K`，从 Finder 验证旧键失效、新键唤起、重复唤起保留草稿、回车只写入一个任务、主窗口不误开与 Finder 恢复前台。最新 release DMG 已通过真实挂载、复制安装、Settings／Quick Entry 输入、SQLite 落库、重启回读、unified log 与 DiagnosticReports 检查。
+- 2026-07-25：全局 Quick Entry 快捷键落地后，`make check` exit 0，完整 SwiftPM 系统套件执行 1115 项测试，1 项明确 opt-in 的 live iCloud 测试按设计跳过，0 失败；确定性仿真、运行证据、签名策略、DMG observer、SwiftLint 和 SwiftFormat 门禁均通过。完整 `scripts/test-e2e` exit 0，并通过真实 Settings 录制器把默认 `⌃⇧N` 改为 `⌃⇧K`，从 Finder 验证旧键失效、新键唤起、重复唤起保留草稿、回车只写入一个任务、主窗口不误开与 Finder 恢复前台。专项 E2E 另对账由真实主菜单生成的 8 个双修饰键冲突组合。最新 release DMG 已通过真实挂载、复制安装、Settings／Quick Entry 输入、SQLite 落库、重启回读、unified log 与 DiagnosticReports 检查。
 - 2026-07-06：设置页导出 / 导入已接入 `NoonmarkDataPackage` JSON 数据包；`swift test --filter NoonmarkStorageTests` 通过 5 个 Storage 测试。
 - 2026-07-20：`NoonmarkAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 DeepSeek 验证入口为 `scripts/test-ai-provider-live`，缺少本地配置或显式环境凭证时 fail-closed。
 

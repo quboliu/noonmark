@@ -1411,8 +1411,10 @@ Todo 写入涉及两套存储：
 
 系统冲突分两层：
 
-- 晷迹自身命令和 `CopySymbolicHotKeys` 的 macOS 系统组合可以硬拦截；
+- 晷迹自身命令目录从实际 `NSMenu` 递归生成，避免菜单与校验规则各维护一份；`CopySymbolicHotKeys` 返回的 macOS 系统组合也会硬拦截；
 - 第三方 App 自定义组合无法完整枚举，只能在设置中披露并要求用户在常用 App 中试按。
+
+`CopySymbolicHotKeys` 读取失败属于未知状态，不等于空集合；coordinator 会拒绝保存候选组合并保留旧注册。录制器保存 `NSEvent.keyCode` 对应的物理 virtual key，不通过当前键盘布局的字符重新映射。Carbon event handler 安装失败也只表现为注册失败，不终止 App。
 
 全局触发记录先前 `NSRunningApplication`，只呈现 Quick Entry panel。提交或取消后恢复先前 App；主窗口关闭时保持关闭。应用内 `⌘N` 仍走菜单命令并保留原有行为。
 

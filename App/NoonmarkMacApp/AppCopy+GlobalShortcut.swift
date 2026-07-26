@@ -63,6 +63,12 @@ extension AppCopy {
             : "Conflicts with a macOS system shortcut and was not enabled."
     }
 
+    var globalQuickEntryShortcutInspectionUnavailable: String {
+        language == .chinese
+            ? "无法读取 macOS 系统快捷键，未保存新组合。"
+            : "Could not inspect macOS system shortcuts; the new combination was not saved."
+    }
+
     func globalQuickEntryShortcutRegistrationFailed(
         retainedShortcut: String?
     ) -> String {

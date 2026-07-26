@@ -13,6 +13,19 @@ final class GlobalQuickEntryShortcutTests: XCTestCase {
         XCTAssertEqual(preference.shortcut.displayText, "⌃⇧N")
     }
 
+    func testSupportedPhysicalKeysHaveUniqueVirtualCodesAndRoundTrip() {
+        let keyCodes = GlobalShortcutKey.allCases.map(\.virtualKeyCode)
+
+        XCTAssertEqual(Set(keyCodes).count, GlobalShortcutKey.allCases.count)
+        for key in GlobalShortcutKey.allCases {
+            XCTAssertEqual(
+                GlobalShortcutKey(virtualKeyCode: key.virtualKeyCode),
+                key
+            )
+        }
+        XCTAssertNil(GlobalShortcutKey(virtualKeyCode: UInt16.max))
+    }
+
     func testRepositoryRoundTripsAndFailsClosedWhenStoredValueIsCorrupt() {
         let (suiteName, defaults) = makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -47,7 +60,13 @@ final class GlobalQuickEntryShortcutTests: XCTestCase {
     }
 
     func testPolicyRejectsUnsafeNoonmarkAndSystemCombinations() {
-        let policy = GlobalQuickEntryShortcutPolicy.standard
+        let noonmarkShortcut = GlobalQuickEntryShortcut(
+            key: .f,
+            modifiers: [.command, .shift]
+        )
+        let policy = GlobalQuickEntryShortcutPolicy(
+            noonmarkReservedShortcuts: [noonmarkShortcut]
+        )
 
         XCTAssertEqual(
             policy.validate(
@@ -55,17 +74,14 @@ final class GlobalQuickEntryShortcutTests: XCTestCase {
                     key: .n,
                     modifiers: [.shift]
                 ),
-                enabledSystemShortcuts: []
+                systemShortcutSnapshot: .available([])
             ),
             .unsafeModifierCombination
         )
         XCTAssertEqual(
             policy.validate(
-                GlobalQuickEntryShortcut(
-                    key: .i,
-                    modifiers: [.command, .shift]
-                ),
-                enabledSystemShortcuts: []
+                noonmarkShortcut,
+                systemShortcutSnapshot: .available([])
             ),
             .noonmarkCommandConflict
         )
@@ -77,16 +93,30 @@ final class GlobalQuickEntryShortcutTests: XCTestCase {
         XCTAssertEqual(
             policy.validate(
                 systemShortcut,
-                enabledSystemShortcuts: [systemShortcut]
+                systemShortcutSnapshot: .available([systemShortcut])
             ),
             .systemShortcutConflict
         )
         XCTAssertEqual(
             policy.validate(
                 .standard,
-                enabledSystemShortcuts: []
+                systemShortcutSnapshot: .available([])
             ),
             .allowed
+        )
+    }
+
+    func testPolicyFailsClosedWhenSystemShortcutInspectionIsUnavailable() {
+        let policy = GlobalQuickEntryShortcutPolicy(
+            noonmarkReservedShortcuts: []
+        )
+
+        XCTAssertEqual(
+            policy.validate(
+                .standard,
+                systemShortcutSnapshot: .unavailable
+            ),
+            .systemShortcutInspectionUnavailable
         )
     }
 
@@ -100,7 +130,10 @@ final class GlobalQuickEntryShortcutTests: XCTestCase {
         let coordinator = GlobalQuickEntryShortcutCoordinator(
             repository: repository,
             registrar: registrar,
-            enabledSystemShortcuts: { [] },
+            policy: GlobalQuickEntryShortcutPolicy(
+                noonmarkReservedShortcuts: []
+            ),
+            systemShortcutSnapshot: { .available([]) },
             onTrigger: {}
         )
 
@@ -141,7 +174,12 @@ final class GlobalQuickEntryShortcutTests: XCTestCase {
         let coordinator = GlobalQuickEntryShortcutCoordinator(
             repository: repository,
             registrar: registrar,
-            enabledSystemShortcuts: { [systemShortcut] },
+            policy: GlobalQuickEntryShortcutPolicy(
+                noonmarkReservedShortcuts: []
+            ),
+            systemShortcutSnapshot: {
+                .available([systemShortcut])
+            },
             onTrigger: {}
         )
         coordinator.start()
@@ -165,6 +203,37 @@ final class GlobalQuickEntryShortcutTests: XCTestCase {
         )
     }
 
+    func testCoordinatorFailsClosedWhenSystemInspectionIsUnavailable() {
+        let (suiteName, defaults) = makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let repository = GlobalShortcutPreferenceRepository(
+            defaults: defaults
+        )
+        let registrar = FakeGlobalShortcutRegistrar()
+        let coordinator = GlobalQuickEntryShortcutCoordinator(
+            repository: repository,
+            registrar: registrar,
+            policy: GlobalQuickEntryShortcutPolicy(
+                noonmarkReservedShortcuts: []
+            ),
+            systemShortcutSnapshot: { .unavailable },
+            onTrigger: {}
+        )
+
+        coordinator.start()
+
+        XCTAssertTrue(registrar.registrationAttempts.isEmpty)
+        XCTAssertNil(registrar.registeredShortcut)
+        XCTAssertEqual(repository.load(), .standard)
+        XCTAssertEqual(
+            coordinator.status,
+            .validationFailed(
+                reason: .systemShortcutInspectionUnavailable,
+                retainedShortcut: nil
+            )
+        )
+    }
+
     func testDisablingUnregistersAndPersistsTheDisabledPreference() {
         let (suiteName, defaults) = makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -175,7 +244,10 @@ final class GlobalQuickEntryShortcutTests: XCTestCase {
         let coordinator = GlobalQuickEntryShortcutCoordinator(
             repository: repository,
             registrar: registrar,
-            enabledSystemShortcuts: { [] },
+            policy: GlobalQuickEntryShortcutPolicy(
+                noonmarkReservedShortcuts: []
+            ),
+            systemShortcutSnapshot: { .available([]) },
             onTrigger: {}
         )
         coordinator.start()

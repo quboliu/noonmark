@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import NoonmarkCore
+import NoonmarkMacRuntime
 
 /// Verifies the installed Carbon hotkey from a different foreground app.
 ///
@@ -53,6 +54,7 @@ struct GlobalQuickEntryShortcutE2EAutomation: LaunchAutomationRunnable {
             mainWindow.isKeyWindow && NSApp.isActive
         }
 
+        try verifyNoonmarkShortcutCatalog()
         try await customizeShortcut(
             toKeyCode: 40,
             expectedTitle: "⌃⇧K",
@@ -135,6 +137,54 @@ struct GlobalQuickEntryShortcutE2EAutomation: LaunchAutomationRunnable {
         try await waitUntil("Quick Entry did not restore Finder focus") {
             NSWorkspace.shared.frontmostApplication?.processIdentifier
                 == finder.processIdentifier
+        }
+    }
+
+    private func verifyNoonmarkShortcutCatalog() throws {
+        let expected: Set<GlobalQuickEntryShortcut> = [
+            GlobalQuickEntryShortcut(
+                key: .h,
+                modifiers: [.command, .option]
+            ),
+            GlobalQuickEntryShortcut(
+                key: .i,
+                modifiers: [.command, .shift]
+            ),
+            GlobalQuickEntryShortcut(
+                key: .z,
+                modifiers: [.command, .shift]
+            ),
+            GlobalQuickEntryShortcut(
+                key: .g,
+                modifiers: [.command, .shift]
+            ),
+            GlobalQuickEntryShortcut(
+                key: .f,
+                modifiers: [.command, .shift]
+            ),
+            GlobalQuickEntryShortcut(
+                key: .s,
+                modifiers: [.command, .control]
+            ),
+            GlobalQuickEntryShortcut(
+                key: .i,
+                modifiers: [.command, .option]
+            ),
+            GlobalQuickEntryShortcut(
+                key: .f,
+                modifiers: [.command, .control]
+            )
+        ]
+        let actual = NoonmarkMainMenuFactory
+            .globalQuickEntryReservedShortcuts(in: NSApp.mainMenu)
+        guard expected.isSubset(of: actual) else {
+            let missing = expected.subtracting(actual)
+                .map(\.displayText)
+                .sorted()
+                .joined(separator: ",")
+            throw Failure.failed(
+                "Noonmark shortcut conflict catalog missed \(missing)"
+            )
         }
     }
 

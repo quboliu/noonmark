@@ -129,6 +129,8 @@ struct GlobalQuickEntryShortcutSettingsSection: View {
             store.copy.globalQuickEntryShortcutNoonmarkConflict
         case .systemShortcutConflict:
             store.copy.globalQuickEntryShortcutSystemConflict
+        case .systemShortcutInspectionUnavailable:
+            store.copy.globalQuickEntryShortcutInspectionUnavailable
         }
         guard let retainedShortcut else { return message }
         return switch store.copy.language {
@@ -206,10 +208,9 @@ private final class GlobalShortcutRecorderButton: NSButton {
             finishRecording()
             return
         }
-        guard let characters = event.charactersIgnoringModifiers,
-              let key = GlobalShortcutKey(
-                  charactersIgnoringModifiers: characters
-              )
+        guard let key = GlobalShortcutKey(
+            virtualKeyCode: event.keyCode
+        )
         else {
             NSSound.beep()
             toolTip = unsupportedKeyHint
@@ -218,7 +219,9 @@ private final class GlobalShortcutRecorderButton: NSButton {
 
         let shortcut = GlobalQuickEntryShortcut(
             key: key,
-            modifiers: Self.modifiers(from: event.modifierFlags)
+            modifiers: GlobalShortcutModifiers(
+                appKitFlags: event.modifierFlags
+            )
         )
         finishRecording()
         onRecord?(shortcut)
@@ -238,25 +241,5 @@ private final class GlobalShortcutRecorderButton: NSButton {
     private func finishRecording() {
         isRecording = false
         updateTitle()
-    }
-
-    private static func modifiers(
-        from flags: NSEvent.ModifierFlags
-    ) -> GlobalShortcutModifiers {
-        let flags = flags.intersection(.deviceIndependentFlagsMask)
-        var result: GlobalShortcutModifiers = []
-        if flags.contains(.command) {
-            result.insert(.command)
-        }
-        if flags.contains(.control) {
-            result.insert(.control)
-        }
-        if flags.contains(.option) {
-            result.insert(.option)
-        }
-        if flags.contains(.shift) {
-            result.insert(.shift)
-        }
-        return result
     }
 }

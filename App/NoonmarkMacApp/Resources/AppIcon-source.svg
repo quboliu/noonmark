@@ -7,36 +7,34 @@
     width="824"
     height="824"
     rx="188"
-    fill="#FFFFFF"
-    stroke="#E0DCD1"
+    fill="#FFFEFC"
+    stroke="#DED9CF"
     stroke-width="2"
   />
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
     <path
-      d="M604 242 C446 195 291 282 242 441 C196 589 271 741 414 790 C452 803 492 807 526 802"
-      stroke="#22211F"
-      stroke-width="54"
+      d="M600 242 C444 197 292 283 242 441 C196 589 271 741 414 790 C449 802 483 808 508 802"
+      stroke="#202124"
+      stroke-width="51"
     />
     <path
-      d="M526 802 C672 798 789 674 794 528 C796 470 782 426 758 387"
-      stroke="#C46E2B"
-      stroke-width="38"
+      d="M548 800 C681 790 789 670 792 523 C793 475 781 431 758 391"
+      stroke="#E8642B"
+      stroke-width="32"
     />
-    <path d="M526 802 L526 748" stroke="#C46E2B" stroke-width="38" />
-    <path d="M620 780 L602 730" stroke="#C46E2B" stroke-width="38" />
-    <path d="M691 744 L657 701" stroke="#C46E2B" stroke-width="38" />
-    <path d="M750 680 L705 653" stroke="#C46E2B" stroke-width="38" />
-    <path d="M784 596 L733 587" stroke="#C46E2B" stroke-width="38" />
-    <path d="M794 508 L742 511" stroke="#C46E2B" stroke-width="38" />
-    <path d="M779 430 L730 447" stroke="#C46E2B" stroke-width="38" />
+    <path d="M626 779 L610 737" stroke="#E8642B" stroke-width="26" />
+    <path d="M702 741 L671 706" stroke="#E8642B" stroke-width="26" />
+    <path d="M758 680 L718 653" stroke="#E8642B" stroke-width="26" />
+    <path d="M786 603 L741 593" stroke="#E8642B" stroke-width="26" />
+    <path d="M792 518 L747 521" stroke="#E8642B" stroke-width="26" />
   </g>
-  <path d="M396 700 L444 682 L642 350 L478 700 Z" fill="#22211F" />
+  <path d="M430 688 L644 350 L476 700 Z" fill="#202124" />
   <path
-    d="M394 706 C421 698 458 698 486 706"
+    d="M397 705 C423 697 457 697 484 705"
     fill="none"
-    stroke="#22211F"
-    stroke-width="42"
+    stroke="#202124"
+    stroke-width="32"
     stroke-linecap="round"
   />
-  <circle cx="700" cy="248" r="52" fill="#E24E22" />
+  <circle cx="700" cy="248" r="46" fill="#E8642B" />
 </svg>

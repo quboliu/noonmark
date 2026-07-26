@@ -35,27 +35,33 @@ private enum RenderError: Error, CustomStringConvertible {
 
 private struct OpticalIconRenderer {
     private let black = CGColor(
-        red: 0.13,
-        green: 0.13,
-        blue: 0.12,
+        red: 0.125,
+        green: 0.129,
+        blue: 0.141,
         alpha: 1
     )
     private let solarOrange = CGColor(
-        red: 0.89,
-        green: 0.31,
-        blue: 0.13,
+        red: 0.91,
+        green: 0.39,
+        blue: 0.17,
         alpha: 1
     )
     private let scaleOrange = CGColor(
-        red: 0.76,
-        green: 0.43,
+        red: 0.91,
+        green: 0.39,
         blue: 0.17,
         alpha: 1
     )
     private let tileBorder = CGColor(
-        red: 0.88,
-        green: 0.86,
-        blue: 0.82,
+        red: 0.87,
+        green: 0.85,
+        blue: 0.81,
+        alpha: 1
+    )
+    private let tileFill = CGColor(
+        red: 1,
+        green: 0.996,
+        blue: 0.988,
         alpha: 1
     )
 
@@ -116,7 +122,7 @@ private struct OpticalIconRenderer {
 
         context.clear(CGRect(x: 0, y: 0, width: canvas, height: canvas))
         context.addPath(tilePath)
-        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.setFillColor(tileFill)
         context.fillPath()
         context.addPath(tilePath)
         context.setStrokeColor(tileBorder)
@@ -133,17 +139,17 @@ private struct OpticalIconRenderer {
             control2: CGPoint(x: 4.2, y: 11.75)
         )
         dial.addCurve(
-            to: CGPoint(x: 7.75, y: 3.45),
+            to: CGPoint(x: 7.55, y: 3.45),
             control1: CGPoint(x: 2.85, y: 6.7),
             control2: CGPoint(x: 4.45, y: 4.05)
         )
-        stroke(dial, color: black, width: 1.25, in: context)
+        stroke(dial, color: black, width: 1.15, in: context)
 
         let scale = CGMutablePath()
-        scale.move(to: CGPoint(x: 7.9, y: 3.45))
+        scale.move(to: CGPoint(x: 8.35, y: 3.5))
         scale.addCurve(
             to: CGPoint(x: 12.4, y: 7.1),
-            control1: CGPoint(x: 10.65, y: 3.5),
+            control1: CGPoint(x: 10.8, y: 3.6),
             control2: CGPoint(x: 12.25, y: 4.85)
         )
         scale.addCurve(
@@ -151,21 +157,21 @@ private struct OpticalIconRenderer {
             control1: CGPoint(x: 12.55, y: 8.1),
             control2: CGPoint(x: 12.35, y: 9.15)
         )
-        stroke(scale, color: scaleOrange, width: 1.0, in: context)
+        stroke(scale, color: scaleOrange, width: 0.82, in: context)
 
-        drawLine(from: CGPoint(x: 8.15, y: 3.5), to: CGPoint(x: 8.15, y: 4.65), width: 1.0, in: context)
-        drawLine(from: CGPoint(x: 10.45, y: 4.05), to: CGPoint(x: 9.95, y: 5.1), width: 1.0, in: context)
-        drawLine(from: CGPoint(x: 12.35, y: 7.0), to: CGPoint(x: 11.05, y: 7.0), width: 1.0, in: context)
+        drawLine(from: CGPoint(x: 9.8, y: 3.8), to: CGPoint(x: 9.35, y: 4.8), width: 0.82, in: context)
+        drawLine(from: CGPoint(x: 11.6, y: 5.2), to: CGPoint(x: 10.6, y: 5.7), width: 0.82, in: context)
+        drawLine(from: CGPoint(x: 12.45, y: 7.5), to: CGPoint(x: 11.2, y: 7.45), width: 0.82, in: context)
 
         drawNeedle(
-            baseLeft: CGPoint(x: 5.25, y: 5.0),
-            baseRight: CGPoint(x: 7.15, y: 5.0),
-            shoulder: CGPoint(x: 6.25, y: 5.35),
-            tip: CGPoint(x: 10.15, y: 10.65),
-            footWidth: 1.1,
+            baseLeft: CGPoint(x: 5.55, y: 5.05),
+            baseRight: CGPoint(x: 6.85, y: 5.05),
+            shoulder: CGPoint(x: 6.2, y: 5.25),
+            tip: CGPoint(x: 10.1, y: 10.55),
+            footWidth: 0.85,
             in: context
         )
-        drawSun(center: CGPoint(x: 10.8, y: 11.55), radius: 1.2, in: context)
+        drawSun(center: CGPoint(x: 10.8, y: 11.55), radius: 1.05, in: context)
     }
 
     private func drawRegularMark(in context: CGContext) {
@@ -177,17 +183,17 @@ private struct OpticalIconRenderer {
             control2: CGPoint(x: 8.35, y: 23.55)
         )
         dial.addCurve(
-            to: CGPoint(x: 15.55, y: 6.85),
+            to: CGPoint(x: 15.35, y: 6.85),
             control1: CGPoint(x: 5.75, y: 13.35),
             control2: CGPoint(x: 8.9, y: 8.05)
         )
-        stroke(dial, color: black, width: 2.0, in: context)
+        stroke(dial, color: black, width: 1.75, in: context)
 
         let scale = CGMutablePath()
-        scale.move(to: CGPoint(x: 15.85, y: 6.85))
+        scale.move(to: CGPoint(x: 17.0, y: 6.95))
         scale.addCurve(
             to: CGPoint(x: 24.85, y: 14.25),
-            control1: CGPoint(x: 21.35, y: 6.95),
+            control1: CGPoint(x: 21.6, y: 7.15),
             control2: CGPoint(x: 24.55, y: 9.75)
         )
         scale.addCurve(
@@ -195,23 +201,23 @@ private struct OpticalIconRenderer {
             control1: CGPoint(x: 25.1, y: 16.4),
             control2: CGPoint(x: 24.75, y: 18.85)
         )
-        stroke(scale, color: scaleOrange, width: 1.55, in: context)
+        stroke(scale, color: scaleOrange, width: 1.2, in: context)
 
-        drawLine(from: CGPoint(x: 16.35, y: 6.95), to: CGPoint(x: 16.35, y: 9.1), width: 1.55, in: context)
-        drawLine(from: CGPoint(x: 20.0, y: 7.85), to: CGPoint(x: 19.2, y: 9.9), width: 1.55, in: context)
-        drawLine(from: CGPoint(x: 23.0, y: 10.35), to: CGPoint(x: 21.15, y: 11.6), width: 1.55, in: context)
-        drawLine(from: CGPoint(x: 24.85, y: 14.25), to: CGPoint(x: 22.35, y: 14.25), width: 1.55, in: context)
-        drawLine(from: CGPoint(x: 24.55, y: 18.0), to: CGPoint(x: 22.25, y: 17.2), width: 1.55, in: context)
+        drawLine(from: CGPoint(x: 18.2, y: 7.3), to: CGPoint(x: 17.65, y: 9.2), width: 1.2, in: context)
+        drawLine(from: CGPoint(x: 21.0, y: 8.4), to: CGPoint(x: 19.8, y: 10.1), width: 1.2, in: context)
+        drawLine(from: CGPoint(x: 23.1, y: 10.8), to: CGPoint(x: 21.3, y: 11.8), width: 1.2, in: context)
+        drawLine(from: CGPoint(x: 24.5, y: 14.2), to: CGPoint(x: 22.1, y: 14.2), width: 1.2, in: context)
+        drawLine(from: CGPoint(x: 24.3, y: 17.7), to: CGPoint(x: 22.1, y: 17.0), width: 1.2, in: context)
 
         drawNeedle(
-            baseLeft: CGPoint(x: 10.4, y: 9.9),
-            baseRight: CGPoint(x: 14.35, y: 9.9),
-            shoulder: CGPoint(x: 12.45, y: 10.55),
-            tip: CGPoint(x: 20.4, y: 21.35),
-            footWidth: 1.8,
+            baseLeft: CGPoint(x: 10.9, y: 9.9),
+            baseRight: CGPoint(x: 13.9, y: 9.9),
+            shoulder: CGPoint(x: 12.45, y: 10.35),
+            tip: CGPoint(x: 20.3, y: 21.2),
+            footWidth: 1.35,
             in: context
         )
-        drawSun(center: CGPoint(x: 21.75, y: 23.2), radius: 2.15, in: context)
+        drawSun(center: CGPoint(x: 21.75, y: 23.2), radius: 1.85, in: context)
     }
 
     private func drawLine(

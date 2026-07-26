@@ -232,26 +232,21 @@ public enum GlobalQuickEntryShortcutValidation: Equatable, Sendable {
     case unsafeModifierCombination
     case noonmarkCommandConflict
     case systemShortcutConflict
-    case systemShortcutInspectionUnavailable
+    case conflictInspectionUnavailable
 }
 
-public enum GlobalSystemShortcutSnapshot: Equatable, Sendable {
+public enum GlobalShortcutSnapshot: Equatable, Sendable {
     case available(Set<GlobalQuickEntryShortcut>)
     case unavailable
 }
 
 public struct GlobalQuickEntryShortcutPolicy: Sendable {
-    private let noonmarkReservedShortcuts: Set<GlobalQuickEntryShortcut>
-
-    public init(
-        noonmarkReservedShortcuts: Set<GlobalQuickEntryShortcut>
-    ) {
-        self.noonmarkReservedShortcuts = noonmarkReservedShortcuts
-    }
+    public init() {}
 
     public func validate(
         _ shortcut: GlobalQuickEntryShortcut,
-        systemShortcutSnapshot: GlobalSystemShortcutSnapshot
+        noonmarkShortcutSnapshot: GlobalShortcutSnapshot,
+        systemShortcutSnapshot: GlobalShortcutSnapshot
     ) -> GlobalQuickEntryShortcutValidation {
         guard shortcut.modifiers.count >= 2,
               shortcut.modifiers.contains(.command)
@@ -259,13 +254,18 @@ public struct GlobalQuickEntryShortcutPolicy: Sendable {
         else {
             return .unsafeModifierCombination
         }
+        guard case let .available(noonmarkReservedShortcuts) =
+            noonmarkShortcutSnapshot
+        else {
+            return .conflictInspectionUnavailable
+        }
         guard noonmarkReservedShortcuts.contains(shortcut) == false else {
             return .noonmarkCommandConflict
         }
         guard case let .available(enabledSystemShortcuts) =
             systemShortcutSnapshot
         else {
-            return .systemShortcutInspectionUnavailable
+            return .conflictInspectionUnavailable
         }
         guard enabledSystemShortcuts.contains(shortcut) == false else {
             return .systemShortcutConflict
@@ -306,8 +306,10 @@ public final class GlobalQuickEntryShortcutCoordinator: ObservableObject {
     private let repository: any GlobalShortcutPreferenceStoring
     private let registrar: any GlobalQuickEntryShortcutRegistering
     private let policy: GlobalQuickEntryShortcutPolicy
+    private let noonmarkShortcutSnapshot:
+        @MainActor () -> GlobalShortcutSnapshot
     private let systemShortcutSnapshot:
-        @MainActor () -> GlobalSystemShortcutSnapshot
+        @MainActor () -> GlobalShortcutSnapshot
     private let onTrigger: @MainActor () -> Void
     private var registeredShortcut: GlobalQuickEntryShortcut?
     private var hasStarted = false
@@ -315,14 +317,17 @@ public final class GlobalQuickEntryShortcutCoordinator: ObservableObject {
     public init(
         repository: any GlobalShortcutPreferenceStoring,
         registrar: any GlobalQuickEntryShortcutRegistering,
-        policy: GlobalQuickEntryShortcutPolicy,
+        policy: GlobalQuickEntryShortcutPolicy = .init(),
+        noonmarkShortcutSnapshot: @escaping @MainActor ()
+            -> GlobalShortcutSnapshot,
         systemShortcutSnapshot: @escaping @MainActor ()
-            -> GlobalSystemShortcutSnapshot,
+            -> GlobalShortcutSnapshot,
         onTrigger: @escaping @MainActor () -> Void
     ) {
         self.repository = repository
         self.registrar = registrar
         self.policy = policy
+        self.noonmarkShortcutSnapshot = noonmarkShortcutSnapshot
         self.systemShortcutSnapshot = systemShortcutSnapshot
         self.onTrigger = onTrigger
         preference = repository.load()
@@ -362,6 +367,7 @@ public final class GlobalQuickEntryShortcutCoordinator: ObservableObject {
 
         let validation = policy.validate(
             candidate.shortcut,
+            noonmarkShortcutSnapshot: noonmarkShortcutSnapshot(),
             systemShortcutSnapshot: systemShortcutSnapshot()
         )
         guard validation == .allowed else {

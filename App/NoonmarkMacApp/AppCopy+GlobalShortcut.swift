@@ -65,8 +65,14 @@ extension AppCopy {
 
     var globalQuickEntryShortcutInspectionUnavailable: String {
         language == .chinese
-            ? "无法读取 macOS 系统快捷键，未保存新组合。"
-            : "Could not inspect macOS system shortcuts; the new combination was not saved."
+            ? "无法读取当前键盘布局或 macOS 系统快捷键；全局快捷键当前未启用，原偏好仍保留。"
+            : "Could not inspect the current keyboard layout or macOS system shortcuts. The global shortcut is not active; your preference is unchanged."
+    }
+
+    var globalQuickEntryShortcutCandidateInspectionUnavailable: String {
+        language == .chinese
+            ? "无法读取当前键盘布局或 macOS 系统快捷键，未保存新组合。"
+            : "Could not inspect the current keyboard layout or macOS system shortcuts; the new combination was not saved."
     }
 
     func globalQuickEntryShortcutRegistrationFailed(

@@ -129,8 +129,11 @@ struct GlobalQuickEntryShortcutSettingsSection: View {
             store.copy.globalQuickEntryShortcutNoonmarkConflict
         case .systemShortcutConflict:
             store.copy.globalQuickEntryShortcutSystemConflict
-        case .systemShortcutInspectionUnavailable:
-            store.copy.globalQuickEntryShortcutInspectionUnavailable
+        case .conflictInspectionUnavailable:
+            retainedShortcut == nil
+                ? store.copy.globalQuickEntryShortcutInspectionUnavailable
+                : store.copy
+                    .globalQuickEntryShortcutCandidateInspectionUnavailable
         }
         guard let retainedShortcut else { return message }
         return switch store.copy.language {

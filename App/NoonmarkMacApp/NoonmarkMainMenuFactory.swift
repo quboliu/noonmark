@@ -277,39 +277,65 @@ enum NoonmarkMainMenuFactory {
         return mainMenu
     }
 
-    static func globalQuickEntryReservedShortcuts(
+    static func globalQuickEntryReservedShortcutSnapshot(
         in menu: NSMenu?
-    ) -> Set<GlobalQuickEntryShortcut> {
-        guard let menu else { return [] }
-        return Set(
-            menu.items.compactMap(globalQuickEntryShortcut)
-                + menu.items.flatMap { item in
-                    globalQuickEntryReservedShortcuts(in: item.submenu)
-                }
-        )
+    ) -> GlobalShortcutSnapshot {
+        guard let menu,
+              let physicalKeyByCharacter = CarbonKeyboardLayoutResolver
+              .physicalKeyByCharacter()
+        else {
+            return .unavailable
+        }
+        var shortcuts: Set<GlobalQuickEntryShortcut> = []
+        guard collectGlobalQuickEntryShortcuts(
+            in: menu,
+            physicalKeyByCharacter: physicalKeyByCharacter,
+            into: &shortcuts
+        ) else {
+            return .unavailable
+        }
+        return .available(shortcuts)
     }
 
-    private static func globalQuickEntryShortcut(
-        for item: NSMenuItem
-    ) -> GlobalQuickEntryShortcut? {
-        guard item.keyEquivalent.isEmpty == false,
-              let key = GlobalShortcutKey(
-                  charactersIgnoringModifiers: item.keyEquivalent
-              )
-        else {
-            return nil
-        }
-        var flags = item.keyEquivalentModifierMask
-            .intersection(.deviceIndependentFlagsMask)
-        if item.keyEquivalent != item.keyEquivalent.lowercased() {
-            flags.insert(.shift)
-        }
-        return GlobalQuickEntryShortcut(
-            key: key,
-            modifiers: GlobalShortcutModifiers(
-                appKitFlags: flags
+    private static func collectGlobalQuickEntryShortcuts(
+        in menu: NSMenu,
+        physicalKeyByCharacter: [String: GlobalShortcutKey],
+        into result: inout Set<GlobalQuickEntryShortcut>
+    ) -> Bool {
+        for item in menu.items {
+            if let submenu = item.submenu,
+               collectGlobalQuickEntryShortcuts(
+                   in: submenu,
+                   physicalKeyByCharacter: physicalKeyByCharacter,
+                   into: &result
+               ) == false
+            {
+                return false
+            }
+            guard GlobalShortcutKey(
+                charactersIgnoringModifiers: item.keyEquivalent
+            ) != nil else {
+                continue
+            }
+            let character = item.keyEquivalent.lowercased()
+            guard let key = physicalKeyByCharacter[character] else {
+                return false
+            }
+            var flags = item.keyEquivalentModifierMask
+                .intersection(.deviceIndependentFlagsMask)
+            if item.keyEquivalent != character {
+                flags.insert(.shift)
+            }
+            result.insert(
+                GlobalQuickEntryShortcut(
+                    key: key,
+                    modifiers: GlobalShortcutModifiers(
+                        appKitFlags: flags
+                    )
+                )
             )
-        )
+        }
+        return true
     }
 
     private static func addTopLevelMenu(

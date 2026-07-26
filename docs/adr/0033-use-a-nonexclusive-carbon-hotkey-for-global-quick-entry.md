@@ -15,7 +15,7 @@ macOS 能列出 Keyboard Settings 中已经启用的系统 symbolic hotkeys，�
 - 保留应用内 `⌘N`，另外提供默认启用的全局 `⌃⇧N`。
 - 使用 `RegisterEventHotKey` 和 `kEventHotKeyNoOptions` 注册非独占 hotkey；不使用 exclusive 选项、`NSEvent` global key monitor、event tap 或 Accessibility 权限。
 - 全局组合至少包含两个修饰键，并包含 Control 或 Command；按键范围为字母、数字和 Space。
-- 从已安装的真实主菜单生成晷迹自身命令目录，并在保存前拦截这些命令和 `CopySymbolicHotKeys` 返回的已启用系统组合；读取系统组合失败时 fail-closed，不把未知状态显示为无冲突。第三方 App 冲突只能明确说明并由用户在常用 App 中试按。
+- 从已安装的真实主菜单生成晷迹自身命令目录，并通过当前 keyboard layout 把菜单字符解析为物理 virtual key；保存前拦截这些命令和 `CopySymbolicHotKeys` 返回的已启用系统组合。键盘布局或系统组合读取失败时 fail-closed，不把未知状态显示为无冲突。第三方 App 冲突只能明确说明并由用户在常用 App 中试按。
 - 改键采用事务性切换：先成功注册候选组合，再注销旧组合并持久化；注册或校验失败时，旧组合继续有效。
 - Carbon event handler 无法安装时不得终止 App；注册入口返回失败，由设置页显示真实状态。
 - 快捷键偏好只保存在本机 `UserDefaults`，不进入任务数据库、数据包或同步。

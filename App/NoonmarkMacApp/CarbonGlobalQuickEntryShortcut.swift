@@ -132,7 +132,7 @@ final class CarbonGlobalQuickEntryShortcutRegistrar: GlobalQuickEntryShortcutReg
 
 enum CarbonSystemShortcutInspector {
     @MainActor
-    static func snapshot() -> GlobalSystemShortcutSnapshot {
+    static func snapshot() -> GlobalShortcutSnapshot {
         var unmanagedArray: Unmanaged<CFArray>?
         guard CopySymbolicHotKeys(&unmanagedArray) == noErr,
               let array = unmanagedArray?.takeRetainedValue()
@@ -187,5 +187,63 @@ enum CarbonSystemShortcutInspector {
             result.insert(.shift)
         }
         return result
+    }
+}
+
+enum CarbonKeyboardLayoutResolver {
+    @MainActor
+    static func physicalKeyByCharacter() -> [String: GlobalShortcutKey]? {
+        let inputSource = TISCopyCurrentKeyboardLayoutInputSource()
+            .takeRetainedValue()
+        guard let property = TISGetInputSourceProperty(
+            inputSource,
+            kTISPropertyUnicodeKeyLayoutData
+        ) else {
+            return nil
+        }
+        let data = Unmanaged<CFData>
+            .fromOpaque(property)
+            .takeUnretainedValue()
+        guard let bytes = CFDataGetBytePtr(data) else { return nil }
+        let layout = UnsafeRawPointer(bytes)
+            .assumingMemoryBound(to: UCKeyboardLayout.self)
+
+        var result: [String: GlobalShortcutKey] = [:]
+        for key in GlobalShortcutKey.allCases {
+            guard let character = translatedCharacter(
+                for: key,
+                layout: layout
+            ) else {
+                return nil
+            }
+            result[character.lowercased()] = key
+        }
+        return result
+    }
+
+    private static func translatedCharacter(
+        for key: GlobalShortcutKey,
+        layout: UnsafePointer<UCKeyboardLayout>
+    ) -> String? {
+        var deadKeyState: UInt32 = 0
+        var outputLength = 0
+        var output = [UniChar](repeating: 0, count: 4)
+        let status = UCKeyTranslate(
+            layout,
+            key.virtualKeyCode,
+            UInt16(kUCKeyActionDisplay),
+            0,
+            UInt32(LMGetKbdType()),
+            OptionBits(kUCKeyTranslateNoDeadKeysBit),
+            &deadKeyState,
+            output.count,
+            &outputLength,
+            &output
+        )
+        guard status == noErr, outputLength > 0 else { return nil }
+        return String(
+            utf16CodeUnits: output,
+            count: outputLength
+        )
     }
 }

@@ -175,8 +175,15 @@ struct GlobalQuickEntryShortcutE2EAutomation: LaunchAutomationRunnable {
                 modifiers: [.command, .control]
             )
         ]
-        let actual = NoonmarkMainMenuFactory
-            .globalQuickEntryReservedShortcuts(in: NSApp.mainMenu)
+        guard case let .available(actual) = NoonmarkMainMenuFactory
+            .globalQuickEntryReservedShortcutSnapshot(
+                in: NSApp.mainMenu
+            )
+        else {
+            throw Failure.failed(
+                "Noonmark shortcut conflict catalog was unavailable"
+            )
+        }
         guard expected.isSubset(of: actual) else {
             let missing = expected.subtracting(actual)
                 .map(\.displayText)

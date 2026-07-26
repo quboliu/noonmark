@@ -28,12 +28,12 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         GlobalQuickEntryShortcutCoordinator(
             repository: GlobalShortcutPreferenceRepository(),
             registrar: globalQuickEntryShortcutRegistrar,
-            policy: GlobalQuickEntryShortcutPolicy(
-                noonmarkReservedShortcuts: NoonmarkMainMenuFactory
-                    .globalQuickEntryReservedShortcuts(
+            noonmarkShortcutSnapshot: {
+                NoonmarkMainMenuFactory
+                    .globalQuickEntryReservedShortcutSnapshot(
                         in: NSApp.mainMenu
                     )
-            ),
+            },
             systemShortcutSnapshot: {
                 CarbonSystemShortcutInspector.snapshot()
             },

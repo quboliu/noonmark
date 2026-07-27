@@ -3,35 +3,57 @@ import XCTest
 
 @MainActor
 final class LatestTransientMessageSchedulerTests: XCTestCase {
-    func testReplacingMessagePreventsCancelledExpiryFromClearingLatestMessage() async throws {
-        let scheduler = LatestTransientMessageScheduler()
+    func testReplacingMessagePreventsCancelledExpiryFromClearingLatestMessage() {
+        let expirySchedule = ControlledExpirySchedule()
+        let scheduler = LatestTransientMessageScheduler(
+            scheduleExpiry: expirySchedule.schedule
+        )
         var expired: [String] = []
 
         scheduler.replace(after: .milliseconds(20)) {
             expired.append("first")
         }
-        try await Task.sleep(for: .milliseconds(5))
         scheduler.replace(after: .milliseconds(45)) {
             expired.append("second")
         }
 
-        try await Task.sleep(for: .milliseconds(25))
+        expirySchedule.fire(index: 0)
         XCTAssertTrue(expired.isEmpty)
 
-        try await Task.sleep(for: .milliseconds(30))
+        expirySchedule.fire(index: 1)
         XCTAssertEqual(expired, ["second"])
     }
 
-    func testCancelInvalidatesPendingExpiry() async throws {
-        let scheduler = LatestTransientMessageScheduler()
+    func testCancelInvalidatesPendingExpiry() {
+        let expirySchedule = ControlledExpirySchedule()
+        let scheduler = LatestTransientMessageScheduler(
+            scheduleExpiry: expirySchedule.schedule
+        )
         var didExpire = false
 
         scheduler.replace(after: .milliseconds(15)) {
             didExpire = true
         }
         scheduler.cancel()
-        try await Task.sleep(for: .milliseconds(25))
+        expirySchedule.fire(index: 0)
 
         XCTAssertFalse(didExpire)
+    }
+}
+
+@MainActor
+private final class ControlledExpirySchedule {
+    private var actions: [@MainActor () -> Void] = []
+
+    func schedule(
+        _: Duration,
+        _ action: @escaping @MainActor () -> Void
+    ) -> Task<Void, Never> {
+        actions.append(action)
+        return Task {}
+    }
+
+    func fire(index: Int) {
+        actions[index]()
     }
 }

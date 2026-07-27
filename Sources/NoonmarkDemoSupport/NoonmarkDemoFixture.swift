@@ -69,6 +69,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let taskCycleSeriesWithPlannedSubtasksCount: Int
     public let taskCyclePlanRevisionCount: Int
     public let unstartedTaskCycleSeriesCount: Int
+    public let taskCycleLifecycleCounts: [String: Int]
     public let visibleRecurringFutureOccurrenceCount: Int
     public let recurringCollectionLeakCount: Int
     public let openParentWithCompletedChildrenCount: Int
@@ -156,6 +157,13 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             "尚未开始的重复任务可调整开始日期",
             into: &missing
         )
+        for lifecycle in ["active", "upcoming", "ended", "stopped"] {
+            require(
+                taskCycleLifecycleCounts[lifecycle, default: 0] > 0,
+                "重复计划生命周期 \(lifecycle)",
+                into: &missing
+            )
+        }
         require(
             visibleRecurringFutureOccurrenceCount > 0,
             "未来计划展示窗口内的重复日实例",
@@ -269,6 +277,21 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
                 today: anchorDate
             )
         }
+        taskCycleLifecycleCounts = engine.taskCycleTracks(
+            today: anchorDate
+        ).reduce(into: [:]) { counts, track in
+            let key = switch track.lifecycle {
+            case .active:
+                "active"
+            case .upcoming:
+                "upcoming"
+            case .ended:
+                "ended"
+            case .stopped:
+                "stopped"
+            }
+            counts[key, default: 0] += 1
+        }
         visibleRecurringFutureOccurrenceCount = engine
             .visibleFuturePlans(
                 today: anchorDate,
@@ -337,12 +360,23 @@ private struct DemoStory {
 
     mutating func replay() throws {
         let taskIDs = try createTaskPool()
-        let cycleSeriesID = try createCycleSeries()
-        try replayFirstFiveDays(taskIDs)
-        try replayLastFiveDays(taskIDs)
+        let cycleSeriesIDs = try createCycleSeries()
+        try replayFirstFiveDays(
+            taskIDs,
+            cycleSeriesID: cycleSeriesIDs.active
+        )
+        try replayLastFiveDays(
+            taskIDs,
+            cycleSeriesID: cycleSeriesIDs.active
+        )
         try addTodayAndFutureState(taskIDs)
+        _ = try engine.stopTaskCycleSeries(
+            seriesID: cycleSeriesIDs.stoppable,
+            today: dates[9],
+            now: time(on: dates[9], hour: 14, minute: 45)
+        )
         _ = try engine.reviseTaskCycleSeries(
-            seriesID: cycleSeriesID,
+            seriesID: cycleSeriesIDs.active,
             schedule: .daily,
             endCondition: .onDate(
                 try DemoCalendar.offset(dates[9], by: 3)
@@ -354,7 +388,7 @@ private struct DemoStory {
         try engine.snapshot().validateIntegrity()
     }
 
-    private func createCycleSeries() throws -> TaskCycleSeriesID {
+    private func createCycleSeries() throws -> DemoCycleSeriesIDs {
         let plannedSubtask = PlannedSubtask(
             title: "记录完成、遗漏与下一步",
             position: 1,
@@ -446,7 +480,56 @@ private struct DemoStory {
             categoryID: classification.categoryID,
             labelIDs: classification.labelIDs
         )
+        _ = try createEndedCycleSeries()
+        let stoppableSeriesID = try createStoppableCycleSeries()
+        return DemoCycleSeriesIDs(
+            active: seriesID,
+            stoppable: stoppableSeriesID
+        )
+    }
+
+    private func createEndedCycleSeries() throws -> TaskCycleSeriesID {
+        let createdAt = time(
+            on: dates[0],
+            hour: 6,
+            minute: 51
+        )
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "完成首次晨间回顾",
+            descriptionText: "已按计划完成的一次性重复计划，用于查看历史终态。",
+            startDate: dates[0],
+            endDate: dates[0],
+            schedule: .daily,
+            today: dates[0],
+            now: createdAt
+        )
+        guard let chain = engine.chains.values.first(where: {
+            $0.cycleMembership?.seriesID == seriesID
+        }), let trace = engine.traces.values.first(where: {
+            $0.chainID == chain.id && $0.date == dates[0]
+        }) else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage([
+                "已结束重复计划实例"
+            ])
+        }
+        try engine.markCompleted(
+            traceID: trace.id,
+            today: dates[0],
+            now: time(on: dates[0], hour: 6, minute: 52)
+        )
         return seriesID
+    }
+
+    private func createStoppableCycleSeries() throws -> TaskCycleSeriesID {
+        try engine.createTaskCycleSeries(
+            title: "暂停周报打磨",
+            descriptionText: "提前停止但保留历史与当天事实的重复计划。",
+            startDate: dates[0],
+            endDate: try DemoCalendar.offset(dates[9], by: 3),
+            schedule: .daily,
+            today: dates[0],
+            now: time(on: dates[0], hour: 6, minute: 53)
+        )
     }
 
     private func createUnstartedCycleSeries(
@@ -720,7 +803,8 @@ private struct DemoStory {
     }
 
     private mutating func replayFirstFiveDays(
-        _ ids: DemoTaskIDs
+        _ ids: DemoTaskIDs,
+        cycleSeriesID: TaskCycleSeriesID
     ) throws {
         let research = try schedule(
             ids.researchBrief,
@@ -737,7 +821,11 @@ private struct DemoStory {
             on: dates[0],
             hour: 9
         )
-        try completeCycleOccurrence(on: dates[0], hour: 18)
+        try completeCycleOccurrence(
+            seriesID: cycleSeriesID,
+            on: dates[0],
+            hour: 18
+        )
 
         try settle(atStartOf: dates[1])
         guard let interview = engine.snapshot().traces.first(where: {
@@ -778,7 +866,11 @@ private struct DemoStory {
             today: dates[2],
             now: time(on: dates[2], hour: 17)
         )
-        try completeCycleOccurrence(on: dates[2], hour: 18)
+        try completeCycleOccurrence(
+            seriesID: cycleSeriesID,
+            on: dates[2],
+            hour: 18
+        )
 
         try settle(atStartOf: dates[3])
         let expense = try schedule(
@@ -821,11 +913,16 @@ private struct DemoStory {
             today: dates[4],
             now: time(on: dates[4], hour: 16)
         )
-        try completeCycleOccurrence(on: dates[4], hour: 18)
+        try completeCycleOccurrence(
+            seriesID: cycleSeriesID,
+            on: dates[4],
+            hour: 18
+        )
     }
 
     private mutating func replayLastFiveDays(
-        _ ids: DemoTaskIDs
+        _ ids: DemoTaskIDs,
+        cycleSeriesID: TaskCycleSeriesID
     ) throws {
         try settle(atStartOf: dates[5])
         let delivery = try schedule(
@@ -879,7 +976,11 @@ private struct DemoStory {
             today: dates[6],
             now: time(on: dates[6], hour: 13)
         )
-        try completeCycleOccurrence(on: dates[6], hour: 18)
+        try completeCycleOccurrence(
+            seriesID: cycleSeriesID,
+            on: dates[6],
+            hour: 18
+        )
 
         try settle(atStartOf: dates[7])
         let handoff = try schedule(
@@ -913,7 +1014,11 @@ private struct DemoStory {
             today: dates[8],
             now: time(on: dates[8], hour: 15)
         )
-        try completeCycleOccurrence(on: dates[8], hour: 18)
+        try completeCycleOccurrence(
+            seriesID: cycleSeriesID,
+            on: dates[8],
+            hour: 18
+        )
 
         try settle(atStartOf: dates[9])
     }
@@ -1134,11 +1239,13 @@ private struct DemoStory {
     }
 
     private func completeCycleOccurrence(
+        seriesID: TaskCycleSeriesID,
         on date: LocalDate,
         hour: Int
     ) throws {
         guard let chainID = engine.chains.values.first(where: {
-            $0.cycleMembership?.occurrenceDate == date
+            $0.cycleMembership?.seriesID == seriesID
+                && $0.cycleMembership?.occurrenceDate == date
         })?.id,
             let trace = engine.traces.values.first(where: {
                 $0.chainID == chainID && $0.date == date
@@ -1184,6 +1291,11 @@ private struct DemoStory {
             minute: minute
         )
     }
+}
+
+private struct DemoCycleSeriesIDs {
+    let active: TaskCycleSeriesID
+    let stoppable: TaskCycleSeriesID
 }
 
 private struct DemoTaskIDs {

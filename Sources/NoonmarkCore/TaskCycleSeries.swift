@@ -652,12 +652,20 @@ public struct TaskCycleTrackDay: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum TaskCycleLifecycle: Equatable, Sendable {
+    case upcoming(startDate: LocalDate)
+    case active(nextDate: LocalDate?)
+    case ended(endDate: LocalDate)
+    case stopped(stopDate: LocalDate)
+}
+
 public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
     public let id: TaskCycleSeriesID
     public let title: String
     public let startDate: LocalDate
     public let endDate: LocalDate
     public let schedule: TaskCycleSchedule
+    public let lifecycle: TaskCycleLifecycle
     public let days: [TaskCycleTrackDay]
 
     public init(
@@ -666,6 +674,7 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
         startDate: LocalDate,
         endDate: LocalDate,
         schedule: TaskCycleSchedule,
+        lifecycle: TaskCycleLifecycle,
         days: [TaskCycleTrackDay]
     ) {
         self.id = id
@@ -673,6 +682,7 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
         self.startDate = startDate
         self.endDate = endDate
         self.schedule = schedule
+        self.lifecycle = lifecycle
         self.days = days
     }
 
@@ -698,6 +708,89 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
 
     public var pooledOccurrenceCount: Int {
         days.count { $0.state == .returnedToPool }
+    }
+}
+
+private extension TaskCycleSeries {
+    func taskCycleLifecycle(
+        today: LocalDate,
+        days: [TaskCycleTrackDay]
+    ) -> TaskCycleLifecycle {
+        let terminalFacts: [(
+            date: LocalDate,
+            reason: TaskCycleCancellationReason,
+            recordedAt: Date,
+            id: UUID
+        )] = cancellationFacts.compactMap { fact in
+            guard case let .followingDates(after: date) = fact.scope,
+                  date <= today,
+                  fact.reason == .stoppedEarly
+                    || fact.reason == .completionTargetReached
+            else {
+                return nil
+            }
+            return (
+                date: date,
+                reason: fact.reason,
+                recordedAt: fact.recordedAt,
+                id: fact.id
+            )
+        }
+        let terminalFact = terminalFacts.min {
+            if $0.date != $1.date {
+                return $0.date < $1.date
+            }
+            if $0.recordedAt != $1.recordedAt {
+                return $0.recordedAt < $1.recordedAt
+            }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        if let terminalFact {
+            switch terminalFact.reason {
+            case .stoppedEarly:
+                return .stopped(stopDate: terminalFact.date)
+            case .completionTargetReached:
+                return .ended(endDate: terminalFact.date)
+            case .userSkipped, .planRevision:
+                break
+            }
+        }
+        if today < startDate {
+            return .upcoming(startDate: startDate)
+        }
+        if today > endDate {
+            return .ended(endDate: endDate)
+        }
+        let nextDate = days.compactMap(\.futurePlanTarget?.date).min()
+        return .active(nextDate: nextDate)
+    }
+}
+
+private extension TaskCycleLifecycle {
+    var sortRank: Int {
+        switch self {
+        case .active:
+            0
+        case .upcoming:
+            1
+        case .ended:
+            2
+        case .stopped:
+            3
+        }
+    }
+
+    var sortDate: LocalDate? {
+        switch self {
+        case let .active(nextDate):
+            nextDate
+        case let .upcoming(startDate):
+            startDate
+        case let .ended(endDate):
+            endDate
+        case let .stopped(stopDate):
+            stopDate
+        }
     }
 }
 
@@ -1065,12 +1158,33 @@ public extension NoonmarkEngine {
                     startDate: trackStartDate,
                     endDate: trackEndDate,
                     schedule: series.schedule,
+                    lifecycle: series.taskCycleLifecycle(
+                        today: today,
+                        days: days
+                    ),
                     days: days
                 )
             }
             .sorted {
-                if $0.startDate != $1.startDate {
-                    return $0.startDate < $1.startDate
+                let lhsLifecycle = $0.lifecycle
+                let rhsLifecycle = $1.lifecycle
+                if lhsLifecycle.sortRank != rhsLifecycle.sortRank {
+                    return lhsLifecycle.sortRank < rhsLifecycle.sortRank
+                }
+                let lhsDate = lhsLifecycle.sortDate
+                let rhsDate = rhsLifecycle.sortDate
+                if lhsDate != rhsDate {
+                    if lhsLifecycle.sortRank >= 2 {
+                        return (lhsDate ?? $0.endDate)
+                            > (rhsDate ?? $1.endDate)
+                    }
+                    guard let lhsDate else {
+                        return true
+                    }
+                    guard let rhsDate else {
+                        return false
+                    }
+                    return lhsDate < rhsDate
                 }
                 return $0.id.description < $1.id.description
             }

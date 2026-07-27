@@ -8,13 +8,47 @@ struct TaskCycleDetail: View {
     @State private var showingStopConfirmation = false
     let series: TaskCycleSeries
 
-    private var isStopped: Bool {
-        series.stoppedAfterDate != nil
-    }
-
     private var track: TaskCycleTrack? {
         store.engine.taskCycleTracks(today: store.today).first {
             $0.id == series.id
+        }
+    }
+
+    private var isEditable: Bool {
+        guard let track else {
+            return false
+        }
+        return switch track.lifecycle {
+        case .active, .upcoming:
+            true
+        case .ended, .stopped:
+            false
+        }
+    }
+
+    private var terminalNotice: String? {
+        guard let track else {
+            return nil
+        }
+        return switch track.lifecycle {
+        case .ended:
+            store.copy.taskCycleEndedNotice
+        case .stopped:
+            store.copy.taskCycleStoppedNotice
+        case .active, .upcoming:
+            nil
+        }
+    }
+
+    private var canStop: Bool {
+        guard let track, track.futurePlanCount > 0 else {
+            return false
+        }
+        return switch track.lifecycle {
+        case .active, .upcoming:
+            true
+        case .ended, .stopped:
+            false
         }
     }
 
@@ -27,7 +61,7 @@ struct TaskCycleDetail: View {
             DetailPrimaryText {
                 EditableDetailTitleRow(
                     series.title,
-                    editable: isStopped == false
+                    editable: isEditable
                 ) {
                     store.updateTaskCycleTitle(
                         seriesID: series.id,
@@ -46,12 +80,12 @@ struct TaskCycleDetail: View {
                         }
                     ),
                     placeholder: store.copy.taskDescriptionPlaceholder,
-                    editable: isStopped == false
+                    editable: isEditable
                 )
             }
 
-            if isStopped {
-                Text(store.copy.taskCycleStoppedNotice)
+            if let terminalNotice {
+                Text(terminalNotice)
                     .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
@@ -69,7 +103,7 @@ struct TaskCycleDetail: View {
             DetailSection(store.copy.subtasksTitle, showsTitle: false) {
                 TaskCyclePlannedSubtasksSection(
                     series: series,
-                    editable: isStopped == false
+                    editable: isEditable
                 )
             }
 
@@ -96,7 +130,7 @@ struct TaskCycleDetail: View {
                         .foregroundStyle(Theme.text3)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if isStopped == false {
+                    if isEditable {
                         Button(store.copy.taskCycleEditPlan) {
                             showingPlanEditor = true
                         }
@@ -117,14 +151,19 @@ struct TaskCycleDetail: View {
 
             if let track {
                 DetailSection(store.copy.recurringTaskTrack) {
-                    Text(store.copy.taskCycleSummary(track))
+                    Text(
+                        store.copy.taskCycleLifecycleSummary(
+                            track,
+                            displayDate: store.displayDate
+                        )
+                    )
                     .font(.noonmarkSystem(size: 11.5))
                     .foregroundStyle(Theme.text2)
                     .monospacedDigit()
                 }
             }
 
-            if isStopped == false, track?.futurePlanCount ?? 0 > 0 {
+            if canStop {
                 Button(
                     store.copy.stopRecurringTask,
                     role: .destructive

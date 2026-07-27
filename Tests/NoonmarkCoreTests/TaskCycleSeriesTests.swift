@@ -501,10 +501,17 @@ final class TaskCycleSeriesTests: XCTestCase {
             engine.taskCycleSeries[seriesID]?.stoppedAfterDate,
             tuesday
         )
-        XCTAssertEqual(
+        let track = try XCTUnwrap(
             engine.taskCycleTracks(today: wednesday)
-                .first { $0.id == seriesID }?.days.map(\.state),
+                .first { $0.id == seriesID }
+        )
+        XCTAssertEqual(
+            track.days.map(\.state),
             [.completed, .completed, .skipped, .skipped, .skipped]
+        )
+        XCTAssertEqual(
+            track.lifecycle,
+            .ended(endDate: tuesday)
         )
     }
 
@@ -1060,6 +1067,10 @@ final class TaskCycleSeriesTests: XCTestCase {
         )
         XCTAssertEqual(track.completedCount, 1)
         XCTAssertEqual(track.unfinishedCount, 1)
+        XCTAssertEqual(
+            track.lifecycle,
+            .stopped(stopDate: wednesday)
+        )
         XCTAssertTrue(engine.taskPool().isEmpty)
         XCTAssertTrue(engine.unfinishedPool().isEmpty)
         XCTAssertTrue(engine.completedPool().isEmpty)
@@ -1151,6 +1162,104 @@ final class TaskCycleSeriesTests: XCTestCase {
         XCTAssertTrue(engine.taskPool().isEmpty)
         XCTAssertEqual(track.completedCount, 1)
         XCTAssertTrue(engine.completedPool().isEmpty)
+    }
+
+    func testTrackLifecycleDistinguishesUpcomingActiveAndEndedSeries() throws {
+        let engine = NoonmarkEngine()
+        let endedID = try engine.createTaskCycleSeries(
+            title: "已经结束",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let activeID = try engine.createTaskCycleSeries(
+            title: "正在进行",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+        let upcomingID = try engine.createTaskCycleSeries(
+            title: "即将开始",
+            startDate: wednesday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(
+            engine.taskCycleTracks(today: monday)
+                .first { $0.id == endedID }?.lifecycle,
+            .active(nextDate: nil)
+        )
+
+        let tracks = Dictionary(
+            uniqueKeysWithValues: engine.taskCycleTracks(today: tuesday)
+                .map { ($0.id, $0) }
+        )
+
+        XCTAssertEqual(
+            tracks[endedID]?.lifecycle,
+            .ended(endDate: monday)
+        )
+        XCTAssertEqual(
+            tracks[activeID]?.lifecycle,
+            .active(nextDate: wednesday)
+        )
+        XCTAssertEqual(
+            tracks[upcomingID]?.lifecycle,
+            .upcoming(startDate: wednesday)
+        )
+    }
+
+    func testTracksSortActiveThenUpcomingThenEndedThenStopped() throws {
+        let engine = NoonmarkEngine()
+        let endedID = try engine.createTaskCycleSeries(
+            title: "已经结束",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let activeID = try engine.createTaskCycleSeries(
+            title: "正在进行",
+            startDate: tuesday,
+            endDate: friday,
+            schedule: .daily,
+            today: tuesday,
+            now: now.addingTimeInterval(1)
+        )
+        let upcomingID = try engine.createTaskCycleSeries(
+            title: "即将开始",
+            startDate: wednesday,
+            endDate: friday,
+            schedule: .daily,
+            today: tuesday,
+            now: now.addingTimeInterval(2)
+        )
+        let stoppedID = try engine.createTaskCycleSeries(
+            title: "已经停止",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now.addingTimeInterval(3)
+        )
+        _ = try engine.stopTaskCycleSeries(
+            seriesID: stoppedID,
+            today: tuesday,
+            now: now.addingTimeInterval(4)
+        )
+
+        XCTAssertEqual(
+            engine.taskCycleTracks(today: tuesday).map(\.id),
+            [activeID, upcomingID, endedID, stoppedID]
+        )
     }
 
     func testSkipRejectsTodayAndHistoricalOccurrence() throws {

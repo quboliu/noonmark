@@ -24,20 +24,28 @@ struct NoonmarkDemoFixtureTests {
             fixture.engine.taskCycleTracks(today: anchorDate).first
         )
         #expect(track.days.count == 13)
-        #expect(fixture.report.taskCycleSeriesCount == 2)
-        #expect(fixture.report.taskCycleOccurrenceCount == 43)
+        #expect(fixture.report.taskCycleSeriesCount == 4)
+        #expect(fixture.report.taskCycleOccurrenceCount == 57)
         #expect(fixture.report.classifiedTaskCycleSeriesCount == 2)
         #expect(
             fixture.report.taskCycleSeriesWithPlannedSubtasksCount == 2
         )
-        #expect(fixture.report.taskCyclePlanRevisionCount == 3)
+        #expect(fixture.report.taskCyclePlanRevisionCount == 5)
         #expect(fixture.report.unstartedTaskCycleSeriesCount == 1)
+        #expect(
+            fixture.report.taskCycleLifecycleCounts == [
+                "active": 1,
+                "upcoming": 1,
+                "ended": 1,
+                "stopped": 1
+            ]
+        )
         #expect(
             fixture.report.visibleRecurringFutureOccurrenceCount == 16
         )
         #expect(fixture.report.recurringCollectionLeakCount == 0)
         #expect(
-            fixture.engine.taskCycleTracks(today: anchorDate).count == 2
+            fixture.engine.taskCycleTracks(today: anchorDate).count == 4
         )
         #expect(fixture.engine.taskPool().allSatisfy {
             fixture.engine.isRecurringTaskChain($0.chain.id) == false

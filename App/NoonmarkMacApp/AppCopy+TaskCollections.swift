@@ -123,6 +123,12 @@ extension AppCopy {
             : "This recurring task ended early. History and today remain."
     }
 
+    var taskCycleEndedNotice: String {
+        language == .chinese
+            ? "该重复任务已按计划结束。历史记录仍然保留。"
+            : "This recurring task ended as planned. Its history remains."
+    }
+
     var taskCycleSettingsTitle: String {
         language == .chinese ? "重复设置" : "Recurrence"
     }
@@ -280,12 +286,35 @@ extension AppCopy {
         }
     }
 
-    func taskCycleSummary(_ track: TaskCycleTrack) -> String {
-        switch language {
-        case .chinese:
-            "\(track.scheduledCount) 个计划日 · \(track.futurePlanCount) 个未来"
-        case .english:
-            "\(track.scheduledCount) scheduled · \(track.futurePlanCount) upcoming"
+    func taskCycleLifecycleSummary(
+        _ track: TaskCycleTrack,
+        displayDate: (LocalDate) -> String
+    ) -> String {
+        switch track.lifecycle {
+        case let .upcoming(startDate):
+            let date = displayDate(startDate)
+            return language == .chinese
+                ? "即将开始 · \(date)开始"
+                : "Upcoming · Starts \(date)"
+        case let .active(nextDate):
+            guard let nextDate else {
+                return language == .chinese
+                    ? "进行中 · 暂无后续排期"
+                    : "Active · No later occurrence"
+            }
+            let date = displayDate(nextDate)
+            return language == .chinese
+                ? "进行中 · 下次 \(date)"
+                : "Active · Next \(date)"
+        case .ended:
+            return language == .chinese
+                ? "已结束 · 完成 \(track.completedCount)/\(track.scheduledCount) 次"
+                : "Ended · \(track.completedCount)/\(track.scheduledCount) completed"
+        case let .stopped(stopDate):
+            let date = displayDate(stopDate)
+            return language == .chinese
+                ? "已停止 · 停止于 \(date)"
+                : "Stopped · Stopped \(date)"
         }
     }
 

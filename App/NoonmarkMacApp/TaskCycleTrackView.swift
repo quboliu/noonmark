@@ -14,6 +14,36 @@ struct TaskCycleTrackRow: View {
         Theme.navRecurring
     }
 
+    private var lifecycleColor: Color {
+        switch track.lifecycle {
+        case .active:
+            Theme.navRecurring
+        case .upcoming:
+            Theme.navFuture
+        case .ended, .stopped:
+            Theme.text3
+        }
+    }
+
+    private var lifecycleSummary: String {
+        store.copy.taskCycleLifecycleSummary(
+            track,
+            displayDate: store.displayDate
+        )
+    }
+
+    private var canStop: Bool {
+        guard track.futurePlanCount > 0 else {
+            return false
+        }
+        return switch track.lifecycle {
+        case .active, .upcoming:
+            true
+        case .ended, .stopped:
+            false
+        }
+    }
+
     private var accessibilityIdentifier: String {
         "task-cycle-track.recurring.\(track.id.description)"
     }
@@ -37,7 +67,7 @@ struct TaskCycleTrackRow: View {
                     HStack(spacing: 10) {
                     PlanningGlyph(
                         systemName: "repeat",
-                        color: Theme.navRecurring
+                        color: lifecycleColor
                     )
                     MarkdownInlineText(
                         store.copy.displayTaskTitle(track.title)
@@ -69,12 +99,19 @@ struct TaskCycleTrackRow: View {
 
                     Spacer(minLength: 8)
 
-                    Text(
-                        store.copy.taskCycleSummary(track)
-                    )
+                    Text(lifecycleSummary)
                     .font(.noonmarkSystem(size: 10.5))
-                    .foregroundStyle(Theme.text2)
+                    .foregroundStyle(lifecycleColor)
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .layoutPriority(2)
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier:
+                            "\(accessibilityIdentifier).lifecycle",
+                            verificationText: lifecycleSummary
+                        )
+                    }
                     }
                     .contentShape(Rectangle())
                 }
@@ -148,7 +185,7 @@ struct TaskCycleTrackRow: View {
         )
         .workspaceSelectable(.taskCycleSeries(track.id))
         .contextMenu {
-            if track.futurePlanCount > 0 {
+            if canStop {
                 Button(store.copy.stopRecurringTask, role: .destructive) {
                     showingStopConfirmation = true
                 }

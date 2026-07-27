@@ -588,10 +588,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             )
             return
         }
+        let tracks = context.engine.taskCycleTracks(
+            today: context.fixture.anchorDate
+        )
         guard context.store.page == .recurring,
-              let track = context.engine.taskCycleTracks(
-                  today: context.fixture.anchorDate
-              ).first
+              let track = tracks.first
         else {
             retryTaskCyclePresentation(
                 context: context,
@@ -604,7 +605,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let expectedTrackIdentifiers: Set<String> = [
             expectedTrackIdentifier,
             "\(expectedTrackIdentifier).detail",
-            "\(expectedTrackIdentifier).disclosure"
+            "\(expectedTrackIdentifier).disclosure",
+            "\(expectedTrackIdentifier).lifecycle"
         ]
         let expectedDayIdentifiers = Set(track.days.map {
             "task-cycle-day.recurring.\(track.id.description).\($0.date.description).\($0.state.rawValue)"
@@ -612,13 +614,26 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let trackIdentifiers = AppViewTreeE2E.identifiers(
             withPrefix: "task-cycle-track.recurring."
         )
-        let expectedTrackRootIdentifiers = Set(
-            context.engine.taskCycleTracks(
-                today: context.fixture.anchorDate
-            ).map {
-                "task-cycle-track.recurring.\($0.id.description)"
+        let expectedTrackRootIdentifiers = Set(tracks.map {
+            "task-cycle-track.recurring.\($0.id.description)"
+        })
+        let lifecyclePresentationsAreCorrect = tracks.allSatisfy {
+            let identifier =
+                "task-cycle-track.recurring."
+                + "\($0.id.description).lifecycle"
+            guard let view = AppViewTreeE2E.view(
+                identifier: identifier
+            ) else {
+                return false
             }
-        )
+            let expected = context.store.copy
+                .taskCycleLifecycleSummary(
+                    $0,
+                    displayDate: context.store.displayDate
+                )
+            return AppViewTreeE2E.verificationText(for: view)
+                == expected
+        }
         let actualTrackRootIdentifiers =
             (trackIdentifiers ?? []).intersection(
                 expectedTrackRootIdentifiers
@@ -635,6 +650,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                   of: trackIdentifiers ?? []
               ),
               actualTrackRootIdentifiers == expectedTrackRootIdentifiers,
+              lifecyclePresentationsAreCorrect,
               AppViewTreeE2E.view(
                   identifier: "task-cycle-create.open"
               ) == nil

@@ -113,12 +113,28 @@ cycle_series_count="$(
 cycle_occurrence_count="$(
   plutil -extract core.taskCycleOccurrenceCount raw -o - "$result_path"
 )"
+cycle_active_count="$(
+  plutil -extract core.taskCycleLifecycleCounts.active raw -o - "$result_path"
+)"
+cycle_upcoming_count="$(
+  plutil -extract core.taskCycleLifecycleCounts.upcoming raw -o - "$result_path"
+)"
+cycle_ended_count="$(
+  plutil -extract core.taskCycleLifecycleCounts.ended raw -o - "$result_path"
+)"
+cycle_stopped_count="$(
+  plutil -extract core.taskCycleLifecycleCounts.stopped raw -o - "$result_path"
+)"
 if [[ "$single_day_completed_count" != "5" \
       || "$ordinary_single_day_completed_count" != "5" \
       || "$cycle_single_day_completed_count" != "0" \
       || "$multi_day_completed_count" != "2" \
-      || "$cycle_series_count" != "2" \
-      || "$cycle_occurrence_count" != "43" ]]; then
+      || "$cycle_series_count" != "4" \
+      || "$cycle_occurrence_count" != "57" \
+      || "$cycle_active_count" != "1" \
+      || "$cycle_upcoming_count" != "1" \
+      || "$cycle_ended_count" != "1" \
+      || "$cycle_stopped_count" != "1" ]]; then
   echo "demo fixture task and cycle counts drifted" >&2
   sed -n '1,200p' "$result_path" >&2
   exit 1

@@ -227,7 +227,16 @@ final class MacUIDesignContractTests: XCTestCase {
 
         XCTAssertEqual(
             contract.pages,
-            [.dayTodo, .taskPool, .futurePlans, .unfinishedPool, .completedPool, .calendar, .zhulong]
+            [
+                .dayTodo,
+                .taskPool,
+                .futurePlans,
+                .recurringPlans,
+                .unfinishedPool,
+                .completedPool,
+                .calendar,
+                .zhulong
+            ]
         )
     }
 
@@ -403,6 +412,8 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.futurePlansSymbol))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.futurePlansCopy))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.futurePlansPrimaryAction))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.recurringPlansSymbol))
+        XCTAssertTrue(contract.pageEmptyStateElements.contains(.recurringPlansCopy))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.unfinishedPoolSymbol))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.unfinishedPoolCopy))
         XCTAssertTrue(contract.pageEmptyStateElements.contains(.completedPoolSymbol))

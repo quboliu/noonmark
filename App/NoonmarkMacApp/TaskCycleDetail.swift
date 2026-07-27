@@ -179,6 +179,8 @@ struct TaskCycleDetail: View {
 
     private var collection: TaskCycleCollection {
         switch store.page {
+        case .recurring:
+            .recurringPlans
         case .pool:
             .pool
         case .future:

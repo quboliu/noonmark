@@ -95,7 +95,7 @@ if [[ ! -f "$result_path" ]] \
   exit 1
 fi
 
-for page in pool day future unfinished completed; do
+for page in pool day future recurring unfinished completed; do
   screenshot="$demo_root/task-collection-$page.png"
   if [[ ! -s "$screenshot" ]]; then
     echo "interactive demo task collection screenshot is missing: $screenshot" >&2

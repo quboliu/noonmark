@@ -285,6 +285,8 @@ extension AppCopy {
         collection: TaskCycleCollection
     ) -> String {
         switch (language, collection) {
+        case (.chinese, .recurringPlans):
+            "\(track.scheduledCount) 个计划日 · \(track.futurePlanCount) 个未来"
         case (.chinese, .pool):
             "\(track.scheduledCount) 个计划日 · \(track.completedCount) 天已完成"
         case (.chinese, .future):
@@ -293,6 +295,8 @@ extension AppCopy {
             "\(track.unfinishedCount) 天未完成 · \(track.completedCount) 天已完成"
         case (.chinese, .completed):
             "\(track.completedCount) 天已完成 · 共 \(track.scheduledCount) 个计划日"
+        case (.english, .recurringPlans):
+            "\(track.scheduledCount) scheduled · \(track.futurePlanCount) upcoming"
         case (.english, .future):
             "\(track.futurePlanCount) planned · \(track.completedCount) completed"
         case (.english, .unfinished):

@@ -648,6 +648,8 @@ public struct TaskCycleTrackDay: Equatable, Identifiable, Sendable {
         in collection: TaskCycleCollection
     ) -> TaskCycleTraceTarget? {
         switch collection {
+        case .recurringPlans:
+            occurrenceTarget
         case .pool:
             occurrenceTarget
         case .future:
@@ -676,6 +678,7 @@ public struct TaskCycleTrackDay: Equatable, Identifiable, Sendable {
 }
 
 public enum TaskCycleCollection: Equatable, Hashable, Sendable {
+    case recurringPlans
     case pool
     case future
     case unfinished
@@ -732,8 +735,10 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
 
     public func appears(in collection: TaskCycleCollection) -> Bool {
         switch collection {
+        case .recurringPlans:
+            true
         case .pool:
-            futurePlanCount > 0 || pooledOccurrenceCount > 0
+            pooledOccurrenceCount > 0
         case .future:
             futurePlanCount > 0
         case .unfinished:

@@ -18,7 +18,7 @@ struct Sidebar: View {
     @EnvironmentObject private var store: NoonmarkStore
 
     var planPages: [NoonmarkStore.Page] {
-        [.day, .pool, .future]
+        [.day, .pool, .future, .recurring]
     }
 
     var tracePages: [NoonmarkStore.Page] {
@@ -200,6 +200,8 @@ struct MainSurface: View {
                 TaskPoolPage()
             case .future:
                 FuturePlansPage()
+            case .recurring:
+                RecurringPlansPage()
             case .unfinished:
                 UnfinishedPoolPage()
             case .completed:

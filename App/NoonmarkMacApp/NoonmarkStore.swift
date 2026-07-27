@@ -416,6 +416,7 @@ final class NoonmarkStore: ObservableObject {
         case day
         case pool
         case future
+        case recurring
         case unfinished
         case completed
         case calendar
@@ -432,6 +433,8 @@ final class NoonmarkStore: ObservableObject {
                 return "tray"
             case .future:
                 return "calendar.badge.clock"
+            case .recurring:
+                return "repeat"
             case .unfinished:
                 return "exclamationmark.circle"
             case .completed:
@@ -453,6 +456,8 @@ final class NoonmarkStore: ObservableObject {
                 return Theme.navPool
             case .future:
                 return Theme.navFuture
+            case .recurring:
+                return Theme.navRecurring
             case .unfinished:
                 return Theme.navUnfinished
             case .completed:
@@ -480,6 +485,8 @@ final class NoonmarkStore: ObservableObject {
                 self = .pool
             case "future":
                 self = .future
+            case "recurring":
+                self = .recurring
             case "unfinished":
                 self = .unfinished
             case "completed":

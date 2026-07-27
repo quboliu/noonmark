@@ -36,6 +36,20 @@ struct NoonmarkDemoFixtureTests {
         )
         #expect(fixture.report.taskCyclePlanRevisionCount == 3)
         #expect(fixture.report.unstartedTaskCycleSeriesCount == 1)
+        #expect(fixture.report.pooledTaskCycleSeriesCount == 1)
+        #expect(fixture.report.futureOnlyTaskCycleSeriesCount == 1)
+        #expect(
+            fixture.engine.taskCycleTracks(
+                today: anchorDate,
+                collection: .recurringPlans
+            ).count == 2
+        )
+        #expect(
+            fixture.engine.taskCycleTracks(
+                today: anchorDate,
+                collection: .pool
+            ).count == 1
+        )
         #expect(fixture.report.deletableCategoryBoundaryCount > 0)
         #expect(
             fixture.report.openParentWithCompletedChildrenCount > 0

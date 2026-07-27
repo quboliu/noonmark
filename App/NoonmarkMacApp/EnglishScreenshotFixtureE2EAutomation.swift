@@ -768,7 +768,7 @@ private enum EnglishScreenshotUIVerifier {
             try completedEvidence(store: store)
         case .calendar:
             try calendarEvidence(store: store)
-        case .settings, .zhulong:
+        case .recurring, .settings, .zhulong:
             throw EnglishScreenshotFixtureE2EAutomation.Failure.failed(
                 "populated screenshot verifier does not apply to this page"
             )

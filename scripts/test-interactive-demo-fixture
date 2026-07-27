@@ -81,6 +81,8 @@ for expected in \
   '"taskPoolProviderBoundaryVerified" : true' \
   '"taskPoolProviderReportPresentationVerified" : true' \
   '"taskCyclePresentationVerified" : true' \
+  '"pooledTaskCycleSeriesCount" : 1' \
+  '"futureOnlyTaskCycleSeriesCount" : 1' \
   '"zhulongHeaderComposerHierarchyVerified" : true'; do
   if ! grep -Fq "$expected" "$result_path"; then
     echo "demo fixture manifest is missing: $expected" >&2
@@ -121,7 +123,7 @@ if [[ "$single_day_completed_count" != "10" \
   exit 1
 fi
 
-for page in pool day future unfinished completed; do
+for page in pool day future recurring unfinished completed; do
   screenshot="$test_root/task-collection-$page.png"
   if [[ ! -s "$screenshot" ]]; then
     echo "task collection screenshot is missing: $screenshot" >&2

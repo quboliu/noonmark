@@ -69,6 +69,8 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let taskCycleSeriesWithPlannedSubtasksCount: Int
     public let taskCyclePlanRevisionCount: Int
     public let unstartedTaskCycleSeriesCount: Int
+    public let pooledTaskCycleSeriesCount: Int
+    public let futureOnlyTaskCycleSeriesCount: Int
     public let openParentWithCompletedChildrenCount: Int
     public let completedParentWithCompletedChildrenCount: Int
 
@@ -152,6 +154,16 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         require(
             unstartedTaskCycleSeriesCount > 0,
             "尚未开始的重复任务可调整开始日期",
+            into: &missing
+        )
+        require(
+            pooledTaskCycleSeriesCount > 0,
+            "真实回池实例进入任务池重复投影",
+            into: &missing
+        )
+        require(
+            futureOnlyTaskCycleSeriesCount > 0,
+            "仅有未来义务的重复计划不进入任务池",
             into: &missing
         )
         require(
@@ -257,6 +269,15 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
                 today: anchorDate
             )
         }
+        let cycleTracks = engine.taskCycleTracks(today: anchorDate)
+        pooledTaskCycleSeriesCount = cycleTracks.count {
+            $0.pooledOccurrenceCount > 0 && $0.appears(in: .pool)
+        }
+        futureOnlyTaskCycleSeriesCount = cycleTracks.count {
+            $0.futurePlanCount > 0
+                && $0.pooledOccurrenceCount == 0
+                && $0.appears(in: .pool) == false
+        }
         let ordinaryCompletedHierarchies =
             engine.completedTaskHierarchies().filter {
                 $0.chain.cycleMembership == nil
@@ -351,11 +372,31 @@ private struct DemoStory {
             today: dates[0],
             now: time(on: dates[0], hour: 6, minute: 46)
         )
+        let pooledOccurrenceDate = try DemoCalendar.offset(
+            dates[9],
+            by: 1
+        )
+        guard let pooledChain = engine.chains.values.first(where: {
+            $0.cycleMembership?.seriesID == seriesID
+                && $0.cycleMembership?.occurrenceDate
+                == pooledOccurrenceDate
+        }), let pooledTrace = engine.traces.values.first(where: {
+            $0.chainID == pooledChain.id
+        }) else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage([
+                "周期系列真实回池实例"
+            ])
+        }
+        try engine.returnToPool(
+            traceID: pooledTrace.id,
+            today: dates[0],
+            now: time(on: dates[0], hour: 6, minute: 47)
+        )
         try engine.skipTaskCycleOccurrence(
             seriesID: seriesID,
             occurrenceDate: try DemoCalendar.offset(dates[9], by: 2),
             today: dates[0],
-            now: time(on: dates[0], hour: 6, minute: 47)
+            now: time(on: dates[0], hour: 6, minute: 48)
         )
         let memberChainIDs = engine.chains.values
             .filter {
@@ -374,7 +415,7 @@ private struct DemoStory {
         let classificationTime = time(
             on: dates[0],
             hour: 6,
-            minute: 48
+            minute: 49
         )
         try classify(
             anchorChainID,
@@ -417,7 +458,7 @@ private struct DemoStory {
         let createdAt = time(
             on: dates[0],
             hour: 6,
-            minute: 49
+            minute: 50
         )
         let seriesID = try engine.createTaskCycleSeries(
             title: "准备下周工作回顾",

@@ -481,6 +481,25 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             withPrefix:
             "task-cycle-track.\(verificationCase.accessibilityName)."
         )
+        let expectedTrackRootIdentifiers = Set(
+            context.engine.taskCycleTracks(
+                today: context.fixture.anchorDate,
+                collection: verificationCase.collection
+            ).map {
+                "task-cycle-track.\(verificationCase.accessibilityName).\($0.id.description)"
+            }
+        )
+        let allTrackRootIdentifiers = Set(
+            context.engine.taskCycleTracks(
+                today: context.fixture.anchorDate
+            ).map {
+                "task-cycle-track.\(verificationCase.accessibilityName).\($0.id.description)"
+            }
+        )
+        let actualTrackRootIdentifiers =
+            (trackIdentifiers ?? []).intersection(
+                allTrackRootIdentifiers
+            )
         let dayIdentifiers = AppViewTreeE2E.identifiers(
             withPrefix:
             "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description)."
@@ -488,11 +507,12 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         guard AppViewTreeE2E.activateMainWindow(),
               AppViewTreeE2E.view(
                   identifier:
-                  "task-cycle-section.\(verificationCase.accessibilityName)"
+                  verificationCase.collectionAnchorIdentifier
               ) != nil,
               expectedTrackIdentifiers.isSubset(
                   of: trackIdentifiers ?? []
               ),
+              actualTrackRootIdentifiers == expectedTrackRootIdentifiers,
               AppViewTreeE2E.view(
                   identifier: "task-cycle-create.open"
               ) == nil
@@ -502,6 +522,24 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 index: index,
                 remainingAttempts: remainingAttempts - 1
             )
+            return
+        }
+        switch prepareRecurringPlanDetail(
+            context: context,
+            track: track,
+            collection: verificationCase.collection,
+            detailIdentifier: "\(expectedTrackIdentifier).detail"
+        ) {
+        case .ready:
+            break
+        case .retry:
+            retryTaskCyclePresentation(
+                context: context,
+                index: index,
+                remainingAttempts: 100
+            )
+            return
+        case .failed:
             return
         }
         if dayIdentifiers?.isEmpty == true {
@@ -537,58 +575,112 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             return
         }
 
+        continueTaskCyclePresentation(
+            context: context,
+            index: index,
+            track: track,
+            verificationCase: verificationCase
+        )
+    }
+
+    @MainActor
+    private func continueTaskCyclePresentation(
+        context: DemoCycleCheckContext,
+        index: Int,
+        track: TaskCycleTrack,
+        verificationCase: DemoCycleCheckCase
+    ) {
         if verificationCase.collection == .future {
-            guard let movedDay = track.days.first(where: {
-                guard let target = $0.futurePlanTarget else {
-                    return false
-                }
-                return target.date != $0.date
-            }), let movedTarget = movedDay.futurePlanTarget,
-            AppViewTreeE2E.click(
-                identifier: cycleDayIdentifier(
-                    day: movedDay,
-                    track: track,
-                    verificationCase: verificationCase
-                )
-            ) else {
-                AppViewTreeE2E.writeDump(beside: resultURL)
-                finishWithFailure(
-                    InteractiveDemoFixtureError.presentationContractFailed,
-                    on: context.store
-                )
-                return
-            }
-            retryTaskCycleNavigation(
+            navigateMovedFutureTaskCycleDay(
                 context: context,
-                expectedTraceID: movedTarget.traceID,
-                expectedDate: movedTarget.date,
-                nextIndex: index + 1,
-                remainingAttempts: 100
+                track: track,
+                verificationCase: verificationCase,
+                nextIndex: index + 1
             )
             return
         }
 
         let nextIndex = index + 1
         if context.cases.indices.contains(nextIndex) {
-            guard AppViewTreeE2E.click(
-                identifier: context.cases[nextIndex]
-                    .sidebarNavigationIdentifier
-            ) else {
-                AppViewTreeE2E.writeDump(beside: resultURL)
-                finishWithFailure(
-                    InteractiveDemoFixtureError.presentationContractFailed,
-                    on: context.store
-                )
-                return
-            }
-            retryTaskCyclePresentation(
+            navigateToNextTaskCycleCase(
                 context: context,
-                index: nextIndex,
-                remainingAttempts: 100
+                nextIndex: nextIndex
             )
             return
         }
 
+        navigateToAnchorTaskCycleDay(
+            context: context,
+            track: track,
+            verificationCase: verificationCase
+        )
+    }
+
+    @MainActor
+    private func navigateMovedFutureTaskCycleDay(
+        context: DemoCycleCheckContext,
+        track: TaskCycleTrack,
+        verificationCase: DemoCycleCheckCase,
+        nextIndex: Int
+    ) {
+        guard let movedDay = track.days.first(where: {
+            guard let target = $0.futurePlanTarget else {
+                return false
+            }
+            return target.date != $0.date
+        }), let movedTarget = movedDay.futurePlanTarget,
+        AppViewTreeE2E.click(
+            identifier: cycleDayIdentifier(
+                day: movedDay,
+                track: track,
+                verificationCase: verificationCase
+            )
+        ) else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        retryTaskCycleNavigation(
+            context: context,
+            expectedTraceID: movedTarget.traceID,
+            expectedDate: movedTarget.date,
+            nextIndex: nextIndex,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func navigateToNextTaskCycleCase(
+        context: DemoCycleCheckContext,
+        nextIndex: Int
+    ) {
+        guard AppViewTreeE2E.click(
+            identifier: context.cases[nextIndex]
+                .sidebarNavigationIdentifier
+        ) else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        retryTaskCyclePresentation(
+            context: context,
+            index: nextIndex,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func navigateToAnchorTaskCycleDay(
+        context: DemoCycleCheckContext,
+        track: TaskCycleTrack,
+        verificationCase: DemoCycleCheckCase
+    ) {
         guard let anchorDay = track.days.first(where: {
             $0.date == context.fixture.anchorDate
                 && $0.navigationTarget(
@@ -618,6 +710,45 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             nextIndex: nil,
             remainingAttempts: 100
         )
+    }
+
+    @MainActor
+    private func prepareRecurringPlanDetail(
+        context: DemoCycleCheckContext,
+        track: TaskCycleTrack,
+        collection: TaskCycleCollection,
+        detailIdentifier: String
+    ) -> RecurringPlanDetailPreparation {
+        guard collection == .recurringPlans else {
+            return .ready
+        }
+        guard context.store.selectedTaskCycleSeriesID == track.id else {
+            guard AppViewTreeE2E.click(
+                identifier: detailIdentifier
+            ) else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError.presentationContractFailed,
+                    on: context.store
+                )
+                return .failed
+            }
+            return .retry
+        }
+        guard AppViewTreeE2E.view(
+            identifier: "task-cycle-detail.\(track.id.description)"
+        ) != nil,
+        AppViewTreeE2E.view(
+            identifier:
+            "classification.editor.cycle-\(track.id.description)"
+        ) != nil,
+        AppViewTreeE2E.view(
+            identifier: "task-cycle-detail.edit-plan"
+        ) != nil
+        else {
+            return .retry
+        }
+        return .ready
     }
 
     private func cycleDayIdentifier(
@@ -1022,6 +1153,13 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 organization: .flat
             ),
             DemoCollectionCheckCase(
+                page: .recurring,
+                rowPrefixes: [
+                    "classification.task-cycle-row."
+                ],
+                organization: .flat
+            ),
+            DemoCollectionCheckCase(
                 page: .unfinished,
                 rowPrefixes: [
                     "classification.unfinished-row.",
@@ -1042,6 +1180,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
     private var cycleVerificationCases: [DemoCycleCheckCase] {
         [
+            DemoCycleCheckCase(
+                page: .recurring,
+                collection: .recurringPlans
+            ),
             DemoCycleCheckCase(page: .pool, collection: .pool),
             DemoCycleCheckCase(page: .future, collection: .future),
             DemoCycleCheckCase(page: .unfinished, collection: .unfinished),
@@ -1947,6 +2089,8 @@ private struct DemoCollectionCheckCase {
 
     var taskCycleCollection: TaskCycleCollection? {
         switch page {
+        case .recurring:
+            .recurringPlans
         case .pool:
             .pool
         case .unfinished:
@@ -1975,6 +2119,7 @@ private struct DemoCycleCheckCase {
 
     var accessibilityName: String {
         switch collection {
+        case .recurringPlans: "recurring"
         case .pool: "pool"
         case .future: "future"
         case .unfinished: "unfinished"
@@ -1985,6 +2130,18 @@ private struct DemoCycleCheckCase {
     var sidebarNavigationIdentifier: String {
         "sidebar.nav.\(page.rawValue)"
     }
+
+    var collectionAnchorIdentifier: String {
+        collection == .recurringPlans
+            ? "recurring-plans.list"
+            : "task-cycle-section.\(accessibilityName)"
+    }
+}
+
+private enum RecurringPlanDetailPreparation {
+    case ready
+    case retry
+    case failed
 }
 
 private struct InteractiveDemoManifest: Codable {

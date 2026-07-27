@@ -843,6 +843,7 @@ final class TaskCycleSeriesTests: XCTestCase {
             track.days.map(\.state),
             [.completed, .unfinished, .pendingToday, .skipped, .skipped]
         )
+        XCTAssertTrue(track.appears(in: .recurringPlans))
         XCTAssertFalse(track.appears(in: .pool))
         XCTAssertFalse(track.appears(in: .future))
         XCTAssertTrue(track.appears(in: .unfinished))
@@ -872,7 +873,45 @@ final class TaskCycleSeriesTests: XCTestCase {
             }
         )
 
+        XCTAssertTrue(track.appears(in: .recurringPlans))
         XCTAssertFalse(track.appears(in: .pool))
+        XCTAssertTrue(
+            engine.taskCycleTracks(
+                today: monday,
+                collection: .pool
+            ).isEmpty
+        )
+    }
+
+    func testPoolProjectionHidesSeriesWithOnlyFutureObligations() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "尚未开始的重复计划",
+            startDate: tuesday,
+            endDate: wednesday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: monday).first {
+                $0.id == seriesID
+            }
+        )
+
+        XCTAssertEqual(track.futurePlanCount, 2)
+        XCTAssertEqual(track.pooledOccurrenceCount, 0)
+        XCTAssertTrue(track.appears(in: .recurringPlans))
+        XCTAssertFalse(track.appears(in: .pool))
+        XCTAssertTrue(track.appears(in: .future))
+        XCTAssertEqual(
+            engine.taskCycleTracks(
+                today: monday,
+                collection: .recurringPlans
+            ).map(\.id),
+            [seriesID]
+        )
         XCTAssertTrue(
             engine.taskCycleTracks(
                 today: monday,
@@ -908,6 +947,7 @@ final class TaskCycleSeriesTests: XCTestCase {
             }
         )
 
+        XCTAssertTrue(track.appears(in: .recurringPlans))
         XCTAssertFalse(track.appears(in: .pool))
         XCTAssertTrue(
             engine.taskCycleTracks(

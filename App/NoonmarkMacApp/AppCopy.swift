@@ -66,6 +66,10 @@ struct AppCopy {
     var navDay: String { "Day Todo" }
     var navPool: String { language == .chinese ? "任务池" : "Task Pool" }
     var navFuture: String { language == .chinese ? "未来计划" : "Upcoming" }
+    var navRecurring: String {
+        language == .chinese ? "重复计划" : "Recurring Plans"
+    }
+
     var navUnfinished: String { language == .chinese ? "未完成" : "Unfinished" }
     var navCompleted: String { language == .chinese ? "已完成" : "Completed" }
     var navCalendar: String { language == .chinese ? "日历" : "Calendar" }
@@ -141,6 +145,18 @@ struct AppCopy {
     }
 
     var emptyFuture: String { language == .chinese ? "还没有未来计划。" : "No upcoming plans yet." }
+    var recurringPlansSubtitle: String {
+        language == .chinese
+            ? "集中管理重复规则、完整轨迹与已结束计划。"
+            : "Manage recurrence rules, full tracks, and ended plans."
+    }
+
+    var emptyRecurringPlans: String {
+        language == .chinese
+            ? "还没有重复计划。新建任务时输入 /重复 开始。"
+            : "No recurring plans yet. Start a new task with /repeat."
+    }
+
     var unfinishedSubtitle: String {
         language == .chinese
             ? "按任务链去重的未完成轨迹。延续它，或明确废弃。"

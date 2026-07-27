@@ -388,6 +388,11 @@ extension NoonmarkStore {
                 + engine.futurePlans(today: today).map {
                 .futureTrace($0.trace.id)
             }
+        case .recurring:
+            return engine.taskCycleTracks(
+                today: today,
+                collection: .recurringPlans
+            ).map { .taskCycleSeries($0.id) }
         case .unfinished:
             return engine.taskCycleTracks(
                 today: today,
@@ -470,6 +475,13 @@ extension NoonmarkStore {
             selectLaunchDayItem(selectionName)
         case .future:
             selectLaunchFutureItem()
+        case .recurring:
+            if let seriesID = engine.taskCycleTracks(
+                today: today,
+                collection: .recurringPlans
+            ).first?.id {
+                selectTaskCycleSeries(seriesID)
+            }
         case .pool:
             selectLaunchPoolItem()
         case .unfinished:

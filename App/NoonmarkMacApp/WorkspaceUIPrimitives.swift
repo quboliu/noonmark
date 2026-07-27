@@ -940,6 +940,7 @@ enum EmptyStateKind {
     case dayTodo
     case taskPool
     case futurePlans
+    case recurringPlans
     case unfinishedPool
     case completedPool
     case calendar
@@ -992,6 +993,7 @@ private extension EmptyStateKind {
         case .dayTodo: "sun.max"
         case .taskPool: "tray"
         case .futurePlans: "calendar.badge.clock"
+        case .recurringPlans: "repeat"
         case .unfinishedPool: "arrow.uturn.forward.circle"
         case .completedPool: "checkmark.seal"
         case .calendar: "calendar"
@@ -1003,6 +1005,7 @@ private extension EmptyStateKind {
         case .dayTodo: Theme.navDay
         case .taskPool: Theme.navPool
         case .futurePlans: Theme.navFuture
+        case .recurringPlans: Theme.navRecurring
         case .unfinishedPool: Theme.navUnfinished
         case .completedPool: Theme.navCompleted
         case .calendar: Theme.navCalendar

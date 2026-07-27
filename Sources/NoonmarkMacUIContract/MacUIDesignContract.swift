@@ -270,6 +270,7 @@ public enum MacUIPage: String, CaseIterable, Sendable {
     case dayTodo
     case taskPool
     case futurePlans
+    case recurringPlans
     case unfinishedPool
     case completedPool
     case calendar
@@ -520,6 +521,8 @@ public enum MacUIPageEmptyStateElement: String, CaseIterable, Sendable {
     case futurePlansSymbol
     case futurePlansCopy
     case futurePlansPrimaryAction
+    case recurringPlansSymbol
+    case recurringPlansCopy
     case unfinishedPoolSymbol
     case unfinishedPoolCopy
     case completedPoolSymbol

@@ -13,6 +13,8 @@ struct TaskCycleTrackRow: View {
 
     private var accent: Color {
         switch collection {
+        case .recurringPlans:
+            Theme.navRecurring
         case .pool:
             Theme.navPool
         case .future:
@@ -249,7 +251,7 @@ private struct TaskCycleTrackDayButton: View {
     }
 
     private var returnedPoolChainID: TaskChainID? {
-        guard collection == .pool,
+        guard [.pool, .recurringPlans].contains(collection),
               presentationState == .returnedToPool
         else {
             return nil
@@ -283,6 +285,9 @@ private struct TaskCycleTrackDayButton: View {
     var body: some View {
         Button {
             if let returnedPoolChainID {
+                if collection == .recurringPlans {
+                    store.selectPage(.pool)
+                }
                 store.selectPool(returnedPoolChainID)
                 store.isDetailRailExpanded = true
                 return
@@ -383,6 +388,7 @@ private struct TaskCycleTrackDayButton: View {
 private extension TaskCycleCollection {
     var accessibilityName: String {
         switch self {
+        case .recurringPlans: "recurring"
         case .pool: "pool"
         case .future: "future"
         case .unfinished: "unfinished"

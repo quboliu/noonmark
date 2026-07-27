@@ -170,6 +170,7 @@ enum Theme {
     static let navDay = hex(0x2A6FDB)
     static let navPool = hex(0x0E9488)
     static let navFuture = hex(0x7C5CFF)
+    static let navRecurring = hex(0xB86A16)
     static let navUnfinished = hex(0xE0851B)
     static let navCompleted = hex(0x1F8A5B)
     static let navCalendar = hex(0xD1477A)

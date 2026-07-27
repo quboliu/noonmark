@@ -527,26 +527,31 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 finish("failed: 缺少新建重复任务父级")
                 return
             }
-            let detailButtonIdentifier =
-                "task-cycle-track.pool.\(series.id.description).detail"
-            waitFor("重复任务父级详情入口") {
+            waitFor("进入重复计划管理页") {
                 AppViewTreeE2E.click(
-                    identifier: detailButtonIdentifier
+                    identifier: "sidebar.nav.recurring"
                 )
             } onSuccess: { [self] in
-                waitFor("重复任务父级详情") {
-                    self.store.selectedTaskCycleSeriesID == series.id
-                        && self.store.isDetailRailExpanded
-                        && AppViewTreeE2E.view(
-                            identifier:
-                            "task-cycle-detail.\(series.id.description)"
-                        ) != nil
-                        && AppViewTreeE2E.view(
-                            identifier:
-                            "classification.editor.cycle-\(series.id.description)"
-                        ) != nil
+                waitFor("重复任务父级详情入口") {
+                    AppViewTreeE2E.click(
+                        identifier:
+                        "task-cycle-track.recurring.\(series.id.description).detail"
+                    )
                 } onSuccess: { [self] in
-                    addCreatedSeriesLabel(seriesID: series.id)
+                    waitFor("重复任务父级详情") {
+                        self.store.selectedTaskCycleSeriesID == series.id
+                            && self.store.isDetailRailExpanded
+                            && AppViewTreeE2E.view(
+                                identifier:
+                                "task-cycle-detail.\(series.id.description)"
+                            ) != nil
+                            && AppViewTreeE2E.view(
+                                identifier:
+                                "classification.editor.cycle-\(series.id.description)"
+                            ) != nil
+                    } onSuccess: { [self] in
+                        addCreatedSeriesLabel(seriesID: series.id)
+                    }
                 }
             }
         }
@@ -763,7 +768,13 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                         && series.planRevisions.count == 2
                         && AppViewTreeE2E.hasNoAttachedSheets()
                 } onSuccess: { [self] in
-                    convertPoolTaskFromRow()
+                    waitFor("返回任务池转换既有任务") {
+                        AppViewTreeE2E.click(
+                            identifier: "sidebar.nav.pool"
+                        )
+                    } onSuccess: { [self] in
+                        convertPoolTaskFromRow()
+                    }
                 }
             }
         }
@@ -1063,47 +1074,53 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 finish("failed: 缺少尚未开始的重复任务")
                 return
             }
-            waitFor("尚未开始重复任务父级详情入口") {
+            waitFor("返回重复计划管理页") {
                 AppViewTreeE2E.click(
-                    identifier:
-                    "task-cycle-track.pool.\(series.id.description).detail"
+                    identifier: "sidebar.nav.recurring"
                 )
             } onSuccess: { [self] in
-                waitFor("尚未开始重复任务父级详情") {
-                    self.store.selectedTaskCycleSeriesID == series.id
-                        && AppViewTreeE2E.view(
-                            identifier: "task-cycle-detail.edit-plan"
-                        ) != nil
+                waitFor("尚未开始重复任务父级详情入口") {
+                    AppViewTreeE2E.click(
+                        identifier:
+                        "task-cycle-track.recurring.\(series.id.description).detail"
+                    )
                 } onSuccess: { [self] in
-                    waitFor("尚未开始重复任务周期设置入口") {
-                        AppViewTreeE2E.click(
-                            identifier: "task-cycle-detail.edit-plan"
-                        )
+                    waitFor("尚未开始重复任务父级详情") {
+                        self.store.selectedTaskCycleSeriesID == series.id
+                            && AppViewTreeE2E.view(
+                                identifier: "task-cycle-detail.edit-plan"
+                            ) != nil
                     } onSuccess: { [self] in
-                        waitFor("尚未开始重复任务开始日期可编辑") {
-                            AppViewTreeE2E.activateWindow(
-                                containing:
-                                "task-cycle-plan-edit.start-date.anchor"
+                        waitFor("尚未开始重复任务周期设置入口") {
+                            AppViewTreeE2E.click(
+                                identifier: "task-cycle-detail.edit-plan"
                             )
-                                && AppViewTreeE2E.view(
-                                    identifier:
-                                    "task-cycle-plan-edit.start-date.anchor"
-                                ).map {
-                                    AppViewTreeE2E.verificationText(
-                                        for: $0
-                                    ) == series.startDate.description
-                                } == true
                         } onSuccess: { [self] in
-                            guard AppViewTreeE2E.sendEscapeKey() else {
-                                self.finish(
-                                    "failed: 无法关闭尚未开始重复任务周期设置"
+                            waitFor("尚未开始重复任务开始日期可编辑") {
+                                AppViewTreeE2E.activateWindow(
+                                    containing:
+                                    "task-cycle-plan-edit.start-date.anchor"
                                 )
-                                return
-                            }
-                            self.waitFor("尚未开始重复任务周期设置关闭") {
-                                AppViewTreeE2E.hasNoAttachedSheets()
+                                    && AppViewTreeE2E.view(
+                                        identifier:
+                                        "task-cycle-plan-edit.start-date.anchor"
+                                    ).map {
+                                        AppViewTreeE2E.verificationText(
+                                            for: $0
+                                        ) == series.startDate.description
+                                    } == true
                             } onSuccess: { [self] in
-                                self.openReturnedOccurrence()
+                                guard AppViewTreeE2E.sendEscapeKey() else {
+                                    self.finish(
+                                        "failed: 无法关闭尚未开始重复任务周期设置"
+                                    )
+                                    return
+                                }
+                                self.waitFor("尚未开始重复任务周期设置关闭") {
+                                    AppViewTreeE2E.hasNoAttachedSheets()
+                                } onSuccess: { [self] in
+                                    self.openReturnedOccurrence()
+                                }
                             }
                         }
                     }
@@ -1133,17 +1150,22 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
             }
             expandTrackIfNeeded(target)
             waitFor("回池 occurrence 轨迹") {
-                AppViewTreeE2E.view(identifier: target.dayIdentifier)
+                AppViewTreeE2E.view(
+                    identifier: target.recurringDayIdentifier
+                )
                     != nil
             } onSuccess: { [self] in
                 waitFor("回池 occurrence 详情入口") {
                     AppViewTreeE2E.click(
-                        identifier: target.dayIdentifier
+                        identifier: target.recurringDayIdentifier
                     )
                 } onSuccess: { [self] in
                     waitFor("回池 occurrence 任务详情") {
                         self.store.selectedPoolChainID == target.chainID
                             && self.store.isDetailRailExpanded
+                            && AppViewTreeE2E.view(
+                                identifier: target.poolDayIdentifier
+                            ) != nil
                     } onSuccess: { [self] in
                         scheduleReturnedOccurrence(target)
                     }
@@ -1156,7 +1178,7 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
         ) {
             waitFor("回池 occurrence 今日排期菜单") {
                 guard let dayView = AppViewTreeE2E.view(
-                    identifier: target.dayIdentifier
+                    identifier: target.poolDayIdentifier
                 ) else {
                     return false
                 }
@@ -1171,9 +1193,9 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                             && $0.status == .pending
                     }
                 } onSuccess: { [self] in
-                    waitFor("返回任务池重复任务分组") {
+                    waitFor("返回重复计划处理未来实例") {
                         AppViewTreeE2E.click(
-                            identifier: "sidebar.nav.pool"
+                            identifier: "sidebar.nav.recurring"
                         )
                     } onSuccess: { [self] in
                         skipOccurrence()
@@ -1193,7 +1215,7 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
             expandTrackIfNeeded(target)
             waitFor("跳过 occurrence 菜单") {
                 guard let dayView = AppViewTreeE2E.view(
-                    identifier: target.dayIdentifier
+                    identifier: target.recurringDayIdentifier
                 ) else {
                     return false
                 }
@@ -1223,7 +1245,8 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
             }
             waitFor("停止重复任务父级详情入口") {
                 AppViewTreeE2E.click(
-                    identifier: "\(target.trackIdentifier).detail"
+                    identifier:
+                    "\(target.recurringTrackIdentifier).detail"
                 )
             } onSuccess: { [self] in
                 waitFor("停止重复任务父级详情") {
@@ -1523,10 +1546,10 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
             guard let series = series(titled: title),
                   let track = store.engine.taskCycleTracks(
                       today: store.today,
-                      collection: .pool
+                      collection: .recurringPlans
                   ).first(where: { $0.id == series.id }),
                   let day = track.days.first(where: {
-                      $0.presentationState(in: .pool) == state
+                      $0.presentationState(in: .recurringPlans) == state
                           && $0.chainID != nil
                   }),
                   let chainID = day.chainID
@@ -1537,21 +1560,19 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 seriesID: series.id,
                 chainID: chainID,
                 occurrenceDate: day.date,
-                trackIdentifier:
-                "task-cycle-track.pool.\(series.id.description)",
-                dayIdentifier:
-                "task-cycle-day.pool.\(series.id.description).\(day.date.description).\(state.rawValue)"
+                state: state
             )
         }
 
         private func expandTrackIfNeeded(_ target: CycleDayTarget) {
             guard AppViewTreeE2E.view(
-                identifier: target.dayIdentifier
+                identifier: target.recurringDayIdentifier
             ) == nil else {
                 return
             }
             _ = AppViewTreeE2E.click(
-                identifier: "\(target.trackIdentifier).disclosure"
+                identifier:
+                "\(target.recurringTrackIdentifier).disclosure"
             )
         }
 
@@ -1610,8 +1631,30 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
         let seriesID: TaskCycleSeriesID
         let chainID: TaskChainID
         let occurrenceDate: LocalDate
-        let trackIdentifier: String
-        let dayIdentifier: String
+        let state: TaskCycleTrackDayState
+
+        var recurringTrackIdentifier: String {
+            "task-cycle-track.recurring.\(seriesID.description)"
+        }
+
+        var recurringDayIdentifier: String {
+            dayIdentifier(on: .recurring)
+        }
+
+        var poolDayIdentifier: String {
+            dayIdentifier(on: .pool)
+        }
+
+        private func dayIdentifier(
+            on surface: TaskCycleCollectionSurface
+        ) -> String {
+            "task-cycle-day.\(surface.rawValue).\(seriesID.description).\(occurrenceDate.description).\(state.rawValue)"
+        }
+    }
+
+    private enum TaskCycleCollectionSurface: String {
+        case recurring
+        case pool
     }
 }
 

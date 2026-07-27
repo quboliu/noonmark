@@ -5,29 +5,17 @@ struct TaskCycleTrackRow: View {
     @EnvironmentObject private var store: NoonmarkStore
     @State private var showingStopConfirmation = false
     let track: TaskCycleTrack
-    let collection: TaskCycleCollection
 
     private var expanded: Bool {
         store.expandedTaskCycleSeriesIDs.contains(track.id)
     }
 
     private var accent: Color {
-        switch collection {
-        case .recurringPlans:
-            Theme.navRecurring
-        case .pool:
-            Theme.navPool
-        case .future:
-            Theme.navFuture
-        case .unfinished:
-            Theme.navUnfinished
-        case .completed:
-            Theme.navCompleted
-        }
+        Theme.navRecurring
     }
 
     private var accessibilityIdentifier: String {
-        "task-cycle-track.\(collection.accessibilityName).\(track.id.description)"
+        "task-cycle-track.recurring.\(track.id.description)"
     }
 
     private var selected: Bool {
@@ -47,6 +35,10 @@ struct TaskCycleTrackRow: View {
                     store.userSelectTaskCycleSeries(track.id)
                 } label: {
                     HStack(spacing: 10) {
+                    PlanningGlyph(
+                        systemName: "repeat",
+                        color: Theme.navRecurring
+                    )
                     MarkdownInlineText(
                         store.copy.displayTaskTitle(track.title)
                     )
@@ -80,7 +72,7 @@ struct TaskCycleTrackRow: View {
                     Text(
                         store.copy.taskCycleSummary(
                             track,
-                            collection: collection
+                            collection: .recurringPlans
                         )
                     )
                     .font(.noonmarkSystem(size: 10.5))
@@ -141,7 +133,6 @@ struct TaskCycleTrackRow: View {
                         ForEach(track.days) { day in
                             TaskCycleTrackDayButton(
                                 seriesID: track.id,
-                                collection: collection,
                                 day: day
                             )
                         }
@@ -194,74 +185,21 @@ struct TaskCycleTrackRow: View {
     }
 }
 
-struct TaskCycleSection: View {
-    @EnvironmentObject private var store: NoonmarkStore
-    let tracks: [TaskCycleTrack]
-    let collection: TaskCycleCollection
-
-    var body: some View {
-        if tracks.isEmpty == false {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 7) {
-                    Text(store.copy.recurringTasks)
-                        .font(.noonmarkSystem(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                    Text("\(tracks.count)")
-                        .font(.noonmarkSystem(size: 10.5))
-                        .foregroundStyle(Theme.text3)
-                        .monospacedDigit()
-                    Spacer()
-                }
-                .padding(.top, 12)
-                .padding(.bottom, 4)
-                .accessibilityIdentifier(
-                    "task-cycle-section.\(collection.accessibilityName)"
-                )
-                .background {
-                    AppE2EViewAnchor(
-                        identifier:
-                        "task-cycle-section.\(collection.accessibilityName)",
-                        verificationText: store.copy.recurringTasks
-                    )
-                }
-
-                ForEach(tracks) { track in
-                    TaskCycleTrackRow(
-                        track: track,
-                        collection: collection
-                    )
-                }
-            }
-        }
-    }
-}
-
 private struct TaskCycleTrackDayButton: View {
     @EnvironmentObject private var store: NoonmarkStore
     let seriesID: TaskCycleSeriesID
-    let collection: TaskCycleCollection
     let day: TaskCycleTrackDay
 
     private var navigationTarget: TaskCycleTraceTarget? {
-        day.navigationTarget(in: collection)
+        day.navigationTarget(in: .recurringPlans)
     }
 
     private var presentationState: TaskCycleTrackDayState {
-        day.presentationState(in: collection)
-    }
-
-    private var returnedPoolChainID: TaskChainID? {
-        guard [.pool, .recurringPlans].contains(collection),
-              presentationState == .returnedToPool
-        else {
-            return nil
-        }
-        return day.chainID
+        day.presentationState(in: .recurringPlans)
     }
 
     private var movedFutureTargetDate: LocalDate? {
-        guard collection == .future,
-              let targetDate = day.futurePlanTarget?.date,
+        guard let targetDate = day.futurePlanTarget?.date,
               targetDate != day.date
         else {
             return nil
@@ -279,19 +217,11 @@ private struct TaskCycleTrackDayButton: View {
     }
 
     private var accessibilityIdentifier: String {
-        "task-cycle-day.\(collection.accessibilityName).\(seriesID.description).\(day.date.description).\(presentationState.rawValue)"
+        "task-cycle-day.recurring.\(seriesID.description).\(day.date.description).\(presentationState.rawValue)"
     }
 
     var body: some View {
         Button {
-            if let returnedPoolChainID {
-                if collection == .recurringPlans {
-                    store.selectPage(.pool)
-                }
-                store.selectPool(returnedPoolChainID)
-                store.isDetailRailExpanded = true
-                return
-            }
             guard let navigationTarget else { return }
             store.selectedDate = navigationTarget.date
             store.page = .day
@@ -336,33 +266,9 @@ private struct TaskCycleTrackDayButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(
-            navigationTarget == nil
-                && returnedPoolChainID == nil
-        )
+        .disabled(navigationTarget == nil)
         .contextMenu {
-            if let returnedPoolChainID {
-                Button(store.copy.scheduleToday) {
-                    store.schedulePoolTask(
-                        returnedPoolChainID,
-                        date: store.today
-                    )
-                }
-                Button(store.copy.scheduleTomorrow) {
-                    store.schedulePoolTask(
-                        returnedPoolChainID,
-                        date: NoonmarkStore.offset(
-                            store.today,
-                            by: 1
-                        )
-                    )
-                }
-                Button(store.copy.chooseScheduleDate) {
-                    store.showingPicker = .schedulePool(
-                        returnedPoolChainID
-                    )
-                }
-            } else if day.date > store.today,
+            if day.date > store.today,
                (day.futurePlanTarget?.date ?? day.date) > store.today,
                presentationState != .skipped
             {
@@ -381,18 +287,6 @@ private struct TaskCycleTrackDayButton: View {
                 identifier: accessibilityIdentifier,
                 verificationText: accessibilityLabel
             )
-        }
-    }
-}
-
-private extension TaskCycleCollection {
-    var accessibilityName: String {
-        switch self {
-        case .recurringPlans: "recurring"
-        case .pool: "pool"
-        case .future: "future"
-        case .unfinished: "unfinished"
-        case .completed: "completed"
         }
     }
 }

@@ -19,6 +19,10 @@ struct FuturePlanDetail: View {
     let trace: DayTrace
     let definition: TaskDefinition
 
+    private var isRecurringOccurrence: Bool {
+        store.engine.chains[trace.chainID]?.cycleMembership != nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader(store.copy.planDetailsTitle, onClose: { store.clearSelection() }, trailing: {
@@ -82,7 +86,12 @@ struct FuturePlanDetail: View {
                 .foregroundStyle(Theme.accent)
             }
 
-            Notice(text: store.copy.futurePlanNotice, tone: .locked)
+            Notice(
+                text: store.copy.futurePlanNotice(
+                    isRecurringOccurrence: isRecurringOccurrence
+                ),
+                tone: .locked
+            )
 
             TaskClassificationDetailSection(
                 trace: trace,

@@ -669,6 +669,8 @@ final class NoonmarkStore: ObservableObject {
     @Published var zhulongFeaturePreferences: ZhulongFeaturePreferences
     @Published var horizontalPageNavigationSwipeDirection:
         HorizontalPageNavigationSwipeDirection
+    @Published var recurringFuturePlanVisibility:
+        RecurringFuturePlanVisibility
     @Published var reviewAutosaveMessage: String?
     @Published var isLocalFirstSyncing = false
     @Published var localFirstSyncMessage: String?
@@ -690,6 +692,8 @@ final class NoonmarkStore: ObservableObject {
     let zhulongFeaturePreferencesRepository: ZhulongFeaturePreferencesRepository
     let horizontalPageNavigationPreferenceRepository:
         HorizontalSwipePreferenceRepository
+    let recurringFuturePlanVisibilityRepository:
+        RecurringFuturePlanVisibilityRepository
     let databaseURL: URL?
     let syncDeviceIdentity: SyncDeviceIdentity?
     let permitsPersistenceFailureE2E: Bool
@@ -749,6 +753,13 @@ final class NoonmarkStore: ObservableObject {
             horizontalPageNavigationPreferenceRepository
         _horizontalPageNavigationSwipeDirection = Published(
             initialValue: horizontalPageNavigationPreferenceRepository.load()
+        )
+        let recurringFuturePlanVisibilityRepository =
+            RecurringFuturePlanVisibilityRepository()
+        self.recurringFuturePlanVisibilityRepository =
+            recurringFuturePlanVisibilityRepository
+        _recurringFuturePlanVisibility = Published(
+            initialValue: recurringFuturePlanVisibilityRepository.load()
         )
         if let executionRevision = ZhulongProviderSettingsStore
             .persistedReadyExecutionRevision()

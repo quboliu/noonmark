@@ -141,7 +141,21 @@ struct AppCopy {
 
     var emptyPool: String { language == .chinese ? "任务池是空的。" : "Task Pool is empty." }
     var futureSubtitle: String {
-        language == .chinese ? "已排到未来日期的计划草稿，可改期或回到任务池。" : "Draft plans scheduled for future dates. Reschedule them or return them to the pool."
+        language == .chinese
+            ? "按日期查看普通任务与可见范围内的重复实例。"
+            : "View ordinary tasks and recurring occurrences within the selected horizon."
+    }
+
+    var recurringFutureVisibilityTitle: String {
+        language == .chinese
+            ? "重复实例可见范围"
+            : "Recurring occurrence horizon"
+    }
+
+    func recurringFutureVisibilityOption(_ days: Int) -> String {
+        language == .chinese
+            ? "未来 \(days) 天"
+            : "Next \(days) days"
     }
 
     var emptyFuture: String { language == .chinese ? "还没有未来计划。" : "No upcoming plans yet." }

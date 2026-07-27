@@ -1073,7 +1073,8 @@ public final class NoonmarkEngine {
     public func taskPool() -> [PoolTask] {
         chains.values
             .filter { chain in
-                isInTaskPool(chain.id)
+                chain.cycleMembership == nil
+                    && isInTaskPool(chain.id)
             }
             .compactMap { chain in
                 guard let definition = try? currentDefinition(for: chain.id) else { return nil }
@@ -1175,6 +1176,31 @@ public final class NoonmarkEngine {
             }
     }
 
+    public func visibleFuturePlans(
+        today: LocalDate,
+        recurringVisibilityDays: Int
+    ) -> [FuturePlanItem] {
+        let recurringCutoff = (1 ... TaskCycleCivilCalendar
+            .maximumMaterializedDayCount)
+            .contains(recurringVisibilityDays)
+            ? TaskCycleCivilCalendar.offset(
+                today,
+                by: recurringVisibilityDays
+            )
+            : nil
+        return futurePlans(today: today).filter { item in
+            guard let chain = chains[item.trace.chainID],
+                  chain.cycleMembership != nil
+            else {
+                return true
+            }
+            guard let recurringCutoff else {
+                return false
+            }
+            return item.trace.date <= recurringCutoff
+        }
+    }
+
     public func unfinishedPool() -> [UnfinishedPoolItem] {
         let unresolvedStatuses: Set<TraceStatus> = [.unfinished, .abandoned]
         let unresolvedCandidatesByChain = Dictionary(grouping: traces.values.filter { unresolvedStatuses.contains($0.status) }) {
@@ -1189,6 +1215,7 @@ public final class NoonmarkEngine {
             guard
                 unfinishedTraces.isEmpty == false,
                 var chain = chains[chainID],
+                chain.cycleMembership == nil,
                 chain.state == .active || chain.state == .abandoned,
                 let definition = try? currentDefinition(for: chainID),
                 hasCompletedTrace(chainID) == false
@@ -1216,7 +1243,10 @@ public final class NoonmarkEngine {
 
     public func completedPool() -> [CompletedPoolItem] {
         traces.values
-            .filter { $0.status == .completed }
+            .filter {
+                $0.status == .completed
+                    && chains[$0.chainID]?.cycleMembership == nil
+            }
             .compactMap { trace in
                 guard let definition = definitions[trace.definitionID] else { return nil }
                 return CompletedPoolItem(
@@ -1240,6 +1270,7 @@ public final class NoonmarkEngine {
                 guard
                     let trace = traces[subtask.traceID],
                     trace.formsDayHistory,
+                    chains[trace.chainID]?.cycleMembership == nil,
                     let definition = definitions[trace.definitionID]
                 else {
                     return nil
@@ -1383,6 +1414,11 @@ public final class NoonmarkEngine {
 
     public func returnToPool(traceID: DayTraceID, today: LocalDate, now: Date = Date()) throws {
         var trace = try trace(traceID)
+        guard chains[trace.chainID]?.cycleMembership == nil else {
+            throw NoonmarkError.invalidTransition(
+                "recurring occurrences cannot return to the task pool"
+            )
+        }
         try ensureUnlockedDay(trace.date)
 
         if trace.date > today {
@@ -3169,14 +3205,9 @@ private extension NoonmarkEngine {
 
     func isInTaskPool(_ chainID: TaskChainID) -> Bool {
         guard let chain = chains[chainID],
-              chain.state == .active
+              chain.state == .active,
+              chain.cycleMembership == nil
         else {
-            return false
-        }
-        if let membership = chain.cycleMembership,
-           taskCycleSeries[membership.seriesID]?
-           .isOccurrenceSkipped(membership.occurrenceDate) == true
-        {
             return false
         }
 

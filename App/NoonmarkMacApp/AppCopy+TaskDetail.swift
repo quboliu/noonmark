@@ -32,8 +32,8 @@ extension AppCopy {
             english: "Select a task to view details and scheduling actions."
         ),
         NoonmarkStore.Page.future.rawValue: .init(
-            chinese: "选中计划查看详情，可改期或回池。",
-            english: "Select a plan to view details, reschedule it, or return it to the pool."
+            chinese: "选中具体计划查看详情与改期；普通计划还可回池。",
+            english: "Select a dated plan to inspect or reschedule it; ordinary plans can also return to the pool."
         ),
         NoonmarkStore.Page.unfinished.rawValue: .init(
             chinese: "选中任务链查看未完成明细。",
@@ -375,10 +375,17 @@ extension AppCopy {
     var dateTitle: String { language == .chinese ? "日期" : "Date" }
     var priorityTitle: String { language == .chinese ? "优先级" : "Priority" }
     var notDue: String { language == .chinese ? "未到期" : "Not due" }
-    var futurePlanNotice: String {
-        language == .chinese
-            ? "未来计划可改期、调整优先级或回池；到达当天前不能标记完成。"
-            : "Upcoming plans can be rescheduled, reordered, or returned to the pool; they cannot be completed early."
+    func futurePlanNotice(isRecurringOccurrence: Bool) -> String {
+        switch (language, isRecurringOccurrence) {
+        case (.chinese, true):
+            "这是重复计划的具体日期实例，可改期或调整优先级；不能回到任务池，也不能提前完成。"
+        case (.chinese, false):
+            "普通未来计划可改期、调整优先级或回池；到达当天前不能标记完成。"
+        case (.english, true):
+            "This is a dated recurring occurrence. It can be rescheduled or reordered, but cannot return to the pool or be completed early."
+        case (.english, false):
+            "Ordinary upcoming plans can be rescheduled, reordered, or returned to the pool; they cannot be completed early."
+        }
     }
 
     var abandonedChainHistoryNotice: String {

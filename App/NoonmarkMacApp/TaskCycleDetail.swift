@@ -120,7 +120,7 @@ struct TaskCycleDetail: View {
                     Text(
                         store.copy.taskCycleSummary(
                             track,
-                            collection: collection
+                            collection: .recurringPlans
                         )
                     )
                     .font(.noonmarkSystem(size: 11.5))
@@ -174,23 +174,6 @@ struct TaskCycleDetail: View {
             ) {}
         } message: {
             Text(store.copy.stopRecurringTaskConfirmation)
-        }
-    }
-
-    private var collection: TaskCycleCollection {
-        switch store.page {
-        case .recurring:
-            .recurringPlans
-        case .pool:
-            .pool
-        case .future:
-            .future
-        case .unfinished:
-            .unfinished
-        case .completed:
-            .completed
-        case .day, .calendar, .zhulong, .settings:
-            .pool
         }
     }
 

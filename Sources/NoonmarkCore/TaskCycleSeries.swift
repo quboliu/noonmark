@@ -650,24 +650,21 @@ public struct TaskCycleTrackDay: Equatable, Identifiable, Sendable {
         switch collection {
         case .recurringPlans:
             occurrenceTarget
-        case .pool:
-            occurrenceTarget
-        case .future:
-            futurePlanTarget
-        case .unfinished:
-            unfinishedTarget
-        case .completed:
-            completedTarget
+        case .pool, .future, .unfinished, .completed:
+            nil
         }
     }
 
     public func navigationTarget(
         in collection: TaskCycleCollection
     ) -> TaskCycleTraceTarget? {
+        guard collection == .recurringPlans else {
+            return nil
+        }
         guard state != .skipped, state != .returnedToPool else {
             return nil
         }
-        return semanticTarget(in: collection) ?? occurrenceTarget
+        return occurrenceTarget
     }
 
     public func presentationState(
@@ -737,14 +734,8 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
         switch collection {
         case .recurringPlans:
             true
-        case .pool:
-            pooledOccurrenceCount > 0
-        case .future:
-            futurePlanCount > 0
-        case .unfinished:
-            unfinishedCount > 0
-        case .completed:
-            completedCount > 0
+        case .pool, .future, .unfinished, .completed:
+            false
         }
     }
 }

@@ -24,20 +24,23 @@ struct NoonmarkDemoFixtureTests {
             fixture.engine.taskCycleTracks(today: anchorDate).first
         )
         #expect(track.days.count == 13)
-        #expect(track.appears(in: .future))
-        #expect(track.appears(in: .unfinished))
-        #expect(track.appears(in: .completed))
-        #expect(track.appears(in: .pool))
+        #expect(track.appears(in: .recurringPlans))
+        #expect(track.appears(in: .future) == false)
+        #expect(track.appears(in: .unfinished) == false)
+        #expect(track.appears(in: .completed) == false)
+        #expect(track.appears(in: .pool) == false)
         #expect(fixture.report.taskCycleSeriesCount == 2)
-        #expect(fixture.report.taskCycleOccurrenceCount == 16)
+        #expect(fixture.report.taskCycleOccurrenceCount == 43)
         #expect(fixture.report.classifiedTaskCycleSeriesCount == 2)
         #expect(
             fixture.report.taskCycleSeriesWithPlannedSubtasksCount == 2
         )
         #expect(fixture.report.taskCyclePlanRevisionCount == 3)
         #expect(fixture.report.unstartedTaskCycleSeriesCount == 1)
-        #expect(fixture.report.pooledTaskCycleSeriesCount == 1)
-        #expect(fixture.report.futureOnlyTaskCycleSeriesCount == 1)
+        #expect(
+            fixture.report.visibleRecurringFutureOccurrenceCount == 16
+        )
+        #expect(fixture.report.recurringCollectionLeakCount == 0)
         #expect(
             fixture.engine.taskCycleTracks(
                 today: anchorDate,
@@ -48,7 +51,7 @@ struct NoonmarkDemoFixtureTests {
             fixture.engine.taskCycleTracks(
                 today: anchorDate,
                 collection: .pool
-            ).count == 1
+            ).isEmpty
         )
         #expect(fixture.report.deletableCategoryBoundaryCount > 0)
         #expect(
@@ -131,12 +134,10 @@ struct NoonmarkDemoFixtureTests {
             } == 5
         )
         #expect(
-            completedItems.count {
-                $0.trajectory.traces.count == 1
-                    && engine.chains[
-                        $0.trace.chainID
-                    ]?.cycleMembership != nil
-            } == 5
+            completedItems.allSatisfy {
+                engine.chains[$0.trace.chainID]?
+                    .cycleMembership == nil
+            }
         )
         #expect(
             completedItems.count {

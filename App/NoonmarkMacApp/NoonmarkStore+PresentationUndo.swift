@@ -309,7 +309,7 @@ extension NoonmarkStore {
         case .pool:
             return engine.taskPool().count
         case .future:
-            return engine.futurePlans(today: today).count
+            return visibleFuturePlanItems().count
         case .recurring:
             return engine.taskCycleSeries.count
         case .unfinished:
@@ -357,6 +357,8 @@ extension NoonmarkStore {
 
     func contextMenuActions(for trace: DayTrace) -> [TraceContextAction] {
         let isLocked = engine.days[trace.date]?.lockedAt != nil
+        let isRecurringOccurrence =
+            engine.chains[trace.chainID]?.cycleMembership != nil
         let completionCapability = try? engine.completionCapability(
             for: trace.id,
             today: today
@@ -367,7 +369,10 @@ extension NoonmarkStore {
                 actions.append(.markComplete)
             }
             actions.append(trace.pinOrder == nil ? .pinToTop : .unpin)
-            actions.append(contentsOf: [.deferTo, .changeToNewTask, .returnToPool])
+            actions.append(contentsOf: [.deferTo, .changeToNewTask])
+            if isRecurringOccurrence == false {
+                actions.append(.returnToPool)
+            }
             actions.append(.abandonChain)
             if engine.canDeleteNewCurrentDayTask(traceID: trace.id, today: today) {
                 actions.append(.deleteNewCurrentDayTask)
@@ -399,11 +404,14 @@ extension NoonmarkStore {
         }
 
         if trace.date > today, trace.status == .pending {
-            return [
+            var actions: [TraceContextAction] = [
                 trace.pinOrder == nil ? .pinToTop : .unpin,
-                .reschedule,
-                .returnToPool
+                .reschedule
             ]
+            if isRecurringOccurrence == false {
+                actions.append(.returnToPool)
+            }
+            return actions
         }
 
         return []

@@ -5,10 +5,7 @@ struct RecurringPlansPage: View {
     @EnvironmentObject private var store: NoonmarkStore
 
     private var tracks: [TaskCycleTrack] {
-        store.engine.taskCycleTracks(
-            today: store.today,
-            collection: .recurringPlans
-        )
+        store.engine.taskCycleTracks(today: store.today)
     }
 
     var body: some View {
@@ -21,10 +18,7 @@ struct RecurringPlansPage: View {
             TaskSelectionClearingScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(tracks) { track in
-                        TaskCycleTrackRow(
-                            track: track,
-                            collection: .recurringPlans
-                        )
+                        TaskCycleTrackRow(track: track)
                     }
                     if tracks.isEmpty {
                         EmptyState(

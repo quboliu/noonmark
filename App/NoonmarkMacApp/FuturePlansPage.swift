@@ -16,18 +16,9 @@ import UniformTypeIdentifiers
 
 struct FuturePlansPage: View {
     @EnvironmentObject private var store: NoonmarkStore
-    var cycleTracks: [TaskCycleTrack] {
-        store.engine.taskCycleTracks(
-            today: store.today,
-            collection: .future
-        )
-    }
 
     var plans: [FuturePlanItem] {
-        store.standaloneCollectionItems(
-            store.engine.futurePlans(today: store.today),
-            chainID: \.trace.chainID
-        )
+        store.visibleFuturePlanItems()
     }
 
     var grouped: [(LocalDate, [FuturePlanItem])] {
@@ -38,14 +29,15 @@ struct FuturePlansPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navFuture, subtitle: store.copy.futureSubtitle)
+            PageHeader(
+                title: store.copy.navFuture,
+                subtitle: store.copy.futureSubtitle
+            ) {
+                RecurringFutureVisibilityMenu()
+            }
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    TaskCycleSection(
-                        tracks: cycleTracks,
-                        collection: .future
-                    )
                     ForEach(grouped, id: \.0) { date, items in
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 10) {
@@ -67,7 +59,7 @@ struct FuturePlansPage: View {
                             }
                         }
                     }
-                    if plans.isEmpty && cycleTracks.isEmpty {
+                    if plans.isEmpty {
                         EmptyState(
                             kind: .futurePlans,
                             text: store.copy.emptyFuture,
@@ -90,10 +82,23 @@ struct FuturePlanRow: View {
     @EnvironmentObject private var store: NoonmarkStore
     let item: FuturePlanItem
 
+    private var isRecurringOccurrence: Bool {
+        store.engine.chains[item.trace.chainID]?.cycleMembership != nil
+    }
+
     var body: some View {
         let selected = store.isWorkspaceItemSelected(.futureTrace(item.trace.id))
         HStack(spacing: 10) {
-            PlanningGlyph(systemName: "calendar.badge.clock", color: Theme.navFuture)
+            PlanningGlyph(
+                systemName:
+                isRecurringOccurrence
+                    ? "repeat"
+                    : "calendar.badge.clock",
+                color:
+                isRecurringOccurrence
+                    ? Theme.navRecurring
+                    : Theme.navFuture
+            )
             VStack(alignment: .leading, spacing: 0) {
                 MarkdownInlineText(store.copy.displayTaskTitle(item.definition.title))
                     .font(.noonmarkSystem(size: 13, weight: .semibold))
@@ -204,6 +209,57 @@ struct FuturePlanRow: View {
 
     var canMoveDown: Bool {
         store.canMovePriority(item.trace.id, delta: 1)
+    }
+}
+
+private struct RecurringFutureVisibilityMenu: View {
+    @EnvironmentObject private var store: NoonmarkStore
+
+    var body: some View {
+        Menu {
+            Picker(
+                store.copy.recurringFutureVisibilityTitle,
+                selection: Binding(
+                    get: {
+                        store.recurringFuturePlanVisibility
+                    },
+                    set: {
+                        store.setRecurringFuturePlanVisibility($0)
+                    }
+                )
+            ) {
+                ForEach(
+                    RecurringFuturePlanVisibility.allCases,
+                    id: \.self
+                ) { visibility in
+                    Text(
+                        store.copy.recurringFutureVisibilityOption(
+                            visibility.dayCount
+                        )
+                    )
+                    .tag(visibility)
+                }
+            }
+        } label: {
+            Label(
+                store.copy.recurringFutureVisibilityOption(
+                    store.recurringFuturePlanVisibility.dayCount
+                ),
+                systemImage: "repeat"
+            )
+            .font(.noonmarkSystem(size: 11.5, weight: .medium))
+            .foregroundStyle(Theme.text2)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityIdentifier("future.recurring-visibility")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "future.recurring-visibility",
+                verificationText:
+                "\(store.recurringFuturePlanVisibility.dayCount)"
+            )
+        }
     }
 }
 

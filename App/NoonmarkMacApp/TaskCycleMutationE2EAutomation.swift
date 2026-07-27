@@ -107,7 +107,7 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
     static let emptyConvertedTitle = "E2E UI 空标题转重复"
     static let skippedTitle = "E2E UI 跳过重复"
     static let stoppedTitle = "E2E UI 停止重复"
-    static let returnedTitle = "E2E UI 回池重复"
+    static let isolatedTitle = "E2E UI 隔离重复"
     static let detailLabelName = "E2E详情标签"
     static let plannedSubtaskTitle = "E2E详情步骤"
     static let partialHierarchyTitle = "E2E 部分子任务层级"
@@ -282,21 +282,15 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                       endDate: followingDay,
                       schedule: .daily
                   ), store.createTaskCycleSeries(
-                      title: TaskCycleMutationE2EAutomation.returnedTitle,
+                      title: TaskCycleMutationE2EAutomation.isolatedTitle,
                       startDate: tomorrow,
                       endDate: tomorrow,
                       schedule: .daily
-                  ), let returnedSeries = series(
-                      titled: TaskCycleMutationE2EAutomation.returnedTitle
-                  ), let returnedTrace = occurrenceTrace(
-                      seriesID: returnedSeries.id,
-                      occurrenceDate: tomorrow
                   )
             else {
                 finish("failed: 无法建立重复任务 UI mutation fixture")
                 return
             }
-            store.returnToPool(returnedTrace.id)
             store.page = .pool
             waitFor("任务池 slash command 输入框") {
                 guard AppViewTreeE2E.activateMainWindow(),
@@ -1119,7 +1113,7 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                                 self.waitFor("尚未开始重复任务周期设置关闭") {
                                     AppViewTreeE2E.hasNoAttachedSheets()
                                 } onSuccess: { [self] in
-                                    self.openReturnedOccurrence()
+                                    self.skipOccurrence()
                                 }
                             }
                         }
@@ -1138,70 +1132,6 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                 }
                 .max { $0.sequence < $1.sequence }?
                 .title
-        }
-
-        private func openReturnedOccurrence() {
-            guard let target = cycleDayTarget(
-                title: TaskCycleMutationE2EAutomation.returnedTitle,
-                state: .returnedToPool
-            ) else {
-                finish("failed: 缺少回池 occurrence")
-                return
-            }
-            expandTrackIfNeeded(target)
-            waitFor("回池 occurrence 轨迹") {
-                AppViewTreeE2E.view(
-                    identifier: target.recurringDayIdentifier
-                )
-                    != nil
-            } onSuccess: { [self] in
-                waitFor("回池 occurrence 详情入口") {
-                    AppViewTreeE2E.click(
-                        identifier: target.recurringDayIdentifier
-                    )
-                } onSuccess: { [self] in
-                    waitFor("回池 occurrence 任务详情") {
-                        self.store.selectedPoolChainID == target.chainID
-                            && self.store.isDetailRailExpanded
-                            && AppViewTreeE2E.view(
-                                identifier: target.poolDayIdentifier
-                            ) != nil
-                    } onSuccess: { [self] in
-                        scheduleReturnedOccurrence(target)
-                    }
-                }
-            }
-        }
-
-        private func scheduleReturnedOccurrence(
-            _ target: CycleDayTarget
-        ) {
-            waitFor("回池 occurrence 今日排期菜单") {
-                guard let dayView = AppViewTreeE2E.view(
-                    identifier: target.poolDayIdentifier
-                ) else {
-                    return false
-                }
-                return AppViewTreeE2E.selectFirstContextMenuItem(
-                    of: dayView
-                )
-            } onSuccess: { [self] in
-                waitFor("回池 occurrence 今日排期结果") {
-                    self.store.engine.traces.values.contains {
-                        $0.chainID == target.chainID
-                            && $0.date == self.store.today
-                            && $0.status == .pending
-                    }
-                } onSuccess: { [self] in
-                    waitFor("返回重复计划处理未来实例") {
-                        AppViewTreeE2E.click(
-                            identifier: "sidebar.nav.recurring"
-                        )
-                    } onSuccess: { [self] in
-                        skipOccurrence()
-                    }
-                }
-            }
         }
 
         private func skipOccurrence() {
@@ -1522,23 +1452,6 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
             }
         }
 
-        private func occurrenceTrace(
-            seriesID: TaskCycleSeriesID,
-            occurrenceDate: LocalDate
-        ) -> DayTrace? {
-            guard let chainID = store.engine.chains.values.first(where: {
-                $0.cycleMembership?.seriesID == seriesID
-                    && $0.cycleMembership?.occurrenceDate
-                    == occurrenceDate
-            })?.id else {
-                return nil
-            }
-            return store.engine.traces.values.first {
-                $0.chainID == chainID
-                    && $0.date == occurrenceDate
-            }
-        }
-
         private func cycleDayTarget(
             title: String,
             state: TaskCycleTrackDayState
@@ -1638,23 +1551,8 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
         }
 
         var recurringDayIdentifier: String {
-            dayIdentifier(on: .recurring)
+            "task-cycle-day.recurring.\(seriesID.description).\(occurrenceDate.description).\(state.rawValue)"
         }
-
-        var poolDayIdentifier: String {
-            dayIdentifier(on: .pool)
-        }
-
-        private func dayIdentifier(
-            on surface: TaskCycleCollectionSurface
-        ) -> String {
-            "task-cycle-day.\(surface.rawValue).\(seriesID.description).\(occurrenceDate.description).\(state.rawValue)"
-        }
-    }
-
-    private enum TaskCycleCollectionSurface: String {
-        case recurring
-        case pool
     }
 }
 
@@ -1736,20 +1634,27 @@ struct TaskCycleMutationRestartE2EAutomation:
         seriesByTitle[
             TaskCycleMutationE2EAutomation.stoppedTitle
         ]?.stoppedAfterDate == store.today,
-        let returned = seriesByTitle[
-            TaskCycleMutationE2EAutomation.returnedTitle
+        let isolated = seriesByTitle[
+            TaskCycleMutationE2EAutomation.isolatedTitle
         ],
-        let returnedChainID = store.engine.chains.values.first(where: {
-            $0.cycleMembership?.seriesID == returned.id
+        let isolatedChainID = store.engine.chains.values.first(where: {
+            $0.cycleMembership?.seriesID == isolated.id
         })?.id,
         store.engine.traces.values.contains(where: {
-            $0.chainID == returnedChainID
-                && $0.date == store.today
+            $0.chainID == isolatedChainID
+                && $0.date == NoonmarkStore.offset(store.today, by: 1)
                 && $0.status == .pending
         }),
         store.engine.taskPool().contains(where: {
-            $0.chain.id == returnedChainID
-        }) == false
+            $0.chain.id == isolatedChainID
+        }) == false,
+        store.engine.unfinishedPool().allSatisfy({
+            $0.chain.cycleMembership == nil
+        }),
+        store.engine.completedPool().allSatisfy({
+            store.engine.chains[$0.trace.chainID]?
+                .cycleMembership == nil
+        })
         else {
             finish("failed: 重启后重复任务 UI mutation 未完整保留")
             return

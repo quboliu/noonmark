@@ -206,8 +206,13 @@ extension NoonmarkStore {
     var canBulkReturnSelectionToPool: Bool {
         let traceIDs = selectedFutureTraceIDs
         return traceIDs.count > 1 && traceIDs.allSatisfy { traceID in
-            guard let trace = engine.traces[traceID] else { return false }
-            return trace.date > today && trace.status == .pending
+            guard let trace = engine.traces[traceID],
+                  engine.chains[trace.chainID]?.cycleMembership == nil
+            else {
+                return false
+            }
+            return trace.date > today
+                && trace.status == .pending
         }
     }
 
@@ -375,17 +380,9 @@ extension NoonmarkStore {
                 tracesByDescription[$0.id].map(WorkspaceSelectionItem.dayTrace)
             }
         case .pool:
-            return engine.taskCycleTracks(
-                today: today,
-                collection: .pool
-            ).map { .taskCycleSeries($0.id) }
-                + engine.taskPool().map { .poolTask($0.chain.id) }
+            return engine.taskPool().map { .poolTask($0.chain.id) }
         case .future:
-            return engine.taskCycleTracks(
-                today: today,
-                collection: .future
-            ).map { .taskCycleSeries($0.id) }
-                + engine.futurePlans(today: today).map {
+            return visibleFuturePlanItems().map {
                 .futureTrace($0.trace.id)
             }
         case .recurring:
@@ -394,23 +391,12 @@ extension NoonmarkStore {
                 collection: .recurringPlans
             ).map { .taskCycleSeries($0.id) }
         case .unfinished:
-            return engine.taskCycleTracks(
-                today: today,
-                collection: .unfinished
-            ).map { .taskCycleSeries($0.id) }
-                + engine.unfinishedPool().map {
+            return engine.unfinishedPool().map {
                 .unfinishedTask($0.chain.id)
             }
         case .completed:
-            let hierarchies = standaloneCollectionItems(
-                engine.completedTaskHierarchies(),
-                chainID: \.chain.id
-            )
-            return engine.taskCycleTracks(
-                today: today,
-                collection: .completed
-            ).map { .taskCycleSeries($0.id) }
-                + hierarchies.flatMap { hierarchy in
+            return engine.completedTaskHierarchies()
+                .flatMap { hierarchy in
                 let parent = completedHierarchyParentSelection(
                     hierarchy
                 ).map { [$0] } ?? []
@@ -514,7 +500,7 @@ extension NoonmarkStore {
     }
 
     private func selectLaunchFutureItem() {
-        if let trace = engine.futurePlans(today: today).first?.trace {
+        if let trace = visibleFuturePlanItems().first?.trace {
             selectTrace(trace.id)
         }
     }

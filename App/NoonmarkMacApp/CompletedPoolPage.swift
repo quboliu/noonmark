@@ -29,18 +29,8 @@ struct CompletedPoolPage: View {
         )
     }
 
-    var cycleTracks: [TaskCycleTrack] {
-        store.engine.taskCycleTracks(
-            today: store.today,
-            collection: .completed
-        )
-    }
-
     var hierarchies: [CompletedTaskHierarchy] {
-        store.standaloneCollectionItems(
-            store.engine.completedTaskHierarchies(),
-            chainID: \.chain.id
-        )
+        store.engine.completedTaskHierarchies()
     }
 
     private var hierarchiesByID: [String: CompletedTaskHierarchy] {
@@ -83,10 +73,6 @@ struct CompletedPoolPage: View {
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    TaskCycleSection(
-                        tracks: cycleTracks,
-                        collection: .completed
-                    )
                     ForEach(presentationSections, id: \.id) { section in
                         if presentationPreference.organization == .grouped {
                             TaskCollectionSectionHeader(section: section, count: section.items.count)
@@ -99,7 +85,7 @@ struct CompletedPoolPage: View {
                             }
                         }
                     }
-                    if hierarchies.isEmpty && cycleTracks.isEmpty {
+                    if hierarchies.isEmpty {
                         EmptyState(kind: .completedPool, text: store.copy.emptyCompleted)
                             .padding(.top, 40)
                     }

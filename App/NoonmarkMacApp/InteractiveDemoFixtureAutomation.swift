@@ -352,10 +352,32 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 context: context,
                 verificationCase: verificationCase
             )
+        let recurringProjectionIsValid: Bool = {
+            switch verificationCase.page {
+            case .future:
+                return AppViewTreeE2E.view(
+                    identifier: "future.recurring-visibility"
+                ).flatMap(AppViewTreeE2E.verificationText) == "15"
+                    && context.store.visibleFuturePlanItems().count {
+                        context.engine.chains[$0.trace.chainID]?
+                            .cycleMembership != nil
+                    } == 16
+                    && AppViewTreeE2E.identifiers(
+                        withPrefix: "task-cycle-track."
+                    )?.isEmpty == true
+            case .pool, .unfinished, .completed:
+                return AppViewTreeE2E.identifiers(
+                    withPrefix: "task-cycle-track."
+                )?.isEmpty == true
+            case .recurring, .day, .calendar, .zhulong, .settings:
+                return true
+            }
+        }()
         guard AppViewTreeE2E.activateMainWindow(),
               labelIdentifiers?.isEmpty == false,
               categoryPlacementIsValid,
-              completedHierarchyIsValid
+              completedHierarchyIsValid,
+              recurringProjectionIsValid
         else {
             retryTaskCollectionCategoryVisibility(
                 context: context,
@@ -1133,10 +1155,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         [
             DemoCollectionCheckCase(
                 page: .pool,
-                rowPrefixes: [
-                    "classification.pool-row.",
-                    "classification.task-cycle-row."
-                ],
+                rowPrefixes: ["classification.pool-row."],
                 organization: .grouped
             ),
             DemoCollectionCheckCase(
@@ -1146,10 +1165,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             ),
             DemoCollectionCheckCase(
                 page: .future,
-                rowPrefixes: [
-                    "classification.future-row.",
-                    "classification.task-cycle-row."
-                ],
+                rowPrefixes: ["classification.future-row."],
                 organization: .flat
             ),
             DemoCollectionCheckCase(
@@ -1161,18 +1177,12 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             ),
             DemoCollectionCheckCase(
                 page: .unfinished,
-                rowPrefixes: [
-                    "classification.unfinished-row.",
-                    "classification.task-cycle-row."
-                ],
+                rowPrefixes: ["classification.unfinished-row."],
                 organization: .flat
             ),
             DemoCollectionCheckCase(
                 page: .completed,
-                rowPrefixes: [
-                    "classification.completed-row.",
-                    "classification.task-cycle-row."
-                ],
+                rowPrefixes: ["classification.completed-row."],
                 organization: .grouped
             )
         ]
@@ -1183,11 +1193,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             DemoCycleCheckCase(
                 page: .recurring,
                 collection: .recurringPlans
-            ),
-            DemoCycleCheckCase(page: .pool, collection: .pool),
-            DemoCycleCheckCase(page: .future, collection: .future),
-            DemoCycleCheckCase(page: .unfinished, collection: .unfinished),
-            DemoCycleCheckCase(page: .completed, collection: .completed)
+            )
         ]
     }
 
@@ -1847,23 +1853,15 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 && mixedStatusSectionCount > 0
                 && statusSinkingVerified
         let completedItems = engine.completedPool()
-        let ordinaryCompletedItems = completedItems.filter {
-            engine.chains[$0.trace.chainID]?.cycleMembership == nil
-        }
-        let cycleCompletedItems = completedItems.filter {
-            engine.chains[$0.trace.chainID]?.cycleMembership != nil
-        }
         let singleDayCompletedTaskCount = completedItems.count {
             $0.trajectory.traces.count == 1
         }
         let ordinarySingleDayCompletedTaskCount =
-            ordinaryCompletedItems.count {
-                $0.trajectory.traces.count == 1
-            }
-        let cycleSingleDayCompletedTaskCount =
-            cycleCompletedItems.count {
-                $0.trajectory.traces.count == 1
-            }
+            singleDayCompletedTaskCount
+        let cycleSingleDayCompletedTaskCount = completedItems.count {
+            engine.chains[$0.trace.chainID]?.cycleMembership != nil
+                && $0.trajectory.traces.count == 1
+        }
         let multiDayCompletedTaskCount = completedItems.count {
             $0.trajectory.traces.count
                 >= MacUICompletedPoolRowLayout.minimumVisibleTrajectoryNodeCount
@@ -1883,8 +1881,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                     && $0.completedChildren.isEmpty == false
             }
         let completedPoolRowHierarchyVerified =
-            ordinarySingleDayCompletedTaskCount > 0
-                && cycleSingleDayCompletedTaskCount > 0
+            singleDayCompletedTaskCount > 0
+                && completedItems.allSatisfy {
+                    engine.chains[$0.trace.chainID]?
+                        .cycleMembership == nil
+                }
                 && multiDayCompletedTaskCount > 0
                 && hasOpenParentWithCompletedChildren
                 && hasCompletedParentWithCompletedChildren
@@ -2088,18 +2089,7 @@ private struct DemoCollectionCheckCase {
     }
 
     var taskCycleCollection: TaskCycleCollection? {
-        switch page {
-        case .recurring:
-            .recurringPlans
-        case .pool:
-            .pool
-        case .unfinished:
-            .unfinished
-        case .completed:
-            .completed
-        case .day, .future, .calendar, .zhulong, .settings:
-            nil
-        }
+        page == .recurring ? .recurringPlans : nil
     }
 }
 

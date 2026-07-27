@@ -69,8 +69,8 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let taskCycleSeriesWithPlannedSubtasksCount: Int
     public let taskCyclePlanRevisionCount: Int
     public let unstartedTaskCycleSeriesCount: Int
-    public let pooledTaskCycleSeriesCount: Int
-    public let futureOnlyTaskCycleSeriesCount: Int
+    public let visibleRecurringFutureOccurrenceCount: Int
+    public let recurringCollectionLeakCount: Int
     public let openParentWithCompletedChildrenCount: Int
     public let completedParentWithCompletedChildrenCount: Int
 
@@ -157,13 +157,13 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             into: &missing
         )
         require(
-            pooledTaskCycleSeriesCount > 0,
-            "真实回池实例进入任务池重复投影",
+            visibleRecurringFutureOccurrenceCount > 0,
+            "未来计划展示窗口内的重复日实例",
             into: &missing
         )
         require(
-            futureOnlyTaskCycleSeriesCount > 0,
-            "仅有未来义务的重复计划不进入任务池",
+            recurringCollectionLeakCount == 0,
+            "重复实例不外溢到任务池、未完成或已完成",
             into: &missing
         )
         require(
@@ -269,15 +269,26 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
                 today: anchorDate
             )
         }
-        let cycleTracks = engine.taskCycleTracks(today: anchorDate)
-        pooledTaskCycleSeriesCount = cycleTracks.count {
-            $0.pooledOccurrenceCount > 0 && $0.appears(in: .pool)
-        }
-        futureOnlyTaskCycleSeriesCount = cycleTracks.count {
-            $0.futurePlanCount > 0
-                && $0.pooledOccurrenceCount == 0
-                && $0.appears(in: .pool) == false
-        }
+        visibleRecurringFutureOccurrenceCount = engine
+            .visibleFuturePlans(
+                today: anchorDate,
+                recurringVisibilityDays: 15
+            )
+            .count {
+                engine.chains[$0.trace.chainID]?
+                    .cycleMembership != nil
+            }
+        recurringCollectionLeakCount =
+            engine.taskPool().count {
+                $0.chain.cycleMembership != nil
+            }
+            + engine.unfinishedPool().count {
+                $0.chain.cycleMembership != nil
+            }
+            + engine.completedPool().count {
+                engine.chains[$0.trace.chainID]?
+                    .cycleMembership != nil
+            }
         let ordinaryCompletedHierarchies =
             engine.completedTaskHierarchies().filter {
                 $0.chain.cycleMembership == nil
@@ -372,26 +383,6 @@ private struct DemoStory {
             today: dates[0],
             now: time(on: dates[0], hour: 6, minute: 46)
         )
-        let pooledOccurrenceDate = try DemoCalendar.offset(
-            dates[9],
-            by: 1
-        )
-        guard let pooledChain = engine.chains.values.first(where: {
-            $0.cycleMembership?.seriesID == seriesID
-                && $0.cycleMembership?.occurrenceDate
-                == pooledOccurrenceDate
-        }), let pooledTrace = engine.traces.values.first(where: {
-            $0.chainID == pooledChain.id
-        }) else {
-            throw NoonmarkDemoFixtureError.incompleteCoverage([
-                "周期系列真实回池实例"
-            ])
-        }
-        try engine.returnToPool(
-            traceID: pooledTrace.id,
-            today: dates[0],
-            now: time(on: dates[0], hour: 6, minute: 47)
-        )
         try engine.skipTaskCycleOccurrence(
             seriesID: seriesID,
             occurrenceDate: try DemoCalendar.offset(dates[9], by: 2),
@@ -472,7 +463,7 @@ private struct DemoStory {
             ],
             startDate: startDate,
             schedule: .daily,
-            endCondition: .durationDays(3),
+            endCondition: .durationDays(30),
             today: dates[0],
             now: createdAt
         )

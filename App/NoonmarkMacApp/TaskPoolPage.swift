@@ -69,18 +69,8 @@ struct TaskPoolPage: View {
         )
     }
 
-    var cycleTracks: [TaskCycleTrack] {
-        store.engine.taskCycleTracks(
-            today: store.today,
-            collection: .pool
-        )
-    }
-
     var tasks: [PoolTask] {
-        store.standaloneCollectionItems(
-            store.engine.taskPool(),
-            chainID: \.chain.id
-        )
+        store.engine.taskPool()
     }
 
     private var tasksByID: [String: PoolTask] {
@@ -121,10 +111,6 @@ struct TaskPoolPage: View {
                         .padding(.bottom, 12)
 
                     LazyVStack(spacing: 0) {
-                        TaskCycleSection(
-                            tracks: cycleTracks,
-                            collection: .pool
-                        )
                         ForEach(presentationSections, id: \.id) { section in
                             if presentationPreference.organization == .grouped {
                                 VStack(alignment: .leading, spacing: 0) {
@@ -146,7 +132,7 @@ struct TaskPoolPage: View {
                                 }
                             }
                         }
-                        if tasks.isEmpty && cycleTracks.isEmpty {
+                        if tasks.isEmpty {
                             EmptyState(
                                 kind: .taskPool,
                                 text: store.copy.emptyPool,

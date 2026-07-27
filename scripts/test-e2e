@@ -3259,8 +3259,8 @@ run_task_cycle_mutation_probe() {
          FROM day_traces
          JOIN task_definitions
            ON task_definitions.id = day_traces.definition_id
-         WHERE task_definitions.title = 'E2E UI 回池重复'
-           AND day_traces.date = '2026-07-24'
+         WHERE task_definitions.title = 'E2E UI 隔离重复'
+           AND day_traces.date = '2026-07-25'
            AND day_traces.status = 'pending'),
         (SELECT count(*)
          FROM day_traces

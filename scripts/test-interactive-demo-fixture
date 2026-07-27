@@ -81,8 +81,8 @@ for expected in \
   '"taskPoolProviderBoundaryVerified" : true' \
   '"taskPoolProviderReportPresentationVerified" : true' \
   '"taskCyclePresentationVerified" : true' \
-  '"pooledTaskCycleSeriesCount" : 1' \
-  '"futureOnlyTaskCycleSeriesCount" : 1' \
+  '"visibleRecurringFutureOccurrenceCount" : 16' \
+  '"recurringCollectionLeakCount" : 0' \
   '"zhulongHeaderComposerHierarchyVerified" : true'; do
   if ! grep -Fq "$expected" "$result_path"; then
     echo "demo fixture manifest is missing: $expected" >&2
@@ -112,12 +112,12 @@ cycle_series_count="$(
 cycle_occurrence_count="$(
   plutil -extract core.taskCycleOccurrenceCount raw -o - "$result_path"
 )"
-if [[ "$single_day_completed_count" != "10" \
+if [[ "$single_day_completed_count" != "5" \
       || "$ordinary_single_day_completed_count" != "5" \
-      || "$cycle_single_day_completed_count" != "5" \
+      || "$cycle_single_day_completed_count" != "0" \
       || "$multi_day_completed_count" != "2" \
       || "$cycle_series_count" != "2" \
-      || "$cycle_occurrence_count" != "16" ]]; then
+      || "$cycle_occurrence_count" != "43" ]]; then
   echo "demo fixture task and cycle counts drifted" >&2
   sed -n '1,200p' "$result_path" >&2
   exit 1

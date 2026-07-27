@@ -1,13 +1,21 @@
 import NoonmarkCore
+import NoonmarkMacRuntime
 
 extension NoonmarkStore {
-    func standaloneCollectionItems<Item>(
-        _ items: [Item],
-        chainID: (Item) -> TaskChainID
-    ) -> [Item] {
-        items.filter {
-            engine.chains[chainID($0)]?.cycleMembership == nil
-        }
+    func visibleFuturePlanItems() -> [FuturePlanItem] {
+        engine.visibleFuturePlans(
+            today: today,
+            recurringVisibilityDays:
+            recurringFuturePlanVisibility.dayCount
+        )
+    }
+
+    func setRecurringFuturePlanVisibility(
+        _ visibility: RecurringFuturePlanVisibility
+    ) {
+        recurringFuturePlanVisibility = visibility
+        recurringFuturePlanVisibilityRepository.save(visibility)
+        clearSelection()
     }
 
     func completedHierarchyParentSelection(

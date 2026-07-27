@@ -44,6 +44,27 @@ public enum NoonmarkDemoFixtureError: Error, Equatable {
     case incompleteCoverage([String])
 }
 
+public struct NoonmarkDemoTaskCycleLifecycleCounts: Codable, Equatable,
+    Sendable
+{
+    public let active: Int
+    public let upcoming: Int
+    public let ended: Int
+    public let stopped: Int
+
+    public init(
+        active: Int,
+        upcoming: Int,
+        ended: Int,
+        stopped: Int
+    ) {
+        self.active = active
+        self.upcoming = upcoming
+        self.ended = ended
+        self.stopped = stopped
+    }
+}
+
 public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let storyDates: [String]
     public let dayTodoCount: Int
@@ -69,7 +90,8 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let taskCycleSeriesWithPlannedSubtasksCount: Int
     public let taskCyclePlanRevisionCount: Int
     public let unstartedTaskCycleSeriesCount: Int
-    public let taskCycleLifecycleCounts: [String: Int]
+    public let taskCycleLifecycleCounts:
+        NoonmarkDemoTaskCycleLifecycleCounts
     public let visibleRecurringFutureOccurrenceCount: Int
     public let recurringCollectionLeakCount: Int
     public let openParentWithCompletedChildrenCount: Int
@@ -136,47 +158,55 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             "跨页面任务描述",
             into: &missing
         )
-        require(taskCycleSeriesCount > 0, "周期系列非空", into: &missing)
         require(
-            classifiedTaskCycleSeriesCount > 0,
-            "重复任务父项包含分组与标签",
+            taskCycleSeriesCount == 4,
+            "四条重复计划父项",
             into: &missing
         )
         require(
-            taskCycleSeriesWithPlannedSubtasksCount > 0,
-            "重复任务父项包含规划子任务",
+            taskCycleOccurrenceCount == 57,
+            "五十七个重复计划日实例",
             into: &missing
         )
         require(
-            taskCyclePlanRevisionCount > taskCycleSeriesCount,
-            "重复任务包含向前生效的规则修订",
+            classifiedTaskCycleSeriesCount == 2,
+            "两条重复任务父项包含分组与标签",
             into: &missing
         )
         require(
-            unstartedTaskCycleSeriesCount > 0,
-            "尚未开始的重复任务可调整开始日期",
+            taskCycleSeriesWithPlannedSubtasksCount == 2,
+            "两条重复任务父项包含规划子任务",
             into: &missing
         )
-        for lifecycle in ["active", "upcoming", "ended", "stopped"] {
-            require(
-                taskCycleLifecycleCounts[lifecycle, default: 0] > 0,
-                "重复计划生命周期 \(lifecycle)",
-                into: &missing
-            )
-        }
         require(
-            visibleRecurringFutureOccurrenceCount > 0,
-            "未来计划展示窗口内的重复日实例",
+            taskCyclePlanRevisionCount == 5,
+            "五条重复计划修订事实",
+            into: &missing
+        )
+        require(
+            unstartedTaskCycleSeriesCount == 1,
+            "一条尚未开始的重复任务可调整开始日期",
+            into: &missing
+        )
+        require(
+            taskCycleLifecycleCounts
+                == NoonmarkDemoTaskCycleLifecycleCounts(
+                    active: 1,
+                    upcoming: 1,
+                    ended: 1,
+                    stopped: 1
+                ),
+            "重复计划四态各一条",
+            into: &missing
+        )
+        require(
+            visibleRecurringFutureOccurrenceCount == 16,
+            "未来计划展示窗口内的十六个重复日实例",
             into: &missing
         )
         require(
             recurringCollectionLeakCount == 0,
             "重复实例不外溢到任务池、未完成或已完成",
-            into: &missing
-        )
-        require(
-            taskCycleOccurrenceCount >= 10,
-            "周期系列覆盖完整十天轨迹",
             into: &missing
         )
         require(
@@ -277,21 +307,29 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
                 today: anchorDate
             )
         }
-        taskCycleLifecycleCounts = engine.taskCycleTracks(
-            today: anchorDate
-        ).reduce(into: [:]) { counts, track in
-            let key = switch track.lifecycle {
+        var activeCycleCount = 0
+        var upcomingCycleCount = 0
+        var endedCycleCount = 0
+        var stoppedCycleCount = 0
+        for track in engine.taskCycleTracks(today: anchorDate) {
+            switch track.lifecycle {
             case .active:
-                "active"
+                activeCycleCount += 1
             case .upcoming:
-                "upcoming"
+                upcomingCycleCount += 1
             case .ended:
-                "ended"
+                endedCycleCount += 1
             case .stopped:
-                "stopped"
+                stoppedCycleCount += 1
             }
-            counts[key, default: 0] += 1
         }
+        taskCycleLifecycleCounts =
+            NoonmarkDemoTaskCycleLifecycleCounts(
+                active: activeCycleCount,
+                upcoming: upcomingCycleCount,
+                ended: endedCycleCount,
+                stopped: stoppedCycleCount
+            )
         visibleRecurringFutureOccurrenceCount = engine
             .visibleFuturePlans(
                 today: anchorDate,

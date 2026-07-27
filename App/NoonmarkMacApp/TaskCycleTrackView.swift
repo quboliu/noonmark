@@ -32,18 +32,6 @@ struct TaskCycleTrackRow: View {
         )
     }
 
-    private var canStop: Bool {
-        guard track.futurePlanCount > 0 else {
-            return false
-        }
-        return switch track.lifecycle {
-        case .active, .upcoming:
-            true
-        case .ended, .stopped:
-            false
-        }
-    }
-
     private var accessibilityIdentifier: String {
         "task-cycle-track.recurring.\(track.id.description)"
     }
@@ -67,7 +55,7 @@ struct TaskCycleTrackRow: View {
                     HStack(spacing: 10) {
                     PlanningGlyph(
                         systemName: "repeat",
-                        color: lifecycleColor
+                        color: accent
                     )
                     MarkdownInlineText(
                         store.copy.displayTaskTitle(track.title)
@@ -185,7 +173,7 @@ struct TaskCycleTrackRow: View {
         )
         .workspaceSelectable(.taskCycleSeries(track.id))
         .contextMenu {
-            if canStop {
+            if track.canStop {
                 Button(store.copy.stopRecurringTask, role: .destructive) {
                     showingStopConfirmation = true
                 }

@@ -33,12 +33,13 @@ struct NoonmarkDemoFixtureTests {
         #expect(fixture.report.taskCyclePlanRevisionCount == 5)
         #expect(fixture.report.unstartedTaskCycleSeriesCount == 1)
         #expect(
-            fixture.report.taskCycleLifecycleCounts == [
-                "active": 1,
-                "upcoming": 1,
-                "ended": 1,
-                "stopped": 1
-            ]
+            fixture.report.taskCycleLifecycleCounts
+                == NoonmarkDemoTaskCycleLifecycleCounts(
+                    active: 1,
+                    upcoming: 1,
+                    ended: 1,
+                    stopped: 1
+                )
         )
         #expect(
             fixture.report.visibleRecurringFutureOccurrenceCount == 16

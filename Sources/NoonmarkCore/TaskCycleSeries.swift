@@ -657,6 +657,15 @@ public enum TaskCycleLifecycle: Equatable, Sendable {
     case active(nextDate: LocalDate?)
     case ended(endDate: LocalDate)
     case stopped(stopDate: LocalDate)
+
+    public var allowsPlanEditing: Bool {
+        switch self {
+        case .active, .upcoming:
+            true
+        case .ended, .stopped:
+            false
+        }
+    }
 }
 
 public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
@@ -665,6 +674,7 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
     public let startDate: LocalDate
     public let endDate: LocalDate
     public let schedule: TaskCycleSchedule
+    public let endCondition: TaskCycleEndCondition
     public let lifecycle: TaskCycleLifecycle
     public let days: [TaskCycleTrackDay]
 
@@ -674,6 +684,7 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
         startDate: LocalDate,
         endDate: LocalDate,
         schedule: TaskCycleSchedule,
+        endCondition: TaskCycleEndCondition,
         lifecycle: TaskCycleLifecycle,
         days: [TaskCycleTrackDay]
     ) {
@@ -682,6 +693,7 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
         self.startDate = startDate
         self.endDate = endDate
         self.schedule = schedule
+        self.endCondition = endCondition
         self.lifecycle = lifecycle
         self.days = days
     }
@@ -708,6 +720,19 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
 
     public var pooledOccurrenceCount: Int {
         days.count { $0.state == .returnedToPool }
+    }
+
+    public var completionGoalCount: Int {
+        switch endCondition {
+        case let .completionTarget(count, _):
+            count
+        case .durationDays, .onDate:
+            scheduledCount
+        }
+    }
+
+    public var canStop: Bool {
+        lifecycle.allowsPlanEditing && futurePlanCount > 0
     }
 }
 
@@ -761,7 +786,17 @@ private extension TaskCycleSeries {
         if today > endDate {
             return .ended(endDate: endDate)
         }
-        let nextDate = days.compactMap(\.futurePlanTarget?.date).min()
+        let nextDate = days.compactMap { day -> LocalDate? in
+            if let futurePlanTarget = day.futurePlanTarget {
+                return futurePlanTarget.date
+            }
+            guard day.date == today,
+                  day.state == .pendingToday
+            else {
+                return nil
+            }
+            return day.occurrenceTarget?.date ?? day.date
+        }.min()
         return .active(nextDate: nextDate)
     }
 }
@@ -1158,6 +1193,7 @@ public extension NoonmarkEngine {
                     startDate: trackStartDate,
                     endDate: trackEndDate,
                     schedule: series.schedule,
+                    endCondition: series.endCondition,
                     lifecycle: series.taskCycleLifecycle(
                         today: today,
                         days: days

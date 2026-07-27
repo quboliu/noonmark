@@ -308,8 +308,8 @@ extension AppCopy {
                 : "Active · Next \(date)"
         case .ended:
             return language == .chinese
-                ? "已结束 · 完成 \(track.completedCount)/\(track.scheduledCount) 次"
-                : "Ended · \(track.completedCount)/\(track.scheduledCount) completed"
+                ? "已结束 · 完成 \(track.completedCount)/\(track.completionGoalCount) 次"
+                : "Ended · \(track.completedCount)/\(track.completionGoalCount) completed"
         case let .stopped(stopDate):
             let date = displayDate(stopDate)
             return language == .chinese

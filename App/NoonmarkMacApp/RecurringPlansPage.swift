@@ -8,6 +8,16 @@ struct RecurringPlansPage: View {
         store.engine.taskCycleTracks(today: store.today)
     }
 
+    private var listVerificationText: String {
+        tracks.map {
+            "\($0.title)|"
+                + store.copy.taskCycleLifecycleSummary(
+                    $0,
+                    displayDate: store.displayDate
+                )
+        }.joined(separator: "\n")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(
@@ -37,7 +47,7 @@ struct RecurringPlansPage: View {
                 .background {
                     AppE2EViewAnchor(
                         identifier: "recurring-plans.list",
-                        verificationText: "\(tracks.count)"
+                        verificationText: listVerificationText
                     )
                 }
             }

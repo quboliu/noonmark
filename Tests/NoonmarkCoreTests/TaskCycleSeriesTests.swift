@@ -513,6 +513,7 @@ final class TaskCycleSeriesTests: XCTestCase {
             track.lifecycle,
             .ended(endDate: tuesday)
         )
+        XCTAssertEqual(track.completionGoalCount, 2)
     }
 
     func testTemplateContentEditPreservesHistoryAndUpdatesEditableOccurrences() throws {
@@ -1194,7 +1195,7 @@ final class TaskCycleSeriesTests: XCTestCase {
         XCTAssertEqual(
             engine.taskCycleTracks(today: monday)
                 .first { $0.id == endedID }?.lifecycle,
-            .active(nextDate: nil)
+            .active(nextDate: monday)
         )
 
         let tracks = Dictionary(
@@ -1208,7 +1209,7 @@ final class TaskCycleSeriesTests: XCTestCase {
         )
         XCTAssertEqual(
             tracks[activeID]?.lifecycle,
-            .active(nextDate: wednesday)
+            .active(nextDate: tuesday)
         )
         XCTAssertEqual(
             tracks[upcomingID]?.lifecycle,

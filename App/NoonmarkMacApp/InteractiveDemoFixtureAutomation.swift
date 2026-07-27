@@ -541,7 +541,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             presentationVerification:
             context.presentationVerification
                 .verifyingTaskCollectionCategoryVisibility()
-                .verifyingCalendarRecurringBoundary()
+                .verifyingCalendarRecurringBoundary(),
+            detailVerificationStage: .ended
         )
         guard AppViewTreeE2E.click(
             identifier: "sidebar.nav.recurring"
@@ -591,8 +592,24 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let tracks = context.engine.taskCycleTracks(
             today: context.fixture.anchorDate
         )
+        let presentationExpectations =
+            taskCyclePresentationExpectations(context: context)
         guard context.store.page == .recurring,
-              let track = tracks.first
+              tracks.map(\.title)
+              == presentationExpectations.map(\.title),
+              let track = tracks.first(where: {
+                  $0.title
+                      == DemoCycleDetailVerificationStage.active
+                      .trackTitle
+              }),
+              let detailTrack = tracks.first(where: {
+                  $0.title
+                      == context.detailVerificationStage.trackTitle
+              }),
+              let detailExpectation =
+              presentationExpectations.first(where: {
+                  $0.title == detailTrack.title
+              })
         else {
             retryTaskCyclePresentation(
                 context: context,
@@ -617,23 +634,25 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let expectedTrackRootIdentifiers = Set(tracks.map {
             "task-cycle-track.recurring.\($0.id.description)"
         })
-        let lifecyclePresentationsAreCorrect = tracks.allSatisfy {
+        let lifecyclePresentationsAreCorrect = zip(
+            tracks,
+            presentationExpectations
+        ).allSatisfy { track, expectation in
             let identifier =
                 "task-cycle-track.recurring."
-                + "\($0.id.description).lifecycle"
+                + "\(track.id.description).lifecycle"
             guard let view = AppViewTreeE2E.view(
                 identifier: identifier
             ) else {
                 return false
             }
-            let expected = context.store.copy
-                .taskCycleLifecycleSummary(
-                    $0,
-                    displayDate: context.store.displayDate
-                )
             return AppViewTreeE2E.verificationText(for: view)
-                == expected
+                == expectation.lifecycleSummary
         }
+        let expectedListVerificationText =
+            presentationExpectations.map {
+                "\($0.title)|\($0.lifecycleSummary)"
+            }.joined(separator: "\n")
         let actualTrackRootIdentifiers =
             (trackIdentifiers ?? []).intersection(
                 expectedTrackRootIdentifiers
@@ -645,7 +664,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         guard AppViewTreeE2E.activateMainWindow(),
               AppViewTreeE2E.view(
                   identifier: "recurring-plans.list"
-              ) != nil,
+              ).flatMap(AppViewTreeE2E.verificationText)
+              == expectedListVerificationText,
               expectedTrackIdentifiers.isSubset(
                   of: trackIdentifiers ?? []
               ),
@@ -663,11 +683,22 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         }
         switch prepareRecurringPlanDetail(
             context: context,
-            track: track,
-            detailIdentifier: "\(expectedTrackIdentifier).detail"
+            track: detailTrack,
+            expectsPlanEditing:
+            detailExpectation.expectsPlanEditing,
+            expectsStop:
+            detailExpectation.expectsStop
         ) {
         case .ready:
-            break
+            if let nextStage =
+                context.detailVerificationStage.next
+            {
+                retryTaskCyclePresentation(
+                    context: context.advancing(to: nextStage),
+                    remainingAttempts: 100
+                )
+                return
+            }
         case .retry:
             retryTaskCyclePresentation(
                 context: context,
@@ -748,11 +779,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     private func prepareRecurringPlanDetail(
         context: DemoCycleCheckContext,
         track: TaskCycleTrack,
-        detailIdentifier: String
+        expectsPlanEditing: Bool,
+        expectsStop: Bool
     ) -> RecurringPlanDetailPreparation {
         guard context.store.selectedTaskCycleSeriesID == track.id else {
             guard AppViewTreeE2E.click(
-                identifier: detailIdentifier
+                identifier:
+                "task-cycle-track.recurring."
+                    + "\(track.id.description).detail"
             ) else {
                 AppViewTreeE2E.writeDump(beside: resultURL)
                 finishWithFailure(
@@ -763,6 +797,12 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             }
             return .retry
         }
+        let hasPlanEditing = AppViewTreeE2E.view(
+            identifier: "task-cycle-detail.edit-plan"
+        ) != nil
+        let hasStop = AppViewTreeE2E.view(
+            identifier: "task-cycle-detail.stop"
+        ) != nil
         guard AppViewTreeE2E.view(
             identifier: "task-cycle-detail.\(track.id.description)"
         ) != nil,
@@ -770,13 +810,85 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             identifier:
             "classification.editor.cycle-\(track.id.description)"
         ) != nil,
-        AppViewTreeE2E.view(
-            identifier: "task-cycle-detail.edit-plan"
-        ) != nil
+        hasPlanEditing == expectsPlanEditing,
+        hasStop == expectsStop
         else {
             return .retry
         }
         return .ready
+    }
+
+    @MainActor
+    private func taskCyclePresentationExpectations(
+        context: DemoCycleCheckContext
+    ) -> [DemoCyclePresentationExpectation] {
+        let today = context.store.displayDate(
+            context.fixture.anchorDate
+        )
+        let upcomingDate = context.store.displayDate(
+            DemoFixtureClock.offset(
+                context.fixture.anchorDate,
+                by: 2
+            )
+        )
+        return switch context.store.copy.language {
+        case .chinese:
+            [
+                DemoCyclePresentationExpectation(
+                    title: "每日产品复盘",
+                    lifecycleSummary: "进行中 · 下次 \(today)",
+                    expectsPlanEditing: true,
+                    expectsStop: true
+                ),
+                DemoCyclePresentationExpectation(
+                    title: "准备下周工作回顾",
+                    lifecycleSummary:
+                    "即将开始 · \(upcomingDate)开始",
+                    expectsPlanEditing: true,
+                    expectsStop: true
+                ),
+                DemoCyclePresentationExpectation(
+                    title: "完成首次晨间回顾",
+                    lifecycleSummary: "已结束 · 完成 1/1 次",
+                    expectsPlanEditing: false,
+                    expectsStop: false
+                ),
+                DemoCyclePresentationExpectation(
+                    title: "暂停周报打磨",
+                    lifecycleSummary: "已停止 · 停止于 \(today)",
+                    expectsPlanEditing: false,
+                    expectsStop: false
+                )
+            ]
+        case .english:
+            [
+                DemoCyclePresentationExpectation(
+                    title: "每日产品复盘",
+                    lifecycleSummary: "Active · Next \(today)",
+                    expectsPlanEditing: true,
+                    expectsStop: true
+                ),
+                DemoCyclePresentationExpectation(
+                    title: "准备下周工作回顾",
+                    lifecycleSummary:
+                    "Upcoming · Starts \(upcomingDate)",
+                    expectsPlanEditing: true,
+                    expectsStop: true
+                ),
+                DemoCyclePresentationExpectation(
+                    title: "完成首次晨间回顾",
+                    lifecycleSummary: "Ended · 1/1 completed",
+                    expectsPlanEditing: false,
+                    expectsStop: false
+                ),
+                DemoCyclePresentationExpectation(
+                    title: "暂停周报打磨",
+                    lifecycleSummary: "Stopped · Stopped \(today)",
+                    expectsPlanEditing: false,
+                    expectsStop: false
+                )
+            ]
+        }
     }
 
     private func cycleDayIdentifier(
@@ -2069,6 +2181,61 @@ private struct DemoCycleCheckContext {
     let store: NoonmarkStore
     let presentationVerification:
         InteractiveDemoPresentationVerification
+    let detailVerificationStage:
+        DemoCycleDetailVerificationStage
+
+    func advancing(
+        to stage: DemoCycleDetailVerificationStage
+    ) -> DemoCycleCheckContext {
+        DemoCycleCheckContext(
+            fixture: fixture,
+            engine: engine,
+            sessions: sessions,
+            store: store,
+            presentationVerification: presentationVerification,
+            detailVerificationStage: stage
+        )
+    }
+}
+
+private struct DemoCyclePresentationExpectation {
+    let title: String
+    let lifecycleSummary: String
+    let expectsPlanEditing: Bool
+    let expectsStop: Bool
+}
+
+private enum DemoCycleDetailVerificationStage {
+    case ended
+    case stopped
+    case upcoming
+    case active
+
+    var trackTitle: String {
+        switch self {
+        case .ended:
+            "完成首次晨间回顾"
+        case .stopped:
+            "暂停周报打磨"
+        case .upcoming:
+            "准备下周工作回顾"
+        case .active:
+            "每日产品复盘"
+        }
+    }
+
+    var next: DemoCycleDetailVerificationStage? {
+        switch self {
+        case .ended:
+            .stopped
+        case .stopped:
+            .upcoming
+        case .upcoming:
+            .active
+        case .active:
+            nil
+        }
+    }
 }
 
 private enum RecurringPlanDetailPreparation {

@@ -15,15 +15,7 @@ struct TaskCycleDetail: View {
     }
 
     private var isEditable: Bool {
-        guard let track else {
-            return false
-        }
-        return switch track.lifecycle {
-        case .active, .upcoming:
-            true
-        case .ended, .stopped:
-            false
-        }
+        track?.lifecycle.allowsPlanEditing == true
     }
 
     private var terminalNotice: String? {
@@ -37,18 +29,6 @@ struct TaskCycleDetail: View {
             store.copy.taskCycleStoppedNotice
         case .active, .upcoming:
             nil
-        }
-    }
-
-    private var canStop: Bool {
-        guard let track, track.futurePlanCount > 0 else {
-            return false
-        }
-        return switch track.lifecycle {
-        case .active, .upcoming:
-            true
-        case .ended, .stopped:
-            false
         }
     }
 
@@ -163,7 +143,7 @@ struct TaskCycleDetail: View {
                 }
             }
 
-            if canStop {
+            if track?.canStop == true {
                 Button(
                     store.copy.stopRecurringTask,
                     role: .destructive

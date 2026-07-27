@@ -669,8 +669,29 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               || AppViewTreeE2E.view(
                   identifier:
                   "day-row.task-cycle.\(expectedTraceID.description)"
-              ) != nil
+              ) != nil,
+              taskCycleClassificationEditorMatchesStore(
+                  store: context.store,
+                  traceID: expectedTraceID
+              ),
+              taskLifecycleSummaryIsPlain(
+                  traceID: expectedTraceID
+              )
         else {
+            if remainingAttempts == 1 {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError
+                        .taskCycleDetailPresentationFailed(
+                            taskCycleDetailPresentationDiagnostic(
+                                store: context.store,
+                                traceID: expectedTraceID
+                            )
+                        ),
+                    on: context.store
+                )
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 retryTaskCycleNavigation(
                     context: context,
@@ -720,6 +741,95 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     }
 
     @MainActor
+    private func taskCycleClassificationEditorMatchesStore(
+        store: NoonmarkStore,
+        traceID: DayTraceID
+    ) -> Bool {
+        guard let trace = store.engine.traces[traceID],
+              let classification = store.currentClassification(
+                  for: trace.chainID
+              ),
+              let category = classification.category,
+              let categoryView = AppViewTreeE2E.view(
+                  identifier:
+                  "classification.editor.category.\(trace.chainID.description)"
+              ),
+              AppViewTreeE2E.verificationText(for: categoryView)
+              == category.name
+        else {
+            return false
+        }
+        return classification.labels.allSatisfy { label in
+            let identifier =
+                "classification.editor.label-chip."
+                + "\(trace.chainID.description).\(label.id)"
+            guard let view = AppViewTreeE2E.view(
+                identifier: identifier
+            ) else {
+                return false
+            }
+            return AppViewTreeE2E.verificationText(for: view)
+                == label.name
+        }
+    }
+
+    @MainActor
+    private func taskLifecycleSummaryIsPlain(
+        traceID: DayTraceID
+    ) -> Bool {
+        guard let view = AppViewTreeE2E.view(
+            identifier:
+            "detail.lifecycle-summary.\(traceID.description)"
+        ) else {
+            return false
+        }
+        return AppViewTreeE2E.verificationText(for: view)
+            == "plain"
+    }
+
+    @MainActor
+    private func taskCycleDetailPresentationDiagnostic(
+        store: NoonmarkStore,
+        traceID: DayTraceID
+    ) -> String {
+        guard let trace = store.engine.traces[traceID] else {
+            return "trace=missing id=\(traceID.description)"
+        }
+        let classification = store.currentClassification(
+            for: trace.chainID
+        )
+        let categoryIdentifier =
+            "classification.editor.category."
+            + trace.chainID.description
+        let categoryText = AppViewTreeE2E.view(
+            identifier: categoryIdentifier
+        ).flatMap(AppViewTreeE2E.verificationText)
+        let expectedLabels = classification?.labels.map {
+            "\($0.id):\($0.name)"
+        }.sorted() ?? []
+        let visibleLabelIdentifiers = AppViewTreeE2E.identifiers(
+            withPrefix:
+            "classification.editor.label-chip."
+            + trace.chainID.description
+        )?.sorted() ?? []
+        let lifecycleIdentifier =
+            "detail.lifecycle-summary."
+            + traceID.description
+        let lifecyclePresentation = AppViewTreeE2E.view(
+            identifier: lifecycleIdentifier
+        ).flatMap(AppViewTreeE2E.verificationText)
+        return [
+            "trace=\(traceID.description)",
+            "chain=\(trace.chainID.description)",
+            "expectedCategory=\(classification?.category?.name ?? "nil")",
+            "actualCategory=\(categoryText ?? "missing")",
+            "expectedLabels=\(expectedLabels)",
+            "actualLabelIdentifiers=\(visibleLabelIdentifiers)",
+            "lifecyclePresentation=\(lifecyclePresentation ?? "missing")"
+        ].joined(separator: " ")
+    }
+
+    @MainActor
     private func taskCollectionRowIdentifiers(
         prefixes: [String]
     ) -> Set<String>? {
@@ -740,29 +850,52 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         context: DemoCollectionCheckContext,
         verificationCase: DemoCollectionCheckCase
     ) -> Set<String> {
-        guard verificationCase.page == .day,
-              verificationCase.organization == .grouped
-        else {
+        guard verificationCase.organization == .grouped else {
             return []
         }
-        return Set(
-            context.store.engine.getDayTodo(
-                date: context.fixture.anchorDate
-            ).traces.compactMap { trace in
-                guard trace.status == .pending,
-                      trace.pinOrder != nil,
-                      context.store.displayableClassification(
-                          for: trace
-                      )?.category != nil
-                else {
-                    return nil
+        var result: Set<String> = []
+        if verificationCase.page == .day {
+            result.formUnion(
+                context.store.engine.getDayTodo(
+                    date: context.fixture.anchorDate
+                ).traces.compactMap { trace in
+                    guard trace.status == .pending,
+                          trace.pinOrder != nil,
+                          context.store.displayableClassification(
+                              for: trace
+                          )?.category != nil
+                    else {
+                        return nil
+                    }
+                    return TaskClassificationAccessibilityNamespace(
+                        surface: "day-row",
+                        instanceID: trace.id.description
+                    ).categoryIdentifier
                 }
-                return TaskClassificationAccessibilityNamespace(
-                    surface: "day-row",
-                    instanceID: trace.id.description
-                ).categoryIdentifier
-            }
-        )
+            )
+        }
+        if let collection = verificationCase.taskCycleCollection {
+            result.formUnion(
+                context.engine.taskCycleTracks(
+                    today: context.fixture.anchorDate,
+                    collection: collection
+                ).compactMap { track in
+                    guard
+                        (try? context.engine
+                            .taskCycleTemplateClassification(
+                                seriesID: track.id
+                            ))?.category != nil
+                    else {
+                        return nil
+                    }
+                    return TaskClassificationAccessibilityNamespace(
+                        surface: "task-cycle-row",
+                        instanceID: track.id.description
+                    ).categoryIdentifier
+                }
+            )
+        }
+        return result
     }
 
     @MainActor
@@ -869,7 +1002,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         [
             DemoCollectionCheckCase(
                 page: .pool,
-                rowPrefixes: ["classification.pool-row."],
+                rowPrefixes: [
+                    "classification.pool-row.",
+                    "classification.task-cycle-row."
+                ],
                 organization: .grouped
             ),
             DemoCollectionCheckCase(
@@ -878,13 +1014,27 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 organization: .grouped
             ),
             DemoCollectionCheckCase(
+                page: .future,
+                rowPrefixes: [
+                    "classification.future-row.",
+                    "classification.task-cycle-row."
+                ],
+                organization: .flat
+            ),
+            DemoCollectionCheckCase(
                 page: .unfinished,
-                rowPrefixes: ["classification.unfinished-row."],
+                rowPrefixes: [
+                    "classification.unfinished-row.",
+                    "classification.task-cycle-row."
+                ],
                 organization: .flat
             ),
             DemoCollectionCheckCase(
                 page: .completed,
-                rowPrefixes: ["classification.completed-row."],
+                rowPrefixes: [
+                    "classification.completed-row.",
+                    "classification.task-cycle-row."
+                ],
                 organization: .grouped
             )
         ]
@@ -1794,6 +1944,19 @@ private struct DemoCollectionCheckCase {
     var sidebarNavigationIdentifier: String {
         "sidebar.nav.\(page.rawValue)"
     }
+
+    var taskCycleCollection: TaskCycleCollection? {
+        switch page {
+        case .pool:
+            .pool
+        case .unfinished:
+            .unfinished
+        case .completed:
+            .completed
+        case .day, .future, .calendar, .zhulong, .settings:
+            nil
+        }
+    }
 }
 
 private struct DemoCycleCheckContext {
@@ -1864,6 +2027,7 @@ private enum InteractiveDemoFixtureError: LocalizedError {
     case unexpectedScopeReauthorization(count: Int)
     case scopeAuthorizationPresentationFailed
     case presentationContractFailed
+    case taskCycleDetailPresentationFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -1881,6 +2045,8 @@ private enum InteractiveDemoFixtureError: LocalizedError {
             "演示 App 的烛龙历史会话仍然显示阅读范围确认卡。"
         case .presentationContractFailed:
             "演示 App 未满足任务池统计边界或烛龙头部／输入框层级契约。"
+        case let .taskCycleDetailPresentationFailed(diagnostic):
+            "重复任务实例详情未满足分类与生命周期摘要契约：\(diagnostic)"
         }
     }
 }

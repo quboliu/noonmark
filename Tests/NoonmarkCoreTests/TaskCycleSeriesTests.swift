@@ -785,6 +785,11 @@ final class TaskCycleSeriesTests: XCTestCase {
         let series = try XCTUnwrap(engine.taskCycleSeries[seriesID])
         XCTAssertTrue(series.isOccurrenceSkipped(tuesday))
         XCTAssertFalse(series.isOccurrenceSkipped(wednesday))
+        XCTAssertFalse(
+            engine.taskPool().contains {
+                $0.chain.cycleMembership?.seriesID == seriesID
+            }
+        )
         let track = try XCTUnwrap(
             engine.taskCycleTracks(today: monday).first { $0.id == seriesID }
         )
@@ -838,11 +843,85 @@ final class TaskCycleSeriesTests: XCTestCase {
             track.days.map(\.state),
             [.completed, .unfinished, .pendingToday, .skipped, .skipped]
         )
-        XCTAssertTrue(track.appears(in: .pool))
+        XCTAssertFalse(track.appears(in: .pool))
         XCTAssertFalse(track.appears(in: .future))
         XCTAssertTrue(track.appears(in: .unfinished))
         XCTAssertTrue(track.appears(in: .completed))
+        XCTAssertFalse(
+            engine.taskPool().contains {
+                $0.chain.cycleMembership?.seriesID == seriesID
+            }
+        )
         XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testPoolProjectionHidesSeriesWhenOnlyTodayRemains() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "仅今天一次",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: monday).first {
+                $0.id == seriesID
+            }
+        )
+
+        XCTAssertFalse(track.appears(in: .pool))
+        XCTAssertTrue(
+            engine.taskCycleTracks(
+                today: monday,
+                collection: .pool
+            ).isEmpty
+        )
+    }
+
+    func testPoolProjectionHidesNaturallyEndedHistoricalSeries() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "已经结束",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let mondayTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+        try engine.markCompleted(
+            traceID: mondayTrace.id,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+
+        let track = try XCTUnwrap(
+            engine.taskCycleTracks(today: tuesday).first {
+                $0.id == seriesID
+            }
+        )
+
+        XCTAssertFalse(track.appears(in: .pool))
+        XCTAssertTrue(
+            engine.taskCycleTracks(
+                today: tuesday,
+                collection: .pool
+            ).isEmpty
+        )
+        XCTAssertEqual(
+            engine.taskCycleTracks(
+                today: tuesday,
+                collection: .completed
+            ).map(\.id),
+            [seriesID]
+        )
     }
 
     func testSkipRejectsTodayAndHistoricalOccurrence() throws {

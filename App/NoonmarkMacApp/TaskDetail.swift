@@ -65,7 +65,7 @@ struct TaskDetail: View {
                     .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
-            TraceContextCard(trace: trace)
+            TraceLifecycleSummary(trace: trace)
             if trace.date < store.today {
                 Notice(text: store.copy.historicalReadOnlyNotice, tone: .locked)
             }
@@ -621,12 +621,15 @@ struct DetailNoteEntryRow: View {
     }
 }
 
-struct TraceContextCard: View {
+struct TraceLifecycleSummary: View {
     @EnvironmentObject private var store: NoonmarkStore
     let trace: DayTrace
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        TaskLifecycleSummaryLine(
+            accessibilityIdentifier:
+            "detail.lifecycle-summary.\(trace.id.description)"
+        ) {
             Text(continuationText)
             Text("·")
                 .foregroundStyle(Theme.text3)
@@ -683,14 +686,7 @@ struct TraceContextCard: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.accent)
             }
-            Spacer(minLength: 0)
         }
-        .font(.noonmarkSystem(size: 11))
-        .foregroundStyle(Theme.text2)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
     }
 
     var continuationText: String {

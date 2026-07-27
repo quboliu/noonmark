@@ -1010,6 +1010,27 @@ private extension EmptyStateKind {
     }
 }
 
+struct TaskLifecycleSummaryLine<Content: View>: View {
+    let accessibilityIdentifier: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            content
+            Spacer(minLength: 0)
+        }
+        .font(.noonmarkSystem(size: 11))
+        .foregroundStyle(Theme.text2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            AppE2EViewAnchor(
+                identifier: accessibilityIdentifier,
+                verificationText: "plain"
+            )
+        }
+    }
+}
+
 struct DetailSection<Content: View>: View {
     let title: String
     let showsTitle: Bool

@@ -9,6 +9,13 @@ private extension EnvironmentValues {
 }
 
 extension View {
+    func taskRowCategoryVisibility(_ isVisible: Bool) -> some View {
+        environment(
+            \.taskRowCategoryIsVisible,
+            isVisible
+        )
+    }
+
     func taskCollectionCategoryVisibility(
         _ preference: TaskCollectionPresentationPreference
     ) -> some View {

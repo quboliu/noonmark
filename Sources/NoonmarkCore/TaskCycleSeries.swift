@@ -726,10 +726,14 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
         days.count { $0.futurePlanTarget != nil }
     }
 
+    public var pooledOccurrenceCount: Int {
+        days.count { $0.state == .returnedToPool }
+    }
+
     public func appears(in collection: TaskCycleCollection) -> Bool {
         switch collection {
         case .pool:
-            true
+            futurePlanCount > 0 || pooledOccurrenceCount > 0
         case .future:
             futurePlanCount > 0
         case .unfinished:

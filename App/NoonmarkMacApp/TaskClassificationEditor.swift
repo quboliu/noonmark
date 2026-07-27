@@ -530,6 +530,13 @@ struct TaskClassificationEditor: View {
                 tagName: label.name
             )
         )
+        .background {
+            AppE2EViewAnchor(
+                identifier:
+                "classification.editor.label-chip.\(target.identifier).\(label.accessibilityIdentifierComponent)",
+                verificationText: label.name
+            )
+        }
     }
 
     private func editorError(_ message: String) -> some View {

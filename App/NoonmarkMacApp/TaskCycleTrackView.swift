@@ -66,6 +66,7 @@ struct TaskCycleTrackRow: View {
                                 instanceID: track.id.description
                             )
                         )
+                        .taskRowCategoryVisibility(true)
                     }
 
                     Text(store.copy.taskCycleSchedule(track.schedule))

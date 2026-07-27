@@ -3168,7 +3168,15 @@ private extension NoonmarkEngine {
     }
 
     func isInTaskPool(_ chainID: TaskChainID) -> Bool {
-        guard chains[chainID]?.state == .active else {
+        guard let chain = chains[chainID],
+              chain.state == .active
+        else {
+            return false
+        }
+        if let membership = chain.cycleMembership,
+           taskCycleSeries[membership.seriesID]?
+           .isOccurrenceSkipped(membership.occurrenceDate) == true
+        {
             return false
         }
 

@@ -55,7 +55,7 @@ struct UnfinishedDetail: View {
                         .foregroundStyle(Theme.text3)
                 }
 
-                UnfinishedTraceContextCard(item: item, trace: trace)
+                UnfinishedLifecycleSummary(item: item, trace: trace)
                 Notice(
                     text: item.isAbandoned
                         ? store.copy.abandonedChainHistoryNotice
@@ -91,13 +91,16 @@ struct UnfinishedDetail: View {
     }
 }
 
-struct UnfinishedTraceContextCard: View {
+struct UnfinishedLifecycleSummary: View {
     @EnvironmentObject private var store: NoonmarkStore
     let item: UnfinishedPoolItem
     let trace: DayTrace
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        TaskLifecycleSummaryLine(
+            accessibilityIdentifier:
+            "unfinished.detail.lifecycle-summary.\(trace.id.description)"
+        ) {
             Text(store.copy.continuationOrdinal(trace.continuationSeq))
             Text("·")
                 .foregroundStyle(Theme.text3)
@@ -113,14 +116,7 @@ struct UnfinishedTraceContextCard: View {
                 .buttonStyle(.plain)
                     .foregroundStyle(Theme.accent)
             }
-            Spacer(minLength: 0)
         }
-        .font(.noonmarkSystem(size: 11))
-        .foregroundStyle(Theme.text2)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.warnSoft))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
     }
 
     var durationDays: Int {

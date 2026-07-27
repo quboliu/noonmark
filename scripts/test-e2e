@@ -3516,7 +3516,10 @@ run_native_command_surface_probe() {
        FROM automatic_classification_jobs AS job
        WHERE job.chain_id = definition.chain_id
          AND job.state = 'waitingForConfiguration'
-         AND job.generation = 2)
+         AND job.generation = 2),
+      (SELECT count(*)
+       FROM task_cycle_series
+       WHERE title = 'recurringsearchplan')
     FROM day_traces AS trace
     JOIN task_definitions AS definition ON definition.id = trace.definition_id
     JOIN task_chains AS chain ON chain.id = trace.chain_id
@@ -3526,7 +3529,7 @@ run_native_command_surface_probe() {
       AND trace.status = 'pending'
       AND chain.state = 'active';
   ")"
-  if [[ "$sqlite_probe" != "1 1 1 1" ]]; then
+  if [[ "$sqlite_probe" != "1 1 1 1 1" ]]; then
     echo "native command surface SQLite restart probe failed: ${sqlite_probe:-missing}" >&2
     exit 1
   fi

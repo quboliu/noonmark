@@ -7,8 +7,9 @@ import NoonmarkStorage
 
 /// Exercises Noonmark's native command surface inside the real application.
 ///
-/// Commands and text entry are posted through WindowServer. The driver never
-/// invokes a controller action or mutates the store directly.
+/// Commands and text entry are posted through WindowServer. Domain APIs only
+/// install persisted prerequisites that are not themselves under interaction
+/// test; the driver never invokes a controller action.
 @MainActor
 struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     private enum Mode {
@@ -22,6 +23,8 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         let chainID: String
         let traceID: String
         let date: String
+        let recurringPlanTitle: String
+        let recurringSeriesID: String
     }
 
     private struct HelpCommandHandshake {
@@ -188,6 +191,7 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
     }
 
     private static let fixtureTitle = "commandrecoverytask"
+    private static let recurringPlanFixtureTitle = "recurringsearchplan"
     private static let fixtureLabelName = "commandlabel"
     private static let fixtureCategoryName = "commandgroup"
     private static let fixtureInput =
@@ -356,13 +360,34 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             expectedTraceID: restored.trace.id,
             input: input
         )
+        guard store.createTaskCycleSeries(
+            title: Self.recurringPlanFixtureTitle,
+            startDate: store.today,
+            endDate: NoonmarkStore.offset(store.today, by: 2),
+            schedule: .daily
+        ), let recurringSeries = taskCycleSeries(
+            titled: Self.recurringPlanFixtureTitle,
+            in: store
+        ) else {
+            throw Failure.failed(
+                "could not install the recurring-plan search fixture"
+            )
+        }
+        try await exerciseRecurringPlanSearch(
+            mainWindow: mainWindow,
+            store: store,
+            expectedSeriesID: recurringSeries.id,
+            input: input
+        )
 
         try writeState(
             ProbeState(
                 taskTitle: Self.fixtureTitle,
                 chainID: restored.trace.chainID.description,
                 traceID: restored.trace.id.description,
-                date: restored.trace.date.description
+                date: restored.trace.date.description,
+                recurringPlanTitle: Self.recurringPlanFixtureTitle,
+                recurringSeriesID: recurringSeries.id.description
             )
         )
     }
@@ -391,6 +416,21 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             mainWindow: mainWindow,
             store: store,
             expectedTraceID: restored.trace.id,
+            input: input
+        )
+        guard let recurringSeries = taskCycleSeries(
+            titled: expected.recurringPlanTitle,
+            in: store
+        ), recurringSeries.id.description == expected.recurringSeriesID
+        else {
+            throw Failure.failed(
+                "recurring-plan search fixture identity did not survive restart"
+            )
+        }
+        try await exerciseRecurringPlanSearch(
+            mainWindow: mainWindow,
+            store: store,
+            expectedSeriesID: recurringSeries.id,
             input: input
         )
     }
@@ -994,6 +1034,78 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
                 && store.page == .day
                 && store.selectedTraceID == expectedTraceID
                 && store.selectedDefinition?.title == Self.fixtureTitle
+                && mainWindow.isVisible
+        }
+    }
+
+    private func exerciseRecurringPlanSearch(
+        mainWindow: NSWindow,
+        store: NoonmarkStore,
+        expectedSeriesID: TaskCycleSeriesID,
+        input: WindowServerInputDriver
+    ) async throws {
+        try await activate(mainWindow)
+        mainWindow.makeFirstResponder(nil)
+        try performMenuShortcut(
+            MenuShortcut(
+                action: NoonmarkMenuAction.showSearch,
+                key: "f",
+                modifiers: [.command, .shift]
+            ),
+            input: input
+        )
+
+        let searchWindow = try await visibleWindow(
+            identifier: NoonmarkSearchWindowController.windowIdentifier,
+            failure: "Search did not reopen for the recurring-plan result"
+        )
+        let editor = try await focusedTextEditor(
+            identifier: "search.field",
+            in: searchWindow,
+            input: input
+        )
+        if editor.string.isEmpty == false {
+            try replaceEditorContents(with: "", in: editor)
+        }
+        try await typeASCII(Self.recurringPlanFixtureTitle, into: editor)
+        try await waitUntil(
+            "Search did not render exactly one recurring-plan parent result"
+        ) {
+            let indexed = WorkspaceSearchIndex(engine: store.engine).search(
+                Self.recurringPlanFixtureTitle
+            )
+            return editor.string == Self.recurringPlanFixtureTitle
+                && indexed.count == 1
+                && indexed.first?.kind == .recurringPlan
+                && indexed.first?.destination
+                == .recurringPlan(seriesID: expectedSeriesID)
+                && self.hasVisibleView(
+                    identifier: "search.results",
+                    in: searchWindow
+                )
+        }
+
+        try sendKeyDown(
+            Keystroke(
+                characters: "\r",
+                charactersIgnoringModifiers: "\r",
+                keyCode: 36,
+                modifiers: []
+            ),
+            to: searchWindow,
+            requiring: editor
+        )
+        try await waitUntil(
+            "Search Return did not reveal the recurring-plan parent"
+        ) {
+            searchWindow.isVisible == false
+                && store.page == .recurring
+                && store.selectedTaskCycleSeriesID == expectedSeriesID
+                && self.hasVisibleView(
+                    identifier:
+                    "task-cycle-detail.\(expectedSeriesID.description)",
+                    in: mainWindow
+                )
                 && mainWindow.isVisible
         }
     }
@@ -1825,6 +1937,17 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("expected exactly one task titled \(title)")
         }
         return record
+    }
+
+    private func taskCycleSeries(
+        titled title: String,
+        in store: NoonmarkStore
+    ) -> TaskCycleSeries? {
+        let matches = store.engine.taskCycleSeries.values.filter {
+            $0.title == title
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 
     private func waitUntil(

@@ -484,7 +484,7 @@ struct SidebarAnalysisModel {
         case .pool:
             return nil
         case .future:
-            let plans = store.engine.futurePlans(today: store.today)
+            let plans = store.visibleFuturePlanItems()
             let dates = Set(plans.map(\.trace.date))
             let continuationCount = plans.filter { $0.trace.continuationSeq > 0 }.count
             let maxDayLoad = Dictionary(grouping: plans, by: { $0.trace.date }).values.map(\.count).max() ?? 0

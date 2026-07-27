@@ -1458,11 +1458,10 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
         ) -> CycleDayTarget? {
             guard let series = series(titled: title),
                   let track = store.engine.taskCycleTracks(
-                      today: store.today,
-                      collection: .recurringPlans
+                      today: store.today
                   ).first(where: { $0.id == series.id }),
                   let day = track.days.first(where: {
-                      $0.presentationState(in: .recurringPlans) == state
+                      $0.state == state
                           && $0.chainID != nil
                   }),
                   let chainID = day.chainID

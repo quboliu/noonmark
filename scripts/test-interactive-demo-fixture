@@ -81,6 +81,7 @@ for expected in \
   '"taskPoolProviderBoundaryVerified" : true' \
   '"taskPoolProviderReportPresentationVerified" : true' \
   '"taskCyclePresentationVerified" : true' \
+  '"calendarRecurringBoundaryVerified" : true' \
   '"visibleRecurringFutureOccurrenceCount" : 16' \
   '"recurringCollectionLeakCount" : 0' \
   '"zhulongHeaderComposerHierarchyVerified" : true'; do
@@ -123,7 +124,7 @@ if [[ "$single_day_completed_count" != "5" \
   exit 1
 fi
 
-for page in pool day future recurring unfinished completed; do
+for page in pool day future recurring unfinished completed calendar; do
   screenshot="$test_root/task-collection-$page.png"
   if [[ ! -s "$screenshot" ]]; then
     echo "task collection screenshot is missing: $screenshot" >&2

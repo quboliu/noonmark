@@ -24,11 +24,6 @@ struct NoonmarkDemoFixtureTests {
             fixture.engine.taskCycleTracks(today: anchorDate).first
         )
         #expect(track.days.count == 13)
-        #expect(track.appears(in: .recurringPlans))
-        #expect(track.appears(in: .future) == false)
-        #expect(track.appears(in: .unfinished) == false)
-        #expect(track.appears(in: .completed) == false)
-        #expect(track.appears(in: .pool) == false)
         #expect(fixture.report.taskCycleSeriesCount == 2)
         #expect(fixture.report.taskCycleOccurrenceCount == 43)
         #expect(fixture.report.classifiedTaskCycleSeriesCount == 2)
@@ -42,17 +37,11 @@ struct NoonmarkDemoFixtureTests {
         )
         #expect(fixture.report.recurringCollectionLeakCount == 0)
         #expect(
-            fixture.engine.taskCycleTracks(
-                today: anchorDate,
-                collection: .recurringPlans
-            ).count == 2
+            fixture.engine.taskCycleTracks(today: anchorDate).count == 2
         )
-        #expect(
-            fixture.engine.taskCycleTracks(
-                today: anchorDate,
-                collection: .pool
-            ).isEmpty
-        )
+        #expect(fixture.engine.taskPool().allSatisfy {
+            fixture.engine.isRecurringTaskChain($0.chain.id) == false
+        })
         #expect(fixture.report.deletableCategoryBoundaryCount > 0)
         #expect(
             fixture.report.openParentWithCompletedChildrenCount > 0

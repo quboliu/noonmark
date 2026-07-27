@@ -207,7 +207,7 @@ extension NoonmarkStore {
         let traceIDs = selectedFutureTraceIDs
         return traceIDs.count > 1 && traceIDs.allSatisfy { traceID in
             guard let trace = engine.traces[traceID],
-                  engine.chains[trace.chainID]?.cycleMembership == nil
+                  engine.isRecurringTaskChain(trace.chainID) == false
             else {
                 return false
             }
@@ -386,10 +386,8 @@ extension NoonmarkStore {
                 .futureTrace($0.trace.id)
             }
         case .recurring:
-            return engine.taskCycleTracks(
-                today: today,
-                collection: .recurringPlans
-            ).map { .taskCycleSeries($0.id) }
+            return engine.taskCycleTracks(today: today)
+                .map { .taskCycleSeries($0.id) }
         case .unfinished:
             return engine.unfinishedPool().map {
                 .unfinishedTask($0.chain.id)
@@ -462,10 +460,7 @@ extension NoonmarkStore {
         case .future:
             selectLaunchFutureItem()
         case .recurring:
-            if let seriesID = engine.taskCycleTracks(
-                today: today,
-                collection: .recurringPlans
-            ).first?.id {
+            if let seriesID = engine.taskCycleTracks(today: today).first?.id {
                 selectTaskCycleSeries(seriesID)
             }
         case .pool:

@@ -358,7 +358,7 @@ extension NoonmarkStore {
     func contextMenuActions(for trace: DayTrace) -> [TraceContextAction] {
         let isLocked = engine.days[trace.date]?.lockedAt != nil
         let isRecurringOccurrence =
-            engine.chains[trace.chainID]?.cycleMembership != nil
+            engine.isRecurringTaskChain(trace.chainID)
         let completionCapability = try? engine.completionCapability(
             for: trace.id,
             today: today

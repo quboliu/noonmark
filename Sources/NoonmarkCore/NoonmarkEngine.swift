@@ -1072,15 +1072,16 @@ public final class NoonmarkEngine {
 
     public func taskPool() -> [PoolTask] {
         chains.values
-            .filter { chain in
-                chain.cycleMembership == nil
-                    && isInTaskPool(chain.id)
-            }
+            .filter { isInTaskPool($0.id) }
             .compactMap { chain in
                 guard let definition = try? currentDefinition(for: chain.id) else { return nil }
                 return PoolTask(chain: chain, definition: definition)
             }
             .sorted { $0.definition.createdAt < $1.definition.createdAt }
+    }
+
+    public func isRecurringTaskChain(_ chainID: TaskChainID) -> Bool {
+        chains[chainID]?.cycleMembership != nil
     }
 
     public func taskTrail(chainID: TaskChainID) throws -> [TaskTrailEntry] {
@@ -1189,9 +1190,7 @@ public final class NoonmarkEngine {
             )
             : nil
         return futurePlans(today: today).filter { item in
-            guard let chain = chains[item.trace.chainID],
-                  chain.cycleMembership != nil
-            else {
+            guard isRecurringTaskChain(item.trace.chainID) else {
                 return true
             }
             guard let recurringCutoff else {
@@ -1215,7 +1214,7 @@ public final class NoonmarkEngine {
             guard
                 unfinishedTraces.isEmpty == false,
                 var chain = chains[chainID],
-                chain.cycleMembership == nil,
+                isRecurringTaskChain(chainID) == false,
                 chain.state == .active || chain.state == .abandoned,
                 let definition = try? currentDefinition(for: chainID),
                 hasCompletedTrace(chainID) == false
@@ -1245,7 +1244,7 @@ public final class NoonmarkEngine {
         traces.values
             .filter {
                 $0.status == .completed
-                    && chains[$0.chainID]?.cycleMembership == nil
+                    && isRecurringTaskChain($0.chainID) == false
             }
             .compactMap { trace in
                 guard let definition = definitions[trace.definitionID] else { return nil }
@@ -1270,7 +1269,7 @@ public final class NoonmarkEngine {
                 guard
                     let trace = traces[subtask.traceID],
                     trace.formsDayHistory,
-                    chains[trace.chainID]?.cycleMembership == nil,
+                    isRecurringTaskChain(trace.chainID) == false,
                     let definition = definitions[trace.definitionID]
                 else {
                     return nil
@@ -1414,7 +1413,7 @@ public final class NoonmarkEngine {
 
     public func returnToPool(traceID: DayTraceID, today: LocalDate, now: Date = Date()) throws {
         var trace = try trace(traceID)
-        guard chains[trace.chainID]?.cycleMembership == nil else {
+        guard isRecurringTaskChain(trace.chainID) == false else {
             throw NoonmarkError.invalidTransition(
                 "recurring occurrences cannot return to the task pool"
             )
@@ -1472,6 +1471,11 @@ public final class NoonmarkEngine {
         var trace = try trace(traceID)
         var chain = try chain(trace.chainID)
         try ensureUnlockedDay(trace.date)
+        guard isRecurringTaskChain(trace.chainID) == false else {
+            throw NoonmarkError.invalidTransition(
+                "recurring occurrences must be managed from recurring plans"
+            )
+        }
         guard chain.state == .active else {
             throw NoonmarkError.chainAbandoned
         }
@@ -1509,6 +1513,7 @@ public final class NoonmarkEngine {
     ) -> Bool {
         guard let trace = traces[traceID],
               let chain = chains[trace.chainID],
+              isRecurringTaskChain(trace.chainID) == false,
               chain.state == .active,
               days[trace.date]?.lockedAt == nil,
               trace.date == today,
@@ -2289,9 +2294,7 @@ public final class NoonmarkEngine {
     }
 
     public func calendarSummary(for date: LocalDate) -> CalendarDaySummary {
-        let items = traces.values.filter {
-            $0.date == date && $0.status.isVisibleInDayTodo
-        }
+        let items = calendarTraces(for: date)
         let completed = items.filter { $0.status == .completed }.count
         return CalendarDaySummary(
             date: date,
@@ -2301,6 +2304,12 @@ public final class NoonmarkEngine {
             unfinished: items.filter { $0.status == .unfinished }.count,
             heatLevel: min(completed, 4)
         )
+    }
+
+    public func calendarTraces(for date: LocalDate) -> [DayTrace] {
+        getDayTodo(date: date).traces.filter {
+            isRecurringTaskChain($0.chainID) == false
+        }
     }
 
     public func updatePriority(
@@ -2456,18 +2465,11 @@ public final class NoonmarkEngine {
     }
 
     public func dailyReviewStats(date: LocalDate) -> DailyReviewStats {
-        let items = traces.values.filter {
-            $0.date == date && $0.status.isVisibleInDayTodo
-        }
-        return DailyReviewStats(
-            total: items.count,
-            completed: items.filter { $0.status == .completed }.count,
-            unfinished: items.filter { $0.status == .unfinished }.count,
-            deferred: items.filter { $0.status == .deferred }.count,
-            changed: items.filter { $0.status == .changed }.count,
-            returnedToPool: items.filter { $0.status == .returnedToPool }.count,
-            abandoned: items.filter { $0.status == .abandoned }.count
-        )
+        reviewStats(for: getDayTodo(date: date).traces)
+    }
+
+    public func calendarReviewStats(date: LocalDate) -> DailyReviewStats {
+        reviewStats(for: calendarTraces(for: date))
     }
 
     public func updateDailyReview(
@@ -3206,7 +3208,7 @@ private extension NoonmarkEngine {
     func isInTaskPool(_ chainID: TaskChainID) -> Bool {
         guard let chain = chains[chainID],
               chain.state == .active,
-              chain.cycleMembership == nil
+              isRecurringTaskChain(chainID) == false
         else {
             return false
         }
@@ -3229,6 +3231,18 @@ private extension NoonmarkEngine {
         }
         return latest?.status == .returnedToPool
             || latest?.status == .cancelledDraft
+    }
+
+    func reviewStats(for items: [DayTrace]) -> DailyReviewStats {
+        DailyReviewStats(
+            total: items.count,
+            completed: items.filter { $0.status == .completed }.count,
+            unfinished: items.filter { $0.status == .unfinished }.count,
+            deferred: items.filter { $0.status == .deferred }.count,
+            changed: items.filter { $0.status == .changed }.count,
+            returnedToPool: items.filter { $0.status == .returnedToPool }.count,
+            abandoned: items.filter { $0.status == .abandoned }.count
+        )
     }
 
     func hasCompletedTrace(_ chainID: TaskChainID) -> Bool {

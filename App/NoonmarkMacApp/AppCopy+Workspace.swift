@@ -47,6 +47,10 @@ extension AppCopy {
         language == .chinese ? "任务池" : "Task Pool"
     }
 
+    var searchRecurringPlanKind: String {
+        language == .chinese ? "重复计划" : "Recurring Plan"
+    }
+
     var searchSubtaskKind: String {
         language == .chinese ? "子任务" : "Subtask"
     }

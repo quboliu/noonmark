@@ -43,7 +43,7 @@ extension NoonmarkStore {
         chainID: TaskChainID,
         traceID: DayTraceID? = nil
     ) {
-        guard engine.chains[chainID]?.cycleMembership == nil,
+        guard engine.isRecurringTaskChain(chainID) == false,
               let definition = engine.definitions.values
               .filter({
                   $0.chainID == chainID

@@ -194,7 +194,7 @@ struct CalendarCell: View {
 
     var summary: CalendarDaySummary { store.engine.calendarSummary(for: date) }
     var traces: [DayTrace] {
-        store.engine.getDayTodo(date: date).traces.sorted { $0.priority < $1.priority }
+        store.engine.calendarTraces(for: date)
     }
 
     var selected: Bool { store.selectedCalendarDate == date }
@@ -390,8 +390,8 @@ struct CalendarDayInsight {
 
     @MainActor
     static func make(for date: LocalDate, store: NoonmarkStore) -> CalendarDayInsight {
-        let traces = store.engine.getDayTodo(date: date).traces
-        let stats = store.engine.dailyReviewStats(date: date)
+        let traces = store.engine.calendarTraces(for: date)
+        let stats = store.engine.calendarReviewStats(date: date)
         let completionRate = stats.total == 0 ? 0 : Int((Double(stats.completed) / Double(stats.total) * 100).rounded())
         let continuationCount = traces.filter {
             store.engine.carryoverKind(for: $0.id) == .continuation
@@ -507,7 +507,7 @@ struct CalendarInsightRow: View {
 struct CalendarDetailPanel: View {
     @EnvironmentObject private var store: NoonmarkStore
     var traces: [DayTrace] {
-        store.engine.getDayTodo(date: store.selectedCalendarDate).traces.sorted { $0.priority < $1.priority }
+        store.engine.calendarTraces(for: store.selectedCalendarDate)
     }
 
     var insight: CalendarDayInsight {

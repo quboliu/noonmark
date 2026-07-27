@@ -29,6 +29,37 @@ final class WorkspaceSearchIndexTests: XCTestCase {
         XCTAssertTrue(subtaskResults.contains { $0.kind == .task })
     }
 
+    func testSearchIndexesRecurringParentWithoutIndexingItsOccurrences() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日深度工作",
+            descriptionText: "保持专注节奏",
+            startDate: today,
+            endDate: LocalDate("2026-07-17"),
+            schedule: .daily,
+            today: today,
+            now: start
+        )
+
+        let titleResults = WorkspaceSearchIndex(engine: engine).search(
+            "每日深度工作"
+        )
+        let descriptionResults = WorkspaceSearchIndex(engine: engine).search(
+            "专注节奏"
+        )
+
+        XCTAssertEqual(titleResults.count, 1)
+        XCTAssertEqual(titleResults.first?.kind, .recurringPlan)
+        XCTAssertEqual(
+            titleResults.first?.destination,
+            .recurringPlan(seriesID: seriesID)
+        )
+        XCTAssertEqual(
+            descriptionResults.map(\.destination),
+            [.recurringPlan(seriesID: seriesID)]
+        )
+    }
+
     func testEveryQueryTokenMustMatchAcrossTitleAndContext() throws {
         let fixture = try makeFixture()
         let index = WorkspaceSearchIndex(engine: fixture.engine)

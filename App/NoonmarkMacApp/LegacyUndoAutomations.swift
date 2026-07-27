@@ -1767,7 +1767,7 @@ private func workspaceSearchContainsTrace(
             id == traceID
         case let .subtask(_, parentTraceID, _, _):
             parentTraceID == traceID
-        case .pool:
+        case .pool, .recurringPlan:
             false
         }
     }

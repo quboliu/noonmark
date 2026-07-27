@@ -644,42 +644,12 @@ public struct TaskCycleTrackDay: Equatable, Identifiable, Sendable {
         self.completedTarget = completedTarget
     }
 
-    public func semanticTarget(
-        in collection: TaskCycleCollection
-    ) -> TaskCycleTraceTarget? {
-        switch collection {
-        case .recurringPlans:
-            occurrenceTarget
-        case .pool, .future, .unfinished, .completed:
-            nil
-        }
-    }
-
-    public func navigationTarget(
-        in collection: TaskCycleCollection
-    ) -> TaskCycleTraceTarget? {
-        guard collection == .recurringPlans else {
-            return nil
-        }
+    public var navigationTarget: TaskCycleTraceTarget? {
         guard state != .skipped, state != .returnedToPool else {
             return nil
         }
         return occurrenceTarget
     }
-
-    public func presentationState(
-        in collection: TaskCycleCollection
-    ) -> TaskCycleTrackDayState {
-        semanticTarget(in: collection)?.state ?? state
-    }
-}
-
-public enum TaskCycleCollection: Equatable, Hashable, Sendable {
-    case recurringPlans
-    case pool
-    case future
-    case unfinished
-    case completed
 }
 
 public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
@@ -728,15 +698,6 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
 
     public var pooledOccurrenceCount: Int {
         days.count { $0.state == .returnedToPool }
-    }
-
-    public func appears(in collection: TaskCycleCollection) -> Bool {
-        switch collection {
-        case .recurringPlans:
-            true
-        case .pool, .future, .unfinished, .completed:
-            false
-        }
     }
 }
 
@@ -1113,15 +1074,6 @@ public extension NoonmarkEngine {
                 }
                 return $0.id.description < $1.id.description
             }
-    }
-
-    func taskCycleTracks(
-        today: LocalDate,
-        collection: TaskCycleCollection
-    ) -> [TaskCycleTrack] {
-        taskCycleTracks(today: today).filter {
-            $0.appears(in: collection)
-        }
     }
 
     func taskCycleTemplateClassification(

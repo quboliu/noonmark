@@ -9,7 +9,7 @@ struct TaskCycleConversionMenuSection: View {
     let accessibilityIdentifier: String
 
     var body: some View {
-        if store.engine.chains[chainID]?.cycleMembership == nil {
+        if store.engine.isRecurringTaskChain(chainID) == false {
             Divider()
             Button(store.copy.convertToRecurringTask) {
                 store.beginTaskCycleConversion(

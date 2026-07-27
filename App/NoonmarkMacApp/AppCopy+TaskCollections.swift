@@ -280,31 +280,12 @@ extension AppCopy {
         }
     }
 
-    func taskCycleSummary(
-        _ track: TaskCycleTrack,
-        collection: TaskCycleCollection
-    ) -> String {
-        switch (language, collection) {
-        case (.chinese, .recurringPlans):
+    func taskCycleSummary(_ track: TaskCycleTrack) -> String {
+        switch language {
+        case .chinese:
             "\(track.scheduledCount) 个计划日 · \(track.futurePlanCount) 个未来"
-        case (.chinese, .pool):
-            "\(track.scheduledCount) 个计划日 · \(track.completedCount) 天已完成"
-        case (.chinese, .future):
-            "\(track.futurePlanCount) 个未来计划 · \(track.completedCount) 天已完成"
-        case (.chinese, .unfinished):
-            "\(track.unfinishedCount) 天未完成 · \(track.completedCount) 天已完成"
-        case (.chinese, .completed):
-            "\(track.completedCount) 天已完成 · 共 \(track.scheduledCount) 个计划日"
-        case (.english, .recurringPlans):
+        case .english:
             "\(track.scheduledCount) scheduled · \(track.futurePlanCount) upcoming"
-        case (.english, .future):
-            "\(track.futurePlanCount) planned · \(track.completedCount) completed"
-        case (.english, .unfinished):
-            "\(track.unfinishedCount) unfinished · \(track.completedCount) completed"
-        case (.english, .completed):
-            "\(track.completedCount) completed · \(track.scheduledCount) scheduled days"
-        case (.english, .pool):
-            "\(track.scheduledCount) scheduled · \(track.completedCount) completed"
         }
     }
 

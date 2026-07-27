@@ -83,7 +83,7 @@ struct FuturePlanRow: View {
     let item: FuturePlanItem
 
     private var isRecurringOccurrence: Bool {
-        store.engine.chains[item.trace.chainID]?.cycleMembership != nil
+        store.engine.isRecurringTaskChain(item.trace.chainID)
     }
 
     var body: some View {

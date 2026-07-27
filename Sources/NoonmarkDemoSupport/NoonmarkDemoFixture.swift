@@ -278,6 +278,13 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
                 engine.chains[$0.trace.chainID]?
                     .cycleMembership != nil
             }
+        let recurringCalendarLeakCount = Set(
+            snapshot.traces.map(\.date)
+        ).reduce(into: 0) { count, date in
+            count += engine.calendarTraces(for: date).count {
+                engine.isRecurringTaskChain($0.chainID)
+            }
+        }
         recurringCollectionLeakCount =
             engine.taskPool().count {
                 $0.chain.cycleMembership != nil
@@ -289,6 +296,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
                 engine.chains[$0.trace.chainID]?
                     .cycleMembership != nil
             }
+            + recurringCalendarLeakCount
         let ordinaryCompletedHierarchies =
             engine.completedTaskHierarchies().filter {
                 $0.chain.cycleMembership == nil

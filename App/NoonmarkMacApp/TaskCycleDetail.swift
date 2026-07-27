@@ -117,12 +117,7 @@ struct TaskCycleDetail: View {
 
             if let track {
                 DetailSection(store.copy.recurringTaskTrack) {
-                    Text(
-                        store.copy.taskCycleSummary(
-                            track,
-                            collection: .recurringPlans
-                        )
-                    )
+                    Text(store.copy.taskCycleSummary(track))
                     .font(.noonmarkSystem(size: 11.5))
                     .foregroundStyle(Theme.text2)
                     .monospacedDigit()

@@ -275,6 +275,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 taskPoolProviderReportPresentationVerified:
                 analysisReportContractVerified,
                 taskCollectionCategoryVisibilityVerified: false,
+                calendarRecurringBoundaryVerified: false,
                 taskCyclePresentationVerified: false,
                 zhulongHeaderComposerHierarchyVerified: true
             )
@@ -352,27 +353,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 context: context,
                 verificationCase: verificationCase
             )
-        let recurringProjectionIsValid: Bool = {
-            switch verificationCase.page {
-            case .future:
-                return AppViewTreeE2E.view(
-                    identifier: "future.recurring-visibility"
-                ).flatMap(AppViewTreeE2E.verificationText) == "15"
-                    && context.store.visibleFuturePlanItems().count {
-                        context.engine.chains[$0.trace.chainID]?
-                            .cycleMembership != nil
-                    } == 16
-                    && AppViewTreeE2E.identifiers(
-                        withPrefix: "task-cycle-track."
-                    )?.isEmpty == true
-            case .pool, .unfinished, .completed:
-                return AppViewTreeE2E.identifiers(
-                    withPrefix: "task-cycle-track."
-                )?.isEmpty == true
-            case .recurring, .day, .calendar, .zhulong, .settings:
-                return true
-            }
-        }()
+        let recurringProjectionIsValid =
+            taskCollectionRecurringProjectionIsValid(
+                context: context,
+                verificationCase: verificationCase
+            )
         guard AppViewTreeE2E.activateMainWindow(),
               labelIdentifiers?.isEmpty == false,
               categoryPlacementIsValid,
@@ -395,20 +380,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
         let nextIndex = index + 1
         guard context.cases.indices.contains(nextIndex) else {
-            let cycleContext = DemoCycleCheckContext(
-                fixture: context.fixture,
-                engine: context.engine,
-                sessions: context.sessions,
-                store: context.store,
-                presentationVerification:
-                context.presentationVerification
-                    .verifyingTaskCollectionCategoryVisibility(),
-                cases: cycleVerificationCases
+            guard AppViewTreeE2E.click(
+                identifier: "sidebar.nav.calendar"
             )
-            guard let firstCase = cycleContext.cases.first,
-                  AppViewTreeE2E.click(
-                      identifier: firstCase.sidebarNavigationIdentifier
-                  )
             else {
                 AppViewTreeE2E.writeDump(beside: resultURL)
                 finishWithFailure(
@@ -418,9 +392,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 )
                 return
             }
-            retryTaskCyclePresentation(
-                context: cycleContext,
-                index: 0,
+            retryCalendarRecurringBoundary(
+                context: context,
                 remainingAttempts: 100
             )
             return
@@ -440,6 +413,152 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         retryTaskCollectionCategoryVisibility(
             context: context,
             index: nextIndex,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func taskCollectionRecurringProjectionIsValid(
+        context: DemoCollectionCheckContext,
+        verificationCase: DemoCollectionCheckCase
+    ) -> Bool {
+        switch verificationCase.page {
+        case .future:
+            futureRecurringProjectionIsValid(context: context)
+        case .day:
+            dayRecurringProjectionIsValid(context: context)
+        case .pool, .unfinished, .completed:
+            AppViewTreeE2E.identifiers(
+                withPrefix: "task-cycle-track."
+            )?.isEmpty == true
+        case .recurring, .calendar, .zhulong, .settings:
+            true
+        }
+    }
+
+    @MainActor
+    private func futureRecurringProjectionIsValid(
+        context: DemoCollectionCheckContext
+    ) -> Bool {
+        let recurringItems =
+            context.store.visibleFuturePlanItems().filter {
+                context.engine.isRecurringTaskChain(
+                    $0.trace.chainID
+                )
+            }
+        let firstRecurringCategoryIdentifier =
+            recurringItems.first.map {
+                TaskClassificationAccessibilityNamespace(
+                    surface: "future-row",
+                    instanceID: $0.trace.id.description
+                ).categoryIdentifier
+            }
+        return AppViewTreeE2E.view(
+            identifier: "future.recurring-visibility"
+        ).flatMap(AppViewTreeE2E.verificationText) == "15"
+            && recurringItems.count == 16
+            && firstRecurringCategoryIdentifier.flatMap {
+                AppViewTreeE2E.view(identifier: $0)
+            } != nil
+            && AppViewTreeE2E.identifiers(
+                withPrefix: "task-cycle-track."
+            )?.isEmpty == true
+    }
+
+    @MainActor
+    private func dayRecurringProjectionIsValid(
+        context: DemoCollectionCheckContext
+    ) -> Bool {
+        let recurringTraceIDs = context.engine.getDayTodo(
+            date: context.fixture.anchorDate
+        ).traces.filter {
+            context.engine.isRecurringTaskChain($0.chainID)
+        }.map(\.id)
+        return recurringTraceIDs.isEmpty == false
+            && recurringTraceIDs.allSatisfy {
+                AppViewTreeE2E.view(
+                    identifier:
+                    "day-row.task-cycle.\($0.description)"
+                ) != nil
+            }
+    }
+
+    @MainActor
+    private func retryCalendarRecurringBoundary(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        let ordinaryTrace = context.engine.calendarTraces(
+            for: context.fixture.anchorDate
+        ).first
+        let recurringTraceIDs = context.engine.traces.values.filter {
+            context.engine.isRecurringTaskChain($0.chainID)
+        }.map(\.id)
+        let recurringRowsAreHidden = recurringTraceIDs.allSatisfy {
+            AppViewTreeE2E.view(
+                identifier: "calendar.trace.\($0.description).status-dot"
+            ) == nil
+        }
+        guard context.store.page == .calendar,
+              context.store.selectedCalendarDate
+              == context.fixture.anchorDate,
+              let ordinaryTrace,
+              AppViewTreeE2E.activateMainWindow(),
+              AppViewTreeE2E.view(
+                  identifier:
+                  "calendar.trace.\(ordinaryTrace.id.description).status-dot"
+              ) != nil,
+              recurringRowsAreHidden
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                retryCalendarRecurringBoundary(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        do {
+            try captureTaskCollectionScreenshot(page: .calendar)
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+
+        let cycleContext = DemoCycleCheckContext(
+            fixture: context.fixture,
+            engine: context.engine,
+            sessions: context.sessions,
+            store: context.store,
+            presentationVerification:
+            context.presentationVerification
+                .verifyingTaskCollectionCategoryVisibility()
+                .verifyingCalendarRecurringBoundary(),
+            cases: cycleVerificationCases
+        )
+        guard let firstCase = cycleContext.cases.first,
+              AppViewTreeE2E.click(
+                  identifier: firstCase.sidebarNavigationIdentifier
+              )
+        else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        retryTaskCyclePresentation(
+            context: cycleContext,
+            index: 0,
             remainingAttempts: 100
         )
     }
@@ -478,8 +597,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let verificationCase = context.cases[index]
         guard context.store.page == verificationCase.page,
               let track = context.engine.taskCycleTracks(
-                  today: context.fixture.anchorDate,
-                  collection: verificationCase.collection
+                  today: context.fixture.anchorDate
               ).first
         else {
             retryTaskCyclePresentation(
@@ -497,7 +615,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             "\(expectedTrackIdentifier).disclosure"
         ]
         let expectedDayIdentifiers = Set(track.days.map {
-            "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\($0.date.description).\($0.presentationState(in: verificationCase.collection).rawValue)"
+            "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\($0.date.description).\($0.state.rawValue)"
         })
         let trackIdentifiers = AppViewTreeE2E.identifiers(
             withPrefix:
@@ -505,8 +623,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         )
         let expectedTrackRootIdentifiers = Set(
             context.engine.taskCycleTracks(
-                today: context.fixture.anchorDate,
-                collection: verificationCase.collection
+                today: context.fixture.anchorDate
             ).map {
                 "task-cycle-track.\(verificationCase.accessibilityName).\($0.id.description)"
             }
@@ -549,7 +666,6 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         switch prepareRecurringPlanDetail(
             context: context,
             track: track,
-            collection: verificationCase.collection,
             detailIdentifier: "\(expectedTrackIdentifier).detail"
         ) {
         case .ready:
@@ -612,16 +728,6 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         track: TaskCycleTrack,
         verificationCase: DemoCycleCheckCase
     ) {
-        if verificationCase.collection == .future {
-            navigateMovedFutureTaskCycleDay(
-                context: context,
-                track: track,
-                verificationCase: verificationCase,
-                nextIndex: index + 1
-            )
-            return
-        }
-
         let nextIndex = index + 1
         if context.cases.indices.contains(nextIndex) {
             navigateToNextTaskCycleCase(
@@ -635,42 +741,6 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             context: context,
             track: track,
             verificationCase: verificationCase
-        )
-    }
-
-    @MainActor
-    private func navigateMovedFutureTaskCycleDay(
-        context: DemoCycleCheckContext,
-        track: TaskCycleTrack,
-        verificationCase: DemoCycleCheckCase,
-        nextIndex: Int
-    ) {
-        guard let movedDay = track.days.first(where: {
-            guard let target = $0.futurePlanTarget else {
-                return false
-            }
-            return target.date != $0.date
-        }), let movedTarget = movedDay.futurePlanTarget,
-        AppViewTreeE2E.click(
-            identifier: cycleDayIdentifier(
-                day: movedDay,
-                track: track,
-                verificationCase: verificationCase
-            )
-        ) else {
-            AppViewTreeE2E.writeDump(beside: resultURL)
-            finishWithFailure(
-                InteractiveDemoFixtureError.presentationContractFailed,
-                on: context.store
-            )
-            return
-        }
-        retryTaskCycleNavigation(
-            context: context,
-            expectedTraceID: movedTarget.traceID,
-            expectedDate: movedTarget.date,
-            nextIndex: nextIndex,
-            remainingAttempts: 100
         )
     }
 
@@ -705,12 +775,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     ) {
         guard let anchorDay = track.days.first(where: {
             $0.date == context.fixture.anchorDate
-                && $0.navigationTarget(
-                    in: verificationCase.collection
-                ) != nil
-        }), let navigationTarget = anchorDay.navigationTarget(
-            in: verificationCase.collection
-        ),
+                && $0.navigationTarget != nil
+        }), let navigationTarget = anchorDay.navigationTarget,
         AppViewTreeE2E.click(
             identifier: cycleDayIdentifier(
                 day: anchorDay,
@@ -738,12 +804,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     private func prepareRecurringPlanDetail(
         context: DemoCycleCheckContext,
         track: TaskCycleTrack,
-        collection: TaskCycleCollection,
         detailIdentifier: String
     ) -> RecurringPlanDetailPreparation {
-        guard collection == .recurringPlans else {
-            return .ready
-        }
         guard context.store.selectedTaskCycleSeriesID == track.id else {
             guard AppViewTreeE2E.click(
                 identifier: detailIdentifier
@@ -778,10 +840,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         track: TaskCycleTrack,
         verificationCase: DemoCycleCheckCase
     ) -> String {
-        let state = day.presentationState(
-            in: verificationCase.collection
-        )
-        return "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\(day.date.description).\(state.rawValue)"
+        "task-cycle-day.\(verificationCase.accessibilityName).\(track.id.description).\(day.date.description).\(day.state.rawValue)"
     }
 
     @MainActor
@@ -1027,27 +1086,6 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 }
             )
         }
-        if let collection = verificationCase.taskCycleCollection {
-            result.formUnion(
-                context.engine.taskCycleTracks(
-                    today: context.fixture.anchorDate,
-                    collection: collection
-                ).compactMap { track in
-                    guard
-                        (try? context.engine
-                            .taskCycleTemplateClassification(
-                                seriesID: track.id
-                            ))?.category != nil
-                    else {
-                        return nil
-                    }
-                    return TaskClassificationAccessibilityNamespace(
-                        surface: "task-cycle-row",
-                        instanceID: track.id.description
-                    ).categoryIdentifier
-                }
-            )
-        }
         return result
     }
 
@@ -1191,8 +1229,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     private var cycleVerificationCases: [DemoCycleCheckCase] {
         [
             DemoCycleCheckCase(
-                page: .recurring,
-                collection: .recurringPlans
+                page: .recurring
             )
         ]
     }
@@ -1932,6 +1969,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               presentationVerification
               .taskCollectionCategoryVisibilityVerified,
               presentationVerification
+              .calendarRecurringBoundaryVerified,
+              presentationVerification
               .taskCyclePresentationVerified,
               presentationVerification
               .zhulongHeaderComposerHierarchyVerified,
@@ -1981,6 +2020,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             taskCollectionCategoryVisibilityVerified:
             presentationVerification
                 .taskCollectionCategoryVisibilityVerified,
+            calendarRecurringBoundaryVerified:
+            presentationVerification
+                .calendarRecurringBoundaryVerified,
             taskCyclePresentationVerified:
             presentationVerification
                 .taskCyclePresentationVerified,
@@ -2029,6 +2071,7 @@ private struct InteractiveDemoPresentationVerification {
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
     let taskCollectionCategoryVisibilityVerified: Bool
+    let calendarRecurringBoundaryVerified: Bool
     let taskCyclePresentationVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool
 
@@ -2043,6 +2086,28 @@ private struct InteractiveDemoPresentationVerification {
             taskPoolProviderReportPresentationVerified:
             taskPoolProviderReportPresentationVerified,
             taskCollectionCategoryVisibilityVerified: true,
+            calendarRecurringBoundaryVerified:
+            calendarRecurringBoundaryVerified,
+            taskCyclePresentationVerified:
+            taskCyclePresentationVerified,
+            zhulongHeaderComposerHierarchyVerified:
+            zhulongHeaderComposerHierarchyVerified
+        )
+    }
+
+    func verifyingCalendarRecurringBoundary() -> Self {
+        Self(
+            scopeAuthorizationUIVerified:
+            scopeAuthorizationUIVerified,
+            taskPoolStatisticsPresentationVerified:
+            taskPoolStatisticsPresentationVerified,
+            taskPoolProviderBoundaryVerified:
+            taskPoolProviderBoundaryVerified,
+            taskPoolProviderReportPresentationVerified:
+            taskPoolProviderReportPresentationVerified,
+            taskCollectionCategoryVisibilityVerified:
+            taskCollectionCategoryVisibilityVerified,
+            calendarRecurringBoundaryVerified: true,
             taskCyclePresentationVerified:
             taskCyclePresentationVerified,
             zhulongHeaderComposerHierarchyVerified:
@@ -2062,6 +2127,8 @@ private struct InteractiveDemoPresentationVerification {
             taskPoolProviderReportPresentationVerified,
             taskCollectionCategoryVisibilityVerified:
             taskCollectionCategoryVisibilityVerified,
+            calendarRecurringBoundaryVerified:
+            calendarRecurringBoundaryVerified,
             taskCyclePresentationVerified: true,
             zhulongHeaderComposerHierarchyVerified:
             zhulongHeaderComposerHierarchyVerified
@@ -2087,10 +2154,6 @@ private struct DemoCollectionCheckCase {
     var sidebarNavigationIdentifier: String {
         "sidebar.nav.\(page.rawValue)"
     }
-
-    var taskCycleCollection: TaskCycleCollection? {
-        page == .recurring ? .recurringPlans : nil
-    }
 }
 
 private struct DemoCycleCheckContext {
@@ -2105,16 +2168,9 @@ private struct DemoCycleCheckContext {
 
 private struct DemoCycleCheckCase {
     let page: NoonmarkStore.Page
-    let collection: TaskCycleCollection
 
     var accessibilityName: String {
-        switch collection {
-        case .recurringPlans: "recurring"
-        case .pool: "pool"
-        case .future: "future"
-        case .unfinished: "unfinished"
-        case .completed: "completed"
-        }
+        "recurring"
     }
 
     var sidebarNavigationIdentifier: String {
@@ -2122,9 +2178,7 @@ private struct DemoCycleCheckCase {
     }
 
     var collectionAnchorIdentifier: String {
-        collection == .recurringPlans
-            ? "recurring-plans.list"
-            : "task-cycle-section.\(accessibilityName)"
+        "recurring-plans.list"
     }
 }
 
@@ -2156,6 +2210,7 @@ private struct InteractiveDemoManifest: Codable {
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
     let taskCollectionCategoryVisibilityVerified: Bool
+    let calendarRecurringBoundaryVerified: Bool
     let taskCyclePresentationVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool
     let persistedDatabasePath: String

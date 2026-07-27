@@ -248,6 +248,8 @@ private struct NoonmarkSearchResultRow: View {
             store.copy.searchTaskKind
         case .poolTask:
             store.copy.searchPoolTaskKind
+        case .recurringPlan:
+            store.copy.searchRecurringPlanKind
         case .subtask:
             store.copy.searchSubtaskKind
         }
@@ -259,6 +261,8 @@ private struct NoonmarkSearchResultRow: View {
             "checklist"
         case .poolTask:
             "tray"
+        case .recurringPlan:
+            "repeat"
         case .subtask:
             "checkmark.circle"
         }
@@ -270,6 +274,8 @@ private struct NoonmarkSearchResultRow: View {
             Theme.navDay
         case .poolTask:
             Theme.navPool
+        case .recurringPlan:
+            Theme.navRecurring
         case .subtask:
             Theme.accent
         }
@@ -281,7 +287,7 @@ private struct NoonmarkSearchResultRow: View {
             traceDate
         case let .subtask(_, _, subtaskDate, _):
             subtaskDate
-        case .pool:
+        case .pool, .recurringPlan:
             nil
         }
         return date.map(store.displayDate)
@@ -298,6 +304,13 @@ extension NoonmarkStore {
             }
             selectPage(.pool)
             selectPool(chainID)
+        case let .recurringPlan(seriesID):
+            guard engine.taskCycleSeries[seriesID] != nil else {
+                clearSelection()
+                return
+            }
+            selectPage(.recurring)
+            selectTaskCycleSeries(seriesID)
         case let .trace(traceID, _, _):
             guard let trace = currentSearchTrace(traceID) else {
                 clearSelection()

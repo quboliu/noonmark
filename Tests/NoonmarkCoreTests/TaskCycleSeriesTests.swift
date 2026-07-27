@@ -158,6 +158,45 @@ final class TaskCycleSeriesTests: XCTestCase {
         XCTAssertEqual(track.unfinishedCount, 1)
     }
 
+    func testCalendarExcludesRecurringOccurrencesWhileDayTodoKeepsThem() throws {
+        let engine = NoonmarkEngine()
+        let ordinaryChainID = try engine.createPoolTask(
+            title: "普通今日任务",
+            now: now
+        )
+        let ordinaryTraceID = try engine.scheduleFromPool(
+            chainID: ordinaryChainID,
+            date: monday,
+            today: monday,
+            now: now.addingTimeInterval(1)
+        )
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日复盘",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now.addingTimeInterval(2)
+        )
+        let recurringTrace = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+
+        XCTAssertEqual(
+            Set(engine.getDayTodo(date: monday).traces.map(\.id)),
+            [ordinaryTraceID, recurringTrace.id]
+        )
+        XCTAssertEqual(
+            engine.calendarTraces(for: monday).map(\.id),
+            [ordinaryTraceID]
+        )
+        XCTAssertEqual(engine.dailyReviewStats(date: monday).total, 2)
+        XCTAssertEqual(engine.calendarReviewStats(date: monday).total, 1)
+        XCTAssertEqual(engine.calendarSummary(for: monday).total, 1)
+    }
+
     func testRecurringOccurrenceCannotReturnToTaskPool() throws {
         let engine = NoonmarkEngine()
         let seriesID = try engine.createTaskCycleSeries(
@@ -184,6 +223,46 @@ final class TaskCycleSeriesTests: XCTestCase {
         )
         XCTAssertEqual(engine.snapshot(), before)
         XCTAssertTrue(engine.taskPool().isEmpty)
+    }
+
+    func testRecurringOccurrenceCannotUseCurrentDayDraftDeletion() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "每日复盘",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let occurrence = try trace(
+            in: engine,
+            seriesID: seriesID,
+            occurrenceDate: monday
+        )
+        let before = engine.snapshot()
+
+        XCTAssertFalse(
+            engine.canDeleteNewCurrentDayTask(
+                traceID: occurrence.id,
+                today: monday
+            )
+        )
+        XCTAssertThrowsError(
+            try engine.deleteNewCurrentDayTask(
+                traceID: occurrence.id,
+                today: monday,
+                now: now.addingTimeInterval(1)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidTransition(
+                    "recurring occurrences must be managed from recurring plans"
+                )
+            )
+        }
+        XCTAssertEqual(engine.snapshot(), before)
     }
 
     func testEveryTwoDaysScheduleIsAnchoredToTheSeriesStart() throws {
@@ -979,11 +1058,6 @@ final class TaskCycleSeriesTests: XCTestCase {
             track.days.map(\.state),
             [.completed, .unfinished, .pendingToday, .skipped, .skipped]
         )
-        XCTAssertTrue(track.appears(in: .recurringPlans))
-        XCTAssertFalse(track.appears(in: .pool))
-        XCTAssertFalse(track.appears(in: .future))
-        XCTAssertFalse(track.appears(in: .unfinished))
-        XCTAssertFalse(track.appears(in: .completed))
         XCTAssertEqual(track.completedCount, 1)
         XCTAssertEqual(track.unfinishedCount, 1)
         XCTAssertTrue(engine.taskPool().isEmpty)
@@ -1009,14 +1083,8 @@ final class TaskCycleSeriesTests: XCTestCase {
             }
         )
 
-        XCTAssertTrue(track.appears(in: .recurringPlans))
-        XCTAssertFalse(track.appears(in: .pool))
-        XCTAssertTrue(
-            engine.taskCycleTracks(
-                today: monday,
-                collection: .pool
-            ).isEmpty
-        )
+        XCTAssertEqual(track.id, seriesID)
+        XCTAssertTrue(engine.taskPool().isEmpty)
     }
 
     func testPoolProjectionHidesSeriesWithOnlyFutureObligations() throws {
@@ -1038,9 +1106,6 @@ final class TaskCycleSeriesTests: XCTestCase {
 
         XCTAssertEqual(track.futurePlanCount, 2)
         XCTAssertEqual(track.pooledOccurrenceCount, 0)
-        XCTAssertTrue(track.appears(in: .recurringPlans))
-        XCTAssertFalse(track.appears(in: .pool))
-        XCTAssertFalse(track.appears(in: .future))
         XCTAssertEqual(
             engine.visibleFuturePlans(
                 today: monday,
@@ -1049,18 +1114,10 @@ final class TaskCycleSeriesTests: XCTestCase {
             2
         )
         XCTAssertEqual(
-            engine.taskCycleTracks(
-                today: monday,
-                collection: .recurringPlans
-            ).map(\.id),
+            engine.taskCycleTracks(today: monday).map(\.id),
             [seriesID]
         )
-        XCTAssertTrue(
-            engine.taskCycleTracks(
-                today: monday,
-                collection: .pool
-            ).isEmpty
-        )
+        XCTAssertTrue(engine.taskPool().isEmpty)
     }
 
     func testPoolProjectionHidesNaturallyEndedHistoricalSeries() throws {
@@ -1090,20 +1147,8 @@ final class TaskCycleSeriesTests: XCTestCase {
             }
         )
 
-        XCTAssertTrue(track.appears(in: .recurringPlans))
-        XCTAssertFalse(track.appears(in: .pool))
-        XCTAssertTrue(
-            engine.taskCycleTracks(
-                today: tuesday,
-                collection: .pool
-            ).isEmpty
-        )
-        XCTAssertTrue(
-            engine.taskCycleTracks(
-                today: tuesday,
-                collection: .completed
-            ).isEmpty
-        )
+        XCTAssertEqual(track.id, seriesID)
+        XCTAssertTrue(engine.taskPool().isEmpty)
         XCTAssertEqual(track.completedCount, 1)
         XCTAssertTrue(engine.completedPool().isEmpty)
     }
@@ -1186,7 +1231,6 @@ final class TaskCycleSeriesTests: XCTestCase {
             track.days.first?.futurePlanTarget?.traceID,
             deferredTraceID
         )
-        XCTAssertFalse(track.appears(in: .future))
         XCTAssertEqual(
             engine.visibleFuturePlans(
                 today: monday,
@@ -1291,10 +1335,6 @@ final class TaskCycleSeriesTests: XCTestCase {
             track.days.map(\.state),
             [.completed, .unfinished, .pendingToday, .planned, .planned]
         )
-        XCTAssertTrue(track.appears(in: .recurringPlans))
-        XCTAssertFalse(track.appears(in: .future))
-        XCTAssertFalse(track.appears(in: .unfinished))
-        XCTAssertFalse(track.appears(in: .completed))
         XCTAssertEqual(track.completedCount, 1)
         XCTAssertEqual(track.unfinishedCount, 1)
         XCTAssertEqual(track.plannedCount, 2)
@@ -1302,21 +1342,9 @@ final class TaskCycleSeriesTests: XCTestCase {
             track.days.first { $0.date == monday }
         )
         XCTAssertEqual(
-            completedDay.navigationTarget(in: .recurringPlans)?.traceID,
+            completedDay.navigationTarget?.traceID,
             mondayTrace.id
         )
-        for collection in [
-            TaskCycleCollection.future,
-            .unfinished,
-            .completed
-        ] {
-            XCTAssertTrue(
-                engine.taskCycleTracks(
-                    today: wednesday,
-                    collection: collection
-                ).isEmpty
-            )
-        }
         XCTAssertTrue(engine.unfinishedPool().isEmpty)
         XCTAssertTrue(engine.completedPool().isEmpty)
     }
@@ -1367,7 +1395,6 @@ final class TaskCycleSeriesTests: XCTestCase {
             tuesdayDay.futurePlanTarget,
             tuesdayDay.occurrenceTarget
         )
-        XCTAssertFalse(track.appears(in: .future))
         XCTAssertEqual(
             engine.visibleFuturePlans(
                 today: monday,
@@ -1418,8 +1445,7 @@ final class TaskCycleSeriesTests: XCTestCase {
         )
         XCTAssertEqual(tuesdayDay.state, .skipped)
         XCTAssertNil(tuesdayDay.futurePlanTarget)
-        XCTAssertNil(tuesdayDay.navigationTarget(in: .pool))
-        XCTAssertNil(tuesdayDay.navigationTarget(in: .future))
+        XCTAssertNil(tuesdayDay.navigationTarget)
         XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
     }
 
@@ -1496,13 +1522,13 @@ final class TaskCycleSeriesTests: XCTestCase {
                 state: .planned
             )
         )
-        XCTAssertFalse(track.appears(in: .future))
         XCTAssertEqual(
-            track.days.first?.presentationState(in: .future),
+            track.days.first?.state,
             .deferred
         )
-        XCTAssertNil(
-            track.days.first?.navigationTarget(in: .future)
+        XCTAssertEqual(
+            track.days.first?.navigationTarget?.traceID,
+            mondayTrace.id
         )
         XCTAssertEqual(
             engine.visibleFuturePlans(
@@ -1546,7 +1572,6 @@ final class TaskCycleSeriesTests: XCTestCase {
                 $0.id == seriesID
             }
         )
-        XCTAssertFalse(track.appears(in: .completed))
         XCTAssertEqual(
             track.days.first?.completedTarget,
             TaskCycleTraceTarget(
@@ -1555,14 +1580,9 @@ final class TaskCycleSeriesTests: XCTestCase {
                 state: .completed
             )
         )
-        XCTAssertNil(
-            track.days.first?.navigationTarget(in: .completed)
-        )
-        XCTAssertTrue(
-            engine.taskCycleTracks(
-                today: tuesday,
-                collection: .completed
-            ).isEmpty
+        XCTAssertEqual(
+            track.days.first?.navigationTarget?.traceID,
+            mondayTrace.id
         )
         XCTAssertTrue(engine.completedPool().isEmpty)
     }
@@ -1599,20 +1619,14 @@ final class TaskCycleSeriesTests: XCTestCase {
                 $0.id == seriesID
             }
         )
-        XCTAssertFalse(track.appears(in: .unfinished))
         let unfinishedTarget = try XCTUnwrap(
             track.days.first?.unfinishedTarget
         )
         XCTAssertEqual(unfinishedTarget.date, tuesday)
         XCTAssertEqual(unfinishedTarget.state, .unfinished)
-        XCTAssertNil(
-            track.days.first?.navigationTarget(in: .unfinished)
-        )
-        XCTAssertTrue(
-            engine.taskCycleTracks(
-                today: wednesday,
-                collection: .unfinished
-            ).isEmpty
+        XCTAssertEqual(
+            track.days.first?.navigationTarget?.traceID,
+            mondayTrace.id
         )
         XCTAssertTrue(engine.unfinishedPool().isEmpty)
     }
@@ -1654,24 +1668,10 @@ final class TaskCycleSeriesTests: XCTestCase {
             }
         )
 
-        XCTAssertFalse(track.appears(in: .completed))
-        XCTAssertFalse(track.appears(in: .unfinished))
         XCTAssertEqual(track.completedCount, 1)
         XCTAssertEqual(track.unfinishedCount, 0)
         XCTAssertNil(track.days.first?.unfinishedTarget)
-        XCTAssertEqual(
-            engine.taskCycleTracks(
-                today: tuesday,
-                collection: .unfinished
-            ).map(\.id),
-            []
-        )
-        XCTAssertTrue(
-            engine.taskCycleTracks(
-                today: tuesday,
-                collection: .completed
-            ).isEmpty
-        )
+        XCTAssertTrue(engine.unfinishedPool().isEmpty)
         XCTAssertTrue(engine.completedPool().isEmpty)
     }
 

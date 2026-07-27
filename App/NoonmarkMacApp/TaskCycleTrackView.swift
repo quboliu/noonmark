@@ -70,10 +70,7 @@ struct TaskCycleTrackRow: View {
                     Spacer(minLength: 8)
 
                     Text(
-                        store.copy.taskCycleSummary(
-                            track,
-                            collection: .recurringPlans
-                        )
+                        store.copy.taskCycleSummary(track)
                     )
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text2)
@@ -191,11 +188,11 @@ private struct TaskCycleTrackDayButton: View {
     let day: TaskCycleTrackDay
 
     private var navigationTarget: TaskCycleTraceTarget? {
-        day.navigationTarget(in: .recurringPlans)
+        day.navigationTarget
     }
 
     private var presentationState: TaskCycleTrackDayState {
-        day.presentationState(in: .recurringPlans)
+        day.state
     }
 
     private var movedFutureTargetDate: LocalDate? {

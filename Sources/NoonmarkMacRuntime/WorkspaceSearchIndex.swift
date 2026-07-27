@@ -4,6 +4,7 @@ import NoonmarkCore
 public enum WorkspaceSearchDestination: Hashable, Sendable {
     case trace(id: DayTraceID, date: LocalDate, status: TraceStatus)
     case pool(chainID: TaskChainID)
+    case recurringPlan(seriesID: TaskCycleSeriesID)
     case subtask(
         id: SubtaskID,
         parentTraceID: DayTraceID,
@@ -15,6 +16,7 @@ public enum WorkspaceSearchDestination: Hashable, Sendable {
 public enum WorkspaceSearchResultKind: Hashable, Sendable {
     case task
     case poolTask
+    case recurringPlan
     case subtask
 }
 
@@ -73,6 +75,21 @@ public struct WorkspaceSearchIndex: Sendable {
             entries.append(Self.indexed(result, recency: task.definition.contentUpdatedAt))
         }
 
+        for series in engine.taskCycleSeries.values {
+            let context = Self.joinedContext([
+                series.descriptionText,
+                series.plannedSubtasks.map(\.title).joined(separator: " ")
+            ])
+            let result = WorkspaceSearchResult(
+                id: "recurring-\(series.id.description)",
+                kind: .recurringPlan,
+                title: series.title,
+                context: context,
+                destination: .recurringPlan(seriesID: series.id)
+            )
+            entries.append(Self.indexed(result, recency: series.updatedAt))
+        }
+
         let dayTodoDates = Set(
             engine.traces.values.compactMap { trace in
                 trace.status.isVisibleInDayTodo ? trace.date : nil
@@ -80,6 +97,9 @@ public struct WorkspaceSearchIndex: Sendable {
         ).sorted()
         for date in dayTodoDates {
             for trace in engine.getDayTodo(date: date).traces {
+                guard engine.isRecurringTaskChain(trace.chainID) == false else {
+                    continue
+                }
                 guard let definition = engine.definitions[trace.definitionID] else { continue }
                 let actualSubtasks = engine.subtasks.values
                     .filter {

@@ -20,7 +20,7 @@ struct FuturePlanDetail: View {
     let definition: TaskDefinition
 
     private var isRecurringOccurrence: Bool {
-        store.engine.chains[trace.chainID]?.cycleMembership != nil
+        store.engine.isRecurringTaskChain(trace.chainID)
     }
 
     var body: some View {

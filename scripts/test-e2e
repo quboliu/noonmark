@@ -5549,7 +5549,9 @@ run_preferences_clock_probe() {
     /click identifier=settings.preferences.language/ { language = 1 }
     /click identifier=settings.preferences.poem.enabled/ { poem = 1 }
     /sync uploaded=2 pending=0 failed=0/ { synced = 1 }
-    /sync task-summary new=0 updated=0 rendered=true/ { summary = 1 }
+    /sync task-summary new=0 updated=0 rendered=true timestamps=true/ {
+      summary = 1
+    }
     /restart stale=/ { restarted = 1 }
     END { print theme, language, poem, synced, summary, restarted }
   ' "${preferences_dir}/input-trace.txt")"

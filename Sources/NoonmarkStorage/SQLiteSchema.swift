@@ -12,7 +12,7 @@ private func sqliteNonemptyInvariant(_ column: String) -> String {
 }
 
 public enum SQLiteSchema {
-    public static let version = 14
+    public static let version = 15
 
     public static let statements: [String] = [
         """
@@ -65,6 +65,10 @@ public enum SQLiteSchema {
             label_ids_json TEXT NOT NULL CHECK (
                 json_valid(label_ids_json)
                 AND json_type(label_ids_json) = 'array'
+            ),
+            classification_revisions_json TEXT NOT NULL CHECK (
+                json_valid(classification_revisions_json)
+                AND json_type(classification_revisions_json) = 'array'
             ),
             cancellation_facts_json TEXT NOT NULL CHECK (
                 json_valid(cancellation_facts_json)

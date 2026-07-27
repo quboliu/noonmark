@@ -1067,6 +1067,25 @@ private extension SQLiteEngineRepository {
         )
     }
 
+    func taskCycleClassificationRevisionsJSON(
+        _ revisions: [TaskCycleClassificationRevision]
+    ) throws -> String {
+        try taskCycleDomainJSON(
+            revisions,
+            description: "task cycle classification revisions"
+        )
+    }
+
+    func taskCycleClassificationRevisions(
+        from json: String
+    ) throws -> [TaskCycleClassificationRevision] {
+        try taskCycleDomainValue(
+            [TaskCycleClassificationRevision].self,
+            from: json,
+            description: "task cycle classification revisions"
+        )
+    }
+
     func taskCyclePlannedSubtasksJSON(
         _ subtasks: [PlannedSubtask]
     ) throws -> String {
@@ -1609,10 +1628,10 @@ private extension SQLiteEngineRepository {
             id, title, description_text, start_date, end_date, schedule,
             end_condition_json, plan_revisions_json, planned_subtasks_json,
             category_id, label_ids_json,
-            cancellation_facts_json,
+            classification_revisions_json, cancellation_facts_json,
             created_at, created_at_bits, updated_at, updated_at_bits
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             description_text = excluded.description_text,
@@ -1624,6 +1643,8 @@ private extension SQLiteEngineRepository {
             planned_subtasks_json = excluded.planned_subtasks_json,
             category_id = excluded.category_id,
             label_ids_json = excluded.label_ids_json,
+            classification_revisions_json =
+                excluded.classification_revisions_json,
             cancellation_facts_json = excluded.cancellation_facts_json,
             created_at = excluded.created_at,
             created_at_bits = excluded.created_at_bits,
@@ -1670,16 +1691,23 @@ private extension SQLiteEngineRepository {
                     in: statement
                 )
                 bind(
-                    try taskCycleCancellationFactsJSON(
-                        series.cancellationFacts
+                    try taskCycleClassificationRevisionsJSON(
+                        series.classificationRevisions
                     ),
                     to: 12,
                     in: statement
                 )
-                bind(series.createdAt, to: 13, in: statement)
-                try bindExactDate(series.createdAt, to: 14, in: statement)
-                bind(series.updatedAt, to: 15, in: statement)
-                try bindExactDate(series.updatedAt, to: 16, in: statement)
+                bind(
+                    try taskCycleCancellationFactsJSON(
+                        series.cancellationFacts
+                    ),
+                    to: 13,
+                    in: statement
+                )
+                bind(series.createdAt, to: 14, in: statement)
+                try bindExactDate(series.createdAt, to: 15, in: statement)
+                bind(series.updatedAt, to: 16, in: statement)
+                try bindExactDate(series.updatedAt, to: 17, in: statement)
             }
         }
     }
@@ -3817,7 +3845,7 @@ private extension SQLiteEngineRepository {
                 id, title, description_text, start_date, end_date, schedule,
                 end_condition_json, plan_revisions_json,
                 planned_subtasks_json, category_id, label_ids_json,
-                cancellation_facts_json,
+                classification_revisions_json, cancellation_facts_json,
                 created_at, created_at_bits, updated_at, updated_at_bits
             FROM task_cycle_series
             ORDER BY created_at, id
@@ -3849,18 +3877,22 @@ private extension SQLiteEngineRepository {
                 planRevisions: try taskCyclePlanRevisions(
                     from: string(statement, 7)
                 ),
-                cancellationFacts: try taskCycleCancellationFacts(
+                classificationRevisions:
+                try taskCycleClassificationRevisions(
                     from: string(statement, 11)
+                ),
+                cancellationFacts: try taskCycleCancellationFacts(
+                    from: string(statement, 12)
                 ),
                 createdAt: try validatedExactDate(
                     statement,
-                    textIndex: 12,
-                    bitsIndex: 13
+                    textIndex: 13,
+                    bitsIndex: 14
                 ),
                 updatedAt: try validatedExactDate(
                     statement,
-                    textIndex: 14,
-                    bitsIndex: 15
+                    textIndex: 15,
+                    bitsIndex: 16
                 )
             )
         }

@@ -92,6 +92,29 @@ public final class SQLiteSyncRepository {
         try saveMetadata(entry, into: database)
     }
 
+    public func saveMetadata(_ entries: [SyncMetadataEntry]) throws {
+        guard entries.isEmpty == false else { return }
+        guard Set(entries.map(\.key)).count == entries.count else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "sync metadata batch contains duplicate keys"
+            )
+        }
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            for entry in entries {
+                try saveMetadata(entry, into: database)
+            }
+            try execute("COMMIT", on: database)
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
     public func metadata(for key: String) throws -> SyncMetadataEntry? {
         let database = try openDatabase()
         defer { sqlite3_close(database) }

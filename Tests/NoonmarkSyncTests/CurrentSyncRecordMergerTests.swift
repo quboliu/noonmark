@@ -64,6 +64,117 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
         XCTAssertEqual(forward.updatedAt, now.addingTimeInterval(2))
     }
 
+    func testConcurrentRecurringClassificationLeavesConvergeWhenRootIDSortsLast()
+        throws
+    {
+        let seriesID = TaskCycleSeriesID()
+        let rootID = UUID(
+            uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
+        )!
+        let firstLeafID = UUID(
+            uuidString: "00000000-0000-0000-0000-000000000001"
+        )!
+        let winningLeafID = UUID(
+            uuidString: "00000000-0000-0000-0000-000000000002"
+        )!
+        let root = TaskCycleClassificationRevision(
+            id: rootID,
+            previousRevisionID: nil,
+            interactionID: UUID(),
+            source: .deterministicDomainAction(reason: "root"),
+            decisionID: nil,
+            categoryID: nil,
+            labelIDs: [],
+            recordedAt: now
+        )
+        let firstCategoryID = TaskCategoryID()
+        let winningCategoryID = TaskCategoryID()
+        let firstLeaf = TaskCycleClassificationRevision(
+            id: firstLeafID,
+            previousRevisionID: rootID,
+            interactionID: UUID(),
+            source: .userDirect,
+            decisionID: UUID(),
+            categoryID: firstCategoryID,
+            labelIDs: [],
+            recordedAt: now
+        )
+        let winningLeaf = TaskCycleClassificationRevision(
+            id: winningLeafID,
+            previousRevisionID: rootID,
+            interactionID: UUID(),
+            source: .userDirect,
+            decisionID: UUID(),
+            categoryID: winningCategoryID,
+            labelIDs: [],
+            recordedAt: now
+        )
+        let baseline = TaskCycleSeries(
+            id: seriesID,
+            title: "同步分类",
+            startDate: today,
+            endDate: today,
+            schedule: .daily,
+            createdAt: now
+        )
+        let first = TaskCycleSeries(
+            id: seriesID,
+            title: baseline.title,
+            categoryID: firstCategoryID,
+            startDate: baseline.startDate,
+            endDate: baseline.endDate,
+            schedule: baseline.schedule,
+            endCondition: baseline.endCondition,
+            planRevisions: baseline.planRevisions,
+            classificationRevisions: [root, firstLeaf],
+            createdAt: now
+        )
+        let second = TaskCycleSeries(
+            id: seriesID,
+            title: baseline.title,
+            categoryID: winningCategoryID,
+            startDate: baseline.startDate,
+            endDate: baseline.endDate,
+            schedule: baseline.schedule,
+            endCondition: baseline.endCondition,
+            planRevisions: baseline.planRevisions,
+            classificationRevisions: [root, winningLeaf],
+            createdAt: now
+        )
+        let mapper = SyncRecordMapper()
+        let firstRecord = try mapper.record(
+            for: first,
+            modifiedBy: SyncDeviceID("classification-a")
+        )
+        let secondRecord = try mapper.record(
+            for: second,
+            modifiedBy: SyncDeviceID("classification-b")
+        )
+        let merger = CurrentSyncRecordMerger()
+
+        let forward = try mapper.decodeTaskCycleSeries(
+            merger.merge(
+                existing: firstRecord,
+                incoming: secondRecord
+            )
+        )
+        let reverse = try mapper.decodeTaskCycleSeries(
+            merger.merge(
+                existing: secondRecord,
+                incoming: firstRecord
+            )
+        )
+
+        XCTAssertEqual(forward, reverse)
+        XCTAssertEqual(
+            forward.currentClassificationRevision?.id,
+            winningLeafID
+        )
+        XCTAssertEqual(forward.categoryID, winningCategoryID)
+        XCTAssertEqual(forward.classificationRevisions.count, 3)
+        XCTAssertNoThrow(try forward.validateIntegrity())
+    }
+
     func testTransportBatchCanonicalizesConsecutivePreferenceVersionsToFinalWinner() throws {
         let mapper = SyncRecordMapper()
         let first = try mapper.record(

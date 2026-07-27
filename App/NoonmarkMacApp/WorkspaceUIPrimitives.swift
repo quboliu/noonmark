@@ -1066,6 +1066,124 @@ struct DetailSection<Content: View>: View {
     }
 }
 
+struct CollapsibleTaskTrailSection<Trailing: View>: View {
+    @EnvironmentObject private var store: NoonmarkStore
+
+    private let trace: DayTrace?
+    private let chainID: TaskChainID
+    private let identity: String
+    private let trailing: Trailing
+
+    @State private var isExpanded = true
+
+    init(
+        trace: DayTrace,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.trace = trace
+        chainID = trace.chainID
+        identity = "trace.\(trace.id.description)"
+        self.trailing = trailing()
+    }
+
+    init(
+        chainID: TaskChainID,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        trace = nil
+        self.chainID = chainID
+        identity = "chain.\(chainID.description)"
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text(store.copy.taskTrailTitle)
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.6)
+                Spacer()
+                trailing
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(
+                            isExpanded
+                                ? store.copy.collapseTaskTrail
+                                : store.copy.expandTaskTrail
+                        )
+                        Image(
+                            systemName: isExpanded
+                                ? "chevron.up"
+                                : "chevron.down"
+                        )
+                        .font(.noonmarkSystem(size: 8, weight: .semibold))
+                    }
+                    .font(.noonmarkSystem(size: 10.5, weight: .medium))
+                    .foregroundStyle(Theme.text3)
+                    .contentShape(Rectangle())
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "\(anchorPrefix).toggle",
+                            verificationText:
+                                isExpanded ? "expanded" : "collapsed"
+                        )
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    isExpanded
+                        ? store.copy.collapseTaskTrail
+                        : store.copy.expandTaskTrail
+                )
+                .accessibilityIdentifier("\(anchorPrefix).toggle.ax")
+            }
+
+            if isExpanded {
+                timeline
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "\(anchorPrefix).content",
+                            verificationText: "expanded"
+                        )
+                    }
+            }
+        }
+        .onChange(of: identity) {
+            isExpanded = true
+        }
+    }
+
+    private var anchorPrefix: String {
+        "task-trail.\(identity)"
+    }
+
+    @ViewBuilder
+    private var timeline: some View {
+        if let trace {
+            Timeline(trace: trace)
+        } else {
+            Timeline(chainID: chainID)
+        }
+    }
+}
+
+extension CollapsibleTaskTrailSection where Trailing == EmptyView {
+    init(trace: DayTrace) {
+        self.init(trace: trace) {
+            EmptyView()
+        }
+    }
+
+    init(chainID: TaskChainID) {
+        self.init(chainID: chainID) {
+            EmptyView()
+        }
+    }
+}
+
 struct TaskClassificationDetailSection: View {
     @EnvironmentObject private var store: NoonmarkStore
 

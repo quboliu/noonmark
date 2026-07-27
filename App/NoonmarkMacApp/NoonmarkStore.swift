@@ -674,6 +674,8 @@ final class NoonmarkStore: ObservableObject {
     @Published var reviewAutosaveMessage: String?
     @Published var isLocalFirstSyncing = false
     @Published var localFirstSyncMessage: String?
+    @Published var localFirstSyncTimestamps:
+        SQLiteLocalFirstSyncTimestamps?
     @Published var cloudKitAccountAvailability: CloudKitAccountAvailability?
     @Published var today: LocalDate
     @Published var naturalDayState: NaturalDayState

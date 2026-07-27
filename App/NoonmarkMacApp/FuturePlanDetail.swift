@@ -98,9 +98,7 @@ struct FuturePlanDetail: View {
                 taskTitle: definition.title
             )
 
-            DetailSection(store.copy.taskTrailTitle) {
-                Timeline(trace: trace)
-            }
+            CollapsibleTaskTrailSection(trace: trace)
 
             DetailNotesSection(
                 traceID: trace.id,

@@ -313,36 +313,81 @@ struct LocalFirstCloudSyncCard: View {
                         if let configuration = displayedCloudKitConfiguration {
                             SettingsInfoRow(
                                 label: store.copy.cloudKitContainerTitle,
-                                value: configuration.containerIdentifier
+                                value: configuration.containerIdentifier,
+                                labelWidth: 92
                             )
                             SettingsInfoRow(
                                 label: store.copy.cloudKitZoneTitle,
                                 value: configuration.zoneName,
-                                last: store.localFirstSyncMessage == nil
+                                labelWidth: 92,
+                                last: false
                             )
                         } else if let endpointURL = NoonmarkStore.configuredLocalFirstSyncEndpointURL(for: policy.endpoint) {
                             if policy.endpoint == .iCloud {
                                 SettingsInfoRow(
                                     label: store.copy.iCloudDriveLocationTitle,
-                                    value: store.copy.iCloudDriveLogicalLocation
+                                    value: store.copy.iCloudDriveLogicalLocation,
+                                    labelWidth: 92
                                 )
                                 SettingsInfoRow(
                                     label: store.copy.localCachePathTitle,
                                     value: endpointURL.path,
-                                    last: store.localFirstSyncMessage == nil
+                                    labelWidth: 92,
+                                    last: false
                                 )
                             } else {
                                 SettingsInfoRow(
                                     label: store.copy.syncFolderPathTitle,
                                     value: endpointURL.path,
-                                    last: store.localFirstSyncMessage == nil
+                                    labelWidth: 92,
+                                    last: false
                                 )
                             }
                         } else {
                             SettingsInfoRow(
                                 label: policy.endpoint == .iCloud ? store.copy.iCloudDriveLocationTitle : store.copy.syncFolderPathTitle,
                                 value: store.copy.iCloudDriveUnavailable,
-                                last: store.localFirstSyncMessage == nil
+                                labelWidth: 92,
+                                last: false
+                            )
+                        }
+                        SettingsInfoRow(
+                            label: store.copy.latestSyncTimestampTitle,
+                            value: syncTimestampText(
+                                store.localFirstSyncTimestamps?
+                                    .lastSyncedAt
+                            ),
+                            labelWidth: 92
+                        )
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier:
+                                "settings.sync.latest-timestamp",
+                                verificationText: syncTimestampText(
+                                    store.localFirstSyncTimestamps?
+                                        .lastSyncedAt
+                                )
+                            )
+                        }
+                        SettingsInfoRow(
+                            label:
+                            store.copy
+                                .latestEffectiveSyncTimestampTitle,
+                            value: syncTimestampText(
+                                store.localFirstSyncTimestamps?
+                                    .lastEffectiveSyncedAt
+                            ),
+                            labelWidth: 92,
+                            last: store.localFirstSyncMessage == nil
+                        )
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier:
+                                "settings.sync.latest-effective-timestamp",
+                                verificationText: syncTimestampText(
+                                    store.localFirstSyncTimestamps?
+                                        .lastEffectiveSyncedAt
+                                )
                             )
                         }
                         if let message = store.localFirstSyncMessage {
@@ -369,6 +414,11 @@ struct LocalFirstCloudSyncCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    private func syncTimestampText(_ timestamp: Date?) -> String {
+        timestamp.map(store.displayDateTime)
+            ?? store.copy.noSyncTimestamp
     }
 }
 
@@ -959,6 +1009,7 @@ struct SettingsMetricPill: View {
 struct SettingsInfoRow: View {
     let label: String
     let value: String
+    var labelWidth: CGFloat = 62
     var last = false
 
     var body: some View {
@@ -966,7 +1017,7 @@ struct SettingsInfoRow: View {
             Text(label)
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
-                .frame(width: 62, alignment: .leading)
+                .frame(width: labelWidth, alignment: .leading)
             Text(value)
                 .font(.noonmarkSystem(size: 11.5, weight: .medium))
                 .foregroundStyle(Theme.text2)

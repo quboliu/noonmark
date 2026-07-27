@@ -74,9 +74,7 @@ struct UnfinishedDetail: View {
                     taskTitle: item.definition.title
                 )
 
-                DetailSection(store.copy.taskTrailTitle) {
-                    Timeline(trace: trace)
-                }
+                CollapsibleTaskTrailSection(trace: trace)
 
                 DetailNotesSection(
                     traceID: trace.id,

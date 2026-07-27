@@ -73,22 +73,13 @@ struct TraceTimelineSection: View {
     let trace: DayTrace
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                Text(store.copy.taskTrailTitle)
-                    .font(.noonmarkSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.6)
-                Spacer()
-                MarkdownText(summaryText)
-                    .font(.noonmarkSystem(size: 11))
-                    .foregroundStyle(Theme.text2)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                TraceEndBadge(text: endLabel, color: endColor)
-            }
-
-            Timeline(trace: trace)
+        CollapsibleTaskTrailSection(trace: trace) {
+            MarkdownText(summaryText)
+                .font(.noonmarkSystem(size: 11))
+                .foregroundStyle(Theme.text2)
+                .monospacedDigit()
+                .lineLimit(1)
+            TraceEndBadge(text: endLabel, color: endColor)
         }
     }
 

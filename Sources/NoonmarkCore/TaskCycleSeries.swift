@@ -212,6 +212,39 @@ public struct TaskCycleCancellationFact: Codable, Equatable, Hashable, Sendable 
     }
 }
 
+public struct TaskCycleClassificationRevision: Codable, Equatable, Sendable,
+    Identifiable
+{
+    public let id: UUID
+    public let previousRevisionID: UUID?
+    public let interactionID: UUID
+    public let source: ClassificationSource
+    public let decisionID: UUID?
+    public let categoryID: TaskCategoryID?
+    public let labelIDs: Set<TaskLabelID>
+    public let recordedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        previousRevisionID: UUID?,
+        interactionID: UUID = UUID(),
+        source: ClassificationSource,
+        decisionID: UUID?,
+        categoryID: TaskCategoryID?,
+        labelIDs: Set<TaskLabelID>,
+        recordedAt: Date
+    ) {
+        self.id = id
+        self.previousRevisionID = previousRevisionID
+        self.interactionID = interactionID
+        self.source = source
+        self.decisionID = decisionID
+        self.categoryID = categoryID
+        self.labelIDs = labelIDs
+        self.recordedAt = recordedAt
+    }
+}
+
 public struct TaskCycleSeries: Codable, Equatable, Sendable {
     public let id: TaskCycleSeriesID
     public private(set) var title: String
@@ -224,6 +257,8 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
     public private(set) var schedule: TaskCycleSchedule
     public private(set) var endCondition: TaskCycleEndCondition
     public private(set) var planRevisions: [TaskCyclePlanRevision]
+    public private(set) var classificationRevisions:
+        [TaskCycleClassificationRevision]
     public private(set) var cancellationFacts: [TaskCycleCancellationFact]
     public let createdAt: Date
     public private(set) var updatedAt: Date
@@ -240,6 +275,7 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         schedule: TaskCycleSchedule,
         endCondition: TaskCycleEndCondition? = nil,
         planRevisions: [TaskCyclePlanRevision]? = nil,
+        classificationRevisions: [TaskCycleClassificationRevision]? = nil,
         cancellationFacts: [TaskCycleCancellationFact] = [],
         createdAt: Date,
         updatedAt: Date? = nil
@@ -265,7 +301,23 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
                 recordedAt: createdAt
             )
         ]
-        self.cancellationFacts = cancellationFacts
+        self.classificationRevisions = (
+            classificationRevisions ?? [
+                TaskCycleClassificationRevision(
+                    previousRevisionID: nil,
+                    source: .deterministicDomainAction(
+                        reason: "task cycle created"
+                    ),
+                    decisionID: nil,
+                    categoryID: categoryID,
+                    labelIDs: labelIDs,
+                    recordedAt: createdAt
+                )
+            ]
+        ).sorted(by: Self.classificationRevisionComesBefore)
+        self.cancellationFacts = cancellationFacts.sorted(
+            by: Self.cancellationFactComesBefore
+        )
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
     }
@@ -328,6 +380,7 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
                 recordedAt: now
             )
         )
+        cancellationFacts.sort(by: Self.cancellationFactComesBefore)
     }
 
     mutating func appendPlanRevision(
@@ -413,8 +466,12 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
     mutating func updateTemplateClassification(
         categoryID: TaskCategoryID?,
         labelIDs: Set<TaskLabelID>,
+        source: ClassificationSource,
+        interactionID: UUID,
+        decisionID: UUID?,
         now: Date
     ) throws {
+        try requireUnusedClassificationInteraction(interactionID)
         guard now.timeIntervalSinceReferenceDate.isFinite,
               now >= updatedAt
         else {
@@ -424,7 +481,63 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
         }
         self.categoryID = categoryID
         self.labelIDs = labelIDs
+        classificationRevisions.append(
+            TaskCycleClassificationRevision(
+                previousRevisionID:
+                currentClassificationRevision?.id,
+                interactionID: interactionID,
+                source: source,
+                decisionID: decisionID,
+                categoryID: categoryID,
+                labelIDs: labelIDs,
+                recordedAt: now
+            )
+        )
+        classificationRevisions.sort(
+            by: Self.classificationRevisionComesBefore
+        )
         updatedAt = now
+    }
+
+    func requireUnusedClassificationInteraction(
+        _ interactionID: UUID
+    ) throws {
+        guard classificationRevisions.contains(where: {
+            $0.interactionID == interactionID
+        }) == false else {
+            throw NoonmarkError.invalidTransition(
+                "task cycle classification interaction was reused"
+            )
+        }
+    }
+
+    public var currentClassificationRevision:
+        TaskCycleClassificationRevision?
+    {
+        Self.resolveCurrentClassificationRevision(
+            in: classificationRevisions
+        )
+    }
+
+    public static func resolveCurrentClassificationRevision(
+        in revisions: [TaskCycleClassificationRevision]
+    ) -> TaskCycleClassificationRevision? {
+        let revisionsWithChildren = Set(
+            revisions.compactMap(\.previousRevisionID)
+        )
+        return revisions
+            .filter { revisionsWithChildren.contains($0.id) == false }
+            .max(by: classificationRevisionComesBefore)
+    }
+
+    private static func classificationRevisionComesBefore(
+        _ lhs: TaskCycleClassificationRevision,
+        _ rhs: TaskCycleClassificationRevision
+    ) -> Bool {
+        if lhs.recordedAt != rhs.recordedAt {
+            return lhs.recordedAt < rhs.recordedAt
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
     }
 
     public func validateIntegrity() throws {
@@ -500,10 +613,15 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
                 "task cycle current plan does not match its revision facts"
             )
         }
+        try validateClassificationRevisions()
         let scheduledDates = try everPlannedDates()
         guard scheduledDates.isEmpty == false,
               Set(cancellationFacts.map(\.id)).count
-              == cancellationFacts.count
+              == cancellationFacts.count,
+              cancellationFacts
+              == cancellationFacts.sorted(
+                  by: Self.cancellationFactComesBefore
+              )
         else {
             throw NoonmarkError.invalidInput(
                 "task cycle series contains invalid schedule facts"
@@ -532,6 +650,81 @@ public struct TaskCycleSeries: Codable, Equatable, Sendable {
                     )
                 }
             }
+        }
+    }
+
+    private static func cancellationFactComesBefore(
+        _ lhs: TaskCycleCancellationFact,
+        _ rhs: TaskCycleCancellationFact
+    ) -> Bool {
+        if lhs.recordedAt != rhs.recordedAt {
+            return lhs.recordedAt < rhs.recordedAt
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    private func validateClassificationRevisions() throws {
+        guard classificationRevisions.isEmpty == false,
+              Set(classificationRevisions.map(\.id)).count
+              == classificationRevisions.count,
+              Set(classificationRevisions.map(\.interactionID)).count
+              == classificationRevisions.count,
+              classificationRevisions
+              == classificationRevisions.sorted(
+                  by: Self.classificationRevisionComesBefore
+              ),
+              classificationRevisions.filter({
+                  $0.previousRevisionID == nil
+              }).count == 1
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle contains invalid classification revisions"
+            )
+        }
+        let revisionsByID = Dictionary(
+            uniqueKeysWithValues: classificationRevisions.map {
+                ($0.id, $0)
+            }
+        )
+        for revision in classificationRevisions {
+            guard revision.recordedAt.timeIntervalSinceReferenceDate.isFinite,
+                  revision.recordedAt >= createdAt,
+                  revision.recordedAt <= updatedAt
+            else {
+                throw NoonmarkError.invalidInput(
+                    "task cycle contains invalid classification revisions"
+                )
+            }
+            if let previousRevisionID = revision.previousRevisionID {
+                guard previousRevisionID != revision.id,
+                      let previous = revisionsByID[previousRevisionID],
+                      previous.recordedAt <= revision.recordedAt
+                else {
+                    throw NoonmarkError.invalidInput(
+                        "task cycle classification revision ancestry is invalid"
+                    )
+                }
+            }
+            var visited: Set<UUID> = [revision.id]
+            var previousRevisionID = revision.previousRevisionID
+            while let revisionID = previousRevisionID {
+                guard visited.insert(revisionID).inserted,
+                      let previous = revisionsByID[revisionID]
+                else {
+                    throw NoonmarkError.invalidInput(
+                        "task cycle classification revision ancestry is invalid"
+                    )
+                }
+                previousRevisionID = previous.previousRevisionID
+            }
+        }
+        guard let currentClassificationRevision,
+              currentClassificationRevision.categoryID == categoryID,
+              currentClassificationRevision.labelIDs == labelIDs
+        else {
+            throw NoonmarkError.invalidInput(
+                "task cycle current classification does not match its revision facts"
+            )
         }
     }
 
@@ -736,11 +929,8 @@ public struct TaskCycleTrack: Equatable, Identifiable, Sendable {
     }
 }
 
-private extension TaskCycleSeries {
-    func taskCycleLifecycle(
-        today: LocalDate,
-        days: [TaskCycleTrackDay]
-    ) -> TaskCycleLifecycle {
+extension TaskCycleSeries {
+    func lifecycle(on today: LocalDate) -> TaskCycleLifecycle {
         let terminalFacts: [(
             date: LocalDate,
             reason: TaskCycleCancellationReason,
@@ -748,7 +938,6 @@ private extension TaskCycleSeries {
             id: UUID
         )] = cancellationFacts.compactMap { fact in
             guard case let .followingDates(after: date) = fact.scope,
-                  date <= today,
                   fact.reason == .stoppedEarly
                     || fact.reason == .completionTargetReached
             else {
@@ -785,6 +974,35 @@ private extension TaskCycleSeries {
         }
         if today > endDate {
             return .ended(endDate: endDate)
+        }
+        return .active(nextDate: nil)
+    }
+
+    func requirePlanEditing(
+        on today: LocalDate,
+        operation: String
+    ) throws {
+        switch lifecycle(on: today) {
+        case .active, .upcoming:
+            return
+        case .ended:
+            throw NoonmarkError.invalidTransition(
+                "an ended task cycle cannot be \(operation)"
+            )
+        case .stopped:
+            throw NoonmarkError.invalidTransition(
+                "a stopped task cycle cannot be \(operation)"
+            )
+        }
+    }
+
+    func taskCycleLifecycle(
+        today: LocalDate,
+        days: [TaskCycleTrackDay]
+    ) -> TaskCycleLifecycle {
+        let baseLifecycle = lifecycle(on: today)
+        guard case .active = baseLifecycle else {
+            return baseLifecycle
         }
         let nextDate = days.compactMap { day -> LocalDate? in
             if let futurePlanTarget = day.futurePlanTarget {
@@ -1326,6 +1544,11 @@ public extension NoonmarkEngine {
         seriesID: TaskCycleSeriesID,
         categoryID: TaskCategoryID?,
         labelIDs: Set<TaskLabelID>,
+        source: ClassificationSource = .deterministicDomainAction(
+            reason: "task cycle template classification"
+        ),
+        interactionID: UUID = UUID(),
+        decisionID: UUID? = nil,
         now: Date = Date()
     ) throws {
         guard categoryID.map({
@@ -1343,6 +1566,9 @@ public extension NoonmarkEngine {
         try series.updateTemplateClassification(
             categoryID: categoryID,
             labelIDs: labelIDs,
+            source: source,
+            interactionID: interactionID,
+            decisionID: decisionID,
             now: now
         )
         storeTaskCycleSeries(series)
@@ -1402,6 +1628,10 @@ public extension NoonmarkEngine {
         now: Date = Date()
     ) throws -> TaskCycleRevisionOutcome {
         var series = try taskCycleSeriesValue(seriesID)
+        try series.requirePlanEditing(
+            on: today,
+            operation: "revised"
+        )
         guard let tomorrow = TaskCycleCivilCalendar.offset(today, by: 1)
         else {
             throw NoonmarkError.invalidInput(
@@ -1730,13 +1960,9 @@ public extension NoonmarkEngine {
         today: LocalDate,
         now: Date
     ) throws {
-        let normalizedTitle = try normalizedTaskCycleTitle(title)
         var series = try taskCycleSeriesValue(seriesID)
-        guard series.stoppedAfterDate == nil else {
-            throw NoonmarkError.invalidTransition(
-                "a stopped task cycle cannot be edited"
-            )
-        }
+        try series.requirePlanEditing(on: today, operation: "edited")
+        let normalizedTitle = try normalizedTaskCycleTitle(title)
         let normalizedSubtasks = plannedSubtasks
             .sorted { $0.position < $1.position }
             .enumerated()

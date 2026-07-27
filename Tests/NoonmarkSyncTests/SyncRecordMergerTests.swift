@@ -69,6 +69,67 @@ final class SyncRecordMergerTests: XCTestCase {
         )
     }
 
+    func testSyncWaitsForNewTerminalParentClassificationsInSameBatch() throws {
+        let source = NoonmarkEngine()
+        let seriesID = try source.createTaskCycleSeries(
+            title: "终止计划跨设备分类",
+            startDate: today,
+            endDate: tomorrow,
+            schedule: .daily,
+            today: today,
+            now: now
+        )
+        _ = try source.stopTaskCycleSeries(
+            seriesID: seriesID,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let beforeClassification = source.snapshot()
+        let boundaries = try source.replaceTaskCycleClassification(
+            seriesID: seriesID,
+            category: .new(name: "同步分组", colorHex: "#2A6FDB"),
+            labels: [.new(name: "同步标签", colorHex: "#0E9488")],
+            today: today,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(2)
+        )
+        let mapper = SyncRecordMapper()
+        var records = try mapper.records(
+            from: beforeClassification,
+            modifiedBy: SyncDeviceID("mac-terminal-parent")
+        )
+        let differ = SyncSnapshotDiffer(mapper: mapper)
+        let materializer = SyncRecordMaterializer(mapper: mapper)
+        var previous = beforeClassification
+        for boundary in boundaries {
+            let entries = try differ.journalEntries(
+                from: previous,
+                to: boundary,
+                changedAt: now.addingTimeInterval(2),
+                deviceID: SyncDeviceID("mac-terminal-parent")
+            )
+            records.append(
+                contentsOf: try materializer.records(
+                    for: entries,
+                    in: boundary
+                )
+            )
+            previous = boundary
+        }
+        XCTAssertEqual(previous, source.snapshot())
+
+        let result = try SyncRecordMerger(mapper: mapper).merge(
+            records: records.reversed(),
+            into: NoonmarkEngine().snapshot(),
+            detectedAt: now.addingTimeInterval(3)
+        )
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertTrue(result.waitingRecords.isEmpty)
+        XCTAssertEqual(result.snapshot, source.snapshot())
+        XCTAssertNoThrow(try result.snapshot.validateIntegrity())
+    }
+
     func testSyncRejectsAnUnboundedCycleDescriptorAtomically() throws {
         let source = NoonmarkEngine()
         let seriesID = try source.createTaskCycleSeries(

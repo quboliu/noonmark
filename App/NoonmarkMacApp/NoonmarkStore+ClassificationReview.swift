@@ -296,77 +296,14 @@ extension NoonmarkStore {
                 $0.isEmpty ? nil : $0
             }
         ) { candidate, moment in
-            let memberChainIDs = candidate
-                .taskCycleEditableMemberChainIDs(
-                    seriesID: seriesID,
-                    today: moment.today
-                )
-            let fallbackChainIDs = candidate.chains.values
-                .filter {
-                    $0.cycleMembership?.seriesID == seriesID
-                }
-                .sorted {
-                    guard let lhs = $0.cycleMembership,
-                          let rhs = $1.cycleMembership
-                    else {
-                        return $0.id.description < $1.id.description
-                    }
-                    return lhs.occurrenceDate < rhs.occurrenceDate
-                }
-                .map(\.id)
-            guard let anchorChainID =
-                memberChainIDs.first ?? fallbackChainIDs.last
-            else {
-                throw NoonmarkError.notFound("task cycle occurrence")
-            }
-            let plan = try candidate.prepareClassification(
-                .setCurrent(
-                    TaskClassificationDraft(
-                        chainID: anchorChainID,
-                        category: category,
-                        labels: labels
-                    )
-                ),
-                source: .userDirect,
+            try candidate.replaceTaskCycleClassification(
+                seriesID: seriesID,
+                category: category,
+                labels: labels,
+                today: moment.today,
                 interactionID: interactionID,
                 now: moment.instant
             )
-            _ = try candidate.commitClassification(
-                plan,
-                confirmation: .confirmedByUser(
-                    confirming: plan,
-                    decisionID: interactionID
-                ),
-                now: moment.instant
-            )
-            var boundaries = [candidate.snapshot()]
-            guard let classification = candidate.snapshot().classifications
-                .currentByChainID[anchorChainID]
-            else {
-                throw NoonmarkError.invalidInput(
-                    "recurring task classification did not commit"
-                )
-            }
-            try candidate.setTaskCycleTemplateClassification(
-                seriesID: seriesID,
-                categoryID: classification.categoryID,
-                labelIDs: classification.labelIDs,
-                now: moment.instant
-            )
-            for chainID in memberChainIDs where chainID != anchorChainID {
-                if try candidate.inheritCurrentClassification(
-                    from: anchorChainID,
-                    to: chainID,
-                    now: moment.instant
-                ) {
-                    boundaries.append(candidate.snapshot())
-                }
-            }
-            if boundaries.isEmpty == false {
-                boundaries[boundaries.index(before: boundaries.endIndex)] =
-                    candidate.snapshot()
-            }
-            return boundaries
         }
     }
 

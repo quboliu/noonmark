@@ -99,10 +99,16 @@ public extension NoonmarkSnapshot {
         }
         for series in taskCycleSeries {
             try series.validateIntegrity()
-            guard series.categoryID.map({
+            let classificationCategoryIDs = Set(
+                series.classificationRevisions.compactMap(\.categoryID)
+            )
+            let classificationLabelIDs = Set(
+                series.classificationRevisions.flatMap(\.labelIDs)
+            )
+            guard classificationCategoryIDs.allSatisfy({
                 classifications.categories[$0] != nil
-            }) ?? true,
-                series.labelIDs.allSatisfy({
+            }),
+                classificationLabelIDs.allSatisfy({
                     classifications.labels[$0] != nil
                 })
             else {

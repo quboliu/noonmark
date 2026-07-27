@@ -117,6 +117,7 @@ extension NoonmarkStore {
                 startDate: startDate,
                 locksStartDate: false
             )
+        let templateClassificationInteractionID = UUID()
         do {
             let mutation = try commitEngineMutation(
                 undoPolicy: .invalidate,
@@ -250,6 +251,14 @@ extension NoonmarkStore {
                     seriesID: seriesID,
                     categoryID: templateClassification?.categoryID,
                     labelIDs: templateClassification?.labelIDs ?? [],
+                    source: classificationSourceChainID.map {
+                        .inherited(fromChainID: $0)
+                    } ?? .userDirect,
+                    interactionID:
+                    templateClassificationInteractionID,
+                    decisionID: classificationSourceChainID == nil
+                        ? templateClassificationInteractionID
+                        : nil,
                     now: moment.instant
                 )
                 if boundaries.isEmpty == false {
@@ -863,6 +872,7 @@ extension NoonmarkStore {
     }
 
     func continueUnfinishedTrace(_ traceID: DayTraceID, to date: LocalDate) {
+        let sourcePage = page
         do {
             let nextID = try commitEngineMutation(
                 undoPolicy: .invalidate
@@ -874,9 +884,11 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
-            selectedDate = date
-            page = .day
-            selectTrace(nextID)
+            if sourcePage != .unfinished {
+                selectedDate = date
+                page = .day
+                selectTrace(nextID)
+            }
             showToast(copy.continuedTo(displayDate(date)))
         } catch {
             showOperationFailure(.taskMutation, error: error)

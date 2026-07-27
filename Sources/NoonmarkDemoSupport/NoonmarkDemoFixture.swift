@@ -84,6 +84,8 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let poolTaskWithPlannedSubtasksCount: Int
     public let taskWithNotesCount: Int
     public let taskWithDescriptionCount: Int
+    public let taskWithCollapsibleTrailCount: Int
+    public let continuableUnfinishedTaskCount: Int
     public let taskCycleSeriesCount: Int
     public let taskCycleOccurrenceCount: Int
     public let classifiedTaskCycleSeriesCount: Int
@@ -156,6 +158,16 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         require(
             taskWithDescriptionCount >= 6,
             "跨页面任务描述",
+            into: &missing
+        )
+        require(
+            taskWithCollapsibleTrailCount > 0,
+            "可收起多事件轨迹的普通任务",
+            into: &missing
+        )
+        require(
+            continuableUnfinishedTaskCount > 0,
+            "可在未完成页原地延续的任务",
             into: &missing
         )
         require(
@@ -287,6 +299,19 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         taskWithDescriptionCount = snapshot.definitions.filter {
             $0.descriptionText?.isEmpty == false
         }.count
+        taskWithCollapsibleTrailCount = snapshot.chains.count {
+            $0.cycleMembership == nil
+                && ((try? engine.taskTrail(chainID: $0.id).count) ?? 0)
+                >= 3
+        }
+        continuableUnfinishedTaskCount = engine.unfinishedPool().count {
+            $0.actionPlan.contains {
+                if case .continueTrace = $0 {
+                    return true
+                }
+                return false
+            }
+        }
         let cycleMemberships = snapshot.chains.compactMap(\.cycleMembership)
         taskCycleSeriesCount = snapshot.taskCycleSeries.count
         taskCycleOccurrenceCount = cycleMemberships.count

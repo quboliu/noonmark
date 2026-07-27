@@ -84,6 +84,19 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
             today: today,
             now: now.addingTimeInterval(2)
         )
+        _ = try engine.stopTaskCycleSeries(
+            seriesID: seriesID,
+            today: today,
+            now: now.addingTimeInterval(3)
+        )
+        _ = try engine.replaceTaskCycleClassification(
+            seriesID: seriesID,
+            category: .new(name: "SQLite 分组", colorHex: "#2A6FDB"),
+            labels: [.new(name: "SQLite 标签", colorHex: "#0E9488")],
+            today: today,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(4)
+        )
 
         try repository.save(engine.snapshot())
         let restored = try repository.load()
@@ -97,7 +110,7 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertEqual(track.scheduledCount, 5)
         XCTAssertEqual(
             restored.taskCycleSeries[seriesID]?.cancellationFacts.count,
-            3
+            engine.taskCycleSeries[seriesID]?.cancellationFacts.count
         )
         XCTAssertEqual(
             restored.taskCycleSeries[seriesID]?.plannedSubtasks
@@ -111,6 +124,10 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertEqual(
             restored.taskCycleSeries[seriesID]?.endCondition,
             .durationDays(5)
+        )
+        XCTAssertEqual(
+            restored.taskCycleSeries[seriesID]?.classificationRevisions.count,
+            2
         )
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
     }

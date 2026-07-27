@@ -52,6 +52,8 @@ struct NoonmarkDemoFixtureTests {
             fixture.engine.isRecurringTaskChain($0.chain.id) == false
         })
         #expect(fixture.report.deletableCategoryBoundaryCount > 0)
+        #expect(fixture.report.taskWithCollapsibleTrailCount > 0)
+        #expect(fixture.report.continuableUnfinishedTaskCount > 0)
         #expect(
             fixture.report.openParentWithCompletedChildrenCount > 0
         )

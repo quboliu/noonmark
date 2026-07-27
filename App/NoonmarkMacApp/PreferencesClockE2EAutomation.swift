@@ -781,6 +781,11 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                   updatedTaskCount: 0
               ),
               store.localFirstSyncMessage == expected,
+              store.localFirstSyncTimestamps
+              == SQLiteLocalFirstSyncTimestamps(
+                  lastSyncedAt: result.syncedAt,
+                  lastEffectiveSyncedAt: result.syncedAt
+              ),
               expected == "同步完成：新增任务 0 条，更新任务 0 条"
         else {
             throw Failure.failed(
@@ -806,6 +811,25 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             return AppViewTreeE2E.verificationText(for: resultView)
                 == expected
         }
+        let timestampText = store.displayDateTime(result.syncedAt)
+        try await waitUntil(
+            "Settings sync timestamps did not render the successful effective sync"
+        ) {
+            guard let latest = AppViewTreeE2E.view(
+                identifier: "settings.sync.latest-timestamp",
+                in: settingsWindow
+            ), let effective = AppViewTreeE2E.view(
+                identifier:
+                "settings.sync.latest-effective-timestamp",
+                in: settingsWindow
+            ) else {
+                return false
+            }
+            return AppViewTreeE2E.verificationText(for: latest)
+                == timestampText
+                && AppViewTreeE2E.verificationText(for: effective)
+                == timestampText
+        }
         let screenshotURL = resultURL.deletingLastPathComponent()
             .appendingPathComponent("sync-task-summary.png")
         try AppE2EScreenshot.captureContent(
@@ -813,7 +837,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             to: screenshotURL
         )
         try appendTrace(
-            "sync task-summary new=0 updated=0 rendered=true"
+            "sync task-summary new=0 updated=0 rendered=true timestamps=true"
         )
     }
 

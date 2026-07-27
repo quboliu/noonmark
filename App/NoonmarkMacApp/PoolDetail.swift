@@ -66,9 +66,7 @@ struct PoolDetail: View {
             DetailSection(store.copy.subtasksTitle, showsTitle: false) {
                 PoolPlannedSubtasksSection(task: task)
             }
-            DetailSection(store.copy.taskTrailTitle) {
-                Timeline(chainID: task.chain.id)
-            }
+            CollapsibleTaskTrailSection(chainID: task.chain.id)
             PoolNotesSection(chainID: task.chain.id, entries: task.chain.activeNoteEntries)
         }
     }

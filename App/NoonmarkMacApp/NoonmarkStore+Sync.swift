@@ -352,9 +352,15 @@ extension NoonmarkStore {
                     transport: transport
                 )
                 let result = try await coordinator.sync()
-                let unresolvedConflictCount = try SQLiteSyncRepository(
+                let syncRepository = SQLiteSyncRepository(
                     databaseURL: databaseURL
-                ).unresolvedConflicts().count
+                )
+                let unresolvedConflictCount =
+                    try syncRepository.unresolvedConflicts().count
+                let timestamps =
+                    try SQLiteLocalFirstSyncCoordinator.timestamps(
+                        in: syncRepository
+                    )
                 try await MainActor.run {
                     let loaded = try SQLiteEngineRepository(
                         databaseURL: databaseURL
@@ -374,6 +380,7 @@ extension NoonmarkStore {
                         onLanguageChange?()
                     }
                     isLocalFirstSyncing = false
+                    localFirstSyncTimestamps = timestamps
                     localFirstSyncMessage = copy.localFirstSyncResult(
                         result,
                         unresolvedConflictCount: unresolvedConflictCount
@@ -529,26 +536,25 @@ extension NoonmarkStore {
 
     func restoreLocalFirstSyncStatus() {
         guard let databaseURL else { return }
-        let policy = engine.preferences.localFirstSyncPolicy
-        guard engine.preferences.dataMode == .localFirst,
-              policy.enabled,
-              supportsRunnableLocalFirstSync(policy.endpoint)
-        else {
-            localFirstSyncMessage = nil
-            return
-        }
-        if policy.endpoint == .iCloud {
-            do {
-                try validateICloudSyncEndpoint()
-            } catch {
-                localFirstSyncMessage = AppPresentation(
-                    language: engine.preferences.language
-                ).failureMessage(for: .sync)
+        do {
+            let syncRepository = SQLiteSyncRepository(
+                databaseURL: databaseURL
+            )
+            localFirstSyncTimestamps =
+                try SQLiteLocalFirstSyncCoordinator.timestamps(
+                    in: syncRepository
+                )
+            let policy = engine.preferences.localFirstSyncPolicy
+            guard engine.preferences.dataMode == .localFirst,
+                  policy.enabled,
+                  supportsRunnableLocalFirstSync(policy.endpoint)
+            else {
+                localFirstSyncMessage = nil
                 return
             }
-        }
-        do {
-            let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+            if policy.endpoint == .iCloud {
+                try validateICloudSyncEndpoint()
+            }
             guard let metadata = try syncRepository.metadata(
                 for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
             ) else { return }

@@ -263,6 +263,9 @@ public final class NoonmarkEngine {
             try series.updateTemplateClassification(
                 categoryID: nil,
                 labelIDs: series.labelIDs,
+                source: .userDirect,
+                interactionID: interactionID,
+                decisionID: decisionID,
                 now: now
             )
             taskCycleSeries[seriesID] = series

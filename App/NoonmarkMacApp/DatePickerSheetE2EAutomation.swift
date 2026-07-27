@@ -165,7 +165,8 @@ struct DatePickerSheetE2EAutomation: LaunchAutomationRunnable {
             store: store,
             fixture: fixture,
             mainWindow: mainWindow,
-            input: input
+            input: input,
+            confirmsContinuation: false
         )
         try await exerciseRescheduleConstraint(
             store: store,
@@ -691,7 +692,8 @@ struct DatePickerSheetE2EAutomation: LaunchAutomationRunnable {
         store: NoonmarkStore,
         fixture: Fixture,
         mainWindow: NSWindow,
-        input: WindowServerInputDriver
+        input: WindowServerInputDriver,
+        confirmsContinuation: Bool
     ) async throws {
         let schedulePurpose = NoonmarkStore.DatePickerPurpose.schedulePool(
             fixture.poolChainID
@@ -721,6 +723,7 @@ struct DatePickerSheetE2EAutomation: LaunchAutomationRunnable {
         let continuePurpose = NoonmarkStore.DatePickerPurpose.continueTrace(
             fixture.unfinishedTraceID
         )
+        let selectedDateBeforeContinuation = store.selectedDate
         let continuePresentation = try await openContextMenuSheet(
             entry: ContextMenuEntry(
                 page: .unfinished,
@@ -738,9 +741,29 @@ struct DatePickerSheetE2EAutomation: LaunchAutomationRunnable {
             selectedDate: Self.fixedToday,
             purpose: continuePurpose
         )
-        try input.postKey(keyCode: 53)
-        try await waitForClosed(continuePresentation) {
-            store.showingPicker == nil
+        if confirmsContinuation {
+            try await click(
+                "date-picker.confirm",
+                in: continuePresentation.window,
+                input: input
+            )
+            try await waitForClosed(continuePresentation) {
+                store.showingPicker == nil
+                    && store.page == .unfinished
+                    && store.selectedDate == selectedDateBeforeContinuation
+                    && store.selectedTraceID == nil
+                    && store.engine.traces.values.contains {
+                        $0.chainID == fixture.unfinishedChainID
+                            && $0.id != fixture.unfinishedTraceID
+                            && $0.date == Self.fixedToday
+                            && $0.status == .pending
+                    }
+            }
+        } else {
+            try input.postKey(keyCode: 53)
+            try await waitForClosed(continuePresentation) {
+                store.showingPicker == nil
+            }
         }
     }
 
@@ -871,7 +894,8 @@ struct DatePickerSheetE2EAutomation: LaunchAutomationRunnable {
             store: store,
             fixture: fixture,
             mainWindow: mainWindow,
-            input: input
+            input: input,
+            confirmsContinuation: true
         )
 
         let reschedulePurpose = NoonmarkStore.DatePickerPurpose.reschedule(

@@ -1737,6 +1737,293 @@ public extension NoonmarkEngine {
         }
     }
 
+    func replaceTaskCycleClassification(
+        seriesID: TaskCycleSeriesID,
+        category: TaskCategoryChoice?,
+        labels: [TaskLabelChoice],
+        today: LocalDate,
+        interactionID: UUID = UUID(),
+        now: Date = Date()
+    ) throws -> [NoonmarkSnapshot] {
+        let candidate = try NoonmarkEngine(snapshot: snapshot())
+        let boundaries = try candidate
+            .replaceTaskCycleClassificationInPlace(
+                seriesID: seriesID,
+                category: category,
+                labels: labels,
+                today: today,
+                interactionID: interactionID,
+                now: now
+            )
+        try candidate.snapshot().validateIntegrity()
+        adoptState(from: candidate)
+        return boundaries
+    }
+
+    private func replaceTaskCycleClassificationInPlace(
+        seriesID: TaskCycleSeriesID,
+        category: TaskCategoryChoice?,
+        labels: [TaskLabelChoice],
+        today: LocalDate,
+        interactionID: UUID,
+        now: Date
+    ) throws -> [NoonmarkSnapshot] {
+        guard let series = taskCycleSeries[seriesID] else {
+            throw NoonmarkError.notFound("task cycle series")
+        }
+        try series.requireUnusedClassificationInteraction(interactionID)
+        let memberChainIDs = series.lifecycle(on: today)
+            .allowsPlanEditing
+            ? taskCycleEditableMemberChainIDs(
+                seriesID: seriesID,
+                today: today
+            )
+            : []
+        if let anchorChainID = memberChainIDs.first {
+            return try replaceEditableTaskCycleClassification(
+                seriesID: seriesID,
+                memberChainIDs: memberChainIDs,
+                anchorChainID: anchorChainID,
+                category: category,
+                labels: labels,
+                interactionID: interactionID,
+                now: now
+            )
+        }
+        return try replaceTaskCycleParentClassification(
+            series: series,
+            category: category,
+            labels: labels,
+            decisionID: interactionID,
+            now: now
+        )
+    }
+
+    private func replaceEditableTaskCycleClassification(
+        seriesID: TaskCycleSeriesID,
+        memberChainIDs: [TaskChainID],
+        anchorChainID: TaskChainID,
+        category: TaskCategoryChoice?,
+        labels: [TaskLabelChoice],
+        interactionID: UUID,
+        now: Date
+    ) throws -> [NoonmarkSnapshot] {
+        let plan = try prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: anchorChainID,
+                    category: category,
+                    labels: labels
+                )
+            ),
+            source: .userDirect,
+            interactionID: interactionID,
+            now: now
+        )
+        _ = try commitClassification(
+            plan,
+            confirmation: .user(
+                confirming: plan,
+                decisionID: interactionID
+            ),
+            now: now
+        )
+        var boundaries = [snapshot()]
+        guard let classification = classificationState
+            .currentByChainID[anchorChainID]
+        else {
+            throw NoonmarkError.invalidInput(
+                "recurring task classification did not commit"
+            )
+        }
+        try setTaskCycleTemplateClassification(
+            seriesID: seriesID,
+            categoryID: classification.categoryID,
+            labelIDs: classification.labelIDs,
+            source: .userDirect,
+            interactionID: interactionID,
+            decisionID: interactionID,
+            now: now
+        )
+        for chainID in memberChainIDs where chainID != anchorChainID {
+            if try inheritCurrentClassification(
+                from: anchorChainID,
+                to: chainID,
+                now: now
+            ) {
+                boundaries.append(snapshot())
+            }
+        }
+        boundaries[boundaries.index(before: boundaries.endIndex)] =
+            snapshot()
+        return boundaries
+    }
+
+    private func replaceTaskCycleParentClassification(
+        series: TaskCycleSeries,
+        category: TaskCategoryChoice?,
+        labels: [TaskLabelChoice],
+        decisionID: UUID,
+        now: Date
+    ) throws -> [NoonmarkSnapshot] {
+        var boundaries: [NoonmarkSnapshot] = []
+        let categoryID = try resolveTaskCycleParentCategory(
+            category,
+            currentID: series.categoryID,
+            decisionID: decisionID,
+            now: now,
+            boundaries: &boundaries
+        )
+        var labelIDs: Set<TaskLabelID> = []
+        for label in labels {
+            labelIDs.insert(
+                try resolveTaskCycleParentLabel(
+                    label,
+                    currentIDs: series.labelIDs,
+                    decisionID: decisionID,
+                    now: now,
+                    boundaries: &boundaries
+                )
+            )
+        }
+        try setTaskCycleTemplateClassification(
+            seriesID: series.id,
+            categoryID: categoryID,
+            labelIDs: labelIDs,
+            source: .userDirect,
+            interactionID: decisionID,
+            decisionID: decisionID,
+            now: now
+        )
+        if boundaries.isEmpty == false {
+            boundaries[boundaries.index(before: boundaries.endIndex)] =
+                snapshot()
+        }
+        return boundaries
+    }
+
+    private func resolveTaskCycleParentCategory(
+        _ choice: TaskCategoryChoice?,
+        currentID: TaskCategoryID?,
+        decisionID: UUID,
+        now: Date,
+        boundaries: inout [NoonmarkSnapshot]
+    ) throws -> TaskCategoryID? {
+        guard let choice else { return nil }
+        switch choice {
+        case let .existing(id):
+            guard let category = classificationState.categories[id] else {
+                throw NoonmarkError.notFound("task category")
+            }
+            guard category.lifecycle == .active || currentID == id else {
+                throw NoonmarkError.invalidTransition(
+                    "task category is not active"
+                )
+            }
+            return id
+        case let .new(name, colorHex):
+            let normalizedName = try normalizedClassificationName(name)
+            let key = classificationNameKey(normalizedName)
+            if let existing = classificationState.categories.values
+                .first(where: { $0.allCanonicalKeys.contains(key) })
+            {
+                guard existing.lifecycle == .active
+                    || currentID == existing.id
+                else {
+                    throw NoonmarkError.invalidTransition(
+                        "task category is not active"
+                    )
+                }
+                return existing.id
+            }
+            let plan = try prepareClassification(
+                .createCategory(
+                    name: normalizedName,
+                    colorHex: colorHex
+                ),
+                source: .userDirect,
+                interactionID: UUID(),
+                now: now
+            )
+            guard let rawID = plan.createdItemID else {
+                throw NoonmarkError.invalidInput(
+                    "classification plan is missing its created identity"
+                )
+            }
+            _ = try commitClassification(
+                plan,
+                confirmation: .user(
+                    confirming: plan,
+                    decisionID: decisionID
+                ),
+                now: now
+            )
+            boundaries.append(snapshot())
+            return TaskCategoryID(rawID)
+        }
+    }
+
+    private func resolveTaskCycleParentLabel(
+        _ choice: TaskLabelChoice,
+        currentIDs: Set<TaskLabelID>,
+        decisionID: UUID,
+        now: Date,
+        boundaries: inout [NoonmarkSnapshot]
+    ) throws -> TaskLabelID {
+        switch choice {
+        case let .existing(id):
+            guard let label = classificationState.labels[id] else {
+                throw NoonmarkError.notFound("task label")
+            }
+            guard label.lifecycle == .active || currentIDs.contains(id)
+            else {
+                throw NoonmarkError.invalidTransition(
+                    "task label is not active"
+                )
+            }
+            return id
+        case let .new(name, colorHex):
+            let normalizedName = try normalizedClassificationName(name)
+            let key = classificationNameKey(normalizedName)
+            if let existing = classificationState.labels.values
+                .first(where: { $0.allCanonicalKeys.contains(key) })
+            {
+                guard existing.lifecycle == .active
+                    || currentIDs.contains(existing.id)
+                else {
+                    throw NoonmarkError.invalidTransition(
+                        "task label is not active"
+                    )
+                }
+                return existing.id
+            }
+            let plan = try prepareClassification(
+                .createLabel(
+                    name: normalizedName,
+                    colorHex: colorHex
+                ),
+                source: .userDirect,
+                interactionID: UUID(),
+                now: now
+            )
+            guard let rawID = plan.createdItemID else {
+                throw NoonmarkError.invalidInput(
+                    "classification plan is missing its created identity"
+                )
+            }
+            _ = try commitClassification(
+                plan,
+                confirmation: .user(
+                    confirming: plan,
+                    decisionID: decisionID
+                ),
+                now: now
+            )
+            boundaries.append(snapshot())
+            return TaskLabelID(rawID)
+        }
+    }
+
     func prepareClassification(
         _ intent: ClassificationIntent,
         source: ClassificationSource,
@@ -1979,6 +2266,9 @@ public extension NoonmarkEngine {
         classificationState = next
         try normalizeTaskCycleTemplateClassification(
             after: plan.intent,
+            source: plan.source,
+            interactionID: plan.interactionID,
+            decisionID: decisionID,
             now: now
         )
         return receipt
@@ -1986,6 +2276,9 @@ public extension NoonmarkEngine {
 
     private func normalizeTaskCycleTemplateClassification(
         after intent: ClassificationIntent,
+        source classificationSource: ClassificationSource,
+        interactionID: UUID,
+        decisionID: UUID?,
         now: Date
     ) throws {
         switch intent {
@@ -1998,6 +2291,9 @@ public extension NoonmarkEngine {
                 try series.updateTemplateClassification(
                     categoryID: target,
                     labelIDs: series.labelIDs,
+                    source: classificationSource,
+                    interactionID: interactionID,
+                    decisionID: decisionID,
                     now: now
                 )
                 storeTaskCycleSeries(series)
@@ -2014,6 +2310,9 @@ public extension NoonmarkEngine {
                 try series.updateTemplateClassification(
                     categoryID: series.categoryID,
                     labelIDs: labels,
+                    source: classificationSource,
+                    interactionID: interactionID,
+                    decisionID: decisionID,
                     now: now
                 )
                 storeTaskCycleSeries(series)
@@ -3334,6 +3633,11 @@ extension NoonmarkEngine {
                 + taskCycleSeries.values.count { $0.categoryID == id },
             relationHistoryCount: state.relationHistory.count {
                 $0.kind == .category && $0.itemID == id.description
+            } + taskCycleSeries.values.count {
+                $0.categoryID != id
+                    && $0.classificationRevisions.contains {
+                        $0.categoryID == id
+                    }
             },
             historicalEventCount: historicalEventIDs.count,
             mergeSourceCount: state.categoryMerges[id] == nil ? 0 : 1,
@@ -3358,6 +3662,11 @@ extension NoonmarkEngine {
                 },
             relationHistoryCount: state.relationHistory.count {
                 $0.kind == .label && $0.itemID == id.description
+            } + taskCycleSeries.values.count {
+                $0.labelIDs.contains(id) == false
+                    && $0.classificationRevisions.contains {
+                        $0.labelIDs.contains(id)
+                    }
             },
             historicalEventCount: historicalEventIDs.count,
             mergeSourceCount: state.labelMerges[id] == nil ? 0 : 1,

@@ -11,6 +11,42 @@ final class TaskCycleSeriesTests: XCTestCase {
     private let sunday = LocalDate("2026-07-26")
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testCancellationFactsUseStableOrderWhenRecordedAtTies() throws {
+        let laterID = try XCTUnwrap(
+            UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")
+        )
+        let earlierID = try XCTUnwrap(
+            UUID(uuidString: "00000000-0000-0000-0000-000000000001")
+        )
+
+        let series = TaskCycleSeries(
+            title: "确定性取消事实",
+            startDate: monday,
+            endDate: tuesday,
+            schedule: .daily,
+            cancellationFacts: [
+                TaskCycleCancellationFact(
+                    id: laterID,
+                    scope: .occurrence(tuesday),
+                    reason: .stoppedEarly,
+                    recordedAt: now
+                ),
+                TaskCycleCancellationFact(
+                    id: earlierID,
+                    scope: .followingDates(after: monday),
+                    reason: .stoppedEarly,
+                    recordedAt: now
+                ),
+            ],
+            createdAt: now
+        )
+
+        XCTAssertEqual(
+            series.cancellationFacts.map(\.id),
+            [earlierID, laterID]
+        )
+    }
+
     func testCreatingDailySeriesMaterializesIndependentTaskChains() throws {
         let engine = NoonmarkEngine()
 
@@ -1261,6 +1297,373 @@ final class TaskCycleSeriesTests: XCTestCase {
             engine.taskCycleTracks(today: tuesday).map(\.id),
             [activeID, upcomingID, endedID, stoppedID]
         )
+    }
+
+    func testNaturallyEndedSeriesRejectsStalePlanAndContentEdits() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "一天计划",
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let before = engine.snapshot()
+
+        XCTAssertThrowsError(
+            try engine.updateTaskCycleTemplateContent(
+                seriesID: seriesID,
+                title: "不应写入",
+                descriptionText: nil,
+                plannedSubtasks: [],
+                today: tuesday,
+                now: now.addingTimeInterval(1)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidTransition(
+                    "an ended task cycle cannot be edited"
+                )
+            )
+        }
+        XCTAssertEqual(engine.snapshot(), before)
+
+        XCTAssertThrowsError(
+            try engine.reviseTaskCycleSeries(
+                seriesID: seriesID,
+                schedule: .daily,
+                endCondition: .onDate(friday),
+                today: tuesday,
+                now: now.addingTimeInterval(1)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidTransition(
+                    "an ended task cycle cannot be revised"
+                )
+            )
+        }
+        XCTAssertEqual(engine.snapshot(), before)
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testStoppedSeriesClassificationUpdatesOnlyItsParentTemplate() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "停止后的分类",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        _ = try engine.stopTaskCycleSeries(
+            seriesID: seriesID,
+            today: wednesday,
+            now: now.addingTimeInterval(1)
+        )
+        let memberChainIDs = engine.chains.values
+            .filter { $0.cycleMembership?.seriesID == seriesID }
+            .map(\.id)
+        let memberClassificationsBefore = engine.snapshot()
+            .classifications.currentByChainID
+
+        let boundaries = try engine.replaceTaskCycleClassification(
+            seriesID: seriesID,
+            category: .new(
+                name: "复盘",
+                colorHex: "#2A6FDB"
+            ),
+            labels: [
+                .new(name: "停止后补记", colorHex: "#0E9488")
+            ],
+            today: wednesday,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(boundaries.count, 2)
+        XCTAssertEqual(boundaries.last, engine.snapshot())
+        let parent = try engine.taskCycleTemplateClassification(
+            seriesID: seriesID
+        )
+        XCTAssertEqual(parent.category?.name, "复盘")
+        XCTAssertEqual(parent.labels.map(\.name), ["停止后补记"])
+        for chainID in memberChainIDs {
+            XCTAssertEqual(
+                engine.snapshot().classifications.currentByChainID[chainID],
+                memberClassificationsBefore[chainID]
+            )
+        }
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testActiveSeriesClassificationStillPropagatesToEditableInstances()
+        throws
+    {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "进行中的分类",
+            startDate: monday,
+            endDate: wednesday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        let memberChainIDs = engine.chains.values
+            .filter { $0.cycleMembership?.seriesID == seriesID }
+            .map(\.id)
+
+        let boundaries = try engine.replaceTaskCycleClassification(
+            seriesID: seriesID,
+            category: .new(
+                name: "工作",
+                colorHex: "#2A6FDB"
+            ),
+            labels: [
+                .new(name: "日常", colorHex: "#0E9488")
+            ],
+            today: monday,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(1)
+        )
+
+        XCTAssertFalse(boundaries.isEmpty)
+        XCTAssertEqual(boundaries.last, engine.snapshot())
+        let parent = try engine.taskCycleTemplateClassification(
+            seriesID: seriesID
+        )
+        XCTAssertEqual(parent.category?.name, "工作")
+        XCTAssertEqual(parent.labels.map(\.name), ["日常"])
+        for chainID in memberChainIDs {
+            guard case let .task(classification) = try engine.classification(
+                .task(chainID)
+            ) else {
+                return XCTFail("预期重复实例当前分类")
+            }
+            XCTAssertEqual(classification.category?.name, "工作")
+            XCTAssertEqual(classification.labels.map(\.name), ["日常"])
+        }
+        XCTAssertNoThrow(try engine.snapshot().validateIntegrity())
+    }
+
+    func testClassificationChildWinsCreationTimestampTieRegardlessOfID()
+        throws
+    {
+        let rootID = UUID(
+            uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
+        )!
+        let childID = UUID(
+            uuidString: "00000000-0000-0000-0000-000000000001"
+        )!
+        let categoryID = TaskCategoryID()
+        let root = TaskCycleClassificationRevision(
+            id: rootID,
+            previousRevisionID: nil,
+            interactionID: UUID(),
+            source: .deterministicDomainAction(reason: "root"),
+            decisionID: nil,
+            categoryID: nil,
+            labelIDs: [],
+            recordedAt: now
+        )
+        let child = TaskCycleClassificationRevision(
+            id: childID,
+            previousRevisionID: rootID,
+            interactionID: UUID(),
+            source: .userDirect,
+            decisionID: UUID(),
+            categoryID: categoryID,
+            labelIDs: [],
+            recordedAt: now
+        )
+        let series = TaskCycleSeries(
+            title: "同刻分类",
+            categoryID: categoryID,
+            startDate: monday,
+            endDate: monday,
+            schedule: .daily,
+            classificationRevisions: [root, child],
+            createdAt: now
+        )
+
+        XCTAssertEqual(series.currentClassificationRevision?.id, childID)
+        XCTAssertEqual(
+            series.classificationRevisions.map(\.id),
+            [childID, rootID]
+        )
+        XCTAssertNoThrow(try series.validateIntegrity())
+    }
+
+    func testTerminalFactRemainsAuthoritativeWhenLocalDayIsBehind() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "跨时区停止",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        _ = try engine.stopTaskCycleSeries(
+            seriesID: seriesID,
+            today: wednesday,
+            now: now.addingTimeInterval(1)
+        )
+        let series = try XCTUnwrap(engine.taskCycleSeries[seriesID])
+
+        XCTAssertEqual(
+            series.lifecycle(on: tuesday),
+            .stopped(stopDate: wednesday)
+        )
+        XCTAssertThrowsError(
+            try engine.updateTaskCycleTemplateContent(
+                seriesID: seriesID,
+                title: "不应绕过停止事实",
+                descriptionText: nil,
+                plannedSubtasks: [],
+                today: tuesday,
+                now: now.addingTimeInterval(2)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidTransition(
+                    "a stopped task cycle cannot be edited"
+                )
+            )
+        }
+    }
+
+    func testTerminalParentClassificationRetainsAuditAndInteractionIdentity()
+        throws
+    {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "停止后的父计划分类",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        _ = try engine.stopTaskCycleSeries(
+            seriesID: seriesID,
+            today: wednesday,
+            now: now.addingTimeInterval(1)
+        )
+        let firstInteractionID = UUID()
+        _ = try engine.replaceTaskCycleClassification(
+            seriesID: seriesID,
+            category: .new(name: "历史分类", colorHex: "#2A6FDB"),
+            labels: [],
+            today: wednesday,
+            interactionID: firstInteractionID,
+            now: now.addingTimeInterval(2)
+        )
+        let categoryID = try XCTUnwrap(
+            engine.taskCycleSeries[seriesID]?.categoryID
+        )
+        let classifiedSeries = try XCTUnwrap(
+            engine.taskCycleSeries[seriesID]
+        )
+        XCTAssertEqual(
+            classifiedSeries.classificationRevisions.last?.interactionID,
+            firstInteractionID
+        )
+        XCTAssertEqual(
+            classifiedSeries.classificationRevisions.last?.source,
+            .userDirect
+        )
+        XCTAssertEqual(
+            classifiedSeries.classificationRevisions.last?.decisionID,
+            firstInteractionID
+        )
+
+        let removalInteractionID = UUID()
+        _ = try engine.replaceTaskCycleClassification(
+            seriesID: seriesID,
+            category: nil,
+            labels: [],
+            today: wednesday,
+            interactionID: removalInteractionID,
+            now: now.addingTimeInterval(3)
+        )
+        let removedSeries = try XCTUnwrap(engine.taskCycleSeries[seriesID])
+        XCTAssertNil(removedSeries.categoryID)
+        XCTAssertEqual(removedSeries.classificationRevisions.count, 3)
+        XCTAssertEqual(
+            removedSeries.classificationRevisions.last?.previousRevisionID,
+            classifiedSeries.classificationRevisions.last?.id
+        )
+
+        let deletePlan = try engine.prepareClassification(
+            .hardDeleteCategory(categoryID),
+            source: .userDirect,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(4)
+        )
+        guard case let .referencedItem(
+            kind,
+            itemID,
+            references
+        ) = try XCTUnwrap(deletePlan.blockers.first)
+        else {
+            return XCTFail("预期父计划分类历史阻止硬删除")
+        }
+        XCTAssertEqual(kind, .category)
+        XCTAssertEqual(itemID, categoryID.description)
+        XCTAssertEqual(references.currentRelationCount, 0)
+        XCTAssertEqual(references.relationHistoryCount, 1)
+    }
+
+    func testTerminalParentClassificationRejectsReusedInteraction() throws {
+        let engine = NoonmarkEngine()
+        let seriesID = try engine.createTaskCycleSeries(
+            title: "父计划交互幂等",
+            startDate: monday,
+            endDate: friday,
+            schedule: .daily,
+            today: monday,
+            now: now
+        )
+        _ = try engine.stopTaskCycleSeries(
+            seriesID: seriesID,
+            today: wednesday,
+            now: now.addingTimeInterval(1)
+        )
+        let interactionID = UUID()
+        _ = try engine.replaceTaskCycleClassification(
+            seriesID: seriesID,
+            category: .new(name: "第一次", colorHex: "#2A6FDB"),
+            labels: [],
+            today: wednesday,
+            interactionID: interactionID,
+            now: now.addingTimeInterval(2)
+        )
+        let beforeRetry = engine.snapshot()
+
+        XCTAssertThrowsError(
+            try engine.replaceTaskCycleClassification(
+                seriesID: seriesID,
+                category: nil,
+                labels: [.new(name: "不应创建", colorHex: "#0E9488")],
+                today: wednesday,
+                interactionID: interactionID,
+                now: now.addingTimeInterval(3)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkError,
+                .invalidTransition(
+                    "task cycle classification interaction was reused"
+                )
+            )
+        }
+        XCTAssertEqual(engine.snapshot(), beforeRetry)
     }
 
     func testSkipRejectsTodayAndHistoricalOccurrence() throws {

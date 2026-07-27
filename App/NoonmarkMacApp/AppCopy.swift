@@ -326,6 +326,20 @@ struct AppCopy {
 
     var syncNow: String { language == .chinese ? "立即同步" : "Sync now" }
     var syncing: String { language == .chinese ? "同步中" : "Syncing" }
+    var latestSyncTimestampTitle: String {
+        language == .chinese ? "最近同步" : "Latest sync"
+    }
+
+    var latestEffectiveSyncTimestampTitle: String {
+        language == .chinese
+            ? "最近有效同步"
+            : "Latest effective sync"
+    }
+
+    var noSyncTimestamp: String {
+        language == .chinese ? "暂无" : "Not yet"
+    }
+
     var syncFolderPathTitle: String { language == .chinese ? "同步文件夹" : "Sync folder" }
     var iCloudDriveLocationTitle: String { language == .chinese ? "iCloud Drive 位置" : "iCloud Drive location" }
     var localCachePathTitle: String { language == .chinese ? "本机缓存路径" : "Local cache path" }

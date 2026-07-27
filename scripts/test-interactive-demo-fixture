@@ -125,6 +125,12 @@ cycle_ended_count="$(
 cycle_stopped_count="$(
   plutil -extract core.taskCycleLifecycleCounts.stopped raw -o - "$result_path"
 )"
+collapsible_trail_count="$(
+  plutil -extract core.taskWithCollapsibleTrailCount raw -o - "$result_path"
+)"
+continuable_unfinished_count="$(
+  plutil -extract core.continuableUnfinishedTaskCount raw -o - "$result_path"
+)"
 if [[ "$single_day_completed_count" != "5" \
       || "$ordinary_single_day_completed_count" != "5" \
       || "$cycle_single_day_completed_count" != "0" \
@@ -134,7 +140,9 @@ if [[ "$single_day_completed_count" != "5" \
       || "$cycle_active_count" != "1" \
       || "$cycle_upcoming_count" != "1" \
       || "$cycle_ended_count" != "1" \
-      || "$cycle_stopped_count" != "1" ]]; then
+      || "$cycle_stopped_count" != "1" \
+      || "$collapsible_trail_count" -lt 1 \
+      || "$continuable_unfinished_count" -lt 1 ]]; then
   echo "demo fixture task and cycle counts drifted" >&2
   sed -n '1,200p' "$result_path" >&2
   exit 1

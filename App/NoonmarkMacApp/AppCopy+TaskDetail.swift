@@ -80,6 +80,14 @@ extension AppCopy {
     var missingTaskDescription: String { language == .chinese ? "未填写描述" : "No description" }
     var taskDetailsTitle: String { language == .chinese ? "任务详情" : "Task Details" }
     var taskTrailTitle: String { language == .chinese ? "任务轨迹" : "Task Trail" }
+    var collapseTaskTrail: String {
+        language == .chinese ? "收起轨迹" : "Collapse trail"
+    }
+
+    var expandTaskTrail: String {
+        language == .chinese ? "展开轨迹" : "Expand trail"
+    }
+
     var subtasksTitle: String { language == .chinese ? "子任务" : "Subtasks" }
     var noSubtasks: String { language == .chinese ? "暂无子任务" : "No subtasks" }
     var addSubtaskPlaceholder: String {

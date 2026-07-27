@@ -734,8 +734,6 @@ struct CurrentSyncRecordMerger {
                   == incomingSeries.descriptionText,
                   existingSeries.plannedSubtasks
                   == incomingSeries.plannedSubtasks,
-                  existingSeries.categoryID == incomingSeries.categoryID,
-                  existingSeries.labelIDs == incomingSeries.labelIDs,
                   existingSeries.endDate == incomingSeries.endDate,
                   existingSeries.schedule == incomingSeries.schedule,
                   existingSeries.endCondition
@@ -767,6 +765,36 @@ struct CurrentSyncRecordMerger {
         guard let latestRevision = mergedRevisions.last else {
             throw CurrentSyncRecordMergeError.invalidContentClock
         }
+        var classificationRevisionsByID = Dictionary(
+            uniqueKeysWithValues:
+            existingSeries.classificationRevisions.map {
+                ($0.id, $0)
+            }
+        )
+        for revision in incomingSeries.classificationRevisions {
+            if let existingRevision =
+                classificationRevisionsByID[revision.id],
+               existingRevision != revision
+            {
+                throw CurrentSyncRecordMergeError
+                    .taskCycleSeriesIdentityCollision
+            }
+            classificationRevisionsByID[revision.id] = revision
+        }
+        let mergedClassificationRevisions =
+            classificationRevisionsByID.values.sorted {
+                if $0.recordedAt != $1.recordedAt {
+                    return $0.recordedAt < $1.recordedAt
+                }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+        guard let currentClassificationRevision =
+            TaskCycleSeries.resolveCurrentClassificationRevision(
+                in: mergedClassificationRevisions
+            )
+        else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
+        }
         var factsByID = Dictionary(
             uniqueKeysWithValues: existingSeries.cancellationFacts.map {
                 ($0.id, $0)
@@ -788,8 +816,8 @@ struct CurrentSyncRecordMerger {
             title: winnerSeries.title,
             descriptionText: winnerSeries.descriptionText,
             plannedSubtasks: winnerSeries.plannedSubtasks,
-            categoryID: winnerSeries.categoryID,
-            labelIDs: winnerSeries.labelIDs,
+            categoryID: currentClassificationRevision.categoryID,
+            labelIDs: currentClassificationRevision.labelIDs,
             startDate: winnerSeries.startDate,
             endDate: try latestRevision.endCondition.resolvedEndDate(
                 from: winnerSeries.startDate
@@ -797,6 +825,7 @@ struct CurrentSyncRecordMerger {
             schedule: latestRevision.schedule,
             endCondition: latestRevision.endCondition,
             planRevisions: mergedRevisions,
+            classificationRevisions: mergedClassificationRevisions,
             cancellationFacts: factsByID.values.sorted {
                 if $0.recordedAt != $1.recordedAt {
                     return $0.recordedAt < $1.recordedAt

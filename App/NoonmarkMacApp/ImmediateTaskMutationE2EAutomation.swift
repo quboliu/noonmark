@@ -565,6 +565,12 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
             ],
             store: store
         )
+        try await assertTrailCanCollapse(
+            traceID: replacementTraceID,
+            chainID: fixture.returnedChainID,
+            store: store,
+            input: input
+        )
 
         let replacementSubtasks = store.subtasks(for: replacementTraceID)
         for subtask in replacementSubtasks {
@@ -642,6 +648,62 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                         options: .regularExpression
                     ) != nil
             }
+        }
+    }
+
+    private func assertTrailCanCollapse(
+        traceID: DayTraceID,
+        chainID: TaskChainID,
+        store: NoonmarkStore,
+        input: WindowServerInputDriver
+    ) async throws {
+        let prefix = "task-trail.trace.\(traceID.description)"
+        guard let firstEntry = try store.engine.taskTrail(
+            chainID: chainID
+        ).first else {
+            throw Failure.failed("task trail collapse fixture was empty")
+        }
+        let firstEventIdentifier = "timeline.event.\(firstEntry.id)"
+
+        try await waitUntil("task trail did not start expanded") {
+            AppViewTreeE2E.view(
+                identifier: "\(prefix).toggle"
+            ).flatMap(AppViewTreeE2E.verificationText) == "expanded"
+                && AppViewTreeE2E.view(
+                    identifier: "\(prefix).content"
+                ) != nil
+        }
+        try await click(
+            identifier: "\(prefix).toggle",
+            modifiers: [],
+            input: input
+        )
+        try await waitUntil("task trail could not collapse") {
+            AppViewTreeE2E.view(
+                identifier: "\(prefix).toggle"
+            ).flatMap(AppViewTreeE2E.verificationText) == "collapsed"
+                && AppViewTreeE2E.view(
+                    identifier: "\(prefix).content"
+                ) == nil
+                && AppViewTreeE2E.view(
+                    identifier: firstEventIdentifier
+                ) == nil
+        }
+        try await click(
+            identifier: "\(prefix).toggle",
+            modifiers: [],
+            input: input
+        )
+        try await waitUntil("task trail could not expand again") {
+            AppViewTreeE2E.view(
+                identifier: "\(prefix).toggle"
+            ).flatMap(AppViewTreeE2E.verificationText) == "expanded"
+                && AppViewTreeE2E.view(
+                    identifier: "\(prefix).content"
+                ) != nil
+                && AppViewTreeE2E.view(
+                    identifier: firstEventIdentifier
+                ) != nil
         }
     }
 

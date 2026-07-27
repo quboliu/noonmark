@@ -7,6 +7,64 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let today = LocalDate("2026-07-05")
 
+    func testSyncTimestampsDistinguishSuccessfulCheckFromEffectiveTransfer()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL("sync-timestamps")
+        let engineRepository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(
+            databaseURL: databaseURL
+        )
+        let transport = InMemorySyncTransport()
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        let firstSyncAt = now
+        try engineRepository.save(NoonmarkEngine().snapshot())
+
+        _ = try await coordinator.sync(now: firstSyncAt)
+        XCTAssertEqual(
+            try syncTimestamps(in: syncRepository),
+            SQLiteLocalFirstSyncTimestamps(
+                lastSyncedAt: firstSyncAt,
+                lastEffectiveSyncedAt: nil
+            )
+        )
+
+        let engine = try engineRepository.load()
+        _ = try engine.createPoolTask(
+            title: "触发有效同步",
+            now: now.addingTimeInterval(1)
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("timestamp-device"),
+            changedAt: now.addingTimeInterval(1)
+        )
+        let effectiveSyncAt = now.addingTimeInterval(2)
+        _ = try await coordinator.sync(now: effectiveSyncAt)
+        XCTAssertEqual(
+            try syncTimestamps(in: syncRepository),
+            SQLiteLocalFirstSyncTimestamps(
+                lastSyncedAt: effectiveSyncAt,
+                lastEffectiveSyncedAt: effectiveSyncAt
+            )
+        )
+
+        let emptySyncAt = now.addingTimeInterval(3)
+        _ = try await coordinator.sync(now: emptySyncAt)
+        XCTAssertEqual(
+            try syncTimestamps(in: syncRepository),
+            SQLiteLocalFirstSyncTimestamps(
+                lastSyncedAt: emptySyncAt,
+                lastEffectiveSyncedAt: effectiveSyncAt
+            )
+        )
+    }
+
     func testNonPositiveBatchLimitStillDrainsTheUploadQueue() async throws {
         let databaseURL = makeDatabaseURL("non-positive-batch-limit")
         let repository = SQLiteEngineRepository(databaseURL: databaseURL)
@@ -30,6 +88,23 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
         XCTAssertTrue(
             try syncRepository.journalEntries(state: .pendingUpload).isEmpty
+        )
+    }
+
+    private func syncTimestamps(
+        in repository: SQLiteSyncRepository
+    ) throws -> SQLiteLocalFirstSyncTimestamps {
+        let metadata = try XCTUnwrap(
+            repository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator
+                    .timestampsMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(
+            SQLiteLocalFirstSyncTimestamps.self,
+            from: metadata.value
         )
     }
 
@@ -517,6 +592,11 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         try SQLiteEngineRepository(databaseURL: databaseURL).save(
             NoonmarkEngine().snapshot()
         )
+        let previousSyncAt = now.addingTimeInterval(-1)
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: InMemorySyncTransport()
+        ).sync(now: previousSyncAt)
         let coordinator = SQLiteLocalFirstSyncCoordinator(
             databaseURL: databaseURL,
             transport: FailingFetchSyncTransport()
@@ -547,6 +627,15 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             )
         )
         XCTAssertEqual(metadata.updatedAt, now)
+        XCTAssertEqual(
+            try syncTimestamps(
+                in: SQLiteSyncRepository(databaseURL: databaseURL)
+            ),
+            SQLiteLocalFirstSyncTimestamps(
+                lastSyncedAt: previousSyncAt,
+                lastEffectiveSyncedAt: nil
+            )
+        )
     }
 
     func testTwoSQLiteStoresConvergeConcurrentTaskNoteForksThroughSharedTransport() async throws {

@@ -2025,6 +2025,19 @@ public struct SyncRecordMerger: Sendable {
             )
             return
         }
+        let missingClassificationDependencies =
+            taskCycleClassificationDependencies(
+                missingFrom: series,
+                in: context.working
+            )
+        guard missingClassificationDependencies.isEmpty else {
+            wait(
+                for: record,
+                dependencies: missingClassificationDependencies,
+                context: &context
+            )
+            return
+        }
         guard let existing = context.working.taskCycleSeries[series.id]
         else {
             context.working.taskCycleSeries[series.id] = series
@@ -2055,6 +2068,23 @@ public struct SyncRecordMerger: Sendable {
                 )
             )
         }
+    }
+
+    private func taskCycleClassificationDependencies(
+        missingFrom series: TaskCycleSeries,
+        in snapshot: SnapshotIndex
+    ) -> [SyncRecordDependency] {
+        let categoryDependencies = Set(
+            series.classificationRevisions.compactMap(\.categoryID)
+        )
+            .subtracting(snapshot.classifications.categories.keys)
+            .map(SyncRecordDependency.category)
+        let labelDependencies = Set(
+            series.classificationRevisions.flatMap(\.labelIDs)
+        )
+            .subtracting(snapshot.classifications.labels.keys)
+            .map(SyncRecordDependency.label)
+        return categoryDependencies + labelDependencies
     }
 
     private func apply(_ chain: TaskChain, record: SyncRecord, context: inout MergeContext) {

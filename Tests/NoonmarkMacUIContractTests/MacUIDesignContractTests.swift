@@ -200,7 +200,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertEqual(MacUITypographyMetrics.compactEditorVerticalInset, 8.5)
     }
 
-    func testSmallTextAndSemanticSuccessColorsMeetContrastContract() {
+    func testReadableAndQuietTextColorsMeetTheirContrastContracts() {
         let white = MacUISRGBColor(red: 1, green: 1, blue: 1)
         let recurringIconColors =
             MacUIRecurringLifecycleColorMetrics.iconColors
@@ -231,19 +231,31 @@ final class MacUIDesignContractTests: XCTestCase {
             MacUIAccessibleColorMetrics.warmPaperTertiaryText.red
         )
         for surface in MacUITaskTextSurfaceColorMetrics.coolGray {
-            XCTAssertGreaterThanOrEqual(
+            let contrast =
                 MacUITerminalTaskTextColorMetrics.coolGray.contrastRatio(
                     against: surface
-                ),
-                MacUIAccessibleColorMetrics.minimumSmallTextContrast
+                )
+            XCTAssertGreaterThanOrEqual(
+                contrast,
+                MacUITerminalTaskTextColorMetrics.minimumDefaultContrast
+            )
+            XCTAssertLessThanOrEqual(
+                contrast,
+                MacUITerminalTaskTextColorMetrics.maximumDefaultContrast
             )
         }
         for surface in MacUITaskTextSurfaceColorMetrics.warmPaper {
-            XCTAssertGreaterThanOrEqual(
+            let contrast =
                 MacUITerminalTaskTextColorMetrics.warmPaper.contrastRatio(
                     against: surface
-                ),
-                MacUIAccessibleColorMetrics.minimumSmallTextContrast
+                )
+            XCTAssertGreaterThanOrEqual(
+                contrast,
+                MacUITerminalTaskTextColorMetrics.minimumDefaultContrast
+            )
+            XCTAssertLessThanOrEqual(
+                contrast,
+                MacUITerminalTaskTextColorMetrics.maximumDefaultContrast
             )
         }
         XCTAssertNotEqual(

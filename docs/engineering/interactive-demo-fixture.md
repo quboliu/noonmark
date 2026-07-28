@@ -70,7 +70,7 @@ make test-demo-fixture
 - pending、completed、unfinished、deferred、changed、returned-to-pool 和 abandoned 轨迹齐全；
 - pending、completed、unfinished 和 abandoned 子任务齐全；
 - 至少两项有序置顶，以及至少一项当天可撤回延期；
-- Day Todo 至少一个分组同时包含待完成与当日结果；真实 App 投影中分组标题唯一，完成、延期和废弃只能在原分组内沉底，并与待完成任务形成清晰的深色／浅灰文字层级；
+- Day Todo 至少一个分组同时包含待完成与当日结果；真实 App 投影中分组标题唯一，完成、延期和废弃只能在原分组内沉底；其中已完成任务使用明显浅于待完成任务的静默文字层级，延期、废弃等其他结果继续使用各自共享状态色；
 - 真实 App 通过侧栏点击打开 Day Todo、任务池、未来计划、重复计划、未完成、已完成和日历；分组视图的普通 section 由分组标题承载分组信息，任务行不重复分组；重复父计划只在“重复计划”行内显示自己的分组和标签，Day Todo 与未来计划则由具体重复实例显示分类。任务池、未完成和已完成不得出现 `task-cycle-track` 管理行，日历月格与选中日列表不得出现任何重复实例。Day Todo 的双置顶队列没有分组标题，两条已分组置顶任务必须在行内分别显示分组；未完成池的平铺视图则由任务行显示分组。六页任务行与日历均产出真实 App 截图；App log 与 unified console 必须没有 runtime、持久化、布局或 accessibility failure；
 - 已完成池同时包含单日完成与跨日完成任务；真实 App 行只保留一个强调型完成状态，单日记录收起延续轨迹，跨日记录改用轻量事件路径；
 - 任务池右栏以一个本地统计区呈现任务、池内分组、池内标签、未分组、说明、拆分和重新回池计数；统计不依赖 Provider。Provider 未就绪时烛龙分析区必须完整隐藏，就绪时显示 fixture 中 grounded 且未过期的分析报告；

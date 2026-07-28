@@ -232,16 +232,9 @@ public enum MacUIAccessibleColorMetrics {
     public static let warmPaperBackground = MacUISRGBColor(red: 0.997, green: 0.992, blue: 0.982)
 }
 
-/// Every surface on which terminal task text is rendered. Selection values are
-/// the resolved 8% semantic tint over the theme panel; Calendar uses
-/// `calendarSelected` directly.
+/// Every list surface on which quiet terminal task text is rendered. Selection
+/// values are the resolved 8% semantic tint over the theme panel.
 public enum MacUITaskTextSurfaceColorMetrics {
-    public static let calendarSelected = MacUISRGBColor(
-        red: 0.93,
-        green: 0.955,
-        blue: 1
-    )
-
     public static let coolGray = [
         MacUIAccessibleColorMetrics.coolGrayBackground,
         MacUISRGBColor(red: 1, green: 1, blue: 1),
@@ -251,8 +244,7 @@ public enum MacUITaskTextSurfaceColorMetrics {
             red: 0.977_725_488,
             green: 0.953_254_88,
             blue: 0.926_902
-        ),
-        calendarSelected
+        )
     ]
 
     public static let warmPaper = [
@@ -268,24 +260,26 @@ public enum MacUITaskTextSurfaceColorMetrics {
             red: 0.977_725_488,
             green: 0.951_414_88,
             blue: 0.919_542
-        ),
-        calendarSelected
+        )
     ]
 }
 
-/// A deliberately quiet text tier for settled Day Todo facts and terminal
-/// recurring plans. It remains distinct from placeholder copy because the task
-/// title is real content, while Increase Contrast replaces it with `text2`.
+/// A deliberately quiet text tier used only by completed Day Todo list rows
+/// and ended or stopped recurring-plan list rows. Increase Contrast replaces it
+/// with `text2`.
 public enum MacUITerminalTaskTextColorMetrics {
+    public static let minimumDefaultContrast = 2.3
+    public static let maximumDefaultContrast = 2.8
+
     public static let coolGray = MacUISRGBColor(
-        red: 0.431,
-        green: 0.431,
-        blue: 0.471
+        red: 0.627_451,
+        green: 0.627_451,
+        blue: 0.658_824
     )
     public static let warmPaper = MacUISRGBColor(
-        red: 0.488,
-        green: 0.423,
-        blue: 0.348
+        red: 0.647_059,
+        green: 0.603_922,
+        blue: 0.560_784
     )
 }
 

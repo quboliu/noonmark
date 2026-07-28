@@ -636,6 +636,16 @@ struct TaskRow: View {
 
     var expanded: Bool { store.expandedTraceIDs.contains(trace.id) }
 
+    private var titleColor: Color {
+        trace.status == .completed
+            ? Theme.terminalTaskText
+            : trace.status.uiStyle.titleColor
+    }
+
+    private var titleWeight: Font.Weight {
+        trace.status == .completed ? .regular : .medium
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: NoonmarkVisualMetrics.taskRowAccessorySpacing) {
@@ -649,10 +659,10 @@ struct TaskRow: View {
                         .font(
                             .noonmarkSystem(
                                 size: 13,
-                                weight: trace.status.uiStyle.titleWeight
+                                weight: titleWeight
                             )
                         )
-                        .foregroundStyle(trace.status.uiStyle.titleColor)
+                        .foregroundStyle(titleColor)
                         .strikethrough(
                             trace.status.uiStyle.strikethrough
                         )

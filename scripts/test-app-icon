@@ -14,8 +14,11 @@ required_files=(
   "$app_icon_source_svg"
   "$app_icon_master_png"
   "$app_icon_icns_path"
+  "docs/assets/brand/noonmark-logo-reference.png"
+  "scripts/app-icon-svg-structure.py"
   "scripts/app-icon-optical-renderer.swift"
   "scripts/app-icon-optical-probe.swift"
+  "scripts/vectorize-app-icon-source.py"
 )
 for representation in "${app_icon_representations[@]}"; do
   required_files+=("${app_icon_iconset_dir}/${representation%%:*}")
@@ -28,14 +31,10 @@ for file in "${required_files[@]}"; do
   fi
 done
 
-if ! grep -Eq '<svg[^>]+viewBox="0 0 1024 1024"' "$app_icon_source_svg"; then
-  echo "canonical app icon SVG must use a 0 0 1024 1024 viewBox: $app_icon_source_svg" >&2
-  exit 1
-fi
-if grep -Eq '<image([[:space:]>])' "$app_icon_source_svg"; then
-  echo "canonical app icon SVG must not embed raster images: $app_icon_source_svg" >&2
-  exit 1
-fi
+python3 scripts/app-icon-svg-structure.py --self-test
+python3 scripts/app-icon-svg-structure.py "$app_icon_source_svg"
+python3 scripts/vectorize-app-icon-source.py --verify-source-only
+
 if [[ -e "${app_icon_resources_dir}/AppIcon-source.png" ]]; then
   echo "legacy raster app icon source must be removed in favor of SVG" >&2
   exit 1

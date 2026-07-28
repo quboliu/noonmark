@@ -104,7 +104,19 @@ private struct SmallIconMetrics {
     let opaqueCount: Int
     let edgeAlphaCount: Int
     let darkCount: Int
-    let orangeCount: Int
+    let goldCount: Int
+}
+
+private enum BrandGoldSignature {
+    private static let redRange = 145...245
+    private static let redGreenDeltaRange = 16...95
+    private static let minimumGreenBlueDelta = 20
+
+    static func contains(red: Int, green: Int, blue: Int) -> Bool {
+        redRange.contains(red)
+            && redGreenDeltaRange.contains(red - green)
+            && green - blue >= minimumGreenBlueDelta
+    }
 }
 
 private func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -125,7 +137,7 @@ private func metrics(for image: PixelImage) -> SmallIconMetrics {
     var opaqueCount = 0
     var edgeAlphaCount = 0
     var darkCount = 0
-    var orangeCount = 0
+    var goldCount = 0
 
     for y in 0..<image.height {
         for x in 0..<image.width {
@@ -148,8 +160,8 @@ private func metrics(for image: PixelImage) -> SmallIconMetrics {
             if max(red, green, blue) < 150 {
                 darkCount += 1
                 motifBounds.include(x: x, y: y)
-            } else if red - green > 24, green - blue > 8 {
-                orangeCount += 1
+            } else if BrandGoldSignature.contains(red: red, green: green, blue: blue) {
+                goldCount += 1
                 motifBounds.include(x: x, y: y)
             }
         }
@@ -162,7 +174,7 @@ private func metrics(for image: PixelImage) -> SmallIconMetrics {
         opaqueCount: opaqueCount,
         edgeAlphaCount: edgeAlphaCount,
         darkCount: darkCount,
-        orangeCount: orangeCount
+        goldCount: goldCount
     )
 }
 
@@ -179,7 +191,7 @@ private func validateSmall(path: String, expectedSize: Int) throws {
     let alphaHeightRatio = Double(result.alphaBounds.height) / Double(expectedSize)
     let opaqueRatio = Double(result.opaqueCount) / canvasArea
     let darkRatio = Double(result.darkCount) / canvasArea
-    let orangeRatio = Double(result.orangeCount) / canvasArea
+    let goldRatio = Double(result.goldCount) / canvasArea
     let motifWidthRatio = Double(result.motifBounds.width) / Double(expectedSize)
     let motifHeightRatio = Double(result.motifBounds.height) / Double(expectedSize)
     let minimumMotifGap = max(1, Int((Double(expectedSize) * 0.09).rounded(.down)))
@@ -201,8 +213,9 @@ private func validateSmall(path: String, expectedSize: Int) throws {
         "optical app icon dark mark is not legible: \(path)"
     )
     try require(
-        (0.05...0.12).contains(orangeRatio),
-        "optical app icon orange mark is not legible: \(path)"
+        (0.05...0.12).contains(goldRatio),
+        "optical app icon gold mark is not legible: \(path), ratio=\(goldRatio), "
+            + "pixels=\(result.goldCount)"
     )
     try require(
         (0.58...0.68).contains(motifWidthRatio)
@@ -222,7 +235,7 @@ private func validateSmall(path: String, expectedSize: Int) throws {
         "Optical probe \(name): alpha=\(result.alphaBounds) "
             + "visible=\(result.visibleCount) opaque=\(result.opaqueCount) "
             + "edge=\(result.edgeAlphaCount) dark=\(result.darkCount) "
-            + "orange=\(result.orangeCount) motif=\(result.motifBounds)"
+            + "gold=\(result.goldCount) motif=\(result.motifBounds)"
     )
 }
 
@@ -237,7 +250,7 @@ private func validateLarge(path: String, expectedSize: Int) throws {
     let canvasArea = Double(expectedSize * expectedSize)
     let motifWidthRatio = Double(result.motifBounds.width) / Double(expectedSize)
     let motifHeightRatio = Double(result.motifBounds.height) / Double(expectedSize)
-    let motifPixelRatio = Double(result.darkCount + result.orangeCount) / canvasArea
+    let motifPixelRatio = Double(result.darkCount + result.goldCount) / canvasArea
 
     try require(result.motifBounds.isEmpty == false, "large app icon has no mark: \(path)")
     try require(
@@ -253,7 +266,7 @@ private func validateLarge(path: String, expectedSize: Int) throws {
     let name = URL(fileURLWithPath: path).lastPathComponent
     print(
         "Large probe \(name): dark=\(result.darkCount) "
-            + "orange=\(result.orangeCount) motif=\(result.motifBounds)"
+            + "gold=\(result.goldCount) motif=\(result.motifBounds)"
     )
 }
 

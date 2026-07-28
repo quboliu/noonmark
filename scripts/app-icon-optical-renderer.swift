@@ -35,33 +35,33 @@ private enum RenderError: Error, CustomStringConvertible {
 
 private struct OpticalIconRenderer {
     private let black = CGColor(
-        red: 0.125,
-        green: 0.129,
+        red: 0.157,
+        green: 0.149,
         blue: 0.141,
         alpha: 1
     )
-    private let solarOrange = CGColor(
-        red: 0.91,
-        green: 0.39,
-        blue: 0.17,
+    private let solarGold = CGColor(
+        red: 0.769,
+        green: 0.553,
+        blue: 0.247,
         alpha: 1
     )
-    private let scaleOrange = CGColor(
-        red: 0.91,
-        green: 0.39,
-        blue: 0.17,
+    private let scaleGold = CGColor(
+        red: 0.769,
+        green: 0.553,
+        blue: 0.247,
         alpha: 1
     )
     private let tileBorder = CGColor(
-        red: 0.87,
-        green: 0.85,
-        blue: 0.81,
+        red: 0.867,
+        green: 0.835,
+        blue: 0.800,
         alpha: 1
     )
     private let tileFill = CGColor(
-        red: 1,
-        green: 0.996,
-        blue: 0.988,
+        red: 0.980,
+        green: 0.961,
+        blue: 0.941,
         alpha: 1
     )
 
@@ -157,11 +157,11 @@ private struct OpticalIconRenderer {
             control1: CGPoint(x: 12.55, y: 8.1),
             control2: CGPoint(x: 12.35, y: 9.15)
         )
-        stroke(scale, color: scaleOrange, width: 0.82, in: context)
+        stroke(scale, color: scaleGold, width: 0.9, in: context)
 
-        drawLine(from: CGPoint(x: 9.8, y: 3.8), to: CGPoint(x: 9.35, y: 4.8), width: 0.82, in: context)
-        drawLine(from: CGPoint(x: 11.6, y: 5.2), to: CGPoint(x: 10.6, y: 5.7), width: 0.82, in: context)
-        drawLine(from: CGPoint(x: 12.45, y: 7.5), to: CGPoint(x: 11.2, y: 7.45), width: 0.82, in: context)
+        drawLine(from: CGPoint(x: 9.8, y: 3.8), to: CGPoint(x: 9.35, y: 4.8), width: 0.9, in: context)
+        drawLine(from: CGPoint(x: 11.6, y: 5.2), to: CGPoint(x: 10.6, y: 5.7), width: 0.9, in: context)
+        drawLine(from: CGPoint(x: 12.45, y: 7.5), to: CGPoint(x: 11.2, y: 7.45), width: 0.9, in: context)
 
         drawNeedle(
             baseLeft: CGPoint(x: 5.55, y: 5.05),
@@ -171,7 +171,7 @@ private struct OpticalIconRenderer {
             footWidth: 0.85,
             in: context
         )
-        drawSun(center: CGPoint(x: 10.8, y: 11.55), radius: 1.05, in: context)
+        drawSun(center: CGPoint(x: 10.8, y: 11.55), radius: 1.14, in: context)
     }
 
     private func drawRegularMark(in context: CGContext) {
@@ -201,14 +201,12 @@ private struct OpticalIconRenderer {
             control1: CGPoint(x: 25.1, y: 16.4),
             control2: CGPoint(x: 24.75, y: 18.85)
         )
-        stroke(scale, color: scaleOrange, width: 1.2, in: context)
+        stroke(scale, color: scaleGold, width: 1.2, in: context)
 
         drawLine(from: CGPoint(x: 18.2, y: 7.3), to: CGPoint(x: 17.65, y: 9.2), width: 1.2, in: context)
         drawLine(from: CGPoint(x: 21.0, y: 8.4), to: CGPoint(x: 19.8, y: 10.1), width: 1.2, in: context)
         drawLine(from: CGPoint(x: 23.1, y: 10.8), to: CGPoint(x: 21.3, y: 11.8), width: 1.2, in: context)
         drawLine(from: CGPoint(x: 24.5, y: 14.2), to: CGPoint(x: 22.1, y: 14.2), width: 1.2, in: context)
-        drawLine(from: CGPoint(x: 24.3, y: 17.7), to: CGPoint(x: 22.1, y: 17.0), width: 1.2, in: context)
-
         drawNeedle(
             baseLeft: CGPoint(x: 10.9, y: 9.9),
             baseRight: CGPoint(x: 13.9, y: 9.9),
@@ -229,7 +227,7 @@ private struct OpticalIconRenderer {
         let path = CGMutablePath()
         path.move(to: start)
         path.addLine(to: end)
-        stroke(path, color: scaleOrange, width: width, in: context)
+        stroke(path, color: scaleGold, width: width, in: context)
     }
 
     private func drawNeedle(
@@ -267,7 +265,7 @@ private struct OpticalIconRenderer {
             width: radius * 2,
             height: radius * 2
         )
-        context.setFillColor(solarOrange)
+        context.setFillColor(solarGold)
         context.fillEllipse(in: rect)
     }
 

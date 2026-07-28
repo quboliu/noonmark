@@ -147,6 +147,8 @@ public enum MacUICompletedPoolRowLayout {
     public static let minimumVisibleTrajectoryNodeCount = 2
     public static let trajectoryUsesStrongStatusGlyphs = false
     public static let completionMomentIncludesDate = true
+    public static let completedChildRowsAreCollapsible = true
+    public static let completedChildRowsStartExpanded = true
 }
 
 public enum MacUICalendarDetailRowLayout {
@@ -228,6 +230,63 @@ public enum MacUIAccessibleColorMetrics {
     public static let warmPaperTertiaryText = MacUISRGBColor(red: 0.47, green: 0.405, blue: 0.335)
     public static let warmPaperPlaceholderText = MacUISRGBColor(red: 0.62, green: 0.57, blue: 0.50)
     public static let warmPaperBackground = MacUISRGBColor(red: 0.997, green: 0.992, blue: 0.982)
+}
+
+/// Every surface on which terminal task text is rendered. Selection values are
+/// the resolved 8% semantic tint over the theme panel; Calendar uses
+/// `calendarSelected` directly.
+public enum MacUITaskTextSurfaceColorMetrics {
+    public static let calendarSelected = MacUISRGBColor(
+        red: 0.93,
+        green: 0.955,
+        blue: 1
+    )
+
+    public static let coolGray = [
+        MacUIAccessibleColorMetrics.coolGrayBackground,
+        MacUISRGBColor(red: 1, green: 1, blue: 1),
+        MacUISRGBColor(red: 0.977, green: 0.979, blue: 0.984),
+        MacUISRGBColor(red: 0.9328, green: 0.9504, blue: 0.9824),
+        MacUISRGBColor(
+            red: 0.977_725_488,
+            green: 0.953_254_88,
+            blue: 0.926_902
+        ),
+        calendarSelected
+    ]
+
+    public static let warmPaper = [
+        MacUIAccessibleColorMetrics.warmPaperBackground,
+        MacUISRGBColor(red: 1, green: 0.998, blue: 0.992),
+        MacUISRGBColor(red: 0.989, green: 0.981, blue: 0.966),
+        MacUISRGBColor(
+            red: 0.9328,
+            green: 0.94856,
+            blue: 0.97504
+        ),
+        MacUISRGBColor(
+            red: 0.977_725_488,
+            green: 0.951_414_88,
+            blue: 0.919_542
+        ),
+        calendarSelected
+    ]
+}
+
+/// A deliberately quiet text tier for settled Day Todo facts and terminal
+/// recurring plans. It remains distinct from placeholder copy because the task
+/// title is real content, while Increase Contrast replaces it with `text2`.
+public enum MacUITerminalTaskTextColorMetrics {
+    public static let coolGray = MacUISRGBColor(
+        red: 0.431,
+        green: 0.431,
+        blue: 0.471
+    )
+    public static let warmPaper = MacUISRGBColor(
+        red: 0.488,
+        green: 0.423,
+        blue: 0.348
+    )
 }
 
 public enum MacUIRecurringLifecycleColorMetrics {
@@ -358,6 +417,7 @@ public enum MacUIColorToken: String, CaseIterable, Sendable {
     case t1
     case t2
     case t3
+    case terminalTaskText
 }
 
 public enum MacUINavigationElement: String, CaseIterable, Sendable {
@@ -484,6 +544,7 @@ public enum MacUICompletedPoolElement: String, CaseIterable, Sendable {
     case parentChildHierarchy
     case completedChildrenOnly
     case quietChildrenAfterParentCompletion
+    case collapsibleCompletedChildren
     case parentCompletionRecord
     case subtaskCompletionRecord
     case trajectoryNodes

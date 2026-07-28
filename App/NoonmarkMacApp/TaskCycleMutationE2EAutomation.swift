@@ -1302,6 +1302,95 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
                     }
                     return true
                 } onSuccess: { [self] in
+                    verifyCompletedHierarchyCollapse()
+                }
+            }
+        }
+
+        private func verifyCompletedHierarchyCollapse() {
+            guard let chainID = completedHierarchyChainID,
+                  let firstChildID = completedHierarchyChildIDs.first
+            else {
+                finish("failed: 缺少可折叠的已完成父子层级")
+                return
+            }
+            waitFor("选中折叠范围内的已完成子任务") {
+                AppViewTreeE2E.click(
+                    identifier:
+                    "completed.hierarchy.child.\(firstChildID.description)"
+                )
+            } onSuccess: { [self] in
+                waitFor("已完成子任务选中态") {
+                    self.store.selectedCompletedSubtaskID
+                        == firstChildID
+                } onSuccess: { [self] in
+                    collapseCompletedHierarchy(chainID: chainID)
+                }
+            }
+        }
+
+        private func collapseCompletedHierarchy(
+            chainID: TaskChainID
+        ) {
+            waitFor("收起已完成子任务列表") {
+                AppViewTreeE2E.click(
+                    identifier:
+                    "completed.hierarchy.disclosure.\(chainID.description)"
+                )
+            } onSuccess: { [self] in
+                waitFor("已完成子任务列表已收起") {
+                    guard AppViewTreeE2E.view(
+                        identifier:
+                        "completed.hierarchy.disclosure.\(chainID.description)"
+                    ).flatMap(AppViewTreeE2E.verificationText)
+                        == "collapsed",
+                        self.completedHierarchyChildIDs.allSatisfy({
+                            AppViewTreeE2E.hasNoVisibleView(
+                                identifier:
+                                "completed.hierarchy.child.\($0.description)"
+                            )
+                        }),
+                        self.store.selectedCompletedTraceID
+                        == self.completedHierarchyTraceID,
+                        self.store.selectedCompletedSubtaskID == nil
+                    else {
+                        return false
+                    }
+                    return true
+                } onSuccess: { [self] in
+                    expandCompletedHierarchy(chainID: chainID)
+                }
+            }
+        }
+
+        private func expandCompletedHierarchy(
+            chainID: TaskChainID
+        ) {
+            waitFor("重新展开已完成子任务列表") {
+                AppViewTreeE2E.click(
+                    identifier:
+                    "completed.hierarchy.disclosure.\(chainID.description)"
+                )
+            } onSuccess: { [self] in
+                waitFor("已完成子任务列表已重新展开") {
+                    guard AppViewTreeE2E.view(
+                        identifier:
+                        "completed.hierarchy.disclosure.\(chainID.description)"
+                    ).flatMap(AppViewTreeE2E.verificationText)
+                        == "expanded"
+                    else {
+                        return false
+                    }
+                    return self.completedHierarchyChildIDs
+                        .allSatisfy {
+                            AppViewTreeE2E.view(
+                                identifier:
+                                "completed.hierarchy.child.\($0.description)"
+                            ).flatMap(
+                                AppViewTreeE2E.verificationText
+                            ) == "quiet"
+                        }
+                } onSuccess: { [self] in
                     openPartialHierarchyDetail()
                 }
             }

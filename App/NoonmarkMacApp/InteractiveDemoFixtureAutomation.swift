@@ -1163,9 +1163,19 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         ), let completedParent = AppViewTreeE2E.view(
             identifier:
             "completed.hierarchy.parent.\(completed.chain.id.description)"
+        ), let openDisclosure = AppViewTreeE2E.view(
+            identifier:
+            "completed.hierarchy.disclosure.\(open.chain.id.description)"
+        ), let completedDisclosure = AppViewTreeE2E.view(
+            identifier:
+            "completed.hierarchy.disclosure.\(completed.chain.id.description)"
         ), AppViewTreeE2E.verificationText(for: openParent) == "open",
             AppViewTreeE2E.verificationText(for: completedParent)
-            == "completed"
+            == "completed",
+            AppViewTreeE2E.verificationText(for: openDisclosure)
+            == "expanded",
+            AppViewTreeE2E.verificationText(for: completedDisclosure)
+            == "expanded"
         else {
             return false
         }

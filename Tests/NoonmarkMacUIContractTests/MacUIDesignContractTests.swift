@@ -115,6 +115,12 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(
             MacUICompletedPoolRowLayout.completionMomentIncludesDate
         )
+        XCTAssertTrue(
+            MacUICompletedPoolRowLayout.completedChildRowsAreCollapsible
+        )
+        XCTAssertTrue(
+            MacUICompletedPoolRowLayout.completedChildRowsStartExpanded
+        )
     }
 
     func testCalendarRailRowsKeepOneReadableStatusAndExposeFullTitles() {
@@ -223,6 +229,30 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertGreaterThan(
             MacUIAccessibleColorMetrics.warmPaperPlaceholderText.red,
             MacUIAccessibleColorMetrics.warmPaperTertiaryText.red
+        )
+        for surface in MacUITaskTextSurfaceColorMetrics.coolGray {
+            XCTAssertGreaterThanOrEqual(
+                MacUITerminalTaskTextColorMetrics.coolGray.contrastRatio(
+                    against: surface
+                ),
+                MacUIAccessibleColorMetrics.minimumSmallTextContrast
+            )
+        }
+        for surface in MacUITaskTextSurfaceColorMetrics.warmPaper {
+            XCTAssertGreaterThanOrEqual(
+                MacUITerminalTaskTextColorMetrics.warmPaper.contrastRatio(
+                    against: surface
+                ),
+                MacUIAccessibleColorMetrics.minimumSmallTextContrast
+            )
+        }
+        XCTAssertNotEqual(
+            MacUITerminalTaskTextColorMetrics.coolGray,
+            MacUIAccessibleColorMetrics.coolGrayPlaceholderText
+        )
+        XCTAssertNotEqual(
+            MacUITerminalTaskTextColorMetrics.warmPaper,
+            MacUIAccessibleColorMetrics.warmPaperPlaceholderText
         )
         for (index, iconColor) in recurringIconColors.enumerated() {
             for otherIndex in recurringIconColors.indices
@@ -440,6 +470,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.colorTokens.contains(.t1))
         XCTAssertTrue(contract.colorTokens.contains(.t2))
         XCTAssertTrue(contract.colorTokens.contains(.t3))
+        XCTAssertTrue(contract.colorTokens.contains(.terminalTaskText))
         XCTAssertTrue(contract.navigationElements.contains(.unifiedNavigationIcons))
         XCTAssertTrue(contract.navigationElements.contains(.semanticNavigationIconColors))
         XCTAssertTrue(contract.navigationElements.contains(.quietSelectedPill))
@@ -470,6 +501,7 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.unfinishedPoolElements.contains(.detailsExpansion))
         XCTAssertTrue(contract.unfinishedPoolElements.contains(.reenableAbandonedContextMenuAction))
         XCTAssertTrue(contract.completedPoolElements.contains(.subtaskCompletionRecord))
+        XCTAssertTrue(contract.completedPoolElements.contains(.collapsibleCompletedChildren))
         XCTAssertTrue(contract.completedPoolElements.contains(.copyAsNewTaskContextMenuAction))
         XCTAssertTrue(contract.calendarElements.contains(.completionHeatBlock))
         XCTAssertTrue(contract.calendarElements.contains(.keyboardDateNavigation))
@@ -567,6 +599,7 @@ final class MacUIDesignContractTests: XCTestCase {
                 .parentChildHierarchy,
                 .completedChildrenOnly,
                 .quietChildrenAfterParentCompletion,
+                .collapsibleCompletedChildren,
                 .parentCompletionRecord,
                 .subtaskCompletionRecord,
                 .trajectoryNodes,

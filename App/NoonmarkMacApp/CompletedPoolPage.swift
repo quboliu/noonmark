@@ -106,16 +106,27 @@ struct CompletedTaskHierarchyRows: View {
     @EnvironmentObject private var store: NoonmarkStore
     let hierarchy: CompletedTaskHierarchy
 
+    private var childrenExpanded: Bool {
+        store.collapsedCompletedHierarchyIDs.contains(
+            hierarchy.chain.id
+        ) == false
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            CompletedTaskHierarchyParentRow(hierarchy: hierarchy)
-            ForEach(hierarchy.completedChildren, id: \.subtask.id) {
-                record in
-                CompletedTaskHierarchyChildRow(
-                    record: record,
-                    parentIsCompleted:
-                    hierarchy.parentCompletion != nil
-                )
+            CompletedTaskHierarchyParentRow(
+                hierarchy: hierarchy,
+                childrenExpanded: childrenExpanded
+            )
+            if childrenExpanded {
+                ForEach(hierarchy.completedChildren, id: \.subtask.id) {
+                    record in
+                    CompletedTaskHierarchyChildRow(
+                        record: record,
+                        parentIsCompleted:
+                        hierarchy.parentCompletion != nil
+                    )
+                }
             }
         }
         .background {
@@ -123,7 +134,13 @@ struct CompletedTaskHierarchyRows: View {
                 identifier:
                 "completed.hierarchy.\(hierarchy.chain.id.description)",
                 verificationText:
-                "\(hierarchy.parentCompletion == nil ? "open" : "completed"),\(hierarchy.completedChildren.count)"
+                [
+                    hierarchy.parentCompletion == nil
+                        ? "open"
+                        : "completed",
+                    "\(hierarchy.completedChildren.count)",
+                    childrenExpanded ? "expanded" : "collapsed"
+                ].joined(separator: ",")
             )
         }
     }
@@ -132,6 +149,7 @@ struct CompletedTaskHierarchyRows: View {
 struct CompletedTaskHierarchyParentRow: View {
     @EnvironmentObject private var store: NoonmarkStore
     let hierarchy: CompletedTaskHierarchy
+    let childrenExpanded: Bool
 
     private var selection: NoonmarkStore.WorkspaceSelectionItem? {
         store.completedHierarchyParentSelection(hierarchy)
@@ -230,6 +248,38 @@ struct CompletedTaskHierarchyParentRow: View {
                         accessibilityInstanceID
                     )
                     .padding(.top, 3)
+                }
+                if hierarchy.completedChildren.isEmpty == false {
+                    Button {
+                        store.toggleCompletedHierarchyChildren(
+                            hierarchy
+                        )
+                    } label: {
+                        SubtaskDisclosureLabel(
+                            count: hierarchy.completedChildren.count,
+                            expanded: childrenExpanded
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        store.copy.subtaskDisclosureAccessibilityLabel(
+                            count: hierarchy.completedChildren.count,
+                            expanded: childrenExpanded
+                        )
+                    )
+                    .accessibilityIdentifier(
+                        "completed.hierarchy.disclosure.\(hierarchy.chain.id.description)"
+                    )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier:
+                            "completed.hierarchy.disclosure.\(hierarchy.chain.id.description)",
+                            verificationText:
+                            childrenExpanded
+                                ? "expanded"
+                                : "collapsed"
+                        )
+                    }
                 }
                 Spacer()
                 if let completedItem {

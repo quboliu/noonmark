@@ -638,6 +638,7 @@ final class NoonmarkStore: ObservableObject {
     @Published var expandedTraceIDs: Set<DayTraceID> = []
     @Published var expandedUnfinishedChainIDs: Set<TaskChainID> = []
     @Published var expandedTaskCycleSeriesIDs: Set<TaskCycleSeriesID> = []
+    @Published var collapsedCompletedHierarchyIDs: Set<TaskChainID> = []
     @Published var quickText = ""
     @Published var poolText = ""
     @Published var showingPicker: DatePickerPurpose?

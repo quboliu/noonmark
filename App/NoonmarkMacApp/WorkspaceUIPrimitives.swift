@@ -770,6 +770,7 @@ struct TraceStatusStyle {
     let glyphBorder: Color
     let dotColor: Color
     let titleColor: Color
+    let titleWeight: Font.Weight
     let strikethrough: Bool
 }
 
@@ -786,6 +787,7 @@ extension TraceStatus {
                 glyphBorder: Theme.line2,
                 dotColor: Theme.accent,
                 titleColor: Theme.text1,
+                titleWeight: .medium,
                 strikethrough: false
             )
         case .completed:
@@ -797,7 +799,8 @@ extension TraceStatus {
                 glyphBackground: Theme.ok,
                 glyphBorder: .clear,
                 dotColor: Theme.ok,
-                titleColor: Theme.text3,
+                titleColor: Theme.terminalTaskText,
+                titleWeight: .regular,
                 strikethrough: true
             )
         case .unfinished:
@@ -809,7 +812,8 @@ extension TraceStatus {
                 glyphBackground: Theme.warnSoft,
                 glyphBorder: .clear,
                 dotColor: Theme.warn,
-                titleColor: Theme.text2,
+                titleColor: Theme.terminalTaskText,
+                titleWeight: .regular,
                 strikethrough: false
             )
         case .deferred:
@@ -821,7 +825,8 @@ extension TraceStatus {
                 glyphBackground: Theme.chip,
                 glyphBorder: .clear,
                 dotColor: Theme.text3,
-                titleColor: Theme.text2,
+                titleColor: Theme.terminalTaskText,
+                titleWeight: .regular,
                 strikethrough: false
             )
         case .changed:
@@ -833,7 +838,8 @@ extension TraceStatus {
                 glyphBackground: Theme.chip,
                 glyphBorder: .clear,
                 dotColor: Theme.text3,
-                titleColor: Theme.text2,
+                titleColor: Theme.terminalTaskText,
+                titleWeight: .regular,
                 strikethrough: false
             )
         case .returnedToPool:
@@ -845,7 +851,8 @@ extension TraceStatus {
                 glyphBackground: Theme.chip,
                 glyphBorder: .clear,
                 dotColor: Theme.text3,
-                titleColor: Theme.text2,
+                titleColor: Theme.terminalTaskText,
+                titleWeight: .regular,
                 strikethrough: false
             )
         case .cancelledDraft:
@@ -859,7 +866,8 @@ extension TraceStatus {
                 glyphBackground: Theme.chip,
                 glyphBorder: .clear,
                 dotColor: Theme.text3,
-                titleColor: Theme.text3,
+                titleColor: Theme.terminalTaskText,
+                titleWeight: .regular,
                 strikethrough: true
             )
         }

@@ -140,6 +140,18 @@ enum Theme {
         }
     }
 
+    static var terminalTaskText: Color {
+        if accessibilityPolicy.usesEnhancedBoundaries {
+            return palette.text2
+        }
+        return switch activeTheme {
+        case .coolGray:
+            color(MacUITerminalTaskTextColorMetrics.coolGray)
+        case .warmPaper:
+            color(MacUITerminalTaskTextColorMetrics.warmPaper)
+        }
+    }
+
     static var chip: Color { palette.chip }
     static var sidebar: Color { palette.sidebar }
     static var controlFill: Color { palette.controlFill }

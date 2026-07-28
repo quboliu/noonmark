@@ -84,7 +84,12 @@ struct TaskCycleTrackRow: View {
                     MarkdownInlineText(
                         store.copy.displayTaskTitle(track.title)
                     )
-                    .font(.noonmarkSystem(size: 13, weight: .semibold))
+                    .font(
+                        .noonmarkSystem(
+                            size: 13,
+                            weight: lifecycleStyle.titleWeight
+                        )
+                    )
                     .foregroundStyle(lifecycleStyle.titleColor)
                     .lineLimit(1)
                     .layoutPriority(1)
@@ -107,7 +112,7 @@ struct TaskCycleTrackRow: View {
 
                     Text(store.copy.taskCycleSchedule(track.schedule))
                         .font(.noonmarkSystem(size: 10.5, weight: .medium))
-                        .foregroundStyle(Theme.text3)
+                        .foregroundStyle(lifecycleStyle.scheduleColor)
 
                     Spacer(minLength: 8)
 
@@ -247,7 +252,25 @@ private struct TaskCycleLifecycleVisualStyle {
         case .primary:
             Theme.text1
         case .muted:
-            Theme.text2
+            Theme.terminalTaskText
+        }
+    }
+
+    var titleWeight: Font.Weight {
+        switch contract.rowEmphasis {
+        case .primary:
+            .semibold
+        case .muted:
+            .regular
+        }
+    }
+
+    var scheduleColor: Color {
+        switch contract.rowEmphasis {
+        case .primary:
+            Theme.text3
+        case .muted:
+            Theme.terminalTaskText
         }
     }
 
@@ -258,7 +281,7 @@ private struct TaskCycleLifecycleVisualStyle {
         case .upcoming:
             Theme.recurringUpcomingText
         case .ended, .stopped:
-            Theme.text2
+            Theme.terminalTaskText
         }
     }
 }

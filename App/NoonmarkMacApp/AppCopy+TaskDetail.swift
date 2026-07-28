@@ -61,6 +61,14 @@ extension AppCopy {
     var detailExpanded: String { language == .chinese ? "▾ 明细" : "▾ Details" }
     var detailCollapsed: String { language == .chinese ? "▸ 明细" : "▸ Details" }
     var subtask: String { language == .chinese ? "子任务" : "Subtask" }
+    var collapseSubtasksAction: String {
+        language == .chinese ? "收起子任务" : "Collapse subtasks"
+    }
+
+    var expandSubtasksAction: String {
+        language == .chinese ? "展开子任务" : "Expand subtasks"
+    }
+
     var belongsToTaskPrefix: String { language == .chinese ? "属于" : "Part of" }
     var currentLocation: String { language == .chinese ? "当前所在" : "Current" }
     var firstEntry: String { language == .chinese ? "首次进入" : "First entry" }
@@ -138,6 +146,21 @@ extension AppCopy {
         switch language {
         case .chinese: "\(count) 子任务"
         case .english: count == 1 ? "1 subtask" : "\(count) subtasks"
+        }
+    }
+
+    func subtaskDisclosureAccessibilityLabel(
+        count: Int,
+        expanded: Bool
+    ) -> String {
+        let action = expanded
+            ? collapseSubtasksAction
+            : expandSubtasksAction
+        return switch language {
+        case .chinese:
+            "\(action)，\(subtaskCount(count))"
+        case .english:
+            "\(action), \(subtaskCount(count))"
         }
     }
 

@@ -166,6 +166,33 @@ extension NoonmarkStore {
         )
     }
 
+    func toggleCompletedHierarchyChildren(
+        _ hierarchy: CompletedTaskHierarchy
+    ) {
+        let chainID = hierarchy.chain.id
+        if collapsedCompletedHierarchyIDs.remove(chainID) != nil {
+            return
+        }
+
+        let hiddenSelections = Set(
+            hierarchy.completedChildren.map {
+                WorkspaceSelectionItem.completedSubtask($0.subtask.id)
+            }
+        )
+        let selectedChildWillBeHidden =
+            workspaceSelection.selectedIDs.isDisjoint(
+                with: hiddenSelections
+            ) == false
+        collapsedCompletedHierarchyIDs.insert(chainID)
+
+        guard selectedChildWillBeHidden else { return }
+        if let parent = completedHierarchyParentSelection(hierarchy) {
+            selectWorkspaceItem(parent, modifiers: [])
+        } else {
+            clearSelection()
+        }
+    }
+
     func isWorkspaceItemSelected(_ item: WorkspaceSelectionItem) -> Bool {
         workspaceSelection.contains(item)
     }
@@ -398,9 +425,17 @@ extension NoonmarkStore {
                 let parent = completedHierarchyParentSelection(
                     hierarchy
                 ).map { [$0] } ?? []
-                return parent + hierarchy.completedChildren.map {
-                    .completedSubtask($0.subtask.id)
-                }
+                let children: [WorkspaceSelectionItem] =
+                    collapsedCompletedHierarchyIDs.contains(
+                        hierarchy.chain.id
+                    )
+                    ? []
+                    : hierarchy.completedChildren.map {
+                        WorkspaceSelectionItem.completedSubtask(
+                            $0.subtask.id
+                        )
+                    }
+                return parent + children
             }
         case .calendar, .zhulong, .settings:
             return []

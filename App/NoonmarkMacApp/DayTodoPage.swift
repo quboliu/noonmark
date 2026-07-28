@@ -646,7 +646,12 @@ struct TaskRow: View {
                         MarkdownInlineText(
                             store.copy.displayTaskTitle(definition?.title)
                         )
-                        .font(.noonmarkSystem(size: 13, weight: .medium))
+                        .font(
+                            .noonmarkSystem(
+                                size: 13,
+                                weight: trace.status.uiStyle.titleWeight
+                            )
+                        )
                         .foregroundStyle(trace.status.uiStyle.titleColor)
                         .strikethrough(
                             trace.status.uiStyle.strikethrough
@@ -1032,7 +1037,11 @@ struct SubtaskRow: View {
                     immediately: true
                 )
             }
-            .foregroundStyle(subtask.status == .completed ? Theme.text3 : Theme.text1)
+            .foregroundStyle(
+                subtask.status == .completed
+                    ? Theme.terminalTaskText
+                    : Theme.text1
+            )
             .strikethrough(subtask.status == .completed)
 
             Spacer()

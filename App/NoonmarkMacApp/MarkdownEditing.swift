@@ -370,6 +370,13 @@ private final class MarkdownNSTextView: NSTextView {
     var commitAction: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
+        // Give the active input method the untouched event stream. Reading
+        // command characters before AppKit interprets a marked-text event can
+        // prevent third-party IMEs from committing their selected candidate.
+        if hasMarkedText() {
+            super.keyDown(with: event)
+            return
+        }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
 

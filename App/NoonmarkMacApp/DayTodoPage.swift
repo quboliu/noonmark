@@ -1159,6 +1159,7 @@ struct EditableSubtaskTitle: View {
     @State private var draft: String
     @State private var pendingPersistedTitle: String?
     @State private var persistenceRevision: UInt64 = 0
+    private let autosaveDelay = Duration.milliseconds(300)
 
     init(
         title: String,
@@ -1183,7 +1184,7 @@ struct EditableSubtaskTitle: View {
                 commitsOnReturn: true,
                 onCommit: finishEditing,
                 onEndEditing: finishEditing,
-                onTextChange: persistNonemptyDraft,
+                onTextChange: scheduleAutosave,
                 nativeAccessibilityIdentifier: accessibilityIdentifier
             )
             .onChange(of: title) { _, newValue in
@@ -1205,30 +1206,32 @@ struct EditableSubtaskTitle: View {
         }
     }
 
-    private func persistNonemptyDraft(_ value: String) {
+    private func scheduleAutosave(_ value: String) {
         persistenceRevision &+= 1
         let revision = persistenceRevision
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.isEmpty == false, normalized != title else { return }
         Task { @MainActor in
-            // NSTextView reports edits while SwiftUI is reconciling its
-            // representable. Publish only after that update finishes, and
-            // discard an older draft if another edit arrived first.
-            await Task.yield()
+            try? await Task.sleep(for: autosaveDelay)
             guard persistenceRevision == revision else { return }
-            pendingPersistedTitle = normalized
-            onChange(normalized)
+            persist(normalized)
         }
     }
 
     private func finishEditing() {
+        persistenceRevision &+= 1
         let normalized = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.isEmpty == false else {
-            persistenceRevision &+= 1
             draft = title
             return
         }
-        persistNonemptyDraft(normalized)
+        persist(normalized)
+    }
+
+    private func persist(_ normalized: String) {
+        guard normalized != title else { return }
+        pendingPersistedTitle = normalized
+        onChange(normalized)
     }
 }
 

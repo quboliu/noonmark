@@ -12,10 +12,16 @@ struct WorkspaceSelectableRow: ViewModifier {
             .focusable(true)
             .focusEffectDisabled()
             .onKeyPress(.return) {
+                guard isNativeTextInputActive == false else {
+                    return .ignored
+                }
                 store.userSelectWorkspaceItem(item)
                 return .handled
             }
             .onKeyPress(.space) {
+                guard isNativeTextInputActive == false else {
+                    return .ignored
+                }
                 store.userSelectWorkspaceItem(item)
                 return .handled
             }
@@ -46,6 +52,10 @@ struct WorkspaceSelectableRow: ViewModifier {
             .background {
                 AppE2EViewAnchor(identifier: item.e2eIdentifier)
             }
+    }
+
+    private var isNativeTextInputActive: Bool {
+        NSApp.keyWindow?.firstResponder is NSTextView
     }
 }
 

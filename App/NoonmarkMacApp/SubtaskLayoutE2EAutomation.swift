@@ -289,13 +289,15 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         ) {
             window.firstResponder === editor
         }
-        try await verifyMarkedTextSurvivesSwiftUIReconciliation(
-            editor: editor,
-            inputIdentifier: inputIdentifier,
-            subtaskID: subtaskID,
-            initialTitle: store.engine.subtasks[subtaskID]?.title ?? "",
-            store: store
-        )
+        if imeInputModeID == nil {
+            try await verifyMarkedTextSurvivesSwiftUIReconciliation(
+                editor: editor,
+                inputIdentifier: inputIdentifier,
+                subtaskID: subtaskID,
+                initialTitle: store.engine.subtasks[subtaskID]?.title ?? "",
+                store: store
+            )
+        }
         try input.postKey(keyCode: 0, modifiers: .command)
         if let imeInputModeID {
             try await typeWithPhysicalPinyinIME(
@@ -310,7 +312,19 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                 )
             )
         } else {
+            try await verifyResponsiveASCIIEditing(
+                context: IMEEditingContext(
+                    input: input,
+                    editor: editor,
+                    inputIdentifier: inputIdentifier,
+                    subtaskID: subtaskID,
+                    initialTitle: store.engine.subtasks[subtaskID]?.title ?? "",
+                    store: store
+                )
+            )
+            try input.postKey(keyCode: 0, modifiers: .command)
             try input.typeUnicode(editedTitle)
+            try input.postKey(keyCode: 36)
         }
         do {
             try await waitUntil("Day Todo 主列表子任务接收键入后没有更新领域模型") {
@@ -347,6 +361,90 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                     + "\(store.engine.subtasks[subtaskID]?.title ?? "nil")，"
                     + "focused=\(window.firstResponder === editor)"
             )
+        }
+    }
+
+    private func verifyResponsiveASCIIEditing(
+        context: IMEEditingContext
+    ) async throws {
+        let input = context.input
+        let editor = context.editor
+        let inputIdentifier = context.inputIdentifier
+        let subtaskID = context.subtaskID
+        let initialTitle = context.initialTitle
+        let store = context.store
+        let originalInputSource = TISCopyCurrentKeyboardInputSource()
+            .takeRetainedValue()
+        let asciiInputSource =
+            TISCopyCurrentASCIICapableKeyboardLayoutInputSource()
+                .takeRetainedValue()
+        guard TISSelectInputSource(asciiInputSource) == noErr else {
+            throw Failure.failed("无法选择 ASCII 键盘布局进行响应性测试")
+        }
+        defer {
+            _ = TISSelectInputSource(originalInputSource)
+        }
+
+        let strokes: [(CGKeyCode, Character)] = [
+            (0, "a"),
+            (11, "b"),
+            (8, "c"),
+            (2, "d"),
+            (14, "e"),
+            (3, "f"),
+            (5, "g"),
+            (4, "h"),
+            (34, "i"),
+            (38, "j")
+        ]
+        var expected = ""
+        var maximumLatency = Duration.zero
+        let clock = ContinuousClock()
+        for (keyCode, character) in strokes {
+            let startedAt = clock.now
+            try input.postKey(keyCode: keyCode)
+            expected.append(character)
+            for _ in 0 ..< 30 {
+                if editor.string == expected {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            guard editor.string == expected else {
+                throw Failure.failed(
+                    "英文连续输入未及时进入编辑器：expected=\(expected)，"
+                        + "actual=\(editor.string)"
+                )
+            }
+            maximumLatency = max(
+                maximumLatency,
+                startedAt.duration(to: clock.now)
+            )
+            guard store.engine.subtasks[subtaskID]?.title == initialTitle else {
+                throw Failure.failed(
+                    "英文连续输入期间逐键触发了领域持久化："
+                        + "\(store.engine.subtasks[subtaskID]?.title ?? "nil")"
+                )
+            }
+        }
+        guard maximumLatency < .milliseconds(120) else {
+            throw Failure.failed(
+                "英文单键到编辑器的最大延迟过高：\(maximumLatency)"
+            )
+        }
+        NSLog(
+            "Noonmark E2E subtask ASCII input maximum latency: %@",
+            String(describing: maximumLatency)
+        )
+        try await waitUntil("英文输入停止后没有自动保存最终标题") {
+            guard let activeEditor = AppViewTreeE2E.view(
+                identifier: inputIdentifier
+            ) as? NSTextView
+            else {
+                return false
+            }
+            return activeEditor.string == expected
+                && store.engine.subtasks[subtaskID]?.title == expected
         }
     }
 
@@ -449,20 +547,16 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                     + "\(store.engine.subtasks[subtaskID]?.title ?? "nil")"
             )
         }
-        try input.postKey(keyCode: 18)
+        try input.postKey(keyCode: 49)
         try await waitForIMECommit(
             "你好",
-            inputIdentifier: inputIdentifier,
-            subtaskID: subtaskID,
-            store: store
+            inputIdentifier: inputIdentifier
         )
 
         try input.postKey(keyCode: 43)
         try await waitForIMECommit(
             "你好，",
-            inputIdentifier: inputIdentifier,
-            subtaskID: subtaskID,
-            store: store
+            inputIdentifier: inputIdentifier
         )
 
         try await typePhysicalKeys(
@@ -480,21 +574,21 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                 && activeEditor.markedRange().length >= 6
         }
         try await Task.sleep(for: .milliseconds(160))
-        try input.postKey(keyCode: 18)
+        try input.postKey(keyCode: 49)
         try await waitForIMECommit(
             "你好，你好",
-            inputIdentifier: inputIdentifier,
-            subtaskID: subtaskID,
-            store: store
+            inputIdentifier: inputIdentifier
         )
 
         try input.postKey(keyCode: 47)
         try await waitForIMECommit(
             Self.imeEditedTitle,
-            inputIdentifier: inputIdentifier,
-            subtaskID: subtaskID,
-            store: store
+            inputIdentifier: inputIdentifier
         )
+        try input.postKey(keyCode: 36)
+        try await waitUntil("IME 最终标题没有在回车后写入领域模型") {
+            store.engine.subtasks[subtaskID]?.title == Self.imeEditedTitle
+        }
         guard editor.window?.firstResponder is NSTextView else {
             throw Failure.failed("IME 输入过程中子任务编辑器丢失焦点")
         }
@@ -512,9 +606,7 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
 
     private func waitForIMECommit(
         _ expected: String,
-        inputIdentifier: String,
-        subtaskID: SubtaskID,
-        store: NoonmarkStore
+        inputIdentifier: String
     ) async throws {
         try await waitUntil("IME 没有提交预期文本：\(expected)") {
             guard let activeEditor = AppViewTreeE2E.view(
@@ -525,7 +617,6 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             }
             return activeEditor.hasMarkedText() == false
                 && activeEditor.string == expected
-                && store.engine.subtasks[subtaskID]?.title == expected
         }
     }
 

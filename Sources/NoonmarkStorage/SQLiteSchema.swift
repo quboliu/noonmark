@@ -2287,7 +2287,8 @@ public enum SQLiteSchema {
                 entity_type IN (
                     'day', 'taskCycleSeries', 'taskChain', 'taskDefinition',
                     'dayTrace', 'subtask', 'appPreferences',
-                    'classificationCommit', 'traceClassificationEvent'
+                    'classificationBaseline', 'classificationCommit',
+                    'traceClassificationEvent'
                 )
             ),
             entity_id TEXT NOT NULL,
@@ -2305,6 +2306,7 @@ public enum SQLiteSchema {
                 (
                     entity_type IN (
                         'appPreferences',
+                        'classificationBaseline',
                         'classificationCommit',
                         'traceClassificationEvent'
                     )
@@ -2318,6 +2320,7 @@ public enum SQLiteSchema {
                 OR (
                     entity_type NOT IN (
                         'appPreferences',
+                        'classificationBaseline',
                         'classificationCommit',
                         'traceClassificationEvent',
                         'taskChain'
@@ -2339,7 +2342,8 @@ public enum SQLiteSchema {
                 entity_type IN (
                     'day', 'taskCycleSeries', 'taskChain', 'taskDefinition',
                     'dayTrace', 'subtask', 'appPreferences',
-                    'classificationCommit', 'traceClassificationEvent'
+                    'classificationBaseline', 'classificationCommit',
+                    'traceClassificationEvent'
                 )
             ),
             entity_id TEXT NOT NULL CHECK (length(entity_id) > 0),
@@ -2409,7 +2413,10 @@ public enum SQLiteSchema {
         """
         CREATE TABLE IF NOT EXISTS sync_terminal_rejections (
             entity_type TEXT NOT NULL CHECK (
-                entity_type IN ('classificationCommit', 'traceClassificationEvent')
+                entity_type IN (
+                    'classificationBaseline', 'classificationCommit',
+                    'traceClassificationEvent'
+                )
             ),
             entity_id TEXT NOT NULL CHECK (length(entity_id) = 36),
             conflict_id TEXT NOT NULL UNIQUE

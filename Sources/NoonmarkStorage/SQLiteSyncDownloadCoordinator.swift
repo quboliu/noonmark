@@ -69,8 +69,38 @@ public final class SQLiteSyncDownloadCoordinator {
         detectedAt: Date
     ) async throws -> SQLiteSyncDownloadObservation {
         let pending = try syncRepository.pendingDownloads()
-        let terminalRejections = try syncRepository.terminalRejectionEvidence()
+        let terminalRejections = try syncRepository
+            .terminalRejectionEvidence()
         let fetchedRecords = try await transport.fetchAll()
+        return try downloadAndMergeObservation(
+            pending: pending,
+            terminalRejections: terminalRejections,
+            fetchedRecords: fetchedRecords,
+            detectedAt: detectedAt
+        )
+    }
+
+    func downloadAndMergeObservingRecords(
+        fetchedRecords: [SyncRecord],
+        detectedAt: Date
+    ) throws -> SQLiteSyncDownloadObservation {
+        let pending = try syncRepository.pendingDownloads()
+        let terminalRejections = try syncRepository
+            .terminalRejectionEvidence()
+        return try downloadAndMergeObservation(
+            pending: pending,
+            terminalRejections: terminalRejections,
+            fetchedRecords: fetchedRecords,
+            detectedAt: detectedAt
+        )
+    }
+
+    private func downloadAndMergeObservation(
+        pending: [SyncPendingDownloadRecord],
+        terminalRejections: [SyncTerminalRejection],
+        fetchedRecords: [SyncRecord],
+        detectedAt: Date
+    ) throws -> SQLiteSyncDownloadObservation {
         let result = try downloadAndMerge(
             pending: pending,
             terminalRejections: terminalRejections,

@@ -15,6 +15,15 @@ public enum AppOperationFailureContext: CaseIterable, Hashable, Sendable {
     case databaseLoad
 }
 
+public enum AppSyncFailureReason: CaseIterable, Hashable, Sendable {
+    case baselineUnavailable
+    case baselineInvalid
+    case baselineNotUploaded
+    case localRecordsUnpreparable
+    case localChangesPending
+    case remoteChangesPending
+}
+
 private struct AppOperationFailureCopy {
     let chinese: String
     let english: String
@@ -43,8 +52,8 @@ private extension AppOperationFailureContext {
             english: "The change could not be saved safely. Existing data is unchanged."
         ),
         .sync: .init(
-            chinese: "同步未完成，本机数据保持不变；请检查账户或网络后重试。",
-            english: "Sync did not complete. Local data is unchanged; check your account or network and try again."
+            chinese: "同步未完成；本机数据仍安全保留。请检查同步端点、账户、网络和可用磁盘空间后重试。",
+            english: "Sync did not complete. Local data is still retained; check the sync endpoint, account, network, and available disk space, then try again."
         ),
         .provider: .init(
             chinese: "Provider 操作未完成，请检查配置与连接后重试。",
@@ -84,5 +93,34 @@ public extension AppPresentation {
     func failureMessage(for context: AppOperationFailureContext) -> String {
         let copy = context.copy
         return language == .chinese ? copy.chinese : copy.english
+    }
+
+    func syncFailureMessage(for reason: AppSyncFailureReason) -> String {
+        switch (language, reason) {
+        case (.chinese, .baselineUnavailable):
+            "同步未完成：无法建立本机完整数据基线。系统没有将本次操作标记为成功；本机数据仍然保留，请重试。"
+        case (.chinese, .baselineInvalid):
+            "同步未完成：本机同步基线不完整或已损坏。系统没有将本次操作标记为成功；请勿删除本机数据，重试后仍出现时请重新导入原数据包或联系支持。"
+        case (.chinese, .baselineNotUploaded):
+            "同步未完成：本机完整数据尚未全部上传。系统没有将本次操作标记为成功；请确认同步端点可用后重试。"
+        case (.chinese, .localRecordsUnpreparable):
+            "同步未完成：部分本机数据无法安全生成同步记录。系统没有将本次操作标记为成功；本机数据仍然保留，请重试。"
+        case (.chinese, .localChangesPending):
+            "同步未完成：结束同步时仍有新的本机更改等待上传。系统没有将本次操作标记为成功；本机数据仍然保留，请重试。"
+        case (.chinese, .remoteChangesPending):
+            "同步未完成：结束同步时仍有新的远端更改到达。系统没有将本次操作标记为成功；本机数据仍然保留，请重试。"
+        case (.english, .baselineUnavailable):
+            "Sync did not complete: the complete local data baseline could not be created. This operation was not marked as successful; local data is still retained. Try again."
+        case (.english, .baselineInvalid):
+            "Sync did not complete: the local sync baseline is incomplete or corrupted. This operation was not marked as successful; keep the local data, then reimport the original data package or contact support."
+        case (.english, .baselineNotUploaded):
+            "Sync did not complete: the complete local data has not been fully uploaded. This operation was not marked as successful; check the sync endpoint and try again."
+        case (.english, .localRecordsUnpreparable):
+            "Sync did not complete: some local data could not be safely converted into sync records. This operation was not marked as successful; local data is still retained. Try again."
+        case (.english, .localChangesPending):
+            "Sync did not complete: new local changes were still waiting to upload while sync was finishing. This operation was not marked as successful; local data is still retained. Try again."
+        case (.english, .remoteChangesPending):
+            "Sync did not complete: new remote changes were still arriving while sync was finishing. This operation was not marked as successful; local data is still retained. Try again."
+        }
     }
 }

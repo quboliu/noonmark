@@ -2204,7 +2204,11 @@ final class LocalFolderSyncTransportTests: XCTestCase {
     }
 
     private var immutableEntityTypes: [SyncEntityType] {
-        [.classificationCommit, .traceClassificationEvent]
+        [
+            .classificationBaseline,
+            .classificationCommit,
+            .traceClassificationEvent
+        ]
     }
 
     private func immutableRecord(

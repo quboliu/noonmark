@@ -425,7 +425,29 @@ public final class SQLiteEngineRepository {
         let stagedRepository = SQLiteEngineRepository(databaseURL: stagedURL)
         try stagedRepository.save(snapshot)
         if let deviceIdentity {
-            try SQLiteSyncRepository(databaseURL: stagedURL).saveDeviceIdentity(deviceIdentity)
+            let stagedSyncRepository = SQLiteSyncRepository(
+                databaseURL: stagedURL
+            )
+            try stagedSyncRepository.saveDeviceIdentity(deviceIdentity)
+            let baselineCreatedAt = Date()
+            let baselineEntries = try SyncSnapshotBaselineBuilder()
+                .journalEntries(
+                    from: snapshot,
+                    modifiedBy: deviceIdentity.deviceID,
+                    createdAt: baselineCreatedAt
+                )
+            let manifest = SQLiteSyncBaselineManifest(
+                createdAt: baselineCreatedAt,
+                entries: baselineEntries
+            )
+            try stagedSyncRepository.saveBaselineJournal(
+                baselineEntries,
+                manifestMetadata: try manifest.metadata(
+                    key: SQLiteLocalFirstSyncCoordinator
+                        .baselineManifestMetadataKey,
+                    updatedAt: baselineCreatedAt
+                )
+            )
         }
         _ = try stagedRepository.load()
 

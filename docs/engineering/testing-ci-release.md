@@ -37,7 +37,7 @@ Neon 的可借鉴点：
 - 交互式演示 fixture：功能快速迭代的默认人工入口为 `make run-demo-app`，自动探针为 `make test-demo-fixture`。它与局部截图 seed 分离，通过真实领域接口重放固定十天用户故事，并对 SQLite、加密烛龙 sidecar、已提交／未提交任务产物和复盘回执 fail-closed 对账。覆盖契约与维护规则见 `docs/engineering/interactive-demo-fixture.md`。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
 - Live AI Provider Smoke：只验证真实 DeepSeek provider，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，优先读取被 Git 忽略且权限为 `0600` 的 `config/ai-provider.local.json`，格式参考 `config/ai-provider.local.example.json`；也可显式提供 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`。它同时验证结构化归类、至少两个 SSE 文本片段、真实烛龙对话产物经过流式 adapter／Provider run／任务 diff／加密 sidecar 保存恢复的完整链，以及真实 App 自动归类；诊断烛龙链时可对底层 executable 显式设置 `NOONMARK_AI_ZHULONG_ONLY=1`，跳过无关归类请求。一旦手动启用，缺少 key、配置并非 DeepSeek、provider 不可达、流式传输不可用、烛龙产物无法形成可恢复任务 diff，或 EXIT 清理后 E2E Keychain／UserDefaults 仍有测试凭证都必须失败。
-- Live iCloud Sync：真实 Apple Account / iCloud Drive 手动测试，入口为 `scripts/test-icloud-sync-live`，不进入默认 `make check`；覆盖双 SQLite record merge、真实 `.app` 同步、SQLite status、仓库 ref 与 `brctl` 上传完成信号。
+- Live iCloud Sync：真实 Apple Account / iCloud Drive 手动测试，入口为 `NOONMARK_LIVE_ICLOUD_PACKAGE_PATH=/absolute/current-package.json scripts/test-icloud-sync-live`，不进入默认 `make check`；数据包路径为必填且缺失时 fail-closed，覆盖真实数据包双 SQLite 往返、record merge、真实 `.app` 同步、SQLite status、仓库 ref 与 `brctl` 上传完成信号。
 - Live CloudKit Sync：真实签名 App / CloudKit Development container 手动测试，入口为 `scripts/test-cloudkit-sync-live`，不进入默认 `make check`；要求 Apple signing identity、provisioning profile 与 container 授权，覆盖独立 SQLite 上传／下载、`CKSyncEngine` state 落盘和隔离 test zone 清理。缺少任一外部条件必须失败，不能以 mock 或 ad-hoc 结果代替。
 
 ## 本机稳定签名与 TCC
@@ -59,7 +59,7 @@ make test-e2e
 make test-demo-fixture
 make run-demo-app
 make test-ai-provider-live
-scripts/test-icloud-sync-live
+NOONMARK_LIVE_ICLOUD_PACKAGE_PATH=/absolute/current-package.json scripts/test-icloud-sync-live
 make test-cloudkit-sync-live
 make test-all
 make package-dmg

@@ -353,7 +353,11 @@ extension NoonmarkStore {
                 reference: moment.instant
             )
         )
-        try replacePersistedData(with: importedEngine)
+        try withExclusiveEngineWriteAuthorization(
+            for: .dataImport(preview.id)
+        ) {
+            try replacePersistedData(with: importedEngine)
+        }
         clearUndoHistory()
         engine = importedEngine
         naturalDayState = moment.state
@@ -803,12 +807,33 @@ extension NoonmarkStore {
     }
 
     func assertEngineWriteAllowed() throws {
+        if let exclusiveEngineOperation,
+           authorizedExclusiveEngineWrite != exclusiveEngineOperation
+        {
+            throw StoreMutationGateError
+                .exclusiveOperationInProgress
+        }
         guard pendingZhulongEngineWriteAuthorized == false else { return }
         do {
             try zhulongWorkspace.assertNoPendingApplication()
         } catch {
             throw StoreMutationGateError.pendingZhulongApplication
         }
+    }
+
+    func withExclusiveEngineWriteAuthorization<Result>(
+        for operation: ExclusiveEngineOperation,
+        _ body: () throws -> Result
+    ) throws -> Result {
+        guard exclusiveEngineOperation == operation,
+              authorizedExclusiveEngineWrite == nil
+        else {
+            throw StoreMutationGateError
+                .exclusiveOperationInProgress
+        }
+        authorizedExclusiveEngineWrite = operation
+        defer { authorizedExclusiveEngineWrite = nil }
+        return try body()
     }
 
     @discardableResult

@@ -101,49 +101,88 @@ private struct NoonmarkSettingsWindowRoot: View {
     }
 
     var body: some View {
-        // Settings always keeps its navigation visible. NavigationSplitView adds
-        // a sidebar-toggle toolbar item on macOS, even though this window has no
-        // compact sidebar state. HSplitView preserves the native, resizable
-        // sidebar without advertising that unavailable action in the title bar.
-        HSplitView {
-            List(SettingsPane.allCases, selection: $selectedPane) { pane in
-                Label(pane.title(copy: store.copy), systemImage: pane.systemImage)
-                    .tag(pane)
-                    .accessibilityIdentifier("settings.sidebar.\(pane.rawValue)")
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: "settings.sidebar.\(pane.rawValue)",
-                            verificationText: pane.title(copy: store.copy)
+        ZStack {
+            // Settings always keeps its navigation visible.
+            // NavigationSplitView adds a sidebar-toggle toolbar item on macOS,
+            // even though this window has no compact sidebar state. HSplitView
+            // preserves the native, resizable sidebar without advertising that
+            // unavailable action in the title bar.
+            HSplitView {
+                List(SettingsPane.allCases, selection: $selectedPane) { pane in
+                    Label(
+                        pane.title(copy: store.copy),
+                        systemImage: pane.systemImage
+                    )
+                        .tag(pane)
+                        .accessibilityIdentifier(
+                            "settings.sidebar.\(pane.rawValue)"
                         )
-                    }
-            }
-            .listStyle(.sidebar)
-            .frame(
-                minWidth: CGFloat(MacUISettingsWindowLayout.sidebarMinimumWidth),
-                idealWidth: CGFloat(MacUISettingsWindowLayout.sidebarIdealWidth),
-                maxWidth: CGFloat(MacUISettingsWindowLayout.sidebarMaximumWidth)
-            )
-            .accessibilityIdentifier("settings.sidebar")
-            .background {
-                AppE2EViewAnchor(identifier: "settings.sidebar")
-            }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    Text(selectedPane.title(copy: store.copy))
-                        .font(.noonmarkSystem(size: 20, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                        .accessibilityAddTraits(.isHeader)
-
-                    SettingsPaneContent(pane: selectedPane)
-                        .frame(maxWidth: 660, alignment: .topLeading)
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier:
+                                "settings.sidebar.\(pane.rawValue)",
+                                verificationText: pane.title(copy: store.copy)
+                            )
+                        }
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.horizontal, 34)
-                .padding(.vertical, 30)
+                .listStyle(.sidebar)
+                .frame(
+                    minWidth: CGFloat(
+                        MacUISettingsWindowLayout.sidebarMinimumWidth
+                    ),
+                    idealWidth: CGFloat(
+                        MacUISettingsWindowLayout.sidebarIdealWidth
+                    ),
+                    maxWidth: CGFloat(
+                        MacUISettingsWindowLayout.sidebarMaximumWidth
+                    )
+                )
+                .accessibilityIdentifier("settings.sidebar")
+                .background {
+                    AppE2EViewAnchor(identifier: "settings.sidebar")
+                }
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        Text(selectedPane.title(copy: store.copy))
+                            .font(
+                                .noonmarkSystem(
+                                    size: 20,
+                                    weight: .semibold
+                                )
+                            )
+                            .foregroundStyle(Theme.text1)
+                            .accessibilityAddTraits(.isHeader)
+
+                        SettingsPaneContent(pane: selectedPane)
+                            .frame(
+                                maxWidth: 660,
+                                alignment: .topLeading
+                            )
+                    }
+                    .frame(
+                        maxWidth: .infinity,
+                        alignment: .topLeading
+                    )
+                    .padding(.horizontal, 34)
+                    .padding(.vertical, 30)
+                }
+                .background(Theme.background)
+                .accessibilityIdentifier("settings.content")
             }
-            .background(Theme.background)
-            .accessibilityIdentifier("settings.content")
+
+            if let operationFailure = store.operationFailureNotice {
+                OperationFailureBanner(
+                    message: operationFailure.message,
+                    dismissTitle: store.copy.dismiss,
+                    accessibilityIdentifier:
+                    "settings.operation-failure",
+                    bottomPadding: 20
+                ) {
+                    store.dismissOperationFailure()
+                }
+                .zIndex(1)
+            }
         }
         .background {
             AppE2EViewAnchor(

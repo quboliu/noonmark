@@ -195,6 +195,22 @@ public struct SyncRecordMapper: Sendable {
     }
 
     public func record(
+        for envelope: ClassificationBaselineEnvelope,
+        modifiedBy deviceID: SyncDeviceID
+    ) throws -> SyncRecord {
+        SyncRecord(
+            id: SyncRecordID(
+                "classification-baseline:\(envelope.baselineID.uuidString)"
+            ),
+            entityType: .classificationBaseline,
+            entityID: envelope.baselineID.uuidString,
+            modifiedAt: envelope.createdAt,
+            modifiedByDeviceID: deviceID,
+            payload: try envelope.canonicalData()
+        )
+    }
+
+    public func record(
         for envelope: ClassificationCommitEnvelope,
         modifiedBy deviceID: SyncDeviceID
     ) throws -> SyncRecord {
@@ -242,6 +258,10 @@ public struct SyncRecordMapper: Sendable {
             return .subtask(try decodeSubtask(record))
         case .appPreferences:
             return .appPreferences(try decodeAppPreferences(record))
+        case .classificationBaseline:
+            return .classificationBaseline(
+                try decodeClassificationBaseline(record)
+            )
         case .classificationCommit:
             return .classificationCommit(try decodeClassificationCommit(record))
         case .traceClassificationEvent:
@@ -359,6 +379,36 @@ public struct SyncRecordMapper: Sendable {
             throw error
         } catch {
             throw SyncRecordMapperError.invalidPayload(.classificationCommit)
+        }
+    }
+
+    public func decodeClassificationBaseline(
+        _ record: SyncRecord
+    ) throws -> ClassificationBaselineEnvelope {
+        try require(record, type: .classificationBaseline)
+        do {
+            let envelope = try ClassificationBaselineEnvelope.decode(
+                record.payload
+            )
+            guard record.entityID == envelope.baselineID.uuidString,
+                  record.id.rawValue
+                  == "classification-baseline:\(record.entityID)",
+                  record.modifiedAt.timeIntervalSinceReferenceDate.isFinite,
+                  record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+                  == envelope.createdAt.timeIntervalSinceReferenceDate
+                      .bitPattern
+            else {
+                throw SyncRecordMapperError.invalidPayload(
+                    .classificationBaseline
+                )
+            }
+            return envelope
+        } catch let error as SyncRecordMapperError {
+            throw error
+        } catch {
+            throw SyncRecordMapperError.invalidPayload(
+                .classificationBaseline
+            )
         }
     }
 

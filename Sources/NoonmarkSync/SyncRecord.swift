@@ -46,11 +46,13 @@ public enum SyncEntityType: String, Codable, CaseIterable, Hashable, Sendable {
     case dayTrace
     case subtask
     case appPreferences
+    case classificationBaseline
     case classificationCommit
     case traceClassificationEvent
 
     public var requiresImmutableRecordPayload: Bool {
-        self == .classificationCommit
+        self == .classificationBaseline
+            || self == .classificationCommit
             || self == .traceClassificationEvent
     }
 
@@ -64,16 +66,18 @@ public enum SyncEntityType: String, Codable, CaseIterable, Hashable, Sendable {
             2
         case .day:
             3
-        case .classificationCommit:
+        case .classificationBaseline:
             4
-        case .dayTrace:
+        case .classificationCommit:
             5
-        case .traceClassificationEvent:
+        case .dayTrace:
             6
-        case .subtask:
+        case .traceClassificationEvent:
             7
-        case .appPreferences:
+        case .subtask:
             8
+        case .appPreferences:
+            9
         }
     }
 }
@@ -270,6 +274,7 @@ public enum SyncRecordPayload: Equatable, Sendable {
     case dayTrace(DayTrace)
     case subtask(Subtask)
     case appPreferences(AppPreferencesEnvelope)
+    case classificationBaseline(ClassificationBaselineEnvelope)
     case classificationCommit(ClassificationCommitEnvelope)
     case traceClassificationEvent(TraceClassificationEventEnvelope)
 }

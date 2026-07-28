@@ -3,7 +3,29 @@ import Foundation
 @_spi(ClassificationUserDecision) import NoonmarkCore
 import NoonmarkDayContext
 import NoonmarkMacRuntime
+import NoonmarkStorage
 import SwiftUI
+
+extension SQLiteLocalFirstSyncFailureReason {
+    var appPresentationReason: AppSyncFailureReason? {
+        switch self {
+        case .baselineUnavailable:
+            .baselineUnavailable
+        case .baselineInvalid:
+            .baselineInvalid
+        case .baselineNotUploaded:
+            .baselineNotUploaded
+        case .localRecordsUnpreparable:
+            .localRecordsUnpreparable
+        case .localChangesPending:
+            .localChangesPending
+        case .remoteChangesPending:
+            .remoteChangesPending
+        case .transportOrStorage:
+            nil
+        }
+    }
+}
 
 extension NoonmarkStore {
     enum DetailRailRoute: Equatable {
@@ -978,8 +1000,17 @@ extension NoonmarkStore {
             String(describing: context),
             String(reflecting: error)
         )
-        let message = AppPresentation(language: engine.preferences.language)
-            .failureMessage(for: context)
+        let presentation = AppPresentation(
+            language: engine.preferences.language
+        )
+        let message: String = if context == .sync,
+           let reason = (error as? SQLiteLocalFirstSyncError)?
+           .failureReason.appPresentationReason
+        {
+            presentation.syncFailureMessage(for: reason)
+        } else {
+            presentation.failureMessage(for: context)
+        }
         showPersistentFailureMessage(message, context: context)
     }
 

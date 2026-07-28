@@ -138,8 +138,7 @@ extension NoonmarkStore {
                 do {
                     try validateICloudSyncEndpoint()
                 } catch {
-                    showOperationFailure(.sync, error: error)
-                    localFirstSyncMessage = operationFailure
+                    presentLocalFirstSyncFailure(error)
                     return
                 }
             }
@@ -266,8 +265,7 @@ extension NoonmarkStore {
             } catch is CancellationError {
                 return
             } catch {
-                showOperationFailure(.sync, error: error)
-                localFirstSyncMessage = operationFailure
+                presentLocalFirstSyncFailure(error)
             }
         }
     }
@@ -294,8 +292,7 @@ extension NoonmarkStore {
         if policy.enabled == false || policy.endpoint != .iCloud {
             discardCloudKitTransport()
         }
-        localFirstSyncMessage = nil
-        resetPersistedLocalFirstSyncStatus()
+        restoreLocalFirstSyncStatus()
         restartLocalFirstSyncAutomation()
         showToast(copy.localFirstSyncChangedToast)
     }
@@ -326,8 +323,7 @@ extension NoonmarkStore {
                 databaseURL: databaseURL
             )
         } catch {
-            showOperationFailure(.sync, error: error)
-            localFirstSyncMessage = operationFailure
+            presentLocalFirstSyncFailure(error)
             return
         }
 
@@ -339,13 +335,14 @@ extension NoonmarkStore {
                 )
             )
         } catch {
-            showOperationFailure(.persistence, error: error)
-            localFirstSyncMessage = operationFailure
+            presentLocalFirstSyncFailure(error)
             return
         }
+        let syncOperationID = UUID()
+        exclusiveEngineOperation = .localFirstSync(syncOperationID)
         isLocalFirstSyncing = true
         localFirstSyncMessage = copy.syncingWithEllipsis
-        Task { [databaseURL, transport] in
+        Task { [databaseURL, syncOperationID, transport] in
             do {
                 let coordinator = SQLiteLocalFirstSyncCoordinator(
                     databaseURL: databaseURL,
@@ -371,15 +368,20 @@ extension NoonmarkStore {
                         engine.preferences.dataMode != loaded.preferences.dataMode
                         || engine.preferences.localFirstSyncPolicy
                             != loaded.preferences.localFirstSyncPolicy
-                    try installExternallyLoadedEngine(
-                        loaded,
-                        moment: moment
-                    )
+                    try withExclusiveEngineWriteAuthorization(
+                        for: .localFirstSync(syncOperationID)
+                    ) {
+                        try installExternallyLoadedEngine(
+                            loaded,
+                            moment: moment
+                        )
+                    }
                     Theme.apply(engine.preferences.theme)
                     if previousLanguage != engine.preferences.language {
                         onLanguageChange?()
                     }
-                    isLocalFirstSyncing = false
+                    finishLocalFirstSyncOperation(syncOperationID)
+                    resolveOperationFailure(.sync)
                     localFirstSyncTimestamps = timestamps
                     localFirstSyncMessage = copy.localFirstSyncResult(
                         result,
@@ -394,12 +396,42 @@ extension NoonmarkStore {
                 }
             } catch {
                 await MainActor.run {
-                    isLocalFirstSyncing = false
-                    showOperationFailure(.sync, error: error)
-                    localFirstSyncMessage = operationFailure
+                    finishLocalFirstSyncOperation(syncOperationID)
+                    presentLocalFirstSyncFailure(error)
                 }
             }
         }
+    }
+
+    private func finishLocalFirstSyncOperation(_ operationID: UUID) {
+        if exclusiveEngineOperation == .localFirstSync(operationID) {
+            exclusiveEngineOperation = nil
+        }
+        isLocalFirstSyncing = false
+    }
+
+    private func presentLocalFirstSyncFailure(
+        _ error: Error,
+        failedAt: Date = Date()
+    ) {
+        if let databaseURL {
+            do {
+                try SQLiteLocalFirstSyncCoordinator.persistFailure(
+                    error,
+                    at: failedAt,
+                    in: SQLiteSyncRepository(
+                        databaseURL: databaseURL
+                    )
+                )
+            } catch {
+                NSLog(
+                    "Noonmark sync failure status persistence failed: %@",
+                    String(describing: error)
+                )
+            }
+        }
+        showOperationFailure(.sync, error: error)
+        localFirstSyncMessage = operationFailure
     }
 
     private func installExternallyLoadedEngine(
@@ -544,17 +576,6 @@ extension NoonmarkStore {
                 try SQLiteLocalFirstSyncCoordinator.timestamps(
                     in: syncRepository
                 )
-            let policy = engine.preferences.localFirstSyncPolicy
-            guard engine.preferences.dataMode == .localFirst,
-                  policy.enabled,
-                  supportsRunnableLocalFirstSync(policy.endpoint)
-            else {
-                localFirstSyncMessage = nil
-                return
-            }
-            if policy.endpoint == .iCloud {
-                try validateICloudSyncEndpoint()
-            }
             guard let metadata = try syncRepository.metadata(
                 for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
             ) else { return }
@@ -567,22 +588,41 @@ extension NoonmarkStore {
             switch status {
             case .idle:
                 localFirstSyncMessage = nil
+                resolveOperationFailure(.sync)
             case let .succeeded(result):
                 localFirstSyncMessage = copy.localFirstSyncResult(
                     result,
                     unresolvedConflictCount: try syncRepository.unresolvedConflicts().count
                 )
-            case let .failed(message, _):
+                resolveOperationFailure(.sync)
+            case let .failed(reason, message, _):
                 NSLog("Noonmark previous sync failed: %@", message)
-                localFirstSyncMessage = AppPresentation(
+                let presentation = AppPresentation(
                     language: engine.preferences.language
-                ).failureMessage(for: .sync)
+                )
+                let failureMessage: String = if let appReason = reason.appPresentationReason {
+                    presentation
+                        .syncFailureMessage(for: appReason)
+                } else {
+                    presentation
+                        .failureMessage(for: .sync)
+                }
+                localFirstSyncMessage = failureMessage
+                showPersistentFailureMessage(
+                    failureMessage,
+                    context: .sync
+                )
             }
         } catch {
             NSLog("Noonmark sync status load failed: %@", String(describing: error))
-            localFirstSyncMessage = AppPresentation(
+            let failureMessage = AppPresentation(
                 language: engine.preferences.language
             ).failureMessage(for: .sync)
+            localFirstSyncMessage = failureMessage
+            showPersistentFailureMessage(
+                failureMessage,
+                context: .sync
+            )
         }
     }
 

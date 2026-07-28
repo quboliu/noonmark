@@ -31,4 +31,18 @@ final class OperationFailurePresentationTests: XCTestCase {
             )
         }
     }
+
+    func testSyncBaselineFailuresExplicitlyRejectFalseSuccess() {
+        let chinese = AppPresentation(language: .chinese)
+        let english = AppPresentation(language: .english)
+
+        for reason in AppSyncFailureReason.allCases {
+            let chineseMessage = chinese.syncFailureMessage(for: reason)
+            let englishMessage = english.syncFailureMessage(for: reason)
+            XCTAssertTrue(chineseMessage.contains("同步未完成"))
+            XCTAssertTrue(chineseMessage.contains("没有将本次操作标记为成功"))
+            XCTAssertTrue(englishMessage.contains("Sync did not complete"))
+            XCTAssertTrue(englishMessage.contains("was not marked as successful"))
+        }
+    }
 }

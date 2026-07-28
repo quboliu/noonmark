@@ -155,13 +155,13 @@ final class SQLiteSchemaTests: XCTestCase {
             "changed_at_bits INTEGER NOT NULL CHECK (typeof(changed_at_bits) = 'integer')"
         ))
         XCTAssertTrue(compactChangeJournalTable.contains(
-            "entity_type IN ( 'appPreferences', 'classificationCommit', 'traceClassificationEvent' )"
+            "entity_type IN ( 'appPreferences', 'classificationBaseline', 'classificationCommit', 'traceClassificationEvent' )"
         ))
         XCTAssertTrue(schema.contains("record_payload IS NOT NULL"))
         XCTAssertTrue(schema.contains("entity_type = 'taskChain'"))
         XCTAssertTrue(schema.contains("record_payload IS NULL OR length(record_payload) > 0"))
         XCTAssertTrue(compactChangeJournalTable.contains(
-            "entity_type NOT IN ( 'appPreferences', 'classificationCommit', 'traceClassificationEvent', 'taskChain' )"
+            "entity_type NOT IN ( 'appPreferences', 'classificationBaseline', 'classificationCommit', 'traceClassificationEvent', 'taskChain' )"
         ))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS sync_pending_download_records"))
         XCTAssertTrue(
@@ -170,7 +170,7 @@ final class SQLiteSchemaTests: XCTestCase {
             )
         )
         XCTAssertTrue(compactPendingDownloadTable.contains(
-            "entity_type IN ( 'day', 'taskCycleSeries', 'taskChain', 'taskDefinition', 'dayTrace', 'subtask', 'appPreferences', 'classificationCommit', 'traceClassificationEvent' )"
+            "entity_type IN ( 'day', 'taskCycleSeries', 'taskChain', 'taskDefinition', 'dayTrace', 'subtask', 'appPreferences', 'classificationBaseline', 'classificationCommit', 'traceClassificationEvent' )"
         ))
         XCTAssertTrue(schema.contains("operation TEXT NOT NULL CHECK (operation = 'upsert')"))
         XCTAssertTrue(schema.contains("modified_at_bits INTEGER NOT NULL CHECK (typeof(modified_at_bits) = 'integer')"))
@@ -1115,7 +1115,25 @@ final class SQLiteSchemaTests: XCTestCase {
 
         XCTAssertEqual(try repository.load().snapshot(), importedEngine.snapshot())
         XCTAssertEqual(try syncRepository.loadDeviceIdentity(), identity)
-        XCTAssertTrue(try syncRepository.journalEntries().isEmpty)
+        let importedBaseline = try syncRepository.journalEntries()
+        XCTAssertFalse(importedBaseline.isEmpty)
+        XCTAssertTrue(
+            importedBaseline.allSatisfy {
+                $0.state == .pendingUpload
+            }
+        )
+        XCTAssertTrue(
+            SyncSnapshotBaselineCoverageAuditor().isComplete(
+                snapshot: importedEngine.snapshot(),
+                journalEntries: importedBaseline
+            )
+        )
+        XCTAssertNotNil(
+            try syncRepository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator
+                    .baselineManifestMetadataKey
+            )
+        )
         XCTAssertNil(try syncRepository.metadata(for: "old.sync.status"))
     }
 

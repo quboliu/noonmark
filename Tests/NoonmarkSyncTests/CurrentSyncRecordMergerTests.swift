@@ -821,6 +821,19 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
                 modifiedBy: deviceID
             )
         )
+        records.append(
+            try mapper.record(
+                for: ClassificationBaselineEnvelope(
+                    baselineID: UUID(
+                        uuidString:
+                            "A1000000-0000-0000-0000-000000000004"
+                    )!,
+                    state: after,
+                    createdAt: now
+                ),
+                modifiedBy: deviceID
+            )
+        )
 
         let traceEvent = TraceClassificationSnapshot(
             id: UUID(

@@ -335,6 +335,8 @@ public struct SyncRecordMerger: Sendable {
         for record: SyncRecord
     ) -> SyncConflictType {
         switch record.entityType {
+        case .classificationBaseline:
+            return .classificationBaselineRejected
         case .classificationCommit:
             return .classificationCommitRejected
         case .traceClassificationEvent:
@@ -774,7 +776,8 @@ public struct SyncRecordMerger: Sendable {
                 return try subtaskStructuralTokens(record)
             case .appPreferences:
                 return [.legacy("preferences:default")]
-            case .classificationCommit, .traceClassificationEvent:
+            case .classificationBaseline, .classificationCommit,
+                 .traceClassificationEvent:
                 return [.isolated(record.id)]
             }
         } catch {
@@ -976,7 +979,8 @@ public struct SyncRecordMerger: Sendable {
                         projection.definitions[incoming.id] = incoming
                     }
                 case .day, .taskCycleSeries, .dayTrace, .subtask, .appPreferences,
-                     .classificationCommit, .traceClassificationEvent:
+                     .classificationBaseline, .classificationCommit,
+                     .traceClassificationEvent:
                     break
                 }
             } catch {
@@ -1025,7 +1029,8 @@ public struct SyncRecordMerger: Sendable {
                     let subtask = try mapper.decodeSubtask(record)
                     projection.subtasks[subtask.id] = subtask
                 case .day, .taskCycleSeries, .taskChain, .taskDefinition, .appPreferences,
-                     .classificationCommit, .traceClassificationEvent:
+                     .classificationBaseline, .classificationCommit,
+                     .traceClassificationEvent:
                     break
                 }
             }
@@ -1119,7 +1124,8 @@ public struct SyncRecordMerger: Sendable {
                     trajectoryIssueIsMissingDependency
                 )
         case .day, .taskCycleSeries, .appPreferences,
-             .classificationCommit, .traceClassificationEvent:
+             .classificationBaseline, .classificationCommit,
+             .traceClassificationEvent:
             return false
         }
     }
@@ -1179,6 +1185,8 @@ public struct SyncRecordMerger: Sendable {
                 context.conflicts.append(known.conflict)
             } else {
                 let type: SyncConflictType = switch identity {
+                case .classificationBaseline:
+                    .classificationBaselineRejected
                 case .classificationCommit:
                     .classificationCommitRejected
                 case .traceClassificationEvent:
@@ -1235,6 +1243,8 @@ public struct SyncRecordMerger: Sendable {
         case let .subtask(subtask):
             apply(subtask, record: record, context: &context)
         case let .appPreferences(envelope):
+            apply(envelope, record: record, context: &context)
+        case let .classificationBaseline(envelope):
             apply(envelope, record: record, context: &context)
         case let .classificationCommit(envelope):
             apply(envelope, record: record, context: &context)
@@ -1317,6 +1327,13 @@ public struct SyncRecordMerger: Sendable {
         _ records: [SyncRecord],
         knownClassificationCommitIDs: Set<UUID>
     ) -> RecordOrderingPlan {
+        let baselineCommitIDs = records
+            .filter { $0.entityType == .classificationBaseline }
+            .compactMap { try? mapper.decodeClassificationBaseline($0) }
+            .compactMap { try? $0.classificationState() }
+            .flatMap { $0.changeRecords.map(\.id) }
+        let allKnownClassificationCommitIDs =
+            knownClassificationCommitIDs.union(baselineCommitIDs)
         let groups = Dictionary(grouping: records, by: { $0.entityType.dependencyOrder })
         var ordered: [SyncRecord] = []
         var rejected: [RecordOrderingRejection] = []
@@ -1329,7 +1346,7 @@ public struct SyncRecordMerger: Sendable {
             case .classificationCommit:
                 classificationOrderingPlan(
                     group,
-                    knownCommitIDs: knownClassificationCommitIDs
+                    knownCommitIDs: allKnownClassificationCommitIDs
                 )
             case .dayTrace:
                 dayTraceOrderingPlan(group)
@@ -2992,6 +3009,94 @@ public struct SyncRecordMerger: Sendable {
     }
 
     private func apply(
+        _ envelope: ClassificationBaselineEnvelope,
+        record: SyncRecord,
+        context: inout MergeContext
+    ) {
+        let incoming: TaskClassificationState
+        do {
+            incoming = try envelope.classificationState()
+        } catch {
+            reject(
+                .classificationBaselineRejected,
+                record: record,
+                message: "classification baseline could not be decoded",
+                context: &context
+            )
+            return
+        }
+
+        let local = context.working.classifications
+        if local == incoming {
+            return
+        }
+        if local == TaskClassificationState() {
+            applyClassificationBaseline(
+                incoming,
+                record: record,
+                context: &context
+            )
+            return
+        }
+
+        let localContainsIncoming =
+            local.containsClassificationHistory(from: incoming)
+        let incomingContainsLocal =
+            incoming.containsClassificationHistory(from: local)
+        if localContainsIncoming && incomingContainsLocal {
+            reject(
+                .classificationBaselineRejected,
+                record: record,
+                message: "classification baseline has the same immutable "
+                    + "history but a different current projection",
+                context: &context
+            )
+            return
+        }
+        if localContainsIncoming {
+            return
+        }
+        if incomingContainsLocal {
+            reject(
+                .classificationBaselineRejected,
+                record: record,
+                message: "classification baseline cannot advance a "
+                    + "nonempty receiver without replayable commit evidence",
+                context: &context
+            )
+            return
+        }
+        reject(
+            .classificationBaselineRejected,
+            record: record,
+            message: "classification baseline diverges from local history",
+            context: &context
+        )
+    }
+
+    private func applyClassificationBaseline(
+        _ incoming: TaskClassificationState,
+        record: SyncRecord,
+        context: inout MergeContext
+    ) {
+        var candidate = context
+        candidate.working.classifications = incoming
+        do {
+            try candidate.working.snapshot().validateIntegrity()
+        } catch {
+            reject(
+                .classificationBaselineRejected,
+                record: record,
+                message: "classification baseline references unavailable task facts",
+                context: &context
+            )
+            return
+        }
+        context = candidate
+        markApplied(record, context: &context)
+    }
+
+    private func apply(
         _ envelope: ClassificationCommitEnvelope,
         record: SyncRecord,
         context: inout MergeContext
@@ -3265,6 +3370,34 @@ public struct SyncRecordMerger: Sendable {
         from record: SyncRecord
     ) -> Set<SyncRecordDependency> {
         switch record.entityType {
+        case .classificationBaseline:
+            guard let envelope = try? mapper.decodeClassificationBaseline(
+                record
+            ), let state = try? envelope.classificationState()
+            else {
+                return []
+            }
+            var dependencies = Set(
+                state.changeRecords.map {
+                    SyncRecordDependency.classificationCommit($0.id)
+                }
+            )
+            dependencies.formUnion(
+                state.categories.keys.map(
+                    SyncRecordDependency.category
+                )
+            )
+            dependencies.formUnion(
+                state.labels.keys.map(SyncRecordDependency.label)
+            )
+            dependencies.formUnion(
+                state.snapshotEventsByTraceID.values
+                    .joined()
+                    .map {
+                        SyncRecordDependency.classificationEvent($0.id)
+                    }
+            )
+            return dependencies
         case .classificationCommit:
             guard let envelope = try? mapper.decodeClassificationCommit(record)
             else { return [] }

@@ -560,7 +560,8 @@ struct EnglishScreenshotFixtureE2EAutomation: LaunchAutomationRunnable {
                 [subtask.createdAt, subtask.updatedAt]
                     + [subtask.completedAt, subtask.settledAt].compactMap { $0 }
             }
-        case .appPreferences, .classificationCommit,
+        case .appPreferences, .classificationBaseline,
+             .classificationCommit,
              .traceClassificationEvent:
             nil
         }

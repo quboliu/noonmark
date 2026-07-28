@@ -105,7 +105,8 @@ public struct SyncSnapshotDiffer: Sendable {
         case .appPreferences:
             preferencesPayload
         case .day, .taskCycleSeries, .taskDefinition, .dayTrace, .subtask,
-             .classificationCommit, .traceClassificationEvent:
+             .classificationBaseline, .classificationCommit,
+             .traceClassificationEvent:
             nil
         }
     }

@@ -16,7 +16,14 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
         let rootURL = try ICloudDriveSyncTransport.defaultRootURL(repositoryName: repositoryName)
         XCTAssertTrue(rootURL.path.contains("Mobile Documents") || rootURL.path.contains("CloudDocs"))
         addTeardownBlock {
-            try? FileManager.default.removeItem(at: rootURL)
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: rootURL.path) {
+                try fileManager.removeItem(at: rootURL)
+            }
+            XCTAssertFalse(
+                fileManager.fileExists(atPath: rootURL.path),
+                "live iCloud test repository must be removed"
+            )
         }
 
         let macURL = makeDatabaseURL("icloud-mac")
@@ -87,6 +94,137 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
             try SQLiteSyncRepository(databaseURL: phoneURL).metadata(
                 for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
             )
+        )
+    }
+
+    func testImportedDataPackageRoundTripsThroughIsolatedICloudDriveEndpoint()
+        async throws
+    {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["NOONMARK_LIVE_ICLOUD_SYNC"] == "1" else {
+            throw XCTSkip(
+                "Set NOONMARK_LIVE_ICLOUD_SYNC=1 to run the live iCloud Drive sync test."
+            )
+        }
+        let packagePath = try XCTUnwrap(
+            environment["NOONMARK_LIVE_ICLOUD_PACKAGE_PATH"],
+            "NOONMARK_LIVE_ICLOUD_PACKAGE_PATH is required when live iCloud sync is enabled."
+        )
+        guard packagePath.isEmpty == false else {
+            XCTFail(
+                "NOONMARK_LIVE_ICLOUD_PACKAGE_PATH must not be empty when live iCloud sync is enabled."
+            )
+            return
+        }
+
+        let packageURL = URL(fileURLWithPath: packagePath)
+        let importedSnapshot = try NoonmarkDataPackage.read(
+            from: packageURL
+        )
+        let repositoryName =
+            "NoonmarkLiveTests/ImportedDataPackage-\(UUID().uuidString)"
+        let rootURL = try ICloudDriveSyncTransport.defaultRootURL(
+            repositoryName: repositoryName
+        )
+        XCTAssertTrue(
+            rootURL.path.contains("Mobile Documents")
+                || rootURL.path.contains("CloudDocs")
+        )
+        XCTAssertFalse(
+            rootURL.path.hasSuffix("Noonmark/SyncRepository")
+        )
+        addTeardownBlock {
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: rootURL.path) {
+                try fileManager.removeItem(at: rootURL)
+            }
+            XCTAssertFalse(
+                fileManager.fileExists(atPath: rootURL.path),
+                "imported-package iCloud repository must be removed"
+            )
+        }
+
+        let sourceURL = makeDatabaseURL("icloud-import-source")
+        let targetURL = makeDatabaseURL("icloud-import-target")
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let targetRepository = SQLiteEngineRepository(
+            databaseURL: targetURL
+        )
+        let sourceIdentity = SyncDeviceIdentity(
+            deviceID: SyncDeviceID("icloud-import-source"),
+            createdAt: now
+        )
+        try sourceRepository.replaceForDataImport(
+            importedSnapshot,
+            preserving: sourceIdentity
+        )
+        try targetRepository.save(NoonmarkEngine().snapshot())
+
+        let sourceResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: ICloudDriveSyncTransport(rootURL: rootURL)
+        ).sync(now: now.addingTimeInterval(10))
+        let targetResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: ICloudDriveSyncTransport(rootURL: rootURL)
+        ).sync(now: now.addingTimeInterval(20))
+        let restored = try targetRepository.load().snapshot()
+
+        XCTAssertGreaterThan(sourceResult.upload.uploadedCount, 0)
+        XCTAssertGreaterThan(targetResult.download.appliedCount, 0)
+        XCTAssertEqual(targetResult.download.waitingCount, 0)
+        XCTAssertEqual(targetResult.download.conflictCount, 0)
+        XCTAssertEqual(restored.days, importedSnapshot.days)
+        XCTAssertEqual(
+            restored.taskCycleSeries,
+            importedSnapshot.taskCycleSeries
+        )
+        XCTAssertEqual(restored.chains, importedSnapshot.chains)
+        XCTAssertEqual(restored.definitions, importedSnapshot.definitions)
+        XCTAssertEqual(restored.traces, importedSnapshot.traces)
+        XCTAssertEqual(restored.subtasks, importedSnapshot.subtasks)
+        XCTAssertEqual(
+            restored.classifications,
+            importedSnapshot.classifications
+        )
+        XCTAssertEqual(
+            AppPreferencesEnvelope(
+                preferences: restored.preferences
+            ),
+            AppPreferencesEnvelope(
+                preferences: importedSnapshot.preferences
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: rootURL.appendingPathComponent(
+                    "refs/latest"
+                ).path
+            )
+        )
+
+        let sourceSyncRepository = SQLiteSyncRepository(
+            databaseURL: sourceURL
+        )
+        let manifestMetadata = try XCTUnwrap(
+            sourceSyncRepository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator
+                    .baselineManifestMetadataKey
+            )
+        )
+        XCTAssertEqual(
+            try SQLiteSyncBaselineManifest.decode(
+                manifestMetadata
+            ).state,
+            .established
+        )
+        XCTAssertEqual(
+            try SQLiteLocalFirstSyncCoordinator.timestamps(
+                in: sourceSyncRepository
+            )?.lastEffectiveSyncedAt,
+            now.addingTimeInterval(10)
         )
     }
 

@@ -3,6 +3,7 @@ import ApplicationServices
 import CryptoKit
 import Foundation
 import NoonmarkCore
+import NoonmarkMacRuntime
 import NoonmarkStorage
 import NoonmarkSync
 
@@ -19,6 +20,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         case setup
         case exercise
         case verifyRestart
+        case verifyFailureRestart
     }
 
     private struct ProbeState: Codable {
@@ -120,6 +122,10 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             "--e2e-preferences-clock-verify"
         ) {
             mode = .verifyRestart
+        } else if AppLaunchArguments.contains(
+            "--e2e-preferences-clock-verify-failure-restart"
+        ) {
+            mode = .verifyFailureRestart
         } else {
             return nil
         }
@@ -158,6 +164,8 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                     try await exercise(on: store)
                 case .verifyRestart:
                     try await verifyRestart(on: store)
+                case .verifyFailureRestart:
+                    try await verifyFailureRestart(on: store)
                 }
                 try writeResult("ok")
             } catch {
@@ -685,8 +693,8 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         )
 
         let syncResult = try await synchronize(store)
-        guard syncResult.upload.pendingCount == 0,
-              syncResult.upload.uploadedCount == 0,
+        guard syncResult.upload.pendingCount == 1,
+              syncResult.upload.uploadedCount == 1,
               syncResult.upload.failedCount == 0,
               syncResult.download.fetchedCount == 1,
               syncResult.download.appliedCount == 0,
@@ -708,10 +716,14 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             )
         )
         entries = try preferenceJournalEntries()
-        try assertFinalJournal(entries, state: state)
+        try assertFinalJournal(
+            entries,
+            state: state,
+            expectedCount: 3
+        )
 
         let preferenceAudit = try appPreferencesAuditEntries()
-        guard preferenceAudit.count == final.auditCountAfterExercise + 1,
+        guard preferenceAudit.count == final.auditCountAfterExercise + 2,
               preferenceAudit.filter({
                   $0.direction == .download && $0.action == "ignored"
               }).count == 2,
@@ -720,17 +732,411 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
               }).count == 1,
               preferenceAudit.filter({
                   $0.direction == .upload
-              }).count == 2
+              }).count == 3
         else {
             throw Failure.failed(
-                "restart stale remote was not recorded as one ignored download"
+                "restart stale remote was not replaced by one complete "
+                    + "baseline upload and one ignored download"
             )
         }
         try appendTrace(
             "restart stale=\(state.remoteClockBits) "
                 + "winner=\(final.languageClockBits) "
-                + "journal=uploaded,uploaded local-only=retained"
+                + "journal=uploaded,uploaded baseline=republished "
+                + "local-only=retained"
         )
+        try await assertFailClosedBaselineWarning(on: store)
+    }
+
+    private func assertFailClosedBaselineWarning(
+        on store: NoonmarkStore
+    ) async throws {
+        try await assertPreflightPersistenceFailureWarning(
+            on: store
+        )
+        let engineBefore = store.engine.snapshot()
+        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let timestampsBefore = try SQLiteLocalFirstSyncCoordinator.timestamps(
+            in: repository
+        )
+        let validBaselineMetadata = try requiredMetadata(
+            SQLiteLocalFirstSyncCoordinator.baselineManifestMetadataKey,
+            in: repository
+        )
+        try repository.saveMetadata(
+            SyncMetadataEntry(
+                key: SQLiteLocalFirstSyncCoordinator
+                    .baselineManifestMetadataKey,
+                value: Data(#"{"invalid":"baseline"}"#.utf8),
+                updatedAt: Date()
+            )
+        )
+
+        store.syncLocalFolderNow()
+        guard store.isLocalFirstSyncing else {
+            throw Failure.failed(
+                "invalid sync baseline did not start the production sync path"
+            )
+        }
+        let gatedSnapshot = store.engine.snapshot()
+        let gatedPolicy =
+            store.engine.preferences.localFirstSyncPolicy
+        let rejectedTaskTitle =
+            "E2E 同步期间不得写入任务"
+        store.poolText = rejectedTaskTitle
+        store.addPoolTask()
+        store.setLocalFirstSyncEnabled(false)
+        guard store.isLocalFirstSyncing,
+              store.engine.snapshot() == gatedSnapshot,
+              store.engine.preferences.localFirstSyncPolicy
+              == gatedPolicy,
+              store.poolText == rejectedTaskTitle
+        else {
+            throw Failure.failed(
+                "sync in-flight gate allowed a task or sync policy mutation"
+            )
+        }
+        try appendTrace(
+            "sync in-flight task-mutation=blocked "
+                + "policy-mutation=blocked"
+        )
+        try await waitUntil(
+            "invalid sync baseline was silently treated as successful"
+        ) {
+            store.isLocalFirstSyncing == false
+        }
+
+        let expected = AppPresentation(
+            language: store.engine.preferences.language
+        ).syncFailureMessage(for: .baselineInvalid)
+        try await waitUntil(
+            "invalid sync baseline did not render the global warning"
+        ) {
+            guard let notice = store.operationFailureNotice,
+                  notice.context == .sync,
+                  notice.message == expected,
+                  store.localFirstSyncMessage == expected,
+                  let failureView = AppViewTreeE2E.view(
+                      identifier: "settings.operation-failure"
+                  )
+            else {
+                return false
+            }
+            return AppViewTreeE2E.verificationText(for: failureView)
+                == expected
+        }
+        guard store.engine.snapshot() == engineBefore,
+              try SQLiteEngineRepository(databaseURL: databaseURL)
+              .load().snapshot() == engineBefore,
+              try SQLiteLocalFirstSyncCoordinator.timestamps(
+                  in: repository
+              ) == timestampsBefore
+        else {
+            throw Failure.failed(
+                "invalid sync baseline did not preserve data, timestamps, "
+                    + "and one visible actionable warning"
+            )
+        }
+
+        guard let statusMetadata = try repository.metadata(
+            for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+        ) else {
+            throw Failure.failed(
+                "invalid sync baseline did not persist a failed status"
+            )
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let status = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: statusMetadata.value
+        )
+        guard case let .failed(reason, _, _) = status,
+              reason == .baselineInvalid
+        else {
+            throw Failure.failed(
+                "invalid sync baseline persisted an incorrect sync status"
+            )
+        }
+
+        guard let settingsWindow = NSApp.windows.first(
+            where: {
+                $0.identifier
+                    == NoonmarkSettingsWindowController.windowIdentifier
+                    && $0.isVisible
+            }
+        ) else {
+            throw Failure.failed(
+                "sync failure warning settings window is unavailable"
+            )
+        }
+        try AppE2EScreenshot.captureContent(
+            of: settingsWindow,
+            to: resultURL.deletingLastPathComponent()
+                .appendingPathComponent("sync-failure-warning.png")
+        )
+        try appendTrace(
+            "sync baseline-invalid status=failed warning=visible "
+                + "timestamps=unchanged data=unchanged"
+        )
+
+        try repository.saveMetadata(validBaselineMetadata)
+        try appendTrace(
+            "sync failure persisted for restart with repairable baseline"
+        )
+    }
+
+    private func assertPreflightPersistenceFailureWarning(
+        on store: NoonmarkStore
+    ) async throws {
+        let repository = SQLiteSyncRepository(
+            databaseURL: databaseURL
+        )
+        let timestampsBefore =
+            try SQLiteLocalFirstSyncCoordinator.timestamps(
+                in: repository
+            )
+        try store.armPersistenceFailureForE2E()
+        store.syncLocalFolderNow()
+        guard store.isLocalFirstSyncing == false else {
+            throw Failure.failed(
+                "preflight persistence failure started stale sync work"
+            )
+        }
+        let expected = AppPresentation(
+            language: store.engine.preferences.language
+        ).failureMessage(for: .sync)
+        guard store.operationFailureNotice?.context == .sync,
+              store.operationFailureNotice?.message == expected,
+              store.localFirstSyncMessage == expected,
+              try SQLiteLocalFirstSyncCoordinator.timestamps(
+                  in: repository
+              ) == timestampsBefore
+        else {
+            throw Failure.failed(
+                "preflight persistence failure was silent or changed timestamps"
+            )
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let failedStatus = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: requiredMetadata(
+                SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
+                in: repository
+            ).value
+        )
+        guard case let .failed(reason, _, _) = failedStatus,
+              reason == .transportOrStorage
+        else {
+            throw Failure.failed(
+                "preflight persistence failure was not durably typed"
+            )
+        }
+        try appendTrace(
+            "sync preflight-save status=failed warning=visible "
+                + "timestamps=unchanged"
+        )
+
+        store.syncLocalFolderNow()
+        guard store.isLocalFirstSyncing else {
+            throw Failure.failed(
+                "preflight persistence recovery did not start sync"
+            )
+        }
+        try await waitUntil(
+            "preflight persistence recovery did not clear its warning"
+        ) {
+            store.isLocalFirstSyncing == false
+                && store.operationFailureNotice == nil
+        }
+        let recoveredStatus = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: requiredMetadata(
+                SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
+                in: repository
+            ).value
+        )
+        guard case .succeeded = recoveredStatus else {
+            throw Failure.failed(
+                "preflight persistence recovery did not persist success"
+            )
+        }
+        try appendTrace(
+            "sync preflight-save recovery=succeeded warning=cleared"
+        )
+    }
+
+    private func verifyFailureRestart(
+        on store: NoonmarkStore
+    ) async throws {
+        try validateIsolation()
+        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let expected = AppPresentation(
+            language: store.engine.preferences.language
+        ).syncFailureMessage(for: .baselineInvalid)
+        try await waitUntil(
+            "persisted sync failure was silent after app restart"
+        ) {
+            guard let notice = store.operationFailureNotice,
+                  notice.context == .sync,
+                  notice.message == expected,
+                  store.localFirstSyncMessage == expected,
+                  let failureView = AppViewTreeE2E.view(
+                      identifier: "settings.operation-failure"
+                  )
+            else {
+                return false
+            }
+            return AppViewTreeE2E.verificationText(for: failureView)
+                == expected
+        }
+        guard let statusMetadata = try repository.metadata(
+            for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+        ) else {
+            throw Failure.failed(
+                "persisted sync failure status disappeared after restart"
+            )
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let status = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: statusMetadata.value
+        )
+        guard case let .failed(reason, _, _) = status,
+              reason == .baselineInvalid
+        else {
+            throw Failure.failed(
+                "restart restored the warning without its typed failure"
+            )
+        }
+        guard let settingsWindow = NSApp.windows.first(
+            where: {
+                $0.identifier
+                    == NoonmarkSettingsWindowController.windowIdentifier
+                    && $0.isVisible
+            }
+        ) else {
+            throw Failure.failed(
+                "restart sync failure settings window is unavailable"
+            )
+        }
+        try AppE2EScreenshot.captureContent(
+            of: settingsWindow,
+            to: resultURL.deletingLastPathComponent()
+                .appendingPathComponent(
+                    "sync-failure-restart-warning.png"
+                )
+        )
+        try appendTrace(
+            "sync restart status=failed warning=restored"
+        )
+
+        store.setLocalFirstSyncEnabled(false)
+        guard store.engine.preferences.localFirstSyncPolicy.enabled == false
+        else {
+            throw Failure.failed(
+                "sync failure policy-change probe did not disable sync"
+            )
+        }
+        try requirePersistedBaselineInvalidFailure(
+            on: store,
+            in: repository,
+            expectedMessage: expected,
+            decoder: decoder
+        )
+
+        store.setLocalFirstSyncEnabled(true)
+        guard store.engine.preferences.localFirstSyncPolicy.enabled else {
+            throw Failure.failed(
+                "sync failure policy-change probe did not re-enable sync"
+            )
+        }
+        try requirePersistedBaselineInvalidFailure(
+            on: store,
+            in: repository,
+            expectedMessage: expected,
+            decoder: decoder
+        )
+        try appendTrace(
+            "sync policy-change status=failed warning=retained"
+        )
+
+        store.syncLocalFolderNow()
+        guard store.isLocalFirstSyncing else {
+            throw Failure.failed(
+                "sync recovery did not start the production sync path"
+            )
+        }
+        try await waitUntil(
+            "successful retry did not finish or clear the old warning"
+        ) {
+            store.isLocalFirstSyncing == false
+                && store.operationFailureNotice == nil
+        }
+        let recoveredStatusMetadata = try requiredMetadata(
+            SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
+            in: repository
+        )
+        let recoveredStatus = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: recoveredStatusMetadata.value
+        )
+        guard case .succeeded = recoveredStatus,
+              store.localFirstSyncMessage != expected
+        else {
+            throw Failure.failed(
+                "successful retry retained the stale sync failure state"
+            )
+        }
+        try appendTrace(
+            "sync restart recovery status=succeeded "
+                + "stale-warning=cleared"
+        )
+    }
+
+    private func requirePersistedBaselineInvalidFailure(
+        on store: NoonmarkStore,
+        in repository: SQLiteSyncRepository,
+        expectedMessage: String,
+        decoder: JSONDecoder
+    ) throws {
+        guard store.operationFailureNotice?.context == .sync,
+              store.operationFailureNotice?.message == expectedMessage,
+              store.localFirstSyncMessage == expectedMessage
+        else {
+            throw Failure.failed(
+                "sync policy change silently cleared the failure warning"
+            )
+        }
+        let metadata = try requiredMetadata(
+            SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
+            in: repository
+        )
+        let status = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: metadata.value
+        )
+        guard case let .failed(reason, _, _) = status,
+              reason == .baselineInvalid
+        else {
+            throw Failure.failed(
+                "sync policy change replaced the durable failure status"
+            )
+        }
+    }
+
+    private func requiredMetadata(
+        _ key: String,
+        in repository: SQLiteSyncRepository
+    ) throws -> SyncMetadataEntry {
+        guard let metadata = try repository.metadata(for: key) else {
+            throw Failure.failed(
+                "required sync metadata is missing: \(key)"
+            )
+        }
+        return metadata
     }
 
     private func synchronize(
@@ -1002,27 +1408,30 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
 
     private func assertFinalJournal(
         _ entries: [SyncJournalEntry],
-        state: ProbeState
+        state: ProbeState,
+        expectedCount: Int = 2
     ) throws {
         let final = try validateExerciseState(state)
-        guard entries.count == 2,
+        guard [2, 3].contains(expectedCount),
+              entries.count == expectedCount,
               try preferenceJournalEntries(state: .pendingUpload).isEmpty,
               try preferenceJournalEntries(state: .failed).isEmpty
         else {
             throw Failure.failed(
-                "final preference journal did not contain two uploaded rows"
+                "final preference journal did not contain "
+                    + "\(expectedCount) uploaded rows"
             )
         }
-        let themeEntry = try uniqueJournalEntry(
-            in: entries,
-            clock: date(from: final.themeClockBits)
-        )
-        let languageEntry = try uniqueJournalEntry(
-            in: entries,
-            clock: date(from: final.languageClockBits)
-        )
-        guard themeEntry.id == final.themeJournalID,
-              languageEntry.id == final.languageJournalID,
+        let themeEntries = entries.filter {
+            $0.id == final.themeJournalID
+        }
+        let languageEntries = entries.filter {
+            $0.id == final.languageJournalID
+        }
+        guard themeEntries.count == 1,
+              languageEntries.count == 1,
+              let themeEntry = themeEntries.first,
+              let languageEntry = languageEntries.first,
               sha256(try requiredPayload(themeEntry))
               == final.themePayloadSHA256,
               sha256(try requiredPayload(languageEntry))
@@ -1046,6 +1455,24 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             clock: date(from: final.languageClockBits),
             state: .uploaded
         )
+        if expectedCount == 3 {
+            let baselineEntries = entries.filter {
+                $0.id != themeEntry.id && $0.id != languageEntry.id
+            }
+            guard baselineEntries.count == 1 else {
+                throw Failure.failed(
+                    "republished preference baseline was not unique"
+                )
+            }
+            let baselineEntry = baselineEntries[0]
+            _ = try assertPreferenceJournalEntry(
+                baselineEntry,
+                theme: Self.localTheme,
+                language: Self.localLanguage,
+                clock: date(from: final.languageClockBits),
+                state: .uploaded
+            )
+        }
     }
 
     private func uniqueJournalEntry(

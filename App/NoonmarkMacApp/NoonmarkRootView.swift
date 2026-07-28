@@ -61,6 +61,56 @@ enum TaskClassificationDisplay: Equatable {
     }
 }
 
+struct OperationFailureBanner: View {
+    let message: String
+    let dismissTitle: String
+    let accessibilityIdentifier: String
+    let bottomPadding: CGFloat
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Theme.warn)
+                    .accessibilityHidden(true)
+                Text(message)
+                    .font(.noonmarkSystem(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.text1)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button(dismissTitle, action: onDismiss)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: 620)
+            .background {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Theme.panel)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Theme.warn.opacity(0.5))
+            }
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
+            .padding(.horizontal, 24)
+            .padding(.bottom, bottomPadding)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(accessibilityIdentifier)
+            .background {
+                AppE2EViewAnchor(
+                    identifier: accessibilityIdentifier,
+                    verificationText: message
+                )
+            }
+        }
+    }
+}
+
 struct NoonmarkRootView: View {
     @EnvironmentObject private var store: NoonmarkStore
     let workspaceStateRepository: WorkspaceStateRepository
@@ -114,45 +164,13 @@ struct NoonmarkRootView: View {
             }
 
             if let operationFailure = store.operationFailureNotice {
-                VStack {
-                    Spacer()
-                    HStack(spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(Theme.warn)
-                            .accessibilityHidden(true)
-                        Text(operationFailure.message)
-                            .font(.noonmarkSystem(size: 12, weight: .medium))
-                            .foregroundStyle(Theme.text1)
-                            .lineLimit(2)
-                        Spacer(minLength: 8)
-                        Button(store.copy.dismiss) {
-                            store.dismissOperationFailure()
-                        }
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: 620)
-                    .background {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Theme.panel)
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Theme.warn.opacity(0.5))
-                    }
-                    .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 76)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("app.operation-failure")
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: "app.operation-failure",
-                            verificationText: operationFailure.message
-                        )
-                    }
+                OperationFailureBanner(
+                    message: operationFailure.message,
+                    dismissTitle: store.copy.dismiss,
+                    accessibilityIdentifier: "app.operation-failure",
+                    bottomPadding: 76
+                ) {
+                    store.dismissOperationFailure()
                 }
                 .zIndex(3)
             }

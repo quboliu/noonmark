@@ -129,7 +129,8 @@ struct CurrentSyncRecordMerger {
             try validateDayTraceRecord(record)
         case .subtask, .appPreferences:
             try validateLeafCurrentRecord(record)
-        case .classificationCommit, .traceClassificationEvent:
+        case .classificationBaseline, .classificationCommit,
+             .traceClassificationEvent:
             return
         }
     }
@@ -219,7 +220,8 @@ struct CurrentSyncRecordMerger {
         case .appPreferences:
             _ = try mapper.decodeAppPreferences(record)
         case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace,
-             .classificationCommit, .traceClassificationEvent:
+             .classificationBaseline, .classificationCommit,
+             .traceClassificationEvent:
             preconditionFailure("unexpected current record validation type")
         }
     }
@@ -581,7 +583,8 @@ struct CurrentSyncRecordMerger {
                 case .dayTrace:
                     evidence.traces.append(try mapper.decodeDayTrace(record))
                 case .day, .taskCycleSeries, .taskDefinition, .subtask, .appPreferences,
-                     .classificationCommit, .traceClassificationEvent:
+                     .classificationBaseline, .classificationCommit,
+                     .traceClassificationEvent:
                     break
                 }
             } catch {
@@ -642,7 +645,8 @@ struct CurrentSyncRecordMerger {
                     let chain = try mapper.decodeTaskChain(record)
                     context.chainsByID[chain.id] = chain
                 case .taskCycleSeries, .taskDefinition, .dayTrace, .subtask, .appPreferences,
-                     .classificationCommit, .traceClassificationEvent:
+                     .classificationBaseline, .classificationCommit,
+                     .traceClassificationEvent:
                     break
                 }
             } catch {
@@ -705,7 +709,8 @@ struct CurrentSyncRecordMerger {
                 existing: existing,
                 incoming: incoming
             )
-        case .classificationCommit, .traceClassificationEvent:
+        case .classificationBaseline, .classificationCommit,
+             .traceClassificationEvent:
             return lwwWinner(existing, incoming)
         }
     }

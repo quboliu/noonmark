@@ -179,6 +179,64 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertNil(try repository.metadata(for: "missing"))
     }
 
+    func testSuccessMetadataIsRejectedWhenANewJournalEntryIsPending()
+        throws
+    {
+        let repository = SQLiteSyncRepository(
+            databaseURL: makeDatabaseURL()
+        )
+        let uploadedEntry = SyncJournalEntry(
+            entityType: .taskChain,
+            entityID: "already-uploaded",
+            changedAt: now,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        try repository.appendJournalEntry(uploadedEntry)
+        try repository.markJournalEntriesUploaded([uploadedEntry.id])
+
+        let concurrentEntry = SyncJournalEntry(
+            entityType: .taskDefinition,
+            entityID: "created-before-success-commit",
+            changedAt: now.addingTimeInterval(1),
+            deviceID: SyncDeviceID("mac-a")
+        )
+        try repository.appendJournalEntry(concurrentEntry)
+        let successMetadata = [
+            SyncMetadataEntry(
+                key: SQLiteLocalFirstSyncCoordinator
+                    .lastStatusMetadataKey,
+                value: Data("succeeded".utf8),
+                updatedAt: now.addingTimeInterval(2)
+            ),
+            SyncMetadataEntry(
+                key: SQLiteLocalFirstSyncCoordinator
+                    .timestampsMetadataKey,
+                value: Data("timestamps".utf8),
+                updatedAt: now.addingTimeInterval(2)
+            ),
+            SyncMetadataEntry(
+                key: SQLiteLocalFirstSyncCoordinator
+                    .baselineManifestMetadataKey,
+                value: Data("established".utf8),
+                updatedAt: now.addingTimeInterval(2)
+            )
+        ]
+
+        XCTAssertFalse(
+            try repository.saveMetadataIfJournalIsFullyUploaded(
+                successMetadata
+            )
+        )
+        for entry in successMetadata {
+            XCTAssertNil(try repository.metadata(for: entry.key))
+        }
+        XCTAssertEqual(
+            try repository.journalEntries(state: .pendingUpload)
+                .map(\.id),
+            [concurrentEntry.id]
+        )
+    }
+
     func testJournalEntriesMoveThroughPendingUploadedAndFailedStates() throws {
         let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
         let firstID = UUID()

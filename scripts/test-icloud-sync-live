@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -z "${NOONMARK_LIVE_ICLOUD_PACKAGE_PATH:-}" ]]; then
+  echo "NOONMARK_LIVE_ICLOUD_PACKAGE_PATH is required for live iCloud validation" >&2
+  exit 1
+fi
+if [[ ! -f "$NOONMARK_LIVE_ICLOUD_PACKAGE_PATH" ]]; then
+  echo "live iCloud data package is missing: $NOONMARK_LIVE_ICLOUD_PACKAGE_PATH" >&2
+  exit 1
+fi
+
 scripts/reset-dev-data
 export NOONMARK_LIVE_ICLOUD_SYNC=1
 
 swift test --filter ICloudDriveLocalFirstSyncLiveTests/testTwoSQLiteStoresSyncThroughRealICloudDriveEndpoint
+
+swift test \
+  --skip-build \
+  --filter \
+  ICloudDriveLocalFirstSyncLiveTests/testImportedDataPackageRoundTripsThroughIsolatedICloudDriveEndpoint
 
 scripts/build-mac-app debug e2e >/dev/null
 

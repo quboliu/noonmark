@@ -582,7 +582,8 @@ struct MutationClockE2EAutomation {
         }.sorted()
         let payloadsAreValid = matches.allSatisfy { entry in
             switch type {
-            case .classificationCommit, .traceClassificationEvent:
+            case .classificationBaseline, .classificationCommit,
+                 .traceClassificationEvent:
                 entry.recordPayload?.isEmpty == false
             case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace, .subtask,
                  .appPreferences:

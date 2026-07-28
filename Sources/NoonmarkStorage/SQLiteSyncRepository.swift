@@ -94,11 +94,7 @@ public final class SQLiteSyncRepository {
 
     public func saveMetadata(_ entries: [SyncMetadataEntry]) throws {
         guard entries.isEmpty == false else { return }
-        guard Set(entries.map(\.key)).count == entries.count else {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "sync metadata batch contains duplicate keys"
-            )
-        }
+        try validateMetadataBatch(entries)
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
@@ -109,6 +105,42 @@ public final class SQLiteSyncRepository {
                 try saveMetadata(entry, into: database)
             }
             try execute("COMMIT", on: database)
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
+    func saveMetadataIfJournalIsFullyUploaded(
+        _ entries: [SyncMetadataEntry]
+    ) throws -> Bool {
+        guard entries.isEmpty == false else { return true }
+        try validateMetadataBatch(entries)
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            let unfinishedCount = try query(
+                """
+                SELECT count(*)
+                FROM change_journal
+                WHERE sync_state != 'uploaded'
+                """,
+                on: database
+            ) { statement in
+                Int(sqlite3_column_int64(statement, 0))
+            }.first ?? 0
+            guard unfinishedCount == 0 else {
+                try execute("COMMIT", on: database)
+                return false
+            }
+            for entry in entries {
+                try saveMetadata(entry, into: database)
+            }
+            try execute("COMMIT", on: database)
+            return true
         } catch {
             try? execute("ROLLBACK", on: database)
             throw error
@@ -142,6 +174,37 @@ public final class SQLiteSyncRepository {
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             try SQLiteJournalCAS.insertOrValidateExact(entry, into: database)
+            try execute("COMMIT", on: database)
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
+    func saveBaselineJournal(
+        _ entries: [SyncJournalEntry],
+        manifestMetadata: SyncMetadataEntry
+    ) throws {
+        guard entries.isEmpty == false,
+              Set(entries.map(\.id)).count == entries.count
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "sync baseline journal is empty or contains duplicate ids"
+            )
+        }
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            for entry in entries {
+                try SQLiteJournalCAS.insertOrValidateExact(
+                    entry,
+                    into: database
+                )
+            }
+            try saveMetadata(manifestMetadata, into: database)
             try execute("COMMIT", on: database)
         } catch {
             try? execute("ROLLBACK", on: database)
@@ -196,6 +259,31 @@ public final class SQLiteSyncRepository {
                 on: database
             ) { statement in
                 bind(id, to: 1, in: statement)
+            }
+        }
+    }
+
+    func requeueJournalEntriesForBaselineRecovery(
+        _ ids: Set<UUID>
+    ) throws {
+        let orderedIDs = ids.sorted {
+            $0.uuidString < $1.uuidString
+        }
+        try updateJournalEntries(orderedIDs) { database, id in
+            try run(
+                """
+                UPDATE change_journal
+                SET sync_state = 'pendingUpload', last_error = NULL
+                WHERE id = ?
+                """,
+                on: database
+            ) { statement in
+                bind(id, to: 1, in: statement)
+            }
+            guard sqlite3_changes(database) == 1 else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "sync baseline journal entry is missing"
+                )
             }
         }
     }
@@ -746,6 +834,16 @@ private extension SQLiteSyncRepository {
         }
     }
 
+    private func validateMetadataBatch(
+        _ entries: [SyncMetadataEntry]
+    ) throws {
+        guard Set(entries.map(\.key)).count == entries.count else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "sync metadata batch contains duplicate keys"
+            )
+        }
+    }
+
     func saveMetadata(_ entry: SyncMetadataEntry, into database: Database?) throws {
         try run(
             """
@@ -1076,7 +1174,8 @@ private extension SQLiteSyncRepository {
         }
         switch payload {
         case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace, .subtask,
-             .appPreferences, .classificationCommit,
+             .appPreferences, .classificationBaseline,
+             .classificationCommit,
              .traceClassificationEvent:
             return true
         }

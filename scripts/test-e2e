@@ -5360,6 +5360,8 @@ run_preferences_clock_probe() {
   local task_summary_screenshot="${preferences_dir}/sync-task-summary.png"
   local restart_result="${preferences_dir}/restart-result.txt"
   local restart_log="${preferences_dir}/restart.log"
+  local failure_restart_result="${preferences_dir}/failure-restart-result.txt"
+  local failure_restart_log="${preferences_dir}/failure-restart.log"
   local sync_root="/tmp/noonmark-e2e-preferences-clock-sync-$$"
   local remote_bits
   local theme_bits
@@ -5417,9 +5419,25 @@ run_preferences_clock_probe() {
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
+    --e2e-persistence-failure-automation \
     --e2e-preferences-clock-verify \
     --e2e-preferences-clock-state-url "$PWD/$state_file" \
     --e2e-preferences-clock-result-url "$PWD/$restart_result"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "persisted sync failure restart" \
+    "$failure_restart_result" \
+    "$failure_restart_log" \
+    --data-url "$PWD/$preferences_db" \
+    --sync-folder-url "$sync_root" \
+    --page settings \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-preferences-clock-verify-failure-restart \
+    --e2e-preferences-clock-state-url "$PWD/$state_file" \
+    --e2e-preferences-clock-result-url \
+    "$PWD/$failure_restart_result"
 
   remote_bits="$(/usr/bin/plutil -extract remoteClockBits raw -o - \
     "$state_file")"
@@ -5597,7 +5615,7 @@ run_preferences_clock_probe() {
        FROM preference_audit
        WHERE direction = 'download' AND action = 'ignored');
   ")"
-  if [[ "$sqlite_probe" != "1 1 2 2 0 1 1 5 2 1 2" ]]; then
+  if [[ "$sqlite_probe" != "1 1 3 3 0 1 2 8 3 1 4" ]]; then
     echo "preference SQLite/journal/audit exact-bit probe failed: ${sqlite_probe:-missing}" >&2
     exit 1
   fi

@@ -174,8 +174,11 @@ struct SQLiteSyncTaskChangeAnalyzer {
         before: [SyncRecord],
         after: [SyncRecord]
     ) -> TaskChangeSet {
-        let beforeEvidence = recordEvidenceIndex(before)
-        let afterEvidence = recordEvidenceIndex(after)
+        let beforeByID = before.reduce(
+            into: [SyncRecordID: SyncRecord]()
+        ) { result, record in
+            result[record.id] = record
+        }
         let beforeIdentity = remoteTaskIdentity(in: before)
         let afterIdentity = remoteTaskIdentity(in: after)
         let combinedIdentity = remoteTaskIdentity(
@@ -185,8 +188,14 @@ struct SQLiteSyncTaskChangeAnalyzer {
         let afterTaskIDs = afterIdentity.taskIDs
         let newTaskIDs = afterTaskIDs.subtracting(beforeTaskIDs)
         let traceOwners = traceOwnerIndex(records: before + after)
-        let changedRecords = afterEvidence.compactMap { evidenceID, record in
-            beforeEvidence[evidenceID] == nil ? record : nil
+        let changedRecords = after.filter { record in
+            guard let previous = beforeByID[record.id] else {
+                return true
+            }
+            return recordsHaveDifferentUserFacts(
+                previous,
+                record
+            )
         }
         let affectedTaskIDs = changedRecords.reduce(into: Set<TaskChainID>()) { result, record in
             result.formUnion(
@@ -208,12 +217,15 @@ struct SQLiteSyncTaskChangeAnalyzer {
         )
     }
 
-    private func recordEvidenceIndex(
-        _ records: [SyncRecord]
-    ) -> [SyncRecordEvidenceID: SyncRecord] {
-        records.reduce(into: [:]) { result, record in
-            result[SyncRecordEvidenceID(record: record)] = record
-        }
+    private func recordsHaveDifferentUserFacts(
+        _ lhs: SyncRecord,
+        _ rhs: SyncRecord
+    ) -> Bool {
+        lhs.entityType != rhs.entityType
+            || lhs.entityID != rhs.entityID
+            || lhs.operation != rhs.operation
+            || lhs.payload != rhs.payload
+            || lhs.reactivationWitnesses != rhs.reactivationWitnesses
     }
 
     private func remoteTaskIdentity(
@@ -327,6 +339,8 @@ struct SQLiteSyncTaskChangeAnalyzer {
                   let chainIDs = traceOwners[subtask.traceID]
             else { return [] }
             return taskIDs(for: chainIDs)
+        case .classificationBaseline:
+            return []
         case .classificationCommit:
             guard let envelope = try? mapper.decodeClassificationCommit(record)
             else { return [] }

@@ -48,6 +48,8 @@ public struct SyncRecordMaterializer: Sendable {
             return try subtaskRecord(for: entry, in: snapshot)
         case .appPreferences:
             return try preferencesRecord(for: entry)
+        case .classificationBaseline:
+            return try classificationBaselineRecord(for: entry)
         case .classificationCommit:
             return try classificationCommitRecord(for: entry)
         case .traceClassificationEvent:
@@ -177,6 +179,36 @@ public struct SyncRecordMaterializer: Sendable {
             )
         }
         return try mapper.record(for: envelope, modifiedBy: entry.deviceID)
+    }
+
+    private func classificationBaselineRecord(
+        for entry: SyncJournalEntry
+    ) throws -> SyncRecord {
+        guard let payload = entry.recordPayload else {
+            throw SyncRecordMaterializerError.missingEntity(
+                entry.entityType,
+                entry.entityID
+            )
+        }
+        let envelope: ClassificationBaselineEnvelope
+        do {
+            envelope = try ClassificationBaselineEnvelope.decode(payload)
+        } catch {
+            throw SyncRecordMaterializerError.invalidImmutablePayload(
+                entry.entityType,
+                entry.entityID
+            )
+        }
+        guard envelope.baselineID.uuidString == entry.entityID else {
+            throw SyncRecordMaterializerError.invalidImmutablePayload(
+                entry.entityType,
+                entry.entityID
+            )
+        }
+        return try mapper.record(
+            for: envelope,
+            modifiedBy: entry.deviceID
+        )
     }
 
     private func traceClassificationEventRecord(

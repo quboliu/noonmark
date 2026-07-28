@@ -11,6 +11,7 @@ public enum SyncConflictType: String, Codable, Hashable, Sendable {
     case invalidReference
     case unsupportedDelete
     case invalidRecordPayload
+    case classificationBaselineRejected
     case classificationCommitRejected
     case classificationSnapshotMutation
     case traceClassificationEventRejected
@@ -134,6 +135,7 @@ public struct SyncConflict: Codable, Equatable, Sendable {
 }
 
 public enum SyncTerminalRecordIdentity: Hashable, Sendable {
+    case classificationBaseline(UUID)
     case classificationCommit(UUID)
     case traceClassificationEvent(UUID)
 
@@ -142,6 +144,10 @@ public enum SyncTerminalRecordIdentity: Hashable, Sendable {
               id.uuidString == record.entityID
         else { return nil }
         switch record.entityType {
+        case .classificationBaseline
+        where record.id.rawValue
+            == "classification-baseline:\(record.entityID)":
+            self = .classificationBaseline(id)
         case .classificationCommit
         where record.id.rawValue == "classification-commit:\(record.entityID)":
             self = .classificationCommit(id)
@@ -155,6 +161,8 @@ public enum SyncTerminalRecordIdentity: Hashable, Sendable {
 
     public var entityType: SyncEntityType {
         switch self {
+        case .classificationBaseline:
+            .classificationBaseline
         case .classificationCommit:
             .classificationCommit
         case .traceClassificationEvent:
@@ -164,7 +172,9 @@ public enum SyncTerminalRecordIdentity: Hashable, Sendable {
 
     public var entityID: String {
         switch self {
-        case let .classificationCommit(id), let .traceClassificationEvent(id):
+        case let .classificationBaseline(id),
+             let .classificationCommit(id),
+             let .traceClassificationEvent(id):
             id.uuidString
         }
     }

@@ -413,6 +413,7 @@ struct LocalFirstCloudSyncCard: View {
                     .foregroundStyle(Theme.text3)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .disabled(store.isLocalFirstSyncing)
         }
     }
 

@@ -87,7 +87,7 @@ enum StoreMutationGateError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .exclusiveOperationInProgress:
-            "数据替换正在进行，请完成后再修改任务。"
+            "数据同步或替换正在进行，请完成后再修改任务。"
         case .pendingZhulongApplication:
             "烛龙应用仍待恢复，请先完成恢复再修改任务。"
         }
@@ -212,6 +212,7 @@ final class NoonmarkStore: ObservableObject {
 
     enum ExclusiveEngineOperation: Equatable {
         case dataImport(UUID)
+        case localFirstSync(UUID)
     }
 
     enum DayBoundaryState: Equatable {
@@ -732,6 +733,8 @@ final class NoonmarkStore: ObservableObject {
     var redoStack: [RedoEntry] = []
     var engineRevision: UInt64 = 0
     var exclusiveEngineOperation: ExclusiveEngineOperation?
+    var authorizedExclusiveEngineWrite:
+        ExclusiveEngineOperation?
     var persistenceFailuresRemainingForE2E = 0
     var shouldPauseNextDataImportCommitForE2E = false
     var dataImportCommitContinuationForE2E: CheckedContinuation<Void, Never>?

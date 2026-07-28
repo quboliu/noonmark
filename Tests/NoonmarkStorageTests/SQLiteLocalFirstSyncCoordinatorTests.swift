@@ -91,6 +91,936 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
     }
 
+    func testSyncDrainsLocalMutationCreatedWhileDownloadIsInFlight()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL(
+            "mutation-during-download"
+        )
+        let repository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(
+            databaseURL: databaseURL
+        )
+        let deviceID = SyncDeviceID(
+            "mutation-during-download-device"
+        )
+        try saveSyncIdentity(deviceID, databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(
+            title: "同步开始前已有",
+            now: now
+        )
+        try repository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+
+        let injectedAt = now.addingTimeInterval(1)
+        let transport = DownloadMutationInjectingTransport {
+            let concurrentRepository = SQLiteEngineRepository(
+                databaseURL: databaseURL
+            )
+            let concurrentEngine = try concurrentRepository.load()
+            _ = try concurrentEngine.createPoolTask(
+                title: "下载期间新增",
+                now: injectedAt
+            )
+            try concurrentRepository.save(
+                concurrentEngine.snapshot(),
+                recordingChangesFor: deviceID,
+                changedAt: injectedAt
+            )
+        }
+
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(2))
+
+        XCTAssertTrue(
+            try syncRepository.journalEntries(
+                state: .pendingUpload
+            ).isEmpty,
+            "同步返回成功前必须排空下载期间新增的本机变更"
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(
+                state: .failed
+            ).isEmpty
+        )
+
+        let targetURL = makeDatabaseURL(
+            "mutation-during-download-target"
+        )
+        let targetRepository = SQLiteEngineRepository(
+            databaseURL: targetURL
+        )
+        try targetRepository.save(NoonmarkEngine().snapshot())
+        let targetResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(3))
+        XCTAssertEqual(targetResult.download.waitingCount, 0)
+        XCTAssertEqual(targetResult.download.conflictCount, 0)
+        XCTAssertEqual(
+            Set(try targetRepository.load().taskPool().map {
+                $0.definition.title
+            }),
+            ["同步开始前已有", "下载期间新增"]
+        )
+    }
+
+    func testEndpointClearedAfterUploadIsRebuiltBeforeSuccess()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL(
+            "endpoint-cleared-during-sync-source"
+        )
+        let targetURL = makeDatabaseURL(
+            "endpoint-cleared-during-sync-target"
+        )
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let targetRepository = SQLiteEngineRepository(
+            databaseURL: targetURL
+        )
+        let sourceSyncRepository = SQLiteSyncRepository(
+            databaseURL: sourceURL
+        )
+        let sourceDeviceID = SyncDeviceID(
+            "endpoint-cleared-during-sync-source"
+        )
+        let source = NoonmarkEngine()
+        let chainID = try source.createPoolTask(
+            title: "同步中端点清空后仍须恢复",
+            now: now
+        )
+        try sourceRepository.save(
+            source.snapshot(),
+            recordingChangesFor: sourceDeviceID,
+            changedAt: now
+        )
+        try sourceSyncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(
+                deviceID: sourceDeviceID,
+                createdAt: now
+            )
+        )
+        try targetRepository.save(NoonmarkEngine().snapshot())
+        let transport =
+            ClearAfterFirstPushBeforeNextFetchSyncTransport()
+
+        let sourceResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(1))
+        let didClearEndpoint = await transport.didClearEndpoint()
+        let remoteRecords = try await transport.fetchAll()
+
+        XCTAssertTrue(didClearEndpoint)
+        XCTAssertGreaterThan(sourceResult.upload.uploadedCount, 0)
+        XCTAssertTrue(
+            remoteRecords.contains {
+                $0.entityType == .taskChain
+                    && $0.entityID == chainID.description
+            },
+            "同步返回成功前必须确认被清空的端点已用完整本机事实重建"
+        )
+
+        let targetResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(2))
+
+        XCTAssertEqual(targetResult.download.waitingCount, 0)
+        XCTAssertEqual(targetResult.download.conflictCount, 0)
+        XCTAssertNotNil(try targetRepository.load().chains[chainID])
+    }
+
+    func testRemoteChangeArrivingDuringSyncIsMergedBeforeSuccess()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL(
+            "remote-change-during-sync"
+        )
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let sourceSyncRepository = SQLiteSyncRepository(
+            databaseURL: sourceURL
+        )
+        let sourceDeviceID = SyncDeviceID(
+            "remote-change-during-sync-source"
+        )
+        let source = NoonmarkEngine()
+        _ = try source.createPoolTask(
+            title: "本机同步事实",
+            now: now
+        )
+        try sourceRepository.save(
+            source.snapshot(),
+            recordingChangesFor: sourceDeviceID,
+            changedAt: now
+        )
+        try sourceSyncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(
+                deviceID: sourceDeviceID,
+                createdAt: now
+            )
+        )
+
+        let remote = NoonmarkEngine()
+        let remoteChainID = try remote.createPoolTask(
+            title: "同步期间从另一台设备到达",
+            now: now.addingTimeInterval(1)
+        )
+        let remoteDeviceID = SyncDeviceID(
+            "remote-change-during-sync-peer"
+        )
+        let remoteEntries = try SyncSnapshotBaselineBuilder()
+            .journalEntries(
+                from: remote.snapshot(),
+                modifiedBy: remoteDeviceID,
+                createdAt: now.addingTimeInterval(1)
+            )
+        let remoteRecords = try SyncRecordMaterializer().records(
+            for: remoteEntries,
+            in: remote.snapshot()
+        )
+        let transport =
+            InjectRemoteRecordsOnSecondFetchSyncTransport(
+                records: remoteRecords
+            )
+
+        let result = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(2))
+        let didInjectRemoteRecords =
+            await transport.didInjectRemoteRecords()
+
+        XCTAssertTrue(didInjectRemoteRecords)
+        XCTAssertEqual(result.download.waitingCount, 0)
+        XCTAssertEqual(result.download.conflictCount, 0)
+        XCTAssertNotNil(
+            try sourceRepository.load().chains[remoteChainID],
+            "同步返回成功前必须合并最终抓取中新增的远端事实"
+        )
+    }
+
+    func testImportedSnapshotEstablishesACompleteSyncBaseline()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL("import-baseline-source")
+        let targetURL = makeDatabaseURL("import-baseline-target")
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let targetRepository = SQLiteEngineRepository(
+            databaseURL: targetURL
+        )
+        let transport = InMemorySyncTransport()
+        let sourceDevice = SyncDeviceIdentity(
+            deviceID: SyncDeviceID("import-baseline-source-device"),
+            createdAt: now
+        )
+        let importedEngine = NoonmarkEngine()
+        let importedChainID = try importedEngine.createPoolTask(
+            title: "数据包中的任务",
+            now: now
+        )
+
+        try sourceRepository.replaceForDataImport(
+            importedEngine.snapshot(),
+            preserving: sourceDevice
+        )
+        try targetRepository.save(NoonmarkEngine().snapshot())
+
+        let sourceResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(1))
+        let targetResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(2))
+
+        XCTAssertEqual(
+            sourceResult.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 1, updatedTaskCount: 0)
+        )
+        XCTAssertEqual(
+            targetResult.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 1, updatedTaskCount: 0)
+        )
+        XCTAssertEqual(
+            try targetRepository.load().chains[importedChainID]?
+                .id,
+            importedChainID
+        )
+        XCTAssertEqual(targetResult.download.waitingCount, 0)
+        XCTAssertEqual(targetResult.download.conflictCount, 0)
+    }
+
+    func testImportedSnapshotBaselinePreservesClassificationHistory()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL(
+            "classified-import-baseline-source"
+        )
+        let targetURL = makeDatabaseURL(
+            "classified-import-baseline-target"
+        )
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let targetRepository = SQLiteEngineRepository(
+            databaseURL: targetURL
+        )
+        let transport = InMemorySyncTransport()
+        let sourceDevice = SyncDeviceIdentity(
+            deviceID: SyncDeviceID(
+                "classified-import-baseline-source-device"
+            ),
+            createdAt: now
+        )
+        let importedEngine = NoonmarkEngine()
+        let importedChainID = try importedEngine.createPoolTask(
+            title: "带分类历史的数据包任务",
+            now: now
+        )
+        let importedTraceID = try importedEngine.scheduleFromPool(
+            chainID: importedChainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        _ = try importedEngine.addSubtask(
+            traceID: importedTraceID,
+            title: "数据包子任务",
+            now: now.addingTimeInterval(2)
+        )
+        try commitClassification(
+            on: importedEngine,
+            chainID: importedChainID,
+            interactionID: UUID(
+                uuidString: "52000000-0000-0000-0000-000000000001"
+            )!,
+            decisionID: UUID(
+                uuidString: "52000000-0000-0000-0000-000000000002"
+            )!,
+            now: now.addingTimeInterval(3)
+        )
+        let importedSnapshot = importedEngine.snapshot()
+
+        try sourceRepository.replaceForDataImport(
+            importedSnapshot,
+            preserving: sourceDevice
+        )
+        try targetRepository.save(NoonmarkEngine().snapshot())
+
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(4))
+        let targetResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(5))
+        let restored = try targetRepository.load().snapshot()
+
+        XCTAssertEqual(restored.days, importedSnapshot.days)
+        XCTAssertEqual(restored.taskCycleSeries, importedSnapshot.taskCycleSeries)
+        XCTAssertEqual(restored.chains, importedSnapshot.chains)
+        XCTAssertEqual(restored.definitions, importedSnapshot.definitions)
+        XCTAssertEqual(restored.traces, importedSnapshot.traces)
+        XCTAssertEqual(restored.subtasks, importedSnapshot.subtasks)
+        XCTAssertEqual(
+            restored.classifications,
+            importedSnapshot.classifications
+        )
+        XCTAssertEqual(targetResult.download.waitingCount, 0)
+        XCTAssertEqual(targetResult.download.conflictCount, 0)
+    }
+
+    func testMissingCurrentJournalReseedsBeforeSync()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL(
+            "missing-journal-baseline-source"
+        )
+        let targetURL = makeDatabaseURL(
+            "missing-journal-baseline-target"
+        )
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let targetRepository = SQLiteEngineRepository(
+            databaseURL: targetURL
+        )
+        let sourceSyncRepository = SQLiteSyncRepository(
+            databaseURL: sourceURL
+        )
+        let transport = InMemorySyncTransport()
+        let importedEngine = NoonmarkEngine()
+        let chainID = try importedEngine.createPoolTask(
+            title: "当前事实必须重新入队",
+            now: now
+        )
+        try sourceRepository.save(importedEngine.snapshot())
+        try sourceSyncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(
+                deviceID: SyncDeviceID("missing-journal-source-device"),
+                createdAt: now
+            )
+        )
+        try targetRepository.save(NoonmarkEngine().snapshot())
+
+        let sourceResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(1))
+        let targetResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(2))
+
+        XCTAssertEqual(
+            sourceResult.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 1, updatedTaskCount: 0)
+        )
+        XCTAssertEqual(
+            targetResult.taskChanges,
+            SQLiteSyncTaskChanges(newTaskCount: 1, updatedTaskCount: 0)
+        )
+        XCTAssertNotNil(try targetRepository.load().chains[chainID])
+    }
+
+    func testUploadedJournalDoesNotPretendAnEmptyEndpointIsCovered()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL("endpoint-reseed-source")
+        let targetURL = makeDatabaseURL("endpoint-reseed-target")
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let targetRepository = SQLiteEngineRepository(
+            databaseURL: targetURL
+        )
+        let sourceSyncRepository = SQLiteSyncRepository(
+            databaseURL: sourceURL
+        )
+        let deviceID = SyncDeviceID("endpoint-reseed-device")
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "必须进入新端点",
+            now: now
+        )
+        try sourceRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+        try sourceSyncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(deviceID: deviceID, createdAt: now)
+        )
+
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: InMemorySyncTransport()
+        ).sync(now: now.addingTimeInterval(1))
+        XCTAssertTrue(
+            try sourceSyncRepository.journalEntries(
+                state: .pendingUpload
+            ).isEmpty
+        )
+
+        let emptyEndpoint = InMemorySyncTransport()
+        let reseedResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: emptyEndpoint
+        ).sync(now: now.addingTimeInterval(2))
+        try targetRepository.save(NoonmarkEngine().snapshot())
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: emptyEndpoint
+        ).sync(now: now.addingTimeInterval(3))
+
+        XCTAssertGreaterThan(reseedResult.upload.uploadedCount, 0)
+        XCTAssertNotNil(try targetRepository.load().chains[chainID])
+    }
+
+    func testStaleUploadedJournalDoesNotCoverANewerLocalFact()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL("stale-journal-source")
+        let targetURL = makeDatabaseURL("stale-journal-target")
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let targetRepository = SQLiteEngineRepository(
+            databaseURL: targetURL
+        )
+        let sourceSyncRepository = SQLiteSyncRepository(
+            databaseURL: sourceURL
+        )
+        let transport = InMemorySyncTransport()
+        let deviceID = SyncDeviceID("stale-journal-device")
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "已有上传记录",
+            now: now
+        )
+        try sourceRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+        try sourceSyncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(deviceID: deviceID, createdAt: now)
+        )
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(1))
+
+        let newerLocal = try sourceRepository.load()
+        _ = try newerLocal.appendPoolNote(
+            chainID: chainID,
+            body: "不能被旧 journal 掩盖",
+            now: now.addingTimeInterval(2)
+        )
+        try sourceRepository.save(newerLocal.snapshot())
+
+        let repaired = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(3))
+        try targetRepository.save(NoonmarkEngine().snapshot())
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(4))
+
+        XCTAssertGreaterThan(repaired.upload.uploadedCount, 0)
+        XCTAssertEqual(
+            try targetRepository.load().chains[chainID]?
+                .activeNoteEntries.map(\.body),
+            ["不能被旧 journal 掩盖"]
+        )
+    }
+
+    func testNewerRemoteTaskChainCannotHideALocalForkFromBaseline()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL("newer-remote-fork-source")
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let sourceSyncRepository = SQLiteSyncRepository(
+            databaseURL: sourceURL
+        )
+        let base = NoonmarkEngine()
+        let chainID = try base.createPoolTask(
+            title: "双方都有事实",
+            now: now
+        )
+        let local = try NoonmarkEngine(snapshot: base.snapshot())
+        let remote = try NoonmarkEngine(snapshot: base.snapshot())
+        _ = try local.appendPoolNote(
+            chainID: chainID,
+            body: "本机旧数据包中的附言",
+            now: now.addingTimeInterval(1)
+        )
+        _ = try remote.appendPoolNote(
+            chainID: chainID,
+            body: "远端较新的附言",
+            now: now.addingTimeInterval(2)
+        )
+        try sourceRepository.save(local.snapshot())
+        try sourceSyncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(
+                deviceID: SyncDeviceID("newer-remote-fork-source"),
+                createdAt: now
+            )
+        )
+
+        let remoteDevice = SyncDeviceID("newer-remote-fork-remote")
+        let remoteEntries = try SyncSnapshotBaselineBuilder()
+            .journalEntries(
+                from: remote.snapshot(),
+                modifiedBy: remoteDevice,
+                createdAt: now.addingTimeInterval(3)
+            )
+        let remoteRecords = try SyncRecordMaterializer().records(
+            for: remoteEntries,
+            in: remote.snapshot()
+        )
+        let transport = try InMemorySyncTransport(records: remoteRecords)
+
+        let result = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(4))
+
+        XCTAssertGreaterThan(result.upload.uploadedCount, 0)
+        let finalRecords = try await transport.fetchAll()
+        let canonicalRecord = try XCTUnwrap(
+            finalRecords.first {
+                $0.entityType == .taskChain
+                    && $0.entityID == chainID.description
+            }
+        )
+        let canonicalChain = try SyncRecordMapper().decodeTaskChain(
+            canonicalRecord
+        )
+        XCTAssertEqual(
+            Set(canonicalChain.activeNoteEntries.map(\.body)),
+            ["本机旧数据包中的附言", "远端较新的附言"]
+        )
+    }
+
+    func testMalformedRemoteClassificationEvidenceCannotHideBaseline()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL(
+            "malformed-remote-classification-source"
+        )
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let sourceSyncRepository = SQLiteSyncRepository(
+            databaseURL: sourceURL
+        )
+        let local = NoonmarkEngine()
+        let chainID = try local.createPoolTask(
+            title: "分类证据不可伪造",
+            now: now
+        )
+        try commitClassification(
+            on: local,
+            chainID: chainID,
+            interactionID: UUID(
+                uuidString: "54000000-0000-0000-0000-000000000001"
+            )!,
+            decisionID: UUID(
+                uuidString: "54000000-0000-0000-0000-000000000002"
+            )!,
+            now: now.addingTimeInterval(1)
+        )
+        let snapshot = local.snapshot()
+        try sourceRepository.save(snapshot)
+        try sourceSyncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(
+                deviceID: SyncDeviceID(
+                    "malformed-remote-classification-source"
+                ),
+                createdAt: now
+            )
+        )
+
+        let remoteDevice = SyncDeviceID(
+            "malformed-remote-classification-remote"
+        )
+        let baselineEntries = try SyncSnapshotBaselineBuilder()
+            .journalEntries(
+                from: snapshot,
+                modifiedBy: remoteDevice,
+                createdAt: now.addingTimeInterval(2)
+            )
+        var remoteRecords = try SyncRecordMaterializer().records(
+            for: baselineEntries,
+            in: snapshot
+        )
+        let baselineIndex = try XCTUnwrap(
+            remoteRecords.firstIndex {
+                $0.entityType == .classificationBaseline
+            }
+        )
+        let validBaseline = remoteRecords[baselineIndex]
+        remoteRecords[baselineIndex] = SyncRecord(
+            id: SyncRecordID(
+                "forged-classification-baseline:\(UUID().uuidString)"
+            ),
+            entityType: validBaseline.entityType,
+            entityID: validBaseline.entityID,
+            modifiedAt: validBaseline.modifiedAt,
+            modifiedByDeviceID: validBaseline.modifiedByDeviceID,
+            payload: validBaseline.payload
+        )
+        remoteRecords.append(
+            SyncRecord(
+                id: validBaseline.id,
+                entityType: validBaseline.entityType,
+                entityID: validBaseline.entityID,
+                operation: .delete,
+                modifiedAt: validBaseline.modifiedAt,
+                modifiedByDeviceID:
+                validBaseline.modifiedByDeviceID,
+                payload: validBaseline.payload
+            )
+        )
+        let transport = RawCurrentRecordSyncTransport(
+            records: remoteRecords
+        )
+
+        let result = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: transport
+        ).sync(now: now.addingTimeInterval(3))
+
+        XCTAssertGreaterThan(result.upload.uploadedCount, 0)
+        let finalRecords = await transport.fetchAll()
+        XCTAssertTrue(
+            finalRecords.contains {
+                $0.entityType == .classificationBaseline
+                    && (try? SyncRecordMapper()
+                        .decodeClassificationBaseline($0)) != nil
+            }
+        )
+    }
+
+    func testPartiallyUploadedPendingBaselineCanReseedAnEmptyEndpoint()
+        async throws
+    {
+        let sourceURL = makeDatabaseURL(
+            "partially-uploaded-baseline-source"
+        )
+        let targetURL = makeDatabaseURL(
+            "partially-uploaded-baseline-target"
+        )
+        let sourceRepository = SQLiteEngineRepository(
+            databaseURL: sourceURL
+        )
+        let sourceSyncRepository = SQLiteSyncRepository(
+            databaseURL: sourceURL
+        )
+        let targetRepository = SQLiteEngineRepository(
+            databaseURL: targetURL
+        )
+        let imported = NoonmarkEngine()
+        let chainID = try imported.createPoolTask(
+            title: "分批失败后仍能完整重试",
+            now: now
+        )
+        try sourceRepository.replaceForDataImport(
+            imported.snapshot(),
+            preserving: SyncDeviceIdentity(
+                deviceID: SyncDeviceID(
+                    "partially-uploaded-baseline-source"
+                ),
+                createdAt: now
+            )
+        )
+        let interruptedTransport = FailAfterFirstPushSyncTransport()
+
+        do {
+            _ = try await SQLiteLocalFirstSyncCoordinator(
+                databaseURL: sourceURL,
+                transport: interruptedTransport
+            ).sync(limit: 1, now: now.addingTimeInterval(1))
+            XCTFail("第二批上传失败时不得返回成功")
+        } catch {
+            XCTAssertEqual(
+                error as? FailAfterFirstPushSyncTransport.Failure,
+                .interrupted
+            )
+        }
+        let interruptedEntries = try sourceSyncRepository
+            .journalEntries()
+        XCTAssertTrue(
+            interruptedEntries.contains { $0.state == .uploaded }
+        )
+        XCTAssertTrue(
+            interruptedEntries.contains { $0.state == .failed }
+        )
+
+        let changed = try sourceRepository.load()
+        let secondChainID = try changed.createPoolTask(
+            title: "pending 期间上传到旧端点的新事实",
+            now: now.addingTimeInterval(1.5)
+        )
+        try sourceRepository.save(
+            changed.snapshot(),
+            recordingChangesFor: SyncDeviceID(
+                "partially-uploaded-baseline-source"
+            ),
+            changedAt: now.addingTimeInterval(1.5)
+        )
+        let originalEntryIDs = Set(interruptedEntries.map(\.id))
+        let newEntryIDs = Set(
+            try sourceSyncRepository.journalEntries()
+                .map(\.id)
+        ).subtracting(originalEntryIDs)
+        XCTAssertFalse(newEntryIDs.isEmpty)
+        try sourceSyncRepository.markJournalEntriesUploaded(
+            Array(newEntryIDs)
+        )
+
+        let emptyEndpoint = InMemorySyncTransport()
+        let retryResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: emptyEndpoint
+        ).sync(limit: 1, now: now.addingTimeInterval(2))
+        try targetRepository.save(NoonmarkEngine().snapshot())
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: emptyEndpoint
+        ).sync(now: now.addingTimeInterval(3))
+
+        XCTAssertGreaterThan(retryResult.upload.uploadedCount, 0)
+        XCTAssertNotNil(try targetRepository.load().chains[chainID])
+        XCTAssertNotNil(
+            try targetRepository.load().chains[secondChainID]
+        )
+    }
+
+    func testInvalidBaselineManifestFailsClosedAndPersistsFailure()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL(
+            "invalid-baseline-manifest"
+        )
+        let engineRepository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(
+            databaseURL: databaseURL
+        )
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(
+            title: "不能被静默遗漏",
+            now: now
+        )
+        try engineRepository.save(engine.snapshot())
+        try syncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(
+                deviceID: SyncDeviceID("invalid-manifest-device"),
+                createdAt: now
+            )
+        )
+        try syncRepository.saveMetadata(
+            SyncMetadataEntry(
+                key: SQLiteLocalFirstSyncCoordinator
+                    .baselineManifestMetadataKey,
+                value: Data("{}".utf8),
+                updatedAt: now
+            )
+        )
+        let transport = InMemorySyncTransport()
+
+        do {
+            _ = try await SQLiteLocalFirstSyncCoordinator(
+                databaseURL: databaseURL,
+                transport: transport
+            ).sync(now: now.addingTimeInterval(1))
+            XCTFail("损坏的完整基线不得被标记为同步成功")
+        } catch {
+            XCTAssertEqual(
+                error as? SQLiteLocalFirstSyncError,
+                .baselineManifestInvalid
+            )
+        }
+
+        let remoteRecords = try await transport.fetchAll()
+        XCTAssertTrue(remoteRecords.isEmpty)
+        let statusMetadata = try XCTUnwrap(
+            syncRepository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator
+                    .lastStatusMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(
+            try decoder.decode(
+                SQLiteLocalFirstSyncStatus.self,
+                from: statusMetadata.value
+            ),
+            .failed(
+                reason: .baselineInvalid,
+                message: SQLiteLocalFirstSyncError
+                    .baselineManifestInvalid.localizedDescription,
+                failedAt: now.addingTimeInterval(1)
+            )
+        )
+        XCTAssertNil(
+            try SQLiteLocalFirstSyncCoordinator.timestamps(
+                in: syncRepository
+            )
+        )
+    }
+
+    func testUnmaterializableLocalRecordCannotProduceFalseSuccess()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL(
+            "unmaterializable-local-record"
+        )
+        let engineRepository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(
+            databaseURL: databaseURL
+        )
+        try engineRepository.save(NoonmarkEngine().snapshot())
+        try syncRepository.appendJournalEntry(
+            SyncJournalEntry(
+                entityType: .taskChain,
+                entityID:
+                "53000000-0000-0000-0000-000000000001",
+                changedAt: now,
+                deviceID: SyncDeviceID(
+                    "unmaterializable-record-device"
+                )
+            )
+        )
+
+        do {
+            _ = try await SQLiteLocalFirstSyncCoordinator(
+                databaseURL: databaseURL,
+                transport: InMemorySyncTransport()
+            ).sync(now: now.addingTimeInterval(1))
+            XCTFail("无法物化的本机记录不得被标记为同步成功")
+        } catch {
+            XCTAssertEqual(
+                error as? SQLiteLocalFirstSyncError,
+                .uploadMaterializationFailed(count: 1)
+            )
+        }
+
+        let statusMetadata = try XCTUnwrap(
+            syncRepository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator
+                    .lastStatusMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(
+            try decoder.decode(
+                SQLiteLocalFirstSyncStatus.self,
+                from: statusMetadata.value
+            ),
+            .failed(
+                reason: .localRecordsUnpreparable,
+                message: SQLiteLocalFirstSyncError
+                    .uploadMaterializationFailed(count: 1)
+                    .localizedDescription,
+                failedAt: now.addingTimeInterval(1)
+            )
+        )
+        XCTAssertNil(
+            try SQLiteLocalFirstSyncCoordinator.timestamps(
+                in: syncRepository
+            )
+        )
+    }
+
     private func syncTimestamps(
         in repository: SQLiteSyncRepository
     ) throws -> SQLiteLocalFirstSyncTimestamps {
@@ -349,6 +1279,9 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let phoneRepository = SQLiteEngineRepository(databaseURL: phoneURL)
         let transport = InMemorySyncTransport()
         let macDevice = SyncDeviceID("mac-task-summary")
+        let phoneDevice = SyncDeviceID("phone-task-summary")
+        try saveSyncIdentity(macDevice, databaseURL: macURL)
+        try saveSyncIdentity(phoneDevice, databaseURL: phoneURL)
         let firstClock = now.addingTimeInterval(10)
         let macEngine = NoonmarkEngine()
         let firstChainID = try macEngine.createPoolTask(
@@ -472,6 +1405,8 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let phoneRepository = SQLiteEngineRepository(databaseURL: phoneURL)
         let macDevice = SyncDeviceID("mac-a")
         let phoneDevice = SyncDeviceID("phone-b")
+        try saveSyncIdentity(macDevice, databaseURL: macURL)
+        try saveSyncIdentity(phoneDevice, databaseURL: phoneURL)
 
         let macEngine = NoonmarkEngine()
         let chainID = try macEngine.createPoolTask(title: "同步到另一台设备", now: now)
@@ -622,6 +1557,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             try decoder.decode(SQLiteLocalFirstSyncStatus.self, from: metadata.value),
             .failed(
+                reason: .transportOrStorage,
                 message: FailingFetchSyncTransportError.unavailable.localizedDescription,
                 failedAt: now
             )
@@ -646,6 +1582,8 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let transport = InMemorySyncTransport()
         let macDevice = SyncDeviceID("mac-note-device")
         let phoneDevice = SyncDeviceID("phone-note-device")
+        try saveSyncIdentity(macDevice, databaseURL: macURL)
+        try saveSyncIdentity(phoneDevice, databaseURL: phoneURL)
 
         let baselineEngine = NoonmarkEngine()
         let chainID = try baselineEngine.createPoolTask(
@@ -768,6 +1706,8 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             let transport = InMemorySyncTransport()
             let macDevice = SyncDeviceID("mac-rename-device")
             let phoneDevice = SyncDeviceID("phone-note-device")
+            try saveSyncIdentity(macDevice, databaseURL: macURL)
+            try saveSyncIdentity(phoneDevice, databaseURL: phoneURL)
 
             let baseline = NoonmarkEngine()
             let chainID = try baseline.createPoolTask(
@@ -906,6 +1846,8 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let transport = InMemorySyncTransport()
         let macDevice = SyncDeviceID("mac-locked-undo-device")
         let phoneDevice = SyncDeviceID("phone-locked-undo-device")
+        try saveSyncIdentity(macDevice, databaseURL: macURL)
+        try saveSyncIdentity(phoneDevice, databaseURL: phoneURL)
 
         let baseline = NoonmarkEngine()
         let chainID = try baseline.createPoolTask(
@@ -1056,6 +1998,19 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
     }
 
+    private func saveSyncIdentity(
+        _ deviceID: SyncDeviceID,
+        databaseURL: URL
+    ) throws {
+        try SQLiteSyncRepository(databaseURL: databaseURL)
+            .saveDeviceIdentity(
+                SyncDeviceIdentity(
+                    deviceID: deviceID,
+                    createdAt: now
+                )
+            )
+    }
+
     private func assertConvergedNotes(
         _ notes: [TaskNoteEntry],
         oldNoteID: TaskNoteEntryID,
@@ -1122,5 +2077,129 @@ private actor FailingFetchSyncTransport: SyncRecordTransport {
 
     func fetchAll() async throws -> [SyncRecord] {
         throw FailingFetchSyncTransportError.unavailable
+    }
+}
+
+private actor RawCurrentRecordSyncTransport: SyncRecordTransport {
+    private var recordsByID: [SyncRecordID: SyncRecord]
+
+    init(records: [SyncRecord]) {
+        recordsByID = Dictionary(
+            uniqueKeysWithValues: records.map { ($0.id, $0) }
+        )
+    }
+
+    func push(_ records: [SyncRecord]) async throws {
+        for record in records {
+            recordsByID[record.id] = record
+        }
+    }
+
+    func fetchAll() async -> [SyncRecord] {
+        Array(recordsByID.values)
+    }
+}
+
+private actor FailAfterFirstPushSyncTransport: SyncRecordTransport {
+    enum Failure: Error, Equatable {
+        case interrupted
+    }
+
+    private let backing = InMemorySyncTransport()
+    private var completedPushCount = 0
+
+    func push(_ records: [SyncRecord]) async throws {
+        guard completedPushCount == 0 else {
+            throw Failure.interrupted
+        }
+        try await backing.push(records)
+        completedPushCount += 1
+    }
+
+    func fetchAll() async throws -> [SyncRecord] {
+        try await backing.fetchAll()
+    }
+}
+
+private actor ClearAfterFirstPushBeforeNextFetchSyncTransport:
+    SyncRecordTransport
+{
+    private let backing = InMemorySyncTransport()
+    private var shouldClearOnNextFetch = false
+    private var clearedEndpoint = false
+
+    func push(_ records: [SyncRecord]) async throws {
+        try await backing.push(records)
+        guard clearedEndpoint == false else { return }
+        shouldClearOnNextFetch = true
+    }
+
+    func fetchAll() async throws -> [SyncRecord] {
+        if shouldClearOnNextFetch {
+            shouldClearOnNextFetch = false
+            clearedEndpoint = true
+            await backing.removeAll()
+        }
+        return try await backing.fetchAll()
+    }
+
+    func didClearEndpoint() -> Bool {
+        clearedEndpoint
+    }
+}
+
+private actor InjectRemoteRecordsOnSecondFetchSyncTransport:
+    SyncRecordTransport
+{
+    private let backing = InMemorySyncTransport()
+    private let records: [SyncRecord]
+    private var fetchCount = 0
+    private var injectedRemoteRecords = false
+
+    init(records: [SyncRecord]) {
+        self.records = records
+    }
+
+    func push(_ records: [SyncRecord]) async throws {
+        try await backing.push(records)
+    }
+
+    func fetchAll() async throws -> [SyncRecord] {
+        fetchCount += 1
+        if fetchCount == 2 {
+            try await backing.push(records)
+            injectedRemoteRecords = true
+        }
+        return try await backing.fetchAll()
+    }
+
+    func didInjectRemoteRecords() -> Bool {
+        injectedRemoteRecords
+    }
+}
+
+private actor DownloadMutationInjectingTransport:
+    SyncRecordTransport
+{
+    private let backing = InMemorySyncTransport()
+    private let injectMutation: @Sendable () throws -> Void
+    private var fetchCount = 0
+
+    init(
+        injectMutation: @escaping @Sendable () throws -> Void
+    ) {
+        self.injectMutation = injectMutation
+    }
+
+    func push(_ records: [SyncRecord]) async throws {
+        try await backing.push(records)
+    }
+
+    func fetchAll() async throws -> [SyncRecord] {
+        fetchCount += 1
+        if fetchCount == 2 {
+            try injectMutation()
+        }
+        return try await backing.fetchAll()
     }
 }

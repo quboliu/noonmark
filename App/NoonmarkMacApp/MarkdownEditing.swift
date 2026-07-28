@@ -220,7 +220,10 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? MarkdownNSTextView else { return }
-        if textView.string != text {
+        // An IME owns the editor contents while marked text is active.
+        // Replacing the string from SwiftUI during composition cancels the
+        // candidate session before AppKit can commit the selected text.
+        if textView.hasMarkedText() == false, textView.string != text {
             let selection = textView.selectedRange()
             textView.string = text
             textView.setSelectedRange(

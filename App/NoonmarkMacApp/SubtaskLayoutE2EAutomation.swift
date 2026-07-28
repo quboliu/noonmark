@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import NoonmarkCore
 
@@ -22,10 +23,27 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
-    private static let editedTitle = "测试主列表展开子任务可编辑"
+    private struct IMEEditingContext {
+        let input: WindowServerInputDriver
+        let editor: NSTextView
+        let inputIdentifier: String
+        let subtaskID: SubtaskID
+        let initialTitle: String
+        let store: NoonmarkStore
+    }
+
+    private static let unicodeEditedTitle = "测试主列表展开子任务可编辑"
+    private static let imeEditedTitle = "你好，你好。"
 
     private let resultURL: URL
     private let mode: Mode
+    private let imeInputModeID: String?
+
+    private var editedTitle: String {
+        imeInputModeID == nil
+            ? Self.unicodeEditedTitle
+            : Self.imeEditedTitle
+    }
 
     static func fromCommandLine() -> Self? {
         guard let resultPath = AppLaunchArguments.value(
@@ -33,12 +51,16 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         ) else {
             return nil
         }
+        let imeInputModeID = AppLaunchArguments.value(
+            after: "--e2e-subtask-ime-input-mode"
+        )
         if AppLaunchArguments.contains(
             "--e2e-subtask-layout-restart-verify"
         ) {
             return Self(
                 resultURL: URL(fileURLWithPath: resultPath),
-                mode: .verifyRestart
+                mode: .verifyRestart,
+                imeInputModeID: imeInputModeID
             )
         }
         guard let poolScreenshotPath = AppLaunchArguments.value(
@@ -57,7 +79,8 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                 inlineEditScreenshotURL: URL(
                     fileURLWithPath: inlineEditScreenshotPath
                 )
-            )
+            ),
+            imeInputModeID: imeInputModeID
         )
     }
 
@@ -129,7 +152,7 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
 
     private func verifyRestart(on store: NoonmarkStore) async throws {
         let matches = store.engine.subtasks.values.filter {
-            $0.title == Self.editedTitle
+            $0.title == editedTitle
         }
         guard matches.count == 1, let subtask = matches.first,
               let trace = store.engine.traces[subtask.traceID]
@@ -160,9 +183,9 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             else {
                 return false
             }
-            return listEditor.string == Self.editedTitle
-                && detailEditor.string == Self.editedTitle
-                && store.engine.subtasks[subtask.id]?.title == Self.editedTitle
+            return listEditor.string == editedTitle
+                && detailEditor.string == editedTitle
+                && store.engine.subtasks[subtask.id]?.title == editedTitle
         }
     }
 
@@ -266,8 +289,29 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         ) {
             window.firstResponder === editor
         }
+        try await verifyMarkedTextSurvivesSwiftUIReconciliation(
+            editor: editor,
+            inputIdentifier: inputIdentifier,
+            subtaskID: subtaskID,
+            initialTitle: store.engine.subtasks[subtaskID]?.title ?? "",
+            store: store
+        )
         try input.postKey(keyCode: 0, modifiers: .command)
-        try input.typeUnicode(Self.editedTitle)
+        if let imeInputModeID {
+            try await typeWithPhysicalPinyinIME(
+                inputModeID: imeInputModeID,
+                context: IMEEditingContext(
+                    input: input,
+                    editor: editor,
+                    inputIdentifier: inputIdentifier,
+                    subtaskID: subtaskID,
+                    initialTitle: store.engine.subtasks[subtaskID]?.title ?? "",
+                    store: store
+                )
+            )
+        } else {
+            try input.typeUnicode(editedTitle)
+        }
         do {
             try await waitUntil("Day Todo 主列表子任务接收键入后没有更新领域模型") {
                 guard let listEditor = AppViewTreeE2E.view(
@@ -280,10 +324,10 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                 else {
                     return false
                 }
-                return listEditor.string == Self.editedTitle
-                    && detailEditor.string == Self.editedTitle
+                return listEditor.string == editedTitle
+                    && detailEditor.string == editedTitle
                     && store.engine.subtasks[subtaskID]?.title
-                    == Self.editedTitle
+                    == editedTitle
             }
         } catch {
             let listEditorState = (
@@ -304,6 +348,215 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                     + "focused=\(window.firstResponder === editor)"
             )
         }
+    }
+
+    private func verifyMarkedTextSurvivesSwiftUIReconciliation(
+        editor: NSTextView,
+        inputIdentifier: String,
+        subtaskID: SubtaskID,
+        initialTitle: String,
+        store: NoonmarkStore
+    ) async throws {
+        let markedFixture = "nihao"
+        editor.selectAll(nil)
+        editor.setMarkedText(
+            markedFixture,
+            selectedRange: NSRange(
+                location: markedFixture.utf16.count,
+                length: 0
+            ),
+            replacementRange: editor.selectedRange()
+        )
+        guard editor.hasMarkedText(), editor.string == markedFixture else {
+            throw Failure.failed("无法建立子任务 IME marked-text 回归现场")
+        }
+
+        store.objectWillChange.send()
+        try await Task.sleep(for: .milliseconds(160))
+        guard let activeEditor = AppViewTreeE2E.view(
+            identifier: inputIdentifier
+        ) as? NSTextView,
+            activeEditor === editor,
+            activeEditor.hasMarkedText(),
+            activeEditor.string == markedFixture
+        else {
+            throw Failure.failed(
+                "SwiftUI 刷新覆盖了子任务 IME marked-text 组合态"
+            )
+        }
+        guard store.engine.subtasks[subtaskID]?.title == initialTitle else {
+            throw Failure.failed("IME 组合态错误写入了子任务领域模型")
+        }
+
+        editor.setMarkedText(
+            "",
+            selectedRange: NSRange(location: 0, length: 0),
+            replacementRange: editor.markedRange()
+        )
+        editor.string = initialTitle
+        editor.setSelectedRange(
+            NSRange(location: initialTitle.utf16.count, length: 0)
+        )
+        guard editor.hasMarkedText() == false,
+              editor.string == initialTitle,
+              store.engine.subtasks[subtaskID]?.title == initialTitle
+        else {
+            throw Failure.failed("IME 回归探针没有静默恢复子任务编辑现场")
+        }
+    }
+
+    private func typeWithPhysicalPinyinIME(
+        inputModeID: String,
+        context: IMEEditingContext
+    ) async throws {
+        let input = context.input
+        let editor = context.editor
+        let inputIdentifier = context.inputIdentifier
+        let subtaskID = context.subtaskID
+        let initialTitle = context.initialTitle
+        let store = context.store
+        let originalInputSource = TISCopyCurrentKeyboardInputSource()
+            .takeRetainedValue()
+        let selectedInputSource = try inputSource(modeID: inputModeID)
+        guard TISSelectInputSource(selectedInputSource) == noErr else {
+            throw Failure.failed("无法选择真实拼音输入源：\(inputModeID)")
+        }
+        defer {
+            _ = TISSelectInputSource(originalInputSource)
+        }
+        try await waitUntil("真实拼音输入源没有切换成功：\(inputModeID)") {
+            currentInputModeID() == inputModeID
+        }
+
+        try await typePhysicalKeys(
+            [45, 34, 4, 0, 31],
+            using: input
+        )
+        try await waitUntil("物理键入 nihao 后没有形成完整 IME marked-text") {
+            guard let activeEditor = AppViewTreeE2E.view(
+                identifier: inputIdentifier
+            ) as? NSTextView
+            else {
+                return false
+            }
+            return activeEditor.hasMarkedText()
+                && activeEditor.markedRange().length >= 6
+        }
+        try await Task.sleep(for: .milliseconds(160))
+        guard store.engine.subtasks[subtaskID]?.title == initialTitle else {
+            throw Failure.failed(
+                "IME 候选确认前错误写入领域模型："
+                    + "\(store.engine.subtasks[subtaskID]?.title ?? "nil")"
+            )
+        }
+        try input.postKey(keyCode: 18)
+        try await waitForIMECommit(
+            "你好",
+            inputIdentifier: inputIdentifier,
+            subtaskID: subtaskID,
+            store: store
+        )
+
+        try input.postKey(keyCode: 43)
+        try await waitForIMECommit(
+            "你好，",
+            inputIdentifier: inputIdentifier,
+            subtaskID: subtaskID,
+            store: store
+        )
+
+        try await typePhysicalKeys(
+            [45, 34, 4, 0, 31],
+            using: input
+        )
+        try await waitUntil("再次物理键入 nihao 后没有形成完整 IME marked-text") {
+            guard let activeEditor = AppViewTreeE2E.view(
+                identifier: inputIdentifier
+            ) as? NSTextView
+            else {
+                return false
+            }
+            return activeEditor.hasMarkedText()
+                && activeEditor.markedRange().length >= 6
+        }
+        try await Task.sleep(for: .milliseconds(160))
+        try input.postKey(keyCode: 18)
+        try await waitForIMECommit(
+            "你好，你好",
+            inputIdentifier: inputIdentifier,
+            subtaskID: subtaskID,
+            store: store
+        )
+
+        try input.postKey(keyCode: 47)
+        try await waitForIMECommit(
+            Self.imeEditedTitle,
+            inputIdentifier: inputIdentifier,
+            subtaskID: subtaskID,
+            store: store
+        )
+        guard editor.window?.firstResponder is NSTextView else {
+            throw Failure.failed("IME 输入过程中子任务编辑器丢失焦点")
+        }
+    }
+
+    private func typePhysicalKeys(
+        _ keyCodes: [CGKeyCode],
+        using input: WindowServerInputDriver
+    ) async throws {
+        for keyCode in keyCodes {
+            try input.postKey(keyCode: keyCode)
+            try await Task.sleep(for: .milliseconds(45))
+        }
+    }
+
+    private func waitForIMECommit(
+        _ expected: String,
+        inputIdentifier: String,
+        subtaskID: SubtaskID,
+        store: NoonmarkStore
+    ) async throws {
+        try await waitUntil("IME 没有提交预期文本：\(expected)") {
+            guard let activeEditor = AppViewTreeE2E.view(
+                identifier: inputIdentifier
+            ) as? NSTextView
+            else {
+                return false
+            }
+            return activeEditor.hasMarkedText() == false
+                && activeEditor.string == expected
+                && store.engine.subtasks[subtaskID]?.title == expected
+        }
+    }
+
+    private func inputSource(modeID: String) throws -> TISInputSource {
+        let filter = [
+            kTISPropertyInputModeID: modeID as CFString
+        ] as CFDictionary
+        let sources = TISCreateInputSourceList(filter, false)
+            .takeRetainedValue()
+        guard CFArrayGetCount(sources) == 1,
+              let rawSource = CFArrayGetValueAtIndex(sources, 0)
+        else {
+            throw Failure.failed("找不到唯一且已启用的拼音输入源：\(modeID)")
+        }
+        return Unmanaged<TISInputSource>
+            .fromOpaque(rawSource)
+            .takeUnretainedValue()
+    }
+
+    private func currentInputModeID() -> String? {
+        let source = TISCopyCurrentKeyboardInputSource()
+            .takeRetainedValue()
+        guard let property = TISGetInputSourceProperty(
+            source,
+            kTISPropertyInputModeID
+        ) else {
+            return nil
+        }
+        return Unmanaged<CFString>
+            .fromOpaque(property)
+            .takeUnretainedValue() as String
     }
 
     private func verifyLayout(

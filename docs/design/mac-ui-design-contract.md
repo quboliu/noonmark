@@ -20,7 +20,7 @@
 - 通用输入、分段控件、筛选/操作按钮必须使用低对比浅底和发丝线边界；hover 只做轻微底色变化。
 - 任务行、池化行、未来计划行、未完成行、已完成行和日历详情行优先使用线性列表分隔；默认态不得回到重卡片边框。
 - 状态样式必须使用共享映射：待完成使用 accent/accent-soft，已完成使用 ok/ok-soft，未完成使用 warn/warn-soft，已延续、已变更、已回池使用 chip/t2，已废弃使用 chip/t3；任务行、日历、详情栏和轨迹时间线不得各自定义状态颜色。未完成状态色必须使用共享 `Theme.warn` / `Theme.warnSoft`，不得混用侧栏未完成导航橙色。
-- 重复计划父项继续以同一个 `repeat` glyph 表达类型；进行中、即将开始、已结束、已停止的 glyph 分别使用橙、紫、绿、警示红，状态小字使用通过 4.5:1 对比度门槛的对应深色 token。四态映射必须来自 `NoonmarkMacUIContract`，并同时保留可见状态文字与 VoiceOver 状态值，颜色不得成为唯一语义。
+- 重复计划父项以生命周期 glyph 提高扫描区分度：进行中与即将开始使用 `repeat`，已结束使用绿色 `flag.checkered`，已停止使用警示红 `stop.fill`；两个终止态的标题与状态摘要统一使用共享 `text2` 灰色，状态摘要保留半粗体，先以文字层级区分活跃／终止，再以图形和明确文案区分自然结束／人为停止。四态映射必须来自 `NoonmarkMacUIContract`，并同时保留可见状态文字与 VoiceOver 状态值，形状和颜色不得成为唯一语义。
 - 列表选中态必须使用 accent/accent-soft，不得被任务状态色覆盖；状态色只用于 glyph、chip、进度和轨迹节点。
 - 工作区列表行经真实鼠标或键盘选中后，必须只显示 accent-soft 底色与 1 px 低饱和边界；不得叠加 macOS 默认粗 focus effect。键盘 focus、方向键操作和 selected accessibility trait 必须继续保留，不能以移除可聚焦能力换取视觉变轻。
 - 非编辑态完成进度必须使用确定性自绘进度条，100% 使用 ok 绿色，避免 macOS 系统 `ProgressView` 把完成态渲染成灰色。

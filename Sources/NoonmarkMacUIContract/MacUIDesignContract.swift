@@ -262,12 +262,6 @@ public enum MacUIRecurringLifecycleColorMetrics {
         green: 0.305_882,
         blue: 0.901_961
     )
-    public static let endedText = MacUISRGBColor(
-        red: 0.098_039,
-        green: 0.486_275,
-        blue: 0.313_725
-    )
-    public static let stoppedText = stoppedIcon
 
     public static let iconColors = [
         activeIcon,
@@ -275,12 +269,70 @@ public enum MacUIRecurringLifecycleColorMetrics {
         endedIcon,
         stoppedIcon
     ]
-    public static let textColors = [
+    public static let nonterminalTextColors = [
         activeText,
-        upcomingText,
-        endedText,
-        stoppedText
+        upcomingText
     ]
+}
+
+public enum MacUIRecurringTextWeight: String, Sendable {
+    case regular
+    case semibold
+}
+
+public enum MacUIRecurringRowEmphasis: String, Sendable {
+    case primary
+    case muted
+}
+
+public enum MacUIRecurringLifecycleRole: String, Sendable {
+    case active
+    case upcoming
+    case ended
+    case stopped
+}
+
+public struct MacUIRecurringLifecycleStyle: Equatable, Sendable {
+    public let role: MacUIRecurringLifecycleRole
+    public let systemSymbolName: String
+    public let textWeight: MacUIRecurringTextWeight
+    public let rowEmphasis: MacUIRecurringRowEmphasis
+
+    public var verificationText: String {
+        [
+            role.rawValue,
+            systemSymbolName,
+            textWeight.rawValue,
+            rowEmphasis.rawValue
+        ].joined(separator: "|")
+    }
+}
+
+public enum MacUIRecurringLifecycleStyles {
+    public static let active = MacUIRecurringLifecycleStyle(
+        role: .active,
+        systemSymbolName: "repeat",
+        textWeight: .regular,
+        rowEmphasis: .primary
+    )
+    public static let upcoming = MacUIRecurringLifecycleStyle(
+        role: .upcoming,
+        systemSymbolName: "repeat",
+        textWeight: .regular,
+        rowEmphasis: .primary
+    )
+    public static let ended = MacUIRecurringLifecycleStyle(
+        role: .ended,
+        systemSymbolName: "flag.checkered",
+        textWeight: .semibold,
+        rowEmphasis: .muted
+    )
+    public static let stopped = MacUIRecurringLifecycleStyle(
+        role: .stopped,
+        systemSymbolName: "stop.fill",
+        textWeight: .semibold,
+        rowEmphasis: .muted
+    )
 }
 
 public enum MacUITypographyMetrics {

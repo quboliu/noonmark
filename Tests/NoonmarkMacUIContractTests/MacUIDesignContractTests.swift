@@ -199,7 +199,7 @@ final class MacUIDesignContractTests: XCTestCase {
         let recurringIconColors =
             MacUIRecurringLifecycleColorMetrics.iconColors
         let recurringTextColors =
-            MacUIRecurringLifecycleColorMetrics.textColors
+            MacUIRecurringLifecycleColorMetrics.nonterminalTextColors
         XCTAssertGreaterThanOrEqual(
             MacUIAccessibleColorMetrics.success.contrastRatio(against: white),
             MacUIAccessibleColorMetrics.minimumSmallTextContrast
@@ -224,6 +224,16 @@ final class MacUIDesignContractTests: XCTestCase {
             MacUIAccessibleColorMetrics.warmPaperPlaceholderText.red,
             MacUIAccessibleColorMetrics.warmPaperTertiaryText.red
         )
+        for (index, iconColor) in recurringIconColors.enumerated() {
+            for otherIndex in recurringIconColors.indices
+                where otherIndex > index
+            {
+                XCTAssertNotEqual(
+                    iconColor,
+                    recurringIconColors[otherIndex]
+                )
+            }
+        }
         for (index, textColor) in recurringTextColors.enumerated() {
             XCTAssertGreaterThanOrEqual(
                 textColor.contrastRatio(
@@ -239,15 +249,74 @@ final class MacUIDesignContractTests: XCTestCase {
             )
             for otherIndex in recurringTextColors.indices where otherIndex > index {
                 XCTAssertNotEqual(
-                    recurringIconColors[index],
-                    recurringIconColors[otherIndex]
-                )
-                XCTAssertNotEqual(
                     textColor,
                     recurringTextColors[otherIndex]
                 )
             }
         }
+    }
+
+    func testRecurringTerminalLifecycleUsesDistinctSemanticSymbols() {
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.active.systemSymbolName,
+            "repeat"
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.upcoming.systemSymbolName,
+            "repeat"
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.ended.systemSymbolName,
+            "flag.checkered"
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.stopped.systemSymbolName,
+            "stop.fill"
+        )
+        XCTAssertNotEqual(
+            MacUIRecurringLifecycleStyles.ended.systemSymbolName,
+            MacUIRecurringLifecycleStyles.stopped.systemSymbolName
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.active.textWeight,
+            .regular
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.upcoming.textWeight,
+            .regular
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.ended.textWeight,
+            .semibold
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.stopped.textWeight,
+            .semibold
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.active.rowEmphasis,
+            .primary
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.upcoming.rowEmphasis,
+            .primary
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.ended.rowEmphasis,
+            .muted
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.stopped.rowEmphasis,
+            .muted
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.ended.verificationText,
+            "ended|flag.checkered|semibold|muted"
+        )
+        XCTAssertEqual(
+            MacUIRecurringLifecycleStyles.stopped.verificationText,
+            "stopped|stop.fill|semibold|muted"
+        )
     }
 
     func testCurrentContractCoversAllTopLevelPages() {

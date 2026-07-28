@@ -655,7 +655,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             return AppViewTreeE2E.verificationText(for: view)
                 == expectation.lifecycleSummary
                 && AppViewTreeE2E.verificationText(for: iconView)
-                == expectation.lifecycleColorToken
+                == expectation.lifecycleIconVerification
         }
         let expectedListVerificationText =
             presentationExpectations.map {
@@ -845,7 +845,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 DemoCyclePresentationExpectation(
                     title: "每日产品复盘",
                     lifecycleSummary: "进行中 · 下次 \(today)",
-                    lifecycleColorToken: "active",
+                    lifecycleIconVerification:
+                    MacUIRecurringLifecycleStyles.active.verificationText,
                     expectsPlanEditing: true,
                     expectsStop: true
                 ),
@@ -853,21 +854,24 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                     title: "准备下周工作回顾",
                     lifecycleSummary:
                     "即将开始 · \(upcomingDate)开始",
-                    lifecycleColorToken: "upcoming",
+                    lifecycleIconVerification:
+                    MacUIRecurringLifecycleStyles.upcoming.verificationText,
                     expectsPlanEditing: true,
                     expectsStop: true
                 ),
                 DemoCyclePresentationExpectation(
                     title: "完成首次晨间回顾",
                     lifecycleSummary: "已结束 · 完成 1/1 次",
-                    lifecycleColorToken: "ended",
+                    lifecycleIconVerification:
+                    MacUIRecurringLifecycleStyles.ended.verificationText,
                     expectsPlanEditing: false,
                     expectsStop: false
                 ),
                 DemoCyclePresentationExpectation(
                     title: "暂停周报打磨",
                     lifecycleSummary: "已停止 · 停止于 \(today)",
-                    lifecycleColorToken: "stopped",
+                    lifecycleIconVerification:
+                    MacUIRecurringLifecycleStyles.stopped.verificationText,
                     expectsPlanEditing: false,
                     expectsStop: false
                 )
@@ -877,7 +881,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 DemoCyclePresentationExpectation(
                     title: "每日产品复盘",
                     lifecycleSummary: "Active · Next \(today)",
-                    lifecycleColorToken: "active",
+                    lifecycleIconVerification:
+                    MacUIRecurringLifecycleStyles.active.verificationText,
                     expectsPlanEditing: true,
                     expectsStop: true
                 ),
@@ -885,21 +890,24 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                     title: "准备下周工作回顾",
                     lifecycleSummary:
                     "Upcoming · Starts \(upcomingDate)",
-                    lifecycleColorToken: "upcoming",
+                    lifecycleIconVerification:
+                    MacUIRecurringLifecycleStyles.upcoming.verificationText,
                     expectsPlanEditing: true,
                     expectsStop: true
                 ),
                 DemoCyclePresentationExpectation(
                     title: "完成首次晨间回顾",
                     lifecycleSummary: "Ended · 1/1 completed",
-                    lifecycleColorToken: "ended",
+                    lifecycleIconVerification:
+                    MacUIRecurringLifecycleStyles.ended.verificationText,
                     expectsPlanEditing: false,
                     expectsStop: false
                 ),
                 DemoCyclePresentationExpectation(
                     title: "暂停周报打磨",
                     lifecycleSummary: "Stopped · Stopped \(today)",
-                    lifecycleColorToken: "stopped",
+                    lifecycleIconVerification:
+                    MacUIRecurringLifecycleStyles.stopped.verificationText,
                     expectsPlanEditing: false,
                     expectsStop: false
                 )
@@ -2217,7 +2225,7 @@ private struct DemoCycleCheckContext {
 private struct DemoCyclePresentationExpectation {
     let title: String
     let lifecycleSummary: String
-    let lifecycleColorToken: String
+    let lifecycleIconVerification: String
     let expectsPlanEditing: Bool
     let expectsStop: Bool
 }

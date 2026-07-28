@@ -194,10 +194,4 @@ enum Theme {
     static let recurringUpcomingText = color(
         MacUIRecurringLifecycleColorMetrics.upcomingText
     )
-    static let recurringEndedText = color(
-        MacUIRecurringLifecycleColorMetrics.endedText
-    )
-    static let recurringStoppedText = color(
-        MacUIRecurringLifecycleColorMetrics.stoppedText
-    )
 }

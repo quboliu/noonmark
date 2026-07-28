@@ -1,4 +1,5 @@
 import NoonmarkCore
+import NoonmarkMacUIContract
 import SwiftUI
 
 struct TaskCycleTrackRow: View {
@@ -18,27 +19,23 @@ struct TaskCycleTrackRow: View {
         switch track.lifecycle {
         case .active:
             TaskCycleLifecycleVisualStyle(
-                iconColor: Theme.recurringActiveIcon,
-                textColor: Theme.recurringActiveText,
-                semanticToken: "active"
+                contract: MacUIRecurringLifecycleStyles.active,
+                iconColor: Theme.recurringActiveIcon
             )
         case .upcoming:
             TaskCycleLifecycleVisualStyle(
-                iconColor: Theme.recurringUpcomingIcon,
-                textColor: Theme.recurringUpcomingText,
-                semanticToken: "upcoming"
+                contract: MacUIRecurringLifecycleStyles.upcoming,
+                iconColor: Theme.recurringUpcomingIcon
             )
         case .ended:
             TaskCycleLifecycleVisualStyle(
-                iconColor: Theme.recurringEndedIcon,
-                textColor: Theme.recurringEndedText,
-                semanticToken: "ended"
+                contract: MacUIRecurringLifecycleStyles.ended,
+                iconColor: Theme.recurringEndedIcon
             )
         case .stopped:
             TaskCycleLifecycleVisualStyle(
-                iconColor: Theme.recurringStoppedIcon,
-                textColor: Theme.recurringStoppedText,
-                semanticToken: "stopped"
+                contract: MacUIRecurringLifecycleStyles.stopped,
+                iconColor: Theme.recurringStoppedIcon
             )
         }
     }
@@ -72,7 +69,8 @@ struct TaskCycleTrackRow: View {
                 } label: {
                     HStack(spacing: 10) {
                     PlanningGlyph(
-                        systemName: "repeat",
+                        systemName:
+                        lifecycleStyle.contract.systemSymbolName,
                         color: lifecycleStyle.iconColor
                     )
                     .background {
@@ -80,14 +78,14 @@ struct TaskCycleTrackRow: View {
                             identifier:
                             "\(accessibilityIdentifier).lifecycle-icon",
                             verificationText:
-                            lifecycleStyle.semanticToken
+                            lifecycleStyle.contract.verificationText
                         )
                     }
                     MarkdownInlineText(
                         store.copy.displayTaskTitle(track.title)
                     )
                     .font(.noonmarkSystem(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text1)
+                    .foregroundStyle(lifecycleStyle.titleColor)
                     .lineLimit(1)
                     .layoutPriority(1)
 
@@ -114,8 +112,14 @@ struct TaskCycleTrackRow: View {
                     Spacer(minLength: 8)
 
                     Text(lifecycleSummary)
-                    .font(.noonmarkSystem(size: 10.5))
-                    .foregroundStyle(lifecycleStyle.textColor)
+                    .font(
+                        .noonmarkSystem(
+                            size: 10.5,
+                            weight:
+                            lifecycleStyle.contract.textWeight.fontWeight
+                        )
+                    )
+                    .foregroundStyle(lifecycleStyle.summaryColor)
                     .monospacedDigit()
                     .lineLimit(1)
                     .layoutPriority(2)
@@ -235,9 +239,39 @@ struct TaskCycleTrackRow: View {
 }
 
 private struct TaskCycleLifecycleVisualStyle {
+    let contract: MacUIRecurringLifecycleStyle
     let iconColor: Color
-    let textColor: Color
-    let semanticToken: String
+
+    var titleColor: Color {
+        switch contract.rowEmphasis {
+        case .primary:
+            Theme.text1
+        case .muted:
+            Theme.text2
+        }
+    }
+
+    var summaryColor: Color {
+        switch contract.role {
+        case .active:
+            Theme.recurringActiveText
+        case .upcoming:
+            Theme.recurringUpcomingText
+        case .ended, .stopped:
+            Theme.text2
+        }
+    }
+}
+
+private extension MacUIRecurringTextWeight {
+    var fontWeight: Font.Weight {
+        switch self {
+        case .regular:
+            .regular
+        case .semibold:
+            .semibold
+        }
+    }
 }
 
 private struct TaskCycleTrackDayButton: View {

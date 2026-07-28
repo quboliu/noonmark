@@ -799,7 +799,10 @@ struct TaskRow: View {
             if expanded {
                 VStack(spacing: 6) {
                     ForEach(subtasks, id: \.id) { subtask in
-                        SubtaskRow(subtask: subtask)
+                        SubtaskRow(
+                            subtask: subtask,
+                            surface: .dayList
+                        )
                     }
                 }
                 .padding(.top, 1)
@@ -998,9 +1001,28 @@ struct ChangedSourceButton: View {
     }
 }
 
+enum SubtaskRowSurface {
+    case dayList
+    case dayDetail
+
+    var accessibilityNamespace: String {
+        switch self {
+        case .dayList:
+            "day-list"
+        case .dayDetail:
+            "day"
+        }
+    }
+}
+
 struct SubtaskRow: View {
     @EnvironmentObject private var store: NoonmarkStore
     let subtask: Subtask
+    let surface: SubtaskRowSurface
+
+    private var accessibilityPrefix: String {
+        "\(surface.accessibilityNamespace).subtask.\(subtask.id.description)"
+    }
 
     var canToggle: Bool {
         store.canToggleSubtask(subtask)
@@ -1032,14 +1054,14 @@ struct SubtaskRow: View {
                     : store.copy.markComplete
             )
             .accessibilityIdentifier(
-                "day.subtask.\(subtask.id.description).completion"
+                "\(accessibilityPrefix).completion"
             )
             .disabled(canToggle == false)
 
             EditableSubtaskTitle(
                 title: subtask.title,
                 editable: canEdit,
-                accessibilityIdentifier: "day.subtask.\(subtask.id.description).title"
+                accessibilityIdentifier: "\(accessibilityPrefix).title"
             ) {
                 store.renameSubtask(
                     subtask.id,
@@ -1105,11 +1127,11 @@ struct SubtaskRow: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(store.copy.removeSubtaskAction)
                 .accessibilityIdentifier(
-                    "day.subtask.\(subtask.id.description).delete.ax"
+                    "\(accessibilityPrefix).delete.ax"
                 )
                 .background {
                     AppE2EViewAnchor(
-                        identifier: "day.subtask.\(subtask.id.description).delete"
+                        identifier: "\(accessibilityPrefix).delete"
                     )
                 }
                 .help(store.copy.removeSubtaskAction)
@@ -1117,7 +1139,7 @@ struct SubtaskRow: View {
         }
         .background {
             AppE2EViewAnchor(
-                identifier: "day.subtask.\(subtask.id.description).row"
+                identifier: "\(accessibilityPrefix).row"
             )
         }
     }
@@ -1136,6 +1158,7 @@ struct EditableSubtaskTitle: View {
 
     @State private var draft: String
     @State private var pendingPersistedTitle: String?
+    @State private var persistenceRevision: UInt64 = 0
 
     init(
         title: String,
@@ -1168,6 +1191,7 @@ struct EditableSubtaskTitle: View {
                     pendingPersistedTitle = nil
                     return
                 }
+                persistenceRevision &+= 1
                 if draft != newValue {
                     draft = newValue
                 }
@@ -1182,15 +1206,25 @@ struct EditableSubtaskTitle: View {
     }
 
     private func persistNonemptyDraft(_ value: String) {
+        persistenceRevision &+= 1
+        let revision = persistenceRevision
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.isEmpty == false, normalized != title else { return }
-        pendingPersistedTitle = normalized
-        onChange(normalized)
+        Task { @MainActor in
+            // NSTextView reports edits while SwiftUI is reconciling its
+            // representable. Publish only after that update finishes, and
+            // discard an older draft if another edit arrived first.
+            await Task.yield()
+            guard persistenceRevision == revision else { return }
+            pendingPersistedTitle = normalized
+            onChange(normalized)
+        }
     }
 
     private func finishEditing() {
         let normalized = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.isEmpty == false else {
+            persistenceRevision &+= 1
             draft = title
             return
         }

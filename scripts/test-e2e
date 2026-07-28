@@ -4151,23 +4151,63 @@ run_pool_list_layout_probe() {
 
 run_subtask_layout_probe() {
   local layout_dir="artifacts/e2e-subtask-layout"
-  local layout_result="$layout_dir/result.txt"
-  local layout_screenshot="$layout_dir/pool-detail.png"
-  local layout_log="$layout_dir/app.log"
+  local layout_db="$layout_dir/Noonmark.sqlite"
+  local exercise_result="$layout_dir/exercise-result.txt"
+  local restart_result="$layout_dir/restart-result.txt"
+  local pool_screenshot="$layout_dir/pool-detail.png"
+  local inline_edit_screenshot="$layout_dir/day-inline-edit.png"
+  local exercise_log="$layout_dir/exercise.log"
+  local restart_log="$layout_dir/restart.log"
+  local persisted
 
   rm -rf "$layout_dir"
   mkdir -p "$layout_dir"
 
-  run_terminating_ui_probe \
-    "pool and Day Todo multiline subtask layout" \
-    "$layout_result" \
-    "$layout_log" \
-    --ephemeral \
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "pool and Day Todo multiline subtask layout and inline editing" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$layout_db" \
     --page pool \
-    --e2e-subtask-layout-result-url "$PWD/$layout_result" \
-    --e2e-subtask-layout-screenshot-url "$PWD/$layout_screenshot"
+    --e2e-fixed-instant 2026-07-28T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-subtask-layout-result-url "$PWD/$exercise_result" \
+    --e2e-subtask-layout-screenshot-url "$PWD/$pool_screenshot" \
+    --e2e-subtask-inline-edit-screenshot-url "$PWD/$inline_edit_screenshot"
 
-  echo "E2E multiline subtask layout: $layout_result $layout_screenshot"
+  if [[ ! -s "$pool_screenshot" || ! -s "$inline_edit_screenshot" ]]; then
+    echo "subtask layout screenshots were not created" >&2
+    exit 1
+  fi
+
+  persisted="$(sqlite3 -noheader "$layout_db" "
+    SELECT count(*)
+    FROM subtasks AS subtask
+    JOIN day_traces AS trace
+      ON trace.id = subtask.trace_id
+    WHERE subtask.title = '测试主列表展开子任务可编辑'
+      AND trace.date = '2026-07-28'
+      AND trace.status = 'pending';
+  ")"
+  if [[ "$persisted" != "1" ]]; then
+    echo "subtask inline edit SQLite probe failed: ${persisted:-missing}" >&2
+    exit 1
+  fi
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "Day Todo inline subtask title restart readback" \
+    "$restart_result" \
+    "$restart_log" \
+    --data-url "$PWD/$layout_db" \
+    --page day \
+    --e2e-fixed-instant 2026-07-28T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-subtask-layout-restart-verify \
+    --e2e-subtask-layout-result-url "$PWD/$restart_result"
+
+  echo "E2E multiline subtask layout, inline editing, SQLite, and restart: $layout_db $pool_screenshot $inline_edit_screenshot"
 }
 
 run_pool_context_menu_action_probe() {

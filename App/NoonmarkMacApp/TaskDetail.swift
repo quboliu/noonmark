@@ -81,7 +81,10 @@ struct TaskDetail: View {
             DetailSection(store.copy.subtasksTitle, showsTitle: false) {
                 VStack(spacing: 6) {
                     ForEach(subtasks, id: \.id) { subtask in
-                        SubtaskRow(subtask: subtask)
+                        SubtaskRow(
+                            subtask: subtask,
+                            surface: .dayDetail
+                        )
                     }
                     if subtasks.isEmpty && !canAddSubtask {
                         Text(store.copy.noSubtasks)

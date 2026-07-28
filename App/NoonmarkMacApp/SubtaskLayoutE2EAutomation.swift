@@ -4,6 +4,14 @@ import NoonmarkCore
 
 @MainActor
 struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
+    private enum Mode {
+        case exercise(
+            poolScreenshotURL: URL,
+            inlineEditScreenshotURL: URL
+        )
+        case verifyRestart
+    }
+
     private enum Failure: LocalizedError {
         case failed(String)
 
@@ -14,56 +22,147 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
+    private static let editedTitle = "测试主列表展开子任务可编辑"
+
     private let resultURL: URL
-    private let screenshotURL: URL
+    private let mode: Mode
 
     static func fromCommandLine() -> Self? {
         guard let resultPath = AppLaunchArguments.value(
             after: "--e2e-subtask-layout-result-url"
-        ), let screenshotPath = AppLaunchArguments.value(
+        ) else {
+            return nil
+        }
+        if AppLaunchArguments.contains(
+            "--e2e-subtask-layout-restart-verify"
+        ) {
+            return Self(
+                resultURL: URL(fileURLWithPath: resultPath),
+                mode: .verifyRestart
+            )
+        }
+        guard let poolScreenshotPath = AppLaunchArguments.value(
             after: "--e2e-subtask-layout-screenshot-url"
+        ), let inlineEditScreenshotPath = AppLaunchArguments.value(
+            after: "--e2e-subtask-inline-edit-screenshot-url"
         ) else {
             return nil
         }
         return Self(
             resultURL: URL(fileURLWithPath: resultPath),
-            screenshotURL: URL(fileURLWithPath: screenshotPath)
+            mode: .exercise(
+                poolScreenshotURL: URL(
+                    fileURLWithPath: poolScreenshotPath
+                ),
+                inlineEditScreenshotURL: URL(
+                    fileURLWithPath: inlineEditScreenshotPath
+                )
+            )
         )
     }
 
     func run(on store: NoonmarkStore) {
         Task { @MainActor in
             do {
-                let chainID = try preparePoolFixture(on: store)
-                let plannedIDs = try plannedSubtaskIDs(
-                    chainID: chainID,
-                    store: store
-                )
-                try await verifyLayout(
-                    namespace: "pool",
-                    itemIDs: plannedIDs.map(\.description),
-                    newEditorIdentifier: "pool.subtask.\(chainID.description).new"
-                )
-                try captureMainWindow(to: screenshotURL)
-
-                store.schedulePoolTask(chainID, date: store.today)
-                guard let traceID = store.selectedTraceID else {
-                    throw Failure.failed("计划子任务排期后没有选中 Day Todo 轨迹")
+                switch mode {
+                case let .exercise(
+                    poolScreenshotURL,
+                    inlineEditScreenshotURL
+                ):
+                    try await exercise(
+                        on: store,
+                        poolScreenshotURL: poolScreenshotURL,
+                        inlineEditScreenshotURL: inlineEditScreenshotURL
+                    )
+                case .verifyRestart:
+                    try await verifyRestart(on: store)
                 }
-                let subtaskIDs = store.subtasks(for: traceID).map(\.id.description)
-                try await verifyLayout(
-                    namespace: "day",
-                    itemIDs: subtaskIDs,
-                    newEditorIdentifier: "day.subtask.\(traceID.description).new"
-                )
-
                 try writeResult("ok")
             } catch {
                 AppViewTreeE2E.writeDump(beside: resultURL)
-                try? captureMainWindow(to: screenshotURL)
+                if case let .exercise(_, inlineEditScreenshotURL) = mode {
+                    try? captureMainWindow(to: inlineEditScreenshotURL)
+                }
                 try? writeResult("failed: \(error.localizedDescription)")
             }
             NSApp.terminate(nil)
+        }
+    }
+
+    private func exercise(
+        on store: NoonmarkStore,
+        poolScreenshotURL: URL,
+        inlineEditScreenshotURL: URL
+    ) async throws {
+        let chainID = try preparePoolFixture(on: store)
+        let plannedIDs = try plannedSubtaskIDs(
+            chainID: chainID,
+            store: store
+        )
+        try await verifyLayout(
+            namespace: "pool",
+            itemIDs: plannedIDs.map(\.description),
+            newEditorIdentifier: "pool.subtask.\(chainID.description).new"
+        )
+        try captureMainWindow(to: poolScreenshotURL)
+
+        store.schedulePoolTask(chainID, date: store.today)
+        guard let traceID = store.selectedTraceID else {
+            throw Failure.failed("计划子任务排期后没有选中 Day Todo 轨迹")
+        }
+        let subtaskIDs = store.subtasks(for: traceID).map(\.id.description)
+        try await verifyLayout(
+            namespace: "day",
+            itemIDs: subtaskIDs,
+            newEditorIdentifier: "day.subtask.\(traceID.description).new"
+        )
+        store.expandedTraceIDs.insert(traceID)
+        try await verifyInlineEditing(
+            subtaskID: try firstSubtaskID(
+                traceID: traceID,
+                store: store
+            ),
+            store: store
+        )
+        try captureMainWindow(to: inlineEditScreenshotURL)
+    }
+
+    private func verifyRestart(on store: NoonmarkStore) async throws {
+        let matches = store.engine.subtasks.values.filter {
+            $0.title == Self.editedTitle
+        }
+        guard matches.count == 1, let subtask = matches.first,
+              let trace = store.engine.traces[subtask.traceID]
+        else {
+            throw Failure.failed(
+                "重启后没有唯一回读已编辑子任务：\(matches.count)"
+            )
+        }
+
+        store.page = .day
+        store.selectedDate = trace.date
+        store.selectedCalendarDate = trace.date
+        store.isDetailRailExpanded = true
+        store.selectTrace(trace.id)
+        store.expandedTraceIDs.insert(trace.id)
+
+        let listInputIdentifier =
+            "day-list.subtask.\(subtask.id.description).title.input"
+        let detailInputIdentifier =
+            "day.subtask.\(subtask.id.description).title.input"
+        try await waitUntil("重启后主列表与详情栏没有同时回读子任务标题") {
+            guard let listEditor = AppViewTreeE2E.view(
+                identifier: listInputIdentifier
+            ) as? NSTextView,
+                let detailEditor = AppViewTreeE2E.view(
+                    identifier: detailInputIdentifier
+                ) as? NSTextView
+            else {
+                return false
+            }
+            return listEditor.string == Self.editedTitle
+                && detailEditor.string == Self.editedTitle
+                && store.engine.subtasks[subtask.id]?.title == Self.editedTitle
         }
     }
 
@@ -108,6 +207,103 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("任务池布局 fixture 子任务数量错误：\(ids.count)")
         }
         return ids
+    }
+
+    private func firstSubtaskID(
+        traceID: DayTraceID,
+        store: NoonmarkStore
+    ) throws -> SubtaskID {
+        guard let subtaskID = store.subtasks(for: traceID).first?.id else {
+            throw Failure.failed("Day Todo 主列表缺少可编辑子任务")
+        }
+        return subtaskID
+    }
+
+    private func verifyInlineEditing(
+        subtaskID: SubtaskID,
+        store: NoonmarkStore
+    ) async throws {
+        let surfaceIdentifier =
+            "day-list.subtask.\(subtaskID.description).title"
+        let inputIdentifier = "\(surfaceIdentifier).input"
+        var surface: NSView?
+        var editor: NSTextView?
+
+        try await waitUntil("Day Todo 主列表展开后没有形成子任务编辑器") {
+            surface = AppViewTreeE2E.view(identifier: surfaceIdentifier)
+            editor = AppViewTreeE2E.view(
+                identifier: inputIdentifier
+            ) as? NSTextView
+            return surface != nil && editor != nil
+        }
+        guard let surface, let editor, let window = surface.window else {
+            throw Failure.failed("Day Todo 主列表子任务编辑器在点击前消失")
+        }
+        let input = try WindowServerInputDriver()
+        guard AppViewTreeE2E.activateMainWindow() else {
+            throw Failure.failed("Day Todo 主列表子任务编辑时主窗口无法激活")
+        }
+        let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
+            guard surface.window === window,
+                  surface.isHiddenOrHasHiddenAncestor == false
+            else {
+                throw Failure.failed("Day Todo 主列表子任务点击目标发生变化")
+            }
+            let point = surface.convert(
+                NSPoint(x: surface.bounds.midX, y: surface.bounds.midY),
+                to: nil
+            )
+            return try input.pointerCoordinate(windowPoint: point, in: window)
+        }
+        try await input.postClick(
+            at: try resolveTarget(),
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
+        try await waitUntil(
+            "Day Todo 主列表子任务点击后没有获得输入焦点；"
+                + "firstResponder=\(String(describing: window.firstResponder))"
+        ) {
+            window.firstResponder === editor
+        }
+        try input.postKey(keyCode: 0, modifiers: .command)
+        try input.typeUnicode(Self.editedTitle)
+        do {
+            try await waitUntil("Day Todo 主列表子任务接收键入后没有更新领域模型") {
+                guard let listEditor = AppViewTreeE2E.view(
+                    identifier: inputIdentifier
+                ) as? NSTextView,
+                    let detailEditor = AppViewTreeE2E.view(
+                        identifier:
+                        "day.subtask.\(subtaskID.description).title.input"
+                    ) as? NSTextView
+                else {
+                    return false
+                }
+                return listEditor.string == Self.editedTitle
+                    && detailEditor.string == Self.editedTitle
+                    && store.engine.subtasks[subtaskID]?.title
+                    == Self.editedTitle
+            }
+        } catch {
+            let listEditorState = (
+                AppViewTreeE2E.view(
+                    identifier: inputIdentifier
+                ) as? NSTextView
+            )?.string ?? "nil"
+            let detailEditorState = (
+                AppViewTreeE2E.view(
+                    identifier:
+                    "day.subtask.\(subtaskID.description).title.input"
+                ) as? NSTextView
+            )?.string ?? "nil"
+            throw Failure.failed(
+                "Day Todo 主列表子任务连续输入失败：target=\(editor.string)，"
+                    + "list=\(listEditorState)，detail=\(detailEditorState)，model="
+                    + "\(store.engine.subtasks[subtaskID]?.title ?? "nil")，"
+                    + "focused=\(window.firstResponder === editor)"
+            )
+        }
     }
 
     private func verifyLayout(

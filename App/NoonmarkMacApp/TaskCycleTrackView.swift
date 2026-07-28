@@ -14,14 +14,32 @@ struct TaskCycleTrackRow: View {
         Theme.navRecurring
     }
 
-    private var lifecycleColor: Color {
+    private var lifecycleStyle: TaskCycleLifecycleVisualStyle {
         switch track.lifecycle {
         case .active:
-            Theme.navRecurring
+            TaskCycleLifecycleVisualStyle(
+                iconColor: Theme.recurringActiveIcon,
+                textColor: Theme.recurringActiveText,
+                semanticToken: "active"
+            )
         case .upcoming:
-            Theme.navFuture
-        case .ended, .stopped:
-            Theme.text3
+            TaskCycleLifecycleVisualStyle(
+                iconColor: Theme.recurringUpcomingIcon,
+                textColor: Theme.recurringUpcomingText,
+                semanticToken: "upcoming"
+            )
+        case .ended:
+            TaskCycleLifecycleVisualStyle(
+                iconColor: Theme.recurringEndedIcon,
+                textColor: Theme.recurringEndedText,
+                semanticToken: "ended"
+            )
+        case .stopped:
+            TaskCycleLifecycleVisualStyle(
+                iconColor: Theme.recurringStoppedIcon,
+                textColor: Theme.recurringStoppedText,
+                semanticToken: "stopped"
+            )
         }
     }
 
@@ -55,8 +73,16 @@ struct TaskCycleTrackRow: View {
                     HStack(spacing: 10) {
                     PlanningGlyph(
                         systemName: "repeat",
-                        color: accent
+                        color: lifecycleStyle.iconColor
                     )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier:
+                            "\(accessibilityIdentifier).lifecycle-icon",
+                            verificationText:
+                            lifecycleStyle.semanticToken
+                        )
+                    }
                     MarkdownInlineText(
                         store.copy.displayTaskTitle(track.title)
                     )
@@ -89,7 +115,7 @@ struct TaskCycleTrackRow: View {
 
                     Text(lifecycleSummary)
                     .font(.noonmarkSystem(size: 10.5))
-                    .foregroundStyle(lifecycleColor)
+                    .foregroundStyle(lifecycleStyle.textColor)
                     .monospacedDigit()
                     .lineLimit(1)
                     .layoutPriority(2)
@@ -107,6 +133,7 @@ struct TaskCycleTrackRow: View {
                 .accessibilityLabel(
                     store.copy.displayTaskTitle(track.title)
                 )
+                .accessibilityValue(lifecycleSummary)
                 .accessibilityIdentifier(
                     "\(accessibilityIdentifier).detail"
                 )
@@ -205,6 +232,12 @@ struct TaskCycleTrackRow: View {
             store.expandedTaskCycleSeriesIDs.insert(track.id)
         }
     }
+}
+
+private struct TaskCycleLifecycleVisualStyle {
+    let iconColor: Color
+    let textColor: Color
+    let semanticToken: String
 }
 
 private struct TaskCycleTrackDayButton: View {

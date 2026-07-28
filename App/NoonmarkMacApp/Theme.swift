@@ -176,4 +176,28 @@ enum Theme {
     static let navCalendar = hex(0xD1477A)
     static let navZhulong = hex(0x7C5CFF)
     static let navSettings = hex(0x64748B)
+    static let recurringActiveIcon = color(
+        MacUIRecurringLifecycleColorMetrics.activeIcon
+    )
+    static let recurringUpcomingIcon = color(
+        MacUIRecurringLifecycleColorMetrics.upcomingIcon
+    )
+    static let recurringEndedIcon = color(
+        MacUIRecurringLifecycleColorMetrics.endedIcon
+    )
+    static let recurringStoppedIcon = color(
+        MacUIRecurringLifecycleColorMetrics.stoppedIcon
+    )
+    static let recurringActiveText = color(
+        MacUIRecurringLifecycleColorMetrics.activeText
+    )
+    static let recurringUpcomingText = color(
+        MacUIRecurringLifecycleColorMetrics.upcomingText
+    )
+    static let recurringEndedText = color(
+        MacUIRecurringLifecycleColorMetrics.endedText
+    )
+    static let recurringStoppedText = color(
+        MacUIRecurringLifecycleColorMetrics.stoppedText
+    )
 }

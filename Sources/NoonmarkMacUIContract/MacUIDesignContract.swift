@@ -230,6 +230,59 @@ public enum MacUIAccessibleColorMetrics {
     public static let warmPaperBackground = MacUISRGBColor(red: 0.997, green: 0.992, blue: 0.982)
 }
 
+public enum MacUIRecurringLifecycleColorMetrics {
+    public static let activeIcon = MacUISRGBColor(
+        red: 0.721_569,
+        green: 0.415_686,
+        blue: 0.086_275
+    )
+    public static let upcomingIcon = MacUISRGBColor(
+        red: 0.486_275,
+        green: 0.360_784,
+        blue: 1
+    )
+    public static let endedIcon = MacUISRGBColor(
+        red: 0.121_569,
+        green: 0.541_176,
+        blue: 0.356_863
+    )
+    public static let stoppedIcon = MacUISRGBColor(
+        red: 0.705_882,
+        green: 0.301_961,
+        blue: 0.203_922
+    )
+
+    public static let activeText = MacUISRGBColor(
+        red: 0.650_980,
+        green: 0.368_627,
+        blue: 0.062_745
+    )
+    public static let upcomingText = MacUISRGBColor(
+        red: 0.439_216,
+        green: 0.305_882,
+        blue: 0.901_961
+    )
+    public static let endedText = MacUISRGBColor(
+        red: 0.098_039,
+        green: 0.486_275,
+        blue: 0.313_725
+    )
+    public static let stoppedText = stoppedIcon
+
+    public static let iconColors = [
+        activeIcon,
+        upcomingIcon,
+        endedIcon,
+        stoppedIcon
+    ]
+    public static let textColors = [
+        activeText,
+        upcomingText,
+        endedText,
+        stoppedText
+    ]
+}
+
 public enum MacUITypographyMetrics {
     public static let scale = 1.0
     public static let compactThreshold = 10.5

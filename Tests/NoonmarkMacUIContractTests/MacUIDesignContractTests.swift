@@ -196,6 +196,10 @@ final class MacUIDesignContractTests: XCTestCase {
 
     func testSmallTextAndSemanticSuccessColorsMeetContrastContract() {
         let white = MacUISRGBColor(red: 1, green: 1, blue: 1)
+        let recurringIconColors =
+            MacUIRecurringLifecycleColorMetrics.iconColors
+        let recurringTextColors =
+            MacUIRecurringLifecycleColorMetrics.textColors
         XCTAssertGreaterThanOrEqual(
             MacUIAccessibleColorMetrics.success.contrastRatio(against: white),
             MacUIAccessibleColorMetrics.minimumSmallTextContrast
@@ -220,6 +224,30 @@ final class MacUIDesignContractTests: XCTestCase {
             MacUIAccessibleColorMetrics.warmPaperPlaceholderText.red,
             MacUIAccessibleColorMetrics.warmPaperTertiaryText.red
         )
+        for (index, textColor) in recurringTextColors.enumerated() {
+            XCTAssertGreaterThanOrEqual(
+                textColor.contrastRatio(
+                    against: MacUIAccessibleColorMetrics.coolGrayBackground
+                ),
+                MacUIAccessibleColorMetrics.minimumSmallTextContrast
+            )
+            XCTAssertGreaterThanOrEqual(
+                textColor.contrastRatio(
+                    against: MacUIAccessibleColorMetrics.warmPaperBackground
+                ),
+                MacUIAccessibleColorMetrics.minimumSmallTextContrast
+            )
+            for otherIndex in recurringTextColors.indices where otherIndex > index {
+                XCTAssertNotEqual(
+                    recurringIconColors[index],
+                    recurringIconColors[otherIndex]
+                )
+                XCTAssertNotEqual(
+                    textColor,
+                    recurringTextColors[otherIndex]
+                )
+            }
+        }
     }
 
     func testCurrentContractCoversAllTopLevelPages() {

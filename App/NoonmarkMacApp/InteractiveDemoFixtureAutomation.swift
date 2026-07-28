@@ -623,7 +623,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             expectedTrackIdentifier,
             "\(expectedTrackIdentifier).detail",
             "\(expectedTrackIdentifier).disclosure",
-            "\(expectedTrackIdentifier).lifecycle"
+            "\(expectedTrackIdentifier).lifecycle",
+            "\(expectedTrackIdentifier).lifecycle-icon"
         ]
         let expectedDayIdentifiers = Set(track.days.map {
             "task-cycle-day.recurring.\(track.id.description).\($0.date.description).\($0.state.rawValue)"
@@ -641,13 +642,20 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             let identifier =
                 "task-cycle-track.recurring."
                 + "\(track.id.description).lifecycle"
+            let iconIdentifier =
+                "task-cycle-track.recurring."
+                + "\(track.id.description).lifecycle-icon"
             guard let view = AppViewTreeE2E.view(
                 identifier: identifier
+            ), let iconView = AppViewTreeE2E.view(
+                identifier: iconIdentifier
             ) else {
                 return false
             }
             return AppViewTreeE2E.verificationText(for: view)
                 == expectation.lifecycleSummary
+                && AppViewTreeE2E.verificationText(for: iconView)
+                == expectation.lifecycleColorToken
         }
         let expectedListVerificationText =
             presentationExpectations.map {
@@ -837,6 +845,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 DemoCyclePresentationExpectation(
                     title: "每日产品复盘",
                     lifecycleSummary: "进行中 · 下次 \(today)",
+                    lifecycleColorToken: "active",
                     expectsPlanEditing: true,
                     expectsStop: true
                 ),
@@ -844,18 +853,21 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                     title: "准备下周工作回顾",
                     lifecycleSummary:
                     "即将开始 · \(upcomingDate)开始",
+                    lifecycleColorToken: "upcoming",
                     expectsPlanEditing: true,
                     expectsStop: true
                 ),
                 DemoCyclePresentationExpectation(
                     title: "完成首次晨间回顾",
                     lifecycleSummary: "已结束 · 完成 1/1 次",
+                    lifecycleColorToken: "ended",
                     expectsPlanEditing: false,
                     expectsStop: false
                 ),
                 DemoCyclePresentationExpectation(
                     title: "暂停周报打磨",
                     lifecycleSummary: "已停止 · 停止于 \(today)",
+                    lifecycleColorToken: "stopped",
                     expectsPlanEditing: false,
                     expectsStop: false
                 )
@@ -865,6 +877,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 DemoCyclePresentationExpectation(
                     title: "每日产品复盘",
                     lifecycleSummary: "Active · Next \(today)",
+                    lifecycleColorToken: "active",
                     expectsPlanEditing: true,
                     expectsStop: true
                 ),
@@ -872,18 +885,21 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                     title: "准备下周工作回顾",
                     lifecycleSummary:
                     "Upcoming · Starts \(upcomingDate)",
+                    lifecycleColorToken: "upcoming",
                     expectsPlanEditing: true,
                     expectsStop: true
                 ),
                 DemoCyclePresentationExpectation(
                     title: "完成首次晨间回顾",
                     lifecycleSummary: "Ended · 1/1 completed",
+                    lifecycleColorToken: "ended",
                     expectsPlanEditing: false,
                     expectsStop: false
                 ),
                 DemoCyclePresentationExpectation(
                     title: "暂停周报打磨",
                     lifecycleSummary: "Stopped · Stopped \(today)",
+                    lifecycleColorToken: "stopped",
                     expectsPlanEditing: false,
                     expectsStop: false
                 )
@@ -2201,6 +2217,7 @@ private struct DemoCycleCheckContext {
 private struct DemoCyclePresentationExpectation {
     let title: String
     let lifecycleSummary: String
+    let lifecycleColorToken: String
     let expectsPlanEditing: Bool
     let expectsStop: Bool
 }

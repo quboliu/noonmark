@@ -182,6 +182,8 @@ AI 的读取授权、远程发送授权和 Todo 写入授权彼此分离。接�
 
 ![晷迹系统设计：原生应用、领域与呈现、本地数据与同步、AI sidecar](docs/assets/architecture/noonmark-system-architecture.png)
 
+![晷迹系统设计中文版：原生应用、领域与呈现、本地数据与同步、AI sidecar](docs/assets/architecture/noonmark-system-architecture-zh.png)
+
 几个关键设计选择：
 
 - **不是 event sourcing**：SQLite 保存关系事实与当前状态；append-only 流水用于历史、审计、同步和恢复。

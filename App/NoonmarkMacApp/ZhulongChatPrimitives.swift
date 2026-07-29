@@ -2,6 +2,27 @@ import NoonmarkMacRuntime
 import NoonmarkZhulong
 import SwiftUI
 
+/// View-layer polish metrics for the Zhulong session surface. These refine the
+/// contract-level conversation layout (message rhythm, readable measure and
+/// composer surface) without touching the design contract module itself.
+enum ZhulongSessionPolishMetrics {
+    static let contentMaxWidth = 680.0
+    static let messageSpacing = 20.0
+    static let turnSpacing = 24.0
+    static let bodyPointSize = 13.0
+    static let bodyLineSpacing = 4.0
+    static let metaPointSize = 10.5
+    static let userBubbleMaxWidth = 480.0
+    static let userBubbleMinimumLeading = 96.0
+    static let userBubbleCornerRadius = 12.0
+    static let userBubbleHorizontalPadding = 12.0
+    static let userBubbleVerticalPadding = 8.0
+    static let composerCornerRadius = 12.0
+    static let composerActionSize = 28.0
+    static let composerActionRowInset = 12.0
+    static let composerActionRowBottomPadding = 8.0
+}
+
 /// All four stream views deliberately reuse this one transcript grammar. The
 /// projection changes how records are grouped for reading; it never replaces
 /// the message primitive with a second dashboard renderer.
@@ -17,7 +38,7 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
     var body: some View {
         transcript
             .frame(
-                maxWidth: NoonmarkVisualMetrics.zhulongConversationContentMaxWidth,
+                maxWidth: ZhulongSessionPolishMetrics.contentMaxWidth,
                 alignment: .leading
             )
             .frame(maxWidth: .infinity, alignment: .center)
@@ -39,7 +60,7 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
     }
 
     private var conversationTranscript: some View {
-        VStack(alignment: .leading, spacing: NoonmarkVisualMetrics.zhulongConversationMessageSpacing) {
+        VStack(alignment: .leading, spacing: ZhulongSessionPolishMetrics.messageSpacing) {
             ForEach(visibleRecords) { record in
                 transcriptRecord(record)
             }
@@ -47,7 +68,7 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
     }
 
     private var dossierTranscript: some View {
-        VStack(alignment: .leading, spacing: NoonmarkVisualMetrics.zhulongConversationMessageSpacing) {
+        VStack(alignment: .leading, spacing: ZhulongSessionPolishMetrics.messageSpacing) {
             ForEach(Array(visibleRecords.enumerated()), id: \.element.id) { index, record in
                 if beginsSection(for: record, at: index) {
                     dossierHeader(for: record.section)
@@ -58,7 +79,7 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
     }
 
     private var chaptersTranscript: some View {
-        VStack(alignment: .leading, spacing: NoonmarkVisualMetrics.zhulongConversationMessageSpacing) {
+        VStack(alignment: .leading, spacing: ZhulongSessionPolishMetrics.messageSpacing) {
             ForEach(Array(visibleRecords.enumerated()), id: \.element.id) { index, record in
                 if beginsSection(for: record, at: index) {
                     chapterHeader(for: record.section, number: chapterNumber(at: index))
@@ -69,9 +90,9 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
     }
 
     private var weaveTranscript: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: ZhulongSessionPolishMetrics.turnSpacing) {
             ForEach(Array(weaveTurns.enumerated()), id: \.offset) { index, turn in
-                VStack(alignment: .leading, spacing: NoonmarkVisualMetrics.zhulongConversationMessageSpacing) {
+                VStack(alignment: .leading, spacing: ZhulongSessionPolishMetrics.messageSpacing) {
                     ForEach(turn) { record in
                         transcriptRecord(record)
                     }
@@ -151,8 +172,8 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
 
     private func chapterHeader(for section: ZhulongStreamSection, number: Int) -> some View {
         Text(chapterSectionTitle(number, sectionTitle(section)))
-            .font(.noonmarkSystem(size: 12, weight: .semibold))
-            .foregroundStyle(Theme.text2)
+            .font(.noonmarkSystem(size: 11, weight: .semibold))
+            .foregroundStyle(Theme.text3)
             .tracking(0.6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 16)
@@ -183,7 +204,7 @@ private struct ZhulongChatMessage: View {
 
     private var userMessage: some View {
         HStack(alignment: .top) {
-            Spacer(minLength: 96)
+            Spacer(minLength: ZhulongSessionPolishMetrics.userBubbleMinimumLeading)
             userBubble
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -192,27 +213,26 @@ private struct ZhulongChatMessage: View {
     private var userBubble: some View {
         ZhulongUserBubbleLayout(
             maximumWidth:
-            NoonmarkVisualMetrics.zhulongConversationUserBubbleMaxWidth
+            ZhulongSessionPolishMetrics.userBubbleMaxWidth
         ) {
             MarkdownText(message)
                 .font(
                     .noonmarkSystem(
                         size:
-                        NoonmarkVisualMetrics
-                            .zhulongConversationUserBodyPointSize
+                        ZhulongSessionPolishMetrics.bodyPointSize
                     )
                 )
                 .foregroundStyle(Theme.text1)
-                .lineSpacing(4)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 11)
+                .lineSpacing(ZhulongSessionPolishMetrics.bodyLineSpacing)
+                .padding(.horizontal, ZhulongSessionPolishMetrics.userBubbleHorizontalPadding)
+                .padding(.vertical, ZhulongSessionPolishMetrics.userBubbleVerticalPadding)
                 .background(
                     RoundedRectangle(
                         cornerRadius:
-                        NoonmarkVisualMetrics
-                            .zhulongConversationUserBubbleCornerRadius
+                        ZhulongSessionPolishMetrics.userBubbleCornerRadius,
+                        style: .continuous
                     )
-                    .fill(Theme.chip)
+                    .fill(Theme.accentSoft)
                 )
         }
         .background {
@@ -225,9 +245,9 @@ private struct ZhulongChatMessage: View {
 
     private var zhulongMessage: some View {
         MarkdownText(message)
-            .font(.noonmarkSystem(size: NoonmarkVisualMetrics.zhulongConversationAssistantBodyPointSize))
+            .font(.noonmarkSystem(size: ZhulongSessionPolishMetrics.bodyPointSize))
             .foregroundStyle(record.isInvalidation ? Theme.text2 : Theme.text1)
-            .lineSpacing(5)
+            .lineSpacing(ZhulongSessionPolishMetrics.bodyLineSpacing)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(record.isInvalidation ? 0.70 : 1)
@@ -235,8 +255,9 @@ private struct ZhulongChatMessage: View {
 
     private var systemMessage: some View {
         Text(systemText)
-            .font(.noonmarkSystem(size: 11.5, weight: .medium))
+            .font(.noonmarkSystem(size: ZhulongSessionPolishMetrics.metaPointSize, weight: .medium))
             .foregroundStyle(record.isInvalidation ? Theme.warn : Theme.text3)
+            .monospacedDigit()
             .lineSpacing(2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(record.isInvalidation ? 0.82 : 1)
@@ -252,41 +273,73 @@ private struct ZhulongChatMessage: View {
 
 struct ZhulongLiveAssistantMessage: View {
     let content: String
-    let waitingText: String
 
     var body: some View {
-        Group {
-            if content.isEmpty {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(waitingText)
-                        .font(.noonmarkSystem(size: 12, weight: .medium))
-                        .foregroundStyle(Theme.text3)
-                }
-            } else {
-                HStack(alignment: .lastTextBaseline, spacing: 4) {
-                    MarkdownText(content)
-                        .font(.noonmarkSystem(
-                            size: NoonmarkVisualMetrics.zhulongConversationAssistantBodyPointSize
-                        ))
-                        .foregroundStyle(Theme.text1)
-                        .lineSpacing(5)
-                        .textSelection(.enabled)
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(Theme.text2)
-                        .frame(width: 1.5, height: 15)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+        HStack(alignment: .lastTextBaseline, spacing: 4) {
+            MarkdownText(content)
+                .font(.noonmarkSystem(
+                    size: ZhulongSessionPolishMetrics.bodyPointSize
+                ))
+                .foregroundStyle(Theme.text1)
+                .lineSpacing(ZhulongSessionPolishMetrics.bodyLineSpacing)
+                .textSelection(.enabled)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Theme.text2)
+                .frame(width: 1.5, height: 15)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("zhulong-live-assistant-message")
         .background {
             AppE2EViewAnchor(
                 identifier: "zhulong-live-assistant-message",
-                verificationText: content.isEmpty ? waitingText : content
+                verificationText: content
             )
         }
+    }
+}
+
+/// Placeholder shown on the assistant axis while a provider run has started
+/// but no visible token has arrived yet. It reuses the live-message anchor so
+/// the streaming message replaces it in place at the same identifier.
+struct ZhulongProviderWaitingIndicator: View {
+    let waitingText: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if Theme.shouldReduceMotion == false {
+                ZhulongBreathingDots()
+            }
+            Text(waitingText)
+                .font(.noonmarkSystem(size: 11))
+                .foregroundStyle(Theme.text3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("zhulong-live-assistant-message")
+        .background {
+            AppE2EViewAnchor(
+                identifier: "zhulong-live-assistant-message",
+                verificationText: waitingText
+            )
+        }
+    }
+}
+
+/// Three accent dots pulsing in sequence on a 1.2 s cycle.
+private struct ZhulongBreathingDots: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0 ..< 3, id: \.self) { index in
+                Circle()
+                    .fill(Theme.accent)
+                    .frame(width: 6, height: 6)
+                    .phaseAnimator([0.25, 1.0]) { dot, opacity in
+                        dot.opacity(opacity)
+                    } animation: { _ in
+                        .easeInOut(duration: 0.6).delay(Double(index) * 0.2)
+                    }
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -335,11 +388,17 @@ struct ZhulongChatComposer: View {
     let onSend: () -> Void
     let onStop: () -> Void
 
+    @FocusState private var editorIsFocused: Bool
+
     private var isSendEnabled: Bool {
         guard case let .send(isEnabled) = primaryAction else {
             return false
         }
         return isEnabled
+    }
+
+    private var actionIsProminent: Bool {
+        isSendEnabled || primaryAction == .stop
     }
 
     private var actionIdentifier: String {
@@ -381,30 +440,30 @@ struct ZhulongChatComposer: View {
                 onCommit: submitIfAvailable,
                 nativeAccessibilityIdentifier: "zhulong-session-entry"
             )
+            .focused($editorIsFocused)
 
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
                 Button(action: performPrimaryAction) {
                     Image(systemName: actionSystemImage)
-                        .font(.noonmarkSystem(size: 12, weight: .bold))
+                        .font(.noonmarkSystem(
+                            size: primaryAction == .stop ? 10 : 12,
+                            weight: .bold
+                        ))
                         .foregroundStyle(
-                            isSendEnabled || primaryAction == .stop
-                                ? Theme.panel
+                            actionIsProminent
+                                ? Color.white
                                 : Theme.text3
                         )
-                        .frame(width: 30, height: 30)
+                        .frame(
+                            width: ZhulongSessionPolishMetrics.composerActionSize,
+                            height: ZhulongSessionPolishMetrics.composerActionSize
+                        )
                         .background(
                             Circle().fill(
-                                isSendEnabled || primaryAction == .stop
-                                    ? Theme.text1
-                                    : Theme.chip
-                            )
-                        )
-                        .overlay(
-                            Circle().stroke(
-                                isSendEnabled || primaryAction == .stop
-                                    ? Color.clear
-                                    : Theme.line
+                                actionIsProminent
+                                    ? Theme.accent
+                                    : Theme.controlFill
                             )
                         )
                         .contentShape(Circle())
@@ -420,19 +479,25 @@ struct ZhulongChatComposer: View {
                     )
                 }
             }
-            .padding(.horizontal, NoonmarkVisualMetrics.zhulongConversationComposerHorizontalInset)
-            .padding(.bottom, 10)
+            .padding(.horizontal, ZhulongSessionPolishMetrics.composerActionRowInset)
+            .padding(.bottom, ZhulongSessionPolishMetrics.composerActionRowBottomPadding)
         }
         .frame(minHeight: NoonmarkVisualMetrics.zhulongConversationComposerMinimumHeight)
         .background(
-            RoundedRectangle(cornerRadius: NoonmarkVisualMetrics.zhulongConversationComposerCornerRadius)
-                .fill(Theme.panel)
+            RoundedRectangle(
+                cornerRadius: ZhulongSessionPolishMetrics.composerCornerRadius,
+                style: .continuous
+            )
+            .fill(Theme.panel2)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: NoonmarkVisualMetrics.zhulongConversationComposerCornerRadius)
-                .stroke(Theme.line)
+            RoundedRectangle(
+                cornerRadius: ZhulongSessionPolishMetrics.composerCornerRadius,
+                style: .continuous
+            )
+            .stroke(editorIsFocused ? Theme.accentStroke : Color.clear)
         )
-        .shadow(color: Theme.shadowSubtle, radius: 16, y: 5)
+        .shadow(color: Theme.shadowSubtle, radius: 16, y: 4)
         .accessibilityIdentifier("zhulong-session-composer")
         .background {
             AppE2EViewAnchor(

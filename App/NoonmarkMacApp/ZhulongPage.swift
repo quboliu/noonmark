@@ -134,7 +134,7 @@ struct ZhulongScopeChip: View {
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.accent)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 }

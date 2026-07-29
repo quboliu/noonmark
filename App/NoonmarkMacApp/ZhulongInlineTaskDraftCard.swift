@@ -199,7 +199,7 @@ struct ZhulongInlineTaskDraftCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(copy.zhulongTaskDraftTitle)
                     .font(.noonmarkSystem(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.text1)
@@ -218,15 +218,15 @@ struct ZhulongInlineTaskDraftCard: View {
                 )
                 .font(.noonmarkSystem(size: 10.5))
                 .foregroundStyle(Theme.text3)
+                .monospacedDigit()
             }
-            .padding(.bottom, 14)
+            .padding(.bottom, 16)
 
             ForEach($state.tasks) { task in
                 taskEditor(task: task)
                 if task.wrappedValue.id != state.tasks.last?.id {
-                    Divider()
-                        .overlay(Theme.lineSubtle)
-                        .padding(.vertical, 14)
+                    RailDivider()
+                        .padding(.vertical, 16)
                 }
             }
 
@@ -242,7 +242,7 @@ struct ZhulongInlineTaskDraftCard: View {
                 .buttonStyle(.plain)
                 .font(.noonmarkSystem(size: 11.5, weight: .medium))
                 .foregroundStyle(Theme.accent)
-                .padding(.top, 14)
+                .padding(.top, 16)
 
                 HStack(spacing: 12) {
                     Text(
@@ -251,12 +251,11 @@ struct ZhulongInlineTaskDraftCard: View {
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
                     Spacer()
-                    Button(
+                    SmallActionButton(
                         copy.commitZhulongTaskDraft,
+                        tone: .accent,
                         action: onSubmit
                     )
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
                     .accessibilityIdentifier(
                         "zhulong-inline-task-draft-submit-\(artifactIdentifier)"
                     )
@@ -290,11 +289,11 @@ struct ZhulongInlineTaskDraftCard: View {
         }
         .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Theme.panel)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(
                     isApplied
                         ? Theme.ok.opacity(0.25)
@@ -318,7 +317,7 @@ struct ZhulongInlineTaskDraftCard: View {
     private func taskEditor(
         task: Binding<ZhulongInlineTaskDraftState.Task>
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "circle")
                     .font(.noonmarkSystem(size: 13))
@@ -329,7 +328,7 @@ struct ZhulongInlineTaskDraftCard: View {
                     text: task.title
                 )
                 .textFieldStyle(.plain)
-                .font(.noonmarkSystem(size: 13.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.text1)
 
                 if state.tasks.count > 1 {

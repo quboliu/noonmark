@@ -316,6 +316,9 @@ extension AppCopy {
         language == .chinese ? "搜索" : "Search"
     }
 
+    /// 置顶队列分组头的图钉字形：红色斜图钉 emoji，语言无关。
+    var pinnedQueueGlyph: String { "📌" }
+
     var railTrendTitle: String {
         language == .chinese ? "近 7 天完成率" : "7-day completion"
     }

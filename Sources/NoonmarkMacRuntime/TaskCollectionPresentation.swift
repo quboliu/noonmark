@@ -131,11 +131,19 @@ public struct TaskCollectionPresentationItem: Equatable, Sendable {
 }
 
 public struct TaskCollectionPresentationSection: Equatable, Sendable {
+    /// 置顶队列 section 的固定 id：投影器把 pinned 项单独抽成这个无标题 section，
+    /// 呈现层据它渲染图钉分组头。
+    public static let pinnedQueueSectionID = "fixed"
+
     public let id: String
     public let title: String?
     public let category: TaskCollectionCategoryPresentation?
     public let items: [TaskCollectionPresentationItem]
     public let precedence: Int
+
+    public var isPinnedQueue: Bool {
+        id == Self.pinnedQueueSectionID
+    }
 }
 
 public struct TaskCollectionPresentationProjector: Sendable {
@@ -159,7 +167,7 @@ public struct TaskCollectionPresentationProjector: Sendable {
             if fixedItems.isEmpty == false {
                 sections.append(
                     TaskCollectionPresentationSection(
-                        id: "fixed",
+                        id: TaskCollectionPresentationSection.pinnedQueueSectionID,
                         title: nil,
                         category: nil,
                         items: fixedItems,
@@ -185,7 +193,7 @@ public struct TaskCollectionPresentationProjector: Sendable {
         if fixedItems.isEmpty == false {
             sections.append(
                 TaskCollectionPresentationSection(
-                    id: "fixed",
+                    id: TaskCollectionPresentationSection.pinnedQueueSectionID,
                     title: nil,
                     category: nil,
                     items: fixedItems,

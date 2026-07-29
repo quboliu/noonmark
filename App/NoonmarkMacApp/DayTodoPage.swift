@@ -76,7 +76,9 @@ struct DayTodoPage: View {
 
                     LazyVStack(spacing: 0) {
                         ForEach(presentationSections, id: \.id) { section in
-                            if presentationPreference.organization == .grouped, section.title != nil {
+                            if section.isPinnedQueue {
+                                PinnedQueueSectionHeader(count: section.items.count)
+                            } else if presentationPreference.organization == .grouped, section.title != nil {
                                 TaskCollectionSectionHeader(
                                     section: section,
                                     count: section.items.count
@@ -767,14 +769,6 @@ struct TaskRow: View {
                 .layoutPriority(1)
 
                 HStack(spacing: NoonmarkVisualMetrics.taskRowAccessorySpacing) {
-                    if trace.pinOrder != nil {
-                        Image(systemName: "pin.fill")
-                            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                            .foregroundStyle(Theme.accent)
-                            .accessibilityLabel(store.copy.pinToTop)
-                            .help(store.copy.pinToTop)
-                    }
-
                     if subtasks.isEmpty == false {
                         Button {
                             if expanded {

@@ -72,6 +72,33 @@ struct TaskCollectionSectionHeader: View {
     }
 }
 
+/// 置顶队列的分组头：与普通分组标题同规格，但只用图钉图标承载语义，
+/// 不写文字标签；置顶任务行内不再单独显示图钉。
+struct PinnedQueueSectionHeader: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(store.copy.pinnedQueueGlyph)
+                .font(.noonmarkSystem(size: 11))
+            Text("\(count)")
+                .font(.noonmarkSystem(size: 10.5))
+                .foregroundStyle(Theme.text3)
+                .monospacedDigit()
+            Spacer()
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+        .background {
+            AppE2EViewAnchor(
+                identifier: "task-collection.section.pinned",
+                verificationText: "\(count)"
+            )
+        }
+    }
+}
+
 extension ClassificationItemProjection {
     var taskCollectionCategoryPresentation: TaskCollectionCategoryPresentation {
         TaskCollectionCategoryPresentation(

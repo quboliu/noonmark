@@ -180,22 +180,7 @@ AI 的读取授权、远程发送授权和 Todo 写入授权彼此分离。接�
 
 晷迹是 Apple-first 的 SwiftPM 模块化单体：AppKit 管理应用生命周期、窗口、菜单和全局快捷键，SwiftUI 构建页面与设置；领域、持久化、同步和 AI 通过独立 target 隔离。
 
-```mermaid
-flowchart LR
-    App["NoonmarkMacApp<br>AppKit + SwiftUI"] --> Runtime["NoonmarkMacRuntime"]
-    App --> Core["NoonmarkCore<br>任务生命周期与投影"]
-    App --> Storage["NoonmarkStorage<br>SQLite + 事务"]
-    App --> Zhulong["NoonmarkZhulong<br>授权、会话、artifact"]
-    App --> Sync["NoonmarkSync<br>record、merge、transport"]
-    Runtime --> DayContext["NoonmarkDayContext"]
-    DayContext --> Core
-    Storage --> Core
-    Storage --> Sync
-    Zhulong --> Core
-    ZhulongAI["NoonmarkZhulongAI"] --> Zhulong
-    ZhulongAI --> AI["NoonmarkAI<br>Provider seam"]
-    App --> ZhulongAI
-```
+![晷迹系统设计：原生应用、领域与呈现、本地数据与同步、AI sidecar](docs/assets/architecture/noonmark-system-architecture.png)
 
 几个关键设计选择：
 

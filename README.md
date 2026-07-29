@@ -22,11 +22,6 @@
   <img alt="Swift Tools 6.0" src="https://img.shields.io/badge/Swift_Tools-6.0-F05138?logo=swift&logoColor=white">
   <img alt="AppKit + SwiftUI" src="https://img.shields.io/badge/UI-AppKit_%2B_SwiftUI-2563EB">
   <img alt="Local-first" src="https://img.shields.io/badge/Architecture-local--first-0F766E">
-  <img alt="v1.0 source milestone" src="https://img.shields.io/badge/Release-v1.0_source_milestone-B7791F">
-</p>
-
-<p align="center">
-  <img src="docs/assets/screenshots/v1.0/day-todo.png" width="100%" alt="晷迹 Day Todo：日期导航、分组任务、重复实例、置顶队列和每日复盘同屏显示">
 </p>
 
 ## 晷迹解决什么问题
@@ -54,96 +49,99 @@
 
 以下画面全部来自同一个真实 `NoonmarkDemo.app`：固定十天用户故事通过正式领域接口重放，再由 SQLite 与加密烛龙 sidecar 回读对账。它们不是 HTML 原型，也不是为 README 手工拼出的静态 mock。
 
-### 从捕获到排期
+主工作区的八个一级界面、快速记录和四个不包含宿主机身份信息的设置界面均在下方逐一完整展示。同步与 Provider 设置可能包含本机路径或 Provider 身份，因此不生成可复用文档截图，继续由专用真实 App E2E 验证。
 
-任务可以直接进入今天，也可以先留在任务池。标题输入支持 `#标签`、`@分组`，新任务可用 `/重复` 或 `/repeat` 进入重复计划配置。任务池保留说明与计划子任务，排期后才进入具体 Day Todo。
+### 计划与执行
 
-<table>
-  <tr>
-    <td width="50%">
-      <strong>任务池</strong><br>
-      尚未承诺日期的任务，以及不依赖 Provider 的本地统计。
-    </td>
-    <td width="50%">
-      <strong>未来计划</strong><br>
-      按日期查看普通计划与可见范围内的重复实例。
-    </td>
-  </tr>
-  <tr>
-    <td><img src="docs/assets/screenshots/v1.0/task-pool.png" alt="晷迹任务池：分组任务、本地统计和有证据的烛龙分析"></td>
-    <td><img src="docs/assets/screenshots/v1.0/future-plans.png" alt="晷迹未来计划：按日期排列普通任务与重复任务实例"></td>
-  </tr>
-</table>
+#### Day Todo：一天的计划与结果
 
-### 重复计划是一等领域对象
+日期导航、快速输入、置顶队列、分组任务、重复实例和当日结果都在同一条日轨迹上。右侧每日复盘同时呈现完成率、近七天趋势、本地信号、总结和未完成原因，不需要切换到另一套数据视图。
 
-重复计划不是在普通列表里无限复制同名任务。父计划集中管理标题、说明、分类、标签、子任务、开始日期、频率、结束条件和向前生效的规则修订；每个计划日仍然形成可独立完成、未完成、延期、跳过或废弃的实例。
+![晷迹 Day Todo：日期导航、置顶队列、分组任务、重复实例和每日复盘](docs/assets/screenshots/readme/day-todo.png)
 
-进行中、即将开始、自然结束和提前停止拥有不同生命周期语义。完整轨迹按自然日呈现，不用“连续几天”这一项摘要替代真实打卡记录。
+#### 任务池：先捕获，再决定日期
 
-<p align="center">
-  <img src="docs/assets/screenshots/v1.0/recurring-plans.png" width="100%" alt="晷迹重复计划：四种生命周期、逐日轨迹、分类与重复设置详情">
-</p>
+任务可以直接进入今天，也可以先留在任务池。标题输入支持 `#标签`、`@分组`，并可用 `/重复` 或 `/repeat` 进入重复计划配置。任务池按分组整理尚未承诺日期的事项，右侧提供不依赖 Provider 的本地统计；Provider 就绪时才显示有证据、可复核的烛龙分析。
 
-### 未完成与已完成都保留上下文
+![晷迹任务池：分组任务、本地统计和有证据的烛龙分析](docs/assets/screenshots/readme/task-pool.png)
 
-未完成池按任务链去重，用户可以查看历史原因并决定延续或废弃；已完成池按完成事实展示单日与跨日轨迹，并用缩进结构表达父子任务关系。两者都不是把历史压扁成一排无上下文标题。
+#### 未来计划：按日看承诺与负载
 
-<table>
-  <tr>
-    <td width="50%">
-      <strong>未完成</strong><br>
-      看清最近未完成日期、延续关系与当前处理状态。
-    </td>
-    <td width="50%">
-      <strong>已完成</strong><br>
-      保留完成时刻、跨日轨迹和父子任务层级。
-    </td>
-  </tr>
-  <tr>
-    <td><img src="docs/assets/screenshots/v1.0/unfinished.png" alt="晷迹未完成池：按任务链聚合未完成与废弃事实"></td>
-    <td><img src="docs/assets/screenshots/v1.0/completed.png" alt="晷迹已完成池：完成记录、父子任务层级和完成统计"></td>
-  </tr>
-</table>
+普通任务和重复实例按日期汇合，仍保留各自的分类与来源。重复实例可以切换未来 7／15／30 天可见范围；右栏汇总覆盖日期、最重负载日、本地信号和可执行建议。
 
-### 月历是轨迹总览，不是另一套任务源
+![晷迹未来计划：按日期排列普通任务与重复实例，并显示本地负载分析](docs/assets/screenshots/readme/future-plans.png)
 
-日历按月汇总普通任务的日期、状态和摘要；选择某一天后回到该日真实详情。重复计划的父项与管理轨迹留在“重复计划”，日历只承担普通日轨迹总览，避免跨模块重复计数。
+#### 重复计划：规则与每日事实分开
 
-<p align="center">
-  <img src="docs/assets/screenshots/v1.0/calendar.png" width="100%" alt="晷迹日历：2026 年 7 月的任务轨迹、状态点和选中日期">
-</p>
+重复计划不是在普通列表里无限复制同名任务。父计划集中管理标题、说明、分类、标签、子任务、开始日期、频率、结束条件和向前生效的修订；每个计划日仍形成可独立完成、未完成、延期、跳过或废弃的实例。
 
-### 烛龙：会对话，但不绕过任务边界
+进行中、即将开始、自然结束和提前停止拥有不同生命周期语义。展开轨迹后可以逐日检查发生过的事实，不用“连续几天”这一项摘要替代真实记录。
+
+![晷迹重复计划：四种生命周期、逐日轨迹、分类与重复设置详情](docs/assets/screenshots/readme/recurring-plans.png)
+
+### 轨迹与复盘
+
+#### 未完成：延续之前先看清来路
+
+未完成池按任务链去重，直接显示未完成次数、延续次数和最近未完成日期。用户可以展开明细，再决定延续或明确废弃；页面右栏同时汇总重复风险、本地信号和处理建议。
+
+![晷迹未完成池：按任务链聚合未完成、延续与废弃事实](docs/assets/screenshots/readme/unfinished.png)
+
+#### 已完成：保留层级与跨日轨迹
+
+已完成池按完成事实展示单日与跨日轨迹，并用缩进结构表达父子任务关系。部分完成与完整完成使用不同的父子层级，完成时间和可复制的推进路径不会被压扁成一排标题。
+
+![晷迹已完成池：完成记录、父子任务层级和本地完成分析](docs/assets/screenshots/readme/completed.png)
+
+#### 日历：按月回看普通任务轨迹
+
+日历按月汇总普通任务的日期、状态和摘要；选择某一天后可以回到该日真实 Day Todo。重复计划的父项与管理轨迹留在“重复计划”，日历只承担普通日轨迹总览，避免跨模块重复计数。
+
+![晷迹日历：2026 年 7 月的普通任务轨迹、状态点和选中日期](docs/assets/screenshots/readme/calendar.png)
+
+### 可解释 AI 协作
+
+#### 烛龙：会对话，但不绕过任务边界
 
 烛龙可以协助任务成形、每日复盘、习惯洞察和任务池分析。Provider 只接收用户授权的范围；结构化产物先形成可审阅 artifact 与 Todo diff，再由用户确认后通过普通领域接口应用。唯一的窄自动写入例外是用户显式启用的新任务自动分组与标签，它由耐久 job、严格响应 contract 和过期 fences 约束。
 
 没有 Provider 时，Day Todo、任务池、未来计划、重复计划、日历、数据包和本地统计仍然完整可用。
 
-<p align="center">
-  <img src="docs/assets/screenshots/v1.0/zhulong.png" width="100%" alt="晷迹烛龙会话：历史对话、居中会话标题和底部输入区">
-</p>
+![晷迹烛龙会话：会话导航、居中标题、对话内容和底部输入区](docs/assets/screenshots/readme/zhulong.png)
 
-### 在任何 App 里快速记录
+### 捕获、组织与数据边界
+
+#### 在任何 App 里快速记录
 
 应用内使用 `⌘N`；晷迹进程运行时，还可以用默认 `⌃⇧N` 从其他 App 唤起独立 Quick Entry。全局组合可录制修改，注册失败时保留旧组合，并明确提示 macOS 无法枚举所有第三方 App 快捷键这一系统边界。
 
 <p align="center">
-  <img src="docs/assets/screenshots/v1.0/quick-entry.png" width="520" alt="晷迹全局快速记录面板：今日任务输入框和添加操作">
+  <img src="docs/assets/screenshots/readme/quick-entry.png" width="520" alt="晷迹全局快速记录面板：今日任务输入框和添加操作">
 </p>
 
-<details>
-  <summary><strong>查看原生设置与数据边界截图</strong></summary>
-  <br>
-  <p><strong>偏好与全局快捷键</strong></p>
-  <img src="docs/assets/screenshots/v1.0/settings-general.png" width="100%" alt="晷迹偏好设置：外观、语言、滑动方向和全局快捷键">
-  <p><strong>分组与标签目录</strong></p>
-  <img src="docs/assets/screenshots/v1.0/settings-groups.png" width="100%" alt="晷迹组织设置：分组与标签数量和管理入口">
-  <p><strong>事务性数据包</strong></p>
-  <img src="docs/assets/screenshots/v1.0/settings-data.png" width="100%" alt="晷迹数据设置：JSON 数据导出与导入">
-  <p><strong>写入与隐私边界</strong></p>
-  <img src="docs/assets/screenshots/v1.0/settings-privacy.png" width="100%" alt="晷迹隐私设置：Provider 请求、数据范围与用户确认边界">
-</details>
+#### 偏好与全局快捷键
+
+偏好设置集中管理亮色外观、中文／English、Day Todo 与日历共用的滑动方向、全局快速记录组合，以及可选的设置页诗文。
+
+![晷迹偏好设置：外观、语言、滑动方向和全局快捷键](docs/assets/screenshots/readme/settings-general.png)
+
+#### 分组与标签目录
+
+一个主分组建立稳定结构，多标签补充横向线索。组织设置显示当前目录规模，并进入统一的分组与标签管理界面。
+
+![晷迹组织设置：分组与标签数量和管理入口](docs/assets/screenshots/readme/settings-groups.png)
+
+#### 事务性数据包
+
+数据设置通过 canonical JSON 数据包导出与导入完整任务事实。导入先校验、再事务性替换，失败时回滚，不把半套数据留在当前数据库。
+
+![晷迹数据设置：经过校验的 JSON 数据导出与事务性导入](docs/assets/screenshots/readme/settings-data.png)
+
+#### 写入与隐私边界
+
+隐私设置明确列出 Provider 请求、远程发送范围、Todo 写入确认和失败行为。API Key 留在 Keychain，数据库文件、内部 ID 和同步端点配置不会发送给 Provider。
+
+![晷迹隐私设置：Provider 请求、数据范围与用户确认边界](docs/assets/screenshots/readme/settings-privacy.png)
 
 ## 核心能力
 
@@ -259,17 +257,6 @@ make run-demo-app
 | Live Cloud | `make test-cloudkit-sync-live` | 需要签名、entitlement 与隔离环境；缺依赖时 fail-closed |
 
 `make check`、E2E、DMG 和安装验证都会留下带 source／binary identity 的运行证据，避免把旧日志或另一份二进制的结果归到当前提交。
-
-## 发布状态
-
-`v1.0` 是当前源码与产品能力的 **source milestone**，不是一个已经面向公众完成公证的下载发行版。
-
-- 可以从源码构建原生 `.app`；
-- 可以生成 Apple Development 签名的验证 DMG，并完成真实复制安装与重启回读；
-- 公开分发仍需 Developer ID Application、Hardened Runtime、secure timestamp、Apple notarization、staple 与 Gatekeeper 验收；
-- 在这些门禁完成前，仓库不会把开发签名 DMG 伪装成公开下载包。
-
-当前仓库尚未声明开源许可证。复制、再分发或衍生使用须以仓库所有者的明确授权为准。
 
 ---
 

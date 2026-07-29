@@ -819,8 +819,11 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(contract.detailElements.contains(.traceTimeline))
         XCTAssertTrue(contract.detailElements.contains(.changedTraceTargetJump))
 
-        XCTAssertTrue(contract.reviewElements.contains(.statsCard))
-        XCTAssertTrue(contract.reviewElements.contains(.segmentedStatusBar))
+        XCTAssertTrue(contract.reviewElements.contains(.completionHero))
+        XCTAssertTrue(contract.reviewElements.contains(.weeklyTrendStrip))
+        XCTAssertTrue(contract.reviewElements.contains(.statusBreakdownRows))
+        XCTAssertTrue(contract.reviewElements.contains(.localSignals))
+        XCTAssertTrue(contract.reviewElements.contains(.quickSearch))
         XCTAssertTrue(contract.reviewElements.contains(.zhulongAnalysisButton))
         XCTAssertTrue(contract.reviewElements.contains(.summaryInput))
         XCTAssertTrue(contract.reviewElements.contains(.unfinishedReasonInput))

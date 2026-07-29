@@ -229,7 +229,7 @@ struct TaskLabelPatch: View {
     }
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 4) {
             Text("#")
                 .font(.noonmarkSystem(size: 9, weight: .black, design: .rounded))
                 .foregroundStyle(color)

@@ -28,6 +28,43 @@ struct SettingSection<Content: View>: View {
     }
 }
 
+/// 8pt bold 微标签：统一微型标签与微符号（chevron、xmark 等）的字阶。
+struct MicroLabel: View {
+    enum Glyph {
+        case text(String)
+        case systemImage(String)
+    }
+
+    let glyph: Glyph
+    var color: Color = Theme.text3
+
+    init(_ text: String, color: Color = Theme.text3) {
+        glyph = .text(text)
+        self.color = color
+    }
+
+    init(systemImage name: String, color: Color = Theme.text3) {
+        glyph = .systemImage(name)
+        self.color = color
+    }
+
+    var body: some View {
+        content
+            .font(.noonmarkSystem(size: 8, weight: .bold))
+            .foregroundStyle(color)
+    }
+
+    @ViewBuilder private var content: some View {
+        switch glyph {
+        case let .text(text):
+            Text(text)
+                .tracking(0.4)
+        case let .systemImage(name):
+            Image(systemName: name)
+        }
+    }
+}
+
 struct SegmentedPair: View {
     let left: String
     let right: String
@@ -278,10 +315,10 @@ struct HeaderButton: View {
             .help(accessibilityLabel ?? title)
             .hoverSurface(
                 cornerRadius: 7,
-                idleFill: Theme.controlFill,
-                hoverFill: Theme.listRowHover,
-                idleStroke: Theme.line.opacity(0.72),
-                hoverStroke: Theme.line2.opacity(0.72)
+                idleFill: Theme.panel2,
+                hoverFill: Theme.chip,
+                idleStroke: .clear,
+                hoverStroke: .clear
             )
     }
 }
@@ -318,11 +355,46 @@ struct SmallActionButton: View {
             .fixedSize(horizontal: true, vertical: false)
             .hoverSurface(
                 cornerRadius: 6,
-                idleFill: Theme.controlFill,
-                hoverFill: Theme.listRowHover,
-                idleStroke: Theme.line.opacity(0.72),
-                hoverStroke: Theme.line2.opacity(0.72)
+                idleFill: Theme.panel2,
+                hoverFill: Theme.chip,
+                idleStroke: .clear,
+                hoverStroke: .clear
             )
+    }
+}
+
+/// 三级按钮规范中的文本级（tertiary）动作：无底色无描边，
+/// 仅文字着色。secondary 见 HeaderButton / SmallActionButton。
+struct TextActionButton: View {
+    enum Tone {
+        case accent
+        case neutral
+        case warn
+
+        var color: Color {
+            switch self {
+            case .accent: Theme.accent
+            case .neutral: Theme.text2
+            case .warn: Theme.warn
+            }
+        }
+    }
+
+    let title: String
+    let tone: Tone
+    let action: () -> Void
+
+    init(_ title: String, tone: Tone = .accent, action: @escaping () -> Void) {
+        self.title = title
+        self.tone = tone
+        self.action = action
+    }
+
+    var body: some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.noonmarkSystem(size: 11.5, weight: .medium))
+            .foregroundStyle(tone.color)
     }
 }
 
@@ -919,20 +991,44 @@ struct StatusChip: View {
 }
 
 struct Notice: View {
-    enum Tone { case locked, future }
+    enum Tone { case locked, future, warn }
     let text: String
     let tone: Tone
 
+    private var iconName: String {
+        switch tone {
+        case .locked: "lock.fill"
+        case .future: "calendar.badge.clock"
+        case .warn: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var foreground: Color {
+        switch tone {
+        case .locked: Theme.text2
+        case .future: Theme.accent
+        case .warn: Theme.warn
+        }
+    }
+
+    private var background: Color {
+        switch tone {
+        case .locked: Theme.chip
+        case .future: Theme.accentSoft
+        case .warn: Theme.warnSoft
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: tone == .locked ? "lock.fill" : "calendar.badge.clock")
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
             Text(text)
         }
         .font(.noonmarkSystem(size: 12))
-        .foregroundStyle(tone == .locked ? Theme.text2 : Theme.accent)
+        .foregroundStyle(foreground)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(tone == .locked ? Theme.chip : Theme.accentSoft))
+        .background(RoundedRectangle(cornerRadius: 8).fill(background))
     }
 }
 
@@ -977,13 +1073,26 @@ struct EmptyState: View {
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
             if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                SmallActionButton(actionTitle, tone: .accent, action: action)
             }
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
+    }
+}
+
+struct InlineEmptyHint: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.noonmarkSystem(size: 11.5))
+            .foregroundStyle(Theme.text3)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1051,7 +1160,7 @@ struct DetailSection<Content: View>: View {
 
     var body: some View {
         if showsTitle {
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(title)
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
@@ -1097,7 +1206,7 @@ struct CollapsibleTaskTrailSection<Trailing: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(store.copy.taskTrailTitle)
                     .font(.noonmarkSystem(size: 11, weight: .semibold))

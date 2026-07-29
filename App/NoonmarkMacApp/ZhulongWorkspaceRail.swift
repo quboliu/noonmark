@@ -26,11 +26,11 @@ struct ZhulongWorkspaceRail: View {
                     .lineSpacing(3)
             }
 
-            railDivider
+            RailDivider()
             memoryInspector
 
             if let latest = workspace.records(using: copy).last {
-                railDivider
+                RailDivider()
                 DetailSection(copy.latestEventTitle) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(latest.eyebrow)
@@ -62,19 +62,19 @@ struct ZhulongWorkspaceRail: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            railDivider
+            RailDivider()
             DetailSection(copy.dataScopeTitle) {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(session.proposedScopes.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { scope in
                         Text(scopeLabel(scope))
                             .font(.noonmarkSystem(size: 11))
-                            .foregroundStyle(Theme.text2)
+                            .foregroundStyle(Theme.text1)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            railDivider
+            RailDivider()
             DetailSection(copy.providerBoundaryTitle) {
                 VStack(alignment: .leading, spacing: 4) {
                     if let identity =
@@ -128,12 +128,6 @@ struct ZhulongWorkspaceRail: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    private var railDivider: some View {
-        Rectangle()
-            .fill(Theme.line)
-            .frame(height: 1)
     }
 
     private func scopeLabel(_ scope: ZhulongDataScope) -> String {

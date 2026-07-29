@@ -90,13 +90,8 @@ struct OperationFailureBanner: View {
             .frame(maxWidth: 620)
             .background {
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Theme.panel)
+                    .fill(Theme.warnSoft)
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Theme.warn.opacity(0.5))
-            }
-            .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
             .padding(.horizontal, 24)
             .padding(.bottom, bottomPadding)
             .accessibilityElement(children: .contain)
@@ -184,7 +179,7 @@ struct NoonmarkRootView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
                         .background(Capsule().fill(Theme.text1))
-                        .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
+                        .shadow(color: Theme.shadowRaised, radius: 16, y: 8)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .padding(.bottom, 30)
                         .accessibilityIdentifier("app.toast")

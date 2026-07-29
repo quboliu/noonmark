@@ -229,9 +229,9 @@ struct CalendarCell: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 1.5) {
+                VStack(alignment: .leading, spacing: 2) {
                     ForEach(traces.prefix(6), id: \.id) { trace in
-                        HStack(spacing: 3) {
+                        HStack(spacing: 4) {
                             StatusDot(status: trace.status)
                                 .frame(width: 8)
                                 .background {
@@ -259,11 +259,11 @@ struct CalendarCell: View {
                             .padding(.leading, 7)
                     }
                 }
-                .padding(.top, 3)
+                .padding(.top, 4)
 
                 Spacer()
             }
-            .padding(.top, 5)
+            .padding(.top, 4)
             .padding(.horizontal, 6)
             .padding(.bottom, 4)
             .frame(height: height, alignment: .top)
@@ -306,9 +306,7 @@ private struct CalendarGridSlotSurface: ViewModifier {
         content
             .overlay(alignment: .bottom) {
                 if showsBottomBoundary {
-                    Rectangle()
-                        .fill(Theme.line)
-                        .frame(height: 1)
+                    RailDivider()
                         .background {
                             AppE2EViewAnchor(
                                 identifier: "\(identifier).bottom-boundary"
@@ -433,21 +431,74 @@ struct CalendarDayInsightPanel: View {
     @EnvironmentObject private var store: NoonmarkStore
     let insight: CalendarDayInsight
 
+    private var pendingCount: Int {
+        max(
+            0,
+            insight.stats.total
+                - insight.stats.completed
+                - insight.stats.unfinished
+                - insight.stats.deferred
+                - insight.stats.abandoned
+        )
+    }
+
+    private var trendPoints: [RailTrendPoint] {
+        (0 ..< 7).reversed().map { daysBack in
+            let date = NoonmarkStore.offset(store.selectedCalendarDate, by: -daysBack)
+            let dayStats = store.engine.calendarReviewStats(date: date)
+            return RailTrendPoint(
+                axisLabel: store.weekdayNarrow(date),
+                ratio: dayStats.total == 0
+                    ? nil
+                    : Double(dayStats.completed) / Double(dayStats.total),
+                isHighlighted: daysBack == 0
+            )
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(store.copy.dayAnalysis)
-                    .font(.noonmarkSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.6)
-                Spacer()
-                Text(store.copy.completionRate(insight.completionRate))
-                    .font(.noonmarkSystem(size: 11.5, weight: .semibold))
-                    .foregroundStyle(insight.completionRate == 100 && insight.stats.total > 0 ? Theme.ok : Theme.accent)
-                    .monospacedDigit()
+        VStack(alignment: .leading, spacing: 12) {
+            RailHeroStat(
+                label: store.copy.completionHeroLabel,
+                value: "\(insight.completionRate)%",
+                tone: insight.completionRate == 100 && insight.stats.total > 0
+                    ? Theme.ok
+                    : Theme.accent
+            )
+
+            DetailSection(store.copy.railTrendTitle) {
+                RailTrendStrip(points: trendPoints)
             }
 
-            ReviewStatsCard(stats: insight.stats)
+            RailDivider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                RailStatRow(
+                    label: store.copy.traceStatusLabel(.pending),
+                    value: "\(pendingCount)",
+                    valueColor: pendingCount == 0 ? Theme.text3 : Theme.accent
+                )
+                RailStatRow(
+                    label: store.copy.traceStatusLabel(.completed),
+                    value: "\(insight.stats.completed)",
+                    valueColor: insight.stats.completed == 0 ? Theme.text3 : Theme.ok
+                )
+                RailStatRow(
+                    label: store.copy.traceStatusLabel(.unfinished),
+                    value: "\(insight.stats.unfinished)",
+                    valueColor: insight.stats.unfinished == 0 ? Theme.text3 : Theme.warn
+                )
+                RailStatRow(
+                    label: store.copy.traceStatusLabel(.deferred),
+                    value: "\(insight.stats.deferred)"
+                )
+                RailStatRow(
+                    label: store.copy.traceStatusLabel(.abandoned),
+                    value: "\(insight.stats.abandoned)"
+                )
+            }
+
+            RailDivider()
 
             Grid(
                 alignment: .topLeading,
@@ -482,8 +533,9 @@ struct CalendarInsightRow: View {
     var body: some View {
         GridRow(alignment: .top) {
             Text(label)
-                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
+                .tracking(0.6)
                 .lineLimit(MacUICalendarInsightRowLayout.labelLineLimit)
                 .fixedSize(horizontal: true, vertical: false)
                 .gridColumnAlignment(.leading)
@@ -495,7 +547,7 @@ struct CalendarInsightRow: View {
                 }
             Text(text)
                 .font(.noonmarkSystem(size: 11.5))
-                .foregroundStyle(Theme.text2)
+                .foregroundStyle(Theme.text1)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -561,16 +613,13 @@ struct CalendarDetailPanel: View {
                         .foregroundStyle(Theme.text3)
                         .monospacedDigit()
                 }
-                .padding(.top, 7)
+                .padding(.top, 8)
 
-                Button(store.copy.openDayTodo) {
+                TextActionButton(store.copy.openDayTodo) {
                     store.selectedDate = store.selectedCalendarDate
                     store.page = .day
                 }
-                .buttonStyle(.plain)
-                .font(.noonmarkSystem(size: 11.5))
-                .foregroundStyle(Theme.accent)
-                .padding(.top, 9)
+                .padding(.top, 8)
             }
             .padding(.top, 16)
             .padding(.horizontal, 16)
@@ -612,7 +661,7 @@ struct CalendarDetailRow: View {
     let trace: DayTrace
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
+        HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 MarkdownInlineText(title)
                     .font(

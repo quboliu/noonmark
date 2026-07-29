@@ -657,9 +657,11 @@ public enum MacUIReviewElement: String, CaseIterable, Sendable {
     case autosavedIndicator
     case historyReviewNotice
     case futureNoReviewState
-    case statsCard
-    case segmentedStatusBar
-    case statusLegend
+    case completionHero
+    case weeklyTrendStrip
+    case statusBreakdownRows
+    case localSignals
+    case quickSearch
     case summaryInput
     case unfinishedReasonInput
     case tomorrowNoteInput

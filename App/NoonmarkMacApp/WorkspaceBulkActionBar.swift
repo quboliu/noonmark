@@ -66,7 +66,7 @@ struct WorkspaceBulkActionBar: View {
                 )
             )
             .overlay(alignment: .bottom) {
-                Divider().overlay(Theme.line)
+                RailDivider()
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("workspace.bulk-actions")

@@ -171,12 +171,29 @@ struct TaskPoolHomeRail: View {
         ]
     }
 
+    private var oldestPoolTask: (title: String, chainID: TaskChainID, days: Int)? {
+        guard let oldest = store.engine.taskPool().min(by: {
+            $0.chain.createdAt < $1.chain.createdAt
+        }) else {
+            return nil
+        }
+        let days = max(
+            0,
+            Calendar.current.dateComponents(
+                [.day],
+                from: oldest.chain.createdAt,
+                to: Date()
+            ).day ?? 0
+        )
+        return (oldest.definition.title, oldest.chain.id, days)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             statisticsSection
 
             if let analysisState = model.analysisState {
-                Divider()
+                RailDivider()
                 analysisSection(analysisState)
             }
         }
@@ -190,7 +207,7 @@ struct TaskPoolHomeRail: View {
 
     private var statisticsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(store.copy.poolStatisticsTitle)
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
@@ -201,21 +218,12 @@ struct TaskPoolHomeRail: View {
                     .lineSpacing(3)
             }
 
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(store.copy.poolTaskTotalMetric)
-                        .font(.noonmarkSystem(size: 11.5, weight: .medium))
-                        .foregroundStyle(Theme.text2)
-                    Spacer()
-                    Text("\(model.statistics.taskCount)")
-                        .font(.noonmarkSystem(size: 28, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .monospacedDigit()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 11)
-
-                Divider()
+            VStack(alignment: .leading, spacing: 10) {
+                RailHeroStat(
+                    label: store.copy.poolTaskTotalMetric,
+                    value: "\(model.statistics.taskCount)",
+                    tone: Theme.accent
+                )
 
                 LazyVGrid(
                     columns: Array(
@@ -223,32 +231,47 @@ struct TaskPoolHomeRail: View {
                         count: MacUITaskPoolHomeRailLayout.statisticsColumnCount
                     ),
                     alignment: .leading,
-                    spacing: 0
+                    spacing: 8
                 ) {
                     ForEach(secondaryStatistics) { statistic in
-                        VStack(alignment: .leading, spacing: 3) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text("\(statistic.value)")
-                                .font(.noonmarkSystem(size: 17, weight: .semibold))
+                                .font(.noonmarkSystem(size: 15, weight: .semibold))
                                 .foregroundStyle(Theme.text1)
                                 .monospacedDigit()
                             Text(statistic.label)
                                 .font(.noonmarkSystem(size: 10.5))
                                 .foregroundStyle(Theme.text3)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+
+                if let oldest = oldestPoolTask {
+                    Button {
+                        store.selectPool(oldest.chainID)
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(store.copy.poolOldestTaskLabel)
+                                .font(.noonmarkSystem(size: 11.5))
+                                .foregroundStyle(Theme.text3)
+                            Text(store.copy.displayTaskTitle(oldest.title))
+                                .font(.noonmarkSystem(size: 11.5))
+                                .foregroundStyle(Theme.text2)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .layoutPriority(-1)
+                            Spacer(minLength: 0)
+                            Text(store.copy.poolOldestTaskDays(oldest.days))
+                                .font(.noonmarkSystem(size: 11.5, weight: .medium))
+                                .foregroundStyle(Theme.text1)
+                                .monospacedDigit()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .background(
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(Theme.panel2)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9)
-                    .stroke(Theme.line)
-            )
             .background {
                 AppE2EViewAnchor(
                     identifier: "detail.summary.pool.statistics",
@@ -263,7 +286,7 @@ struct TaskPoolHomeRail: View {
         _ state: TaskPoolAnalysisState
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(store.copy.poolAnalysisTitle)
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
@@ -311,7 +334,7 @@ struct TaskPoolHomeRail: View {
                         language: store.engine.preferences.language
                     ).zhulong.eventTimestamp(report.generatedAt)
                 )
-                .font(.noonmarkSystem(size: 10.3))
+                .font(.noonmarkSystem(size: 10.5))
                 .foregroundStyle(Theme.text3)
                 .padding(.bottom, 8)
                 if freshness == .outdated {
@@ -330,17 +353,14 @@ struct TaskPoolHomeRail: View {
                     id: \.offset
                 ) { index, finding in
                     if index > 0 {
-                        Divider().padding(.vertical, 10)
+                        RailDivider()
                     }
                     analysisFinding(finding)
                 }
                 HStack(spacing: 12) {
-                    Button(store.copy.refreshTaskPoolAnalysis) {
+                    TextActionButton(store.copy.refreshTaskPoolAnalysis) {
                         store.requestTaskPoolAnalysis()
                     }
-                    .buttonStyle(.plain)
-                    .font(.noonmarkSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
                     analysisSessionButton
                 }
                 .padding(.top, 12)
@@ -370,7 +390,7 @@ struct TaskPoolHomeRail: View {
     private func analysisFinding(
         _ finding: TaskPoolAnalysisFindingPresentation
     ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(finding.conclusion)
                 .font(.noonmarkSystem(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.text1)
@@ -379,7 +399,7 @@ struct TaskPoolHomeRail: View {
                     finding.evidenceTitles
                 )
             )
-            .font(.noonmarkSystem(size: 10.8))
+            .font(.noonmarkSystem(size: 11))
             .foregroundStyle(Theme.text2)
             Text(
                 store.copy.poolAnalysisConfidence(
@@ -472,8 +492,8 @@ struct SidebarAnalysisModel {
     let title: String
     let subtitle: String
     let metrics: [SidebarAnalysisMetric]
-    let signals: [String]
-    let recommendations: [String]
+    let signals: [RailSignal]
+    let recommendations: [RailSignal]
     let zhulongNote: String
     let zhulongIntent: String
     let zhulongScopes: Set<ZhulongDataScope>
@@ -487,7 +507,44 @@ struct SidebarAnalysisModel {
             let plans = store.visibleFuturePlanItems()
             let dates = Set(plans.map(\.trace.date))
             let continuationCount = plans.filter { $0.trace.continuationSeq > 0 }.count
-            let maxDayLoad = Dictionary(grouping: plans, by: { $0.trace.date }).values.map(\.count).max() ?? 0
+            let plansByDate = Dictionary(grouping: plans, by: { $0.trace.date })
+            let maxDayLoad = plansByDate.values.map(\.count).max() ?? 0
+            let densestDate = plansByDate
+                .filter { $0.value.count == maxDayLoad }
+                .keys
+                .sorted()
+                .first
+            var signals = [
+                RailSignal(
+                    text: store.copy.recentPlanSignal(
+                        date: plans.first.map { store.displayDate($0.trace.date) },
+                        title: plans.first.map {
+                            store.copy.displayTaskTitle($0.definition.title)
+                        }
+                    )
+                )
+            ]
+            if maxDayLoad >= 3, let densestDate {
+                signals.append(
+                    RailSignal(
+                        text: store.copy.densestDaySignal(
+                            date: store.displayDate(densestDate),
+                            count: maxDayLoad
+                        ),
+                        actionTitle: store.copy.openDayAction,
+                        action: {
+                            store.selectedDate = densestDate
+                            store.selectPage(.day)
+                        }
+                    )
+                )
+            } else {
+                signals.append(
+                    RailSignal(
+                        text: store.copy.futureDensitySignal(isDense: false)
+                    )
+                )
+            }
             return SidebarAnalysisModel(
                 page: page,
                 title: store.copy.futureAnalysisTitle,
@@ -497,18 +554,14 @@ struct SidebarAnalysisModel {
                     SidebarAnalysisMetric(label: store.copy.coveredDates, value: "\(dates.count)", tone: .neutral),
                     SidebarAnalysisMetric(label: store.copy.continuedTasks, value: "\(continuationCount)", tone: continuationCount > 0 ? .warn : .ok)
                 ],
-                signals: [
-                    store.copy.recentPlanSignal(
-                        date: plans.first.map { store.displayDate($0.trace.date) },
-                        title: plans.first.map {
-                            store.copy.displayTaskTitle($0.definition.title)
-                        }
-                    ),
-                    store.copy.futureDensitySignal(isDense: maxDayLoad >= 4)
-                ],
+                signals: signals,
                 recommendations: [
-                    store.copy.futurePrimaryRecommendation(isEmpty: plans.isEmpty),
-                    store.copy.futureContinuationRecommendation(hasContinuations: continuationCount > 0)
+                    RailSignal(
+                        text: store.copy.futurePrimaryRecommendation(isEmpty: plans.isEmpty)
+                    ),
+                    RailSignal(
+                        text: store.copy.futureContinuationRecommendation(hasContinuations: continuationCount > 0)
+                    )
                 ],
                 zhulongNote: store.copy.futureZhulongNote,
                 zhulongIntent: store.copy.futureReschedulingIntent,
@@ -518,7 +571,27 @@ struct SidebarAnalysisModel {
             let items = store.engine.unfinishedPool()
             let missed = items.reduce(0) { $0 + $1.unfinishedTraces.count }
             let active = items.filter { $0.activeTrace != nil }.count
-            let repeated = items.filter { $0.unfinishedTraces.count >= 2 }.count
+            let repeatedItems = items.filter { $0.unfinishedTraces.count >= 2 }
+            let repeated = repeatedItems.count
+            var signals = [
+                RailSignal(text: store.copy.repeatedUnfinishedSignal(repeated)),
+                RailSignal(text: store.copy.activeContinuationSignal(active))
+            ]
+            if let top = repeatedItems.max(by: {
+                $0.unfinishedTraces.count < $1.unfinishedTraces.count
+            }) {
+                let chainID = top.chain.id
+                signals.append(
+                    RailSignal(
+                        text: store.copy.repeatedUnfinishedTitleSignal(
+                            title: store.copy.displayTaskTitle(top.definition.title),
+                            count: top.unfinishedTraces.count
+                        ),
+                        actionTitle: store.copy.locateTaskAction,
+                        action: { store.selectUnfinished(chainID) }
+                    )
+                )
+            }
             return SidebarAnalysisModel(
                 page: page,
                 title: store.copy.unfinishedRiskTitle,
@@ -528,13 +601,14 @@ struct SidebarAnalysisModel {
                     SidebarAnalysisMetric(label: store.copy.missedOccurrences, value: "\(missed)", tone: missed == 0 ? .ok : .warn),
                     SidebarAnalysisMetric(label: store.copy.continuedTasks, value: "\(active)", tone: .accent)
                 ],
-                signals: [
-                    store.copy.repeatedUnfinishedSignal(repeated),
-                    store.copy.activeContinuationSignal(active)
-                ],
+                signals: signals,
                 recommendations: [
-                    store.copy.unfinishedPrimaryRecommendation(isEmpty: items.isEmpty),
-                    store.copy.repeatedUnfinishedRecommendation(hasRepeated: repeated > 0)
+                    RailSignal(
+                        text: store.copy.unfinishedPrimaryRecommendation(isEmpty: items.isEmpty)
+                    ),
+                    RailSignal(
+                        text: store.copy.repeatedUnfinishedRecommendation(hasRepeated: repeated > 0)
+                    )
                 ],
                 zhulongNote: store.copy.unfinishedZhulongNote,
                 zhulongIntent: store.copy.unfinishedHandlingIntent,
@@ -555,19 +629,27 @@ struct SidebarAnalysisModel {
                     SidebarAnalysisMetric(label: store.copy.coveredDates, value: "\(dates.count)", tone: .neutral)
                 ],
                 signals: [
-                    store.copy.recentCompletionSignal(
-                        date: completed.first.map { store.displayDate($0.trace.date) },
-                        title: completed.first.map {
-                            store.copy.displayTaskTitle($0.definition.title)
-                        }
+                    RailSignal(
+                        text: store.copy.recentCompletionSignal(
+                            date: completed.first.map { store.displayDate($0.trace.date) },
+                            title: completed.first.map {
+                                store.copy.displayTaskTitle($0.definition.title)
+                            }
+                        )
                     ),
-                    store.copy.continuedCompletionSignal(continuedCompletions)
+                    RailSignal(
+                        text: store.copy.continuedCompletionSignal(continuedCompletions)
+                    )
                 ],
                 recommendations: [
-                    store.copy.completionPrimaryRecommendation(
-                        isEmpty: completed.isEmpty && subtaskRecords.isEmpty
+                    RailSignal(
+                        text: store.copy.completionPrimaryRecommendation(
+                            isEmpty: completed.isEmpty && subtaskRecords.isEmpty
+                        )
                     ),
-                    store.copy.completedSubtaskRecommendation(hasSubtasks: subtaskRecords.isEmpty == false)
+                    RailSignal(
+                        text: store.copy.completedSubtaskRecommendation(hasSubtasks: subtaskRecords.isEmpty == false)
+                    )
                 ],
                 zhulongNote: store.copy.completionZhulongNote,
                 zhulongIntent: store.copy.completionReviewIntent,
@@ -588,8 +670,8 @@ struct SidebarAnalysisRail: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(model.title)
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
@@ -600,9 +682,13 @@ struct SidebarAnalysisRail: View {
                     .lineSpacing(3)
             }
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 ForEach(model.metrics) { metric in
-                    SidebarMetricTile(metric: metric)
+                    RailStatRow(
+                        label: metric.label,
+                        value: metric.value,
+                        valueColor: metric.tone.color
+                    )
                 }
             }
             .background {
@@ -612,16 +698,30 @@ struct SidebarAnalysisRail: View {
                 )
             }
 
-            SidebarTextBlock(
-                title: store.copy.localSignals,
-                rows: model.signals,
-                identifier: "\(identifierPrefix).signals"
-            )
-            SidebarTextBlock(
-                title: store.copy.algorithmSuggestions,
-                rows: model.recommendations,
-                identifier: "\(identifierPrefix).recommendations"
-            )
+            RailDivider()
+
+            DetailSection(store.copy.localSignals) {
+                RailSignalList(signals: model.signals)
+            }
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "\(identifierPrefix).signals",
+                    verificationText: "\(model.signals.count)"
+                )
+            }
+
+            DetailSection(store.copy.algorithmSuggestions) {
+                RailSignalList(signals: model.recommendations)
+            }
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "\(identifierPrefix).recommendations",
+                    verificationText: "\(model.recommendations.count)"
+                )
+            }
+
+            RailDivider()
+
             if store.isZhulongEnabled {
                 ZhulongAnalysisEntry(
                     page: model.page,
@@ -644,61 +744,6 @@ struct SidebarAnalysisRail: View {
     }
 }
 
-struct SidebarMetricTile: View {
-    let metric: SidebarAnalysisMetric
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(metric.label)
-                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                .foregroundStyle(Theme.text3)
-            Text(metric.value)
-                .font(.noonmarkSystem(size: 18, weight: .semibold))
-                .foregroundStyle(metric.tone.color)
-                .monospacedDigit()
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(metric.tone.background.opacity(0.72)))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-    }
-}
-
-struct SidebarTextBlock: View {
-    let title: String
-    let rows: [String]
-    let identifier: String
-
-    var body: some View {
-        DetailSection(title) {
-            VStack(alignment: .leading, spacing: 7) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    HStack(alignment: .top, spacing: 7) {
-                        Circle()
-                            .fill(Theme.accent)
-                            .frame(width: 4, height: 4)
-                            .padding(.top, 6)
-                        Text(row)
-                            .font(.noonmarkSystem(size: 11.5))
-                            .foregroundStyle(Theme.text2)
-                            .lineSpacing(3)
-                    }
-                }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-        }
-        .background {
-            AppE2EViewAnchor(
-                identifier: identifier,
-                verificationText: "\(rows.count)"
-            )
-        }
-    }
-}
-
 struct ZhulongAnalysisHint: View {
     let text: String
     let identifier: String
@@ -708,16 +753,14 @@ struct ZhulongAnalysisHint: View {
             Image(systemName: "sparkles")
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.accent)
-                .frame(width: 18, height: 18)
+                .frame(width: 16)
+                .padding(.top, 1)
             Text(text)
                 .font(.noonmarkSystem(size: 11.5))
                 .foregroundStyle(Theme.text3)
                 .lineSpacing(3)
         }
-        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.accentSoft.opacity(0.55)))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent.opacity(0.16)))
         .background {
             AppE2EViewAnchor(
                 identifier: identifier,
@@ -771,39 +814,18 @@ struct ZhulongAnalysisEntry: View {
     }
 
     var body: some View {
-        Button(action: openZhulongDestination) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.noonmarkSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .frame(width: 18, height: 18)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.noonmarkSystem(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Theme.text1)
-                    Text(subtitle)
-                        .font(.noonmarkSystem(size: 11))
-                        .foregroundStyle(Theme.text3)
-                        .lineSpacing(3)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "arrow.right")
-                    .font(.noonmarkSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .padding(.top, 4)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.accentSoft.opacity(0.55)))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent.opacity(0.16)))
-            .background {
-                AppE2EViewAnchor(
-                    identifier: "detail.summary.\(page.rawValue).zhulong-action",
-                    verificationText: title
-                )
-            }
+        RailEntryRow(
+            systemImage: "sparkles",
+            title: title,
+            subtitle: subtitle,
+            action: openZhulongDestination
+        )
+        .background {
+            AppE2EViewAnchor(
+                identifier: "detail.summary.\(page.rawValue).zhulong-action",
+                verificationText: title
+            )
         }
-        .buttonStyle(.plain)
     }
 
     private func openZhulongDestination() {
@@ -819,25 +841,69 @@ struct ZhulongAnalysisEntry: View {
 struct DetailRail: View {
     @EnvironmentObject private var store: NoonmarkStore
     @ObservedObject var zhulongWorkspace: ZhulongWorkspaceStore
+    @State private var railSearchQuery = ""
+
+    private var trimmedRailSearchQuery: String {
+        railSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var railSearchResults: [WorkspaceSearchResult] {
+        guard trimmedRailSearchQuery.isEmpty == false else { return [] }
+        return WorkspaceSearchIndex(engine: store.engine)
+            .search(trimmedRailSearchQuery, limit: 6)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                PaneBoundaryToggle(
-                    direction: .right,
-                    accessibilityLabel: store.copy.collapseDetailRail,
-                    identifier: "shell.detail-rail.toggle"
-                ) {
-                    store.toggleDetailRail()
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    PaneBoundaryToggle(
+                        direction: .right,
+                        accessibilityLabel: store.copy.collapseDetailRail,
+                        identifier: "shell.detail-rail.toggle"
+                    ) {
+                        store.toggleDetailRail()
+                    }
+                    RailSearchField(
+                        query: $railSearchQuery,
+                        onSubmit: {
+                            if let first = railSearchResults.first {
+                                revealRailSearchResult(first)
+                            }
+                        },
+                        onDismiss: {
+                            railSearchQuery = ""
+                        }
+                    )
                 }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 36)
-            .background(Theme.panel)
+                .padding(.horizontal, 8)
+                .frame(height: 36)
+                .background(Theme.panel)
 
-            detailContent
+                detailContent
+            }
+
+            if trimmedRailSearchQuery.isEmpty == false {
+                VStack(spacing: 0) {
+                    RailSearchResultsPanel(
+                        results: railSearchResults,
+                        onSelect: revealRailSearchResult
+                    )
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
+                    .padding(.bottom, 6)
+                    RailDivider()
+                }
+                .background(Theme.panel)
+                .shadow(color: Theme.shadowRaised, radius: 6, y: 3)
+                .padding(.top, 40)
+            }
         }
+    }
+
+    private func revealRailSearchResult(_ result: WorkspaceSearchResult) {
+        store.revealSearchResult(result)
+        railSearchQuery = ""
     }
 
     @ViewBuilder

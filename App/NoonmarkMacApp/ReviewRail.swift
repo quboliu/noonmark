@@ -21,8 +21,69 @@ struct ReviewRail: View {
     var stats: DailyReviewStats { store.engine.dailyReviewStats(date: store.selectedDate) }
     var noReview: Bool { store.isFuture }
 
+    private var completionRate: Int {
+        stats.total == 0
+            ? 0
+            : Int((Double(stats.completed) / Double(stats.total) * 100).rounded())
+    }
+
+    private var pendingCount: Int {
+        max(
+            0,
+            stats.total
+                - stats.completed
+                - stats.unfinished
+                - stats.deferred
+                - stats.abandoned
+        )
+    }
+
+    private var trendPoints: [RailTrendPoint] {
+        (0 ..< 7).reversed().map { daysBack in
+            let date = NoonmarkStore.offset(store.selectedDate, by: -daysBack)
+            let dayStats = store.engine.dailyReviewStats(date: date)
+            return RailTrendPoint(
+                axisLabel: store.weekdayNarrow(date),
+                ratio: dayStats.total == 0
+                    ? nil
+                    : Double(dayStats.completed) / Double(dayStats.total),
+                isHighlighted: daysBack == 0
+            )
+        }
+    }
+
+    private var signals: [RailSignal] {
+        var items: [RailSignal] = []
+        if stats.unfinished > 0 {
+            items.append(
+                RailSignal(
+                    text: store.copy.reviewUnfinishedCarrySignal(stats.unfinished),
+                    actionTitle: store.copy.reviewOpenUnfinishedAction,
+                    action: { store.selectPage(.unfinished) }
+                )
+            )
+        }
+        if store.selectedDate == store.today {
+            let tomorrow = NoonmarkStore.offset(store.today, by: 1)
+            let tomorrowCount = store.engine.getDayTodo(date: tomorrow).traces.count
+            if tomorrowCount > 0 {
+                items.append(
+                    RailSignal(
+                        text: store.copy.reviewTomorrowLoadSignal(tomorrowCount),
+                        actionTitle: store.copy.reviewOpenTomorrowAction,
+                        action: {
+                            store.selectedDate = tomorrow
+                            store.selectPage(.day)
+                        }
+                    )
+                )
+            }
+        }
+        return items
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text(store.copy.dailyReviewTitle)
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
@@ -51,7 +112,58 @@ struct ReviewRail: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
             } else {
-                ReviewStatsCard(stats: stats)
+                RailHeroStat(
+                    label: store.copy.completionHeroLabel,
+                    value: "\(completionRate)%",
+                    tone: completionRate == 100 && stats.total > 0
+                        ? Theme.ok
+                        : Theme.accent
+                )
+
+                DetailSection(store.copy.railTrendTitle) {
+                    RailTrendStrip(points: trendPoints)
+                }
+
+                RailDivider()
+
+                DetailSection(store.copy.totalTasksTitle) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        RailStatRow(
+                            label: store.copy.traceStatusLabel(.pending),
+                            value: "\(pendingCount)",
+                            valueColor: pendingCount == 0 ? Theme.text3 : Theme.accent
+                        )
+                        RailStatRow(
+                            label: store.copy.traceStatusLabel(.completed),
+                            value: "\(stats.completed)",
+                            valueColor: stats.completed == 0 ? Theme.text3 : Theme.ok
+                        )
+                        RailStatRow(
+                            label: store.copy.traceStatusLabel(.unfinished),
+                            value: "\(stats.unfinished)",
+                            valueColor: stats.unfinished == 0 ? Theme.text3 : Theme.warn
+                        )
+                        RailStatRow(
+                            label: store.copy.traceStatusLabel(.deferred),
+                            value: "\(stats.deferred)"
+                        )
+                        RailStatRow(
+                            label: store.copy.traceStatusLabel(.abandoned),
+                            value: "\(stats.abandoned)"
+                        )
+                    }
+                }
+
+                if signals.isEmpty == false {
+                    RailDivider()
+
+                    DetailSection(store.copy.reviewSignalsTitle) {
+                        RailSignalList(signals: signals)
+                    }
+                }
+
+                RailDivider()
+
                 ReviewEditor(
                     title: store.copy.todaySummaryTitle,
                     placeholder: store.copy.todaySummaryPlaceholder,
@@ -88,7 +200,7 @@ struct ReviewSavedIndicator: View {
     let text: String
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 4) {
             Image(systemName: "checkmark")
                 .font(.noonmarkSystem(size: 8.5, weight: .bold))
             Text(text)
@@ -102,95 +214,12 @@ struct ZhulongReviewEntryButton: View {
     @EnvironmentObject private var store: NoonmarkStore
 
     var body: some View {
-        Button {
+        RailEntryRow(
+            systemImage: "sparkles",
+            title: store.copy.analyzeTodayWithZhulong
+        ) {
             store.requestZhulongDailyReviewFromReviewRail()
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "sparkles")
-                    .font(.noonmarkSystem(size: 11, weight: .semibold))
-                Text(store.copy.analyzeTodayWithZhulong)
-                    .font(.noonmarkSystem(size: 11.5, weight: .semibold))
-                Spacer(minLength: 0)
-                Image(systemName: "arrow.right")
-                    .font(.noonmarkSystem(size: 10, weight: .semibold))
-            }
-            .foregroundStyle(Theme.accent)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .hoverSurface(
-                cornerRadius: 8,
-                idleFill: Theme.accentSoft,
-                hoverFill: Theme.accentSoft.opacity(0.72),
-                idleStroke: Theme.accent.opacity(0.18),
-                hoverStroke: Theme.accent.opacity(0.32)
-            )
         }
-        .buttonStyle(.plain)
-    }
-}
-
-struct ReviewStatsCard: View {
-    @EnvironmentObject private var store: NoonmarkStore
-    let stats: DailyReviewStats
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text(store.copy.totalTasksTitle)
-                    .font(.noonmarkSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                Spacer()
-                Text("\(stats.total)")
-                    .font(.noonmarkSystem(size: 22, weight: .semibold))
-            }
-            GeometryReader { proxy in
-                HStack(spacing: 1.5) {
-                    segment(stats.completed, total: stats.total, color: Theme.ok, width: proxy.size.width)
-                    segment(pendingCount, total: stats.total, color: Theme.accent, width: proxy.size.width)
-                    segment(stats.unfinished, total: stats.total, color: Theme.warn, width: proxy.size.width)
-                }
-            }
-            .frame(height: 7)
-            .clipShape(Capsule())
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 5) {
-                legend(store.copy.traceStatusLabel(.pending), pendingCount, Theme.accent)
-                legend(store.copy.traceStatusLabel(.completed), stats.completed, Theme.ok)
-                legend(store.copy.traceStatusLabel(.unfinished), stats.unfinished, Theme.warn)
-                legend(store.copy.traceStatusLabel(.deferred), stats.deferred, Theme.text2)
-                legend(store.copy.traceStatusLabel(.abandoned), stats.abandoned, Theme.text2)
-            }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
-    }
-
-    func segment(_ value: Int, total: Int, color: Color, width: CGFloat) -> some View {
-        Rectangle()
-            .fill(value == 0 ? Color.clear : color)
-            .frame(width: total == 0 ? 0 : max(2, width * CGFloat(value) / CGFloat(total)))
-    }
-
-    var pendingCount: Int {
-        max(
-            0,
-            stats.total
-                - stats.completed
-                - stats.unfinished
-                - stats.deferred
-                - stats.abandoned
-        )
-    }
-
-    func legend(_ label: String, _ value: Int, _ color: Color) -> some View {
-        HStack {
-            Circle().fill(value == 0 ? Theme.line2 : color).frame(width: 6, height: 6)
-            Text(label)
-            Spacer()
-            Text("\(value)")
-        }
-        .font(.noonmarkSystem(size: 11))
-        .foregroundStyle(value == 0 ? Theme.text3 : Theme.text2)
     }
 }
 
@@ -203,23 +232,24 @@ struct ReviewEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.noonmarkSystem(size: 11.5, weight: .semibold))
-                .foregroundStyle(Theme.text2)
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+                .tracking(0.6)
             MarkdownEditor(
                 text: $text,
                 placeholder: placeholder,
                 style: .body,
+                showsSurface: true,
                 height: 92,
                 nativeAccessibilityIdentifier: accessibilityIdentifier
             )
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .background {
                     AppE2EViewAnchor(
                         identifier: "\(accessibilityIdentifier).surface",
                         verificationText: placeholder
                     )
                 }
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
         }
     }
 }

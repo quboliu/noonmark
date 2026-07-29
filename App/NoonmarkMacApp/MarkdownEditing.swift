@@ -670,7 +670,7 @@ struct MarkdownText: View {
             MarkdownInlineText(block.text)
                 .lineSpacing(3)
         case let .list(marker, checked):
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if let checked {
                     Image(systemName: checked ? "checkmark.square.fill" : "square")
                         .font(.noonmarkSystem(size: 11, weight: .semibold))
@@ -685,7 +685,7 @@ struct MarkdownText: View {
                 MarkdownInlineText(block.text)
             }
         case .quote:
-            HStack(alignment: .top, spacing: 9) {
+            HStack(alignment: .top, spacing: 8) {
                 Rectangle().fill(Theme.accent.opacity(0.55)).frame(width: 3)
                 MarkdownInlineText(block.text).foregroundStyle(Theme.text2)
             }

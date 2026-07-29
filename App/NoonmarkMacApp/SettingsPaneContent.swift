@@ -160,10 +160,10 @@ struct SettingsPreferenceCard: View {
                             text: poemTextBinding,
                             placeholder: store.copy.settingsPoemPlaceholder,
                             style: .body,
+                            showsSurface: true,
                             height: 120
                         )
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel2))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }
                     .padding(.top, 8)
                 }
@@ -403,8 +403,6 @@ struct LocalFirstCloudSyncCard: View {
                         }
                     }
                     .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
                 } else {
                     Notice(text: store.copy.remoteEndpointPlanned, tone: .locked)
                 }
@@ -448,7 +446,7 @@ struct SyncOptionsCard: View {
                 let iCloudUnavailable = option.kind == .iCloud
                     && store.isICloudSyncEndpointAvailable == false
                 HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(store.copy.syncTitle(for: option.kind))
                             .font(.noonmarkSystem(size: 13, weight: .medium))
                             .foregroundStyle(Theme.text1)
@@ -470,14 +468,10 @@ struct SyncOptionsCard: View {
                 .padding(.vertical, 11)
 
                 if index < store.engine.syncEndpointOptions().count - 1 {
-                    Rectangle()
-                        .fill(Theme.line)
-                        .frame(height: 1)
+                    RailDivider()
                 }
             }
         }
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
     }
 }
 
@@ -498,7 +492,7 @@ struct SettingsProviderOverviewCard: View {
 
     var body: some View {
         SettingsCard(subtitle: store.copy.providerSubtitle) {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 20) {
                 SettingSection(title: store.copy.providerConfigurationTitle) {
                     VStack(alignment: .leading, spacing: 16) {
                         HStack(spacing: 10) {
@@ -522,7 +516,7 @@ struct SettingsProviderOverviewCard: View {
                             Spacer()
                         }
 
-                        VStack(alignment: .leading, spacing: 7) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text(store.copy.providerType)
                                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                                 .foregroundStyle(Theme.text3)
@@ -586,7 +580,7 @@ struct SettingsProviderOverviewCard: View {
                         .padding(.top, 2)
 
                         if let feedback = store.zhulongProviderSettingsFeedback {
-                            HStack(spacing: 7) {
+                            HStack(spacing: 8) {
                                 if feedback.tone == .progress {
                                     ProgressView()
                                         .controlSize(.small)
@@ -718,9 +712,7 @@ struct SettingsProviderOverviewCard: View {
                 }
 
                 if let prompt = store.automaticClassificationBacklogPrompt {
-                    Rectangle()
-                        .fill(Theme.line)
-                        .frame(height: 1)
+                    RailDivider()
                         .accessibilityHidden(true)
 
                     AutomaticClassificationBacklogPromptView(
@@ -792,7 +784,7 @@ struct SettingsProviderOverviewCard: View {
             cornerRadius: 6,
             idleFill: Theme.controlFill,
             hoverFill: Theme.listRowHover,
-            idleStroke: Theme.line.opacity(0.72),
+            idleStroke: Theme.lineSubtle,
             hoverStroke: Theme.line2.opacity(0.72)
         )
     }
@@ -935,7 +927,7 @@ private struct AutomaticClassificationBacklogPromptView: View {
             cornerRadius: 6,
             idleFill: Theme.controlFill,
             hoverFill: Theme.listRowHover,
-            idleStroke: Theme.line.opacity(0.72),
+            idleStroke: Theme.lineSubtle,
             hoverStroke: Theme.line2.opacity(0.72)
         )
     }
@@ -1002,8 +994,6 @@ struct SettingsMetricPill: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 30)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
     }
 }
 
@@ -1029,7 +1019,7 @@ struct SettingsInfoRow: View {
         .frame(height: 30)
         .overlay(alignment: .bottom) {
             if last == false {
-                Rectangle().fill(Theme.line).frame(height: 1)
+                RailDivider()
             }
         }
     }

@@ -31,8 +31,10 @@ struct ClassificationManagerButton: View {
                 Text(resolvedTitle)
                     .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                 if prominent {
-                    Image(systemName: "chevron.right")
-                        .font(.noonmarkSystem(size: 8, weight: .bold))
+                    MicroLabel(
+                        systemImage: "chevron.right",
+                        color: prominent ? Theme.accent : Theme.text2
+                    )
                 }
             }
             .foregroundStyle(prominent ? Theme.accent : Theme.text2)
@@ -42,14 +44,14 @@ struct ClassificationManagerButton: View {
                 if prominent || isHovered {
                     RoundedRectangle(cornerRadius: 7).fill(
                         prominent
-                            ? Theme.accentSoft.opacity(isHovered ? 0.88 : 0.64)
+                            ? (isHovered ? Theme.accentSoftStrong : Theme.accentSoftMuted)
                             : Theme.controlFill
                     )
                 }
             }
             .overlay {
                 if prominent {
-                    RoundedRectangle(cornerRadius: 7).stroke(Theme.accent.opacity(0.20))
+                    RoundedRectangle(cornerRadius: 7).stroke(Theme.accentStroke)
                 }
             }
             .contentShape(Rectangle())
@@ -128,18 +130,18 @@ struct ClassificationManagementDialog: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider()
+            RailDivider()
             toolbar
             if isCreating {
                 creationEditor
-                Divider()
+                RailDivider()
             }
             itemList
             if let message {
-                Divider()
+                RailDivider()
                 errorBanner(message)
             }
-            Divider()
+            RailDivider()
             footer
         }
         .frame(
@@ -286,7 +288,7 @@ struct ClassificationManagementDialog: View {
 
     private var toolbar: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 7) {
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.noonmarkSystem(size: 11, weight: .medium))
                     .foregroundStyle(Theme.text3)
@@ -315,7 +317,7 @@ struct ClassificationManagementDialog: View {
             .padding(.horizontal, 9)
             .frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 7).fill(Theme.controlFill))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line.opacity(0.72)))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.lineSubtle))
             .accessibilityIdentifier("classification.manager.search")
 
             Button {
@@ -337,12 +339,12 @@ struct ClassificationManagementDialog: View {
                             .fill(
                                 isCreating
                                     ? Theme.controlFill
-                                    : Theme.accentSoft.opacity(isCreateButtonHovered ? 0.92 : 0.62)
+                                    : (isCreateButtonHovered ? Theme.accentSoftStrong : Theme.accentSoftMuted)
                             )
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 7)
-                            .stroke(isCreating ? Theme.line : Theme.accent.opacity(0.22))
+                            .stroke(isCreating ? Theme.line : Theme.accentStroke)
                     )
             }
             .buttonStyle(.plain)
@@ -362,17 +364,14 @@ struct ClassificationManagementDialog: View {
                     .padding(.horizontal, 9)
                     .frame(height: 30)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.35)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accentStroke))
                     .onSubmit(createItem)
 
-                Button(copy.createAction, action: createItem)
-                    .buttonStyle(.plain)
-                    .font(.noonmarkSystem(size: 10.5, weight: .bold))
-                    .foregroundStyle(Theme.accent)
+                TextActionButton(copy.createAction, action: createItem)
                     .disabled(ClassificationNameCanonicalizer.displayName(newName).isEmpty)
             }
 
-            HStack(spacing: 9) {
+            HStack(spacing: 8) {
                 Text(copy.colorTitle)
                     .font(.noonmarkSystem(size: 9.5, weight: .semibold))
                     .foregroundStyle(Theme.text3)
@@ -405,7 +404,7 @@ struct ClassificationManagementDialog: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Theme.accentSoft.opacity(0.22))
+        .background(Theme.accentSoftWash)
         .accessibilityIdentifier("classification.manager.create.editor")
     }
 
@@ -443,7 +442,7 @@ struct ClassificationManagementDialog: View {
         HStack(spacing: 6) {
             Text(title.uppercased())
                 .font(.noonmarkSystem(size: 9.5, weight: .bold))
-                .tracking(0.7)
+                .tracking(0.6)
                 .foregroundStyle(Theme.text3)
             Text("\(count)")
                 .font(.noonmarkSystem(size: 9, weight: .bold, design: .rounded))
@@ -465,12 +464,11 @@ struct ClassificationManagementDialog: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.noonmarkSystem(size: 8, weight: .bold))
+                MicroLabel(systemImage: "chevron.right")
                     .rotationEffect(.degrees(showsArchived ? 90 : 0))
                 Text(copy.archivedSectionTitle)
                     .font(.noonmarkSystem(size: 9.5, weight: .bold))
-                    .tracking(0.7)
+                    .tracking(0.6)
                 Text("\(archivedItems.count)")
                     .font(.noonmarkSystem(size: 9, weight: .bold, design: .rounded))
                     .padding(.horizontal, 5)
@@ -504,21 +502,15 @@ struct ClassificationManagementDialog: View {
 
     private func itemRow(_ item: ClassificationCatalogItemProjection) -> some View {
         let canDiscard = item.currentUsageCount == 0 && item.historicalUsageCount == 0
-        return HStack(spacing: 9) {
+        return HStack(spacing: 8) {
             itemSymbol(item)
             if editingID == item.id {
                 TextField(copy.nameEditorPlaceholder, text: $editingName)
                     .textFieldStyle(.plain)
                     .font(.noonmarkSystem(size: 11.5, weight: .medium))
                     .onSubmit { rename(item) }
-                Button(copy.saveAction) { rename(item) }
-                    .buttonStyle(.plain)
-                    .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                Button(copy.cancelAction) { editingID = nil }
-                    .buttonStyle(.plain)
-                    .font(.noonmarkSystem(size: 10.5))
-                    .foregroundStyle(Theme.text3)
+                TextActionButton(copy.saveAction) { rename(item) }
+                TextActionButton(copy.cancelAction, tone: .neutral) { editingID = nil }
             } else {
                 let titleColor = kind == .category
                     ? item.categoryPresentationColor
@@ -528,7 +520,7 @@ struct ClassificationManagementDialog: View {
                     .foregroundStyle(item.lifecycle == .active ? titleColor : Theme.text3)
                     .lineLimit(1)
                 Spacer()
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Text(copy.currentReferenceCount(item.currentUsageCount))
                     Text("·")
                     Text(copy.historicalReferenceCount(item.historicalUsageCount))
@@ -627,7 +619,7 @@ struct ClassificationManagementDialog: View {
         .frame(height: CGFloat(MacUIClassificationLayout.managerRowHeight))
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Theme.line.opacity(0.72))
+                .fill(Theme.lineSubtle)
                 .frame(height: 1)
                 .padding(.leading, 48)
         }
@@ -662,7 +654,7 @@ struct ClassificationManagementDialog: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.noonmarkSystem(size: 10.5, weight: .semibold))
             Text(copy.historyNotice)
@@ -677,7 +669,7 @@ struct ClassificationManagementDialog: View {
     }
 
     private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.noonmarkSystem(size: 10.5, weight: .semibold))
             Text(message)

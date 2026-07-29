@@ -37,7 +37,7 @@ struct FuturePlansPage: View {
             }
             WorkspaceBulkActionBar()
             TaskSelectionClearingScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(grouped, id: \.0) { date, items in
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 10) {
@@ -45,13 +45,10 @@ struct FuturePlansPage: View {
                                     .font(.noonmarkSystem(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text1)
                                     .monospacedDigit()
-                                Button(store.copy.openDay) {
+                                TextActionButton(store.copy.openDay) {
                                     store.selectedDate = date
                                     store.page = .day
                                 }
-                                .buttonStyle(.plain)
-                                .font(.noonmarkSystem(size: 11.5))
-                                .foregroundStyle(Theme.accent)
                             }
                             .padding(.bottom, 4)
                             ForEach(items, id: \.trace.id) { item in

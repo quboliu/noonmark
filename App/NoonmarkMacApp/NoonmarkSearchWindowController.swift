@@ -120,7 +120,7 @@ private struct NoonmarkSearchView: View {
             .frame(height: 46)
             .background(Theme.controlFill)
             .overlay(alignment: .bottom) {
-                Rectangle().fill(Theme.line).frame(height: 1)
+                RailDivider()
             }
 
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -207,7 +207,7 @@ private struct NoonmarkSearchResultRow: View {
                 .frame(width: 22, height: 22)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(store.copy.displayTaskTitle(result.title))
                     .font(.noonmarkSystem(size: 13, weight: .medium))
                     .foregroundStyle(Theme.text1)
@@ -226,10 +226,11 @@ private struct NoonmarkSearchResultRow: View {
 
             Spacer(minLength: 12)
 
-            VStack(alignment: .trailing, spacing: 3) {
+            VStack(alignment: .trailing, spacing: 4) {
                 Text(kindLabel)
-                    .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Theme.text2)
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.text3)
+                    .tracking(0.6)
                 if let dateLabel {
                     Text(dateLabel)
                         .font(.noonmarkSystem(size: 10.5))

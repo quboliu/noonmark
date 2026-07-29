@@ -143,7 +143,7 @@ private struct NoonmarkSettingsWindowRoot: View {
                 }
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 20) {
                         Text(selectedPane.title(copy: store.copy))
                             .font(
                                 .noonmarkSystem(

@@ -85,7 +85,7 @@ struct TaskCycleCreationSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             Text(sheetTitle)
             .font(.noonmarkSystem(size: 17, weight: .semibold))
             .foregroundStyle(Theme.text1)

@@ -65,10 +65,10 @@ struct TaskClassificationEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 8) {
             categorySection
             Rectangle()
-                .fill(Theme.line.opacity(0.72))
+                .fill(Theme.lineSubtle)
                 .frame(height: 1)
             labelSection
         }
@@ -93,7 +93,7 @@ struct TaskClassificationEditor: View {
     }
 
     private var categorySection: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 editorFieldLabel(copy.categoryTitle)
                 categoryMenu
@@ -108,7 +108,7 @@ struct TaskClassificationEditor: View {
             }
 
             if isCreatingGroup {
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
                     Color.clear.frame(width: Self.fieldLabelWidth, height: 1)
                     Circle()
                         .fill(classificationUIColor(Self.newGroupColorHex))
@@ -119,7 +119,7 @@ struct TaskClassificationEditor: View {
                         .padding(.horizontal, 8)
                         .frame(height: 28)
                         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.controlFill))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line.opacity(0.8)))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.lineSubtle))
                         .onSubmit(createAndSelectGroup)
                     Button(copy.cancelAction) {
                         newGroupName = ""
@@ -127,10 +127,7 @@ struct TaskClassificationEditor: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.text3)
-                    Button(copy.createAndAddAction, action: createAndSelectGroup)
-                        .buttonStyle(.plain)
-                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
+                    TextActionButton(copy.createAndAddAction, action: createAndSelectGroup)
                 }
             }
 
@@ -191,11 +188,11 @@ struct TaskClassificationEditor: View {
             if let selectedCategory {
                 categoryChip(selectedCategory)
             } else {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Text(copy.noGroup)
                         .font(.noonmarkSystem(size: 11))
                     Image(systemName: "chevron.down")
-                        .font(.noonmarkSystem(size: 7, weight: .bold))
+                        .font(.noonmarkSystem(size: 8, weight: .bold))
                 }
                 .foregroundStyle(Theme.text3)
                 .padding(.horizontal, 7)
@@ -221,7 +218,7 @@ struct TaskClassificationEditor: View {
 
     private func categoryChip(_ category: ClassificationCatalogItemProjection) -> some View {
         let color = category.categoryPresentationColor
-        return HStack(spacing: 5) {
+        return HStack(spacing: 4) {
             Image(systemName: "folder.fill")
                 .font(.noonmarkSystem(size: 9.5, weight: .semibold))
                 .foregroundStyle(color)
@@ -231,7 +228,7 @@ struct TaskClassificationEditor: View {
                 .lineLimit(1)
                 .help(category.name)
             Image(systemName: "chevron.down")
-                .font(.noonmarkSystem(size: 7, weight: .bold))
+                .font(.noonmarkSystem(size: 8, weight: .bold))
                 .foregroundStyle(Theme.text3)
         }
         .padding(.horizontal, 7)
@@ -253,7 +250,7 @@ struct TaskClassificationEditor: View {
     }
 
     private var labelSection: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 editorFieldLabel(copy.labelTitle)
                 ClassificationEditorFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
@@ -298,7 +295,7 @@ struct TaskClassificationEditor: View {
                             ? (
                                 isLabelInputFocused
                                     ? Theme.accent.opacity(0.42)
-                                    : Theme.line.opacity(0.8)
+                                    : Theme.lineSubtle
                             )
                             : Theme.warn,
                         lineWidth: 1
@@ -329,7 +326,7 @@ struct TaskClassificationEditor: View {
     }
 
     private var labelSuggestionDropdown: some View {
-        HStack(alignment: .top, spacing: 7) {
+        HStack(alignment: .top, spacing: 8) {
             Color.clear.frame(width: Self.fieldLabelWidth, height: 1)
             VStack(alignment: .leading, spacing: 0) {
                 if matchingLabelSuggestions.isEmpty {
@@ -344,7 +341,7 @@ struct TaskClassificationEditor: View {
                         Button {
                             addExistingLabel(label)
                         } label: {
-                            HStack(spacing: 7) {
+                            HStack(spacing: 8) {
                                 Text("#")
                                     .font(
                                         .noonmarkSystem(
@@ -393,9 +390,9 @@ struct TaskClassificationEditor: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
-                    .stroke(Theme.line.opacity(0.86))
+                    .stroke(Theme.lineSubtle)
             )
-            .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
+            .shadow(color: Theme.shadowRaised, radius: 8, y: 4)
             .accessibilityIdentifier(
                 "classification.editor.label-suggestions.\(target.identifier)"
             )
@@ -490,9 +487,7 @@ struct TaskClassificationEditor: View {
             Button {
                 removeLabel(label)
             } label: {
-                Image(systemName: "xmark")
-                    .font(.noonmarkSystem(size: 8, weight: .bold))
-                    .foregroundStyle(Theme.text3)
+                MicroLabel(systemImage: "xmark")
                     .frame(width: 16, height: 16)
             }
             .frame(width: 28, height: 28)

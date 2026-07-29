@@ -195,8 +195,9 @@ struct DatePickerSheet: View {
                 id: \.offset
             ) { _, label in
                 Text(label)
-                    .font(.noonmarkSystem(size: 10.5, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
+                    .tracking(0.6)
                     .frame(width: dayCellWidth, height: 18)
             }
         }
@@ -206,8 +207,7 @@ struct DatePickerSheet: View {
 
     private var footer: some View {
         VStack(spacing: 12) {
-            Divider()
-                .overlay(Theme.line)
+            RailDivider()
 
             HStack(spacing: 8) {
                 Text(validationMessage ?? selectionSummary)

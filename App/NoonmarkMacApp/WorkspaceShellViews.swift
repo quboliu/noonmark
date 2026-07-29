@@ -43,7 +43,7 @@ struct Sidebar: View {
                     .padding(.top, 12)
             } else {
                 Divider()
-                    .overlay(Theme.line.opacity(0.72))
+                    .overlay(Theme.lineSubtle)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 10)
             }
@@ -104,9 +104,9 @@ struct NavGroupTitle: View {
 
     var body: some View {
         Text(title)
-            .font(.noonmarkSystem(size: 11.5, weight: .semibold))
+            .font(.noonmarkSystem(size: 11, weight: .semibold))
             .foregroundStyle(Theme.text3)
-            .tracking(0.4)
+            .tracking(0.6)
             .padding(.horizontal, 20)
             .padding(.bottom, 5)
     }
@@ -138,11 +138,9 @@ struct NavItem: View {
                         Spacer()
                         if count > 0 {
                             Text("\(count)")
-                                .font(.noonmarkSystem(size: 12, weight: active ? .semibold : .regular))
-                                .foregroundStyle(Theme.text2)
-                                .padding(.horizontal, 7)
-                                .frame(minWidth: 21, minHeight: 18)
-                                .background(Capsule().fill(Theme.chip))
+                                .font(.noonmarkSystem(size: 11))
+                                .monospacedDigit()
+                                .foregroundStyle(Theme.text3)
                         }
                     }
                     .padding(.leading, 14)

@@ -89,12 +89,12 @@ struct PoolPlannedSubtasksSection: View {
                 text: $store.detailSubtaskText,
                 placeholder: store.copy.addSubtaskPlaceholder,
                 style: .compact,
+                showsSurface: true,
                 commitsOnReturn: true,
                 onCommit: { store.addPoolPlannedSubtask(chainID: task.chain.id) },
                 nativeAccessibilityIdentifier: "pool.subtask.\(task.chain.id.description).new"
             )
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
     }
 }
@@ -149,8 +149,10 @@ struct PlannedSubtaskRow: View {
                     Image(systemName: "slider.horizontal.3")
                         .font(.noonmarkSystem(size: 9, weight: .semibold))
                     Text(store.copy.subtaskDifficulty(plannedSubtask.difficulty, compact: true))
-                    Image(systemName: "chevron.down")
-                        .font(.noonmarkSystem(size: 8, weight: .bold))
+                    MicroLabel(
+                        systemImage: "chevron.down",
+                        color: plannedSubtask.difficulty == .hard ? Theme.warn : Theme.text2
+                    )
                 }
                 .font(.noonmarkSystem(size: 9, weight: .bold))
                 .foregroundStyle(plannedSubtask.difficulty == .hard ? Theme.warn : Theme.text2)
@@ -164,9 +166,7 @@ struct PlannedSubtaskRow: View {
             Button {
                 store.removePoolPlannedSubtask(chainID: chainID, plannedSubtaskID: plannedSubtask.id)
             } label: {
-                Image(systemName: "xmark")
-                    .font(.noonmarkSystem(size: 8, weight: .bold))
-                    .foregroundStyle(Theme.text3)
+                MicroLabel(systemImage: "xmark")
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }

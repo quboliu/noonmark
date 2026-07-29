@@ -31,7 +31,7 @@ struct AutomaticTaskClassificationStatusView: View {
     ) -> some View {
         switch status {
         case .working:
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 ProgressView()
                     .controlSize(.mini)
                     .frame(width: 10, height: 10)

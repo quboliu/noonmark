@@ -187,7 +187,7 @@ struct TaskCycleTrackRow: View {
 
             if expanded {
                 ScrollView(.horizontal) {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 4) {
                         ForEach(track.days) { day in
                             TaskCycleTrackDayButton(
                                 seriesID: track.id,
@@ -339,7 +339,7 @@ private struct TaskCycleTrackDayButton: View {
             store.page = .day
             store.selectTrace(navigationTarget.traceID)
         } label: {
-            VStack(spacing: 3) {
+            VStack(spacing: 4) {
                 Text(store.weekdayNarrow(day.date))
                     .font(.noonmarkSystem(size: 9.5, weight: .medium))
                     .foregroundStyle(Theme.text3)
@@ -360,7 +360,7 @@ private struct TaskCycleTrackDayButton: View {
                         .monospacedDigit()
                     }
                 }
-                .font(.noonmarkSystem(size: 7.5, weight: .bold))
+                .font(.noonmarkSystem(size: 8, weight: .bold))
                 .foregroundStyle(presentationState.color)
                 .lineLimit(1)
                     .frame(height: 8)

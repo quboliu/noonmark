@@ -43,7 +43,7 @@ struct TaskCollectionSectionHeader: View {
     }
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             if section.category != nil {
                 Image(systemName: "folder.fill")
                     .font(.noonmarkSystem(size: 11, weight: .semibold))

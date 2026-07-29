@@ -87,23 +87,21 @@ struct TaskDetail: View {
                         )
                     }
                     if subtasks.isEmpty && !canAddSubtask {
-                        Text(store.copy.noSubtasks)
-                            .font(.noonmarkSystem(size: 12))
-                            .foregroundStyle(Theme.text3)
+                        InlineEmptyHint(store.copy.noSubtasks)
                     }
                     if canAddSubtask {
                         MarkdownEditor(
                             text: $store.detailSubtaskText,
                             placeholder: store.copy.addSubtaskPlaceholder,
                             style: .compact,
+                            showsSurface: true,
                             commitsOnReturn: true,
                             onCommit: { store.addDetailSubtask(traceID: trace.id) },
                             nativeAccessibilityIdentifier: SubtaskRowSurface
                                 .dayDetail
                                 .newEditorIdentifier(for: trace.id)
                         )
-                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }
                 }
             }
@@ -155,7 +153,7 @@ struct DetailProgressControl: View {
     let showsPercent: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             if showsPercent {
                 HStack {
                     Spacer()
@@ -222,7 +220,7 @@ struct ManualProgressSlider: View {
                     .fill(Theme.panel)
                     .frame(width: 12, height: 12)
                     .overlay(Circle().stroke(Theme.accent, lineWidth: 1.8))
-                    .shadow(color: Theme.accent.opacity(0.16), radius: 3, y: 1)
+                    .shadow(color: Theme.shadowRaised, radius: 3, y: 1)
                     .offset(x: max(0, min(width - 12, width * normalizedPercent - 6)))
             }
             .frame(height: 22)
@@ -407,8 +405,7 @@ struct TaskNoteEntriesSection: View {
                         )
 
                         if index < entries.count - 1 || editable {
-                            Divider()
-                                .overlay(Theme.line)
+                            RailDivider()
                         }
                     }
 
@@ -418,7 +415,7 @@ struct TaskNoteEntriesSection: View {
                             placeholder: placeholder,
                             style: .compact,
                             warm: true,
-                            showsSurface: false,
+                            showsSurface: true,
                             height: 32,
                             commitsOnReturn: true,
                             onCommit: {
@@ -428,6 +425,7 @@ struct TaskNoteEntriesSection: View {
                         )
                             .foregroundStyle(Theme.text1)
                             .accessibilityIdentifier("detail.note.composer")
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                             .background {
                                 AppE2EViewAnchor(
                                     identifier: "detail.note.composer.copy",
@@ -437,9 +435,6 @@ struct TaskNoteEntriesSection: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.noteBackground))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-                .clipShape(RoundedRectangle(cornerRadius: 7))
             }
             .accessibilityIdentifier("detail.note.section")
             .background {
@@ -536,7 +531,7 @@ struct DetailNoteEntryRow: View {
     let onDelete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 8) {
                 Text(store.displayDateTime(entry.createdAt))
                     .font(.noonmarkSystem(size: 10.5, weight: .medium))

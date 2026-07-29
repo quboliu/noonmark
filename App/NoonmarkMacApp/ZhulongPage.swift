@@ -54,7 +54,7 @@ struct ZhulongProviderTextField: View {
     let accessibilityIdentifier: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
@@ -80,7 +80,7 @@ struct ZhulongProviderSecureField: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
@@ -114,7 +114,7 @@ struct ZhulongProviderField: View {
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) {
             if last == false {
-                Rectangle().fill(Theme.line).frame(height: 1)
+                RailDivider()
             }
         }
     }
@@ -136,7 +136,5 @@ struct ZhulongScopeChip: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
     }
 }

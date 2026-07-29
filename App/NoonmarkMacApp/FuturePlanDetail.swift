@@ -68,22 +68,17 @@ struct FuturePlanDetail: View {
             .lineLimit(1)
 
             if let source = store.carryoverSource(for: trace) {
-                Button {
+                TextActionButton(
+                    store.engine.carryoverKind(for: trace.id) == .deferral
+                        ? store.copy.deferredFromLink(
+                            store.displayDate(source.date)
+                        )
+                        : store.copy.continuedFromUnfinishedLink(
+                            store.displayDate(source.date)
+                        )
+                ) {
                     store.openCarryoverSource(from: trace)
-                } label: {
-                    Text(
-                        store.engine.carryoverKind(for: trace.id) == .deferral
-                            ? store.copy.deferredFromLink(
-                                store.displayDate(source.date)
-                            )
-                            : store.copy.continuedFromUnfinishedLink(
-                                store.displayDate(source.date)
-                            )
-                    )
                 }
-                .buttonStyle(.plain)
-                .font(.noonmarkSystem(size: 11, weight: .medium))
-                .foregroundStyle(Theme.accent)
             }
 
             Notice(

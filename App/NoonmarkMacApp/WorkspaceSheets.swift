@@ -25,7 +25,7 @@ struct DataImportConfirmationSheet: View {
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(Theme.warn)
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(store.copy.importConfirmationTitle)
                         .font(.noonmarkSystem(size: 17, weight: .semibold))
                     Text(store.copy.importConfirmationMessage)
@@ -35,7 +35,7 @@ struct DataImportConfirmationSheet: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 9) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(store.copy.importVerifiedPackage)
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
@@ -43,14 +43,13 @@ struct DataImportConfirmationSheet: View {
                     .font(.noonmarkSystem(size: 12.5, weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Divider()
+                RailDivider()
                 importMetric(store.copy.importDays, preview.summary.dayCount)
                 importMetric(store.copy.importTasks, preview.summary.taskCount)
                 importMetric(store.copy.importTraces, preview.summary.traceCount)
                 importMetric(store.copy.importSubtasks, preview.summary.subtaskCount)
             }
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
 
             HStack {
                 Spacer()
@@ -175,8 +174,6 @@ struct ChangeTaskSheet: View {
                 .strikethrough()
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
             MarkdownEditor(
                 text: $store.changeText,
                 placeholder: store.copy.newTaskTitlePlaceholder,

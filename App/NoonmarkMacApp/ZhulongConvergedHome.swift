@@ -105,7 +105,7 @@ private struct ZhulongWorkspaceHome: View {
                     .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.headerOuterMaxWidth))
                     .frame(maxWidth: .infinity)
 
-                    VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 20) {
                         intentComposer
                         workflowSection
                         if pendingCount > 0 {
@@ -223,7 +223,7 @@ private struct ZhulongWorkspaceHome: View {
 
             if conversationAccessIsDenied {
                 Text(copy.homeDataAccessDeniedHint)
-                    .font(.noonmarkSystem(size: 10.8))
+                    .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.warn)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier(
@@ -265,7 +265,7 @@ private struct ZhulongWorkspaceHome: View {
                 }
                 .frame(width: 22, height: 22)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text(workflow.title)
                             .font(.noonmarkSystem(size: 13, weight: .semibold))
@@ -277,7 +277,7 @@ private struct ZhulongWorkspaceHome: View {
                         }
                     }
                     Text(disclosedDetail)
-                        .font(.noonmarkSystem(size: 11.3))
+                        .font(.noonmarkSystem(size: 11.5))
                         .foregroundStyle(Theme.text2)
                         .lineLimit(2)
                 }
@@ -327,7 +327,7 @@ private struct ZhulongWorkspaceHome: View {
                 ZhulongWorkspaceSessionRow(session: session, copy: copy) {
                     workspace.selectSession(session.id)
                 }
-                Divider().overlay(Theme.line)
+                RailDivider()
             }
         }
     }
@@ -345,7 +345,7 @@ private struct ZhulongWorkspaceHome: View {
         }
         .padding(.bottom, 9)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.line).frame(height: 1)
+            RailDivider()
         }
     }
 
@@ -398,7 +398,7 @@ private struct ZhulongWorkspaceSessionRow: View {
                         .foregroundStyle(Theme.text1)
                         .lineLimit(1)
                     Text(sessionStatus)
-                        .font(.noonmarkSystem(size: 10.8))
+                        .font(.noonmarkSystem(size: 11))
                         .foregroundStyle(Theme.text2)
                     Text(copy.sessionNextStep)
                         .font(.noonmarkSystem(size: 10.5))
@@ -407,7 +407,7 @@ private struct ZhulongWorkspaceSessionRow: View {
 
                 Spacer(minLength: 10)
                 Text(copy.continueAction)
-                    .font(.noonmarkSystem(size: 10.8, weight: .semibold))
+                    .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.accent)
             }
             .padding(.leading, 38)

@@ -166,7 +166,7 @@ struct UnfinishedRow: View {
 
     var body: some View {
         let selected = store.isWorkspaceItemSelected(.unfinishedTask(item.chain.id))
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 StatusGlyph(status: item.isAbandoned ? .abandoned : .unfinished)
                 VStack(alignment: .leading, spacing: 0) {

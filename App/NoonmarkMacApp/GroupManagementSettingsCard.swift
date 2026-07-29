@@ -38,8 +38,6 @@ struct GroupManagementSettingsCard: View {
                     summaryMetric(
                         value: counts.categories,
                         metric: .category,
-                        systemImage: "folder.fill",
-                        color: Theme.accent,
                         accessibilityIdentifier: "settings.groups.category-count"
                     )
 
@@ -49,8 +47,6 @@ struct GroupManagementSettingsCard: View {
                     summaryMetric(
                         value: counts.labels,
                         metric: .label,
-                        systemImage: "number",
-                        color: Theme.ok,
                         accessibilityIdentifier: "settings.groups.label-count"
                     )
                 } else {
@@ -68,24 +64,15 @@ struct GroupManagementSettingsCard: View {
     private func summaryMetric(
         value: Int,
         metric: GroupManagementMetric,
-        systemImage: String,
-        color: Color,
         accessibilityIdentifier: String
     ) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: systemImage)
-                .font(.noonmarkSystem(size: 11, weight: .bold))
-                .foregroundStyle(color)
-                .frame(width: 22, height: 22)
-                .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.09)))
-            VStack(alignment: .leading, spacing: 1) {
-                Text("\(value)")
-                    .font(.noonmarkSystem(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.text1)
-                Text(copy.metricTitle(metric))
-                    .font(.noonmarkSystem(size: 10))
-                    .foregroundStyle(Theme.text3)
-            }
+        VStack(alignment: .leading, spacing: 1) {
+            Text("\(value)")
+                .font(.noonmarkSystem(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(Theme.text1)
+            Text(copy.metricTitle(metric))
+                .font(.noonmarkSystem(size: 10))
+                .foregroundStyle(Theme.text3)
         }
         .frame(minWidth: 54, alignment: .leading)
         .accessibilityElement(children: .ignore)

@@ -111,7 +111,7 @@ struct TaskCycleDetail: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     if isEditable {
-                        Button(store.copy.taskCycleEditPlan) {
+                        TextActionButton(store.copy.taskCycleEditPlan) {
                             showingPlanEditor = true
                         }
                         .accessibilityIdentifier(
@@ -144,9 +144,9 @@ struct TaskCycleDetail: View {
             }
 
             if track?.canStop == true {
-                Button(
+                TextActionButton(
                     store.copy.stopRecurringTask,
-                    role: .destructive
+                    tone: .warn
                 ) {
                     showingStopConfirmation = true
                 }
@@ -197,8 +197,9 @@ struct TaskCycleDetail: View {
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(name)
-                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
+                .tracking(0.6)
                 .frame(width: 60, alignment: .leading)
             Text(value)
                 .font(.noonmarkSystem(size: 11.5, weight: .medium))
@@ -312,7 +313,7 @@ private struct TaskCyclePlanEditingSheet: View {
                 .font(.noonmarkSystem(size: 10.5))
                 .foregroundStyle(Theme.text3)
 
-            Divider()
+            RailDivider()
 
             HStack {
                 Spacer()
@@ -426,8 +427,7 @@ private struct TaskCyclePlannedSubtasksSection: View {
                                 subtaskID: subtask.id
                             )
                         } label: {
-                            Image(systemName: "xmark")
-                                .font(.noonmarkSystem(size: 8, weight: .bold))
+                            MicroLabel(systemImage: "xmark", color: .primary)
                         }
                         .buttonStyle(.plain)
                     }
@@ -439,6 +439,7 @@ private struct TaskCyclePlannedSubtasksSection: View {
                     text: $store.detailSubtaskText,
                     placeholder: store.copy.addSubtaskPlaceholder,
                     style: .compact,
+                    showsSurface: true,
                     commitsOnReturn: true,
                     onCommit: {
                         store.addTaskCyclePlannedSubtask(
@@ -449,14 +450,7 @@ private struct TaskCyclePlannedSubtasksSection: View {
                     nativeAccessibilityIdentifier:
                     "task-cycle-subtask.\(series.id.description).new"
                 )
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(Theme.panel2)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(Theme.line)
-                )
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
         }
     }

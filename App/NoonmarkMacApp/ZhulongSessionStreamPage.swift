@@ -412,12 +412,11 @@ struct ZhulongSessionStreamPage: View {
                     .font(.noonmarkSystem(size: 12, weight: .semibold))
                     .frame(width: 32, height: 32)
             case .labelled:
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Text(
                         "\(language == .chinese ? "视图" : "View") · \(workspace.variant.title(language: language))"
                     )
-                    Image(systemName: "chevron.down")
-                        .font(.noonmarkSystem(size: 8, weight: .bold))
+                    MicroLabel(systemImage: "chevron.down", color: .primary)
                 }
             }
         }
@@ -482,7 +481,7 @@ struct ZhulongSessionStreamPage: View {
                     store.activeZhulongProviderIdentity
                 {
                     Text(providerDisclosure(identity))
-                        .font(.noonmarkSystem(size: 10.8))
+                        .font(.noonmarkSystem(size: 11))
                         .foregroundStyle(
                             identity.location == .local
                                 ? Theme.ok
@@ -540,7 +539,7 @@ struct ZhulongSessionStreamPage: View {
     }
 
     private func decisionGateAction(_ gate: ZhulongDecisionGate) -> some View {
-        return VStack(alignment: .leading, spacing: 11) {
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(copy.sharedDecisionTitle)
                     .font(.noonmarkSystem(size: 12.5, weight: .semibold))
@@ -567,7 +566,7 @@ struct ZhulongSessionStreamPage: View {
                             .font(.noonmarkSystem(size: 10, weight: .semibold))
                             .foregroundStyle(Theme.accent)
                             .padding(.top, 2)
-                        VStack(alignment: .leading, spacing: 3) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(option.title)
                                 .font(.noonmarkSystem(size: 11.5, weight: .semibold))
                                 .foregroundStyle(Theme.text1)
@@ -581,7 +580,6 @@ struct ZhulongSessionStreamPage: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("zhulong-decision-option-\(option.id)")
@@ -589,16 +587,15 @@ struct ZhulongSessionStreamPage: View {
             MarkdownEditor(
                 text: $decisionSupplement,
                 placeholder: copy.decisionSupplementPlaceholder,
-                style: .body
+                style: .body,
+                showsSurface: true
             )
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             Text(copy.decisionChoiceNotice)
                 .font(.noonmarkSystem(size: 10.5))
                 .foregroundStyle(Theme.text3)
         }
         .padding(13)
-        .background(RoundedRectangle(cornerRadius: 8).fill(actionEmphasisFill))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(actionEmphasisStroke.opacity(0.24)))
     }
 
     private func dailyReviewAction(_ session: ZhulongSession) -> some View {
@@ -608,7 +605,7 @@ struct ZhulongSessionStreamPage: View {
                 $0.draftID == draft.id
             }
         } ?? false
-        return VStack(alignment: .leading, spacing: 11) {
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(copy.dailyReviewTitle)
                     .font(.noonmarkSystem(size: 12.5, weight: .semibold))
@@ -628,15 +625,17 @@ struct ZhulongSessionStreamPage: View {
                 MarkdownEditor(
                     text: $dailyReviewSummary,
                     placeholder: copy.dailyReviewSummaryPlaceholder,
-                    style: .body
+                    style: .body,
+                    showsSurface: true
                 )
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 MarkdownEditor(
                     text: $dailyReviewTomorrow,
                     placeholder: copy.dailyReviewTomorrowPlaceholder,
-                    style: .body
+                    style: .body,
+                    showsSurface: true
                 )
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 HStack(spacing: 10) {
                     Text(copy.zhulongDailyReviewEditableHint)
                     .font(.noonmarkSystem(size: 10.5))
@@ -658,14 +657,6 @@ struct ZhulongSessionStreamPage: View {
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Theme.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(
-                    isSaved
-                        ? Theme.ok.opacity(0.25)
-                        : Theme.accent.opacity(0.22)
-                )
         )
         .disabled(isSaved)
         .accessibilityIdentifier(
@@ -1099,14 +1090,6 @@ struct ZhulongSessionStreamPage: View {
             for: identity,
             copy: copy
         )
-    }
-
-    private var actionEmphasisFill: Color {
-        .clear
-    }
-
-    private var actionEmphasisStroke: Color {
-        .clear
     }
 
     private func sectionTitle(_ section: ZhulongStreamSection) -> String {

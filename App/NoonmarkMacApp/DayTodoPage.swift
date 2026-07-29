@@ -360,7 +360,7 @@ struct NewTaskInlineField: View {
                 focusRequest: focusRequest
             )
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line.opacity(0.72)))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.lineSubtle))
 
             if showsSlashCommand {
                 NewTaskSlashCommandSuggestion {
@@ -394,7 +394,7 @@ struct NewTaskSlashCommandSuggestion: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 7) {
+            HStack(spacing: 8) {
                 Text("/")
                     .font(.noonmarkSystem(
                         size: 10,
@@ -427,9 +427,9 @@ struct NewTaskSlashCommandSuggestion: View {
         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
         .overlay(
             RoundedRectangle(cornerRadius: 7)
-                .stroke(Theme.line.opacity(0.72))
+                .stroke(Theme.lineSubtle)
         )
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+        .shadow(color: Theme.shadowSubtle, radius: 8, y: 4)
         .accessibilityIdentifier("new-task.slash-command.recurring")
         .background {
             AppE2EViewAnchor(
@@ -451,7 +451,7 @@ struct NewTaskClassificationSuggestionList: View {
                 Button {
                     onSelect(suggestion)
                 } label: {
-                    HStack(spacing: 7) {
+                    HStack(spacing: 8) {
                         Text(String(tokenKind.marker))
                             .font(.noonmarkSystem(size: 10, weight: .black, design: .rounded))
                             .foregroundStyle(suggestion.color)
@@ -475,8 +475,8 @@ struct NewTaskClassificationSuggestionList: View {
         }
         .padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line.opacity(0.72)))
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.lineSubtle))
+        .shadow(color: Theme.shadowSubtle, radius: 8, y: 4)
         .accessibilityIdentifier("new-task.classification-suggestions")
         .background {
             AppE2EViewAnchor(
@@ -506,7 +506,9 @@ struct DateStrip: View {
                 ForEach(dates, id: \.self) { date in
                     let selected = date == store.selectedDate
                     let today = date == store.today
-                    let count = store.engine.getDayTodo(date: date).traces.count
+                    let traces = store.engine.getDayTodo(date: date).traces
+                    let count = traces.count
+                    let pendingCount = traces.count(where: { $0.status == .pending })
                     Button {
                         focusRequest &+= 1
                         withAnimation(
@@ -530,14 +532,14 @@ struct DateStrip: View {
                                 .frame(width: 24, height: 24)
                                 .overlay(Circle().stroke(today && !selected ? Theme.accent : .clear, lineWidth: 1.5))
                             Group {
-                                if count > 0, Theme.shouldDifferentiateWithoutColor {
-                                    Text("\(min(count, 99))")
+                                if pendingCount > 0, Theme.shouldDifferentiateWithoutColor {
+                                    Text("\(min(pendingCount, 99))")
                                         .font(.noonmarkSystem(size: 8.5, weight: .bold))
                                         .foregroundStyle(selected ? .white : Theme.text2)
                                         .monospacedDigit()
                                 } else {
                                     Circle()
-                                        .fill(count > 0 ? (selected ? .white.opacity(0.9) : Theme.accent) : .clear)
+                                        .fill(pendingCount > 0 ? (selected ? .white.opacity(0.9) : Theme.accent) : .clear)
                                         .frame(width: 4, height: 4)
                                 }
                             }
@@ -652,7 +654,7 @@ struct TaskRow: View {
                 completionControl
 
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         MarkdownInlineText(
                             store.copy.displayTaskTitle(definition?.title)
                         )
@@ -740,10 +742,7 @@ struct TaskRow: View {
                     }
 
                     if let relationLabel {
-                        Button(relationLabel.title, action: relationLabel.action)
-                            .buttonStyle(.plain)
-                            .font(.noonmarkSystem(size: 11, weight: .medium))
-                            .foregroundStyle(Theme.accent)
+                        TextActionButton(relationLabel.title, action: relationLabel.action)
                             .padding(.top, 2)
                     }
 
@@ -1122,8 +1121,10 @@ struct SubtaskRow: View {
                     Image(systemName: "slider.horizontal.3")
                         .font(.noonmarkSystem(size: 9, weight: .semibold))
                     Text(store.copy.subtaskDifficulty(subtask.difficulty, compact: true))
-                    Image(systemName: "chevron.down")
-                        .font(.noonmarkSystem(size: 8, weight: .bold))
+                    MicroLabel(
+                        systemImage: "chevron.down",
+                        color: subtask.difficulty == .hard ? Theme.warn : Theme.text2
+                    )
                 }
                 .font(.noonmarkSystem(size: 9, weight: .bold))
                 .foregroundStyle(subtask.difficulty == .hard ? Theme.warn : Theme.text2)

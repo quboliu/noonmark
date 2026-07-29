@@ -225,7 +225,7 @@ struct ZhulongInlineTaskDraftCard: View {
                 taskEditor(task: task)
                 if task.wrappedValue.id != state.tasks.last?.id {
                     Divider()
-                        .overlay(Theme.line.opacity(0.72))
+                        .overlay(Theme.lineSubtle)
                         .padding(.vertical, 14)
                 }
             }
@@ -298,7 +298,7 @@ struct ZhulongInlineTaskDraftCard: View {
                 .stroke(
                     isApplied
                         ? Theme.ok.opacity(0.25)
-                        : Theme.accent.opacity(0.22)
+                        : Theme.accentStroke
                 )
         )
         .accessibilityIdentifier(
@@ -319,7 +319,7 @@ struct ZhulongInlineTaskDraftCard: View {
         task: Binding<ZhulongInlineTaskDraftState.Task>
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 9) {
+            HStack(spacing: 8) {
                 Image(systemName: "circle")
                     .font(.noonmarkSystem(size: 13))
                     .foregroundStyle(Theme.accent)
@@ -401,7 +401,7 @@ struct ZhulongInlineTaskDraftCard: View {
             .padding(.leading, 22)
 
             if task.wrappedValue.subtasks.isEmpty == false {
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(task.subtasks) { subtask in
                         subtaskEditor(
                             subtask: subtask,

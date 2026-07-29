@@ -69,7 +69,7 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
     }
 
     private var weaveTranscript: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             ForEach(Array(weaveTurns.enumerated()), id: \.offset) { index, turn in
                 VStack(alignment: .leading, spacing: NoonmarkVisualMetrics.zhulongConversationMessageSpacing) {
                     ForEach(turn) { record in
@@ -79,8 +79,7 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
                 .accessibilityIdentifier("zhulong-stream-weave-turn-\(index)")
 
                 if index < weaveTurns.count - 1 {
-                    Divider()
-                        .overlay(Theme.line.opacity(0.64))
+                    RailDivider()
                         .padding(.leading, 48)
                 }
             }
@@ -141,11 +140,10 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
     private func dossierHeader(for section: ZhulongStreamSection) -> some View {
         HStack(spacing: 10) {
             Text(dossierSectionTitle(sectionTitle(section)))
-                .font(.noonmarkSystem(size: 10.5, weight: .semibold))
+                .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
-                .tracking(0.28)
-            Divider()
-                .overlay(Theme.line.opacity(0.6))
+                .tracking(0.6)
+            RailDivider()
         }
         .padding(.top, 8)
         .padding(.bottom, -12)
@@ -155,7 +153,7 @@ struct ZhulongChatTranscript<ArtifactContent: View>: View {
         Text(chapterSectionTitle(number, sectionTitle(section)))
             .font(.noonmarkSystem(size: 12, weight: .semibold))
             .foregroundStyle(Theme.text2)
-            .tracking(0.16)
+            .tracking(0.6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 16)
             .padding(.bottom, -8)
@@ -267,7 +265,7 @@ struct ZhulongLiveAssistantMessage: View {
                         .foregroundStyle(Theme.text3)
                 }
             } else {
-                HStack(alignment: .lastTextBaseline, spacing: 3) {
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
                     MarkdownText(content)
                         .font(.noonmarkSystem(
                             size: NoonmarkVisualMetrics.zhulongConversationAssistantBodyPointSize
@@ -434,7 +432,7 @@ struct ZhulongChatComposer: View {
             RoundedRectangle(cornerRadius: NoonmarkVisualMetrics.zhulongConversationComposerCornerRadius)
                 .stroke(Theme.line)
         )
-        .shadow(color: Theme.text1.opacity(0.07), radius: 16, y: 5)
+        .shadow(color: Theme.shadowSubtle, radius: 16, y: 5)
         .accessibilityIdentifier("zhulong-session-composer")
         .background {
             AppE2EViewAnchor(

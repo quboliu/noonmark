@@ -309,4 +309,86 @@ extension AppCopy {
             total: total
         )
     }
+
+    // MARK: - Detail rails
+
+    var railSearchPlaceholder: String {
+        language == .chinese ? "搜索" : "Search"
+    }
+
+    var railTrendTitle: String {
+        language == .chinese ? "近 7 天完成率" : "7-day completion"
+    }
+
+    var completionHeroLabel: String {
+        language == .chinese ? "完成率" : "Completion"
+    }
+
+    var reviewSignalsTitle: String {
+        language == .chinese ? "信号与建议" : "Signals & suggestions"
+    }
+
+    func reviewUnfinishedCarrySignal(_ count: Int) -> String {
+        switch language {
+        case .chinese:
+            "今天有 \(count) 项任务未完成。"
+        case .english:
+            count == 1
+                ? "1 task was left unfinished today."
+                : "\(count) tasks were left unfinished today."
+        }
+    }
+
+    var reviewOpenUnfinishedAction: String {
+        language == .chinese ? "查看未完成" : "Open unfinished"
+    }
+
+    func reviewTomorrowLoadSignal(_ count: Int) -> String {
+        switch language {
+        case .chinese:
+            "明天已排 \(count) 项任务。"
+        case .english:
+            count == 1
+                ? "1 task is already planned for tomorrow."
+                : "\(count) tasks are already planned for tomorrow."
+        }
+    }
+
+    var reviewOpenTomorrowAction: String {
+        language == .chinese ? "查看明天" : "Open tomorrow"
+    }
+
+    var poolOldestTaskLabel: String {
+        language == .chinese ? "停留最久" : "Oldest in pool"
+    }
+
+    func poolOldestTaskDays(_ days: Int) -> String {
+        language == .chinese ? "\(days) 天" : "\(days)d"
+    }
+
+    func densestDaySignal(date: String, count: Int) -> String {
+        switch language {
+        case .chinese:
+            "\(date) 已排 \(count) 项，负载最重。"
+        case .english:
+            "\(date) is the densest day with \(count) task\(count == 1 ? "" : "s")."
+        }
+    }
+
+    var openDayAction: String {
+        language == .chinese ? "查看这一天" : "Open this day"
+    }
+
+    func repeatedUnfinishedTitleSignal(title: String, count: Int) -> String {
+        switch language {
+        case .chinese:
+            "「\(title)」已有 \(count) 次未完成。"
+        case .english:
+            "\"\(title)\" has been left unfinished \(count) times."
+        }
+    }
+
+    var locateTaskAction: String {
+        language == .chinese ? "定位任务" : "Locate task"
+    }
 }

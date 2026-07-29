@@ -27,7 +27,7 @@ struct ZhulongTodoDiffEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(copy.todoEditorTitle)
                     .font(.noonmarkSystem(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.text1)
@@ -37,7 +37,7 @@ struct ZhulongTodoDiffEditor: View {
             }
             .padding(18)
 
-            Divider()
+            RailDivider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
@@ -54,7 +54,7 @@ struct ZhulongTodoDiffEditor: View {
             }
             .frame(maxHeight: 440)
 
-            Divider()
+            RailDivider()
 
             HStack(spacing: 8) {
                 Text(copy.todoRevisionBoundary)
@@ -77,7 +77,7 @@ struct ZhulongTodoDiffEditor: View {
 
     private func editorRow(item: Binding<EditableTodoDiffItem>) -> some View {
         let value = item.wrappedValue
-        return VStack(alignment: .leading, spacing: 9) {
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: value.symbolName)
                     .foregroundStyle(Theme.accent)
@@ -105,8 +105,13 @@ struct ZhulongTodoDiffEditor: View {
             }
 
             if value.hasEditableTitle {
-                MarkdownEditor(text: item.title, placeholder: copy.taskTitlePlaceholder, style: .title)
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
+                MarkdownEditor(
+                    text: item.title,
+                    placeholder: copy.taskTitlePlaceholder,
+                    style: .title,
+                    showsSurface: true
+                )
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     .accessibilityIdentifier(
                         "zhulong-todo-diff-title-\(value.identifierSuffix)"
                     )
@@ -133,7 +138,6 @@ struct ZhulongTodoDiffEditor: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
     }
 
     private func remove(_ id: ZhulongTodoDiffItemID) {

@@ -189,7 +189,7 @@ struct CompletedSubtaskDetail: View {
             )
 
             DetailSection(store.copy.parentTaskTitle) {
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 8) {
                     MarkdownInlineText(
                         store.copy.displayTaskTitle(record.parentDefinition.title)
                     )
@@ -206,8 +206,6 @@ struct CompletedSubtaskDetail: View {
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
             }
 
             DetailSection(store.copy.completionNodeTitle) {
@@ -227,12 +225,13 @@ struct CompletionSummaryCard: View {
     let items: [CompletionSummaryItem]
 
     var body: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 8) {
             ForEach(items, id: \.label) { item in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(item.label)
-                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
+                        .font(.noonmarkSystem(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.text3)
+                        .tracking(0.6)
                         .frame(width: 38, alignment: .leading)
                     Text(item.value)
                         .font(.noonmarkSystem(size: 11.5, weight: .medium))
@@ -244,8 +243,6 @@ struct CompletionSummaryCard: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.okSoft.opacity(0.45)))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
     }
 }
 
@@ -257,7 +254,5 @@ struct CompletedTrajectoryPanel: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
     }
 }

@@ -174,6 +174,13 @@ enum Theme {
 
     static let accent = Color(red: 0.16, green: 0.38, blue: 0.78)
     static let accentSoft = Color(red: 0.93, green: 0.955, blue: 1.0)
+    static var lineSubtle: Color { line.opacity(0.72) }
+    static let accentStroke = accent.opacity(0.25)
+    static let shadowSubtle = Color.black.opacity(0.06)
+    static let shadowRaised = Color.black.opacity(0.1)
+    static let accentSoftStrong = accentSoft.opacity(0.9)
+    static let accentSoftMuted = accentSoft.opacity(0.6)
+    static let accentSoftWash = accentSoft.opacity(0.22)
     static let ok = color(MacUIAccessibleColorMetrics.success)
     static let okSoft = Color(red: 0.91, green: 0.98, blue: 0.95)
     static let warn = Color(red: 0.706, green: 0.302, blue: 0.204)

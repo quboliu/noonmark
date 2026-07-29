@@ -238,7 +238,7 @@ struct TaskCyclePlanEditor: View {
     }
 
     private var weekdaySelector: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             ForEach(TaskCycleWeekday.allCases, id: \.self) {
                 weekday in
                 let selected = state.weekdays.contains(weekday)

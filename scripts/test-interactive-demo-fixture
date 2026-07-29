@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/interactive-demo-screenshot-contract
 source scripts/runtime-evidence
 
 configuration="${1:-debug}"
@@ -43,7 +44,7 @@ runtime_evidence_start_console_capture \
   >"$app_log" 2>&1 &
 app_pid=$!
 
-for _ in {1..200}; do
+for ((attempt = 0; attempt < NOONMARK_INTERACTIVE_DEMO_READY_POLL_LIMIT; attempt += 1)); do
   if [[ -f "$result_path" ]]; then
     break
   fi
@@ -148,7 +149,7 @@ if [[ "$single_day_completed_count" != "5" \
   exit 1
 fi
 
-for page in pool day future recurring unfinished completed calendar; do
+for page in "${NOONMARK_INTERACTIVE_DEMO_TASK_COLLECTION_SCREENSHOTS[@]}"; do
   screenshot="$test_root/task-collection-$page.png"
   if [[ ! -s "$screenshot" ]]; then
     echo "task collection screenshot is missing: $screenshot" >&2
@@ -159,6 +160,29 @@ for page in pool day future recurring unfinished completed calendar; do
   if [[ -z "$width" || -z "$height" \
         || "$width" -lt 600 || "$height" -lt 400 ]]; then
     echo "invalid task collection screenshot size: $screenshot" >&2
+    exit 1
+  fi
+done
+
+for screenshot_name in "${NOONMARK_INTERACTIVE_DEMO_DOCUMENTATION_SCREENSHOTS[@]}"; do
+  screenshot="$test_root/$screenshot_name.png"
+  if [[ ! -s "$screenshot" ]]; then
+    echo "documentation screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+  width="$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ {print $2}')"
+  height="$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ {print $2}')"
+  if [[ -z "$width" || -z "$height" \
+        || "$width" -lt 500 || "$height" -lt 160 ]]; then
+    echo "invalid documentation screenshot size: $screenshot" >&2
+    exit 1
+  fi
+done
+
+for screenshot_name in "${NOONMARK_INTERACTIVE_DEMO_FORBIDDEN_DOCUMENTATION_SCREENSHOTS[@]}"; do
+  screenshot="$test_root/$screenshot_name.png"
+  if [[ -e "$screenshot" ]]; then
+    echo "sensitive documentation screenshot must not be produced: $screenshot" >&2
     exit 1
   fi
 done

@@ -256,9 +256,46 @@ if [[ -e "$gate_contract_record" ]]; then
   exit 1
 fi
 rm -rf "$gate_contract_root"
+classification_overflow_handshake_function="$(
+  sed -n '/^capture_classification_overflow_handshake() {$/,/^}$/p' scripts/test-e2e
+)"
+classification_overflow_acknowledgement_loop="$(
+  sed -n '/for _ in {1..80}; do/,/^[[:space:]]*done$/p' \
+    <<<"$classification_overflow_handshake_function"
+)"
+if [[ "$(grep -oF '$(<"$result_path")' \
+  <<<"$classification_overflow_acknowledgement_loop" | wc -l | tr -d ' ')" != "1" ]] ||
+  ! grep -F 'acknowledgement_state="$(<"$result_path")"' \
+    <<<"$classification_overflow_acknowledgement_loop" >/dev/null ||
+  ! grep -F '"$acknowledgement_state" ==' \
+    <<<"$classification_overflow_acknowledgement_loop" >/dev/null ||
+  ! grep -F '"$acknowledgement_state" != "$result_value"' \
+    <<<"$classification_overflow_acknowledgement_loop" >/dev/null; then
+  echo "classification overflow acknowledgement polling does not use one immutable file snapshot" >&2
+  exit 1
+fi
 require_literal \
   App/NoonmarkMacApp/LegacyPoolUIEntryAutomations.swift \
   'UIEntryE2EStartGate.fromCommandLine('
+require_literal \
+  App/NoonmarkMacApp/DayTodoPage.swift \
+  'func accessibilityPrefix(for subtaskID: SubtaskID) -> String'
+require_literal \
+  App/NoonmarkMacApp/CompletionControlE2EAutomation.swift \
+  'SubtaskRowSurface.dayList.completionIdentifier(for: subtaskID)'
+require_literal \
+  scripts/test-e2e \
+  "key = 'localFirst.sync.baselineManifest'"
+require_literal \
+  scripts/test-e2e \
+  '"onlineFirst 0 0 0 0 0 1 1 1"'
+if rg -n '"(day|day-list)\.subtask\.\\\(' \
+  App/NoonmarkMacApp \
+  --glob '*E2E*.swift' \
+  --glob '*Automation.swift' >/dev/null; then
+  echo "E2E automation hard-codes a subtask surface namespace" >&2
+  exit 1
+fi
 require_literal \
   App/NoonmarkMacApp/UIEntryE2EInteractionDriver.swift \
   'arm|<token>|<pid>|<main-window-number>'

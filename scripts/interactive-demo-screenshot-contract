@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+readonly NOONMARK_INTERACTIVE_DEMO_READY_POLL_LIMIT=900
+
+readonly -a NOONMARK_INTERACTIVE_DEMO_TASK_COLLECTION_SCREENSHOTS=(
+  pool
+  day
+  future
+  recurring
+  unfinished
+  completed
+  calendar
+  zhulong
+)
+
+readonly -a NOONMARK_INTERACTIVE_DEMO_DOCUMENTATION_SCREENSHOTS=(
+  quick-entry
+  settings-general
+  settings-groups
+  settings-data
+  settings-privacy
+)
+
+# These panes may contain host-specific paths or Provider identity. They remain
+# covered by dedicated E2E, but must never become reusable documentation shots.
+readonly -a NOONMARK_INTERACTIVE_DEMO_FORBIDDEN_DOCUMENTATION_SCREENSHOTS=(
+  settings-sync
+  settings-zhulong
+)

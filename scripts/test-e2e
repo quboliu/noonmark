@@ -1423,6 +1423,7 @@ capture_classification_overflow_handshake() {
   local ready_recovery_count=""
   local extra_field=""
   local observed_presentation_window_id=""
+  local acknowledgement_state=""
 
   for _ in {1..200}; do
     if [[ -f "$result_path" ]]; then
@@ -1465,17 +1466,22 @@ capture_classification_overflow_handshake() {
               "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
               printf '%s\n' "$generation" >"$acknowledgement_path"
               for _ in {1..80}; do
-                if [[ -f "$result_path" &&
-                  "$(<"$result_path")" == "ok|$generation|$ready_recovery_count" ]]; then
+                acknowledgement_state=""
+                if [[ -f "$result_path" ]]; then
+                  acknowledgement_state="$(<"$result_path")"
+                fi
+                if [[ "$acknowledgement_state" == \
+                  "ok|$generation|$ready_recovery_count" ]]; then
                   rm -f "$warmup_screenshot"
                   echo "E2E classification overflow capture handshake: generation=$generation recovery=$ready_recovery_count"
                   return 0
                 fi
-                if [[ -f "$result_path" && "$(<"$result_path")" == failed:* ]]; then
-                  echo "classification overflow capture acknowledgement failed: $(<"$result_path")" >&2
+                if [[ "$acknowledgement_state" == failed:* ]]; then
+                  echo "classification overflow capture acknowledgement failed: $acknowledgement_state" >&2
                   return 1
                 fi
-                if [[ -f "$result_path" && "$(<"$result_path")" != "$result_value" ]]; then
+                if [[ -n "$acknowledgement_state" &&
+                  "$acknowledgement_state" != "$result_value" ]]; then
                   break
                 fi
                 sleep 0.05
@@ -2623,17 +2629,42 @@ guard (!verifyDay || dayImage != nil), (!verifyZhulong || zhulongImage != nil) e
     exit(1)
 }
 
-let dayIcons: [(name: String, centerY: Double, rgb: Int)] = verifyDay ? [
-    ("day", 83, 0x2A6FDB),
-    ("pool", 125.5, 0x0E9488),
-    ("future", 156.5, 0x7C5CFF),
-    ("unfinished", 225, 0xE0851B),
-    ("completed", 261.5, 0x1F8A5B),
-    ("calendar", 299.5, 0xD1477A),
-] : []
-let zhulongIcons: [(name: String, centerY: Double, rgb: Int)] = verifyZhulong ? [
-    ("zhulong", 336.5, 0x7C5CFF),
-] : []
+typealias NavigationIcon = (name: String, rgb: Int)
+typealias PositionedNavigationIcon = (name: String, centerY: Double, rgb: Int)
+
+let planIcons: [NavigationIcon] = [
+    ("day", 0x2A6FDB),
+    ("pool", 0x0E9488),
+    ("future", 0x7C5CFF),
+    ("recurring", 0xB86A16),
+]
+let traceIcons: [NavigationIcon] = [
+    ("unfinished", 0xE0851B),
+    ("completed", 0x1F8A5B),
+    ("calendar", 0xD1477A),
+    ("zhulong", 0x7C5CFF),
+]
+
+// NavItem is 34 pt high with 1.5 pt vertical padding on both sides.
+// Keep the screenshot oracle coupled to the two navigation groups instead of
+// duplicating absolute coordinates that drift whenever a row is inserted.
+let firstPlanCenterY = 83.0
+let navigationRowStride = 37.0
+let traceGroupGap = 30.5
+let positionedPlanIcons: [PositionedNavigationIcon] = planIcons.enumerated().map { index, icon in
+    (icon.name, firstPlanCenterY + Double(index) * navigationRowStride, icon.rgb)
+}
+let firstTraceCenterY =
+    firstPlanCenterY + Double(planIcons.count) * navigationRowStride + traceGroupGap
+let positionedTraceIcons: [PositionedNavigationIcon] = traceIcons.enumerated().map { index, icon in
+    (icon.name, firstTraceCenterY + Double(index) * navigationRowStride, icon.rgb)
+}
+let dayIcons = verifyDay
+    ? positionedPlanIcons + Array(positionedTraceIcons.prefix(3))
+    : []
+let zhulongIcons = verifyZhulong
+    ? Array(positionedTraceIcons.suffix(1))
+    : []
 var results: [String] = []
 for (image, icons) in [(dayImage, dayIcons), (zhulongImage, zhulongIcons)] {
     guard let image else { continue }
@@ -6674,10 +6705,34 @@ run_zhulong_pending_gate_probe() {
       (SELECT count(*) FROM task_definitions),
       (SELECT count(*) FROM day_traces),
       (SELECT count(*) FROM subtasks),
-      (SELECT count(*) FROM change_journal);
+      (SELECT count(*)
+       FROM change_journal
+       WHERE entity_type = 'appPreferences'
+         AND entity_id = 'default'
+         AND operation = 'upsert'
+         AND device_id = 'noonmark.bootstrap'
+         AND sync_state = 'pendingUpload'
+         AND retry_count = 0
+         AND COALESCE(last_error, '') = ''
+         AND json_extract(record_payload, '$.formatVersion') = 6
+         AND json_extract(record_payload, '$.payload.theme') = 'coolGray'
+         AND json_extract(record_payload, '$.payload.language') = 'chinese'
+         AND json_extract(
+               record_payload,
+               '$.payload.writerDeviceID.rawValue'
+             ) = 'noonmark.bootstrap'),
+      (SELECT count(*) FROM change_journal),
+      (SELECT count(*)
+       FROM sync_metadata
+       WHERE key = 'localFirst.sync.baselineManifest'
+         AND json_valid(value) = 1
+         AND json_extract(value, '$.state') = 'pending'
+         AND json_array_length(
+               json_extract(value, '$.expectations')
+             ) = 1);
   ")"
-  if [[ "$sqlite_probe" != "onlineFirst 0 0 0 0 0 0" ]]; then
-    echo "zhulong pending-gate setup was not the empty third Engine: ${sqlite_probe:-missing}" >&2
+  if [[ "$sqlite_probe" != "onlineFirst 0 0 0 0 0 1 1 1" ]]; then
+    echo "zhulong pending-gate setup lost its empty Engine or exact import baseline: ${sqlite_probe:-missing}" >&2
     exit 1
   fi
 

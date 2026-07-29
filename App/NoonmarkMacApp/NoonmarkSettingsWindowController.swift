@@ -159,6 +159,14 @@ private struct NoonmarkSettingsWindowRoot: View {
                                 maxWidth: 660,
                                 alignment: .topLeading
                             )
+                            .background {
+                                AppE2EViewAnchor(
+                                    identifier:
+                                    "settings.content.\(selectedPane.rawValue)",
+                                    verificationText:
+                                    selectedPane.title(copy: store.copy)
+                                )
+                            }
                     }
                     .frame(
                         maxWidth: .infinity,

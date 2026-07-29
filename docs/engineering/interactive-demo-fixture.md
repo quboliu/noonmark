@@ -16,7 +16,8 @@ make run-demo-app
 4. 以 `2026-07-24`、`America/New_York` 和 `zh_Hans_SG` 启动真实 App。
 5. 由 `NoonmarkDemoSupport` 通过真实领域接口重放十天用户故事，再把完整 snapshot 写入 SQLite。
 6. 写入五场真实加密烛龙会话，并回读 SQLite 与 sidecar 对账。
-7. 只有 `fixture-manifest.json` 报告 `ready` 且 App 仍存活时，命令才成功返回。
+7. 从同一真实 App 自动截取 Day Todo、任务池、未来计划、重复计划、未完成、已完成、日历、烛龙、快速记录，以及不含宿主机路径或 Provider 身份的通用、分组、数据和隐私设置面板；窗口或面板状态不符时 fail-closed。
+8. 关闭快速记录与设置辅助窗口，并恢复到 Day Todo。只有 `fixture-manifest.json` 报告 `ready` 且 App 仍存活时，命令才成功返回。
 
 Demo App 运行后会按本机默认偏好注册全局 `⌃⇧N`。可以关闭主窗口、切到其他 App 后直接体验快速记录；设置页也可录制新组合。快捷键偏好是本机壳层状态，不属于十天任务 fixture，也不进入 manifest、SQLite 或烛龙 sidecar。
 
@@ -71,7 +72,7 @@ make test-demo-fixture
 - pending、completed、unfinished 和 abandoned 子任务齐全；
 - 至少两项有序置顶，以及至少一项当天可撤回延期；
 - Day Todo 至少一个分组同时包含待完成与当日结果；真实 App 投影中分组标题唯一，完成、延期和废弃只能在原分组内沉底；其中已完成任务使用明显浅于待完成任务的静默文字层级，延期、废弃等其他结果继续使用各自共享状态色；
-- 真实 App 通过侧栏点击打开 Day Todo、任务池、未来计划、重复计划、未完成、已完成和日历；分组视图的普通 section 由分组标题承载分组信息，任务行不重复分组；重复父计划只在“重复计划”行内显示自己的分组和标签，Day Todo 与未来计划则由具体重复实例显示分类。任务池、未完成和已完成不得出现 `task-cycle-track` 管理行，日历月格与选中日列表不得出现任何重复实例。Day Todo 的双置顶队列没有分组标题，两条已分组置顶任务必须在行内分别显示分组；未完成池的平铺视图则由任务行显示分组。六页任务行与日历均产出真实 App 截图；App log 与 unified console 必须没有 runtime、持久化、布局或 accessibility failure；
+- 真实 App 通过侧栏点击打开 Day Todo、任务池、未来计划、重复计划、未完成、已完成和日历；分组视图的普通 section 由分组标题承载分组信息，任务行不重复分组；重复父计划只在“重复计划”行内显示自己的分组和标签，Day Todo 与未来计划则由具体重复实例显示分类。任务池、未完成和已完成不得出现 `task-cycle-track` 管理行，日历月格与选中日列表不得出现任何重复实例。Day Todo 的双置顶队列没有分组标题，两条已分组置顶任务必须在行内分别显示分组；未完成池的平铺视图则由任务行显示分组。六页任务行、日历、烛龙、快速记录和四个脱敏设置面板均由同一真实 App 产出截图；App log 与 unified console 必须没有 runtime、持久化、布局或 accessibility failure；
 - 已完成池同时包含单日完成与跨日完成任务；真实 App 行只保留一个强调型完成状态，单日记录收起延续轨迹，跨日记录改用轻量事件路径；
 - 任务池右栏以一个本地统计区呈现任务、池内分组、池内标签、未分组、说明、拆分和重新回池计数；统计不依赖 Provider。Provider 未就绪时烛龙分析区必须完整隐藏，就绪时显示 fixture 中 grounded 且未过期的分析报告；
 - 复盘、彩色分组、彩色标签、描述、附言和任务池规划子任务达到最低覆盖；
@@ -88,6 +89,7 @@ make test-demo-fixture
 - App 写入后 SQLite snapshot 与全部加密 sidecar 会话可以精确回读。
 - 全局快速记录不依赖 fixture 数据；独立真实 App E2E 负责从 Finder 改键、触发、提交和恢复焦点，Demo 只提供交互体验入口。
 - 同步运行记录不写入十天任务 fixture；设置页的“最近同步”与“最近有效同步”由独立真实 App E2E 建立一次有效同步并回读 SQLite metadata，空同步只推进前者，失败不得推进任一时间。
+- README 截图只允许取自本入口生成的隔离产物。设置截图仅覆盖不含宿主机路径或 Provider 身份的 `general`、`groups`、`data` 与 `privacy`；`sync` 和 `zhulong` 由专用 E2E 验证，不得生成可复用文档截图。每张设置图必须在对应 `settings.content.<pane>` 真实面板锚点出现后截取；快速记录与设置窗口拍摄后必须关闭，主窗口恢复 Day Todo 后才能写出 `ready` manifest。整个文档截图链共用 30 秒 deadline，外层脚本统一提供 90 秒 ready 预算。
 
 manifest 记录语义计数而非随机 UUID，因此相同锚点可以跨运行比较覆盖，不要求数据库字节完全相同。
 

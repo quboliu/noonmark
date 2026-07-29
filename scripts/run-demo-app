@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/interactive-demo-screenshot-contract
+
 configuration="${1:-debug}"
 app_path="dist/NoonmarkDemo.app"
 executable_name="NoonmarkMacAppDemo"
@@ -76,7 +78,7 @@ if [[ -z "$target_pid" ]]; then
   exit 1
 fi
 
-for _ in {1..200}; do
+for ((attempt = 0; attempt < NOONMARK_INTERACTIVE_DEMO_READY_POLL_LIMIT; attempt += 1)); do
   if [[ -f "$result_path" ]]; then
     break
   fi
@@ -95,10 +97,26 @@ if [[ ! -f "$result_path" ]] \
   exit 1
 fi
 
-for page in pool day future recurring unfinished completed; do
+for page in "${NOONMARK_INTERACTIVE_DEMO_TASK_COLLECTION_SCREENSHOTS[@]}"; do
   screenshot="$demo_root/task-collection-$page.png"
   if [[ ! -s "$screenshot" ]]; then
     echo "interactive demo task collection screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+done
+
+for screenshot_name in "${NOONMARK_INTERACTIVE_DEMO_DOCUMENTATION_SCREENSHOTS[@]}"; do
+  screenshot="$demo_root/$screenshot_name.png"
+  if [[ ! -s "$screenshot" ]]; then
+    echo "interactive demo documentation screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+done
+
+for screenshot_name in "${NOONMARK_INTERACTIVE_DEMO_FORBIDDEN_DOCUMENTATION_SCREENSHOTS[@]}"; do
+  screenshot="$demo_root/$screenshot_name.png"
+  if [[ -e "$screenshot" ]]; then
+    echo "interactive demo produced a sensitive documentation screenshot: $screenshot" >&2
     exit 1
   fi
 done

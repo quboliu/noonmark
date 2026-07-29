@@ -196,6 +196,13 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             return
         }
 
+        do {
+            try captureTaskCollectionScreenshot(page: .zhulong)
+        } catch {
+            finishWithFailure(error, on: store)
+            return
+        }
+
         store.page = .pool
         store.clearSelection()
         store.isDetailRailExpanded = true
@@ -986,6 +993,269 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             }
             return
         }
+        startDocumentationSurfaceCapture(context: context)
+    }
+
+    @MainActor
+    private func startDocumentationSurfaceCapture(
+        context: DemoCycleCheckContext
+    ) {
+        guard AppViewTreeE2E.activateMainWindow(),
+              NSApp.sendAction(
+                  NoonmarkMenuAction.showQuickEntry,
+                  to: nil,
+                  from: nil
+              )
+        else {
+            finishWithFailure(
+                InteractiveDemoFixtureError.documentationCaptureFailed(
+                    "无法打开快速记录窗口"
+                ),
+                on: context.store
+            )
+            return
+        }
+        verifyQuickEntryForDocumentation(
+            context: context,
+            deadline: Date().addingTimeInterval(30)
+        )
+    }
+
+    @MainActor
+    private func verifyQuickEntryForDocumentation(
+        context: DemoCycleCheckContext,
+        deadline: Date
+    ) {
+        guard Date() < deadline else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.documentationCaptureFailed(
+                    "快速记录窗口没有进入可截图状态"
+                ),
+                on: context.store
+            )
+            return
+        }
+        guard let panel = NSApp.windows.first(where: {
+            $0.identifier
+                == NoonmarkQuickEntryWindowController.windowIdentifier
+                && $0.isVisible
+                && $0.isMiniaturized == false
+        }),
+        panel.isKeyWindow,
+        AppViewTreeE2E.view(
+            identifier: "quick-entry.window",
+            in: panel
+        ) != nil,
+        AppViewTreeE2E.view(
+            identifier: "quick-entry.field",
+            in: panel
+        ) != nil
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyQuickEntryForDocumentation(
+                    context: context,
+                    deadline: deadline
+                )
+            }
+            return
+        }
+        do {
+            try captureDocumentationScreenshot(
+                of: panel,
+                named: "quick-entry.png"
+            )
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+        panel.performClose(nil)
+        waitForQuickEntryToClose(
+            context: context,
+            deadline: deadline
+        )
+    }
+
+    @MainActor
+    private func waitForQuickEntryToClose(
+        context: DemoCycleCheckContext,
+        deadline: Date
+    ) {
+        guard Date() < deadline else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.documentationCaptureFailed(
+                    "快速记录窗口无法关闭"
+                ),
+                on: context.store
+            )
+            return
+        }
+        let quickEntryIsVisible = NSApp.windows.contains {
+            $0.identifier
+                == NoonmarkQuickEntryWindowController.windowIdentifier
+                && $0.isVisible
+        }
+        guard quickEntryIsVisible == false else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                waitForQuickEntryToClose(
+                    context: context,
+                    deadline: deadline
+                )
+            }
+            return
+        }
+        guard AppViewTreeE2E.activateMainWindow(),
+              NSApp.sendAction(
+                  NoonmarkMenuAction.showSettings,
+                  to: nil,
+                  from: nil
+              )
+        else {
+            finishWithFailure(
+                InteractiveDemoFixtureError.documentationCaptureFailed(
+                    "无法打开设置窗口"
+                ),
+                on: context.store
+            )
+            return
+        }
+        captureSettingsPaneForDocumentation(
+            context: context,
+            paneIndex: 0,
+            deadline: deadline
+        )
+    }
+
+    @MainActor
+    private func captureSettingsPaneForDocumentation(
+        context: DemoCycleCheckContext,
+        paneIndex: Int,
+        deadline: Date
+    ) {
+        let panes: [SettingsPane] = [
+            .general,
+            .groups,
+            .data,
+            .privacy,
+        ]
+        guard panes.indices.contains(paneIndex) else {
+            finishWithFailure(
+                InteractiveDemoFixtureError.documentationCaptureFailed(
+                    "设置面板索引无效"
+                ),
+                on: context.store
+            )
+            return
+        }
+        let pane = panes[paneIndex]
+        guard Date() < deadline else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.documentationCaptureFailed(
+                    "设置面板 \(pane.rawValue) 没有进入可截图状态"
+                ),
+                on: context.store
+            )
+            return
+        }
+        guard let settingsWindow = NSApp.windows.first(where: {
+            $0.identifier
+                == NoonmarkSettingsWindowController.windowIdentifier
+                && $0.isVisible
+                && $0.isMiniaturized == false
+        }),
+        settingsWindow.isKeyWindow,
+        let contentAnchor = AppViewTreeE2E.view(
+            identifier: "settings.content.\(pane.rawValue)",
+            in: settingsWindow
+        ),
+        AppViewTreeE2E.verificationText(for: contentAnchor)
+            == pane.title(copy: context.store.copy)
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                captureSettingsPaneForDocumentation(
+                    context: context,
+                    paneIndex: paneIndex,
+                    deadline: deadline
+                )
+            }
+            return
+        }
+        do {
+            try captureDocumentationScreenshot(
+                of: settingsWindow,
+                named: "settings-\(pane.rawValue).png"
+            )
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+
+        let nextIndex = paneIndex + 1
+        guard panes.indices.contains(nextIndex) else {
+            settingsWindow.performClose(nil)
+            finalizeDocumentationSurfaceCapture(
+                context: context,
+                deadline: deadline
+            )
+            return
+        }
+        let nextPane = panes[nextIndex]
+        guard let nextPaneAnchor = AppViewTreeE2E.view(
+            identifier: "settings.sidebar.\(nextPane.rawValue)",
+            in: settingsWindow
+        ), AppViewTreeE2E.click(nextPaneAnchor)
+        else {
+            finishWithFailure(
+                InteractiveDemoFixtureError.documentationCaptureFailed(
+                    "无法切换到设置面板 \(nextPane.rawValue)"
+                ),
+                on: context.store
+            )
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            captureSettingsPaneForDocumentation(
+                context: context,
+                paneIndex: nextIndex,
+                deadline: deadline
+            )
+        }
+    }
+
+    @MainActor
+    private func finalizeDocumentationSurfaceCapture(
+        context: DemoCycleCheckContext,
+        deadline: Date
+    ) {
+        guard Date() < deadline else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.documentationCaptureFailed(
+                    "设置窗口关闭后主窗口没有恢复"
+                ),
+                on: context.store
+            )
+            return
+        }
+        let settingsIsVisible = NSApp.windows.contains {
+            $0.identifier
+                == NoonmarkSettingsWindowController.windowIdentifier
+                && $0.isVisible
+        }
+        guard settingsIsVisible == false,
+              AppViewTreeE2E.activateMainWindow(),
+              context.store.page == .day
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                finalizeDocumentationSurfaceCapture(
+                    context: context,
+                    deadline: deadline
+                )
+            }
+            return
+        }
         do {
             let result = try manifest(
                 fixture: context.fixture,
@@ -1246,6 +1516,23 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         } catch {
             throw InteractiveDemoFixtureError
                 .presentationContractFailed
+        }
+    }
+
+    @MainActor
+    private func captureDocumentationScreenshot(
+        of window: NSWindow,
+        named fileName: String
+    ) throws {
+        do {
+            try AppE2EScreenshot.captureContent(
+                of: window,
+                to: resultURL.deletingLastPathComponent()
+                    .appendingPathComponent(fileName)
+            )
+        } catch {
+            throw InteractiveDemoFixtureError
+                .documentationCaptureFailed(fileName)
         }
     }
 
@@ -2321,6 +2608,7 @@ private enum InteractiveDemoFixtureError: LocalizedError {
     case scopeAuthorizationPresentationFailed
     case presentationContractFailed
     case taskCycleDetailPresentationFailed(String)
+    case documentationCaptureFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -2340,6 +2628,8 @@ private enum InteractiveDemoFixtureError: LocalizedError {
             "演示 App 未满足任务池统计边界或烛龙头部／输入框层级契约。"
         case let .taskCycleDetailPresentationFailed(diagnostic):
             "重复任务实例详情未满足分类与生命周期摘要契约：\(diagnostic)"
+        case let .documentationCaptureFailed(diagnostic):
+            "演示 App 文档截图失败：\(diagnostic)"
         }
     }
 }

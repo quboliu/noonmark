@@ -1005,13 +1005,37 @@ enum SubtaskRowSurface {
     case dayList
     case dayDetail
 
-    var accessibilityNamespace: String {
+    private var accessibilityNamespace: String {
         switch self {
         case .dayList:
             "day-list"
         case .dayDetail:
             "day"
         }
+    }
+
+    func accessibilityPrefix(for subtaskID: SubtaskID) -> String {
+        "\(accessibilityNamespace).subtask.\(subtaskID.description)"
+    }
+
+    func completionIdentifier(for subtaskID: SubtaskID) -> String {
+        "\(accessibilityPrefix(for: subtaskID)).completion"
+    }
+
+    func titleIdentifier(for subtaskID: SubtaskID) -> String {
+        "\(accessibilityPrefix(for: subtaskID)).title"
+    }
+
+    func titleInputIdentifier(for subtaskID: SubtaskID) -> String {
+        "\(titleIdentifier(for: subtaskID)).input"
+    }
+
+    func deleteIdentifier(for subtaskID: SubtaskID) -> String {
+        "\(accessibilityPrefix(for: subtaskID)).delete"
+    }
+
+    func newEditorIdentifier(for traceID: DayTraceID) -> String {
+        "\(accessibilityNamespace).subtask.\(traceID.description).new"
     }
 }
 
@@ -1021,7 +1045,7 @@ struct SubtaskRow: View {
     let surface: SubtaskRowSurface
 
     private var accessibilityPrefix: String {
-        "\(surface.accessibilityNamespace).subtask.\(subtask.id.description)"
+        surface.accessibilityPrefix(for: subtask.id)
     }
 
     var canToggle: Bool {
@@ -1053,15 +1077,13 @@ struct SubtaskRow: View {
                     ? store.copy.undoComplete
                     : store.copy.markComplete
             )
-            .accessibilityIdentifier(
-                "\(accessibilityPrefix).completion"
-            )
+            .accessibilityIdentifier(surface.completionIdentifier(for: subtask.id))
             .disabled(canToggle == false)
 
             EditableSubtaskTitle(
                 title: subtask.title,
                 editable: canEdit,
-                accessibilityIdentifier: "\(accessibilityPrefix).title"
+                accessibilityIdentifier: surface.titleIdentifier(for: subtask.id)
             ) {
                 store.renameSubtask(
                     subtask.id,
@@ -1127,11 +1149,11 @@ struct SubtaskRow: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(store.copy.removeSubtaskAction)
                 .accessibilityIdentifier(
-                    "\(accessibilityPrefix).delete.ax"
+                    "\(surface.deleteIdentifier(for: subtask.id)).ax"
                 )
                 .background {
                     AppE2EViewAnchor(
-                        identifier: "\(accessibilityPrefix).delete"
+                        identifier: surface.deleteIdentifier(for: subtask.id)
                     )
                 }
                 .help(store.copy.removeSubtaskAction)

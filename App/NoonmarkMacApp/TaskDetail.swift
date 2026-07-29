@@ -98,7 +98,9 @@ struct TaskDetail: View {
                             style: .compact,
                             commitsOnReturn: true,
                             onCommit: { store.addDetailSubtask(traceID: trace.id) },
-                            nativeAccessibilityIdentifier: "day.subtask.\(trace.id.description).new"
+                            nativeAccessibilityIdentifier: SubtaskRowSurface
+                                .dayDetail
+                                .newEditorIdentifier(for: trace.id)
                         )
                             .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
                             .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))

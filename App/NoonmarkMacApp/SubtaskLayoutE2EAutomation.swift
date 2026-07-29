@@ -137,7 +137,8 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         try await verifyLayout(
             namespace: "day",
             itemIDs: subtaskIDs,
-            newEditorIdentifier: "day.subtask.\(traceID.description).new"
+            newEditorIdentifier: SubtaskRowSurface.dayDetail
+                .newEditorIdentifier(for: traceID)
         )
         store.expandedTraceIDs.insert(traceID)
         try await verifyInlineEditing(
@@ -169,10 +170,10 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         store.selectTrace(trace.id)
         store.expandedTraceIDs.insert(trace.id)
 
-        let listInputIdentifier =
-            "day-list.subtask.\(subtask.id.description).title.input"
-        let detailInputIdentifier =
-            "day.subtask.\(subtask.id.description).title.input"
+        let listInputIdentifier = SubtaskRowSurface.dayList
+            .titleInputIdentifier(for: subtask.id)
+        let detailInputIdentifier = SubtaskRowSurface.dayDetail
+            .titleInputIdentifier(for: subtask.id)
         try await waitUntil("重启后主列表与详情栏没有同时回读子任务标题") {
             guard let listEditor = AppViewTreeE2E.view(
                 identifier: listInputIdentifier
@@ -246,8 +247,8 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         subtaskID: SubtaskID,
         store: NoonmarkStore
     ) async throws {
-        let surfaceIdentifier =
-            "day-list.subtask.\(subtaskID.description).title"
+        let surfaceIdentifier = SubtaskRowSurface.dayList
+            .titleIdentifier(for: subtaskID)
         let inputIdentifier = "\(surfaceIdentifier).input"
         var surface: NSView?
         var editor: NSTextView?
@@ -333,7 +334,8 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                 ) as? NSTextView,
                     let detailEditor = AppViewTreeE2E.view(
                         identifier:
-                        "day.subtask.\(subtaskID.description).title.input"
+                        SubtaskRowSurface.dayDetail
+                            .titleInputIdentifier(for: subtaskID)
                     ) as? NSTextView
                 else {
                     return false
@@ -352,7 +354,8 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             let detailEditorState = (
                 AppViewTreeE2E.view(
                     identifier:
-                    "day.subtask.\(subtaskID.description).title.input"
+                    SubtaskRowSurface.dayDetail
+                        .titleInputIdentifier(for: subtaskID)
                 ) as? NSTextView
             )?.string ?? "nil"
             throw Failure.failed(

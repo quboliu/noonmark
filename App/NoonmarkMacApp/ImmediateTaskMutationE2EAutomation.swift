@@ -217,7 +217,9 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         )
         store.selectTrace(fixture.returnedTraceID)
         try await click(
-            identifier: "day.subtask.\(fixture.deletedDaySubtaskID.description).delete",
+            identifier: SubtaskRowSurface.dayDetail.deleteIdentifier(
+                for: fixture.deletedDaySubtaskID
+            ),
             modifiers: [],
             input: input
         )
@@ -575,8 +577,9 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         let replacementSubtasks = store.subtasks(for: replacementTraceID)
         for subtask in replacementSubtasks {
             try await clickCompletionButton(
-                identifier:
-                    "day.subtask.\(subtask.id.description).completion",
+                identifier: SubtaskRowSurface.dayDetail.completionIdentifier(
+                    for: subtask.id
+                ),
                 label: store.copy.markComplete,
                 input: input
             )
@@ -798,7 +801,8 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         readback: @escaping @MainActor () -> String?,
         input: WindowServerInputDriver
     ) async throws {
-        let identifier = "day.subtask.\(subtaskID.description).title.input"
+        let identifier = SubtaskRowSurface.dayDetail
+            .titleInputIdentifier(for: subtaskID)
         var editor: NSTextView?
         try await waitUntil("native subtask title editor was not ready") {
             editor = AppViewTreeE2E.view(identifier: identifier) as? NSTextView

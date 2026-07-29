@@ -536,7 +536,7 @@ struct CompletionControlE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func subtaskCompletionIdentifier(_ subtaskID: SubtaskID) -> String {
-        "day.subtask.\(subtaskID.description).completion"
+        SubtaskRowSurface.dayList.completionIdentifier(for: subtaskID)
     }
 
     private func writeState(_ state: ProbeState) throws {

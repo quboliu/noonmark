@@ -35,12 +35,12 @@ struct ZhulongTodoDiffEditor: View {
                     .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
             }
-            .padding(18)
+            .padding(20)
 
             RailDivider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 12) {
                     ForEach($items) { $item in
                         editorRow(item: $item)
                     }
@@ -50,7 +50,7 @@ struct ZhulongTodoDiffEditor: View {
                             .foregroundStyle(Theme.warn)
                     }
                 }
-                .padding(18)
+                .padding(20)
             }
             .frame(maxHeight: 440)
 
@@ -68,7 +68,8 @@ struct ZhulongTodoDiffEditor: View {
                     .disabled(items.isEmpty)
                     .accessibilityIdentifier("zhulong-save-todo-diff-revision")
             }
-            .padding(14)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
         .frame(width: 640)
         .background(Theme.background)
@@ -137,7 +138,10 @@ struct ZhulongTodoDiffEditor: View {
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Theme.panel2)
+        )
     }
 
     private func remove(_ id: ZhulongTodoDiffItemID) {

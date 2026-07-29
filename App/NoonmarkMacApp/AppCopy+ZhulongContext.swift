@@ -400,4 +400,10 @@ extension AppCopy {
             ? "开启烛龙后，可从完成轨迹中总结节奏和可复用模式。"
             : "Enable Zhulong to summarize rhythm and reusable patterns from completion trails."
     }
+
+    // MARK: - Provider waiting
+
+    var zhulongProviderWaitingHint: String {
+        language == .chinese ? "烛龙正在回复" : "Zhulong is replying"
+    }
 }

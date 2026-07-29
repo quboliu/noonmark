@@ -110,7 +110,7 @@ private struct ZhulongWorkspaceHome: View {
                         workflowSection
                         if pendingCount > 0 {
                             pendingSection
-                                .padding(.top, 10)
+                                .padding(.top, 12)
                         }
                     }
                     .frame(maxWidth: CGFloat(MacUIZhulongHomeLayout.contentMaxWidth), alignment: .leading)
@@ -137,8 +137,8 @@ private struct ZhulongWorkspaceHome: View {
     }
 
     private var intentComposer: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
                 MarkdownEditor(
                     text: $intent,
                     placeholder: copy.intentPlaceholder,
@@ -154,23 +154,19 @@ private struct ZhulongWorkspaceHome: View {
 
                 Button(action: startIntent) {
                     Image(systemName: "arrow.up")
-                        .font(.noonmarkSystem(size: 11, weight: .bold))
+                        .font(.noonmarkSystem(size: 12, weight: .bold))
                         .foregroundStyle(
-                            canSubmitIntent ? Theme.panel : Theme.text3
+                            canSubmitIntent ? Color.white : Theme.text3
                         )
-                        .frame(width: 32, height: 32)
+                        .frame(
+                            width: ZhulongSessionPolishMetrics.composerActionSize,
+                            height: ZhulongSessionPolishMetrics.composerActionSize
+                        )
                         .background(
                             Circle().fill(
                                 canSubmitIntent
-                                    ? Theme.text1
+                                    ? Theme.accent
                                     : Theme.controlFill
-                            )
-                        )
-                        .overlay(
-                            Circle().stroke(
-                                canSubmitIntent
-                                    ? Color.clear
-                                    : Theme.line
                             )
                         )
                         .contentShape(Circle())
@@ -188,7 +184,7 @@ private struct ZhulongWorkspaceHome: View {
                 }
             }
             .padding(.leading, 16)
-            .padding(.trailing, 10)
+            .padding(.trailing, ZhulongSessionPolishMetrics.composerActionRowInset)
             .frame(
                 height: CGFloat(
                     MacUIZhulongHomeLayout.composerHeight
@@ -196,29 +192,24 @@ private struct ZhulongWorkspaceHome: View {
             )
             .background(
                 RoundedRectangle(
-                    cornerRadius: CGFloat(
-                        MacUIZhulongHomeLayout.composerCornerRadius
-                    )
+                    cornerRadius: ZhulongSessionPolishMetrics.composerCornerRadius,
+                    style: .continuous
                 )
-                .fill(Theme.panel)
+                .fill(Theme.panel2)
             )
             .overlay(
                 RoundedRectangle(
-                    cornerRadius: CGFloat(
-                        MacUIZhulongHomeLayout.composerCornerRadius
-                    )
+                    cornerRadius: ZhulongSessionPolishMetrics.composerCornerRadius,
+                    style: .continuous
                 )
                 .stroke(
-                    intentIsFocused
-                        ? Theme.accent.opacity(0.5)
-                        : Theme.line,
-                    lineWidth: intentIsFocused ? 1.2 : 1
+                    intentIsFocused ? Theme.accentStroke : Color.clear
                 )
             )
             .shadow(
-                color: Theme.text1.opacity(0.045),
+                color: Theme.shadowSubtle,
                 radius: 16,
-                y: 8
+                y: 4
             )
 
             if conversationAccessIsDenied {
@@ -238,9 +229,8 @@ private struct ZhulongWorkspaceHome: View {
             ForEach(Array(workflows.enumerated()), id: \.element.id) { index, workflow in
                 workflowButton(workflow)
                 if index < workflows.count - 1 {
-                    Divider()
-                        .padding(.leading, 34)
-                        .overlay(Theme.line.opacity(0.82))
+                    RailDivider()
+                        .padding(.leading, 36)
                 }
             }
         }
@@ -410,9 +400,9 @@ private struct ZhulongWorkspaceSessionRow: View {
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.accent)
             }
-            .padding(.leading, 38)
-            .padding(.trailing, 2)
-            .padding(.vertical, 11)
+            .padding(.leading, 36)
+            .padding(.trailing, 4)
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }

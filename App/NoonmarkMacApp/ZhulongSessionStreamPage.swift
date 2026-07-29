@@ -63,12 +63,16 @@ struct ZhulongSessionStreamPage: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: NoonmarkVisualMetrics.zhulongConversationMessageSpacing) {
+                    VStack(alignment: .leading, spacing: ZhulongSessionPolishMetrics.messageSpacing) {
                         streamContent
                         if let liveResponse = workspace.selectedLiveResponse {
                             ZhulongLiveAssistantMessage(
-                                content: liveResponse.content,
-                                waitingText: copy.composerProviderRunningHint
+                                content: liveResponse.content
+                            )
+                            .id("zhulong-live-assistant-message")
+                        } else if isWaitingForProvider {
+                            ZhulongProviderWaitingIndicator(
+                                waitingText: providerWaitingHint
                             )
                             .id("zhulong-live-assistant-message")
                         }
@@ -84,7 +88,7 @@ struct ZhulongSessionStreamPage: View {
                         }
                     }
                     .frame(
-                        maxWidth: NoonmarkVisualMetrics.zhulongConversationContentMaxWidth,
+                        maxWidth: ZhulongSessionPolishMetrics.contentMaxWidth,
                         alignment: .leading
                     )
                     .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
@@ -102,7 +106,7 @@ struct ZhulongSessionStreamPage: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if canComposeEntry {
                         entryComposer
-                            .frame(maxWidth: NoonmarkVisualMetrics.zhulongConversationContentMaxWidth)
+                            .frame(maxWidth: ZhulongSessionPolishMetrics.contentMaxWidth)
                             .frame(maxWidth: .infinity)
                             .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
                             .padding(.bottom, 16)
@@ -123,6 +127,10 @@ struct ZhulongSessionStreamPage: View {
                     withAnimation(Theme.shouldReduceMotion ? nil : .easeOut(duration: 0.16)) {
                         proxy.scrollTo("zhulong-live-assistant-message", anchor: .bottom)
                     }
+                }
+                .onChange(of: isWaitingForProvider) {
+                    guard isWaitingForProvider else { return }
+                    proxy.scrollTo("zhulong-live-assistant-message", anchor: .bottom)
                 }
                 .onChange(
                     of: workspace.selectedSession?
@@ -416,6 +424,7 @@ struct ZhulongSessionStreamPage: View {
                     Text(
                         "\(language == .chinese ? "视图" : "View") · \(workspace.variant.title(language: language))"
                     )
+                    .font(.noonmarkSystem(size: 11.5, weight: .medium))
                     MicroLabel(systemImage: "chevron.down", color: .primary)
                 }
             }
@@ -462,7 +471,7 @@ struct ZhulongSessionStreamPage: View {
                 Text(scopeAuthorizationDisclosure(requirement))
                     .font(.noonmarkSystem(size: 12))
                     .foregroundStyle(Theme.text2)
-                    .lineSpacing(3)
+                    .lineSpacing(4)
                 HStack(spacing: 6) {
                     ForEach(session.proposedScopes.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { scope in
                         Text(scopeLabel(scope))
@@ -553,7 +562,7 @@ struct ZhulongSessionStreamPage: View {
             Text(gate.draft.reason)
                 .font(.noonmarkSystem(size: 11))
                 .foregroundStyle(Theme.text2)
-                .lineSpacing(3)
+                .lineSpacing(4)
             ForEach(gate.draft.options, id: \.id) { option in
                 Button {
                     workspace.resolveCurrentDecisionGate(
@@ -561,7 +570,7 @@ struct ZhulongSessionStreamPage: View {
                         supplementalDecision: optionalText(decisionSupplement)
                     )
                 } label: {
-                    HStack(alignment: .top, spacing: 10) {
+                    HStack(alignment: .top, spacing: 12) {
                         Image(systemName: "circle")
                             .font(.noonmarkSystem(size: 10, weight: .semibold))
                             .foregroundStyle(Theme.accent)
@@ -577,9 +586,12 @@ struct ZhulongSessionStreamPage: View {
                         }
                         Spacer()
                     }
-                    .padding(10)
+                    .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel2))
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Theme.panel2)
+                    )
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("zhulong-decision-option-\(option.id)")
@@ -595,7 +607,7 @@ struct ZhulongSessionStreamPage: View {
                 .font(.noonmarkSystem(size: 10.5))
                 .foregroundStyle(Theme.text3)
         }
-        .padding(13)
+        .padding(.vertical, 4)
     }
 
     private func dailyReviewAction(_ session: ZhulongSession) -> some View {
@@ -636,7 +648,7 @@ struct ZhulongSessionStreamPage: View {
                     showsSurface: true
                 )
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     Text(copy.zhulongDailyReviewEditableHint)
                     .font(.noonmarkSystem(size: 10.5))
                     .foregroundStyle(Theme.text3)
@@ -653,11 +665,7 @@ struct ZhulongSessionStreamPage: View {
                 }
             }
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Theme.panel)
-        )
+        .padding(.vertical, 4)
         .disabled(isSaved)
         .accessibilityIdentifier(
             "zhulong-inline-daily-review-draft"
@@ -703,6 +711,18 @@ struct ZhulongSessionStreamPage: View {
 
     private var canComposeEntry: Bool {
         workspace.selectedSession != nil
+    }
+
+    /// A provider run is in flight but no visible token has arrived yet; the
+    /// waiting placeholder occupies the live-message slot until then.
+    private var isWaitingForProvider: Bool {
+        workspace.selectedSession?.phase == .providerRunning
+            && workspace.selectedLiveResponse == nil
+    }
+
+    private var providerWaitingHint: String {
+        AppCopy(language: store.engine.preferences.language)
+            .zhulongProviderWaitingHint
     }
 
     private var canSubmitEntry: Bool {

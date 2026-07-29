@@ -156,7 +156,7 @@ struct DayTodoHeader: View {
     }
 
     private var wideHeader: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 8) {
             identity
             Spacer(minLength: 8)
             presentationMenu
@@ -167,7 +167,7 @@ struct DayTodoHeader: View {
     private var compactHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             identity
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Spacer(minLength: 0)
                 presentationMenu
                 navigationActions
@@ -184,9 +184,9 @@ struct DayTodoHeader: View {
     }
 
     private var identity: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(store.displayFullDate(store.selectedDate))
-                .font(.noonmarkSystem(size: 21, weight: .bold))
+                .font(.noonmarkSystem(size: 20, weight: .semibold))
                 .foregroundStyle(Theme.text1)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -224,7 +224,7 @@ struct DayTodoHeader: View {
     }
 
     private var navigationActions: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             navigationButton(
                 "‹",
                 accessibilityLabel: store.copy.previousDay,
@@ -295,10 +295,10 @@ struct DayStateBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.noonmarkSystem(size: 11, weight: .semibold))
+            .font(.noonmarkSystem(size: 10.5, weight: .semibold))
             .foregroundStyle(filled ? .white : color)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
             .background(Capsule().fill(filled ? color : color.opacity(0.12)))
     }
 }
@@ -524,10 +524,10 @@ struct DateStrip: View {
                     } label: {
                         VStack(spacing: 4) {
                             Text(store.weekdayNarrow(date))
-                                .font(.noonmarkSystem(size: 9.5, weight: .medium))
+                                .font(.noonmarkSystem(size: 10))
                                 .foregroundStyle(Theme.text3)
                             Text("\(date.day)")
-                                .font(.noonmarkSystem(size: 12, weight: .semibold))
+                                .font(.noonmarkSystem(size: 12, weight: .medium))
                                 .foregroundStyle(selected ? .white : today ? Theme.accent : Theme.text1)
                                 .frame(width: 24, height: 24)
                                 .overlay(Circle().stroke(today && !selected ? Theme.accent : .clear, lineWidth: 1.5))
@@ -540,7 +540,7 @@ struct DateStrip: View {
                                 } else {
                                     Circle()
                                         .fill(pendingCount > 0 ? (selected ? .white.opacity(0.9) : Theme.accent) : .clear)
-                                        .frame(width: 4, height: 4)
+                                        .frame(width: 3, height: 3)
                                 }
                             }
                             .frame(height: 9)
@@ -575,8 +575,8 @@ struct DateStrip: View {
                 onFocusChange: { hasKeyboardFocus = $0 }
             )
         }
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(hasKeyboardFocus ? Theme.accent.opacity(0.72) : Theme.line.opacity(0.62))
@@ -599,7 +599,7 @@ struct DateStripSelectionPill: View {
                     .shadow(color: Theme.accent.opacity(0.34), radius: 6, x: 0, y: 2)
                     .offset(
                         x: cellWidth * CGFloat(selectedIndex) + (cellWidth - 24) / 2,
-                        y: 17
+                        y: 18
                     )
                     .animation(
                         Theme.shouldReduceMotion

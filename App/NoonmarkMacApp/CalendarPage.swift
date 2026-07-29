@@ -28,9 +28,9 @@ struct CalendarPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Text(store.displayMonthYear(store.selectedCalendarDate))
-                    .font(.noonmarkSystem(size: 21, weight: .bold))
+                    .font(.noonmarkSystem(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.text1)
                     .monospacedDigit()
                     .background {
@@ -71,7 +71,8 @@ struct CalendarPage: View {
 
             Text(store.copy.calendarSubtitle)
                 .font(.noonmarkSystem(size: 12))
-                .foregroundStyle(Theme.text3)
+                .foregroundStyle(Theme.text2)
+                .lineSpacing(3)
                 .padding(.top, 4)
 
             HStack {

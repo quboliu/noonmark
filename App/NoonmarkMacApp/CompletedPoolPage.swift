@@ -63,7 +63,7 @@ struct CompletedPoolPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navCompleted, subtitle: store.copy.completedSubtitle) {
+            WorkspacePageHeader(title: store.copy.navCompleted, subtitle: store.copy.completedSubtitle) {
                 TaskCollectionPresentationMenu(
                     copy: store.copy,
                     accessibilityIdentifier: "task-collection-view.completed",

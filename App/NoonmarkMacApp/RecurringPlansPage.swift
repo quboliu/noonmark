@@ -20,7 +20,7 @@ struct RecurringPlansPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(
+            WorkspacePageHeader(
                 title: store.copy.navRecurring,
                 subtitle: store.copy.recurringPlansSubtitle
             )

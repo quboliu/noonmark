@@ -29,7 +29,7 @@ struct FuturePlansPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(
+            WorkspacePageHeader(
                 title: store.copy.navFuture,
                 subtitle: store.copy.futureSubtitle
             ) {

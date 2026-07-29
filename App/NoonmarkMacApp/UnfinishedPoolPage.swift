@@ -59,7 +59,7 @@ struct UnfinishedPoolPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navUnfinished, subtitle: store.copy.unfinishedSubtitle) {
+            WorkspacePageHeader(title: store.copy.navUnfinished, subtitle: store.copy.unfinishedSubtitle) {
                 TaskCollectionPresentationMenu(
                     copy: store.copy,
                     accessibilityIdentifier: "task-collection-view.unfinished",

@@ -96,7 +96,7 @@ struct TaskPoolPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeader(title: store.copy.navPool, subtitle: store.copy.poolSubtitle) {
+            WorkspacePageHeader(title: store.copy.navPool, subtitle: store.copy.poolSubtitle) {
                 TaskCollectionPresentationMenu(
                     copy: store.copy,
                     accessibilityIdentifier:

@@ -434,7 +434,13 @@ struct TaskNoteEntriesSection: View {
                             }
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Theme.noteBackground)
+                )
             }
             .accessibilityIdentifier("detail.note.section")
             .background {

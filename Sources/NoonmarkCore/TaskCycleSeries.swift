@@ -1300,123 +1300,13 @@ public extension NoonmarkEngine {
     }
 
     func taskCycleTracks(today: LocalDate) -> [TaskCycleTrack] {
-        let membersBySeries = Dictionary(
-            grouping: chains.values.compactMap {
-                chain -> (TaskChain, TaskCycleMembership)? in
-                guard let membership = chain.cycleMembership else {
-                    return nil
-                }
-                return (chain, membership)
-            },
-            by: { $0.1.seriesID }
-        )
+        let projectionIndex = taskCycleProjectionIndex()
         return taskCycleSeries.values
             .compactMap { series -> TaskCycleTrack? in
-                let entries = membersBySeries[series.id] ?? []
-                let membershipDates = entries.map(\.1.occurrenceDate)
-                guard let seriesBounds = try? series.trackBounds() else {
-                    return nil
-                }
-                let allDates = membershipDates + [
-                    seriesBounds.startDate,
-                    seriesBounds.endDate
-                ]
-                guard let trackStartDate = allDates.min(),
-                      let trackEndDate = allDates.max(),
-                      let dates = try? TaskCycleCivilCalendar
-                      .materializableDates(
-                          from: trackStartDate,
-                          through: trackEndDate
-                      )
-                else {
-                    return nil
-                }
-                let entriesByDate = Dictionary(
-                    uniqueKeysWithValues: entries.map {
-                        ($0.1.occurrenceDate, $0.0)
-                    }
-                )
-                let days = dates.map { date in
-                    guard let chain = entriesByDate[date] else {
-                        return TaskCycleTrackDay(
-                            date: date,
-                            chainID: nil,
-                            occurrenceTarget: nil,
-                            futurePlanTarget: nil,
-                            unfinishedTarget: nil,
-                            completedTarget: nil
-                        )
-                    }
-                    let chainTraces = traces.values.filter {
-                        $0.chainID == chain.id
-                    }
-                    let scheduledTrace = latestTaskCycleTrace(
-                        chainTraces.filter { $0.date == date }
-                    )
-                    let latestTrace = latestTaskCycleTrace(chainTraces)
-                    let representativeTrace =
-                        if scheduledTrace?.status == .cancelledDraft,
-                           latestTrace?.id != scheduledTrace?.id
-                        {
-                            latestTrace
-                        } else {
-                            scheduledTrace ?? latestTrace
-                        }
-                    let futurePlanTrace = latestTaskCycleTrace(
-                        chainTraces.filter {
-                            $0.status == .pending && $0.date > today
-                        }
-                    )
-                    let completedTrace = latestTaskCycleTrace(
-                        chainTraces.filter {
-                            $0.status == .completed
-                        }
-                    )
-                    let unfinishedTrace = completedTrace == nil
-                        ? latestTaskCycleTrace(
-                            chainTraces.filter {
-                                $0.status == .unfinished
-                                    || $0.status == .abandoned
-                            }
-                        )
-                        : nil
-                    return TaskCycleTrackDay(
-                        date: date,
-                        chainID: chain.id,
-                        occurrenceTarget: taskCycleTraceTarget(
-                            representativeTrace,
-                            today: today,
-                            cancelledState: series
-                                .isOccurrenceSkipped(date)
-                                ? .skipped
-                                : .returnedToPool
-                        ),
-                        futurePlanTarget: taskCycleTraceTarget(
-                            futurePlanTrace,
-                            today: today
-                        ),
-                        unfinishedTarget: taskCycleTraceTarget(
-                            unfinishedTrace,
-                            today: today
-                        ),
-                        completedTarget: taskCycleTraceTarget(
-                            completedTrace,
-                            today: today
-                        )
-                    )
-                }
-                return TaskCycleTrack(
-                    id: series.id,
-                    title: series.title,
-                    startDate: trackStartDate,
-                    endDate: trackEndDate,
-                    schedule: series.schedule,
-                    endCondition: series.endCondition,
-                    lifecycle: series.taskCycleLifecycle(
-                        today: today,
-                        days: days
-                    ),
-                    days: days
+                taskCycleTrack(
+                    series: series,
+                    today: today,
+                    projectionIndex: projectionIndex
                 )
             }
             .sorted {
@@ -1442,6 +1332,174 @@ public extension NoonmarkEngine {
                 }
                 return $0.id.description < $1.id.description
             }
+    }
+
+    func taskCycleTrack(
+        seriesID: TaskCycleSeriesID,
+        today: LocalDate
+    ) -> TaskCycleTrack? {
+        guard let series = taskCycleSeries[seriesID] else {
+            return nil
+        }
+        return taskCycleTrack(
+            series: series,
+            today: today,
+            projectionIndex: taskCycleProjectionIndex()
+        )
+    }
+
+    private struct TaskCycleProjectionIndex {
+        let membersBySeries: [
+            TaskCycleSeriesID: [
+                (
+                    chain: TaskChain,
+                    membership: TaskCycleMembership
+                )
+            ]
+        ]
+        let tracesByChain: [TaskChainID: [DayTrace]]
+    }
+
+    private func taskCycleProjectionIndex()
+        -> TaskCycleProjectionIndex
+    {
+        TaskCycleProjectionIndex(
+            membersBySeries: Dictionary(
+                grouping: chains.values.compactMap {
+                    chain -> (
+                        chain: TaskChain,
+                        membership: TaskCycleMembership
+                    )? in
+                    guard let membership =
+                        chain.cycleMembership
+                    else {
+                        return nil
+                    }
+                    return (chain, membership)
+                },
+                by: { $0.membership.seriesID }
+            ),
+            tracesByChain: Dictionary(
+                grouping: traces.values,
+                by: \.chainID
+            )
+        )
+    }
+
+    private func taskCycleTrack(
+        series: TaskCycleSeries,
+        today: LocalDate,
+        projectionIndex: TaskCycleProjectionIndex
+    ) -> TaskCycleTrack? {
+        let entries =
+            projectionIndex.membersBySeries[series.id] ?? []
+        let membershipDates = entries.map(
+            \.membership.occurrenceDate
+        )
+        guard let seriesBounds = try? series.trackBounds()
+        else {
+            return nil
+        }
+        let allDates = membershipDates + [
+            seriesBounds.startDate,
+            seriesBounds.endDate
+        ]
+        guard let trackStartDate = allDates.min(),
+              let trackEndDate = allDates.max(),
+              let dates = try? TaskCycleCivilCalendar
+              .materializableDates(
+                  from: trackStartDate,
+                  through: trackEndDate
+              )
+        else {
+            return nil
+        }
+        let entriesByDate = Dictionary(
+            uniqueKeysWithValues: entries.map {
+                ($0.membership.occurrenceDate, $0.chain)
+            }
+        )
+        let days = dates.map { date in
+            guard let chain = entriesByDate[date] else {
+                return TaskCycleTrackDay(
+                    date: date,
+                    chainID: nil,
+                    occurrenceTarget: nil,
+                    futurePlanTarget: nil,
+                    unfinishedTarget: nil,
+                    completedTarget: nil
+                )
+            }
+            let chainTraces =
+                projectionIndex.tracesByChain[chain.id] ?? []
+            let scheduledTrace = latestTaskCycleTrace(
+                chainTraces.filter { $0.date == date }
+            )
+            let latestTrace = latestTaskCycleTrace(chainTraces)
+            let representativeTrace =
+                if scheduledTrace?.status == .cancelledDraft,
+                   latestTrace?.id != scheduledTrace?.id
+                {
+                    latestTrace
+                } else {
+                    scheduledTrace ?? latestTrace
+                }
+            let futurePlanTrace = latestTaskCycleTrace(
+                chainTraces.filter {
+                    $0.status == .pending && $0.date > today
+                }
+            )
+            let completedTrace = latestTaskCycleTrace(
+                chainTraces.filter {
+                    $0.status == .completed
+                }
+            )
+            let unfinishedTrace = completedTrace == nil
+                ? latestTaskCycleTrace(
+                    chainTraces.filter {
+                        $0.status == .unfinished
+                            || $0.status == .abandoned
+                    }
+                )
+                : nil
+            return TaskCycleTrackDay(
+                date: date,
+                chainID: chain.id,
+                occurrenceTarget: taskCycleTraceTarget(
+                    representativeTrace,
+                    today: today,
+                    cancelledState: series
+                        .isOccurrenceSkipped(date)
+                        ? .skipped
+                        : .returnedToPool
+                ),
+                futurePlanTarget: taskCycleTraceTarget(
+                    futurePlanTrace,
+                    today: today
+                ),
+                unfinishedTarget: taskCycleTraceTarget(
+                    unfinishedTrace,
+                    today: today
+                ),
+                completedTarget: taskCycleTraceTarget(
+                    completedTrace,
+                    today: today
+                )
+            )
+        }
+        return TaskCycleTrack(
+            id: series.id,
+            title: series.title,
+            startDate: trackStartDate,
+            endDate: trackEndDate,
+            schedule: series.schedule,
+            endCondition: series.endCondition,
+            lifecycle: series.taskCycleLifecycle(
+                today: today,
+                days: days
+            ),
+            days: days
+        )
     }
 
     func taskCycleTemplateClassification(
@@ -1527,7 +1585,7 @@ public extension NoonmarkEngine {
         today: LocalDate,
         now: Date = Date()
     ) throws {
-        let candidate = try NoonmarkEngine(snapshot: snapshot())
+        let candidate = NoonmarkEngine(copying: self)
         try candidate.updateTaskCycleTemplateContentInPlace(
             seriesID: seriesID,
             title: title,
@@ -1831,7 +1889,7 @@ public extension NoonmarkEngine {
         today: LocalDate,
         now: Date = Date()
     ) throws -> TaskCycleReconciliationOutcome {
-        let candidate = try NoonmarkEngine(snapshot: snapshot())
+        let candidate = NoonmarkEngine(copying: self)
         let outcome = try candidate.reconcileTaskCycleSeriesInPlace(
             today: today,
             now: now

@@ -1,0 +1,54 @@
+surface	label	area	save_policy	marked_text_required	immediate_exit_probe
+day-quick-add	Day Todo 快速新增	Day Todo	submit	true	false
+future-quick-add	未来日期快速新增	未来计划	submit	true	false
+pool-quick-add	任务池快速新增	任务池	submit	true	false
+rail-search	详情栏快速搜索	共享导航	none	true	false
+quick-entry	全局快速输入	快速记录	submit	true	false
+global-search	全局搜索	共享导航	none	true	false
+pool-title	任务池标题	任务池	sqlite-autosave	true	true
+pool-description	任务池描述	任务池	sqlite-autosave	true	true
+pool-new-subtask	任务池新增计划子任务	任务池	submit	true	false
+pool-existing-subtask	任务池已有计划子任务	任务池	sqlite-autosave	true	true
+pool-new-note	任务池新增附言	任务池	submit	true	false
+pool-existing-note	任务池编辑附言	任务池	sqlite-autosave	true	true
+day-title	当日任务标题	Day Todo	sqlite-autosave	true	true
+day-description	当日任务描述	Day Todo	sqlite-autosave	true	true
+day-new-subtask	当日新增子任务	Day Todo	submit	true	false
+day-existing-subtask	当日已有子任务	Day Todo	sqlite-autosave	true	true
+day-new-note	当日新增附言	Day Todo	submit	true	false
+day-existing-note	当日编辑附言	Day Todo	sqlite-autosave	true	true
+future-title	未来计划标题	未来计划	sqlite-autosave	true	true
+future-description	未来计划描述	未来计划	sqlite-autosave	true	true
+future-new-note	未来计划新增附言	未来计划	submit	true	false
+future-existing-note	未来计划编辑附言	未来计划	sqlite-autosave	true	true
+task-cycle-create-title	新建重复任务标题	重复计划	submit	true	false
+task-cycle-title	重复任务模板标题	重复计划	sqlite-autosave	true	true
+task-cycle-description	重复任务模板描述	重复计划	sqlite-autosave	true	true
+task-cycle-new-subtask	重复任务新增模板子任务	重复计划	submit	true	false
+task-cycle-existing-subtask	重复任务已有模板子任务	重复计划	sqlite-autosave	true	true
+review-summary	复盘今日总结	日终复盘	sqlite-autosave	true	true
+review-unfinished-reason	复盘未完成原因	日终复盘	sqlite-autosave	true	true
+review-tomorrow-note	复盘明日注意事项	日终复盘	sqlite-autosave	true	true
+change-task-title	变更为新任务标题	任务生命周期	submit	true	false
+classification-label	任务标签输入	分类	submit	true	false
+classification-category-create	详情新建分组	分类	submit	true	false
+classification-manager-search	分类管理搜索	分类	none	true	false
+classification-manager-create	分类管理新建名称	分类	submit	true	false
+classification-manager-rename	分类管理重命名	分类	submit	true	false
+settings-poem	设置诗文	设置	sqlite-autosave	true	true
+provider-name	Provider 显示名称	设置	manual-save	true	false
+provider-base-url	Provider Base URL	设置	manual-save	true	false
+provider-model	Provider Model	设置	manual-save	true	false
+provider-api-key	Provider API Key	设置	manual-save	false	false
+zhulong-home-intent	烛龙首页意图	烛龙	submit	true	false
+zhulong-session-entry	烛龙会话输入	烛龙	submit	true	false
+zhulong-decision-supplement	烛龙决策补充	烛龙	submit	true	false
+zhulong-daily-review-summary	烛龙每日复盘总结	烛龙	sidecar-autosave	true	true
+zhulong-daily-review-tomorrow	烛龙每日复盘明日事项	烛龙	sidecar-autosave	true	true
+zhulong-inline-task-title	烛龙内联任务标题	烛龙	sidecar-autosave	true	true
+zhulong-inline-task-description	烛龙内联任务描述	烛龙	sidecar-autosave	true	true
+zhulong-inline-task-note	烛龙内联任务附言	烛龙	sidecar-autosave	true	true
+zhulong-inline-task-target-date	烛龙内联任务目标日期	烛龙	sidecar-autosave	true	false
+zhulong-inline-subtask-title	烛龙内联子任务标题	烛龙	sidecar-autosave	true	true
+zhulong-todo-diff-title	烛龙 Todo 变更标题	烛龙	submit	true	false
+zhulong-todo-diff-target-date	烛龙 Todo 变更目标日期	烛龙	submit	true	false

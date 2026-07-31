@@ -195,6 +195,12 @@ struct RailSearchField: View {
                 .textFieldStyle(.plain)
                 .font(.noonmarkSystem(size: 11.5))
                 .foregroundStyle(Theme.text1)
+                .accessibilityIdentifier("rail.search.field")
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "rail.search.field"
+                    )
+                }
                 .onSubmit(onSubmit)
                 .onExitCommand(perform: onDismiss)
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {

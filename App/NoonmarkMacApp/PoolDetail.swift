@@ -30,28 +30,30 @@ struct PoolDetail: View {
                 )
             })
             DetailPrimaryText {
-                EditableDetailTitleRow(task.definition.title, editable: true) {
-                    store.renamePoolTask(
+                EditableDetailTitleRow(
+                    task.definition.title,
+                    ownerID:
+                    "task:\(task.chain.id.description):title",
+                    editable: true
+                ) {
+                    await store.autosavePoolTaskTitle(
                         chainID: task.chain.id,
-                        title: $0,
-                        immediately: true,
-                        reportsSuccess: false
+                        title: $0
                     )
                 }
             } description: {
                 DetailDescriptionBlock(
-                    text: Binding(
-                        get: { task.definition.descriptionText ?? "" },
-                        set: {
-                            store.updatePoolTaskText(
-                                chainID: task.chain.id,
-                                descriptionText: $0,
-                                immediately: true
-                            )
-                        }
-                    ),
+                    ownerID:
+                    "task:\(task.chain.id.description):description",
+                    text: task.definition.descriptionText ?? "",
                     placeholder: store.copy.taskDescriptionPlaceholder,
-                    editable: true
+                    editable: true,
+                    onPersist: {
+                        await store.autosavePoolTaskText(
+                            chainID: task.chain.id,
+                            descriptionText: $0
+                        )
+                    }
                 )
             }
             Text(store.copy.poolNoDayTodoNotice)
@@ -85,8 +87,8 @@ struct PoolPlannedSubtasksSection: View {
             ForEach(plannedSubtasks) { plannedSubtask in
                 PlannedSubtaskRow(chainID: task.chain.id, plannedSubtask: plannedSubtask)
             }
-            MarkdownEditor(
-                text: $store.detailSubtaskText,
+            NoonmarkTransientMarkdownComposer(
+                draft: store.detailSubtaskTextDraft,
                 placeholder: store.copy.addSubtaskPlaceholder,
                 style: .compact,
                 showsSurface: true,
@@ -117,11 +119,10 @@ struct PlannedSubtaskRow: View {
                 editable: true,
                 accessibilityIdentifier: "pool.subtask.\(plannedSubtask.id.description).title"
             ) {
-                store.renamePoolPlannedSubtask(
+                await store.autosavePoolPlannedSubtaskTitle(
                     chainID: chainID,
                     plannedSubtaskID: plannedSubtask.id,
-                    title: $0,
-                    immediately: true
+                    title: $0
                 )
             }
             .foregroundStyle(Theme.text1)
@@ -204,23 +205,15 @@ struct PoolNotesSection: View {
             entries: entries,
             editable: true,
             placeholder: store.copy.noteComposerPlaceholder,
-            newNoteText: $store.detailNoteText,
+            newNoteDraft: store.detailNoteTextDraft,
             onAppend: { store.appendPoolNote(chainID: chainID) },
             onEdit: { noteID, body, expectedUpdatedAt in
-                guard store.editPoolNote(
+                await store.autosavePoolNote(
                     chainID: chainID,
                     noteID: noteID,
                     body: body,
-                    expectedUpdatedAt: expectedUpdatedAt,
-                    immediately: true
-                ) else {
-                    return nil
-                }
-                return store.engine.taskPool().first { task in
-                    task.chain.id == chainID
-                }?.chain.activeNoteEntries.first { entry in
-                    entry.id == noteID
-                }?.updatedAt
+                    expectedUpdatedAt: expectedUpdatedAt
+                )
             },
             onDelete: { noteID in
                 store.deletePoolNote(chainID: chainID, noteID: noteID)

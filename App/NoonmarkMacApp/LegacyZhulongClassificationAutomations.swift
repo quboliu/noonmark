@@ -402,7 +402,9 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                 return false
             }
             return AppViewTreeE2E.verificationText(for: confirmation) == label
-                && AppViewTreeE2E.button(overlapping: confirmation) != nil
+                && AppViewTreeE2E.buttonInteractionTarget(
+                    overlapping: confirmation
+                ) != nil
         }
         let input = try WindowServerInputDriver()
         let resolveTarget = {
@@ -413,7 +415,7 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                       identifier: identifier,
                       in: mainWindow
                   ), AppViewTreeE2E.verificationText(for: confirmation) == label,
-                  let button = AppViewTreeE2E.button(
+                  let target = AppViewTreeE2E.buttonInteractionTarget(
                       overlapping: confirmation
                   )
             else {
@@ -421,15 +423,8 @@ struct ZhulongTodoDiffE2EAutomation: LaunchAutomationRunnable {
                     "Todo diff confirmation changed before mouseDown"
                 )
             }
-            let point = button.convert(
-                NSPoint(
-                    x: button.bounds.midX,
-                    y: button.bounds.midY
-                ),
-                to: nil
-            )
             return try input.pointerCoordinate(
-                windowPoint: point,
+                windowPoint: target.windowPoint,
                 in: mainWindow
             )
         }

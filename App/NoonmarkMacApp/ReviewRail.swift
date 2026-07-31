@@ -89,9 +89,7 @@ struct ReviewRail: View {
                     .font(.noonmarkSystem(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.text3)
                     .tracking(0.8)
-                if let message = store.reviewAutosaveMessage {
-                    ReviewSavedIndicator(text: message)
-                }
+                ReviewSavedStatusView(status: store.reviewAutosaveStatus)
                 Spacer()
                 Text("\(store.displayDate(store.selectedDate)) \(store.weekday(store.selectedDate))")
                     .font(.noonmarkSystem(size: 11))
@@ -168,28 +166,40 @@ struct ReviewRail: View {
                     title: store.copy.todaySummaryTitle,
                     placeholder: store.copy.todaySummaryPlaceholder,
                     accessibilityIdentifier: "review.summary",
-                    text: Binding(
-                        get: { day?.reviewSummary ?? "" },
-                        set: { store.updateReview(summary: $0) }
-                    )
+                    ownerID:
+                    "review:\(store.selectedDate.description):summary",
+                    text: day?.reviewSummary ?? "",
+                    onPersist: {
+                        await store.autosaveReview(
+                            summary: $0
+                        )
+                    }
                 )
                 ReviewEditor(
                     title: store.copy.unfinishedReasonTitle,
                     placeholder: store.copy.unfinishedReasonPlaceholder,
                     accessibilityIdentifier: "review.unfinished-reason",
-                    text: Binding(
-                        get: { day?.reviewUnfinishedReason ?? "" },
-                        set: { store.updateReview(reason: $0) }
-                    )
+                    ownerID:
+                    "review:\(store.selectedDate.description):unfinished-reason",
+                    text: day?.reviewUnfinishedReason ?? "",
+                    onPersist: {
+                        await store.autosaveReview(
+                            reason: $0
+                        )
+                    }
                 )
                 ReviewEditor(
                     title: store.copy.tomorrowNotesTitle,
                     placeholder: store.copy.tomorrowNotesPlaceholder,
                     accessibilityIdentifier: "review.tomorrow-note",
-                    text: Binding(
-                        get: { day?.reviewTomorrowNote ?? "" },
-                        set: { store.updateReview(tomorrow: $0) }
-                    )
+                    ownerID:
+                    "review:\(store.selectedDate.description):tomorrow-note",
+                    text: day?.reviewTomorrowNote ?? "",
+                    onPersist: {
+                        await store.autosaveReview(
+                            tomorrow: $0
+                        )
+                    }
                 )
             }
         }
@@ -210,6 +220,16 @@ struct ReviewSavedIndicator: View {
     }
 }
 
+private struct ReviewSavedStatusView: View {
+    @ObservedObject var status: ReviewAutosaveStatus
+
+    var body: some View {
+        if let message = status.message {
+            ReviewSavedIndicator(text: message)
+        }
+    }
+}
+
 struct ZhulongReviewEntryButton: View {
     @EnvironmentObject private var store: NoonmarkStore
 
@@ -227,7 +247,9 @@ struct ReviewEditor: View {
     let title: String
     let placeholder: String
     let accessibilityIdentifier: String
-    @Binding var text: String
+    let ownerID: String
+    let text: String
+    let onPersist: @MainActor (String) async -> Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -235,13 +257,16 @@ struct ReviewEditor: View {
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
                 .tracking(0.6)
-            MarkdownEditor(
-                text: $text,
+            AutosavingMarkdownEditor(
+                ownerID: ownerID,
+                persistedText: text,
                 placeholder: placeholder,
                 style: .body,
                 showsSurface: true,
                 height: 92,
-                nativeAccessibilityIdentifier: accessibilityIdentifier
+                onPersist: onPersist,
+                nativeAccessibilityIdentifier:
+                accessibilityIdentifier
             )
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .background {

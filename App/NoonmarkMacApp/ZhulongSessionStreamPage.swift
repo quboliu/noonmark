@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NoonmarkMacRuntime
 import NoonmarkMacUIContract
@@ -40,6 +41,7 @@ struct ZhulongSessionStreamPage: View {
     @State private var todoDiffBeingEdited: ZhulongTodoDiffDraft?
     @State private var inlineTodoDraft:
         ZhulongInlineTaskDraftState?
+    @State private var lifecycleRegistrationToken = UUID()
 
     private var copy: ZhulongCopy {
         AppPresentation(language: store.engine.preferences.language).zhulong
@@ -93,7 +95,18 @@ struct ZhulongSessionStreamPage: View {
                     )
                     .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
                     .padding(.top, 28)
-                    .padding(.bottom, 36)
+                    .padding(
+                        .bottom,
+                        ZhulongSessionPolishMetrics.streamContentBottomPadding
+                            + (
+                                canComposeEntry
+                                    ? NoonmarkVisualMetrics
+                                    .zhulongConversationComposerMinimumHeight
+                                        + ZhulongSessionPolishMetrics
+                                        .composerOuterBottomPadding
+                                    : 0
+                            )
+                    )
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .accessibilityIdentifier("zhulong-session-stream")
@@ -109,7 +122,11 @@ struct ZhulongSessionStreamPage: View {
                             .frame(maxWidth: ZhulongSessionPolishMetrics.contentMaxWidth)
                             .frame(maxWidth: .infinity)
                             .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
-                            .padding(.bottom, 16)
+                            .padding(
+                                .bottom,
+                                ZhulongSessionPolishMetrics
+                                    .composerOuterBottomPadding
+                            )
                     }
                 }
                 .onChange(of: records.count) {
@@ -184,6 +201,7 @@ struct ZhulongSessionStreamPage: View {
     private var initializedPage: some View {
         pageSurface
             .onAppear {
+                registerArtifactLifecycleFlush()
                 if dailyReviewSummary.isEmpty {
                     dailyReviewSummary = store.engine.days[store.today]?
                         .reviewSummary ?? ""
@@ -251,18 +269,27 @@ struct ZhulongSessionStreamPage: View {
                 } catch {
                     return
                 }
-                guard Task.isCancelled == false else { return }
-                _ = persistInlineTodoDraftIfNeeded(
-                    reportValidationError: false
-                )
+                guard Task.isCancelled == false,
+                      hasActiveMarkedText == false
+                else { return }
+                await autosaveInlineTodoDraftIfNeeded()
             }
             .onDisappear {
-                _ = persistInlineTodoDraftIfNeeded(
-                    reportValidationError: false
-                )
-                _ = persistDailyReviewDraftIfNeeded(
-                    reportValidationError: false
-                )
+                let coordinator =
+                    store.inputDraftFlushCoordinator
+                let token = lifecycleRegistrationToken
+                Task { @MainActor in
+                    guard await
+                        flushArtifactDraftsForLifecycle()
+                    else {
+                        return
+                    }
+                    coordinator.unregister(
+                        ownerID:
+                        "zhulong:active-artifacts",
+                        token: token
+                    )
+                }
             }
     }
 
@@ -278,10 +305,10 @@ struct ZhulongSessionStreamPage: View {
             } catch {
                 return
             }
-            guard Task.isCancelled == false else { return }
-            _ = persistDailyReviewDraftIfNeeded(
-                reportValidationError: false
-            )
+            guard Task.isCancelled == false,
+                  hasActiveMarkedText == false
+            else { return }
+            await autosaveDailyReviewDraftIfNeeded()
         }
     }
 
@@ -297,6 +324,13 @@ struct ZhulongSessionStreamPage: View {
                     workspace.reviseCurrentTodoDiff(items: items)
                 }
             }
+        }
+    }
+
+    private var hasActiveMarkedText: Bool {
+        NSApp.windows.contains { window in
+            (window.firstResponder as? NSTextView)?
+                .hasMarkedText() == true
         }
     }
 
@@ -600,7 +634,9 @@ struct ZhulongSessionStreamPage: View {
                 text: $decisionSupplement,
                 placeholder: copy.decisionSupplementPlaceholder,
                 style: .body,
-                showsSurface: true
+                showsSurface: true,
+                nativeAccessibilityIdentifier:
+                "zhulong-decision-supplement"
             )
             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             Text(copy.decisionChoiceNotice)
@@ -638,14 +674,18 @@ struct ZhulongSessionStreamPage: View {
                     text: $dailyReviewSummary,
                     placeholder: copy.dailyReviewSummaryPlaceholder,
                     style: .body,
-                    showsSurface: true
+                    showsSurface: true,
+                    nativeAccessibilityIdentifier:
+                    "zhulong-daily-review.summary"
                 )
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 MarkdownEditor(
                     text: $dailyReviewTomorrow,
                     placeholder: copy.dailyReviewTomorrowPlaceholder,
                     style: .body,
-                    showsSurface: true
+                    showsSurface: true,
+                    nativeAccessibilityIdentifier:
+                    "zhulong-daily-review.tomorrow"
                 )
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 HStack(spacing: 12) {
@@ -887,6 +927,15 @@ struct ZhulongSessionStreamPage: View {
         guard inlineTodoDraft?.sourceDraftID != draft.id else {
             return
         }
+        if var localDraft = inlineTodoDraft,
+           case let .userRevision(parentDraftID, _) =
+           draft.source,
+           parentDraftID == localDraft.sourceDraftID
+        {
+            localDraft.sourceDraftID = draft.id
+            inlineTodoDraft = localDraft
+            return
+        }
         if let retained = workspace
             .retainedInlineTodoEdit(for: draft.id)
         {
@@ -897,6 +946,50 @@ struct ZhulongSessionStreamPage: View {
             draft: draft,
             today: store.today
         )
+    }
+
+    @discardableResult
+    private func autosaveInlineTodoDraftIfNeeded()
+        async -> Bool
+    {
+        guard let snapshot = inlineTodoDraft else {
+            return true
+        }
+        do {
+            let items = try snapshot.makeItems(
+                today: store.today
+            )
+            guard let persistedDraftID =
+                await workspace.autosaveTodoDiff(
+                    draftID: snapshot.sourceDraftID,
+                    items: items
+                )
+            else {
+                if let current = inlineTodoDraft {
+                    workspace.retainInlineTodoEdit(current)
+                }
+                return false
+            }
+            if var current = inlineTodoDraft,
+               current.sourceDraftID
+               == snapshot.sourceDraftID
+            {
+                current.sourceDraftID = persistedDraftID
+                inlineTodoDraft = current
+            }
+            workspace.clearRetainedInlineTodoEdit(
+                for: snapshot.sourceDraftID
+            )
+            workspace.clearRetainedInlineTodoEdit(
+                for: persistedDraftID
+            )
+            return true
+        } catch {
+            if let current = inlineTodoDraft {
+                workspace.retainInlineTodoEdit(current)
+            }
+            return false
+        }
     }
 
     private func inlineTodoDraftBinding(
@@ -980,6 +1073,16 @@ struct ZhulongSessionStreamPage: View {
         guard dailyReviewDraftID != draft.id else {
             return
         }
+        if let localDraftID = dailyReviewDraftID,
+           let localDraft = workspace.selectedSession?
+           .dailyReviewDrafts.first(
+               where: { $0.id == localDraftID }
+           ),
+           localDraft.dailyCloseID == draft.dailyCloseID
+        {
+            dailyReviewDraftID = draft.id
+            return
+        }
         dailyReviewDraftID = draft.id
         if let retained = workspace
             .retainedDailyReviewEdit(for: draft.id)
@@ -998,6 +1101,87 @@ struct ZhulongSessionStreamPage: View {
             dailyReviewSummary,
             dailyReviewTomorrow
         ].joined(separator: "\u{0}")
+    }
+
+    @discardableResult
+    private func autosaveDailyReviewDraftIfNeeded()
+        async -> Bool
+    {
+        guard let draftID = dailyReviewDraftID else {
+            return true
+        }
+        let summaryText = dailyReviewSummary
+        let tomorrowText = dailyReviewTomorrow
+        let summary = optionalText(summaryText)
+        let tomorrow = optionalText(tomorrowText)
+        guard summary != nil || tomorrow != nil else {
+            if let persisted = workspace.selectedSession?
+                .dailyReviewDrafts.first(
+                    where: { $0.id == draftID }
+                ),
+                persisted.summary == nil,
+                persisted.tomorrowNote == nil
+            {
+                workspace.clearRetainedDailyReviewEdit(
+                    for: draftID
+                )
+                return true
+            }
+            workspace.retainDailyReviewEdit(
+                draftID: draftID,
+                summary: summaryText,
+                tomorrowNote: tomorrowText
+            )
+            return false
+        }
+        guard let persistedDraftID =
+            await workspace.autosaveDailyReviewDraft(
+                draftID: draftID,
+                summary: summary,
+                tomorrowNote: tomorrow
+            )
+        else {
+            workspace.retainDailyReviewEdit(
+                draftID: dailyReviewDraftID ?? draftID,
+                summary: dailyReviewSummary,
+                tomorrowNote: dailyReviewTomorrow
+            )
+            return false
+        }
+        if dailyReviewDraftID == draftID {
+            dailyReviewDraftID = persistedDraftID
+        }
+        workspace.clearRetainedDailyReviewEdit(
+            for: draftID
+        )
+        workspace.clearRetainedDailyReviewEdit(
+            for: persistedDraftID
+        )
+        return true
+    }
+
+    private func registerArtifactLifecycleFlush() {
+        let token = lifecycleRegistrationToken
+        store.inputDraftFlushCoordinator.register(
+            ownerID: "zhulong:active-artifacts",
+            token: token
+        ) {
+            await flushArtifactDraftsForLifecycle()
+        }
+    }
+
+    private func flushArtifactDraftsForLifecycle()
+        async -> Bool
+    {
+        guard hasActiveMarkedText == false else {
+            return false
+        }
+        let todoSucceeded =
+            await autosaveInlineTodoDraftIfNeeded()
+        let reviewSucceeded =
+            await autosaveDailyReviewDraftIfNeeded()
+        await workspace.drainDraftPersistence()
+        return todoSucceeded && reviewSucceeded
     }
 
     private func persistDailyReviewDraftIfNeeded(

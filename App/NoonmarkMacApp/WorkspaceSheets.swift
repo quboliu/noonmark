@@ -155,6 +155,7 @@ struct FromPoolSheet: View {
 struct ChangeTaskSheet: View {
     @EnvironmentObject private var store: NoonmarkStore
     @State private var titleFocusRequest = 0
+    @State private var changeText = ""
 
     var oldTitle: String {
         guard let trace = store.selectedTrace else { return "" }
@@ -175,10 +176,11 @@ struct ChangeTaskSheet: View {
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             MarkdownEditor(
-                text: $store.changeText,
+                text: $changeText,
                 placeholder: store.copy.newTaskTitlePlaceholder,
                 style: .title,
-                onCommit: { store.changeSelectedTrace() },
+                onCommit: submit,
+                nativeAccessibilityIdentifier: "change-task.title",
                 focusRequest: titleFocusRequest
             )
                 .frame(minHeight: 58)
@@ -188,11 +190,11 @@ struct ChangeTaskSheet: View {
                 Spacer()
                 Button(store.copy.cancel) { store.showingChangeDialog = false }
                     .keyboardShortcut(.cancelAction)
-                Button(store.copy.confirmChange) { store.changeSelectedTrace() }
+                Button(store.copy.confirmChange, action: submit)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(
-                        store.changeText
+                        changeText
                             .trimmingCharacters(in: .whitespacesAndNewlines)
                             .isEmpty
                     )
@@ -200,7 +202,15 @@ struct ChangeTaskSheet: View {
         }
         .padding(16)
         .frame(width: 400)
-        .onAppear { titleFocusRequest &+= 1 }
+        .onAppear {
+            changeText = store.changeText
+            titleFocusRequest &+= 1
+        }
         .accessibilityElement(children: .contain)
+    }
+
+    private func submit() {
+        store.changeText = changeText
+        store.changeSelectedTrace()
     }
 }

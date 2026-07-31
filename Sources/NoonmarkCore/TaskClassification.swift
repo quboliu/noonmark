@@ -1745,7 +1745,7 @@ public extension NoonmarkEngine {
         interactionID: UUID = UUID(),
         now: Date = Date()
     ) throws -> [NoonmarkSnapshot] {
-        let candidate = try NoonmarkEngine(snapshot: snapshot())
+        let candidate = NoonmarkEngine(copying: self)
         let boundaries = try candidate
             .replaceTaskCycleClassificationInPlace(
                 seriesID: seriesID,

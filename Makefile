@@ -1,4 +1,4 @@
-.PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app run-demo-app test-demo-fixture package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-ai-provider-live test-cloudkit-sync-live test-all lint format format-check check
+.PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app run-demo-app test-demo-fixture package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-tencent-ime-input-contract test-tencent-ime-input-matrix test-tencent-ime-termination-persistence test-ai-provider-live test-cloudkit-sync-live test-all lint format format-check check
 
 reset-dev-data:
 	scripts/reset-dev-data
@@ -53,6 +53,15 @@ test-deterministic-sim:
 
 test-e2e:
 	scripts/test-e2e
+
+test-tencent-ime-input-contract:
+	scripts/test-tencent-ime-input-contract
+
+test-tencent-ime-input-matrix:
+	scripts/test-tencent-ime-input-matrix
+
+test-tencent-ime-termination-persistence:
+	scripts/test-tencent-ime-termination-persistence
 
 test-ai-provider-live:
 	scripts/test-ai-provider-live

@@ -61,6 +61,36 @@ struct CompletedPoolPage: View {
         )
     }
 
+    private var hierarchyProjectionVerificationText: String {
+        hierarchies.filter {
+            $0.chain.cycleMembership == nil
+        }.map { hierarchy in
+            let parentState =
+                hierarchy.parentCompletion == nil
+                    ? "open"
+                    : "completed"
+            let expansionState =
+                store.collapsedCompletedHierarchyIDs.contains(
+                    hierarchy.chain.id
+                )
+                    ? "collapsed"
+                    : "expanded"
+            let childState =
+                hierarchy.parentCompletion == nil
+                    ? "checked"
+                    : "quiet"
+            let children = hierarchy.completedChildren.map {
+                "\($0.subtask.id.description):\(childState)"
+            }.sorted().joined(separator: ",")
+            return [
+                hierarchy.chain.id.description,
+                parentState,
+                expansionState,
+                children
+            ].joined(separator: "|")
+        }.sorted().joined(separator: "\n")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             WorkspacePageHeader(title: store.copy.navCompleted, subtitle: store.copy.completedSubtitle) {
@@ -98,6 +128,12 @@ struct CompletedPoolPage: View {
         .taskCollectionCategoryVisibility(presentationPreference)
         .onChange(of: presentationPreference) { _, preference in
             presentationRepository.save(preference, for: .completed)
+        }
+        .background {
+            AppE2EViewAnchor(
+                identifier: "completed.hierarchy-projection",
+                verificationText: hierarchyProjectionVerificationText
+            )
         }
     }
 }

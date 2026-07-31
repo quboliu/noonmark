@@ -170,6 +170,15 @@ struct LaunchAutomation {
             ClassificationDeletionRestartE2EAutomation.fromCommandLine(),
             to: &actions
         )
+        append(
+            TencentIMEInputLatencyE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
+        append(
+            TencentIMEInputSurfaceMatrixE2EAutomation
+                .fromCommandLine(),
+            to: &actions
+        )
         append(UIEntryE2EAutomation.fromCommandLine(), to: &actions)
 
         if let seedClockResultPath = AppLaunchArguments.value(

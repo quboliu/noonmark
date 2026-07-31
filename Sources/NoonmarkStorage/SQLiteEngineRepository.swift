@@ -132,9 +132,7 @@ enum SQLiteJournalCAS {
     }
 
     private static func string(from date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        SQLiteISO8601DateCodec.string(from: date)
     }
 
     private static func lastError(_ database: OpaquePointer?) -> String {
@@ -381,15 +379,22 @@ struct SQLiteObservedEngineSnapshot: Equatable {
 public final class SQLiteEngineRepository {
     private let databaseURL: URL
     private let journalEntryIDGenerator: () -> UUID
+    private let storeRuntime: SQLiteStoreRuntime
 
     public init(databaseURL: URL) {
         self.databaseURL = databaseURL
         journalEntryIDGenerator = UUID.init
+        storeRuntime = SQLiteStoreRuntime.shared(for: databaseURL)
+    }
+
+    public func finalizeForTermination() throws {
+        try storeRuntime.finalizeForTermination()
     }
 
     init(databaseURL: URL, journalEntryIDGenerator: @escaping () -> UUID) {
         self.databaseURL = databaseURL
         self.journalEntryIDGenerator = journalEntryIDGenerator
+        storeRuntime = SQLiteStoreRuntime.shared(for: databaseURL)
     }
 
     public func save(_ engine: NoonmarkEngine) throws {
@@ -397,6 +402,20 @@ public final class SQLiteEngineRepository {
     }
 
     public func save(_ snapshot: NoonmarkSnapshot) throws {
+        try save(snapshot, changedFrom: nil)
+    }
+
+    public func save(
+        _ snapshot: NoonmarkSnapshot,
+        changedFrom sourceSnapshot: NoonmarkSnapshot
+    ) throws {
+        try save(snapshot, changedFrom: Optional(sourceSnapshot))
+    }
+
+    private func save(
+        _ snapshot: NoonmarkSnapshot,
+        changedFrom sourceSnapshot: NoonmarkSnapshot?
+    ) throws {
         try validateSnapshotForPersistence(snapshot)
         let database = try openDatabase()
         defer { sqlite3_close(database) }
@@ -404,8 +423,16 @@ public final class SQLiteEngineRepository {
         try applySchema(on: database)
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
+            let oldSnapshot = try authoritativeSourceSnapshot(
+                proposed: sourceSnapshot,
+                from: database
+            )
             try advanceEngineSnapshotGeneration(in: database)
-            try persistValidatedSnapshot(snapshot, into: database)
+            try persistValidatedSnapshot(
+                snapshot,
+                changedFrom: oldSnapshot,
+                into: database
+            )
             try execute("COMMIT", on: database)
         } catch {
             try? execute("ROLLBACK", on: database)
@@ -456,6 +483,7 @@ public final class SQLiteEngineRepository {
 
     public func save(
         _ snapshot: NoonmarkSnapshot,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil,
         recordingChangesFor deviceID: SyncDeviceID,
         changedAt: Date
     ) throws {
@@ -471,7 +499,10 @@ public final class SQLiteEngineRepository {
         try applySchema(on: database)
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
-            let oldSnapshot = try loadSnapshot(from: database)
+            let oldSnapshot = try authoritativeSourceSnapshot(
+                proposed: sourceSnapshot,
+                from: database
+            )
             var journalEntries = try SyncSnapshotDiffer().journalEntries(
                 from: oldSnapshot,
                 to: snapshot,
@@ -482,7 +513,11 @@ public final class SQLiteEngineRepository {
                 journalEntries[index].id = journalEntryIDGenerator()
             }
             try advanceEngineSnapshotGeneration(in: database)
-            try persistValidatedSnapshot(snapshot, into: database)
+            try persistValidatedSnapshot(
+                snapshot,
+                changedFrom: oldSnapshot,
+                into: database
+            )
             try appendJournalEntries(journalEntries, into: database)
             try execute("COMMIT", on: database)
         } catch {
@@ -493,12 +528,14 @@ public final class SQLiteEngineRepository {
 
     public func save(
         _ snapshot: NoonmarkSnapshot,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil,
         classificationCommitBoundaries: [NoonmarkSnapshot],
         recordingChangesFor deviceID: SyncDeviceID,
         changedAt: Date
     ) throws {
         try saveWithAutomaticClassificationMutation(
             snapshot,
+            changedFrom: sourceSnapshot,
             classificationCommitBoundaries:
             classificationCommitBoundaries,
             recordingChangesFor: deviceID,
@@ -508,12 +545,14 @@ public final class SQLiteEngineRepository {
 
     public func save(
         _ snapshot: NoonmarkSnapshot,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil,
         recordingChangesFor deviceID: SyncDeviceID,
         changedAt: Date,
         enqueuingAutomaticClassificationJobs jobs: [AutomaticClassificationJobEnqueue]
     ) throws {
         try saveWithAutomaticClassificationMutation(
             snapshot,
+            changedFrom: sourceSnapshot,
             recordingChangesFor: deviceID,
             changedAt: changedAt
         ) { database in
@@ -525,6 +564,7 @@ public final class SQLiteEngineRepository {
 
     public func save(
         _ snapshot: NoonmarkSnapshot,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil,
         classificationCommitBoundaries: [NoonmarkSnapshot],
         recordingChangesFor deviceID: SyncDeviceID,
         changedAt: Date,
@@ -542,6 +582,7 @@ public final class SQLiteEngineRepository {
         )
         try saveWithAutomaticClassificationMutation(
             snapshot,
+            changedFrom: sourceSnapshot,
             classificationCommitBoundaries:
             classificationCommitBoundaries,
             recordingChangesFor: deviceID,
@@ -603,6 +644,7 @@ public final class SQLiteEngineRepository {
 
     public func save(
         _ snapshot: NoonmarkSnapshot,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil,
         recordingChangesFor deviceID: SyncDeviceID,
         changedAt: Date,
         enqueuingAutomaticClassificationJobs jobs: [AutomaticClassificationJobEnqueue],
@@ -617,6 +659,7 @@ public final class SQLiteEngineRepository {
         )
         try saveWithAutomaticClassificationMutation(
             snapshot,
+            changedFrom: sourceSnapshot,
             recordingChangesFor: deviceID,
             changedAt: changedAt
         ) { database in
@@ -758,6 +801,7 @@ public final class SQLiteEngineRepository {
 
     private func saveWithAutomaticClassificationMutation(
         _ snapshot: NoonmarkSnapshot,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil,
         classificationCommitBoundaries: [NoonmarkSnapshot]? = nil,
         recordingChangesFor deviceID: SyncDeviceID,
         changedAt: Date,
@@ -778,7 +822,11 @@ public final class SQLiteEngineRepository {
                 "classification commit boundaries must end at the final snapshot"
             )
         }
-        for boundary in journalBoundaries {
+        // The final boundary is `snapshot`, which was validated above.
+        // Validate only the preceding explicit classification boundaries so
+        // the common single-boundary save does not repeat a full integrity
+        // traversal of the same snapshot.
+        for boundary in journalBoundaries.dropLast() {
             try validateSnapshotForPersistence(boundary)
         }
         let database = try openDatabase()
@@ -787,7 +835,10 @@ public final class SQLiteEngineRepository {
         try applySchema(on: database)
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
-            let oldSnapshot = try loadSnapshot(from: database)
+            let oldSnapshot = try authoritativeSourceSnapshot(
+                proposed: sourceSnapshot,
+                from: database
+            )
             var journalEntries: [SyncJournalEntry] = []
             var precedingSnapshot = oldSnapshot
             for boundary in journalBoundaries {
@@ -813,7 +864,11 @@ public final class SQLiteEngineRepository {
                 journalEntries[index].id = journalEntryIDGenerator()
             }
             try advanceEngineSnapshotGeneration(in: database)
-            try persistValidatedSnapshot(snapshot, into: database)
+            try persistValidatedSnapshot(
+                snapshot,
+                changedFrom: oldSnapshot,
+                into: database
+            )
             try appendJournalEntries(journalEntries, into: database)
             try mutation(database)
             try execute("COMMIT", on: database)
@@ -827,35 +882,156 @@ public final class SQLiteEngineRepository {
         try snapshot.validateIntegrity()
     }
 
+    /// Resolves a differential-write baseline from the transaction's actual
+    /// SQLite snapshot. A caller-provided snapshot is only a hint: in-memory
+    /// domain setup, undo, or another committed writer may have moved ahead of
+    /// durable storage. Trusting that hint without comparison can omit parent
+    /// rows and either lose data silently or violate a child-table foreign key.
+    func authoritativeSourceSnapshot(
+        proposed sourceSnapshot: NoonmarkSnapshot?,
+        from database: OpaquePointer?
+    ) throws -> NoonmarkSnapshot {
+        let storedSnapshot = try loadSnapshot(from: database)
+        guard let sourceSnapshot,
+              sourceSnapshot == storedSnapshot
+        else {
+            return storedSnapshot
+        }
+        return sourceSnapshot
+    }
+
     func persistValidatedSnapshot(
         _ snapshot: NoonmarkSnapshot,
+        changedFrom oldSnapshot: NoonmarkSnapshot,
         into database: OpaquePointer?
     ) throws {
-        try upsert(snapshot.preferences, into: database)
-        try upsert(snapshot.days, into: database)
-        // Tombstones reference immutable change records. Persist that audit root first,
-        // then release deleted identities before a new identity claims any of their aliases.
-        try insertClassificationChangeRecords(snapshot.classifications, into: database)
-        try insertClassificationDeletionTombstonesAndPurgeCatalog(
-            snapshot.classifications,
+        if try (
+            snapshot.preferences != oldSnapshot.preferences
+                || hasMaterializedPreferences(in: database) == false
+        ) {
+            try upsert(snapshot.preferences, into: database)
+        }
+        try upsert(
+            changedValues(
+                snapshot.days,
+                from: oldSnapshot.days,
+                identifiedBy: \.id
+            ),
             into: database
         )
-        try upsertClassificationCatalog(snapshot.classifications, into: database)
-        try upsert(snapshot.taskCycleSeries, into: database)
-        try upsert(snapshot.chains, into: database)
-        try upsert(snapshot.definitions, into: database)
-        try upsert(snapshot.traces, into: database)
-        try upsert(snapshot.subtasks, into: database)
-        try upsertClassificationRelations(
-            snapshot.classifications,
-            chainIDs: snapshot.chains.map(\.id),
+        if snapshot.classifications != oldSnapshot.classifications {
+            // Tombstones reference immutable change records. Persist that
+            // audit root first, then release deleted identities before a new
+            // identity claims any of their aliases.
+            try insertClassificationChangeRecords(
+                snapshot.classifications,
+                into: database
+            )
+            try insertClassificationDeletionTombstonesAndPurgeCatalog(
+                snapshot.classifications,
+                into: database
+            )
+            try upsertClassificationCatalog(
+                snapshot.classifications,
+                into: database
+            )
+        }
+        try upsert(
+            changedValues(
+                snapshot.taskCycleSeries,
+                from: oldSnapshot.taskCycleSeries,
+                identifiedBy: \.id
+            ),
             into: database
         )
-        try insertClassificationRelationHistory(snapshot.classifications, into: database)
-        try insertClassificationSnapshotEvents(snapshot.classifications, into: database)
-        try upsertClassificationRevision(snapshot.classifications.revision, into: database)
-        try insertClassificationMerges(snapshot.classifications, into: database)
-        try insertClassificationReceipts(snapshot.classifications, into: database)
+        try upsert(
+            changedValues(
+                snapshot.chains,
+                from: oldSnapshot.chains,
+                identifiedBy: \.id
+            ),
+            into: database
+        )
+        try upsert(
+            changedValues(
+                snapshot.definitions,
+                from: oldSnapshot.definitions,
+                identifiedBy: \.id
+            ),
+            into: database
+        )
+        try upsert(
+            changedValues(
+                snapshot.traces,
+                from: oldSnapshot.traces,
+                identifiedBy: \.id
+            ),
+            into: database
+        )
+        try upsert(
+            changedValues(
+                snapshot.subtasks,
+                from: oldSnapshot.subtasks,
+                identifiedBy: \.id
+            ),
+            into: database
+        )
+        if snapshot.classifications != oldSnapshot.classifications {
+            try upsertClassificationRelations(
+                snapshot.classifications,
+                chainIDs: snapshot.chains.map(\.id),
+                into: database
+            )
+            try insertClassificationRelationHistory(
+                snapshot.classifications,
+                into: database
+            )
+            try insertClassificationSnapshotEvents(
+                snapshot.classifications,
+                into: database
+            )
+            try upsertClassificationRevision(
+                snapshot.classifications.revision,
+                into: database
+            )
+            try insertClassificationMerges(
+                snapshot.classifications,
+                into: database
+            )
+            try insertClassificationReceipts(
+                snapshot.classifications,
+                into: database
+            )
+        }
+    }
+
+    func hasMaterializedPreferences(
+        in database: OpaquePointer?
+    ) throws -> Bool {
+        try query(
+            """
+            SELECT 1
+            FROM app_preferences
+            WHERE id = 1
+            LIMIT 1
+            """,
+            on: database
+        ) { _ in true }.first ?? false
+    }
+
+    func changedValues<Value: Equatable>(
+        _ incoming: [Value],
+        from stored: [Value],
+        identifiedBy identity: (Value) -> some Hashable
+    ) -> [Value] {
+        let storedByID = Dictionary(
+            uniqueKeysWithValues: stored.map {
+                (identity($0), $0)
+            }
+        )
+        return incoming.filter {
+            storedByID[identity($0)] != $0
+        }
     }
 
     func compareAndAdvanceEngineSnapshotGeneration(
@@ -951,18 +1127,12 @@ private extension SQLiteEngineRepository {
     typealias Database = OpaquePointer
     typealias Statement = OpaquePointer
 
-    static func makeDateFormatter() -> ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }
-
     static func string(from date: Date) -> String {
-        makeDateFormatter().string(from: date)
+        SQLiteISO8601DateCodec.string(from: date)
     }
 
     static func date(from string: String) -> Date? {
-        makeDateFormatter().date(from: string)
+        SQLiteISO8601DateCodec.date(from: string)
     }
 
     func plannedSubtasksJSON(_ plannedSubtasks: [PlannedSubtask]) throws -> String? {
@@ -1264,7 +1434,7 @@ private extension SQLiteEngineRepository {
     }
 
     func applySchema(on database: Database?) throws {
-        try SQLiteSchema.installOrValidate(on: database)
+        try storeRuntime.prepare(database)
     }
 
     func engineSnapshotGeneration(
@@ -1351,7 +1521,12 @@ private extension SQLiteEngineRepository {
         let statement = try prepare(sql, on: database)
         defer { sqlite3_finalize(statement) }
 
-        return try readRows(from: statement, database: database, row: row)
+        return try readRows(
+            from: statement,
+            database: database,
+            sql: sql,
+            row: row
+        )
     }
 
     func query<T>(
@@ -1364,12 +1539,18 @@ private extension SQLiteEngineRepository {
         defer { sqlite3_finalize(statement) }
 
         try bind(statement)
-        return try readRows(from: statement, database: database, row: row)
+        return try readRows(
+            from: statement,
+            database: database,
+            sql: sql,
+            row: row
+        )
     }
 
     func readRows<T>(
         from statement: Statement?,
         database: Database?,
+        sql: String,
         row: (Statement?) throws -> T
     ) throws -> [T] {
         var rows: [T] = []
@@ -1379,7 +1560,9 @@ private extension SQLiteEngineRepository {
                 return rows
             }
             guard result == SQLITE_ROW else {
-                throw SQLiteRepositoryError.stepFailed(lastError(database))
+                throw SQLiteRepositoryError.stepFailed(
+                    "\(lastError(database)) in \(sqlSummary(sql))"
+                )
             }
             rows.append(try row(statement))
         }

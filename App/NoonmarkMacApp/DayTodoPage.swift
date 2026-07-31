@@ -45,6 +45,14 @@ struct DayTodoPage: View {
         )
     }
 
+    private var recurringProjectionVerificationText: String {
+        traces.filter {
+            store.engine.isRecurringTaskChain($0.chainID)
+        }.map {
+            $0.id.description
+        }.sorted().joined(separator: "\n")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             DayTodoHeader(
@@ -122,10 +130,16 @@ struct DayTodoPage: View {
             presentationRepository.save(preference, for: .dayTodo)
         }
         .background {
-            HorizontalPageNavigationBridge(
-                isEnabled: { store.page == .day && store.canNavigateDatePage },
-                onNavigate: { store.moveSelectedPageFromSwipe($0) }
-            )
+            ZStack {
+                HorizontalPageNavigationBridge(
+                    isEnabled: { store.page == .day && store.canNavigateDatePage },
+                    onNavigate: { store.moveSelectedPageFromSwipe($0) }
+                )
+                AppE2EViewAnchor(
+                    identifier: "day.recurring-projection",
+                    verificationText: recurringProjectionVerificationText
+                )
+            }
         }
     }
 
@@ -188,7 +202,7 @@ struct DayTodoHeader: View {
     private var identity: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(store.displayFullDate(store.selectedDate))
-                .font(.noonmarkSystem(size: 20, weight: .semibold))
+                .font(NoonmarkVisualMetrics.dayHeaderDateFont)
                 .foregroundStyle(Theme.text1)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -315,7 +329,7 @@ struct DayQuickAdd: View {
                 placeholder: store.isFuture
                     ? store.copy.dayQuickAddFuturePlaceholder
                     : store.copy.dayQuickAddTodayPlaceholder,
-                text: $store.quickText,
+                draft: store.quickTextDraft,
                 nativeAccessibilityIdentifier: "quick-add.day",
                 focusRequest: focusRequest
             ) {
@@ -329,31 +343,33 @@ struct DayQuickAdd: View {
 struct NewTaskInlineField: View {
     @EnvironmentObject private var store: NoonmarkStore
     let placeholder: String
-    @Binding var text: String
+    @ObservedObject var draft: NoonmarkTextInputDraft
     let nativeAccessibilityIdentifier: String
     let focusRequest: Int
     let onSubmit: () -> Void
 
     var suggestions: [ClassificationCatalogItemProjection] {
-        store.newTaskClassificationSuggestions(for: text)
+        store.newTaskClassificationSuggestions(for: draft.text)
     }
 
     var activeToken: NewTaskClassificationToken? {
-        store.newTaskClassificationToken(for: text)
+        store.newTaskClassificationToken(for: draft.text)
     }
 
     var showsSuggestions: Bool {
-        store.shouldShowNewTaskClassificationSuggestions(for: text)
+        store.shouldShowNewTaskClassificationSuggestions(
+            for: draft.text
+        )
     }
 
     var showsSlashCommand: Bool {
-        store.newTaskSlashCommandMatches(text)
+        store.newTaskSlashCommandMatches(draft.text)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             MarkdownEditor(
-                text: $text,
+                text: $draft.text,
                 placeholder: placeholder,
                 style: .compact,
                 commitsOnReturn: true,
@@ -366,21 +382,25 @@ struct NewTaskInlineField: View {
 
             if showsSlashCommand {
                 NewTaskSlashCommandSuggestion {
-                    text = store.completeNewTaskSlashCommand()
+                    draft.text =
+                        store.completeNewTaskSlashCommand()
                 }
             } else if showsSuggestions, let activeToken {
                 NewTaskClassificationSuggestionList(
                     tokenKind: activeToken.kind,
                     suggestions: Array(suggestions.prefix(6))
                 ) { suggestion in
-                    text = store.completeNewTaskClassificationToken(
-                        in: text,
-                        with: suggestion.name
-                    )
+                    draft.text =
+                        store.completeNewTaskClassificationToken(
+                            in: draft.text,
+                            with: suggestion.name
+                        )
                 }
             }
 
-            if let issue = store.newTaskDraftIssueMessage(for: text) {
+            if let issue = store.newTaskDraftIssueMessage(
+                for: draft.text
+            ) {
                 Text(issue)
                     .font(.noonmarkSystem(size: 11, weight: .medium))
                     .foregroundStyle(Theme.warn)
@@ -1030,6 +1050,10 @@ enum SubtaskRowSurface {
     func newEditorIdentifier(for traceID: DayTraceID) -> String {
         "\(accessibilityNamespace).subtask.\(traceID.description).new"
     }
+
+    func newEditorInputIdentifier(for traceID: DayTraceID) -> String {
+        "\(newEditorIdentifier(for: traceID)).input"
+    }
 }
 
 struct SubtaskRow: View {
@@ -1078,10 +1102,9 @@ struct SubtaskRow: View {
                 editable: canEdit,
                 accessibilityIdentifier: surface.titleIdentifier(for: subtask.id)
             ) {
-                store.renameSubtask(
+                await store.autosaveSubtaskTitle(
                     subtask.id,
-                    title: $0,
-                    immediately: true
+                    title: $0
                 )
             }
             .foregroundStyle(
@@ -1171,49 +1194,35 @@ struct EditableSubtaskTitle: View {
     let title: String
     let editable: Bool
     let accessibilityIdentifier: String
-    let onChange: (String) -> Void
-
-    @State private var draft: String
-    @State private var pendingPersistedTitle: String?
-    @State private var persistenceRevision: UInt64 = 0
-    private let autosaveDelay = Duration.milliseconds(300)
+    let onChange: @MainActor (String) async -> Bool
 
     init(
         title: String,
         editable: Bool,
         accessibilityIdentifier: String,
-        onChange: @escaping (String) -> Void
+        onChange:
+        @escaping @MainActor (String) async -> Bool
     ) {
         self.title = title
         self.editable = editable
         self.accessibilityIdentifier = accessibilityIdentifier
         self.onChange = onChange
-        _draft = State(initialValue: title)
     }
 
     var body: some View {
         if editable {
-            MarkdownEditor(
-                text: $draft,
+            AutosavingMarkdownEditor(
+                ownerID:
+                "subtask:\(accessibilityIdentifier)",
+                persistedText: title,
                 placeholder: store.copy.subtask,
                 style: .subtask,
                 showsSurface: false,
                 commitsOnReturn: true,
-                onCommit: finishEditing,
-                onEndEditing: finishEditing,
-                onTextChange: scheduleAutosave,
+                persistencePolicy: .nonemptyTrimmed,
+                onPersist: onChange,
                 nativeAccessibilityIdentifier: accessibilityIdentifier
             )
-            .onChange(of: title) { _, newValue in
-                if pendingPersistedTitle == newValue {
-                    pendingPersistedTitle = nil
-                    return
-                }
-                persistenceRevision &+= 1
-                if draft != newValue {
-                    draft = newValue
-                }
-            }
             .font(.noonmarkSystem(size: 12))
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
@@ -1221,34 +1230,6 @@ struct EditableSubtaskTitle: View {
                 .font(.noonmarkSystem(size: 12))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    private func scheduleAutosave(_ value: String) {
-        persistenceRevision &+= 1
-        let revision = persistenceRevision
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.isEmpty == false, normalized != title else { return }
-        Task { @MainActor in
-            try? await Task.sleep(for: autosaveDelay)
-            guard persistenceRevision == revision else { return }
-            persist(normalized)
-        }
-    }
-
-    private func finishEditing() {
-        persistenceRevision &+= 1
-        let normalized = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.isEmpty == false else {
-            draft = title
-            return
-        }
-        persist(normalized)
-    }
-
-    private func persist(_ normalized: String) {
-        guard normalized != title else { return }
-        pendingPersistedTitle = normalized
-        onChange(normalized)
     }
 }
 

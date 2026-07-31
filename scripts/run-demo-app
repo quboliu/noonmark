@@ -96,6 +96,18 @@ if [[ ! -f "$result_path" ]] \
   [[ ! -f "$result_path" ]] || sed -n '1,120p' "$result_path" >&2
   exit 1
 fi
+if [[ "$(plutil -extract core.fixtureProfile raw -o - "$result_path")" \
+      != "annual-v1" \
+      || "$(plutil -extract core.storyDayCount raw -o - "$result_path")" \
+      != "365" \
+      || "$(plutil -extract core.storyDateGapCount raw -o - "$result_path")" \
+      != "0" \
+      || "$(plutil -extract zhulongSessionCount raw -o - "$result_path")" \
+      != "20" ]]; then
+  echo "interactive demo fixture is not the complete annual profile" >&2
+  sed -n '1,160p' "$result_path" >&2
+  exit 1
+fi
 
 for page in "${NOONMARK_INTERACTIVE_DEMO_TASK_COLLECTION_SCREENSHOTS[@]}"; do
   screenshot="$demo_root/task-collection-$page.png"

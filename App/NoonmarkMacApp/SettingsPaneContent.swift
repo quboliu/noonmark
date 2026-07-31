@@ -156,12 +156,22 @@ struct SettingsPreferenceCard: View {
                                 store.resetSettingsPoemText()
                             }
                         }
-                        MarkdownEditor(
-                            text: poemTextBinding,
+                        AutosavingMarkdownEditor(
+                            ownerID: "settings:poem",
+                            persistedText:
+                            poemTextBinding.wrappedValue,
                             placeholder: store.copy.settingsPoemPlaceholder,
                             style: .body,
                             showsSurface: true,
-                            height: 120
+                            height: 120,
+                            onPersist: {
+                                await store
+                                    .autosaveSettingsPoemText(
+                                        $0
+                                    )
+                            },
+                            nativeAccessibilityIdentifier:
+                            "settings.preferences.poem.text"
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }
@@ -556,6 +566,8 @@ struct SettingsProviderOverviewCard: View {
                                 tone: .accent,
                                 identifier: "settings.zhulong.provider.save"
                             ) {
+                                NSApp.keyWindow?
+                                    .makeFirstResponder(nil)
                                 store.saveZhulongProvider()
                             }
                             providerActionButton(
@@ -566,6 +578,8 @@ struct SettingsProviderOverviewCard: View {
                                 isEnabled: store
                                     .isTestingZhulongProviderConnection == false
                             ) {
+                                NSApp.keyWindow?
+                                    .makeFirstResponder(nil)
                                 store.testZhulongProvider()
                             }
                             providerActionButton(
@@ -573,6 +587,8 @@ struct SettingsProviderOverviewCard: View {
                                 tone: .warn,
                                 identifier: "settings.zhulong.provider.clear"
                             ) {
+                                NSApp.keyWindow?
+                                    .makeFirstResponder(nil)
                                 store.clearZhulongProvider()
                             }
                             Spacer()

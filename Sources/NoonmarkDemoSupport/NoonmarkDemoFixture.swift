@@ -12,18 +12,30 @@ public struct NoonmarkDemoFixture {
     ) throws -> NoonmarkDemoFixture {
         let storyDates = try DemoCalendar.storyDates(
             endingAt: anchorDate,
-            count: 10
+            count: 365
         )
+        guard let foregroundStartDate = storyDates.suffix(10).first else {
+            throw NoonmarkDemoFixtureError.invalidDateRange
+        }
         let engine = NoonmarkEngine()
+        var history = AnnualDemoHistory(
+            engine: engine,
+            dates: Array(storyDates.dropLast(10)),
+            foregroundStartDate: foregroundStartDate,
+            anchorDate: anchorDate
+        )
+        let historyResult = try history.replay()
         var story = DemoStory(
             engine: engine,
-            dates: storyDates
+            dates: Array(storyDates.suffix(10))
         )
         try story.replay()
         let report = NoonmarkDemoCoverageReport(
             engine: engine,
             storyDates: storyDates,
-            anchorDate: anchorDate
+            anchorDate: anchorDate,
+            repeatedFeatureCounts: historyResult.featureCounts,
+            featureReplayDates: historyResult.featureReplayDates
         )
         guard report.isComplete else {
             throw NoonmarkDemoFixtureError.incompleteCoverage(
@@ -65,8 +77,86 @@ public struct NoonmarkDemoTaskCycleLifecycleCounts: Codable, Equatable,
     }
 }
 
+public struct NoonmarkDemoRepeatedFeatureCounts: Codable, Equatable,
+    Sendable
+{
+    public fileprivate(set) var poolTaskCreation = 0
+    public fileprivate(set) var poolTaskTextEditing = 0
+    public fileprivate(set) var taskTitleEditing = 0
+    public fileprivate(set) var taskDescriptionEditing = 0
+    public fileprivate(set) var noteLifecycle = 0
+    public fileprivate(set) var plannedSubtaskEditing = 0
+    public fileprivate(set) var scheduling = 0
+    public fileprivate(set) var priorityReordering = 0
+    public fileprivate(set) var pinLifecycle = 0
+    public fileprivate(set) var manualProgressEditing = 0
+    public fileprivate(set) var taskCompletion = 0
+    public fileprivate(set) var taskCompletionUndo = 0
+    public fileprivate(set) var unfinishedContinuation = 0
+    public fileprivate(set) var deferral = 0
+    public fileprivate(set) var deferralWithdrawal = 0
+    public fileprivate(set) var taskChange = 0
+    public fileprivate(set) var returnToPool = 0
+    public fileprivate(set) var abandonment = 0
+    public fileprivate(set) var reactivation = 0
+    public fileprivate(set) var copying = 0
+    public fileprivate(set) var futureRescheduling = 0
+    public fileprivate(set) var subtaskCreation = 0
+    public fileprivate(set) var subtaskTextEditing = 0
+    public fileprivate(set) var subtaskDifficultyEditing = 0
+    public fileprivate(set) var subtaskCompletion = 0
+    public fileprivate(set) var subtaskCompletionUndo = 0
+    public fileprivate(set) var subtaskAbandonment = 0
+    public fileprivate(set) var subtaskDeletion = 0
+    public fileprivate(set) var classification = 0
+
+    public var minimumUsageCount: Int {
+        [
+            poolTaskCreation,
+            poolTaskTextEditing,
+            taskTitleEditing,
+            taskDescriptionEditing,
+            noteLifecycle,
+            plannedSubtaskEditing,
+            scheduling,
+            priorityReordering,
+            pinLifecycle,
+            manualProgressEditing,
+            taskCompletion,
+            taskCompletionUndo,
+            unfinishedContinuation,
+            deferral,
+            deferralWithdrawal,
+            taskChange,
+            returnToPool,
+            abandonment,
+            reactivation,
+            copying,
+            futureRescheduling,
+            subtaskCreation,
+            subtaskTextEditing,
+            subtaskDifficultyEditing,
+            subtaskCompletion,
+            subtaskCompletionUndo,
+            subtaskAbandonment,
+            subtaskDeletion,
+            classification
+        ].min() ?? 0
+    }
+}
+
 public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
+    public let fixtureProfile: String
     public let storyDates: [String]
+    public let storyDayCount: Int
+    public let storyDateGapCount: Int
+    public let storyDuplicateDateCount: Int
+    public let storyDayWithOrdinaryTraceCount: Int
+    public let featureReplayDates: [String]
+    public let featureReplayDayCount: Int
+    public let featureReplayCoveredQuarterCount: Int
+    public let minimumRepeatedFeatureUsageCount: Int
+    public let repeatedFeatureCounts: NoonmarkDemoRepeatedFeatureCounts
     public let dayTodoCount: Int
     public let taskPoolCount: Int
     public let futurePlanCount: Int
@@ -91,6 +181,8 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let classifiedTaskCycleSeriesCount: Int
     public let taskCycleSeriesWithPlannedSubtasksCount: Int
     public let taskCyclePlanRevisionCount: Int
+    public let taskCycleSkippedOccurrenceCount: Int
+    public let taskCycleRescheduledOccurrenceCount: Int
     public let unstartedTaskCycleSeriesCount: Int
     public let taskCycleLifecycleCounts:
         NoonmarkDemoTaskCycleLifecycleCounts
@@ -101,7 +193,44 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
 
     public var missingRequirements: [String] {
         var missing: [String] = []
-        require(storyDates.count == 10, "十个连续使用日", into: &missing)
+        require(
+            fixtureProfile == "annual-v1",
+            "年度 fixture profile",
+            into: &missing
+        )
+        require(storyDates.count == 365, "三百六十五个连续使用日", into: &missing)
+        require(storyDayCount == 365, "年度日期计数", into: &missing)
+        require(storyDateGapCount == 0, "年度日期连续无缺口", into: &missing)
+        require(
+            storyDuplicateDateCount == 0,
+            "年度日期没有重复",
+            into: &missing
+        )
+        require(
+            storyDayWithOrdinaryTraceCount == 365,
+            "全年每天都有普通任务轨迹",
+            into: &missing
+        )
+        require(
+            featureReplayDayCount == 12,
+            "十二个分布式功能重放日",
+            into: &missing
+        )
+        require(
+            featureReplayCoveredQuarterCount == 4,
+            "功能重放覆盖四个季度",
+            into: &missing
+        )
+        require(
+            repeatedFeatureCounts.minimumUsageCount >= 12,
+            "普通任务能力各至少重放十二次",
+            into: &missing
+        )
+        require(
+            minimumRepeatedFeatureUsageCount >= 12,
+            "可序列化最低功能重放次数",
+            into: &missing
+        )
         require(dayTodoCount > 0, "Day Todo 非空", into: &missing)
         require(taskPoolCount > 0, "任务池非空", into: &missing)
         require(futurePlanCount > 0, "未来计划非空", into: &missing)
@@ -117,8 +246,8 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             .abandoned
         ] {
             require(
-                traceStatusCounts[status.rawValue, default: 0] > 0,
-                "任务轨迹状态 \(status.rawValue)",
+                traceStatusCounts[status.rawValue, default: 0] >= 12,
+                "任务轨迹状态 \(status.rawValue) 至少十二项",
                 into: &missing
             )
         }
@@ -129,8 +258,8 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             .abandoned
         ] {
             require(
-                subtaskStatusCounts[status.rawValue, default: 0] > 0,
-                "子任务状态 \(status.rawValue)",
+                subtaskStatusCounts[status.rawValue, default: 0] >= 12,
+                "子任务状态 \(status.rawValue) 至少十二项",
                 into: &missing
             )
         }
@@ -140,10 +269,10 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             "当天可撤回延期",
             into: &missing
         )
-        require(reviewedDayCount >= 6, "至少六天复盘记录", into: &missing)
+        require(reviewedDayCount == 365, "全年每日复盘记录", into: &missing)
         require(categoryCount >= 4, "至少四个彩色分组", into: &missing)
         require(labelCount >= 4, "至少四个彩色标签", into: &missing)
-        require(classifiedTaskCount >= 8, "跨页面分类任务", into: &missing)
+        require(classifiedTaskCount >= 120, "全年跨页面分类任务", into: &missing)
         require(
             deletableCategoryBoundaryCount > 0,
             "同时具有当前与历史引用的可删除分组",
@@ -154,15 +283,15 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             "含规划子任务的任务池任务",
             into: &missing
         )
-        require(taskWithNotesCount >= 3, "跨状态任务附言", into: &missing)
+        require(taskWithNotesCount >= 365, "全年跨状态任务附言", into: &missing)
         require(
-            taskWithDescriptionCount >= 6,
-            "跨页面任务描述",
+            taskWithDescriptionCount >= 365,
+            "全年跨页面任务描述",
             into: &missing
         )
         require(
-            taskWithCollapsibleTrailCount > 0,
-            "可收起多事件轨迹的普通任务",
+            taskWithCollapsibleTrailCount >= 12,
+            "至少十二条可收起多事件轨迹的普通任务",
             into: &missing
         )
         require(
@@ -171,44 +300,54 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             into: &missing
         )
         require(
-            taskCycleSeriesCount == 4,
-            "四条重复计划父项",
+            taskCycleSeriesCount == 12,
+            "十二条重复计划父项",
             into: &missing
         )
         require(
-            taskCycleOccurrenceCount == 57,
-            "五十七个重复计划日实例",
+            taskCycleOccurrenceCount >= 500,
+            "至少五百个重复计划日实例",
             into: &missing
         )
         require(
-            classifiedTaskCycleSeriesCount == 2,
-            "两条重复任务父项包含分组与标签",
+            classifiedTaskCycleSeriesCount >= 2,
+            "多条重复任务父项包含分组与标签",
             into: &missing
         )
         require(
-            taskCycleSeriesWithPlannedSubtasksCount == 2,
-            "两条重复任务父项包含规划子任务",
+            taskCycleSeriesWithPlannedSubtasksCount >= 10,
+            "至少十条重复任务父项包含规划子任务",
             into: &missing
         )
         require(
-            taskCyclePlanRevisionCount == 5,
-            "五条重复计划修订事实",
+            taskCyclePlanRevisionCount >= 8,
+            "至少八条重复计划修订事实",
             into: &missing
         )
         require(
-            unstartedTaskCycleSeriesCount == 1,
-            "一条尚未开始的重复任务可调整开始日期",
+            taskCycleSkippedOccurrenceCount >= 3,
+            "至少三次重复实例跳过",
+            into: &missing
+        )
+        require(
+            taskCycleRescheduledOccurrenceCount >= 3,
+            "至少三次重复实例改期",
+            into: &missing
+        )
+        require(
+            unstartedTaskCycleSeriesCount >= 3,
+            "至少三条尚未开始的重复任务可调整开始日期",
             into: &missing
         )
         require(
             taskCycleLifecycleCounts
                 == NoonmarkDemoTaskCycleLifecycleCounts(
-                    active: 1,
-                    upcoming: 1,
-                    ended: 1,
-                    stopped: 1
+                    active: 3,
+                    upcoming: 3,
+                    ended: 3,
+                    stopped: 3
                 ),
-            "重复计划四态各一条",
+            "重复计划四态各三条",
             into: &missing
         )
         require(
@@ -241,10 +380,47 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     init(
         engine: NoonmarkEngine,
         storyDates: [LocalDate],
-        anchorDate: LocalDate
+        anchorDate: LocalDate,
+        repeatedFeatureCounts: NoonmarkDemoRepeatedFeatureCounts,
+        featureReplayDates: [LocalDate]
     ) {
         let snapshot = engine.snapshot()
+        fixtureProfile = "annual-v1"
         self.storyDates = storyDates.map(\.description)
+        storyDayCount = storyDates.count
+        storyDateGapCount = zip(
+            storyDates,
+            storyDates.dropFirst()
+        ).count { current, next in
+            (try? DemoCalendar.offset(current, by: 1)) != next
+        }
+        storyDuplicateDateCount =
+            storyDates.count - Set(storyDates).count
+        let storyDateSet = Set(storyDates)
+        let ordinaryTraceDates: [LocalDate] =
+            snapshot.traces.compactMap { trace in
+                guard trace.formsDayHistory,
+                      storyDateSet.contains(trace.date),
+                      engine.chains[trace.chainID]?
+                      .cycleMembership == nil
+                else {
+                    return nil
+                }
+                return trace.date
+            }
+        storyDayWithOrdinaryTraceCount =
+            Set(ordinaryTraceDates).count
+        self.featureReplayDates =
+            featureReplayDates.map(\.description)
+        featureReplayDayCount = Set(featureReplayDates).count
+        featureReplayCoveredQuarterCount = Set(
+            featureReplayDates.map {
+                "\($0.year)-Q\((($0.month - 1) / 3) + 1)"
+            }
+        ).count
+        minimumRepeatedFeatureUsageCount =
+            repeatedFeatureCounts.minimumUsageCount
+        self.repeatedFeatureCounts = repeatedFeatureCounts
         dayTodoCount = engine.getDayTodo(date: anchorDate).traces.count
         taskPoolCount = engine.taskPool().count
         futurePlanCount = engine.futurePlans(today: anchorDate).count
@@ -326,6 +502,23 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         taskCyclePlanRevisionCount = snapshot.taskCycleSeries.reduce(0) {
             $0 + $1.planRevisions.count
         }
+        let cycleTracks = engine.taskCycleTracks(today: anchorDate)
+        taskCycleSkippedOccurrenceCount = cycleTracks.reduce(0) {
+            count, track in
+            count + track.days.count { $0.state == .skipped }
+        }
+        taskCycleRescheduledOccurrenceCount =
+            snapshot.chains.count { chain in
+                guard let membership = chain.cycleMembership,
+                      let trace = snapshot.traces.first(where: {
+                          $0.chainID == chain.id
+                              && $0.formsDayHistory
+                      })
+                else {
+                    return false
+                }
+                return trace.date != membership.occurrenceDate
+            }
         unstartedTaskCycleSeriesCount = snapshot.taskCycleSeries.count {
             engine.canReviseTaskCycleStartDate(
                 seriesID: $0.id,
@@ -336,7 +529,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         var upcomingCycleCount = 0
         var endedCycleCount = 0
         var stoppedCycleCount = 0
-        for track in engine.taskCycleTracks(today: anchorDate) {
+        for track in cycleTracks {
             switch track.lifecycle {
             case .active:
                 activeCycleCount += 1
@@ -407,6 +600,994 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         if condition == false {
             missing.append(name)
         }
+    }
+}
+
+private struct AnnualDemoHistoryResult {
+    let featureCounts: NoonmarkDemoRepeatedFeatureCounts
+    let featureReplayDates: [LocalDate]
+}
+
+private struct AnnualDemoHistory {
+    let engine: NoonmarkEngine
+    let dates: [LocalDate]
+    let foregroundStartDate: LocalDate
+    let anchorDate: LocalDate
+    private let clock = DemoClock()
+    private var counts = NoonmarkDemoRepeatedFeatureCounts()
+
+    init(
+        engine: NoonmarkEngine,
+        dates: [LocalDate],
+        foregroundStartDate: LocalDate,
+        anchorDate: LocalDate
+    ) {
+        self.engine = engine
+        self.dates = dates
+        self.foregroundStartDate = foregroundStartDate
+        self.anchorDate = anchorDate
+    }
+
+    mutating func replay() throws -> AnnualDemoHistoryResult {
+        guard dates.count == 355 else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage([
+                "年度历史必须包含前置三百五十五天"
+            ])
+        }
+        try createAnnualCycleSeries()
+        var nextDailyIndex = 0
+        for cycleIndex in 0 ..< 12 {
+            let cycleStartIndex = cycleIndex * 29
+            while nextDailyIndex < cycleStartIndex {
+                try replayDailyBaseline(at: nextDailyIndex)
+                nextDailyIndex += 1
+            }
+            try replayMonthlyFeatureCycle(
+                number: cycleIndex + 1,
+                startingAt: cycleStartIndex
+            )
+            nextDailyIndex = cycleStartIndex + 4
+        }
+        while nextDailyIndex < dates.count {
+            try replayDailyBaseline(at: nextDailyIndex)
+            nextDailyIndex += 1
+        }
+        try engine.settleDays(
+            upTo: foregroundStartDate,
+            now: event(
+                on: foregroundStartDate,
+                hour: 0,
+                minute: 1
+            )
+        )
+        try exerciseAnchorDayDeferralWithdrawals()
+        let snapshot = engine.snapshot()
+        try snapshot.validateIntegrity()
+        return AnnualDemoHistoryResult(
+            featureCounts: counts,
+            featureReplayDates: (0 ..< 12).map {
+                dates[$0 * 29]
+            }
+        )
+    }
+
+    private mutating func createAnnualCycleSeries() throws {
+        let startDate = dates[0]
+        let annualEnd: TaskCycleEndCondition = .durationDays(366)
+        let plannedSubtask = PlannedSubtask(
+            title: "记录本次执行结果",
+            position: 1,
+            now: event(on: startDate, hour: 5)
+        )
+        let activeWeekdays = try engine.createTaskCycleSeries(
+            title: "年度工作日整理",
+            descriptionText: "跨越一整年的工作日重复计划。",
+            plannedSubtasks: [plannedSubtask],
+            startDate: startDate,
+            schedule: .weekdays,
+            endCondition: annualEnd,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 1)
+        )
+        let activeWeekly = try engine.createTaskCycleSeries(
+            title: "年度每周回顾",
+            descriptionText: "跨越一整年的每周重复计划。",
+            plannedSubtasks: [plannedSubtask],
+            startDate: startDate,
+            schedule: .everyDays(7),
+            endCondition: annualEnd,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 2)
+        )
+
+        let upcomingStartOne = try DemoCalendar.offset(
+            anchorDate,
+            by: 20
+        )
+        let upcomingStartTwo = try DemoCalendar.offset(
+            anchorDate,
+            by: 25
+        )
+        _ = try engine.createTaskCycleSeries(
+            title: "下月工作日复盘",
+            descriptionText: "尚未开始的工作日重复计划。",
+            plannedSubtasks: [plannedSubtask],
+            startDate: upcomingStartOne,
+            schedule: .weekdays,
+            endCondition: .durationDays(30),
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 3)
+        )
+        _ = try engine.createTaskCycleSeries(
+            title: "下月隔日训练",
+            descriptionText: "尚未开始的隔日重复计划。",
+            plannedSubtasks: [plannedSubtask],
+            startDate: upcomingStartTwo,
+            schedule: .everyDays(2),
+            endCondition: .completionTarget(
+                count: 12,
+                latestDate: try DemoCalendar.offset(
+                    upcomingStartTwo,
+                    by: 29
+                )
+            ),
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 4)
+        )
+
+        _ = try engine.createTaskCycleSeries(
+            title: "首月每日整理",
+            descriptionText: "已经自然结束的每日重复计划。",
+            plannedSubtasks: [plannedSubtask],
+            startDate: startDate,
+            schedule: .daily,
+            endCondition: .durationDays(30),
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 5)
+        )
+        _ = try engine.createTaskCycleSeries(
+            title: "首月每周盘点",
+            descriptionText: "已经自然结束的每周重复计划。",
+            plannedSubtasks: [plannedSubtask],
+            startDate: startDate,
+            schedule: .everyDays(7),
+            endCondition: .onDate(
+                try DemoCalendar.offset(startDate, by: 29)
+            ),
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 6)
+        )
+
+        let stoppedWeekdays = try engine.createTaskCycleSeries(
+            title: "停止年度工作日记录",
+            descriptionText: "提前停止并保留历史的工作日计划。",
+            plannedSubtasks: [plannedSubtask],
+            startDate: startDate,
+            schedule: .weekdays,
+            endCondition: annualEnd,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 7)
+        )
+        let stoppedWeekly = try engine.createTaskCycleSeries(
+            title: "停止年度周报",
+            descriptionText: "提前停止并保留历史的每周计划。",
+            plannedSubtasks: [plannedSubtask],
+            startDate: startDate,
+            schedule: .everyDays(7),
+            endCondition: annualEnd,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 8)
+        )
+        _ = try engine.stopTaskCycleSeries(
+            seriesID: stoppedWeekdays,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 9)
+        )
+        _ = try engine.stopTaskCycleSeries(
+            seriesID: stoppedWeekly,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 10)
+        )
+
+        _ = try engine.reviseTaskCycleSeries(
+            seriesID: activeWeekdays,
+            schedule: .everyDays(2),
+            endCondition: annualEnd,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 11)
+        )
+        _ = try engine.reviseTaskCycleSeries(
+            seriesID: activeWeekdays,
+            schedule: .weekdays,
+            endCondition: annualEnd,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 12)
+        )
+        _ = try engine.reviseTaskCycleSeries(
+            seriesID: activeWeekly,
+            schedule: .everyDays(6),
+            endCondition: annualEnd,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 13)
+        )
+
+        try exerciseCycleOccurrenceExceptions(
+            seriesID: activeWeekdays,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 14)
+        )
+        try exerciseCycleOccurrenceExceptions(
+            seriesID: activeWeekly,
+            today: startDate,
+            now: event(on: startDate, hour: 5, minute: 15)
+        )
+    }
+
+    private mutating func exerciseCycleOccurrenceExceptions(
+        seriesID: TaskCycleSeriesID,
+        today: LocalDate,
+        now: Date
+    ) throws {
+        let members = engine.chains.values.compactMap {
+            chain -> (chain: TaskChain, trace: DayTrace)? in
+            guard chain.cycleMembership?.seriesID == seriesID,
+                  (chain.cycleMembership?.occurrenceDate ?? today)
+                  > today,
+                  let trace = engine.traces.values.first(where: {
+                      $0.chainID == chain.id
+                          && $0.status == .pending
+                          && $0.date > today
+                  })
+            else {
+                return nil
+            }
+            return (chain, trace)
+        }
+            .sorted {
+                $0.chain.cycleMembership!.occurrenceDate
+                    < $1.chain.cycleMembership!.occurrenceDate
+            }
+        guard members.count >= 2,
+              let skippedDate =
+              members[0].chain.cycleMembership?.occurrenceDate,
+              let movedDate =
+              members[1].chain.cycleMembership?.occurrenceDate
+        else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage([
+                "年度重复计划例外操作"
+            ])
+        }
+        try engine.skipTaskCycleOccurrence(
+            seriesID: seriesID,
+            occurrenceDate: skippedDate,
+            today: today,
+            now: now
+        )
+        try engine.rescheduleFuturePlan(
+            traceID: members[1].trace.id,
+            targetDate: try DemoCalendar.offset(movedDate, by: 1),
+            today: today,
+            now: now.addingTimeInterval(0.001)
+        )
+    }
+
+    private mutating func replayMonthlyFeatureCycle(
+        number: Int,
+        startingAt startIndex: Int
+    ) throws {
+        guard dates.indices.contains(startIndex + 3) else {
+            throw NoonmarkDemoFixtureError.invalidDateRange
+        }
+        let day0 = dates[startIndex]
+        let day1 = dates[startIndex + 1]
+        let day2 = dates[startIndex + 2]
+        let day3 = dates[startIndex + 3]
+
+        try engine.settleDays(
+            upTo: day0,
+            now: event(on: day0, hour: 0, minute: 1)
+        )
+
+        let poolDraft = try createTask(
+            "年度第 \(number) 轮：整理月度输入",
+            number: number
+        )
+        let completedTask = try createTask(
+            "年度第 \(number) 轮：完成重点事项",
+            number: number
+        )
+        let unfinishedTask = try createTask(
+            "年度第 \(number) 轮：延续未完成事项",
+            number: number
+        )
+        let changedTask = try createTask(
+            "年度第 \(number) 轮：收窄任务范围",
+            number: number
+        )
+        let deferredTask = try createTask(
+            "年度第 \(number) 轮：延期依赖事项",
+            number: number
+        )
+        let returnedTask = try createTask(
+            "年度第 \(number) 轮：重新整理排期",
+            number: number
+        )
+        let abandonedTask = try createTask(
+            "年度第 \(number) 轮：停止失效尝试",
+            number: number
+        )
+        let reactivatedTask = try createTask(
+            "年度第 \(number) 轮：恢复有效计划",
+            number: number
+        )
+        let subtaskTask = try createTask(
+            "年度第 \(number) 轮：拆解交付步骤",
+            number: number
+        )
+        let futureTask = try createTask(
+            "年度第 \(number) 轮：调整未来计划",
+            number: number
+        )
+
+        try exercisePoolEditing(
+            chainID: poolDraft,
+            number: number,
+            date: day0
+        )
+        try classify(
+            poolDraft,
+            number: number,
+            date: day0
+        )
+
+        let completedTrace = try schedule(
+            completedTask,
+            date: day0,
+            today: day0
+        )
+        try engine.saveTaskTitleInput(
+            chainID: completedTask,
+            title: "年度第 \(number) 轮：交付重点事项",
+            today: day0,
+            now: event(on: day0, hour: 8, minute: 1)
+        )
+        counts.taskTitleEditing += 1
+        try engine.updateTraceText(
+            traceID: completedTrace,
+            descriptionText: "第 \(number) 轮在一年负载下保存的任务说明。",
+            today: day0,
+            now: event(on: day0, hour: 8, minute: 2)
+        )
+        counts.taskDescriptionEditing += 1
+        try exerciseTraceNotes(
+            traceID: completedTrace,
+            number: number,
+            date: day0
+        )
+
+        let unfinishedTrace = try schedule(
+            unfinishedTask,
+            date: day0,
+            today: day0
+        )
+        try engine.setManualProgress(
+            traceID: unfinishedTrace,
+            percent: 40,
+            today: day0,
+            now: event(on: day0, hour: 8, minute: 10)
+        )
+        counts.manualProgressEditing += 1
+        try engine.pinDayTrace(
+            unfinishedTrace,
+            today: day0,
+            now: event(on: day0, hour: 8, minute: 11)
+        )
+        try engine.unpinDayTrace(
+            unfinishedTrace,
+            today: day0,
+            now: event(on: day0, hour: 8, minute: 12)
+        )
+        counts.pinLifecycle += 1
+
+        let changedTrace = try schedule(
+            changedTask,
+            date: day0,
+            today: day0
+        )
+        try engine.reorderDayTrace(
+            changedTrace,
+            before: unfinishedTrace,
+            today: day0,
+            now: event(on: day0, hour: 8, minute: 13)
+        )
+        counts.priorityReordering += 1
+        let changedReplacement = try engine.changeTrace(
+            traceID: changedTrace,
+            newTitle: "年度第 \(number) 轮：交付收窄后的结果",
+            newDescriptionText: "保留旧任务轨迹，并完成范围明确的新任务。",
+            today: day0,
+            now: event(on: day0, hour: 9)
+        )
+        counts.taskChange += 1
+        try complete(
+            changedReplacement,
+            today: day0,
+            date: day0,
+            hour: 16
+        )
+
+        let deferredTrace = try schedule(
+            deferredTask,
+            date: day0,
+            today: day0
+        )
+        let deferredTarget = try engine.deferCurrentTrace(
+            traceID: deferredTrace,
+            targetDate: day1,
+            today: day0,
+            now: event(on: day0, hour: 17)
+        )
+        counts.deferral += 1
+
+        let returnedTrace = try schedule(
+            returnedTask,
+            date: day0,
+            today: day0
+        )
+        try engine.returnToPool(
+            traceID: returnedTrace,
+            today: day0,
+            now: event(on: day0, hour: 17, minute: 4)
+        )
+        counts.returnToPool += 1
+
+        let abandonedTrace = try schedule(
+            abandonedTask,
+            date: day0,
+            today: day0
+        )
+        try engine.abandonChain(
+            from: abandonedTrace,
+            now: event(on: day0, hour: 17, minute: 5)
+        )
+        counts.abandonment += 1
+
+        let reactivatedTrace = try schedule(
+            reactivatedTask,
+            date: day0,
+            today: day0
+        )
+        try engine.abandonChain(
+            from: reactivatedTrace,
+            now: event(on: day0, hour: 17, minute: 6)
+        )
+        counts.abandonment += 1
+        _ = try engine.reactivateAbandonedChain(
+            from: reactivatedTrace,
+            today: day0,
+            now: event(on: day0, hour: 17, minute: 7)
+        )
+        counts.reactivation += 1
+        try complete(
+            reactivatedTrace,
+            today: day0,
+            date: day0,
+            hour: 17,
+            minute: 8
+        )
+
+        let subtaskTrace = try schedule(
+            subtaskTask,
+            date: day0,
+            today: day0
+        )
+        try exerciseSubtasks(
+            traceID: subtaskTrace,
+            number: number,
+            date: day0
+        )
+
+        let futureTrace = try schedule(
+            futureTask,
+            date: day2,
+            today: day0
+        )
+        try engine.rescheduleFuturePlan(
+            traceID: futureTrace,
+            targetDate: day3,
+            today: day0,
+            now: event(on: day0, hour: 17, minute: 20)
+        )
+        counts.futureRescheduling += 1
+
+        try complete(
+            completedTrace,
+            today: day0,
+            date: day0,
+            hour: 18
+        )
+        try engine.undoCompleted(
+            traceID: completedTrace,
+            today: day0,
+            now: event(on: day0, hour: 18, minute: 1)
+        )
+        counts.taskCompletionUndo += 1
+        try complete(
+            completedTrace,
+            today: day0,
+            date: day0,
+            hour: 18,
+            minute: 2
+        )
+        let copiedChainID = try engine.copyAsNewTask(
+            from: completedTrace,
+            target: .date(day1),
+            today: day0,
+            now: event(on: day0, hour: 18, minute: 3)
+        )
+        counts.copying += 1
+
+        try addDailyBaselineAndReview(
+            at: startIndex,
+            date: day0
+        )
+        try engine.settleDays(
+            upTo: day1,
+            now: event(on: day1, hour: 0, minute: 1)
+        )
+        let continuedTrace = try engine.continueUnfinishedTrace(
+            traceID: unfinishedTrace,
+            targetDate: day1,
+            today: day1,
+            now: event(on: day1, hour: 8)
+        )
+        counts.unfinishedContinuation += 1
+        try complete(
+            continuedTrace,
+            today: day1,
+            date: day1,
+            hour: 16
+        )
+
+        let continuedSubtaskTrace = try engine.continueUnfinishedTrace(
+            traceID: subtaskTrace,
+            targetDate: day1,
+            today: day1,
+            now: event(on: day1, hour: 8, minute: 1)
+        )
+        counts.unfinishedContinuation += 1
+        for subtask in engine.subtasks.values
+            .filter({
+                $0.traceID == continuedSubtaskTrace
+                    && $0.status == .pending
+            })
+        {
+            try engine.completeSubtask(
+                subtask.id,
+                today: day1,
+                now: event(on: day1, hour: 15)
+            )
+            counts.subtaskCompletion += 1
+        }
+        try complete(
+            continuedSubtaskTrace,
+            today: day1,
+            date: day1,
+            hour: 16,
+            minute: 1
+        )
+        try complete(
+            deferredTarget,
+            today: day1,
+            date: day1,
+            hour: 16,
+            minute: 2
+        )
+        guard let copiedTrace = engine.traces.values.first(where: {
+            $0.chainID == copiedChainID && $0.date == day1
+        }) else {
+            throw NoonmarkDemoFixtureError.incompleteCoverage([
+                "年度复制任务日轨迹"
+            ])
+        }
+        try complete(
+            copiedTrace.id,
+            today: day1,
+            date: day1,
+            hour: 16,
+            minute: 3
+        )
+
+        try addDailyBaselineAndReview(
+            at: startIndex + 1,
+            date: day1
+        )
+        try replayDailyBaseline(at: startIndex + 2)
+        try engine.settleDays(
+            upTo: day3,
+            now: event(on: day3, hour: 0, minute: 1)
+        )
+        try complete(
+            futureTrace,
+            today: day3,
+            date: day3,
+            hour: 16
+        )
+        try addDailyBaselineAndReview(
+            at: startIndex + 3,
+            date: day3
+        )
+    }
+
+    private mutating func createTask(
+        _ title: String,
+        number: Int
+    ) throws -> TaskChainID {
+        let chainID = try engine.createPoolTask(
+            title: title,
+            descriptionText: "一年演示第 \(number) 轮的真实任务说明。",
+            initialNoteBody: "第 \(number) 轮初始附言。",
+            now: event(on: dates[(number - 1) * 29], hour: 6)
+        )
+        counts.poolTaskCreation += 1
+        return chainID
+    }
+
+    private mutating func exercisePoolEditing(
+        chainID: TaskChainID,
+        number: Int,
+        date: LocalDate
+    ) throws {
+        try engine.updatePoolTask(
+            chainID: chainID,
+            title: "年度第 \(number) 轮：整理完整月度输入",
+            descriptionText: "修改后的任务池说明覆盖标题与说明保存。",
+            now: event(on: date, hour: 6, minute: 10)
+        )
+        counts.poolTaskTextEditing += 1
+
+        let noteID = try engine.appendPoolNote(
+            chainID: chainID,
+            body: "待编辑的月度附言。",
+            now: event(on: date, hour: 6, minute: 11)
+        )
+        try engine.editPoolNote(
+            chainID: chainID,
+            noteID: noteID,
+            body: "已经编辑的月度附言。",
+            now: event(on: date, hour: 6, minute: 12)
+        )
+        try engine.deletePoolNote(
+            chainID: chainID,
+            noteID: noteID,
+            now: event(on: date, hour: 6, minute: 13)
+        )
+        counts.noteLifecycle += 1
+
+        let retained = try engine.addPlannedSubtask(
+            chainID: chainID,
+            title: "整理本月输入",
+            now: event(on: date, hour: 6, minute: 14)
+        )
+        let removable = try engine.addPlannedSubtask(
+            chainID: chainID,
+            title: "移除重复步骤",
+            now: event(on: date, hour: 6, minute: 15)
+        )
+        try engine.updatePlannedSubtaskTitle(
+            chainID: chainID,
+            plannedSubtaskID: retained,
+            title: "整理并核对本月输入",
+            now: event(on: date, hour: 6, minute: 16)
+        )
+        try engine.updatePlannedSubtaskDifficulty(
+            chainID: chainID,
+            plannedSubtaskID: retained,
+            difficulty: .hard,
+            now: event(on: date, hour: 6, minute: 17)
+        )
+        try engine.removePlannedSubtask(
+            chainID: chainID,
+            plannedSubtaskID: removable,
+            now: event(on: date, hour: 6, minute: 18)
+        )
+        counts.plannedSubtaskEditing += 1
+    }
+
+    private mutating func exerciseTraceNotes(
+        traceID: DayTraceID,
+        number: Int,
+        date: LocalDate
+    ) throws {
+        let noteID = try engine.appendTraceNote(
+            traceID: traceID,
+            body: "第 \(number) 轮待编辑的执行附言。",
+            today: date,
+            now: event(on: date, hour: 8, minute: 3)
+        )
+        try engine.editTraceNote(
+            traceID: traceID,
+            noteID: noteID,
+            body: "第 \(number) 轮已经编辑的执行附言。",
+            today: date,
+            now: event(on: date, hour: 8, minute: 4)
+        )
+        try engine.deleteTraceNote(
+            traceID: traceID,
+            noteID: noteID,
+            today: date,
+            now: event(on: date, hour: 8, minute: 5)
+        )
+        counts.noteLifecycle += 1
+    }
+
+    private mutating func exerciseSubtasks(
+        traceID: DayTraceID,
+        number: Int,
+        date: LocalDate
+    ) throws {
+        let completed = try engine.addSubtask(
+            traceID: traceID,
+            title: "第 \(number) 轮完成步骤",
+            now: event(on: date, hour: 10)
+        )
+        let abandoned = try engine.addSubtask(
+            traceID: traceID,
+            title: "第 \(number) 轮调整步骤",
+            now: event(on: date, hour: 10, minute: 1)
+        )
+        let deleted = try engine.addSubtask(
+            traceID: traceID,
+            title: "第 \(number) 轮删除步骤",
+            now: event(on: date, hour: 10, minute: 2)
+        )
+        _ = try engine.addSubtask(
+            traceID: traceID,
+            title: "第 \(number) 轮跨日步骤",
+            now: event(on: date, hour: 10, minute: 3)
+        )
+        counts.subtaskCreation += 4
+
+        try engine.updateSubtaskTitle(
+            abandoned,
+            title: "第 \(number) 轮已经调整的步骤",
+            today: date,
+            now: event(on: date, hour: 10, minute: 4)
+        )
+        counts.subtaskTextEditing += 1
+        try engine.updateSubtaskDifficulty(
+            abandoned,
+            difficulty: .hard,
+            today: date,
+            now: event(on: date, hour: 10, minute: 5)
+        )
+        counts.subtaskDifficultyEditing += 1
+
+        try engine.completeSubtask(
+            completed,
+            today: date,
+            now: event(on: date, hour: 11)
+        )
+        counts.subtaskCompletion += 1
+        try engine.undoCompletedSubtask(
+            completed,
+            today: date,
+            now: event(on: date, hour: 11, minute: 1)
+        )
+        counts.subtaskCompletionUndo += 1
+        try engine.completeSubtask(
+            completed,
+            today: date,
+            now: event(on: date, hour: 11, minute: 2)
+        )
+        counts.subtaskCompletion += 1
+        try engine.abandonSubtask(
+            abandoned,
+            today: date,
+            now: event(on: date, hour: 11, minute: 3)
+        )
+        counts.subtaskAbandonment += 1
+        try engine.deleteSubtask(
+            deleted,
+            today: date,
+            now: event(on: date, hour: 11, minute: 4)
+        )
+        counts.subtaskDeletion += 1
+    }
+
+    private mutating func schedule(
+        _ chainID: TaskChainID,
+        date: LocalDate,
+        today: LocalDate
+    ) throws -> DayTraceID {
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: date,
+            today: today,
+            now: event(on: today, hour: 8)
+        )
+        counts.scheduling += 1
+        return traceID
+    }
+
+    private mutating func complete(
+        _ traceID: DayTraceID,
+        today: LocalDate,
+        date: LocalDate,
+        hour: Int,
+        minute: Int = 0
+    ) throws {
+        try engine.markCompleted(
+            traceID: traceID,
+            today: today,
+            now: event(on: date, hour: hour, minute: minute)
+        )
+        counts.taskCompletion += 1
+    }
+
+    private mutating func classify(
+        _ chainID: TaskChainID,
+        number: Int,
+        date: LocalDate
+    ) throws {
+        let categories = [
+            ("研究", "#7C5CFF"),
+            ("产品", "#2A6FDB"),
+            ("工程", "#0E9488"),
+            ("协作", "#E0851B")
+        ]
+        let labels = [
+            ("洞察", "#0E9488"),
+            ("发布", "#E0851B"),
+            ("体验", "#7C5CFF"),
+            ("交接", "#2A6FDB")
+        ]
+        let category = categories[(number - 1) % categories.count]
+        let label = labels[(number - 1) % labels.count]
+        let now = event(on: date, hour: 6, minute: 30)
+        let interactionID = UUID()
+        let plan = try engine.prepareClassification(
+            .setCurrent(
+                TaskClassificationDraft(
+                    chainID: chainID,
+                    category: .new(
+                        name: category.0,
+                        colorHex: category.1
+                    ),
+                    labels: [
+                        .new(name: label.0, colorHex: label.1)
+                    ]
+                )
+            ),
+            source: .userDirect,
+            interactionID: interactionID,
+            now: now
+        )
+        _ = try engine.commitClassification(
+            plan,
+            confirmation: .confirmedByUser(
+                confirming: plan,
+                decisionID: interactionID
+            ),
+            now: now
+        )
+        counts.classification += 1
+    }
+
+    private mutating func replayDailyBaseline(
+        at index: Int
+    ) throws {
+        let date = dates[index]
+        try engine.settleDays(
+            upTo: date,
+            now: event(on: date, hour: 0, minute: 1)
+        )
+        try addDailyBaselineAndReview(at: index, date: date)
+    }
+
+    private mutating func addDailyBaselineAndReview(
+        at index: Int,
+        date: LocalDate
+    ) throws {
+        let chainID = try engine.createPoolTask(
+            title: "年度第 \(index + 1) 天：完成日常推进",
+            descriptionText: "连续一年中第 \(index + 1) 天的真实任务记录。",
+            initialNoteBody: "当天先完成首要事项。",
+            now: event(on: date, hour: 7)
+        )
+        counts.poolTaskCreation += 1
+        if index.isMultiple(of: 3) {
+            try classify(
+                chainID,
+                number: (index % 12) + 1,
+                date: date
+            )
+        }
+        let traceID = try schedule(
+            chainID,
+            date: date,
+            today: date
+        )
+        try complete(
+            traceID,
+            today: date,
+            date: date,
+            hour: 18
+        )
+        engine.updateDailyReview(
+            date: date,
+            summary: "年度第 \(index + 1) 天：完成了一项可核对的推进。",
+            unfinishedReason: index.isMultiple(of: 3)
+                ? "依赖确认压缩了原定时间。"
+                : "为更重要的交付主动调整了顺序。",
+            tomorrowNote: "明天先完成首要任务，再处理新增输入。",
+            now: event(on: date, hour: 22)
+        )
+    }
+
+    private mutating func exerciseAnchorDayDeferralWithdrawals()
+        throws
+    {
+        let tomorrow = try DemoCalendar.offset(anchorDate, by: 1)
+        for number in 1 ... 12 {
+            let chainID = try engine.createPoolTask(
+                title: "年度撤回延期样例 \(number)",
+                descriptionText: "在今天撤回一次延期并继续保留为待办。",
+                initialNoteBody: "用于验证撤回延期不会丢失内容。",
+                now: event(on: anchorDate, hour: 6, minute: number)
+            )
+            counts.poolTaskCreation += 1
+            let traceID = try schedule(
+                chainID,
+                date: anchorDate,
+                today: anchorDate
+            )
+            _ = try engine.addSubtask(
+                traceID: traceID,
+                title: "撤回延期后继续处理的步骤 \(number)",
+                now: event(
+                    on: anchorDate,
+                    hour: 6,
+                    minute: 12 + number
+                )
+            )
+            counts.subtaskCreation += 1
+            _ = try engine.deferCurrentTrace(
+                traceID: traceID,
+                targetDate: tomorrow,
+                today: anchorDate,
+                now: event(
+                    on: anchorDate,
+                    hour: 6,
+                    minute: 15 + number
+                )
+            )
+            counts.deferral += 1
+            try engine.withdrawDeferral(
+                sourceTraceID: traceID,
+                today: anchorDate,
+                now: event(
+                    on: anchorDate,
+                    hour: 6,
+                    minute: 30 + number
+                )
+            )
+            counts.deferralWithdrawal += 1
+        }
+    }
+
+    private mutating func event(
+        on date: LocalDate,
+        hour: Int,
+        minute: Int = 0
+    ) -> Date {
+        clock.next(
+            from: DemoCalendar.timestamp(
+                date,
+                hour: hour,
+                minute: minute
+            )
+        )
     }
 }
 
@@ -1400,8 +2581,9 @@ private enum DemoCalendar {
     private static var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = Locale(identifier: "en_US_POSIX")
-        calendar.timeZone = TimeZone(secondsFromGMT: -4 * 60 * 60)
-            ?? .current
+        calendar.timeZone = TimeZone(
+            identifier: "America/New_York"
+        ) ?? .current
         return calendar
     }
 

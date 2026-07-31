@@ -86,7 +86,11 @@ func expectedContract(for scenario: String) throws -> ScenarioContract {
             height: 1536
         )
     case "english-settings":
-        ScenarioContract(marker: "Zhulong Configuration", width: 1640, height: 1440)
+        ScenarioContract(
+            marker: "Zhulong and Automation",
+            width: 1720,
+            height: 1376
+        )
     case "english-zhulong":
         ScenarioContract(
             marker: "Clarify what is vague and keep what is underway moving",
@@ -157,7 +161,7 @@ do {
         if scenario == "english-settings" {
             for title in [
                 "Settings",
-                "Zhulong Configuration",
+                "Zhulong and Automation",
                 "Write & Privacy Boundaries",
             ] where !recognized.localizedCaseInsensitiveContains(title) {
                 throw ScreenshotVerificationError.missingSettingsTitle(title)

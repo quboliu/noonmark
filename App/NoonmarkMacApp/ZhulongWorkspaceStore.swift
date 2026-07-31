@@ -17,6 +17,11 @@ struct ZhulongRetainedDailyReviewEdit {
     let tomorrowNote: String
 }
 
+struct ZhulongDraftPersistencePerformanceSample {
+    let totalMilliseconds: Double
+    let mainActorPublishMilliseconds: Double
+}
+
 enum ZhulongStreamActor: Equatable {
     case user
     case zhulong
@@ -117,6 +122,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
     private let sessionRepository: EncryptedFileZhulongSessionRepository
     private let memoryRepository: EncryptedFileZhulongMemoryRepository
     private let providerOrchestrator: ZhulongProviderOrchestrator
+    private let draftPersistenceLane:
+        ZhulongDraftPersistenceLane
     private let applicationJournal: EncryptedFileZhulongApplicationJournal
     private let streamViewRepository: ZhulongStreamViewRepository
     private var retainedInlineTodoEdits: [
@@ -126,6 +133,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
         ZhulongDailyReviewDraftID:
             ZhulongRetainedDailyReviewEdit
     ] = [:]
+    var e2eLastDraftPersistencePerformanceSample:
+        ZhulongDraftPersistencePerformanceSample?
 
     init(directoryURL: URL, keySource: any ZhulongSidecarKeySource) {
         self.directoryURL = directoryURL
@@ -140,6 +149,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
         )
         self.sessionRepository = sessionRepository
         providerOrchestrator = ZhulongProviderOrchestrator(repository: sessionRepository)
+        draftPersistenceLane = ZhulongDraftPersistenceLane(
+            repository: sessionRepository
+        )
         applicationJournal = EncryptedFileZhulongApplicationJournal(
             directoryURL: directoryURL,
             keySource: keySource
@@ -513,6 +525,45 @@ final class ZhulongWorkspaceStore: ObservableObject {
         }
     }
 
+    func autosaveTodoDiff(
+        draftID: ZhulongTodoDiffID,
+        items: [ZhulongTodoDiffItem],
+        now: Date = Date()
+    ) async -> ZhulongTodoDiffID? {
+        guard let session = sessions.first(where: {
+            $0.todoDiffDrafts.contains { $0.id == draftID }
+        }) else {
+            return nil
+        }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        do {
+            let commit = try await draftPersistenceLane
+                .reviseTodoDiff(
+                    sessionID: session.id,
+                    sourceDraftID: draftID,
+                    items: items,
+                    now: now
+                )
+            let persistedAt =
+                ProcessInfo.processInfo.systemUptime
+            replaceLoadedSession(commit.session)
+            status = nil
+            let publishedAt =
+                ProcessInfo.processInfo.systemUptime
+            recordDraftPersistencePerformance(
+                startedAt: startedAt,
+                persistedAt: persistedAt,
+                publishedAt: publishedAt
+            )
+            return commit.draftID
+        } catch {
+            projectSidecarMutationFailure(
+                fallback: .sessionOperationFailed
+            )
+            return nil
+        }
+    }
+
     func publishDailyReviewDraft(
         summary: String?,
         tomorrowNote: String?,
@@ -563,6 +614,47 @@ final class ZhulongWorkspaceStore: ObservableObject {
                 current.confirmedCauseResolutionIDs,
                 now: revisionDate
             ).id
+        }
+    }
+
+    func autosaveDailyReviewDraft(
+        draftID: ZhulongDailyReviewDraftID,
+        summary: String?,
+        tomorrowNote: String?,
+        now: Date = Date()
+    ) async -> ZhulongDailyReviewDraftID? {
+        guard let session = sessions.first(where: {
+            $0.dailyReviewDrafts.contains { $0.id == draftID }
+        }) else {
+            return nil
+        }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        do {
+            let commit = try await draftPersistenceLane
+                .reviseDailyReview(
+                    sessionID: session.id,
+                    sourceDraftID: draftID,
+                    summary: summary,
+                    tomorrowNote: tomorrowNote,
+                    now: now
+                )
+            let persistedAt =
+                ProcessInfo.processInfo.systemUptime
+            replaceLoadedSession(commit.session)
+            status = nil
+            let publishedAt =
+                ProcessInfo.processInfo.systemUptime
+            recordDraftPersistencePerformance(
+                startedAt: startedAt,
+                persistedAt: persistedAt,
+                publishedAt: publishedAt
+            )
+            return commit.draftID
+        } catch {
+            projectSidecarMutationFailure(
+                fallback: .sessionOperationFailed
+            )
+            return nil
         }
     }
 
@@ -1113,6 +1205,37 @@ final class ZhulongWorkspaceStore: ObservableObject {
         } catch {
             status = .memoryReadFailed
         }
+    }
+
+    func drainDraftPersistence() async {
+        await draftPersistenceLane.drain()
+    }
+
+    func persistedSession(
+        _ id: ZhulongSessionID
+    ) async throws -> ZhulongSession {
+        try await draftPersistenceLane.load(
+            sessionID: id
+        )
+    }
+
+    private func recordDraftPersistencePerformance(
+        startedAt: TimeInterval,
+        persistedAt: TimeInterval,
+        publishedAt: TimeInterval
+    ) {
+        guard AppLaunchArguments.contains(
+            "--e2e-tencent-ime-input-realistic-workload"
+        ) else {
+            return
+        }
+        e2eLastDraftPersistencePerformanceSample =
+            ZhulongDraftPersistencePerformanceSample(
+                totalMilliseconds:
+                (publishedAt - startedAt) * 1000,
+                mainActorPublishMilliseconds:
+                (publishedAt - persistedAt) * 1000
+            )
     }
 
     @discardableResult

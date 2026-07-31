@@ -141,48 +141,40 @@ extension DetailTitleRow where Trailing == EmptyView {
 
 struct EditableDetailTitleRow<Trailing: View>: View {
     @EnvironmentObject private var store: NoonmarkStore
+    let ownerID: String
     let title: String
     let editable: Bool
-    let onCommit: (String) -> Void
+    let onCommit: @MainActor (String) async -> Bool
     @ViewBuilder let trailing: Trailing
-    @State private var draft: String
-    @State private var pendingPersistedTitle: String?
 
     init(
         _ title: String,
+        ownerID: String,
         editable: Bool,
-        onCommit: @escaping (String) -> Void,
+        onCommit: @escaping @MainActor (String) async -> Bool,
         @ViewBuilder trailing: () -> Trailing
     ) {
+        self.ownerID = ownerID
         self.title = title
         self.editable = editable
         self.onCommit = onCommit
         self.trailing = trailing()
-        _draft = State(initialValue: title)
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if editable {
-                MarkdownEditor(
-                    text: $draft,
+                AutosavingMarkdownEditor(
+                    ownerID: ownerID,
+                    persistedText: title,
                     placeholder: store.copy.taskTitlePlaceholder,
                     style: .title,
                     showsSurface: false,
-                    onCommit: commitDraft,
-                    onEndEditing: commitDraft,
-                    onTextChange: persistDraft,
-                    nativeAccessibilityIdentifier: "detail.title"
+                    persistencePolicy: .nonemptyTrimmed,
+                    onPersist: onCommit,
+                    nativeAccessibilityIdentifier:
+                    "detail.title"
                 )
-                    .onChange(of: title) { _, newValue in
-                        if pendingPersistedTitle == newValue {
-                            pendingPersistedTitle = nil
-                            return
-                        }
-                        if draft != newValue {
-                            draft = newValue
-                        }
-                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 MarkdownText(title, fallback: store.copy.untitledTask)
@@ -197,24 +189,21 @@ struct EditableDetailTitleRow<Trailing: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    private func commitDraft() {
-        persistDraft(draft)
-    }
-
-    private func persistDraft(_ value: String) {
-        let nextTitle = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard nextTitle != title else {
-            return
-        }
-        pendingPersistedTitle = nextTitle
-        onCommit(nextTitle)
-    }
 }
 
 extension EditableDetailTitleRow where Trailing == EmptyView {
-    init(_ title: String, editable: Bool, onCommit: @escaping (String) -> Void) {
-        self.init(title, editable: editable, onCommit: onCommit) {
+    init(
+        _ title: String,
+        ownerID: String,
+        editable: Bool,
+        onCommit: @escaping @MainActor (String) async -> Bool
+    ) {
+        self.init(
+            title,
+            ownerID: ownerID,
+            editable: editable,
+            onCommit: onCommit
+        ) {
             EmptyView()
         }
     }
@@ -238,17 +227,21 @@ struct DetailPrimaryText<Title: View, Description: View>: View {
 
 struct DetailDescriptionBlock: View {
     @EnvironmentObject private var store: NoonmarkStore
-    @Binding var text: String
+    let ownerID: String
+    let text: String
     let placeholder: String
     let editable: Bool
+    let onPersist: @MainActor (String) async -> Bool
 
     var body: some View {
         EditableDetailText(
-            text: $text,
+            ownerID: ownerID,
+            text: text,
             placeholder: placeholder,
             editable: editable,
             warm: false,
             fallback: store.copy.missingTaskDescription,
+            onPersist: onPersist,
             nativeAccessibilityIdentifier: "detail.description"
         )
     }

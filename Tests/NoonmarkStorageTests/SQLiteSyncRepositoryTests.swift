@@ -1657,6 +1657,7 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertThrowsError(
             try syncRepository.commitDownloadedMerge(
                 SQLiteSyncDownloadCommit(
+                    sourceSnapshot: before,
                     snapshot: merged.snapshot(),
                     observedEngineGeneration: try engineRepository
                         .loadObservedSnapshot().generation,

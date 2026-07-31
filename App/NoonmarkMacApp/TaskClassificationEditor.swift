@@ -121,6 +121,18 @@ struct TaskClassificationEditor: View {
                         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.controlFill))
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.lineSubtle))
                         .onSubmit(createAndSelectGroup)
+                        .accessibilityIdentifier(
+                            "classification.editor.category-create."
+                                + target.identifier
+                        )
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier:
+                                "classification.editor.category-create."
+                                    + target.identifier,
+                                verificationText: newGroupName
+                            )
+                        }
                     Button(copy.cancelAction) {
                         newGroupName = ""
                         isCreatingGroup = false

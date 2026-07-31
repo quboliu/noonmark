@@ -14,7 +14,7 @@ jobs:
   validate:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, macOS, noonmark-ui-e2e]
-    timeout-minutes: 75
+    timeout-minutes: 120
     env:
       NOONMARK_CODESIGN_IDENTITY: ${{ vars.NOONMARK_UI_CODESIGN_IDENTITY }}
       NOONMARK_EVIDENCE_RUN_ID: github-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
@@ -39,6 +39,10 @@ jobs:
         run: scripts/test-data-root-process-lease-e2e
       - name: Full App E2E
         run: scripts/test-e2e
+      - name: Tencent IME input latency and durability
+        run: |
+          scripts/test-tencent-ime-input-matrix release
+          scripts/test-tencent-ime-termination-persistence release
       - name: Verify complete E2E evidence
         run: scripts/verify-development-validation-evidence --scope runtime
       - name: Package artifact

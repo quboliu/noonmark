@@ -110,12 +110,11 @@ struct ZhulongTodoDiffEditor: View {
                     text: item.title,
                     placeholder: copy.taskTitlePlaceholder,
                     style: .title,
-                    showsSurface: true
+                    showsSurface: true,
+                    nativeAccessibilityIdentifier:
+                    "zhulong-todo-diff-title-\(value.identifierSuffix)"
                 )
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .accessibilityIdentifier(
-                        "zhulong-todo-diff-title-\(value.identifierSuffix)"
-                    )
             } else {
                 Text(value.fixedDescription(copy: copy))
                     .font(.noonmarkSystem(size: 11))
@@ -133,6 +132,14 @@ struct ZhulongTodoDiffEditor: View {
                         .accessibilityIdentifier(
                             "zhulong-todo-diff-target-date-\(value.identifierSuffix)"
                         )
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier:
+                                "zhulong-todo-diff-target-date-\(value.identifierSuffix)",
+                                verificationText:
+                                value.targetDateText
+                            )
+                        }
                     Spacer()
                 }
             }

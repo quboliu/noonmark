@@ -232,6 +232,7 @@ public extension NoonmarkSnapshot {
         seriesIDs: Set<TaskCycleSeriesID>
     ) throws {
         let memberships = chains.compactMap(\.cycleMembership)
+        let chainIDsWithTrace = Set(traces.map(\.chainID))
         let occurrenceKeys = memberships.map {
             "\($0.seriesID.description):\($0.occurrenceDate.description)"
         }
@@ -248,9 +249,7 @@ public extension NoonmarkSnapshot {
                     "task cycle membership references a missing series"
                 )
             }
-            guard traces.contains(where: {
-                      $0.chainID == chain.id
-                  })
+            guard chainIDsWithTrace.contains(chain.id)
             else {
                 throw NoonmarkError.invalidInput(
                     "task cycle membership contains invalid schedule facts"

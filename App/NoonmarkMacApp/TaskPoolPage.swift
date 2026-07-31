@@ -163,7 +163,7 @@ struct PoolQuickAdd: View {
     var body: some View {
         NewTaskInlineField(
             placeholder: store.copy.poolQuickAddPlaceholder,
-            text: $store.poolText,
+            draft: store.poolTextDraft,
             nativeAccessibilityIdentifier: "quick-add.pool",
             focusRequest: focusRequest
         ) {

@@ -323,12 +323,15 @@ extension NoonmarkStore {
         }
     }
 
+    @discardableResult
     func updateTaskCycleTitle(
         seriesID: TaskCycleSeriesID,
         title: String
-    ) {
-        guard let series = engine.taskCycleSeries[seriesID] else { return }
-        updateTaskCycleContent(
+    ) -> Bool {
+        guard let series = engine.taskCycleSeries[seriesID] else {
+            return false
+        }
+        return updateTaskCycleContent(
             seriesID: seriesID,
             title: title,
             descriptionText: series.descriptionText,
@@ -336,12 +339,15 @@ extension NoonmarkStore {
         )
     }
 
+    @discardableResult
     func updateTaskCycleDescription(
         seriesID: TaskCycleSeriesID,
         descriptionText: String
-    ) {
-        guard let series = engine.taskCycleSeries[seriesID] else { return }
-        updateTaskCycleContent(
+    ) -> Bool {
+        guard let series = engine.taskCycleSeries[seriesID] else {
+            return false
+        }
+        return updateTaskCycleContent(
             seriesID: seriesID,
             title: series.title,
             descriptionText: descriptionText,
@@ -394,16 +400,17 @@ extension NoonmarkStore {
         }
     }
 
+    @discardableResult
     func renameTaskCyclePlannedSubtask(
         seriesID: TaskCycleSeriesID,
         subtaskID: PlannedSubtaskID,
         title: String
-    ) {
+    ) -> Bool {
         let normalized = title.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
-        guard normalized.isEmpty == false else { return }
-        mutateTaskCyclePlannedSubtasks(seriesID: seriesID) {
+        guard normalized.isEmpty == false else { return false }
+        return mutateTaskCyclePlannedSubtasks(seriesID: seriesID) {
             guard let index = $0.firstIndex(where: {
                 $0.id == subtaskID
             }) else {
@@ -453,6 +460,7 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
+            resolveOperationFailure(.taskMutation)
             return true
         } catch {
             showOperationFailure(.taskMutation, error: error)
@@ -460,12 +468,13 @@ extension NoonmarkStore {
         }
     }
 
+    @discardableResult
     private func updateTaskCycleContent(
         seriesID: TaskCycleSeriesID,
         title: String,
         descriptionText: String?,
         plannedSubtasks: [PlannedSubtask]
-    ) {
+    ) -> Bool {
         do {
             try commitEngineMutation(undoPolicy: .invalidate) {
                 candidate,
@@ -479,19 +488,25 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
+            resolveOperationFailure(.taskMutation)
+            return true
         } catch {
             showOperationFailure(.taskMutation, error: error)
+            return false
         }
     }
 
+    @discardableResult
     private func mutateTaskCyclePlannedSubtasks(
         seriesID: TaskCycleSeriesID,
         mutation: (inout [PlannedSubtask]) -> Void
-    ) {
-        guard let series = engine.taskCycleSeries[seriesID] else { return }
+    ) -> Bool {
+        guard let series = engine.taskCycleSeries[seriesID] else {
+            return false
+        }
         var subtasks = series.plannedSubtasks
         mutation(&subtasks)
-        updateTaskCycleContent(
+        return updateTaskCycleContent(
             seriesID: seriesID,
             title: series.title,
             descriptionText: series.descriptionText,
@@ -794,17 +809,18 @@ extension NoonmarkStore {
         }
     }
 
+    @discardableResult
     func renameSubtask(
         _ subtaskID: SubtaskID,
         title: String,
         immediately: Bool = false
-    ) {
+    ) -> Bool {
         guard let subtask = engine.subtasks[subtaskID],
               let trace = engine.traces[subtask.traceID],
               canEditSubtask(subtask)
-        else { return }
+        else { return false }
         let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard nextTitle.isEmpty == false else { return }
+        guard nextTitle.isEmpty == false else { return false }
         do {
             try commitEngineMutation(
                 undoPolicy: immediately
@@ -818,8 +834,11 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
+            resolveOperationFailure(.taskMutation)
+            return true
         } catch {
             showOperationFailure(.taskMutation, error: error)
+            return false
         }
     }
 
@@ -1192,6 +1211,7 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
+            resolveOperationFailure(.taskMutation)
             return true
         } catch {
             showOperationFailure(.taskMutation, error: error)
@@ -1246,12 +1266,15 @@ extension NoonmarkStore {
         return movingTrace.date
     }
 
+    @discardableResult
     func updateTraceText(
         traceID: DayTraceID,
         descriptionText: String,
         immediately: Bool = false
-    ) {
-        guard let trace = engine.traces[traceID] else { return }
+    ) -> Bool {
+        guard let trace = engine.traces[traceID] else {
+            return false
+        }
         do {
             try commitEngineMutation(
                 undoPolicy: immediately
@@ -1268,18 +1291,24 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
+            resolveOperationFailure(.taskMutation)
+            return true
         } catch {
             showOperationFailure(.taskMutation, error: error)
+            return false
         }
     }
 
+    @discardableResult
     func renameTraceTitle(
         traceID: DayTraceID,
         title: String,
         immediately: Bool = false,
         reportsSuccess: Bool = true
-    ) {
-        guard let trace = engine.traces[traceID] else { return }
+    ) -> Bool {
+        guard let trace = engine.traces[traceID] else {
+            return false
+        }
         let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let classificationPolicy = automaticClassificationPolicyForTitleEdit(
             chainID: trace.chainID,
@@ -1311,17 +1340,20 @@ extension NoonmarkStore {
             if reportsSuccess {
                 showToast(copy.taskTitleUpdated)
             }
+            return true
         } catch {
             showOperationFailure(.taskMutation, error: error)
+            return false
         }
     }
 
+    @discardableResult
     func renamePoolTask(
         chainID: TaskChainID,
         title: String,
         immediately: Bool = false,
         reportsSuccess: Bool = true
-    ) {
+    ) -> Bool {
         let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let classificationPolicy = automaticClassificationPolicyForTitleEdit(
             chainID: chainID,
@@ -1351,8 +1383,10 @@ extension NoonmarkStore {
             if reportsSuccess {
                 showToast(copy.taskTitleUpdated)
             }
+            return true
         } catch {
             showOperationFailure(.taskMutation, error: error)
+            return false
         }
     }
 
@@ -1369,12 +1403,15 @@ extension NoonmarkStore {
         return .taskDefinitionChanged(chainID)
     }
 
+    @discardableResult
     func updatePoolTaskText(
         chainID: TaskChainID,
         descriptionText: String,
         immediately: Bool = false
-    ) {
-        guard let definition = currentDefinition(for: chainID) else { return }
+    ) -> Bool {
+        guard let definition = currentDefinition(for: chainID) else {
+            return false
+        }
         do {
             try commitEngineMutation(
                 undoPolicy: immediately ? .preserve : .snapshot(.editTaskText),
@@ -1387,8 +1424,11 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
+            resolveOperationFailure(.taskMutation)
+            return true
         } catch {
             showOperationFailure(.taskMutation, error: error)
+            return false
         }
     }
 
@@ -1713,14 +1753,15 @@ extension NoonmarkStore {
         }
     }
 
+    @discardableResult
     func renamePoolPlannedSubtask(
         chainID: TaskChainID,
         plannedSubtaskID: PlannedSubtaskID,
         title: String,
         immediately: Bool = false
-    ) {
+    ) -> Bool {
         let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard nextTitle.isEmpty == false else { return }
+        guard nextTitle.isEmpty == false else { return false }
         do {
             try commitEngineMutation(
                 undoPolicy: immediately ? .preserve : .snapshot(.updateSubtask)
@@ -1732,8 +1773,11 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
+            resolveOperationFailure(.taskMutation)
+            return true
         } catch {
             showOperationFailure(.taskMutation, error: error)
+            return false
         }
     }
 
@@ -1756,5 +1800,436 @@ extension NoonmarkStore {
         } catch {
             showOperationFailure(.taskMutation, error: error)
         }
+    }
+
+    @discardableResult
+    func autosaveTraceText(
+        traceID: DayTraceID,
+        descriptionText: String
+    ) async -> Bool {
+        do {
+            try await commitEngineMutationInBackground(
+                publishesEngine: false
+            ) {
+                candidate,
+                moment in
+                try candidate.updateTraceText(
+                    traceID: traceID,
+                    descriptionText: descriptionText,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            resolveOperationFailure(.taskMutation)
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func autosaveTraceTitle(
+        traceID: DayTraceID,
+        title: String
+    ) async -> Bool {
+        let nextTitle = title.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard let chainID = engine.traces[traceID]?.chainID
+        else {
+            return false
+        }
+        do {
+            try await commitEngineMutationInBackground(
+                publishesEngine: false,
+                automaticClassificationPolicy: {
+                    source in
+                    Self.titleEditClassificationPolicy(
+                        in: source,
+                        chainID: chainID,
+                        nextTitle: nextTitle
+                    )
+                }
+            ) { candidate, moment in
+                try candidate.saveTaskTitleInput(
+                    chainID: chainID,
+                    title: nextTitle,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            resolveOperationFailure(.taskMutation)
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func autosavePoolTaskTitle(
+        chainID: TaskChainID,
+        title: String
+    ) async -> Bool {
+        let nextTitle = title.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        do {
+            try await commitEngineMutationInBackground(
+                publishesEngine: false,
+                automaticClassificationPolicy: {
+                    source in
+                    Self.titleEditClassificationPolicy(
+                        in: source,
+                        chainID: chainID,
+                        nextTitle: nextTitle
+                    )
+                }
+            ) { candidate, moment in
+                try candidate.saveTaskTitleInput(
+                    chainID: chainID,
+                    title: nextTitle,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            resolveOperationFailure(.taskMutation)
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func autosavePoolTaskText(
+        chainID: TaskChainID,
+        descriptionText: String
+    ) async -> Bool {
+        do {
+            try await commitEngineMutationInBackground(
+                publishesEngine: false,
+                automaticClassificationPolicy: {
+                    _ in .taskDefinitionChanged(chainID)
+                }
+            ) { candidate, moment in
+                guard let definition = Self.currentDefinition(
+                    in: candidate,
+                    chainID: chainID
+                ) else {
+                    throw NoonmarkError.notFound(
+                        "task definition"
+                    )
+                }
+                try candidate.updatePoolTask(
+                    chainID: chainID,
+                    title: definition.title,
+                    descriptionText: descriptionText,
+                    now: moment.instant
+                )
+            }
+            resolveOperationFailure(.taskMutation)
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func autosaveSubtaskTitle(
+        _ subtaskID: SubtaskID,
+        title: String
+    ) async -> Bool {
+        let nextTitle = title.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard nextTitle.isEmpty == false else {
+            return false
+        }
+        do {
+            try await commitEngineMutationInBackground(
+                publishesEngine: false
+            ) {
+                candidate,
+                moment in
+                try candidate.updateSubtaskTitle(
+                    subtaskID,
+                    title: nextTitle,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            resolveOperationFailure(.taskMutation)
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func autosavePoolPlannedSubtaskTitle(
+        chainID: TaskChainID,
+        plannedSubtaskID: PlannedSubtaskID,
+        title: String
+    ) async -> Bool {
+        let nextTitle = title.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard nextTitle.isEmpty == false else {
+            return false
+        }
+        do {
+            try await commitEngineMutationInBackground(
+                publishesEngine: false
+            ) {
+                candidate,
+                moment in
+                try candidate.updatePlannedSubtaskTitle(
+                    chainID: chainID,
+                    plannedSubtaskID: plannedSubtaskID,
+                    title: nextTitle,
+                    now: moment.instant
+                )
+            }
+            resolveOperationFailure(.taskMutation)
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func autosaveTaskCycleTitle(
+        seriesID: TaskCycleSeriesID,
+        title: String
+    ) async -> Bool {
+        await autosaveTaskCycleContent(
+            seriesID: seriesID,
+            title: title,
+            descriptionText: nil
+        )
+    }
+
+    @discardableResult
+    func autosaveTaskCycleDescription(
+        seriesID: TaskCycleSeriesID,
+        descriptionText: String
+    ) async -> Bool {
+        await autosaveTaskCycleContent(
+            seriesID: seriesID,
+            title: nil,
+            descriptionText: descriptionText
+        )
+    }
+
+    @discardableResult
+    private func autosaveTaskCycleContent(
+        seriesID: TaskCycleSeriesID,
+        title: String?,
+        descriptionText: String?
+    ) async -> Bool {
+        do {
+            try await commitEngineMutationInBackground(
+                undoPolicy: .invalidate,
+                publishesEngine: false
+            ) { candidate, moment in
+                guard let series =
+                    candidate.taskCycleSeries[seriesID]
+                else {
+                    throw NoonmarkError.notFound(
+                        "task cycle series"
+                    )
+                }
+                try candidate.updateTaskCycleTemplateContent(
+                    seriesID: seriesID,
+                    title: title ?? series.title,
+                    descriptionText:
+                    descriptionText ?? series.descriptionText,
+                    plannedSubtasks: series.plannedSubtasks,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            resolveOperationFailure(.taskMutation)
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func autosaveTaskCyclePlannedSubtaskTitle(
+        seriesID: TaskCycleSeriesID,
+        subtaskID: PlannedSubtaskID,
+        title: String
+    ) async -> Bool {
+        let normalized = title.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard normalized.isEmpty == false else {
+            return false
+        }
+        do {
+            try await commitEngineMutationInBackground(
+                undoPolicy: .invalidate,
+                publishesEngine: false
+            ) { candidate, moment in
+                guard let series =
+                    candidate.taskCycleSeries[seriesID],
+                    let index =
+                    series.plannedSubtasks.firstIndex(
+                        where: { $0.id == subtaskID }
+                    )
+                else {
+                    throw NoonmarkError.notFound(
+                        "task cycle planned subtask"
+                    )
+                }
+                var subtasks = series.plannedSubtasks
+                subtasks[index].title = normalized
+                try candidate.updateTaskCycleTemplateContent(
+                    seriesID: seriesID,
+                    title: series.title,
+                    descriptionText: series.descriptionText,
+                    plannedSubtasks: subtasks,
+                    today: moment.today,
+                    now: moment.instant
+                )
+            }
+            resolveOperationFailure(.taskMutation)
+            return true
+        } catch {
+            showOperationFailure(.taskMutation, error: error)
+            return false
+        }
+    }
+
+    func autosaveTraceNote(
+        traceID: DayTraceID,
+        noteID: TaskNoteEntryID,
+        body: String,
+        expectedUpdatedAt: Date
+    ) async -> Date? {
+        do {
+            let updatedAt =
+                try await commitEngineMutationInBackground(
+                    publishesEngine: false
+                ) {
+                candidate,
+                moment in
+                guard let current =
+                    candidate.traces[traceID]?
+                        .activeNoteEntries.first(
+                            where: { $0.id == noteID }
+                        )
+                else {
+                    throw TaskNoteMutationTargetError
+                        .unavailable
+                }
+                guard current.updatedAt == expectedUpdatedAt
+                else {
+                    throw TaskNoteMutationTargetError
+                        .changedSinceEditing
+                }
+                try candidate.editTraceNote(
+                    traceID: traceID,
+                    noteID: noteID,
+                    body: body,
+                    today: moment.today,
+                    now: moment.instant
+                )
+                return candidate.traces[traceID]?
+                    .activeNoteEntries.first(
+                        where: { $0.id == noteID }
+                    )?.updatedAt
+            }
+            resolveOperationFailure(.noteMutation)
+            return updatedAt
+        } catch {
+            showOperationFailure(.noteMutation, error: error)
+            return nil
+        }
+    }
+
+    func autosavePoolNote(
+        chainID: TaskChainID,
+        noteID: TaskNoteEntryID,
+        body: String,
+        expectedUpdatedAt: Date
+    ) async -> Date? {
+        do {
+            let updatedAt =
+                try await commitEngineMutationInBackground(
+                    publishesEngine: false
+                ) {
+                candidate,
+                moment in
+                guard let current =
+                    candidate.chains[chainID]?
+                        .activeNoteEntries.first(
+                            where: { $0.id == noteID }
+                        )
+                else {
+                    throw TaskNoteMutationTargetError
+                        .unavailable
+                }
+                guard current.updatedAt == expectedUpdatedAt
+                else {
+                    throw TaskNoteMutationTargetError
+                        .changedSinceEditing
+                }
+                try candidate.editPoolNote(
+                    chainID: chainID,
+                    noteID: noteID,
+                    body: body,
+                    now: moment.instant
+                )
+                return candidate.chains[chainID]?
+                    .activeNoteEntries.first(
+                        where: { $0.id == noteID }
+                    )?.updatedAt
+            }
+            resolveOperationFailure(.noteMutation)
+            return updatedAt
+        } catch {
+            showOperationFailure(.noteMutation, error: error)
+            return nil
+        }
+    }
+
+    private nonisolated static func currentDefinition(
+        in engine: NoonmarkEngine,
+        chainID: TaskChainID
+    ) -> TaskDefinition? {
+        engine.definitions.values
+            .filter {
+                $0.chainID == chainID
+                    && $0.supersededAt == nil
+            }
+            .max { $0.sequence < $1.sequence }
+    }
+
+    private nonisolated static func
+        titleEditClassificationPolicy(
+            in engine: NoonmarkEngine,
+            chainID: TaskChainID,
+            nextTitle: String
+        ) -> EngineMutationAutomaticClassificationPolicy
+    {
+        if nextTitle.isEmpty {
+            return .taskBecameIneligible(chainID)
+        }
+        if currentDefinition(
+            in: engine,
+            chainID: chainID
+        )?.title.isEmpty == true {
+            return .taskBecameEligible(chainID)
+        }
+        return .taskDefinitionChanged(chainID)
     }
 }

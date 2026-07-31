@@ -47,7 +47,7 @@
 
 ## 产品导览
 
-以下画面全部来自同一个真实 `NoonmarkDemo.app`：固定十天用户故事通过正式领域接口重放，再由 SQLite 与加密烛龙 sidecar 回读对账。它们不是 HTML 原型，也不是为 README 手工拼出的静态 mock。
+以下画面全部来自同一个真实 `NoonmarkDemo.app`：固定一年用户故事通过正式领域接口重放，再由 SQLite 与加密烛龙 sidecar 回读对账。它们不是 HTML 原型，也不是为 README 手工拼出的静态 mock。
 
 主工作区的八个一级界面、快速记录和四个不包含宿主机身份信息的设置界面均在下方逐一完整展示。同步与 Provider 设置可能包含本机路径或 Provider 身份，因此不生成可复用文档截图，继续由专用真实 App E2E 验证。
 
@@ -198,6 +198,7 @@ AI 的读取授权、远程发送授权和 Todo 写入授权彼此分离。接�
 - [产品范围](docs/product/phase-1-scope.md)与[功能规格](docs/product/phase-1-functional-spec.md)
 - [测试、CI 与发布基线](docs/engineering/testing-ci-release.md)
 - [交互式演示 fixture](docs/engineering/interactive-demo-fixture.md)
+- [腾讯输入法输入性能与持久化门禁](docs/engineering/tencent-ime-input-performance.md)
 - [架构决策记录](docs/adr/)
 - [README 调研依据](docs/research/github-readme-product-presentation.md)
 
@@ -229,13 +230,13 @@ open dist/Noonmark.app
 make run-app
 ```
 
-### 启动固定十天演示
+### 启动固定一年演示
 
 ```bash
 make run-demo-app
 ```
 
-该入口会重建隔离目录 `artifacts/interactive-demo/`，生成真实 SQLite、五场加密烛龙会话、机器覆盖 manifest 和 README 同源截图，验证成功后保持 Demo App 打开。
+该入口会重建隔离目录 `artifacts/interactive-demo/`，生成含 365 个连续使用日的真实 SQLite、二十场加密烛龙会话、机器覆盖 manifest 和 README 同源截图，验证成功后保持 Demo App 打开。
 
 > 开发数据警告：项目仍执行 pre-release clean cut。受控构建与测试入口会清除固定开发数据库、相关开发 App 状态和固定 iCloud 开发同步仓库，不迁移旧开发 schema。不要把开发入口指向需要保留的正式用户数据。
 
@@ -250,7 +251,9 @@ make run-demo-app
 | Integration | `make test-integration` | SQLite schema、repository、canonical 数据包、跨模块 round-trip |
 | System | `make test-system` | 完整 SwiftPM test suite |
 | Simulation | `make test-deterministic-sim` | 固定 seed、模型对账、生命周期不变量 |
-| Demo fixture | `make test-demo-fixture` | 真实 `.app`、十天故事、SQLite、加密 sidecar 与截图契约 |
+| Demo fixture | `make test-demo-fixture` | 真实 `.app`、一年故事、SQLite、加密 sidecar 与截图契约 |
+| Tencent IME contract | `make test-tencent-ime-input-contract` | 53 个输入面清单、性能阈值与回归组件静态门禁 |
+| Tencent IME real App | `make test-tencent-ime-input-matrix` + `make test-tencent-ime-termination-persistence` | 真实腾讯拼音、年度负载、回显延迟、组合态、持久化与立即退出重启回读 |
 | Real App E2E | `make test-e2e` | WindowServer 输入、原生窗口、用户交互、重启、SQLite 与日志 |
 | DMG | `make package-dmg` + `make test-dmg-install` | 签名、checksum、挂载、复制安装、启动、输入、持久化与重启 |
 | Live Provider | `make test-ai-provider-live` | 显式凭证下的真实 Provider smoke；不进入默认门禁 |

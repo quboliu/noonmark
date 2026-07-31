@@ -178,6 +178,7 @@ public final class SQLiteSyncDownloadCoordinator {
         }
         let durableWaitingCount = try syncRepository.commitDownloadedMerge(
             SQLiteSyncDownloadCommit(
+                sourceSnapshot: observedEngine.snapshot,
                 snapshot: mergeResult.snapshot,
                 observedEngineGeneration: observedEngine.generation,
                 conflicts: mergeResult.conflicts,

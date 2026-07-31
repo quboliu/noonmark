@@ -1,0 +1,284 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+configuration="${1:-debug}"
+matrix_dir="$repo_root/artifacts/e2e-tencent-ime-input-matrix"
+app_path="$repo_root/dist/NoonmarkMacAppE2E.app"
+summary_path="$matrix_dir/results.tsv"
+console_log="$matrix_dir/runtime-console.log"
+workload_mode="${NOONMARK_TENCENT_IME_WORKLOAD:-realistic}"
+surface_catalog="$repo_root/Tests/Fixtures/tencent-ime-input-surfaces.tsv"
+active_database_path=""
+
+case "$matrix_dir" in
+  "$repo_root"/artifacts/e2e-tencent-ime-input-matrix) ;;
+  *)
+    echo "unsafe Tencent IME matrix directory: $matrix_dir" >&2
+    exit 1
+    ;;
+esac
+
+surfaces=()
+while IFS=$'\t' read -r surface _; do
+  if [[ "$surface" != "surface" && -n "$surface" ]]; then
+    surfaces+=("$surface")
+  fi
+done <"$surface_catalog"
+if [[ -n "${NOONMARK_TENCENT_IME_SURFACES:-}" ]]; then
+  read -r -a surfaces <<<"$NOONMARK_TENCENT_IME_SURFACES"
+fi
+
+source scripts/runtime-evidence
+
+stop_exact_probe() {
+  local database_path="$1"
+  while IFS= read -r candidate_pid; do
+    if ps -ww -p "$candidate_pid" -o command= \
+        | grep -Fq -- "--data-url $database_path"; then
+      kill -TERM "$candidate_pid" 2>/dev/null || true
+    fi
+  done < <(pgrep -x NoonmarkMacAppE2E || true)
+}
+
+sample_exact_probe() {
+  local database_path="$1"
+  local sample_path="$2"
+  while IFS= read -r candidate_pid; do
+    if ps -ww -p "$candidate_pid" -o command= \
+        | grep -Fq -- "--data-url $database_path"; then
+      /usr/bin/sample "$candidate_pid" 2 \
+        -file "$sample_path" >/dev/null 2>&1 || true
+    fi
+  done < <(pgrep -x NoonmarkMacAppE2E || true)
+}
+
+cleanup() {
+  if [[ -n "$active_database_path" ]]; then
+    stop_exact_probe "$active_database_path"
+  fi
+  runtime_evidence_stop_console_capture \
+    >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+scripts/build-mac-app "$configuration" e2e >/dev/null
+rm -rf "$matrix_dir"
+mkdir -p "$matrix_dir"
+runtime_evidence_start_console_capture \
+  "NoonmarkMacAppE2E" \
+  "$console_log"
+case "$workload_mode" in
+  realistic)
+    workload_flag="--e2e-tencent-ime-input-realistic-workload"
+    ;;
+  empty)
+    workload_flag="--e2e-tencent-ime-input-empty-workload"
+    ;;
+  *)
+    echo "unsupported Tencent IME workload: $workload_mode" >&2
+    exit 1
+    ;;
+esac
+
+printf 'surface\tlabel\tstatus\tworkload\tsave_policy\tpaced_p50_ms\tpaced_p95_ms\tpaced_max_ms\tburst_total_ms\tpersistence_overlap_p95_ms\tpersistence_overlap_max_ms\tmarked_text\tcomposition_expected\tpremature_persist_count\tdurable_ms\tdurable_readback_probe_ms\tmutation_main_actor_blocking_ms\tzhulong_draft_persistence_total_ms\tzhulong_draft_main_actor_publish_ms\tlive_readback_match\tdurable_readback_match\treason\n' \
+  >"$summary_path"
+
+append_failure() {
+  local surface="$1"
+  local label="$2"
+  local workload="$3"
+  local reason="$4"
+  local fields=(
+    "$surface" "$label" "FAIL" "$workload" "unknown"
+    "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "$reason"
+  )
+  (
+    IFS=$'\t'
+    printf '%s\n' "${fields[*]}"
+  ) >>"$summary_path"
+}
+
+failures=0
+surface_index=0
+surface_total="${#surfaces[@]}"
+for surface in "${surfaces[@]}"; do
+  surface_index=$((surface_index + 1))
+  echo "[$surface_index/$surface_total] $surface"
+  surface_dir="$matrix_dir/$surface"
+  database_path="$surface_dir/Noonmark.sqlite"
+  active_database_path="$database_path"
+  result_path="$surface_dir/result.txt"
+  app_log="$surface_dir/app.log"
+  cleanup_result_path="$surface_dir/input-cleanup-result.txt"
+  cleanup_log="$surface_dir/input-cleanup.log"
+  mkdir -p "$surface_dir"
+
+  /usr/bin/open -W -n "$app_path" --args \
+    --e2e-windowserver-input-cleanup-result-url \
+    "$cleanup_result_path" \
+    >"$cleanup_log" 2>&1
+  if [[ ! -f "$cleanup_result_path" ]] \
+      || [[ "$(<"$cleanup_result_path")" != "ok" ]]; then
+    append_failure \
+      "$surface" "$surface" "$workload_mode" \
+      "WindowServer input cleanup failed"
+    failures=$((failures + 1))
+    active_database_path=""
+    continue
+  fi
+
+  extra_flags=(--e2e-tencent-ime-input-matrix-default)
+  case "$surface" in
+    settings-poem)
+      extra_flags+=(--e2e-expand-settings-poem)
+      ;;
+    provider-*)
+      extra_flags+=(--e2e-settings-zhulong)
+      ;;
+    zhulong-todo-diff-*)
+      extra_flags+=(
+        --e2e-zhulong-sidecar-key
+        --e2e-open-zhulong-todo-diff-editor
+      )
+      ;;
+    zhulong-*)
+      extra_flags+=(--e2e-zhulong-sidecar-key)
+      ;;
+  esac
+
+  /usr/bin/open -W -n "$app_path" --args \
+    --data-url "$database_path" \
+    --page day \
+    --e2e-fixed-instant 2026-07-24T22:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-tencent-ime-input-surface "$surface" \
+    --e2e-tencent-ime-input-surface-result-url "$result_path" \
+    "$workload_flag" \
+    "${extra_flags[@]}" \
+    >"$app_log" 2>&1 &
+  launcher_pid=$!
+
+  for _ in {1..700}; do
+    if [[ -f "$result_path" ]] \
+      || ! kill -0 "$launcher_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+
+  if [[ ! -f "$result_path" ]]; then
+    sample_exact_probe \
+      "$database_path" \
+      "$surface_dir/missing-result.sample.txt"
+    stop_exact_probe "$database_path"
+    wait "$launcher_pid" 2>/dev/null || true
+    active_database_path=""
+    append_failure \
+      "$surface" "$surface" "$workload_mode" \
+      "result was not created"
+    failures=$((failures + 1))
+    continue
+  fi
+
+  for _ in {1..100}; do
+    if ! kill -0 "$launcher_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if kill -0 "$launcher_pid" 2>/dev/null; then
+    stop_exact_probe "$database_path"
+    wait "$launcher_pid" 2>/dev/null || true
+  else
+    wait "$launcher_pid"
+  fi
+  active_database_path=""
+
+  value() {
+    local key="$1"
+    sed -n "s/^${key}=//p" "$result_path" | head -n 1
+  }
+
+  status="$(value status)"
+  label="$(value label)"
+  workload="$(value workload)"
+  save_policy="$(value save_policy)"
+  p50="$(value paced_p50_ms)"
+  p95="$(value paced_p95_ms)"
+  max="$(value paced_max_ms)"
+  burst="$(value burst_total_ms)"
+  overlap_p95="$(value persistence_overlap_p95_ms)"
+  overlap_max="$(value persistence_overlap_max_ms)"
+  marked="$(value marked_text)"
+  composition_expected="$(value composition_expected)"
+  premature="$(value premature_persist_count)"
+  durable="$(value durable_ms)"
+  durable_probe="$(value durable_readback_probe_ms)"
+  main_actor_blocking="$(
+    value mutation_main_actor_blocking_ms
+  )"
+  zhulong_draft_total="$(
+    value zhulong_draft_persistence_total_ms
+  )"
+  zhulong_draft_publish="$(
+    value zhulong_draft_main_actor_publish_ms
+  )"
+  live_match="$(value live_readback_match)"
+  durable_match="$(value durable_readback_match)"
+  reason="$(value reason)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$surface" "$label" "$status" "$workload" "$save_policy" \
+    "$p50" "$p95" "$max" "$burst" "$overlap_p95" \
+    "$overlap_max" "$marked" "$composition_expected" "$premature" \
+    "$durable" "$durable_probe" "$main_actor_blocking" \
+    "$zhulong_draft_total" "$zhulong_draft_publish" \
+    "$live_match" "$durable_match" "$reason" \
+    >>"$summary_path"
+  if [[ "$status" != "PASS" ]] \
+      || [[ "$composition_expected" == "true" \
+        && "$marked" != "true" ]]; then
+    failures=$((failures + 1))
+  fi
+done
+
+runtime_evidence_stop_console_capture
+runtime_evidence_assert_clean_logs \
+  "Tencent IME input matrix" \
+  "$console_log"
+
+actual_rows="$(
+  awk -F $'\t' 'NR > 1 { count += 1 } END { print count + 0 }' \
+    "$summary_path"
+)"
+if [[ "$actual_rows" -ne "$surface_total" ]]; then
+  echo \
+    "Tencent IME matrix expected $surface_total rows, found $actual_rows" \
+    >&2
+  exit 1
+fi
+if ! awk -F $'\t' '
+  NR == 1 { next }
+  NF != 22 { exit 1 }
+  $1 == "" || ($3 != "PASS" && $3 != "FAIL") { exit 1 }
+' "$summary_path"; then
+  echo "Tencent IME matrix result schema is incomplete" >&2
+  exit 1
+fi
+if ! diff -u \
+    <(printf '%s\n' "${surfaces[@]}") \
+    <(awk -F $'\t' 'NR > 1 { print $1 }' "$summary_path"); then
+  echo "Tencent IME matrix result surfaces are incomplete or reordered" >&2
+  exit 1
+fi
+
+column -t -s $'\t' "$summary_path"
+if (( failures > 0 )); then
+  echo "Tencent IME matrix had $failures failed surfaces" >&2
+  exit 1
+fi

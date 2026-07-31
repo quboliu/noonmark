@@ -838,10 +838,9 @@ private enum EnglishScreenshotUIVerifier {
         let requiredDateWidth = ceil(
             (expectedFullDate as NSString).size(
                 withAttributes: [
-                    .font: NSFont.monospacedDigitSystemFont(
-                        ofSize: 21,
-                        weight: .bold
-                    )
+                    .font:
+                    NoonmarkVisualMetrics
+                        .dayHeaderDateMeasurementFont
                 ]
             ).width
         )
@@ -881,7 +880,10 @@ private enum EnglishScreenshotUIVerifier {
             "header_today_action_visible=false",
             "header_today_surface_count=1",
             "header_navigation_target_count=\(actions.count)",
-            "header_navigation_minimum_target=\(minimumTargetText)"
+            "header_navigation_minimum_target=\(minimumTargetText)",
+            "header_date_width_sufficient=true",
+            "header_navigation_targets_sufficient=true",
+            "header_date_action_overlap=false"
         ]
     }
 
@@ -915,10 +917,9 @@ private enum EnglishScreenshotUIVerifier {
         let requiredDateWidth = ceil(
             (expectedFullDate as NSString).size(
                 withAttributes: [
-                    .font: NSFont.monospacedDigitSystemFont(
-                        ofSize: 21,
-                        weight: .bold
-                    )
+                    .font:
+                    NoonmarkVisualMetrics
+                        .dayHeaderDateMeasurementFont
                 ]
             ).width
         )
@@ -958,7 +959,10 @@ private enum EnglishScreenshotUIVerifier {
             "header_today_surface_count=1",
             "header_navigation_target_count=\(actions.count)",
             "header_navigation_minimum_target=\(String(format: "%.1f", minimumTarget))",
-            "header_compact_row_count=2"
+            "header_compact_row_count=2",
+            "header_date_width_sufficient=true",
+            "header_navigation_targets_sufficient=true",
+            "header_date_action_overlap=false"
         ]
     }
 

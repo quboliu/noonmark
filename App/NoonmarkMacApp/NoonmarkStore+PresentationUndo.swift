@@ -329,15 +329,15 @@ extension NoonmarkStore {
         case .day:
             return engine.getDayTodo(date: today).traces.filter { $0.status == .pending }.count
         case .pool:
-            return engine.taskPool().count
+            return engine.taskPoolCount()
         case .future:
             return visibleFuturePlanItems().count
         case .recurring:
             return engine.taskCycleSeries.count
         case .unfinished:
-            return engine.unfinishedPool().count
+            return engine.unfinishedPoolCount()
         case .completed:
-            return engine.completedTaskHierarchies().count
+            return engine.completedTaskHierarchyCount()
         case .calendar, .zhulong, .settings:
             return 0
         }

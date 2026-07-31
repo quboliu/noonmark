@@ -34,28 +34,30 @@ struct TaskDetail: View {
                 })
             })
             DetailPrimaryText {
-                EditableDetailTitleRow(definition.title, editable: canRenameTitle) {
-                    store.renameTraceTitle(
+                EditableDetailTitleRow(
+                    definition.title,
+                    ownerID:
+                    "task:\(trace.chainID.description):title",
+                    editable: canRenameTitle
+                ) {
+                    await store.autosaveTraceTitle(
                         traceID: trace.id,
-                        title: $0,
-                        immediately: true,
-                        reportsSuccess: false
+                        title: $0
                     )
                 }
             } description: {
                 DetailDescriptionBlock(
-                    text: Binding(
-                        get: { trace.descriptionText ?? "" },
-                        set: {
-                            store.updateTraceText(
-                                traceID: trace.id,
-                                descriptionText: $0,
-                                immediately: true
-                            )
-                        }
-                    ),
+                    ownerID:
+                    "trace:\(trace.id.description):description",
+                    text: trace.descriptionText ?? "",
                     placeholder: store.copy.taskDescriptionPlaceholder,
-                    editable: canEditText
+                    editable: canEditText,
+                    onPersist: {
+                        await store.autosaveTraceText(
+                            traceID: trace.id,
+                            descriptionText: $0
+                        )
+                    }
                 )
             }
 
@@ -90,8 +92,8 @@ struct TaskDetail: View {
                         InlineEmptyHint(store.copy.noSubtasks)
                     }
                     if canAddSubtask {
-                        MarkdownEditor(
-                            text: $store.detailSubtaskText,
+                        NoonmarkTransientMarkdownComposer(
+                            draft: store.detailSubtaskTextDraft,
                             placeholder: store.copy.addSubtaskPlaceholder,
                             style: .compact,
                             showsSurface: true,
@@ -284,22 +286,27 @@ struct StaticProgressBar: View {
 }
 
 struct EditableDetailText: View {
-    @Binding var text: String
+    let ownerID: String
+    let text: String
     let placeholder: String
     let editable: Bool
     let warm: Bool
     let fallback: String
+    let onPersist: @MainActor (String) async -> Bool
     var nativeAccessibilityIdentifier: String?
 
     var body: some View {
         if editable {
-            MarkdownEditor(
-                text: $text,
+            AutosavingMarkdownEditor(
+                ownerID: ownerID,
+                persistedText: text,
                 placeholder: placeholder,
                 style: .detailBody,
                 warm: warm,
                 showsSurface: false,
-                nativeAccessibilityIdentifier: nativeAccessibilityIdentifier
+                onPersist: onPersist,
+                nativeAccessibilityIdentifier:
+                nativeAccessibilityIdentifier
             )
                 .italic(warm)
                 .foregroundStyle(warm ? Theme.text2 : Theme.text1)
@@ -327,21 +334,15 @@ struct DetailNotesSection: View {
             entries: entries,
             editable: editable,
             placeholder: placeholder,
-            newNoteText: $store.detailNoteText,
+            newNoteDraft: store.detailNoteTextDraft,
             onAppend: { store.appendTraceNote(traceID: traceID) },
             onEdit: { noteID, body, expectedUpdatedAt in
-                guard store.editTraceNote(
+                await store.autosaveTraceNote(
                     traceID: traceID,
                     noteID: noteID,
                     body: body,
-                    expectedUpdatedAt: expectedUpdatedAt,
-                    immediately: true
-                ) else {
-                    return nil
-                }
-                return store.engine.traces[traceID]?.activeNoteEntries.first {
-                    $0.id == noteID
-                }?.updatedAt
+                    expectedUpdatedAt: expectedUpdatedAt
+                )
             },
             onDelete: { noteID in
                 store.deleteTraceNote(traceID: traceID, noteID: noteID)
@@ -350,12 +351,27 @@ struct DetailNotesSection: View {
     }
 }
 
-private struct TaskNoteEditSession: Equatable {
+@MainActor
+private final class TaskNoteEditSession {
     let noteID: TaskNoteEntryID
     let originalBody: String
     var baselineUpdatedAt: Date
     var persistedBody: String
     var draft: String
+
+    init(
+        noteID: TaskNoteEntryID,
+        originalBody: String,
+        baselineUpdatedAt: Date,
+        persistedBody: String,
+        draft: String
+    ) {
+        self.noteID = noteID
+        self.originalBody = originalBody
+        self.baselineUpdatedAt = baselineUpdatedAt
+        self.persistedBody = persistedBody
+        self.draft = draft
+    }
 }
 
 struct TaskNoteEntriesSection: View {
@@ -364,9 +380,14 @@ struct TaskNoteEntriesSection: View {
     let entries: [TaskNoteEntry]
     let editable: Bool
     let placeholder: String
-    @Binding var newNoteText: String
+    let newNoteDraft: NoonmarkTextInputDraft
     let onAppend: () -> Bool
-    let onEdit: (TaskNoteEntryID, String, Date) -> Date?
+    let onEdit:
+        @MainActor (
+            TaskNoteEntryID,
+            String,
+            Date
+        ) async -> Date?
     let onDelete: (TaskNoteEntryID) -> Bool
 
     @State private var editSession: TaskNoteEditSession?
@@ -381,7 +402,15 @@ struct TaskNoteEntriesSection: View {
                             editable: editable,
                             allowsActions: editSession == nil,
                             isEditing: editSession?.noteID == entry.id,
-                            editDraft: editDraftBinding(for: entry.id),
+                            persistedEditBody:
+                            editSession?.noteID == entry.id
+                                ? editSession?.persistedBody
+                                    ?? entry.body
+                                : entry.body,
+                            editDraft:
+                            editSession?.noteID == entry.id
+                                ? editSession?.draft ?? entry.body
+                                : entry.body,
                             onStartEditing: {
                                 guard editSession == nil else { return }
                                 editSession = TaskNoteEditSession(
@@ -392,13 +421,37 @@ struct TaskNoteEntriesSection: View {
                                     draft: entry.body
                                 )
                             },
-                            onCancelEditing: {
-                                cancelEditing(entry.id)
+                            onCancelEditing: { [session = editSession] in
+                                guard let session,
+                                      session.noteID == entry.id
+                                else { return }
+                                Task { @MainActor in
+                                    await cancelEditing(session)
+                                }
                             },
-                            onSaveEditing: {
-                                finishEditing(entry.id)
+                            onSaveEditing: { [session = editSession] in
+                                guard let session,
+                                      session.noteID == entry.id
+                                else { return }
+                                Task { @MainActor in
+                                    await finishEditing(session)
+                                }
                             },
-                            onDraftChange: { _ = persistEditedDraft(entry.id, draft: $0) },
+                            onDraftChange: { [session = editSession] draft in
+                                guard let session,
+                                      session.noteID == entry.id
+                                else { return }
+                                session.draft = draft
+                            },
+                            onDraftAutosave: { [session = editSession] draft in
+                                guard let session,
+                                      session.noteID == entry.id
+                                else { return false }
+                                return await persistEditedDraft(
+                                    session,
+                                    draft: draft
+                                )
+                            },
                             onDelete: {
                                 guard onDelete(entry.id) else { return }
                             }
@@ -410,8 +463,8 @@ struct TaskNoteEntriesSection: View {
                     }
 
                     if editable {
-                        MarkdownEditor(
-                            text: $newNoteText,
+                        NoonmarkTransientMarkdownComposer(
+                            draft: newNoteDraft,
                             placeholder: placeholder,
                             style: .compact,
                             warm: true,
@@ -458,66 +511,61 @@ struct TaskNoteEntriesSection: View {
         }
     }
 
-    private func editDraftBinding(for noteID: TaskNoteEntryID) -> Binding<String> {
-        Binding(
-            get: {
-                guard editSession?.noteID == noteID else { return "" }
-                return editSession?.draft ?? ""
-            },
-            set: { draft in
-                setEditedDraft(noteID, draft: draft)
-            }
-        )
-    }
-
-    private func setEditedDraft(_ noteID: TaskNoteEntryID, draft: String) {
-        guard var session = editSession, session.noteID == noteID else { return }
-        session.draft = draft
-        editSession = session
-    }
-
     @discardableResult
-    private func persistEditedDraft(_ noteID: TaskNoteEntryID, draft: String) -> Bool {
-        guard var session = editSession, session.noteID == noteID else { return false }
+    private func persistEditedDraft(
+        _ session: TaskNoteEditSession,
+        draft: String
+    ) async -> Bool {
         session.draft = draft
-        editSession = session
 
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard body.isEmpty == false else { return false }
         guard body != session.persistedBody else { return true }
-        guard let updatedAt = onEdit(noteID, body, session.baselineUpdatedAt) else {
+        guard let updatedAt = await onEdit(
+            session.noteID,
+            body,
+            session.baselineUpdatedAt
+        ) else {
             return false
         }
         session.baselineUpdatedAt = updatedAt
         session.persistedBody = body
-        editSession = session
         return true
     }
 
-    private func finishEditing(_ noteID: TaskNoteEntryID) {
-        guard let session = editSession, session.noteID == noteID else { return }
+    private func finishEditing(
+        _ session: TaskNoteEditSession
+    ) async {
+        guard editSession === session else { return }
         if session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard onDelete(noteID) else { return }
+            guard onDelete(session.noteID) else { return }
             editSession = nil
             return
         }
-        guard persistEditedDraft(noteID, draft: session.draft) else { return }
+        guard await persistEditedDraft(
+            session,
+            draft: session.draft
+        ) else { return }
+        guard editSession === session else { return }
         editSession = nil
     }
 
-    private func cancelEditing(_ noteID: TaskNoteEntryID) {
-        guard let session = editSession, session.noteID == noteID else { return }
+    private func cancelEditing(
+        _ session: TaskNoteEditSession
+    ) async {
+        guard editSession === session else { return }
         guard session.persistedBody != session.originalBody else {
             editSession = nil
             return
         }
-        guard onEdit(
-            noteID,
+        guard await onEdit(
+            session.noteID,
             session.originalBody,
             session.baselineUpdatedAt
         ) != nil else {
             return
         }
+        guard editSession === session else { return }
         editSession = nil
     }
 }
@@ -529,11 +577,14 @@ struct DetailNoteEntryRow: View {
     let editable: Bool
     let allowsActions: Bool
     let isEditing: Bool
-    @Binding var editDraft: String
+    let persistedEditBody: String
+    let editDraft: String
     let onStartEditing: () -> Void
     let onCancelEditing: () -> Void
     let onSaveEditing: () -> Void
     let onDraftChange: (String) -> Void
+    let onDraftAutosave:
+        @MainActor (String) async -> Bool
     let onDelete: () -> Void
 
     var body: some View {
@@ -556,15 +607,20 @@ struct DetailNoteEntryRow: View {
             }
 
             if isEditing {
-                MarkdownEditor(
-                    text: $editDraft,
+                AutosavingMarkdownEditor(
+                    ownerID:
+                    "note:\(entry.id.description)",
+                    persistedText: persistedEditBody,
                     placeholder: store.copy.editNotePlaceholder,
                     style: .body,
                     warm: true,
                     showsSurface: false,
                     height: 58,
-                    onTextChange: onDraftChange,
-                    nativeAccessibilityIdentifier: "detail.note.editor.\(entry.id.description)",
+                    persistencePolicy: .nonemptyTrimmed,
+                    onDraftChange: onDraftChange,
+                    onPersist: onDraftAutosave,
+                    nativeAccessibilityIdentifier:
+                    "detail.note.editor.\(entry.id.description)",
                     focusesOnAppear: true
                 )
                     .foregroundStyle(Theme.text1)

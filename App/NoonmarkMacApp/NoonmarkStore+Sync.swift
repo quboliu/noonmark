@@ -67,6 +67,30 @@ extension NoonmarkStore {
         }
     }
 
+    @discardableResult
+    func autosaveSettingsPoemText(
+        _ text: String
+    ) async -> Bool {
+        do {
+            try await commitEngineMutationInBackground(
+                undoPolicy: .invalidate,
+                publishesEngine: false
+            ) { candidate, _ in
+                var policy = candidate.preferences
+                    .settingsPoemDisplayPolicy
+                policy.text = text
+                candidate.updateSettingsPoemDisplayPolicy(
+                    policy
+                )
+            }
+            resolveOperationFailure(.preferences)
+            return true
+        } catch {
+            showOperationFailure(.preferences, error: error)
+            return false
+        }
+    }
+
     func resetSettingsPoemText() {
         var policy = engine.preferences.settingsPoemDisplayPolicy
         policy.text = SettingsPoemDisplayPolicy.defaultText

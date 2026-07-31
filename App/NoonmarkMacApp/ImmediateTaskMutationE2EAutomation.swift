@@ -780,7 +780,7 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
         try input.postKey(keyCode: 51)
         try await waitUntil("Cmd+A Delete could not clear the task title") {
             titleEditor.string.isEmpty
-                && readback() == ""
+                && readback() == restoredTitle
                 && AppViewTreeE2E.view(
                     identifier: "detail.title.placeholder"
                 ).flatMap(AppViewTreeE2E.verificationText) == placeholder
@@ -925,13 +925,24 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                 as? NSTextView
             return editor?.string == edit.initialText
         }
-        guard let editor else {
+        guard editor != nil else {
             throw Failure.failed("native description editor disappeared before editing")
         }
 
         try await click(identifier: "detail.description.input", modifiers: [], input: input)
         try await waitUntil("native description editor did not become first responder") {
-            editor.window?.firstResponder === editor
+            guard let currentEditor = AppViewTreeE2E.view(
+                identifier: "detail.description.input"
+            ) as? NSTextView else {
+                return false
+            }
+            editor = currentEditor
+            return currentEditor.window?.firstResponder === currentEditor
+        }
+        guard let editor else {
+            throw Failure.failed(
+                "native description editor disappeared after focus"
+            )
         }
         try input.postKey(keyCode: 0, modifiers: .command)
         try input.typeUnicode(edit.savedText)
@@ -990,12 +1001,17 @@ struct ImmediateTaskMutationE2EAutomation: LaunchAutomationRunnable {
                 identifier: "detail.description.input"
             ) as? NSTextView,
                 currentEditor.string.isEmpty,
-                readback() == nil
+                readback() == initialText
             else {
                 throw Failure.failed(
-                    "Control-A and Delete did not keep the task description empty"
+                    "empty description draft leaked through the debounce boundary"
                 )
             }
+        }
+        try await waitUntil(
+            "empty description draft did not persist after debounce"
+        ) {
+            editor.string.isEmpty && readback() == nil
         }
     }
 

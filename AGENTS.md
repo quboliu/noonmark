@@ -51,8 +51,11 @@
   - `make build`
   - `make build-app`
   - `make run-app`
-  - `make run-demo-app`：重建并打开固定十天中段用户状态，作为功能迭代的默认交互验收入口。
+  - `make run-demo-app`：重建并打开固定一年中段用户状态，作为功能迭代的默认交互验收入口。
   - `make test-demo-fixture`：以真实 `.app`、SQLite 和加密烛龙 sidecar 验证演示基线。
+  - `make test-tencent-ime-input-contract`：验证 53 个输入面、性能阈值与测试资产没有漂移。
+  - `make test-tencent-ime-input-matrix`：在一年负载下以真实腾讯拼音验证全部输入面。
+  - `make test-tencent-ime-termination-persistence`：验证自动保存输入后立即退出、重启与故障重试。
   - `make test`
   - `make lint`
   - `make format-check`
@@ -138,8 +141,8 @@ Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作
 ## 交互式演示基线（强制）
 
 - 功能快速迭代期间，每轮交互验收统一使用 `make run-demo-app`，不得再把新用户空库、一次性手工灌数或 `--ephemeral` 截图 fixture 当成用户体验入口。
-- 演示基线必须由 `NoonmarkDemoSupport` 通过真实领域接口重放，并覆盖连续十天的中段用户状态。真实 `.app` 安装后必须再以 SQLite 与加密烛龙 sidecar 回读对账，失败时不得打开成“可体验”状态。
-- 新增或改变用户可见功能时，必须同步评估演示覆盖契约。若该功能需要状态或历史才能体验，应在同一改动中更新十天用户故事、机器可检查报告和 `docs/engineering/interactive-demo-fixture.md` 覆盖表。
+- 演示基线必须由 `NoonmarkDemoSupport` 通过真实领域接口重放，并覆盖连续一年的中段用户状态。真实 `.app` 安装后必须再以 SQLite 与加密烛龙 sidecar 回读对账，失败时不得打开成“可体验”状态。
+- 新增或改变用户可见功能时，必须同步评估演示覆盖契约。若该功能需要状态或历史才能体验，应在同一改动中更新一年用户故事、机器可检查报告和 `docs/engineering/interactive-demo-fixture.md` 覆盖表；普通用户能力必须纳入跨季度重复使用计数。
 - 演示数据根固定隔离于仓库 `artifacts/interactive-demo/`，每次启动整体重建；不得写入或复用默认用户数据库。演示 bundle 只复用内部 E2E 参数能力，不得放宽生产 bundle 的参数边界。
 
 ## 测试三铁律

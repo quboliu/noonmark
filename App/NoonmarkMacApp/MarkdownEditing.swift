@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import NoonmarkMacRuntime
 import SwiftUI
 
 enum MarkdownEditorStyle {
@@ -87,6 +88,11 @@ enum MarkdownEditorStyle {
     }
 }
 
+struct NativeMarkdownEditorSnapshot: Equatable {
+    let text: String
+    let isComposing: Bool
+}
+
 struct MarkdownEditor: View {
     @Binding var text: String
     let placeholder: String
@@ -95,21 +101,32 @@ struct MarkdownEditor: View {
     var showsSurface = true
     var height: CGFloat?
     var commitsOnReturn = false
+    var defersMarkedTextBindingUpdates = false
     var onCommit: (() -> Void)?
     var onEndEditing: (() -> Void)?
-    var onTextChange: ((String) -> Void)?
+    var onNativeSnapshot:
+        ((NativeMarkdownEditorSnapshot) -> Void)?
     var nativeAccessibilityIdentifier: String?
     var focusesOnAppear = false
     var focusRequest = 0
+    @State private var nativeTextIsEmpty: Bool?
 
     var body: some View {
         let editor = MarkdownTextViewRepresentable(
             text: $text,
             style: style,
             commitsOnReturn: commitsOnReturn,
+            defersMarkedTextBindingUpdates:
+            defersMarkedTextBindingUpdates,
             onCommit: onCommit,
             onEndEditing: onEndEditing,
-            onTextChange: onTextChange,
+            onNativeSnapshot: { snapshot in
+                let isEmpty = snapshot.text.isEmpty
+                if nativeTextIsEmpty != isEmpty {
+                    nativeTextIsEmpty = isEmpty
+                }
+                onNativeSnapshot?(snapshot)
+            },
             accessibilityLabel: placeholder,
             nativeAccessibilityIdentifier: nativeAccessibilityIdentifier,
             explicitHeight: height,
@@ -128,7 +145,7 @@ struct MarkdownEditor: View {
         }
             .background(showsSurface ? (warm ? Theme.noteBackground : Theme.panel2) : Color.clear)
             .overlay(alignment: .topLeading) {
-                if text.isEmpty {
+                if nativeTextIsEmpty ?? text.isEmpty {
                     Text(placeholder)
                         .font(style.swiftUIFont)
                         .foregroundStyle(Theme.placeholderText)
@@ -149,6 +166,12 @@ struct MarkdownEditor: View {
                 }
             }
             .accessibilityLabel(placeholder)
+            .onChange(of: text) { _, newValue in
+                let isEmpty = newValue.isEmpty
+                if nativeTextIsEmpty != isEmpty {
+                    nativeTextIsEmpty = isEmpty
+                }
+            }
     }
 }
 
@@ -156,9 +179,11 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     @Binding var text: String
     let style: MarkdownEditorStyle
     let commitsOnReturn: Bool
+    let defersMarkedTextBindingUpdates: Bool
     let onCommit: (() -> Void)?
     let onEndEditing: (() -> Void)?
-    let onTextChange: ((String) -> Void)?
+    let onNativeSnapshot:
+        ((NativeMarkdownEditorSnapshot) -> Void)?
     let accessibilityLabel: String
     let nativeAccessibilityIdentifier: String?
     let explicitHeight: CGFloat?
@@ -168,8 +193,10 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: $text,
+            defersMarkedTextBindingUpdates:
+            defersMarkedTextBindingUpdates,
             onEndEditing: onEndEditing,
-            onTextChange: onTextChange,
+            onNativeSnapshot: onNativeSnapshot,
             focusRequest: focusRequest
         )
     }
@@ -185,6 +212,12 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         let textView = MarkdownNSTextView()
         textView.delegate = context.coordinator
         textView.string = text
+        context.coordinator.recordExternalText(text)
+        textView.compositionStateDidChange = {
+            [weak coordinator = context.coordinator, weak textView] in
+            guard let textView else { return }
+            coordinator?.captureNativeSnapshot(from: textView)
+        }
         textView.font = style.font
         textView.textColor = NSColor.labelColor
         textView.drawsBackground = false
@@ -212,7 +245,8 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             )
         }
         context.coordinator.onEndEditing = onEndEditing
-        context.coordinator.onTextChange = onTextChange
+        context.coordinator.onNativeSnapshot =
+            onNativeSnapshot
         scrollView.documentView = textView
         scrollView.requestInitialFocusIfPossible()
         return scrollView
@@ -229,6 +263,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             textView.setSelectedRange(
                 NSRange(location: min(selection.location, text.utf16.count), length: 0)
             )
+            context.coordinator.recordExternalText(text)
         }
         textView.font = style.font
         textView.textContainerInset = style.textContainerInset
@@ -246,8 +281,16 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             )
         }
         context.coordinator.text = $text
+        context.coordinator.defersMarkedTextBindingUpdates =
+            defersMarkedTextBindingUpdates
         context.coordinator.onEndEditing = onEndEditing
-        context.coordinator.onTextChange = onTextChange
+        context.coordinator.onNativeSnapshot =
+            onNativeSnapshot
+        textView.compositionStateDidChange = {
+            [weak coordinator = context.coordinator, weak textView] in
+            guard let textView else { return }
+            coordinator?.captureNativeSnapshot(from: textView)
+        }
         if let editorScrollView = scrollView as? MarkdownEditorScrollView {
             editorScrollView.requestsInitialFocus = focusesOnAppear
             editorScrollView.requestInitialFocusIfPossible()
@@ -259,6 +302,26 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
                 scrollView.window?.makeFirstResponder(textView)
             }
         }
+    }
+
+    static func dismantleNSView(
+        _ scrollView: NSScrollView,
+        coordinator: Coordinator
+    ) {
+        guard let textView =
+            scrollView.documentView as? MarkdownNSTextView
+        else {
+            coordinator.onEndEditing?()
+            return
+        }
+        if textView.hasMarkedText() {
+            textView.unmarkText()
+        }
+        coordinator.captureNativeSnapshot(from: textView)
+        coordinator.onEndEditing?()
+        textView.delegate = nil
+        textView.compositionStateDidChange = nil
+        textView.commitAction = nil
     }
 
     func sizeThatFits(
@@ -302,34 +365,88 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         )
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
+        var defersMarkedTextBindingUpdates: Bool
         var onEndEditing: (() -> Void)?
-        var onTextChange: ((String) -> Void)?
+        var onNativeSnapshot:
+            ((NativeMarkdownEditorSnapshot) -> Void)?
         var focusRequest: Int
+        private var lastNativeSnapshot:
+            NativeMarkdownEditorSnapshot
 
         init(
             text: Binding<String>,
+            defersMarkedTextBindingUpdates: Bool,
             onEndEditing: (() -> Void)?,
-            onTextChange: ((String) -> Void)?,
+            onNativeSnapshot:
+            ((NativeMarkdownEditorSnapshot) -> Void)?,
             focusRequest: Int
         ) {
             self.text = text
+            self.defersMarkedTextBindingUpdates =
+                defersMarkedTextBindingUpdates
             self.onEndEditing = onEndEditing
-            self.onTextChange = onTextChange
+            self.onNativeSnapshot = onNativeSnapshot
             self.focusRequest = focusRequest
+            lastNativeSnapshot = NativeMarkdownEditorSnapshot(
+                text: text.wrappedValue,
+                isComposing: false
+            )
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
-            let nextText = textView.string
-            guard text.wrappedValue != nextText else { return }
-            text.wrappedValue = nextText
-            onTextChange?(nextText)
+            captureNativeSnapshot(from: textView)
         }
 
         func textDidEndEditing(_ notification: Notification) {
             onEndEditing?()
+        }
+
+        func recordExternalText(_ nextText: String) {
+            lastNativeSnapshot = NativeMarkdownEditorSnapshot(
+                text: nextText,
+                isComposing: false
+            )
+        }
+
+        func captureNativeSnapshot(
+            from textView: NSTextView
+        ) {
+            let startedAt =
+                ProcessInfo.processInfo.systemUptime
+            defer {
+                (textView as? MarkdownNSTextView)?
+                    .recordNativeSnapshotCallback(
+                        milliseconds:
+                        (
+                            ProcessInfo.processInfo
+                                .systemUptime
+                                - startedAt
+                        ) * 1000
+                    )
+            }
+            let snapshot = NativeMarkdownEditorSnapshot(
+                text: textView.string,
+                isComposing: textView.hasMarkedText()
+            )
+            guard snapshot != lastNativeSnapshot else {
+                return
+            }
+            lastNativeSnapshot = snapshot
+            if IMETextBindingPublicationPolicy
+                .shouldPublishToSwiftUI(
+                    isComposing: snapshot.isComposing,
+                    defersMarkedTextUpdates:
+                    defersMarkedTextBindingUpdates
+                ),
+                text.wrappedValue != snapshot.text
+            {
+                text.wrappedValue = snapshot.text
+            }
+            onNativeSnapshot?(snapshot)
         }
     }
 }
@@ -365,16 +482,189 @@ private final class MarkdownEditorScrollView: NSScrollView {
     }
 }
 
+struct MarkdownEditorKeyDownTiming {
+    let enteredAt: TimeInterval
+    let markedTextQueryMilliseconds: Double
+    let preSuperMilliseconds: Double
+    let superKeyDownMilliseconds: Double
+    let setMarkedTextMilliseconds: Double
+    let insertTextMilliseconds: Double
+    let didChangeTextMilliseconds: Double
+    let compositionCallbackMilliseconds: Double
+    let nativeSnapshotCallbackMilliseconds: Double
+}
+
+@MainActor
+enum MarkdownEditorKeyDownTimingProbe {
+    static var observer:
+        ((MarkdownEditorKeyDownTiming) -> Void)?
+
+    static func record(
+        _ timing: MarkdownEditorKeyDownTiming
+    ) {
+        observer?(timing)
+    }
+}
+
 private final class MarkdownNSTextView: NSTextView {
     var commitsOnReturn = false
     var commitAction: (() -> Void)?
+    var compositionStateDidChange: (() -> Void)?
+
+    private var reportedCompositionIsActive = false
+    private var recordsKeyDownTiming = false
+    private var setMarkedTextMilliseconds = 0.0
+    private var insertTextMilliseconds = 0.0
+    private var didChangeTextMilliseconds = 0.0
+    private var compositionCallbackMilliseconds = 0.0
+    private var nativeSnapshotCallbackMilliseconds =
+        0.0
+
+    override func setMarkedText(
+        _ string: Any,
+        selectedRange: NSRange,
+        replacementRange: NSRange
+    ) {
+        let startedAt =
+            ProcessInfo.processInfo.systemUptime
+        super.setMarkedText(
+            string,
+            selectedRange: selectedRange,
+            replacementRange: replacementRange
+        )
+        if recordsKeyDownTiming {
+            setMarkedTextMilliseconds +=
+                (
+                    ProcessInfo.processInfo.systemUptime
+                        - startedAt
+                ) * 1000
+        }
+        let callbackStartedAt =
+            ProcessInfo.processInfo.systemUptime
+        reportCompositionStateIfNeeded()
+        if recordsKeyDownTiming {
+            compositionCallbackMilliseconds +=
+                (
+                    ProcessInfo.processInfo.systemUptime
+                        - callbackStartedAt
+                ) * 1000
+        }
+    }
+
+    override func insertText(
+        _ insertString: Any,
+        replacementRange: NSRange
+    ) {
+        let startedAt =
+            ProcessInfo.processInfo.systemUptime
+        super.insertText(
+            insertString,
+            replacementRange: replacementRange
+        )
+        if recordsKeyDownTiming {
+            insertTextMilliseconds +=
+                (
+                    ProcessInfo.processInfo.systemUptime
+                        - startedAt
+                ) * 1000
+        }
+        let callbackStartedAt =
+            ProcessInfo.processInfo.systemUptime
+        reportCompositionStateIfNeeded()
+        if recordsKeyDownTiming {
+            compositionCallbackMilliseconds +=
+                (
+                    ProcessInfo.processInfo.systemUptime
+                        - callbackStartedAt
+                ) * 1000
+        }
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        reportCompositionStateIfNeeded()
+    }
+
+    override func didChangeText() {
+        let startedAt =
+            ProcessInfo.processInfo.systemUptime
+        super.didChangeText()
+        if recordsKeyDownTiming {
+            didChangeTextMilliseconds +=
+                (
+                    ProcessInfo.processInfo.systemUptime
+                        - startedAt
+                ) * 1000
+        }
+    }
 
     override func keyDown(with event: NSEvent) {
+        recordsKeyDownTiming = true
+        setMarkedTextMilliseconds = 0
+        insertTextMilliseconds = 0
+        didChangeTextMilliseconds = 0
+        compositionCallbackMilliseconds = 0
+        nativeSnapshotCallbackMilliseconds = 0
+        let enteredAt =
+            ProcessInfo.processInfo.systemUptime
+        let markedTextQueryStartedAt =
+            ProcessInfo.processInfo.systemUptime
+        let isComposing = hasMarkedText()
+        let markedTextQueryFinishedAt =
+            ProcessInfo.processInfo.systemUptime
+        var superStartedAt: TimeInterval?
+        var superFinishedAt: TimeInterval?
+        defer {
+            let finishedAt =
+                ProcessInfo.processInfo.systemUptime
+            MarkdownEditorKeyDownTimingProbe.record(
+                MarkdownEditorKeyDownTiming(
+                    enteredAt: enteredAt,
+                    markedTextQueryMilliseconds:
+                    (
+                        markedTextQueryFinishedAt
+                            - markedTextQueryStartedAt
+                    ) * 1000,
+                    preSuperMilliseconds:
+                    (
+                        (
+                            superStartedAt
+                                ?? finishedAt
+                        )
+                            - markedTextQueryFinishedAt
+                    ) * 1000,
+                    superKeyDownMilliseconds:
+                    superStartedAt.map {
+                        (
+                            (
+                                superFinishedAt
+                                    ?? finishedAt
+                            ) - $0
+                        ) * 1000
+                    } ?? 0,
+                    setMarkedTextMilliseconds:
+                    setMarkedTextMilliseconds,
+                    insertTextMilliseconds:
+                    insertTextMilliseconds,
+                    didChangeTextMilliseconds:
+                    didChangeTextMilliseconds,
+                    compositionCallbackMilliseconds:
+                    compositionCallbackMilliseconds,
+                    nativeSnapshotCallbackMilliseconds:
+                    nativeSnapshotCallbackMilliseconds
+                )
+            )
+            recordsKeyDownTiming = false
+        }
         // Give the active input method the untouched event stream. Reading
         // command characters before AppKit interprets a marked-text event can
         // prevent third-party IMEs from committing their selected candidate.
-        if hasMarkedText() {
+        if isComposing {
+            superStartedAt =
+                ProcessInfo.processInfo.systemUptime
             super.keyDown(with: event)
+            superFinishedAt =
+                ProcessInfo.processInfo.systemUptime
             return
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -384,7 +674,30 @@ private final class MarkdownNSTextView: NSTextView {
         if handleReturn(event, modifiers: modifiers) { return }
         if handleFormattingShortcut(key: key, modifiers: modifiers) { return }
         if handleTab(event, modifiers: modifiers) { return }
+        superStartedAt =
+            ProcessInfo.processInfo.systemUptime
         super.keyDown(with: event)
+        superFinishedAt =
+            ProcessInfo.processInfo.systemUptime
+    }
+
+    func recordNativeSnapshotCallback(
+        milliseconds: Double
+    ) {
+        guard recordsKeyDownTiming else {
+            return
+        }
+        nativeSnapshotCallbackMilliseconds +=
+            milliseconds
+    }
+
+    private func reportCompositionStateIfNeeded() {
+        let isActive = hasMarkedText()
+        guard isActive != reportedCompositionIsActive else {
+            return
+        }
+        reportedCompositionIsActive = isActive
+        compositionStateDidChange?()
     }
 
     private func handleSelectAll(

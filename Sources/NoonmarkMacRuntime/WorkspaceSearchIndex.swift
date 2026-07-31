@@ -57,6 +57,12 @@ public struct WorkspaceSearchIndex: Sendable {
 
     public init(engine: NoonmarkEngine) {
         var entries: [IndexedEntry] = []
+        let subtasksByTraceID = Dictionary(
+            grouping: engine.subtasks.values.filter(\.isUserPresentable),
+            by: \.traceID
+        ).mapValues { subtasks in
+            subtasks.sorted { $0.position < $1.position }
+        }
 
         for task in engine.taskPool() {
             let contextParts: [String?] = [
@@ -101,11 +107,8 @@ public struct WorkspaceSearchIndex: Sendable {
                     continue
                 }
                 guard let definition = engine.definitions[trace.definitionID] else { continue }
-                let actualSubtasks = engine.subtasks.values
-                    .filter {
-                        $0.traceID == trace.id && $0.isUserPresentable
-                    }
-                    .sorted { $0.position < $1.position }
+                let actualSubtasks =
+                    subtasksByTraceID[trace.id] ?? []
                 let contextParts: [String?] = [
                     trace.descriptionText,
                     trace.activeNoteEntries.map(\.body).joined(separator: " "),

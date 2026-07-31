@@ -1,11 +1,49 @@
 @testable import NoonmarkCore
 @testable import NoonmarkStorage
+@testable import NoonmarkSync
 import XCTest
 
 final class SnapshotUndoPersistenceTests: XCTestCase {
     private let today = LocalDate("2026-07-16")
     private let tomorrow = LocalDate("2026-07-17")
     private let base = Date(timeIntervalSinceReferenceDate: 910_000)
+
+    func testChangedFromHintCannotOutrunAuthoritativeSQLiteSnapshot() throws {
+        let databaseURL = temporaryDatabaseURL()
+        let repository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        try repository.save(NoonmarkEngine().snapshot())
+
+        let inMemory = NoonmarkEngine()
+        let chainID = try inMemory.createPoolTask(
+            title: "SQLite 权威差量基线",
+            now: base
+        )
+        let aheadOfSQLite = inMemory.snapshot()
+        try repository.save(
+            aheadOfSQLite,
+            changedFrom: aheadOfSQLite,
+            recordingChangesFor:
+            SyncDeviceID("snapshot-baseline-test"),
+            changedAt: base.addingTimeInterval(1)
+        )
+
+        let restarted = try repository.load()
+        XCTAssertEqual(
+            restarted.snapshot(),
+            aheadOfSQLite
+        )
+        XCTAssertEqual(
+            restarted.taskPool().map(\.chain.id),
+            [chainID]
+        )
+        XCTAssertFalse(
+            try SQLiteSyncRepository(
+                databaseURL: databaseURL
+            ).journalEntries().isEmpty
+        )
+    }
 
     func testNewTaskUndoSurvivesSQLiteRestartWithoutResurrection() throws {
         let databaseURL = temporaryDatabaseURL()

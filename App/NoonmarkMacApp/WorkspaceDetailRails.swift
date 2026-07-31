@@ -842,6 +842,8 @@ struct DetailRail: View {
     @EnvironmentObject private var store: NoonmarkStore
     @ObservedObject var zhulongWorkspace: ZhulongWorkspaceStore
     @State private var railSearchQuery = ""
+    @State private var railSearchIndex:
+        WorkspaceSearchIndex?
 
     private var trimmedRailSearchQuery: String {
         railSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -849,8 +851,8 @@ struct DetailRail: View {
 
     private var railSearchResults: [WorkspaceSearchResult] {
         guard trimmedRailSearchQuery.isEmpty == false else { return [] }
-        return WorkspaceSearchIndex(engine: store.engine)
-            .search(trimmedRailSearchQuery, limit: 6)
+        return railSearchIndex?
+            .search(trimmedRailSearchQuery, limit: 6) ?? []
     }
 
     var body: some View {
@@ -898,6 +900,11 @@ struct DetailRail: View {
                 .shadow(color: Theme.shadowRaised, radius: 6, y: 3)
                 .padding(.top, 40)
             }
+        }
+        .task(id: store.engineRevision) {
+            railSearchIndex = WorkspaceSearchIndex(
+                engine: store.engine
+            )
         }
     }
 

@@ -29,6 +29,7 @@ public struct SyncPendingDownloadRecord: Equatable, Sendable {
 }
 
 struct SQLiteSyncDownloadCommit {
+    let sourceSnapshot: NoonmarkSnapshot
     let snapshot: NoonmarkSnapshot
     let observedEngineGeneration: SQLiteEngineSnapshotGeneration
     let conflicts: [SyncConflict]
@@ -42,9 +43,11 @@ struct SQLiteSyncDownloadCommit {
 
 public final class SQLiteSyncRepository {
     private let databaseURL: URL
+    private let storeRuntime: SQLiteStoreRuntime
 
     public init(databaseURL: URL) {
         self.databaseURL = databaseURL
+        storeRuntime = SQLiteStoreRuntime.shared(for: databaseURL)
     }
 
     public func saveDeviceIdentity(_ identity: SyncDeviceIdentity) throws {
@@ -376,7 +379,11 @@ public final class SQLiteSyncRepository {
                 observed: commit.observedEngineGeneration,
                 in: database
             )
-            try engineRepository.persistValidatedSnapshot(commit.snapshot, into: database)
+            try engineRepository.persistValidatedSnapshot(
+                commit.snapshot,
+                changedFrom: commit.sourceSnapshot,
+                into: database
+            )
             for prepared in preparedConflicts {
                 try saveConflict(
                     prepared.conflict,
@@ -535,18 +542,12 @@ private extension SQLiteSyncRepository {
         let dependency: SyncRecordDependency
     }
 
-    static func makeDateFormatter() -> ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }
-
     static func string(from date: Date) -> String {
-        makeDateFormatter().string(from: date)
+        SQLiteISO8601DateCodec.string(from: date)
     }
 
     static func date(from string: String) -> Date? {
-        makeDateFormatter().date(from: string)
+        SQLiteISO8601DateCodec.date(from: string)
     }
 
     func openDatabase() throws -> Database? {
@@ -565,7 +566,7 @@ private extension SQLiteSyncRepository {
     }
 
     func applySchema(on database: Database?) throws {
-        try SQLiteSchema.installOrValidate(on: database)
+        try storeRuntime.prepare(database)
     }
 
     func validatePendingDownloadReconciliation(

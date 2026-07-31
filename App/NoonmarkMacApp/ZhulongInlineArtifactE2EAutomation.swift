@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NoonmarkAI
 import NoonmarkStorage
@@ -155,7 +156,7 @@ struct ZhulongInlineArtifactE2EAutomation:
                 identifier:
                 "zhulong-inline-task-draft-submit-anchor-\(artifactIdentifier)"
             ),
-            let submitButton = AppViewTreeE2E.button(
+            let submitTarget = AppViewTreeE2E.buttonInteractionTarget(
                 overlapping: submitAnchor
             )
         else {
@@ -171,18 +172,85 @@ struct ZhulongInlineArtifactE2EAutomation:
             writePreviewReady()
             return
         }
-        guard AppViewTreeE2E.click(submitButton) else {
-            retry {
-                waitForDraft(
-                    on: store,
-                    remainingAttempts: remainingAttempts - 1
-                )
+        let submitWindow = submitTarget.window
+        Task { @MainActor [self] in
+            await submitDraftThroughWindowServer(
+                on: store,
+                draftID: draft.id,
+                artifactIdentifier: artifactIdentifier,
+                submitWindow: submitWindow
+            )
+        }
+    }
+
+    @MainActor
+    private func submitDraftThroughWindowServer(
+        on store: NoonmarkStore,
+        draftID: ZhulongTodoDiffID,
+        artifactIdentifier: String,
+        submitWindow: NSWindow
+    ) async {
+        let submitIdentifier =
+            "zhulong-inline-task-draft-submit-anchor-\(artifactIdentifier)"
+        let expectedLabel = AppCopy(
+            language: store.engine.preferences.language
+        ).commitZhulongTaskDraft
+        let activationDeadline = Date().addingTimeInterval(10)
+        while Date() < activationDeadline {
+            if AppViewTreeE2E.activateWindow(
+                containing: submitIdentifier
+            ), NSApp.isActive, NSApp.keyWindow === submitWindow {
+                break
             }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard NSApp.isActive, NSApp.keyWindow === submitWindow else {
+            write("failed: inline task draft window did not become key")
             return
         }
+
+        do {
+            let input = try WindowServerInputDriver()
+            let resolveTarget = {
+                () throws -> WindowServerInputDriver.PointerCoordinate in
+                guard NSApp.isActive,
+                      NSApp.keyWindow === submitWindow,
+                      let anchor = AppViewTreeE2E.view(
+                          identifier: submitIdentifier,
+                          in: submitWindow
+                      ),
+                      AppViewTreeE2E.verificationText(for: anchor)
+                      == expectedLabel,
+                      let target = AppViewTreeE2E.buttonInteractionTarget(
+                          overlapping: anchor
+                      )
+                else {
+                    throw InlineArtifactInteractionFailure(
+                        message:
+                        "inline task draft submit target changed before mouseDown"
+                    )
+                }
+                return try input.pointerCoordinate(
+                    windowPoint: target.windowPoint,
+                    in: submitWindow
+                )
+            }
+            try await input.postClick(
+                at: try resolveTarget(),
+                modifiers: [],
+                resolveTarget: resolveTarget
+            )
+        } catch {
+            write(
+                "failed: inline task draft real click failed: "
+                    + error.localizedDescription
+            )
+            return
+        }
+
         waitForReceipt(
             on: store,
-            draftID: draft.id,
+            draftID: draftID,
             artifactIdentifier: artifactIdentifier,
             remainingAttempts: 80
         )
@@ -196,7 +264,29 @@ struct ZhulongInlineArtifactE2EAutomation:
         remainingAttempts: Int
     ) {
         guard remainingAttempts > 0 else {
-            write("failed: inline task draft was not applied")
+            let session = store.zhulongWorkspace.selectedSession
+            let currentDraftID = session?.currentTodoDiff?
+                .id.rawValue.uuidString ?? "none"
+            let latestDraftID = session?.latestTodoDiff?
+                .id.rawValue.uuidString ?? "none"
+            let receiptDraftIDs = session?.todoApplyReceipts.map {
+                $0.draftID.rawValue.uuidString
+            } ?? []
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            write(
+                [
+                    "failed: inline task draft was not applied",
+                    "expectedDraft=\(draftID.rawValue.uuidString)",
+                    "currentDraft=\(currentDraftID)",
+                    "latestDraft=\(latestDraftID)",
+                    "receipts=\(receiptDraftIDs)",
+                    "definitions=\(store.engine.definitions.count)",
+                    "phase=\(session?.phase.rawValue ?? "none")",
+                    "submitVisible=\(AppViewTreeE2E.view(identifier: "zhulong-inline-task-draft-submit-anchor-\(artifactIdentifier)") != nil)",
+                    "currentActionVisible=\(AppViewTreeE2E.view(identifier: "zhulong-stream-conversation-current-action") != nil)",
+                    "status=\(String(describing: store.zhulongWorkspace.status))"
+                ].joined(separator: "; ")
+            )
             return
         }
         let session = store.zhulongWorkspace.selectedSession
@@ -309,5 +399,13 @@ struct ZhulongInlineArtifactE2EAutomation:
                 String(describing: error)
             )
         }
+    }
+}
+
+private struct InlineArtifactInteractionFailure: LocalizedError {
+    let message: String
+
+    var errorDescription: String? {
+        message
     }
 }

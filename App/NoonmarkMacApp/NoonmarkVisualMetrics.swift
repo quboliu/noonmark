@@ -68,6 +68,22 @@ enum NoonmarkVisualMetrics {
 
     static let paneToggleChevronSize = CGFloat(MacUIIconMetrics.paneToggleChevronSize)
     static let navigationIconSize = CGFloat(MacUIIconMetrics.navigationSize)
+    private static let dayHeaderDateBasePointSize = CGFloat(20)
+
+    static var dayHeaderDateFont: Font {
+        .system(
+            size: compactPointSize(dayHeaderDateBasePointSize),
+            weight: .semibold
+        )
+    }
+
+    static var dayHeaderDateMeasurementFont: NSFont {
+        .monospacedDigitSystemFont(
+            ofSize: compactPointSize(dayHeaderDateBasePointSize),
+            weight: .semibold
+        )
+    }
+
     static let compactEditorPointSize = CGFloat(MacUITypographyMetrics.compactEditorPointSize)
     static let compactEditorVerticalInset = CGFloat(
         MacUITypographyMetrics.compactEditorVerticalInset

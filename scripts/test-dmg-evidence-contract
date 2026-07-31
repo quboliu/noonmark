@@ -523,7 +523,7 @@ let values: [String: (String, Int, Int)] = [
     "english-unfinished": ("Review the unresolved keyboard navigation findings", 2400, 1536),
     "english-completed": ("Approve the final English navigation copy", 2400, 1536),
     "english-calendar": ("A whole-month trace overview", 2400, 1536),
-    "english-settings": ("Settings\nZhulong Configuration\nWrite & Privacy Boundaries", 1640, 1440),
+    "english-settings": ("Settings\nZhulong and Automation\nWrite & Privacy Boundaries", 1720, 1376),
     "english-zhulong": ("Clarify what is vague and keep what is underway moving", 2400, 1536),
 ]
 for (scenario, value) in values {

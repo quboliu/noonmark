@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import NoonmarkCore
 import SQLite3
@@ -9,6 +10,43 @@ private let sqliteInvariantWhitespaceCharacters =
 
 private func sqliteNonemptyInvariant(_ column: String) -> String {
     "length(trim(\(column), \(sqliteInvariantWhitespaceCharacters))) > 0"
+}
+
+private struct SQLitePreparedStoreIdentity: Hashable {
+    let path: String
+    let device: UInt64
+    let inode: UInt64
+    let userVersion: Int
+    let schemaVersion: Int
+}
+
+private final class SQLitePreparedStoreRegistry: @unchecked Sendable {
+    static let shared = SQLitePreparedStoreRegistry()
+
+    private let lock = NSLock()
+    private var preparedStores: Set<SQLitePreparedStoreIdentity> = []
+
+    func prepareIfNeeded(
+        observed: SQLitePreparedStoreIdentity,
+        refresh: () throws -> SQLitePreparedStoreIdentity,
+        prepare: (SQLitePreparedStoreIdentity) throws -> SQLitePreparedStoreIdentity
+    ) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if preparedStores.contains(observed) {
+            return
+        }
+        let refreshed = try refresh()
+        if preparedStores.contains(refreshed) {
+            return
+        }
+        let prepared = try prepare(refreshed)
+        preparedStores = Set(
+            preparedStores.filter { $0.path != prepared.path }
+        )
+        preparedStores.insert(prepared)
+    }
 }
 
 public enum SQLiteSchema {
@@ -2715,8 +2753,49 @@ public enum SQLiteSchema {
 extension SQLiteSchema {
     static func installOrValidate(on database: OpaquePointer?) throws {
         try execute(statements[0], on: database)
-        let storedVersion = try integerValue("PRAGMA user_version", on: database)
+        guard let observed = try preparedStoreIdentity(on: database) else {
+            let storedVersion = try integerValue(
+                "PRAGMA user_version",
+                on: database
+            )
+            try installOrValidateUncached(
+                on: database,
+                storedVersion: storedVersion
+            )
+            return
+        }
+
+        try SQLitePreparedStoreRegistry.shared.prepareIfNeeded(
+            observed: observed,
+            refresh: {
+                guard let refreshed = try preparedStoreIdentity(on: database) else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "SQLite file-backed store identity disappeared"
+                    )
+                }
+                return refreshed
+            },
+            prepare: { refreshed in
+                try installOrValidateUncached(
+                    on: database,
+                    storedVersion: refreshed.userVersion
+                )
+                guard let prepared = try preparedStoreIdentity(on: database) else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "SQLite file-backed store identity disappeared"
+                    )
+                }
+                return prepared
+            }
+        )
+    }
+
+    private static func installOrValidateUncached(
+        on database: OpaquePointer?,
+        storedVersion: Int
+    ) throws {
         if storedVersion == version {
+            try enableConcurrentFileBackedReads(on: database)
             try validateCurrentSchema(on: database)
             return
         }
@@ -2735,6 +2814,7 @@ extension SQLiteSchema {
             )
         }
 
+        try enableConcurrentFileBackedReads(on: database)
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             for statement in statements.dropFirst() {
@@ -2747,6 +2827,64 @@ extension SQLiteSchema {
             throw error
         }
         try validateCurrentSchema(on: database)
+    }
+
+    private static func preparedStoreIdentity(
+        on database: OpaquePointer?
+    ) throws -> SQLitePreparedStoreIdentity? {
+        guard let filename = sqlite3_db_filename(database, "main") else {
+            return nil
+        }
+        let path = String(cString: filename)
+        guard path.isEmpty == false else {
+            return nil
+        }
+        var fileStatus = stat()
+        guard lstat(path, &fileStatus) == 0 else {
+            throw SQLiteRepositoryError.openFailed(
+                "SQLite store identity failed: \(String(cString: strerror(errno)))"
+            )
+        }
+        return SQLitePreparedStoreIdentity(
+            path: URL(fileURLWithPath: path).standardizedFileURL.path,
+            device: UInt64(fileStatus.st_dev),
+            inode: UInt64(fileStatus.st_ino),
+            userVersion: try integerValue(
+                "PRAGMA user_version",
+                on: database
+            ),
+            schemaVersion: try integerValue(
+                "PRAGMA schema_version",
+                on: database
+            )
+        )
+    }
+
+    private static func enableConcurrentFileBackedReads(
+        on database: OpaquePointer?
+    ) throws {
+        let currentModes = try stringValues(
+            "PRAGMA journal_mode",
+            on: database
+        )
+        guard currentModes.count == 1 else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "SQLite journal mode could not be read"
+            )
+        }
+        if currentModes == ["wal"] || currentModes == ["memory"] {
+            return
+        }
+
+        let enabledModes = try stringValues(
+            "PRAGMA journal_mode = WAL",
+            on: database
+        )
+        guard enabledModes == ["wal"] else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "SQLite journal mode must be WAL for a file-backed store"
+            )
+        }
     }
 
     private static func validateCurrentSchema(on database: OpaquePointer?) throws {
@@ -2826,11 +2964,15 @@ extension SQLiteSchema {
     ) throws -> Int {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
-            throw SQLiteRepositoryError.prepareFailed(lastError(database))
+            throw SQLiteRepositoryError.prepareFailed(
+                "\(lastError(database)) in \(sqlSummary(sql))"
+            )
         }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else {
-            throw SQLiteRepositoryError.stepFailed(lastError(database))
+            throw SQLiteRepositoryError.stepFailed(
+                "\(lastError(database)) in \(sqlSummary(sql))"
+            )
         }
         return Int(sqlite3_column_int64(statement, 0))
     }
@@ -2841,14 +2983,24 @@ extension SQLiteSchema {
     ) throws -> [String] {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
-            throw SQLiteRepositoryError.prepareFailed(lastError(database))
+            throw SQLiteRepositoryError.prepareFailed(
+                "\(lastError(database)) in \(sqlSummary(sql))"
+            )
         }
         defer { sqlite3_finalize(statement) }
         var values: [String] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            values.append(try text(statement, column: 0))
+        while true {
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                values.append(try text(statement, column: 0))
+            case SQLITE_DONE:
+                return values
+            default:
+                throw SQLiteRepositoryError.stepFailed(
+                    "\(lastError(database)) in \(sqlSummary(sql))"
+                )
+            }
         }
-        return values
     }
 
     private static func hasRows(
@@ -2857,12 +3009,16 @@ extension SQLiteSchema {
     ) throws -> Bool {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
-            throw SQLiteRepositoryError.prepareFailed(lastError(database))
+            throw SQLiteRepositoryError.prepareFailed(
+                "\(lastError(database)) in \(sqlSummary(sql))"
+            )
         }
         defer { sqlite3_finalize(statement) }
         let result = sqlite3_step(statement)
         guard result == SQLITE_ROW || result == SQLITE_DONE else {
-            throw SQLiteRepositoryError.stepFailed(lastError(database))
+            throw SQLiteRepositoryError.stepFailed(
+                "\(lastError(database)) in \(sqlSummary(sql))"
+            )
         }
         return result == SQLITE_ROW
     }
@@ -2889,5 +3045,17 @@ extension SQLiteSchema {
     private static func lastError(_ database: OpaquePointer?) -> String {
         database.map { String(cString: sqlite3_errmsg($0)) }
             ?? "unknown SQLite error"
+    }
+
+    private static func sqlSummary(_ sql: String) -> String {
+        for line in sql.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            if trimmed.isEmpty == false {
+                return trimmed
+            }
+        }
+        return "SQL statement"
     }
 }

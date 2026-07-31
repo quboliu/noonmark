@@ -588,9 +588,13 @@ struct NativeSettingsSecureField: NSViewRepresentable {
     let placeholder: String
     let identifier: String
     let accessibilityLabel: String
+    var onEndEditing: ((String) -> Void)?
 
     func makeCoordinator() -> NativeSettingsTextFieldCoordinator {
-        NativeSettingsTextFieldCoordinator(text: $text)
+        NativeSettingsTextFieldCoordinator(
+            text: $text,
+            onEndEditing: onEndEditing
+        )
     }
 
     func makeNSView(context: Context) -> NSSecureTextField {
@@ -602,6 +606,7 @@ struct NativeSettingsSecureField: NSViewRepresentable {
 
     func updateNSView(_ field: NSSecureTextField, context: Context) {
         context.coordinator.text = $text
+        context.coordinator.onEndEditing = onEndEditing
         configure(field)
     }
 
@@ -625,9 +630,14 @@ struct NativeSettingsSecureField: NSViewRepresentable {
 
 final class NativeSettingsTextFieldCoordinator: NSObject, NSTextFieldDelegate {
     var text: Binding<String>
+    var onEndEditing: ((String) -> Void)?
 
-    init(text: Binding<String>) {
+    init(
+        text: Binding<String>,
+        onEndEditing: ((String) -> Void)? = nil
+    ) {
         self.text = text
+        self.onEndEditing = onEndEditing
     }
 
     func controlTextDidChange(_ notification: Notification) {
@@ -635,6 +645,17 @@ final class NativeSettingsTextFieldCoordinator: NSObject, NSTextFieldDelegate {
         let nextText = field.stringValue
         guard text.wrappedValue != nextText else { return }
         text.wrappedValue = nextText
+    }
+
+    func controlTextDidEndEditing(
+        _ notification: Notification
+    ) {
+        guard let field =
+            notification.object as? NSTextField
+        else {
+            return
+        }
+        onEndEditing?(field.stringValue)
     }
 }
 

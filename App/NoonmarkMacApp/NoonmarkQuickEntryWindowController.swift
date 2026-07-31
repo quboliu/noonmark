@@ -142,8 +142,12 @@ final class NoonmarkQuickEntryWindowModel: ObservableObject {
     var onClose: (() -> Void)?
 
     func prepareForPresentation() {
-        text = ""
-        contentHeight = 168
+        if text.isEmpty == false {
+            text = ""
+        }
+        if contentHeight != 168 {
+            contentHeight = 168
+        }
         focusRequest &+= 1
     }
 
@@ -156,7 +160,9 @@ final class NoonmarkQuickEntryWindowModel: ObservableObject {
             ? CGFloat(min(suggestionCount, 4) * 28 + 12)
             : 0
         let issueHeight: CGFloat = showsIssue ? 28 : 0
-        contentHeight = 168 + suggestionHeight + issueHeight
+        let nextContentHeight = 168 + suggestionHeight + issueHeight
+        guard contentHeight != nextContentHeight else { return }
+        contentHeight = nextContentHeight
     }
 
     func submit() {

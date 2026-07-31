@@ -397,6 +397,430 @@ final class SQLiteSchemaTests: XCTestCase {
         )
     }
 
+    func testSavingDefaultSnapshotMaterializesSingletonPreferences()
+        throws
+    {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-default-preferences-\(UUID().uuidString)"
+            )
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+        let engine = NoonmarkEngine()
+        let repository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+
+        try repository.save(engine.snapshot())
+
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT count(*) FROM app_preferences WHERE id = 1",
+                at: databaseURL
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try repository.load().snapshot(),
+            engine.snapshot()
+        )
+    }
+
+    func testFileBackedRepositoryUsesWALSoDurableReadsDoNotBlockWrites()
+        throws
+    {
+        let databaseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-wal-concurrency-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: databaseDirectory,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(
+                at: databaseDirectory
+            )
+        }
+        let databaseURL = databaseDirectory
+            .appendingPathComponent("Noonmark.sqlite")
+        let repository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        try repository.save(NoonmarkEngine().snapshot())
+
+        XCTAssertEqual(
+            try stringScalar(
+                "PRAGMA journal_mode",
+                at: databaseURL
+            ),
+            "wal"
+        )
+
+        var reader: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_open(databaseURL.path, &reader),
+            SQLITE_OK
+        )
+        defer { sqlite3_close(reader) }
+        XCTAssertEqual(
+            sqlite3_exec(
+                reader,
+                """
+                BEGIN DEFERRED TRANSACTION;
+                SELECT count(*) FROM app_preferences;
+                """,
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+        defer {
+            _ = sqlite3_exec(
+                reader,
+                "ROLLBACK",
+                nil,
+                nil,
+                nil
+            )
+        }
+
+        let candidate = NoonmarkEngine()
+        _ = try candidate.createPoolTask(
+            title: "读快照不应阻塞持久化"
+        )
+        try repository.save(candidate.snapshot())
+
+        XCTAssertEqual(
+            try repository.load().taskPool().map(\.definition.title),
+            ["读快照不应阻塞持久化"]
+        )
+
+        var writer: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_open(databaseURL.path, &writer),
+            SQLITE_OK
+        )
+        defer { sqlite3_close(writer) }
+        XCTAssertEqual(
+            sqlite3_exec(
+                writer,
+                """
+                BEGIN IMMEDIATE TRANSACTION;
+                UPDATE app_preferences SET theme = theme WHERE id = 1;
+                """,
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+        defer {
+            _ = sqlite3_exec(
+                writer,
+                "ROLLBACK",
+                nil,
+                nil,
+                nil
+            )
+        }
+
+        XCTAssertEqual(
+            try repository.load().taskPool().map(\.definition.title),
+            ["读快照不应阻塞持久化"]
+        )
+    }
+
+    func testPreparedStoreHotPathDoesNotRepeatFileLevelSchemaPreparation()
+        throws
+    {
+        let databaseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-schema-hot-path-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: databaseDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let databaseURL = databaseDirectory
+            .appendingPathComponent("Noonmark.sqlite")
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        try repository.save(NoonmarkEngine().snapshot())
+
+        var database: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_open(databaseURL.path, &database),
+            SQLITE_OK
+        )
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(
+            sqlite3_set_authorizer(
+                database,
+                { _, action, firstArgument, _, _, _ in
+                    guard action == SQLITE_PRAGMA,
+                          let firstArgument
+                    else {
+                        return SQLITE_OK
+                    }
+                    switch String(cString: firstArgument).lowercased() {
+                    case "journal_mode", "quick_check":
+                        return SQLITE_DENY
+                    default:
+                        return SQLITE_OK
+                    }
+                },
+                nil
+            ),
+            SQLITE_OK
+        )
+
+        XCTAssertNoThrow(
+            try SQLiteSchema.installOrValidate(on: database)
+        )
+    }
+
+    func testRepositoryLifetimePreventsWALTeardownAcrossProbeConnections()
+        throws
+    {
+        let databaseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-wal-anchor-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: databaseDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let databaseURL = databaseDirectory
+            .appendingPathComponent("Noonmark.sqlite")
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+
+        try withExtendedLifetime(repository) {
+            try repository.save(NoonmarkEngine().snapshot())
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: databaseURL.path + "-wal"
+                )
+            )
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: databaseURL.path + "-shm"
+                )
+            )
+
+            var competingDatabase: OpaquePointer?
+            XCTAssertEqual(
+                sqlite3_open(databaseURL.path, &competingDatabase),
+                SQLITE_OK
+            )
+            defer { sqlite3_close(competingDatabase) }
+            var journalModeStatement: OpaquePointer?
+            XCTAssertEqual(
+                sqlite3_prepare_v2(
+                    competingDatabase,
+                    "PRAGMA journal_mode = DELETE",
+                    -1,
+                    &journalModeStatement,
+                    nil
+                ),
+                SQLITE_OK
+            )
+            defer { sqlite3_finalize(journalModeStatement) }
+            let transitionResult = sqlite3_step(journalModeStatement)
+            switch transitionResult {
+            case SQLITE_ROW:
+                XCTAssertEqual(
+                    String(
+                        cString: try XCTUnwrap(
+                            sqlite3_column_text(journalModeStatement, 0)
+                        )
+                    ),
+                    "wal"
+                )
+            case SQLITE_BUSY, SQLITE_LOCKED:
+                break
+            default:
+                XCTFail(
+                    "WAL teardown returned unexpected SQLite code "
+                        + "\(transitionResult)"
+                )
+            }
+
+            _ = try SQLiteEngineRepository(databaseURL: databaseURL).load()
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: databaseURL.path + "-wal"
+                )
+            )
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: databaseURL.path + "-shm"
+                )
+            )
+        }
+    }
+
+    func testTerminationFinalizationMaterializesStandaloneDatabaseAndClosesRuntime()
+        throws
+    {
+        let databaseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-wal-termination-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: databaseDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let databaseURL = databaseDirectory
+            .appendingPathComponent("Noonmark.sqlite")
+        let standaloneURL = databaseDirectory
+            .appendingPathComponent("Standalone.sqlite")
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(title: "终止前必须收束 WAL")
+
+        try repository.save(engine.snapshot())
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: databaseURL.path + "-wal"
+            )
+        )
+
+        try repository.finalizeForTermination()
+        try FileManager.default.copyItem(
+            at: databaseURL,
+            to: standaloneURL
+        )
+
+        XCTAssertEqual(
+            try SQLiteEngineRepository(databaseURL: standaloneURL)
+                .load()
+                .taskPool()
+                .map(\.definition.title),
+            ["终止前必须收束 WAL"]
+        )
+        XCTAssertThrowsError(try repository.load())
+    }
+
+    func testTerminationFinalizationClosesRuntimeWhenExternalWriterDefersCheckpoint()
+        throws
+    {
+        let databaseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-wal-contended-termination-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: databaseDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let databaseURL = databaseDirectory
+            .appendingPathComponent("Noonmark.sqlite")
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        try repository.save(NoonmarkEngine().snapshot())
+
+        var externalWriter: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_open(databaseURL.path, &externalWriter),
+            SQLITE_OK
+        )
+        defer { sqlite3_close(externalWriter) }
+        XCTAssertEqual(
+            sqlite3_exec(
+                externalWriter,
+                """
+                BEGIN IMMEDIATE TRANSACTION;
+                UPDATE app_preferences SET theme = theme WHERE id = 1;
+                """,
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+        defer {
+            _ = sqlite3_exec(
+                externalWriter,
+                "ROLLBACK",
+                nil,
+                nil,
+                nil
+            )
+        }
+
+        XCTAssertNoThrow(try repository.finalizeForTermination())
+        XCTAssertThrowsError(try repository.load())
+    }
+
+    func testPreparedStoreCacheInvalidatesWhenDatabaseFileIsReplaced()
+        throws
+    {
+        let databaseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-schema-cache-invalidation-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: databaseDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let databaseURL = databaseDirectory
+            .appendingPathComponent("Noonmark.sqlite")
+        do {
+            let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+            try repository.save(NoonmarkEngine().snapshot())
+        }
+
+        try FileManager.default.removeItem(at: databaseURL)
+
+        var database: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_open(databaseURL.path, &database),
+            SQLITE_OK
+        )
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(
+            sqlite3_exec(
+                database,
+                "CREATE TABLE unexpected_schema_object(id INTEGER)",
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+        XCTAssertEqual(
+            sqlite3_exec(
+                database,
+                "PRAGMA user_version = \(SQLiteSchema.version)",
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+
+        XCTAssertThrowsError(
+            try SQLiteSchema.installOrValidate(on: database)
+        ) { error in
+            XCTAssertEqual(
+                error as? SQLiteRepositoryError,
+                .invalidStoredValue(
+                    "current database schema fingerprint does not match"
+                )
+            )
+        }
+    }
+
     func testSQLiteRepositoryRejectsThemeLanguageClockProjectionMismatch() throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -1203,6 +1627,42 @@ private func integerScalar(_ sql: String, at databaseURL: URL) throws -> Int {
         throw SQLiteRepositoryError.stepFailed("test probe could not read scalar")
     }
     return Int(sqlite3_column_int64(statement, 0))
+}
+
+private func stringScalar(
+    _ sql: String,
+    at databaseURL: URL
+) throws -> String {
+    var database: OpaquePointer?
+    guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK else {
+        sqlite3_close(database)
+        throw SQLiteRepositoryError.openFailed(
+            "test probe could not open database"
+        )
+    }
+    defer { sqlite3_close(database) }
+
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(
+        database,
+        sql,
+        -1,
+        &statement,
+        nil
+    ) == SQLITE_OK else {
+        throw SQLiteRepositoryError.prepareFailed(
+            "test probe could not prepare scalar"
+        )
+    }
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_step(statement) == SQLITE_ROW,
+          let text = sqlite3_column_text(statement, 0)
+    else {
+        throw SQLiteRepositoryError.stepFailed(
+            "test probe could not read scalar"
+        )
+    }
+    return String(cString: text)
 }
 
 private func executeSQL(_ sql: String, at databaseURL: URL) throws {

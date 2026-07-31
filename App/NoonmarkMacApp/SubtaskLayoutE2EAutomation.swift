@@ -32,12 +32,26 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         let store: NoonmarkStore
     }
 
+    private struct ASCIILatencySample {
+        let key: Character
+        let totalMilliseconds: Double
+        let postMilliseconds: Double
+        let echoWaitMilliseconds: Double
+        let eventDeliveryMilliseconds: Double
+        let eventToKeyDownMilliseconds: Double
+        let keyDownMilliseconds: Double
+        let superKeyDownMilliseconds: Double
+        let nativeSnapshotCallbackMilliseconds: Double
+        let eventToObservationMilliseconds: Double
+    }
+
     private static let unicodeEditedTitle = "测试主列表展开子任务可编辑"
     private static let imeEditedTitle = "你好，你好。"
 
     private let resultURL: URL
     private let mode: Mode
     private let imeInputModeID: String?
+    private let asciiLatencyReportURL: URL?
 
     private var editedTitle: String {
         imeInputModeID == nil
@@ -54,13 +68,17 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         let imeInputModeID = AppLaunchArguments.value(
             after: "--e2e-subtask-ime-input-mode"
         )
+        let asciiLatencyReportURL = AppLaunchArguments.value(
+            after: "--e2e-subtask-ascii-latency-report-url"
+        ).map(URL.init(fileURLWithPath:))
         if AppLaunchArguments.contains(
             "--e2e-subtask-layout-restart-verify"
         ) {
             return Self(
                 resultURL: URL(fileURLWithPath: resultPath),
                 mode: .verifyRestart,
-                imeInputModeID: imeInputModeID
+                imeInputModeID: imeInputModeID,
+                asciiLatencyReportURL: asciiLatencyReportURL
             )
         }
         guard let poolScreenshotPath = AppLaunchArguments.value(
@@ -80,7 +98,8 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                     fileURLWithPath: inlineEditScreenshotPath
                 )
             ),
-            imeInputModeID: imeInputModeID
+            imeInputModeID: imeInputModeID,
+            asciiLatencyReportURL: asciiLatencyReportURL
         )
     }
 
@@ -299,7 +318,6 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                 store: store
             )
         }
-        try input.postKey(keyCode: 0, modifiers: .command)
         if let imeInputModeID {
             try await typeWithPhysicalPinyinIME(
                 inputModeID: imeInputModeID,
@@ -387,6 +405,27 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         defer {
             _ = TISSelectInputSource(originalInputSource)
         }
+        guard let asciiInputSourceID = inputSourceID(asciiInputSource) else {
+            throw Failure.failed("ASCII 键盘布局缺少输入源标识")
+        }
+        do {
+            try await waitUntil("ASCII 键盘布局没有准备完成") {
+                currentInputSourceID() == asciiInputSourceID
+                    && editor.window?.firstResponder === editor
+            }
+        } catch {
+            throw Failure.failed(
+                "ASCII 输入现场未就绪：expected_source=\(asciiInputSourceID)，"
+                    + "actual_source=\(currentInputSourceID() ?? "nil")，"
+                    + "focused=\(editor.window?.firstResponder === editor)"
+            )
+        }
+        try await selectAllText(
+            in: editor,
+            expectedText: initialTitle,
+            using: input,
+            context: "ASCII"
+        )
 
         let strokes: [(CGKeyCode, Character)] = [
             (0, "a"),
@@ -401,11 +440,43 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             (38, "j")
         ]
         var expected = ""
-        var maximumLatency = Duration.zero
-        let clock = ContinuousClock()
+        var samples: [ASCIILatencySample] = []
+        var keyDownSequence = 0
+        var latestKeyDownAt: TimeInterval?
+        var timingSequence = 0
+        var latestTiming: MarkdownEditorKeyDownTiming?
+        var latestTimingFinishedAt: TimeInterval?
+        let keyDownMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: .keyDown
+        ) { event in
+            keyDownSequence &+= 1
+            latestKeyDownAt =
+                ProcessInfo.processInfo.systemUptime
+            return event
+        }
+        let previousTimingObserver =
+            MarkdownEditorKeyDownTimingProbe.observer
+        MarkdownEditorKeyDownTimingProbe.observer = { timing in
+            timingSequence &+= 1
+            latestTiming = timing
+            latestTimingFinishedAt =
+                ProcessInfo.processInfo.systemUptime
+        }
+        defer {
+            MarkdownEditorKeyDownTimingProbe.observer =
+                previousTimingObserver
+            if let keyDownMonitor {
+                NSEvent.removeMonitor(keyDownMonitor)
+            }
+        }
         for (keyCode, character) in strokes {
-            let startedAt = clock.now
+            let previousKeyDownSequence = keyDownSequence
+            let previousTimingSequence = timingSequence
+            let startedAt =
+                ProcessInfo.processInfo.systemUptime
             try input.postKey(keyCode: keyCode)
+            let postedAt =
+                ProcessInfo.processInfo.systemUptime
             expected.append(character)
             for _ in 0 ..< 30 {
                 if editor.string == expected {
@@ -419,9 +490,40 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                         + "actual=\(editor.string)"
                 )
             }
-            maximumLatency = max(
-                maximumLatency,
-                startedAt.duration(to: clock.now)
+            let observedAt =
+                ProcessInfo.processInfo.systemUptime
+            guard keyDownSequence > previousKeyDownSequence,
+                  let eventArrivedAt = latestKeyDownAt,
+                  timingSequence > previousTimingSequence,
+                  let timing = latestTiming,
+                  let timingFinishedAt = latestTimingFinishedAt
+            else {
+                throw Failure.failed(
+                    "英文按键缺少 WindowServer／编辑器分段计时：\(character)"
+                )
+            }
+            samples.append(
+                ASCIILatencySample(
+                    key: character,
+                    totalMilliseconds:
+                    (observedAt - startedAt) * 1000,
+                    postMilliseconds:
+                    (postedAt - startedAt) * 1000,
+                    echoWaitMilliseconds:
+                    (observedAt - postedAt) * 1000,
+                    eventDeliveryMilliseconds:
+                    max(0, (eventArrivedAt - postedAt) * 1000),
+                    eventToKeyDownMilliseconds:
+                    max(0, (timing.enteredAt - eventArrivedAt) * 1000),
+                    keyDownMilliseconds:
+                    max(0, (timingFinishedAt - timing.enteredAt) * 1000),
+                    superKeyDownMilliseconds:
+                    timing.superKeyDownMilliseconds,
+                    nativeSnapshotCallbackMilliseconds:
+                    timing.nativeSnapshotCallbackMilliseconds,
+                    eventToObservationMilliseconds:
+                    max(0, (observedAt - eventArrivedAt) * 1000)
+                )
             )
             guard store.engine.subtasks[subtaskID]?.title == initialTitle else {
                 throw Failure.failed(
@@ -430,14 +532,35 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                 )
             }
         }
-        guard maximumLatency < .milliseconds(120) else {
+        try writeASCIILatencyReport(samples)
+        guard let slowest = samples.max(by: {
+            $0.totalMilliseconds < $1.totalMilliseconds
+        }) else {
+            throw Failure.failed("英文连续输入没有形成延迟样本")
+        }
+        guard slowest.totalMilliseconds < 120 else {
             throw Failure.failed(
-                "英文单键到编辑器的最大延迟过高：\(maximumLatency)"
+                "英文单键到编辑器的最大延迟过高："
+                    + "key=\(slowest.key) "
+                    + "total=\(format(slowest.totalMilliseconds))ms "
+                    + "post=\(format(slowest.postMilliseconds))ms "
+                    + "echo_wait=\(format(slowest.echoWaitMilliseconds))ms "
+                    + "event_delivery="
+                    + "\(format(slowest.eventDeliveryMilliseconds))ms "
+                    + "event_to_key_down="
+                    + "\(format(slowest.eventToKeyDownMilliseconds))ms "
+                    + "key_down=\(format(slowest.keyDownMilliseconds))ms "
+                    + "super_key_down="
+                    + "\(format(slowest.superKeyDownMilliseconds))ms "
+                    + "native_snapshot_callback="
+                    + "\(format(slowest.nativeSnapshotCallbackMilliseconds))ms "
+                    + "event_to_observation="
+                    + "\(format(slowest.eventToObservationMilliseconds))ms"
             )
         }
         NSLog(
             "Noonmark E2E subtask ASCII input maximum latency: %@",
-            String(describing: maximumLatency)
+            "\(format(slowest.totalMilliseconds))ms"
         )
         try await waitUntil("英文输入停止后没有自动保存最终标题") {
             guard let activeEditor = AppViewTreeE2E.view(
@@ -489,15 +612,17 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("IME 组合态错误写入了子任务领域模型")
         }
 
-        editor.setMarkedText(
-            "",
-            selectedRange: NSRange(location: 0, length: 0),
-            replacementRange: editor.markedRange()
-        )
+        editor.unmarkText()
+        editor.inputContext?.discardMarkedText()
         editor.string = initialTitle
         editor.setSelectedRange(
             NSRange(location: initialTitle.utf16.count, length: 0)
         )
+        editor.didChangeText()
+        editor.inputContext?.invalidateCharacterCoordinates()
+        if #available(macOS 15.4, *) {
+            editor.inputContext?.textInputClientDidUpdateSelection()
+        }
         guard editor.hasMarkedText() == false,
               editor.string == initialTitle,
               store.engine.subtasks[subtaskID]?.title == initialTitle
@@ -528,6 +653,12 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         try await waitUntil("真实拼音输入源没有切换成功：\(inputModeID)") {
             currentInputModeID() == inputModeID
         }
+        try await selectAllText(
+            in: editor,
+            expectedText: initialTitle,
+            using: input,
+            context: "真实拼音"
+        )
 
         try await typePhysicalKeys(
             [45, 34, 4, 0, 31],
@@ -607,6 +738,35 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
+    private func selectAllText(
+        in editor: NSTextView,
+        expectedText: String,
+        using input: WindowServerInputDriver,
+        context: String
+    ) async throws {
+        try input.postKey(keyCode: 0, modifiers: .command)
+        do {
+            try await waitUntil("\(context) 全选输入现场没有准备完成") {
+                guard editor.window?.firstResponder === editor,
+                      editor.string == expectedText
+                else {
+                    return false
+                }
+                let selection = editor.selectedRange()
+                return selection.location == 0
+                    && selection.length == expectedText.utf16.count
+            }
+        } catch {
+            throw Failure.failed(
+                "\(context) 全选输入现场未就绪："
+                    + "selection=\(editor.selectedRange())，"
+                    + "expected_length=\(expectedText.utf16.count)，"
+                    + "actual_text=\(editor.string)，"
+                    + "focused=\(editor.window?.firstResponder === editor)"
+            )
+        }
+    }
+
     private func waitForIMECommit(
         _ expected: String,
         inputIdentifier: String
@@ -645,6 +805,26 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         guard let property = TISGetInputSourceProperty(
             source,
             kTISPropertyInputModeID
+        ) else {
+            return nil
+        }
+        return Unmanaged<CFString>
+            .fromOpaque(property)
+            .takeUnretainedValue() as String
+    }
+
+    private func currentInputSourceID() -> String? {
+        let source = TISCopyCurrentKeyboardInputSource()
+            .takeRetainedValue()
+        return inputSourceID(source)
+    }
+
+    private func inputSourceID(
+        _ source: TISInputSource
+    ) -> String? {
+        guard let property = TISGetInputSourceProperty(
+            source,
+            kTISPropertyInputSourceID
         ) else {
             return nil
         }
@@ -765,6 +945,57 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
                 "无法捕获真实 App 主窗口截图：\(error.localizedDescription)"
             )
         }
+    }
+
+    private func writeASCIILatencyReport(
+        _ samples: [ASCIILatencySample]
+    ) throws {
+        guard let asciiLatencyReportURL else {
+            return
+        }
+        let header = [
+            "key",
+            "total_ms",
+            "post_ms",
+            "echo_wait_ms",
+            "event_delivery_ms",
+            "event_to_key_down_ms",
+            "key_down_ms",
+            "super_key_down_ms",
+            "native_snapshot_callback_ms",
+            "event_to_observation_ms"
+        ].joined(separator: "\t")
+        let rows = samples.map { sample in
+            [
+                String(sample.key),
+                format(sample.totalMilliseconds),
+                format(sample.postMilliseconds),
+                format(sample.echoWaitMilliseconds),
+                format(sample.eventDeliveryMilliseconds),
+                format(sample.eventToKeyDownMilliseconds),
+                format(sample.keyDownMilliseconds),
+                format(sample.superKeyDownMilliseconds),
+                format(sample.nativeSnapshotCallbackMilliseconds),
+                format(sample.eventToObservationMilliseconds)
+            ].joined(separator: "\t")
+        }
+        try FileManager.default.createDirectory(
+            at: asciiLatencyReportURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try ([header] + rows).joined(separator: "\n").write(
+            to: asciiLatencyReportURL,
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private func format(_ milliseconds: Double) -> String {
+        String(
+            format: "%.3f",
+            locale: Locale(identifier: "en_US_POSIX"),
+            milliseconds
+        )
     }
 
     private func writeResult(_ value: String) throws {

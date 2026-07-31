@@ -1,0 +1,263 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+configuration="${1:-debug}"
+artifact_root="$repo_root/artifacts/e2e-tencent-ime-termination"
+app_path="$repo_root/dist/NoonmarkMacAppE2E.app"
+summary_path="$artifact_root/results.tsv"
+console_log="$artifact_root/runtime-console.log"
+surface_catalog="$repo_root/Tests/Fixtures/tencent-ime-input-surfaces.tsv"
+surface_total=0
+
+case "$artifact_root" in
+  "$repo_root"/artifacts/e2e-tencent-ime-termination) ;;
+  *)
+    echo "unsafe Tencent IME termination directory: $artifact_root" >&2
+    exit 1
+    ;;
+esac
+
+surfaces=()
+while IFS=$'\t' read -r surface label area save_policy \
+    marked_text_required immediate_exit_probe; do
+  if [[ "$surface" != "surface" \
+        && "$immediate_exit_probe" == "true" ]]; then
+    surfaces+=("$surface")
+  fi
+done <"$surface_catalog"
+if [[ -n "${NOONMARK_TENCENT_IME_TERMINATION_SURFACES:-}" ]]; then
+  read -r -a surfaces \
+    <<<"$NOONMARK_TENCENT_IME_TERMINATION_SURFACES"
+fi
+
+source scripts/runtime-evidence
+
+stop_exact_probe() {
+  local database_path="$1"
+  while IFS= read -r candidate_pid; do
+    if ps -ww -p "$candidate_pid" -o command= \
+        | grep -Fq -- "--data-url $database_path"; then
+      kill -TERM "$candidate_pid" 2>/dev/null || true
+    fi
+  done < <(pgrep -x NoonmarkMacAppE2E || true)
+}
+
+cleanup() {
+  runtime_evidence_stop_console_capture \
+    >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+scripts/build-mac-app "$configuration" e2e >/dev/null
+rm -rf "$artifact_root"
+mkdir -p "$artifact_root"
+printf 'surface\tstatus\tquit_after_final_echo_ms\tfailure_retry\tlive_readback_match\tdurable_readback_match\tsidecar_plaintext_absent\n' \
+  >"$summary_path"
+
+runtime_evidence_start_console_capture \
+  "NoonmarkMacAppE2E" \
+  "$console_log"
+
+run_surface() {
+  local surface="$1"
+  local inject_failure="$2"
+  local case_name="$surface"
+  if [[ "$inject_failure" == "true" ]]; then
+    case_name="${surface}-failure-retry"
+  fi
+  local surface_dir="$artifact_root/$case_name"
+  local database_path="$surface_dir/Noonmark.sqlite"
+  local state_path="$surface_dir/state.txt"
+  local exercise_result="$surface_dir/exercise-result.txt"
+  local verify_result="$surface_dir/verify-result.txt"
+  local cleanup_result="$surface_dir/input-cleanup-result.txt"
+  local exercise_log="$surface_dir/exercise.log"
+  local verify_log="$surface_dir/verify.log"
+  mkdir -p "$surface_dir"
+
+  /usr/bin/open -W -n "$app_path" --args \
+    --e2e-windowserver-input-cleanup-result-url \
+    "$cleanup_result" \
+    >"$surface_dir/input-cleanup.log" 2>&1
+  if [[ ! -f "$cleanup_result" ]] \
+      || [[ "$(<"$cleanup_result")" != "ok" ]]; then
+    echo "$case_name: WindowServer input cleanup failed" >&2
+    return 1
+  fi
+
+  local extra_flags=(
+    --e2e-tencent-ime-input-matrix-default
+  )
+  case "$surface" in
+    settings-poem)
+      extra_flags+=(--e2e-expand-settings-poem)
+      ;;
+    zhulong-*)
+      extra_flags+=(--e2e-zhulong-sidecar-key)
+      ;;
+  esac
+  if [[ "$inject_failure" == "true" ]]; then
+    extra_flags+=(
+      --e2e-persistence-failure-automation
+      --e2e-tencent-ime-termination-inject-once
+    )
+  fi
+
+  /usr/bin/open -W -n "$app_path" --args \
+    --data-url "$database_path" \
+    --page day \
+    --e2e-fixed-instant 2026-07-24T22:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-tencent-ime-input-surface "$surface" \
+    --e2e-tencent-ime-input-surface-result-url \
+    "$exercise_result" \
+    --e2e-tencent-ime-input-realistic-workload \
+    --e2e-tencent-ime-termination-phase exercise \
+    --e2e-tencent-ime-termination-state-url "$state_path" \
+    "${extra_flags[@]}" \
+    >"$exercise_log" 2>&1 &
+  local launcher_pid=$!
+
+  for _ in {1..1200}; do
+    if ! kill -0 "$launcher_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if kill -0 "$launcher_pid" 2>/dev/null; then
+    stop_exact_probe "$database_path"
+    wait "$launcher_pid" 2>/dev/null || true
+    echo "$case_name: immediate termination did not complete" >&2
+    return 1
+  fi
+  wait "$launcher_pid"
+
+  if [[ ! -f "$exercise_result" ]] \
+      || ! grep -Fq "status=ARMED" "$exercise_result" \
+      || ! grep -Fq "marked_text=true" "$exercise_result" \
+      || ! grep -Fq "pending_before_quit=true" "$exercise_result"; then
+    echo "$case_name: immediate termination was not armed" >&2
+    sed -n '1,120p' "$exercise_result" >&2 || true
+    return 1
+  fi
+
+  local verify_flags=(
+    --e2e-reset-workspace-state
+  )
+  case "$surface" in
+    zhulong-*)
+      verify_flags+=(--e2e-zhulong-sidecar-key)
+      ;;
+  esac
+  /usr/bin/open -W -n "$app_path" --args \
+    --data-url "$database_path" \
+    --page day \
+    --e2e-fixed-instant 2026-07-24T22:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-tencent-ime-input-surface "$surface" \
+    --e2e-tencent-ime-input-surface-result-url \
+    "$verify_result" \
+    --e2e-tencent-ime-termination-phase verify \
+    --e2e-tencent-ime-termination-state-url "$state_path" \
+    "${verify_flags[@]}" \
+    >"$verify_log" 2>&1
+
+  if [[ ! -f "$verify_result" ]] \
+      || ! grep -Fq "status=PASS" "$verify_result" \
+      || ! grep -Fq "live_readback_match=true" "$verify_result" \
+      || ! grep -Fq "durable_readback_match=true" "$verify_result"; then
+    echo "$case_name: restart readback failed" >&2
+    sed -n '1,120p' "$verify_result" >&2 || true
+    return 1
+  fi
+
+  local sidecar_plaintext_absent="n/a"
+  if [[ "$surface" == zhulong-* ]]; then
+    local expected
+    expected="$(
+      sed -n 's/^expected_base64=//p' "$state_path" \
+        | /usr/bin/base64 -D
+    )"
+    if grep -R -a -Fq -- "$expected" \
+        "$surface_dir/ZhulongSidecar"; then
+      echo "$case_name: encrypted sidecar leaked plaintext" >&2
+      return 1
+    fi
+    sidecar_plaintext_absent="true"
+  fi
+
+  local quit_ms
+  quit_ms="$(
+    sed -n \
+      's/^quit_request_after_final_echo_ms=//p' \
+      "$exercise_result"
+  )"
+  printf '%s\tPASS\t%s\t%s\ttrue\ttrue\t%s\n' \
+    "$case_name" "$quit_ms" "$inject_failure" \
+    "$sidecar_plaintext_absent" \
+    >>"$summary_path"
+  echo "$case_name: PASS"
+}
+
+surface_total="${#surfaces[@]}"
+surface_index=0
+for surface in "${surfaces[@]}"; do
+  surface_index=$((surface_index + 1))
+  echo "[$surface_index/$surface_total] $surface"
+  run_surface "$surface" false
+done
+
+if [[ "${NOONMARK_TENCENT_IME_SKIP_FAILURE_RETRY:-0}" != "1" ]]; then
+  echo "[retry] injected persistence failure"
+  run_surface review-summary true
+fi
+
+runtime_evidence_stop_console_capture
+
+if [[ "${NOONMARK_TENCENT_IME_SKIP_FAILURE_RETRY:-0}" != "1" ]]; then
+  injected_failure_count="$(
+    grep -cF \
+      "Noonmark E2E injected persistence save failure" \
+      "$console_log" \
+      || true
+  )"
+  if [[ "$injected_failure_count" -ne 1 ]]; then
+    echo "expected one injected retryable save failure, found $injected_failure_count" >&2
+    exit 1
+  fi
+fi
+
+expected_rows="$surface_total"
+if [[ "${NOONMARK_TENCENT_IME_SKIP_FAILURE_RETRY:-0}" != "1" ]]; then
+  expected_rows=$((expected_rows + 1))
+fi
+actual_rows="$(
+  awk -F $'\t' 'NR > 1 { count += 1 } END { print count + 0 }' \
+    "$summary_path"
+)"
+if [[ "$actual_rows" -ne "$expected_rows" ]]; then
+  echo \
+    "Tencent IME termination expected $expected_rows rows, found $actual_rows" \
+    >&2
+  exit 1
+fi
+if ! awk -F $'\t' '
+  NR == 1 { next }
+  NF != 7 { exit 1 }
+  $1 == "" || $2 != "PASS" || $3 == "" { exit 1 }
+  $4 != "true" && $4 != "false" { exit 1 }
+  $5 != "true" || $6 != "true" { exit 1 }
+  $7 != "true" && $7 != "n/a" { exit 1 }
+' "$summary_path"; then
+  echo "Tencent IME termination result schema is incomplete" >&2
+  exit 1
+fi
+
+column -t -s $'\t' "$summary_path"

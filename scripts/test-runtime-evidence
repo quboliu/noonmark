@@ -14,6 +14,7 @@ mkdir -p "$diagnostic_dir"
 clean_log="${work_dir}/clean.log"
 structured_diagnostic_log="${work_dir}/structured-diagnostic.log"
 failure_log="${work_dir}/failure.log"
+sqlite_lock_log="${work_dir}/sqlite-lock.log"
 console_log="${work_dir}/console.log"
 premature_console_log="${work_dir}/premature-console.log"
 printf 'normal app lifecycle\n' >"$clean_log"
@@ -46,6 +47,15 @@ fi
 printf 'process exited due to SIGSEGV\n' >"$failure_log"
 if runtime_evidence_assert_clean_logs "crash fixture" "$failure_log"; then
   echo "runtime evidence accepted a crash marker" >&2
+  exit 1
+fi
+
+printf 'database is locked in "PRAGMA journal_mode = WAL"\n' \
+  >"$sqlite_lock_log"
+if runtime_evidence_assert_clean_logs \
+  "SQLite contention fixture" \
+  "$sqlite_lock_log"; then
+  echo "runtime evidence accepted a SQLite lock marker" >&2
   exit 1
 fi
 

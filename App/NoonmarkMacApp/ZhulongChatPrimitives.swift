@@ -21,6 +21,8 @@ enum ZhulongSessionPolishMetrics {
     static let composerActionSize = 28.0
     static let composerActionRowInset = 12.0
     static let composerActionRowBottomPadding = 8.0
+    static let composerOuterBottomPadding = 16.0
+    static let streamContentBottomPadding = 36.0
 }
 
 /// All four stream views deliberately reuse this one transcript grammar. The

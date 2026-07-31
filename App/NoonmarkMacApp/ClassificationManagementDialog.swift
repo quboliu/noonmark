@@ -296,6 +296,16 @@ struct ClassificationManagementDialog: View {
                     .textFieldStyle(.plain)
                     .font(.noonmarkSystem(size: 11.5))
                     .focused($isSearchFocused)
+                    .accessibilityIdentifier(
+                        "classification.manager.search.field"
+                    )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier:
+                            "classification.manager.search.field",
+                            verificationText: search
+                        )
+                    }
                 if search.isEmpty == false {
                     Button {
                         search = ""
@@ -350,6 +360,14 @@ struct ClassificationManagementDialog: View {
             .buttonStyle(.plain)
             .onHover { isCreateButtonHovered = $0 }
             .accessibilityIdentifier("classification.manager.create.toggle")
+            .background {
+                AppE2EViewAnchor(
+                    identifier:
+                    "classification.manager.create.toggle",
+                    verificationText:
+                    isCreating ? "editing" : "idle"
+                )
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -366,6 +384,16 @@ struct ClassificationManagementDialog: View {
                     .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accentStroke))
                     .onSubmit(createItem)
+                    .accessibilityIdentifier(
+                        "classification.manager.create.name"
+                    )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier:
+                            "classification.manager.create.name",
+                            verificationText: newName
+                        )
+                    }
 
                 TextActionButton(copy.createAction, action: createItem)
                     .disabled(ClassificationNameCanonicalizer.displayName(newName).isEmpty)
@@ -509,6 +537,16 @@ struct ClassificationManagementDialog: View {
                     .textFieldStyle(.plain)
                     .font(.noonmarkSystem(size: 11.5, weight: .medium))
                     .onSubmit { rename(item) }
+                    .accessibilityIdentifier(
+                        "classification.manager.rename.\(item.id)"
+                    )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier:
+                            "classification.manager.rename.\(item.id)",
+                            verificationText: editingName
+                        )
+                    }
                 TextActionButton(copy.saveAction) { rename(item) }
                 TextActionButton(copy.cancelAction, tone: .neutral) { editingID = nil }
             } else {

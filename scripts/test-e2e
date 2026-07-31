@@ -1809,6 +1809,117 @@ assert_clean_app_log() {
   fi
 }
 
+sqlite_write_lock_holder_pid=""
+sqlite_write_lock_holder_fifo=""
+sqlite_write_lock_holder_ready=""
+sqlite_write_lock_holder_log=""
+sqlite_write_lock_holder_fd_open=0
+
+stop_sqlite_write_lock_holder() {
+  local holder_status=0
+
+  if [[ "$sqlite_write_lock_holder_fd_open" == "1" ]]; then
+    if [[ -n "$sqlite_write_lock_holder_pid" ]] \
+      && kill -0 "$sqlite_write_lock_holder_pid" 2>/dev/null; then
+      if ! printf 'ROLLBACK;\n.quit\n' >&9; then
+        holder_status=1
+      fi
+    fi
+    exec 9>&-
+    sqlite_write_lock_holder_fd_open=0
+  fi
+  if [[ -n "$sqlite_write_lock_holder_pid" ]]; then
+    if ! wait "$sqlite_write_lock_holder_pid"; then
+      holder_status=1
+    fi
+  fi
+  if [[ -n "$sqlite_write_lock_holder_fifo" ]]; then
+    rm -f "$sqlite_write_lock_holder_fifo"
+  fi
+  sqlite_write_lock_holder_pid=""
+  sqlite_write_lock_holder_fifo=""
+  sqlite_write_lock_holder_ready=""
+  sqlite_write_lock_holder_log=""
+  return "$holder_status"
+}
+
+start_sqlite_write_lock_holder() {
+  local database="$1"
+  local fifo="$2"
+  local ready="$3"
+  local log_path="$4"
+  local competitor_output=""
+  local competitor_status=0
+  local holder_ready=0
+  local ready_directory
+  local ready_path
+  local shell_escaped_ready_path
+
+  if [[ "$sqlite_write_lock_holder_fd_open" == "1" ]] \
+    || [[ -n "$sqlite_write_lock_holder_pid" ]]; then
+    echo "refusing to replace an active SQLite write lock holder" >&2
+    return 1
+  fi
+
+  ready_directory="$(cd "$(dirname "$ready")" && pwd -P)"
+  ready_path="${ready_directory}/$(basename "$ready")"
+  printf -v shell_escaped_ready_path '%q' "$ready_path"
+  rm -f "$fifo" "$ready" "$log_path"
+  mkfifo -m 600 "$fifo"
+
+  sqlite_write_lock_holder_fifo="$fifo"
+  sqlite_write_lock_holder_ready="$ready"
+  sqlite_write_lock_holder_log="$log_path"
+  sqlite3 "$database" <"$fifo" >"$log_path" 2>&1 &
+  sqlite_write_lock_holder_pid=$!
+  exec 9>"$fifo"
+  sqlite_write_lock_holder_fd_open=1
+
+  if ! printf \
+    '.bail on\n.timeout 0\nBEGIN IMMEDIATE;\n.shell /usr/bin/touch %s\n' \
+    "$shell_escaped_ready_path" >&9; then
+    echo "failed to submit the SQLite write lock transaction" >&2
+    stop_sqlite_write_lock_holder >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  for _ in {1..100}; do
+    if [[ -f "$ready" ]] \
+      && kill -0 "$sqlite_write_lock_holder_pid" 2>/dev/null; then
+      holder_ready=1
+      break
+    fi
+    if ! kill -0 "$sqlite_write_lock_holder_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ "$holder_ready" != "1" ]]; then
+    echo "SQLite write lock holder did not reach its ready handshake" >&2
+    cat "$log_path" >&2
+    stop_sqlite_write_lock_holder >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  if competitor_output="$(
+    sqlite3 "$database" \
+      'PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK;' 2>&1
+  )"; then
+    competitor_status=0
+  else
+    competitor_status=$?
+  fi
+  if [[ "$competitor_status" -eq 0 ]] \
+    || [[ "$competitor_output" != *"database is locked"* ]]; then
+    echo "SQLite write lock holder did not exclude a competing writer" >&2
+    if [[ -n "$competitor_output" ]]; then
+      printf '%s\n' "$competitor_output" >&2
+    fi
+    stop_sqlite_write_lock_holder >/dev/null 2>&1 || true
+    return 1
+  fi
+}
+
 prepare_english_screenshot_database() {
   local database_path="$1"
   local bootstrap_log="$2"
@@ -2100,7 +2211,6 @@ record_english_scenario_evidence() {
 assert_english_history_header_ui_result() {
   local result="artifacts/e2e-english/day-history-header-ui.txt"
   local actual_width
-  local required_date_width
 
   if [[ ! -f "$result" || "$(head -n 1 "$result")" != "ok" ]]; then
     echo "English history header UI manifest is missing or failed" >&2
@@ -2108,7 +2218,6 @@ assert_english_history_header_ui_result() {
     exit 1
   fi
   actual_width="$(awk -F= '$1 == "detail_width" { print $2 }' "$result")"
-  required_date_width="$(awk -F= '$1 == "header_date_required_width" { print $2 }' "$result")"
   if ! grep -Fqx "page=day" "$result" ||
     ! awk -v actual="$actual_width" 'BEGIN { exit !(actual >= 278 && actual <= 282) }' ||
     ! grep -Fqx "header_full_date=30 September 2025" "$result" ||
@@ -2119,7 +2228,9 @@ assert_english_history_header_ui_result() {
     ! grep -Fqx "header_navigation_target_count=4" "$result" ||
     ! grep -Fqx "header_navigation_minimum_target=28.0" "$result" ||
     ! grep -Fqx "header_compact_row_count=2" "$result" ||
-    ! awk -v required="$required_date_width" 'BEGIN { exit !(required >= 190) }'; then
+    ! grep -Fqx "header_date_width_sufficient=true" "$result" ||
+    ! grep -Fqx "header_navigation_targets_sufficient=true" "$result" ||
+    ! grep -Fqx "header_date_action_overlap=false" "$result"; then
     echo "English history header lost its complete responsive contract" >&2
     cat "$result" >&2
     exit 1
@@ -4185,6 +4296,7 @@ run_subtask_layout_probe() {
   local layout_db="$layout_dir/Noonmark.sqlite"
   local exercise_result="$layout_dir/exercise-result.txt"
   local restart_result="$layout_dir/restart-result.txt"
+  local ascii_latency_report="$layout_dir/ascii-latency.tsv"
   local pool_screenshot="$layout_dir/pool-detail.png"
   local inline_edit_screenshot="$layout_dir/day-inline-edit.png"
   local exercise_log="$layout_dir/exercise.log"
@@ -4198,6 +4310,7 @@ run_subtask_layout_probe() {
     --e2e-fixed-time-zone America/New_York
     --e2e-fixed-locale zh_Hans_SG
     --e2e-subtask-layout-result-url "$PWD/$exercise_result"
+    --e2e-subtask-ascii-latency-report-url "$PWD/$ascii_latency_report"
     --e2e-subtask-layout-screenshot-url "$PWD/$pool_screenshot"
     --e2e-subtask-inline-edit-screenshot-url "$PWD/$inline_edit_screenshot"
   )
@@ -4230,6 +4343,17 @@ run_subtask_layout_probe() {
     "$exercise_result" \
     "$exercise_log" \
     "${exercise_args[@]}"
+
+  if [[ -z "$ime_input_mode" ]]; then
+    if [[ ! -f "$ascii_latency_report" ]] ||
+      [[ "$(head -n 1 "$ascii_latency_report")" != \
+        $'key\ttotal_ms\tpost_ms\techo_wait_ms\tevent_delivery_ms\tevent_to_key_down_ms\tkey_down_ms\tsuper_key_down_ms\tnative_snapshot_callback_ms\tevent_to_observation_ms' ]] ||
+      [[ "$(awk 'END { print NR }' "$ascii_latency_report")" != "11" ]]; then
+      echo "subtask ASCII latency evidence is incomplete" >&2
+      [[ -f "$ascii_latency_report" ]] && cat "$ascii_latency_report" >&2
+      exit 1
+    fi
+  fi
 
   if [[ ! -s "$pool_screenshot" || ! -s "$inline_edit_screenshot" ]]; then
     echo "subtask layout screenshots were not created" >&2
@@ -6647,7 +6771,7 @@ run_zhulong_exact_recovery_identity_probe() {
   echo "E2E Zhulong exact identity recovery and local-only preference conflict: $evidence_dir"
 }
 
-run_zhulong_pending_gate_probe() {
+run_zhulong_pending_gate_probe() (
   local evidence_dir="artifacts/e2e-zhulong-pending-gate"
   local database="${evidence_dir}/Noonmark.sqlite"
   local sidecar_dir="${evidence_dir}/ZhulongSidecar"
@@ -6657,9 +6781,8 @@ run_zhulong_pending_gate_probe() {
   local verify_result="${evidence_dir}/verify-result.txt"
   local verify_log="${evidence_dir}/verify.log"
   local sqlite_lock_fifo="${evidence_dir}/sqlite-lock.fifo"
+  local sqlite_lock_ready="${evidence_dir}/sqlite-lock-ready"
   local sqlite_lock_log="${evidence_dir}/sqlite-lock.log"
-  local sqlite_lock_pid
-  local sqlite_lock_acquired=0
   local session_file
   local session_count
   local before_database_sha256
@@ -6672,6 +6795,7 @@ run_zhulong_pending_gate_probe() {
 
   rm -rf "$evidence_dir"
   mkdir -p "$evidence_dir"
+  trap 'stop_sqlite_write_lock_holder >/dev/null 2>&1 || true' EXIT
 
   run_terminating_ui_probe \
     "zhulong pending-gate bootstrap setup" \
@@ -6740,31 +6864,17 @@ run_zhulong_pending_gate_probe() {
   before_journal_sha256="$(shasum -a 256 "$journal" | awk '{print $1}')"
   before_session_sha256="$(shasum -a 256 "$session_file" | awk '{print $1}')"
 
-  rm -f "$sqlite_lock_fifo" "$sqlite_lock_log"
-  mkfifo "$sqlite_lock_fifo"
-  sqlite3 "$database" <"$sqlite_lock_fifo" >"$sqlite_lock_log" 2>&1 &
-  sqlite_lock_pid=$!
-  exec 9>"$sqlite_lock_fifo"
-  printf 'PRAGMA busy_timeout = 0;\nBEGIN IMMEDIATE;\n' >&9
-  for _ in {1..50}; do
-    if ! sqlite3 "$database" \
-      'PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK;' \
-      >/dev/null 2>&1; then
-      sqlite_lock_acquired=1
-      break
-    fi
-    sleep 0.1
-  done
-  if [[ "$sqlite_lock_acquired" != "1" ]] ||
-    ! kill -0 "$sqlite_lock_pid" 2>/dev/null; then
-    exec 9>&-
-    wait "$sqlite_lock_pid" 2>/dev/null || true
+  if ! start_sqlite_write_lock_holder \
+    "$database" \
+    "$sqlite_lock_fifo" \
+    "$sqlite_lock_ready" \
+    "$sqlite_lock_log"; then
     echo "failed to hold the pending-gate SQLite write lock" >&2
     cat "$sqlite_lock_log" >&2
     exit 1
   fi
 
-  # A RESERVED lock permits Store bootstrap reads but turns any attempted
+  # A WAL writer lock permits Store bootstrap reads but turns any attempted
   # bootstrap save into a real startup failure. The pending journal must make
   # loadOrSeed skip that ordinary write and proceed to exact recovery instead.
   run_terminating_ui_probe \
@@ -6779,14 +6889,11 @@ run_zhulong_pending_gate_probe() {
     --e2e-verify-zhulong-pending-gate \
     --e2e-zhulong-pending-gate-result-url "$PWD/$verify_result"
 
-  printf 'ROLLBACK;\n.quit\n' >&9
-  exec 9>&-
-  if ! wait "$sqlite_lock_pid"; then
+  if ! stop_sqlite_write_lock_holder; then
     echo "pending-gate SQLite lock holder failed" >&2
     cat "$sqlite_lock_log" >&2
     exit 1
   fi
-  rm -f "$sqlite_lock_fifo"
 
   after_database_sha256="$(shasum -a 256 "$database" | awk '{print $1}')"
   after_journal_sha256="$(shasum -a 256 "$journal" | awk '{print $1}')"
@@ -6799,7 +6906,7 @@ run_zhulong_pending_gate_probe() {
   fi
 
   echo "E2E Zhulong bootstrap/direct-save/rollover/import/sync pending gate: $evidence_dir"
-}
+)
 
 automatic_classification_e2e_credential_state() {
   local find_status=0
@@ -8059,6 +8166,7 @@ run_automatic_classification_contention_probe() (
   local verify_log="${evidence_dir}/verify.log"
   local contention_marker="${evidence_dir}/contention-marker.txt"
   local sqlite_lock_fifo="${evidence_dir}/sqlite-lock.fifo"
+  local sqlite_lock_ready="${evidence_dir}/sqlite-lock-ready"
   local sqlite_lock_log="${evidence_dir}/sqlite-lock.log"
   local provider_ready="${evidence_dir}/provider-ready.txt"
   local provider_count="${evidence_dir}/provider-count.txt"
@@ -8066,9 +8174,6 @@ run_automatic_classification_contention_probe() (
   local provider_log="${evidence_dir}/provider.log"
   local provider_pid=""
   local provider_port
-  local sqlite_lock_pid=""
-  local sqlite_lock_fd_open=0
-  local sqlite_lock_acquired=0
   local provider_configuration_persisted=0
   local app_pid=""
   local sqlite_probe
@@ -8081,13 +8186,7 @@ run_automatic_classification_contention_probe() (
       kill "$app_pid" >/dev/null 2>&1 || true
       wait "$app_pid" 2>/dev/null || true
     fi
-    if [[ "$sqlite_lock_fd_open" == "1" ]]; then
-      printf "ROLLBACK;\n.quit\n" >&9 2>/dev/null || true
-      exec 9>&-
-    fi
-    if [[ -n "$sqlite_lock_pid" ]]; then
-      wait "$sqlite_lock_pid" 2>/dev/null || true
-    fi
+    stop_sqlite_write_lock_holder >/dev/null 2>&1 || true
     if [[ -n "$provider_pid" ]]; then
       kill "$provider_pid" >/dev/null 2>&1 || true
       wait "$provider_pid" 2>/dev/null || true
@@ -8112,24 +8211,12 @@ run_automatic_classification_contention_probe() (
     "$PWD/$health_count" \
     "$provider_log"
 
-  rm -f "$sqlite_lock_fifo" "$sqlite_lock_log" "$contention_marker" "$verify_result"
-  mkfifo -m 600 "$sqlite_lock_fifo"
-  sqlite3 "$database" <"$sqlite_lock_fifo" >"$sqlite_lock_log" 2>&1 &
-  sqlite_lock_pid=$!
-  exec 9>"$sqlite_lock_fifo"
-  sqlite_lock_fd_open=1
-  printf 'PRAGMA busy_timeout = 0;\nBEGIN IMMEDIATE;\n' >&9
-  for _ in {1..50}; do
-    if ! sqlite3 "$database" \
-      'PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK;' \
-      >/dev/null 2>&1; then
-      sqlite_lock_acquired=1
-      break
-    fi
-    sleep 0.1
-  done
-  if [[ "$sqlite_lock_acquired" != "1" ]] \
-    || ! kill -0 "$sqlite_lock_pid" 2>/dev/null; then
+  rm -f "$contention_marker" "$verify_result"
+  if ! start_sqlite_write_lock_holder \
+    "$database" \
+    "$sqlite_lock_fifo" \
+    "$sqlite_lock_ready" \
+    "$sqlite_lock_log"; then
     echo "failed to hold automatic classification SQLite write lock" >&2
     cat "$sqlite_lock_log" >&2
     exit 1
@@ -8188,16 +8275,11 @@ run_automatic_classification_contention_probe() (
     exit 1
   fi
 
-  printf 'ROLLBACK;\n.quit\n' >&9
-  exec 9>&-
-  sqlite_lock_fd_open=0
-  if ! wait "$sqlite_lock_pid"; then
+  if ! stop_sqlite_write_lock_holder; then
     echo "automatic classification SQLite lock holder failed" >&2
     cat "$sqlite_lock_log" >&2
     exit 1
   fi
-  sqlite_lock_pid=""
-  rm -f "$sqlite_lock_fifo"
 
   for _ in {1..400}; do
     if [[ -f "$verify_result" ]] || ! kill -0 "$app_pid" 2>/dev/null; then

@@ -80,6 +80,33 @@ struct EnginePersistenceCommitError: LocalizedError {
     }
 }
 
+@MainActor
+final class ReviewAutosaveStatus: ObservableObject {
+    @Published private(set) var message: String?
+
+    func markSaved(_ message: String) {
+        guard self.message != message else { return }
+        self.message = message
+    }
+
+    func clear() {
+        guard message != nil else { return }
+        message = nil
+    }
+}
+
+struct EngineMutationPerformanceSample {
+    let prepareMilliseconds: Double
+    let snapshotMilliseconds: Double
+    let cloneMilliseconds: Double
+    let mutationMilliseconds: Double
+    let automaticClassificationMilliseconds: Double
+    let persistenceMilliseconds: Double
+    let publishMilliseconds: Double
+    let totalMilliseconds: Double
+    let mainActorBlockingMilliseconds: Double
+}
+
 enum StoreMutationGateError: LocalizedError {
     case exclusiveOperationInProgress
     case pendingZhulongApplication
@@ -602,9 +629,26 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
-    @Published var engine = NoonmarkEngine() {
+    var engine = NoonmarkEngine() {
+        willSet {
+            if suppressesEngineObjectWillChange == false {
+                objectWillChange.send()
+            }
+        }
         didSet {
             engineRevision &+= 1
+            guard isInstallingEngineMutationLaneHead
+                == false,
+                let engineMutationLane
+            else {
+                return
+            }
+            publishedEngineMutationSequence =
+                engineMutationLane.replaceAndWait(
+                    with: engine
+                )
+            notifiedEngineMutationSequence =
+                publishedEngineMutationSequence
         }
     }
 
@@ -640,8 +684,24 @@ final class NoonmarkStore: ObservableObject {
     @Published var expandedUnfinishedChainIDs: Set<TaskChainID> = []
     @Published var expandedTaskCycleSeriesIDs: Set<TaskCycleSeriesID> = []
     @Published var collapsedCompletedHierarchyIDs: Set<TaskChainID> = []
-    @Published var quickText = ""
-    @Published var poolText = ""
+    let quickTextDraft = NoonmarkTextInputDraft()
+    let poolTextDraft = NoonmarkTextInputDraft()
+    let detailSubtaskTextDraft = NoonmarkTextInputDraft()
+    let detailNoteTextDraft = NoonmarkTextInputDraft()
+    let inputDraftFlushCoordinator =
+        InputDraftFlushCoordinator()
+    let reviewAutosaveStatus = ReviewAutosaveStatus()
+
+    var quickText: String {
+        get { quickTextDraft.text }
+        set { quickTextDraft.text = newValue }
+    }
+
+    var poolText: String {
+        get { poolTextDraft.text }
+        set { poolTextDraft.text = newValue }
+    }
+
     @Published var showingPicker: DatePickerPurpose?
     @Published var showingFromPoolPicker = false
     @Published var showingChangeDialog = false
@@ -653,8 +713,16 @@ final class NoonmarkStore: ObservableObject {
     @Published var isSidebarExpanded = MacUIShellLayout.sidebarExpandedByDefault
     @Published var isDetailRailExpanded = !MacUIShellLayout.detailRailCollapsedByDefault
     @Published var changeText = ""
-    @Published var detailSubtaskText = ""
-    @Published var detailNoteText = ""
+    var detailSubtaskText: String {
+        get { detailSubtaskTextDraft.text }
+        set { detailSubtaskTextDraft.text = newValue }
+    }
+
+    var detailNoteText: String {
+        get { detailNoteTextDraft.text }
+        set { detailNoteTextDraft.text = newValue }
+    }
+
     @Published var toast: String?
     @Published var operationFailureNotice: AppOperationFailureNotice?
     @Published var automaticClassificationStatusByChainID: [
@@ -673,7 +741,6 @@ final class NoonmarkStore: ObservableObject {
         HorizontalPageNavigationSwipeDirection
     @Published var recurringFuturePlanVisibility:
         RecurringFuturePlanVisibility
-    @Published var reviewAutosaveMessage: String?
     @Published var isLocalFirstSyncing = false
     @Published var localFirstSyncMessage: String?
     @Published var localFirstSyncTimestamps:
@@ -732,6 +799,14 @@ final class NoonmarkStore: ObservableObject {
     var undoStack: [UndoEntry] = []
     var redoStack: [RedoEntry] = []
     var engineRevision: UInt64 = 0
+    var engineMutationLane: OrderedEngineMutationLane?
+    var publishedEngineMutationSequence: UInt64 = 0
+    var notifiedEngineMutationSequence: UInt64 = 0
+    var isInstallingEngineMutationLaneHead = false
+    var suppressesEngineObjectWillChange = false
+    var hasDeferredAutomaticClassificationMutation = false
+    var e2eLastEngineMutationPerformanceSample:
+        EngineMutationPerformanceSample?
     var exclusiveEngineOperation: ExclusiveEngineOperation?
     var authorizedExclusiveEngineWrite:
         ExclusiveEngineOperation?
@@ -810,6 +885,9 @@ final class NoonmarkStore: ObservableObject {
         }
         recoverPendingZhulongApplication()
         try reconcileNaturalDayAtLaunch(initialMoment)
+        engineMutationLane = OrderedEngineMutationLane(
+            engine: engine
+        )
         Theme.apply(engine.preferences.theme)
         restoreLocalFirstSyncStatus()
         restartLocalFirstSyncAutomation()

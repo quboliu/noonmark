@@ -4,11 +4,9 @@ import SwiftUI
 struct RecurringPlansPage: View {
     @EnvironmentObject private var store: NoonmarkStore
 
-    private var tracks: [TaskCycleTrack] {
-        store.engine.taskCycleTracks(today: store.today)
-    }
-
-    private var listVerificationText: String {
+    private func listVerificationText(
+        for tracks: [TaskCycleTrack]
+    ) -> String {
         tracks.map {
             "\($0.title)|"
                 + store.copy.taskCycleLifecycleSummary(
@@ -19,6 +17,10 @@ struct RecurringPlansPage: View {
     }
 
     var body: some View {
+        let tracks = store.engine.taskCycleTracks(
+            today: store.today
+        )
+
         VStack(alignment: .leading, spacing: 0) {
             WorkspacePageHeader(
                 title: store.copy.navRecurring,
@@ -44,12 +46,13 @@ struct RecurringPlansPage: View {
                 )
                 .padding(.top, 12)
                 .padding(.bottom, 20)
-                .background {
-                    AppE2EViewAnchor(
-                        identifier: "recurring-plans.list",
-                        verificationText: listVerificationText
-                    )
-                }
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "recurring-plans.list",
+                            verificationText:
+                            listVerificationText(for: tracks)
+                        )
+                    }
             }
         }
     }

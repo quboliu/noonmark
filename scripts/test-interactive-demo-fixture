@@ -68,10 +68,20 @@ view_tree_path="${result_path%.json}.view-tree.txt"
 for expected in \
   '"status" : "ready"' \
   '"anchorDate" : "2026-07-24"' \
-  '"zhulongSessionCount" : 5' \
-  '"submittedTodoArtifactCount" : 1' \
-  '"editableTodoArtifactCount" : 1' \
-  '"dailyReviewReceiptCount" : 1' \
+  '"fixtureProfile" : "annual-v1"' \
+  '"storyDayCount" : 365' \
+  '"storyDateGapCount" : 0' \
+  '"storyDuplicateDateCount" : 0' \
+  '"storyDayWithOrdinaryTraceCount" : 365' \
+  '"featureReplayDayCount" : 12' \
+  '"featureReplayCoveredQuarterCount" : 4' \
+  '"zhulongSessionCount" : 20' \
+  '"submittedTodoArtifactCount" : 4' \
+  '"editableTodoArtifactCount" : 4' \
+  '"dailyReviewReceiptCount" : 4' \
+  '"habitInsightSessionCount" : 4' \
+  '"taskPoolAnalysisSessionCount" : 4' \
+  '"zhulongCoveredQuarterCount" : 4' \
   '"dayTodoMixedStatusSectionCount" : 2' \
   '"dayTodoGroupingPresentationVerified" : true' \
   '"taskCollectionCategoryVisibilityVerified" : true' \
@@ -132,17 +142,17 @@ collapsible_trail_count="$(
 continuable_unfinished_count="$(
   plutil -extract core.continuableUnfinishedTaskCount raw -o - "$result_path"
 )"
-if [[ "$single_day_completed_count" != "5" \
-      || "$ordinary_single_day_completed_count" != "5" \
+if [[ "$single_day_completed_count" -lt 365 \
+      || "$ordinary_single_day_completed_count" -lt 365 \
       || "$cycle_single_day_completed_count" != "0" \
-      || "$multi_day_completed_count" != "2" \
-      || "$cycle_series_count" != "4" \
-      || "$cycle_occurrence_count" != "57" \
-      || "$cycle_active_count" != "1" \
-      || "$cycle_upcoming_count" != "1" \
-      || "$cycle_ended_count" != "1" \
-      || "$cycle_stopped_count" != "1" \
-      || "$collapsible_trail_count" -lt 1 \
+      || "$multi_day_completed_count" -lt 24 \
+      || "$cycle_series_count" != "12" \
+      || "$cycle_occurrence_count" -lt 500 \
+      || "$cycle_active_count" != "3" \
+      || "$cycle_upcoming_count" != "3" \
+      || "$cycle_ended_count" != "3" \
+      || "$cycle_stopped_count" != "3" \
+      || "$collapsible_trail_count" -lt 12 \
       || "$continuable_unfinished_count" -lt 1 ]]; then
   echo "demo fixture task and cycle counts drifted" >&2
   sed -n '1,200p' "$result_path" >&2
@@ -197,8 +207,8 @@ sidecar_count="$(
     | wc -l \
     | tr -d ' '
 )"
-if [[ "$sidecar_count" != "5" ]]; then
-  echo "expected 5 encrypted Zhulong sessions, found $sidecar_count" >&2
+if [[ "$sidecar_count" != "20" ]]; then
+  echo "expected 20 encrypted Zhulong sessions, found $sidecar_count" >&2
   exit 1
 fi
 

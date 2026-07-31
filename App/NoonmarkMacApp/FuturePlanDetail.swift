@@ -32,28 +32,30 @@ struct FuturePlanDetail: View {
                 })
             })
             DetailPrimaryText {
-                EditableDetailTitleRow(definition.title, editable: true) {
-                    store.renameTraceTitle(
+                EditableDetailTitleRow(
+                    definition.title,
+                    ownerID:
+                    "task:\(trace.chainID.description):title",
+                    editable: true
+                ) {
+                    await store.autosaveTraceTitle(
                         traceID: trace.id,
-                        title: $0,
-                        immediately: true,
-                        reportsSuccess: false
+                        title: $0
                     )
                 }
             } description: {
                 DetailDescriptionBlock(
-                    text: Binding(
-                        get: { trace.descriptionText ?? "" },
-                        set: {
-                            store.updateTraceText(
-                                traceID: trace.id,
-                                descriptionText: $0,
-                                immediately: true
-                            )
-                        }
-                    ),
+                    ownerID:
+                    "trace:\(trace.id.description):description",
+                    text: trace.descriptionText ?? "",
                     placeholder: store.copy.planDescriptionPlaceholder,
-                    editable: true
+                    editable: true,
+                    onPersist: {
+                        await store.autosaveTraceText(
+                            traceID: trace.id,
+                            descriptionText: $0
+                        )
+                    }
                 )
             }
 

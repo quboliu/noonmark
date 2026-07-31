@@ -22,6 +22,9 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     private let fixedNaturalDayEnvironment: FixedNaturalDayEnvironment?
     private let workspaceStateRepository: WorkspaceStateRepository
     private let windowStatePersistenceEnabled: Bool
+    private var terminationTask: Task<Void, Never>?
+    private var terminationWasApproved = false
+    private var didPrepareForTermination = false
     private lazy var globalQuickEntryShortcutRegistrar =
         CarbonGlobalQuickEntryShortcutRegistrar()
     private lazy var globalQuickEntryShortcutCoordinator =
@@ -249,8 +252,102 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         if Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e" {
             NSLog("Noonmark E2E applicationWillTerminate reached")
         }
+        do {
+            try prepareForTerminationIfNeeded()
+        } catch {
+            NSLog(
+                "Noonmark termination storage finalization failed: %@",
+                String(reflecting: error)
+            )
+        }
+    }
+
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        if terminationWasApproved {
+            return .terminateNow
+        }
+        guard terminationTask == nil else {
+            return .terminateCancel
+        }
+        guard finalizeActiveTextInput(in: sender) else {
+            NSLog(
+                "Noonmark termination deferred: active text input refused to resign"
+            )
+            return .terminateCancel
+        }
+        terminationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            let succeeded =
+                await store.flushInputDraftsForTermination()
+            var terminationSucceeded = succeeded
+            if terminationSucceeded {
+                do {
+                    try prepareForTerminationIfNeeded()
+                } catch {
+                    terminationSucceeded = false
+                    NSLog(
+                        "Noonmark termination deferred: storage finalization failed: %@",
+                        String(reflecting: error)
+                    )
+                }
+            } else {
+                NSLog(
+                    "Noonmark termination deferred: input draft flush was rejected "
+                        + "failed_owners=%@ registered_owners=%@",
+                    store.inputDraftFlushCoordinator
+                        .lastFailedOwnerIDs.joined(separator: ","),
+                    store.inputDraftFlushCoordinator
+                        .registeredOwnerIDs.joined(separator: ",")
+                )
+            }
+            terminationTask = nil
+            guard terminationSucceeded else {
+                return
+            }
+            terminationWasApproved = true
+            sender.terminate(nil)
+        }
+        // Returning cancel lets AppKit unwind its synchronous termination
+        // stack so the MainActor flush task can run. A successful flush
+        // immediately starts a second, pre-approved termination request.
+        return .terminateCancel
+    }
+
+    private func finalizeActiveTextInput(
+        in application: NSApplication
+    ) -> Bool {
+        for window in application.windows {
+            guard let textView =
+                window.firstResponder as? NSTextView
+            else {
+                continue
+            }
+            if textView.hasMarkedText() {
+                textView.unmarkText()
+            }
+            guard window.makeFirstResponder(nil) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func prepareForTerminationIfNeeded() throws {
+        guard didPrepareForTermination == false else {
+            return
+        }
         globalQuickEntryShortcutCoordinator.stop()
-        store.prepareForTermination()
+        do {
+            try store.prepareForTermination()
+            didPrepareForTermination = true
+        } catch {
+            globalQuickEntryShortcutCoordinator.start()
+            throw error
+        }
     }
 
     func openMainWindow() {

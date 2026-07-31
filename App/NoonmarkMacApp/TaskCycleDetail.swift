@@ -8,17 +8,9 @@ struct TaskCycleDetail: View {
     @State private var showingStopConfirmation = false
     let series: TaskCycleSeries
 
-    private var track: TaskCycleTrack? {
-        store.engine.taskCycleTracks(today: store.today).first {
-            $0.id == series.id
-        }
-    }
-
-    private var isEditable: Bool {
-        track?.lifecycle.allowsPlanEditing == true
-    }
-
-    private var terminalNotice: String? {
+    private func terminalNotice(
+        for track: TaskCycleTrack?
+    ) -> String? {
         guard let track else {
             return nil
         }
@@ -33,6 +25,14 @@ struct TaskCycleDetail: View {
     }
 
     var body: some View {
+        let track = store.engine.taskCycleTrack(
+            seriesID: series.id,
+            today: store.today
+        )
+        let isEditable =
+            track?.lifecycle.allowsPlanEditing == true
+        let terminalNotice = terminalNotice(for: track)
+
         VStack(alignment: .leading, spacing: 14) {
             DetailHeader(
                 store.copy.taskCycleTemplateTitle,
@@ -41,26 +41,28 @@ struct TaskCycleDetail: View {
             DetailPrimaryText {
                 EditableDetailTitleRow(
                     series.title,
+                    ownerID:
+                    "task-cycle:\(series.id.description):title",
                     editable: isEditable
                 ) {
-                    store.updateTaskCycleTitle(
+                    await store.autosaveTaskCycleTitle(
                         seriesID: series.id,
                         title: $0
                     )
                 }
             } description: {
                 DetailDescriptionBlock(
-                    text: Binding(
-                        get: { series.descriptionText ?? "" },
-                        set: {
-                            store.updateTaskCycleDescription(
-                                seriesID: series.id,
-                                descriptionText: $0
-                            )
-                        }
-                    ),
+                    ownerID:
+                    "task-cycle:\(series.id.description):description",
+                    text: series.descriptionText ?? "",
                     placeholder: store.copy.taskDescriptionPlaceholder,
-                    editable: isEditable
+                    editable: isEditable,
+                    onPersist: {
+                        await store.autosaveTaskCycleDescription(
+                            seriesID: series.id,
+                            descriptionText: $0
+                        )
+                    }
                 )
             }
 
@@ -379,11 +381,12 @@ private struct TaskCyclePlannedSubtasksSection: View {
                         accessibilityIdentifier:
                         "task-cycle-subtask.\(subtask.id.description).title"
                     ) {
-                        store.renameTaskCyclePlannedSubtask(
-                            seriesID: series.id,
-                            subtaskID: subtask.id,
-                            title: $0
-                        )
+                        await store
+                            .autosaveTaskCyclePlannedSubtaskTitle(
+                                seriesID: series.id,
+                                subtaskID: subtask.id,
+                                title: $0
+                            )
                     }
 
                     Spacer()
@@ -435,8 +438,8 @@ private struct TaskCyclePlannedSubtasksSection: View {
             }
 
             if editable {
-                MarkdownEditor(
-                    text: $store.detailSubtaskText,
+                NoonmarkTransientMarkdownComposer(
+                    draft: store.detailSubtaskTextDraft,
                     placeholder: store.copy.addSubtaskPlaceholder,
                     style: .compact,
                     showsSurface: true,

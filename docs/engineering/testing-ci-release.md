@@ -31,10 +31,11 @@ Neon 的可借鉴点：
 - IT：跨模块集成测试，当前入口为 `scripts/test-integration`，覆盖 Storage schema、Core 类型契约和 SQLite repository 核心状态 round-trip；结构化附言必须验证稳定身份、编辑时间、删除墓碑及 `note_entries_json` 读写一致。
 - 数据包测试：随 Storage IT 运行，覆盖完整 snapshot round-trip、canonical bytes、写后回读与 SHA-256 回执、重复键拒绝和断裂引用拒绝。
 - ST：系统级本地测试，当前入口为 `scripts/test-system`，运行完整 SwiftPM test suite。
-- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，默认会先按开发 clean-cut 规则终止旧开发 App 并清除默认本地数据，再打包和打开隔离测试副本 `dist/NoonmarkMacAppE2E.app`；在同一次套件内，每次切换场景前等待测试副本完全退出，以避免 macOS WindowServer 竞态。套件同时保存 unified log、DiagnosticReports 差分与运行 manifest，任何新增崩溃、持久化、布局或辅助功能错误均 fail-closed。测试结束后如需体验普通用户中段状态，统一通过 `scripts/run-demo-app` 重建并打开十天演示基线；只有验证新用户空库或默认数据根时才使用 `scripts/run-mac-app`。
+- E2E：真实 Mac app 入口测试，当前入口为 `scripts/test-e2e`，默认会先按开发 clean-cut 规则终止旧开发 App 并清除默认本地数据，再打包和打开隔离测试副本 `dist/NoonmarkMacAppE2E.app`；在同一次套件内，每次切换场景前等待测试副本完全退出，以避免 macOS WindowServer 竞态。套件同时保存 unified log、DiagnosticReports 差分与运行 manifest，任何新增崩溃、持久化、布局或辅助功能错误均 fail-closed。测试结束后如需体验普通用户中段状态，统一通过 `scripts/run-demo-app` 重建并打开一年演示基线；只有验证新用户空库或默认数据根时才使用 `scripts/run-mac-app`。
   截图场景以 `scripts/test-e2e` 内的 `scenarios` 清单为唯一事实源，覆盖所有顶层页面、主要详情态、分类管理与任务详情分类编辑展开态、烛龙工作流和设置分区；其中 `pool-detail-classification-edit` 验证标签输入只在请求后展开。完整 E2E 还包含默认汇总侧栏 / 日历分析、当天子任务完成撤回和难度修改、附言逐条编辑 / 删除后重启、SQLite JSON 墓碑对账、废弃任务链留在未完成池、重新启用只取消废弃标记、烛龙导航随设置隐藏 / 显示，以及从 Finder 使用用户改写后的全局快捷键唤起 Quick Entry、保留草稿、提交入库和恢复前台 App 等真实 App 探针。UI 调试时可用 `NOONMARK_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `NOONMARK_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。测试副本固定为当前唯一的 `NoonmarkMacAppE2E` 身份，不接受 executable 或 bundle ID override。
 - UI 视觉证据：当前只以真实 `.app` 的 E2E 截图、交互断言、Accessibility 标识、日志和持久化探针作为自动化证据。归档 HTML 原型已经不代表当前产品，不得作为视觉 oracle，也不得通过上调阈值吸收结构差异。`scripts/test-visual-regression` 只提供显式的两图比较能力；只有用户确认过的真实 App 截图才能传入 `NOONMARK_VISUAL_REFERENCE` 建立 reference，当前尚未固化默认 reference，因此该入口不进入 CI 或 release 门禁。
-- 交互式演示 fixture：功能快速迭代的默认人工入口为 `make run-demo-app`，自动探针为 `make test-demo-fixture`。它与局部截图 seed 分离，通过真实领域接口重放固定十天用户故事，并对 SQLite、加密烛龙 sidecar、已提交／未提交任务产物和复盘回执 fail-closed 对账。覆盖契约与维护规则见 `docs/engineering/interactive-demo-fixture.md`。
+- 交互式演示 fixture：功能快速迭代的默认人工入口为 `make run-demo-app`，自动探针为 `make test-demo-fixture`。它与局部截图 seed 分离，通过真实领域接口重放固定一年用户故事，并对 SQLite、二十份加密烛龙 sidecar、已提交／未提交任务产物和复盘回执 fail-closed 对账。覆盖契约与维护规则见 `docs/engineering/interactive-demo-fixture.md`。
+- 腾讯输入法专项：`make test-tencent-ime-input-contract` 是可在 hosted runner 执行的快速门禁，强制 53 个输入面、24 个立即退出探针、硬阈值与实现／测试资产不漂移。`make test-tencent-ime-input-matrix` 和 `make test-tencent-ime-termination-persistence` 必须在安装并选中腾讯拼音、具有稳定签名和 Input Monitoring 权限的真实 WindowServer runner 执行；前者验证年度负载下逐键回显、marked text、burst、主线程占用和持久化回读，后者在最终回显后 250ms 内请求退出并重启对账 SQLite 或加密 sidecar。完整 E2E 的子任务原生编辑器探针另固定生成十键 `ascii-latency.tsv`，分离 WindowServer event delivery、编辑器 `keyDown`、AppKit 文本处理与 native snapshot；计时前必须以真实输入源、first responder 和选区状态证明现场就绪，不能用固定 sleep 或把输入源切换清理算作业务首键。Storage 门禁除持有真实 SQLite 读快照／写事务外，还必须证明已准备 Store 的热路径不重复 `journal_mode`／`quick_check`、活跃 repository 的共享 WAL anchor 阻止最后连接 teardown、普通 probe 仍可读取、无竞争退出会物化可独立回读的主库并关闭 runtime、外部 writer 的 `SQLITE_BUSY` 只延后 checkpoint 而不阻塞 runtime 关闭，以及文件或 schema 身份变化会重新完整校验；不得以 busy timeout 或重试代替连接生命周期修复。E2E 的真实写竞争注入统一先等待 WAL writer ready handshake，再用第二 writer 证明排他，不能用并发抢锁结果反推 holder 已就绪。除已由 holder handshake 证明的预期竞争分支外，所有真实 App runtime evidence 都把 `database is locked` 直接视为失败。完整方法与输入面表见 `docs/engineering/tencent-ime-input-performance.md`。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
 - Live AI Provider Smoke：只验证真实 DeepSeek provider，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，优先读取被 Git 忽略且权限为 `0600` 的 `config/ai-provider.local.json`，格式参考 `config/ai-provider.local.example.json`；也可显式提供 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`。它同时验证结构化归类、至少两个 SSE 文本片段、真实烛龙对话产物经过流式 adapter／Provider run／任务 diff／加密 sidecar 保存恢复的完整链，以及真实 App 自动归类；诊断烛龙链时可对底层 executable 显式设置 `NOONMARK_AI_ZHULONG_ONLY=1`，跳过无关归类请求。一旦手动启用，缺少 key、配置并非 DeepSeek、provider 不可达、流式传输不可用、烛龙产物无法形成可恢复任务 diff，或 EXIT 清理后 E2E Keychain／UserDefaults 仍有测试凭证都必须失败。
 - Live iCloud Sync：真实 Apple Account / iCloud Drive 手动测试，入口为 `NOONMARK_LIVE_ICLOUD_PACKAGE_PATH=/absolute/current-package.json scripts/test-icloud-sync-live`，不进入默认 `make check`；数据包路径为必填且缺失时 fail-closed，覆盖真实数据包双 SQLite 往返、record merge、真实 `.app` 同步、SQLite status、仓库 ref 与 `brctl` 上传完成信号。
@@ -42,7 +43,7 @@ Neon 的可借鉴点：
 
 ## 本机稳定签名与 TCC
 
-`scripts/test-e2e` 和 `scripts/test-dmg-install` 会自行强制稳定签名，不接受 ad-hoc 身份。两个 build 入口共用同一解析器，优先使用调用方显式传入的 `NOONMARK_CODESIGN_IDENTITY`；未显式传入时，只会自动选择当前 Keychain 中唯一有效的 `Apple Development` 身份。零个候选时给出一次性 Xcode 创建路径，多个候选时 fail-closed 并要求显式选择，绝不猜测 Team。解析器只把证书 fingerprint 留在当前进程内，不写入仓库或日志，私钥始终留在 Keychain。
+`scripts/test-e2e`、两套腾讯输入法真实矩阵和 `scripts/test-dmg-install` 会自行强制稳定签名，不接受 ad-hoc 身份。这些 build 入口共用同一解析器，优先使用调用方显式传入的 `NOONMARK_CODESIGN_IDENTITY`；未显式传入时，只会自动选择当前 Keychain 中唯一有效的 `Apple Development` 身份。零个候选时给出一次性 Xcode 创建路径，多个候选时 fail-closed 并要求显式选择，绝不猜测 Team。解析器只把证书 fingerprint 留在当前进程内，不写入仓库或日志，私钥始终留在 Keychain。
 
 本机只有一个开发身份时，用户只需在 `Xcode > Settings... > Accounts > Team > Manage Certificates...` 创建一次 `Apple Development` 证书，不需要在每次命令前设置环境变量。测试 App 固定使用 `app.noonmark.mac.e2e`，DMG helper 固定使用 `app.noonmark.test.dmg-install-harness`；稳定签名门禁同时拒绝含 `cdhash` 的 designated requirement。首次改用稳定签名后，需要把 `dist/NoonmarkMacAppE2E.app` 和 `artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app` 最后加入一次 `System Settings > Privacy & Security > Accessibility`。后续只要 Team、签名类别和 bundle identifier 不变，正常重编译不得再依赖重复授权。
 
@@ -56,6 +57,9 @@ make test-integration
 make test-system
 make test-deterministic-sim
 make test-e2e
+make test-tencent-ime-input-contract
+make test-tencent-ime-input-matrix
+make test-tencent-ime-termination-persistence
 make test-demo-fixture
 make run-demo-app
 make test-ai-provider-live
@@ -114,7 +118,7 @@ scripts/test-visual-regression
 合并到 `main` 或在 `main` ref 上手动触发：
 
 - 先在 GitHub-hosted Mac 运行 `scripts/check`。
-- 通过后才在带固定 `noonmark-ui-e2e` label、稳定签名身份与预授权 TCC 的持久交互式 Mac runner 运行 `scripts/test-e2e`，并上传截图与运行时证据。
+- 通过后才在带固定 `noonmark-ui-e2e` label、稳定签名身份、腾讯拼音与预授权 TCC 的持久交互式 Mac runner 运行 `scripts/test-e2e`、53 输入面性能矩阵和 24 输入面立即退出矩阵，并上传截图与运行时证据。
 - self-hosted E2E job 必须以 job-level ref／event 条件拒绝 `pull_request` 和非 `main` 的 `workflow_dispatch`。未合并 PR 可以修改仓库脚本，因此绝不得在持有签名资产和交互权限的持久 runner 上执行。
 
 Nightly：
@@ -126,7 +130,7 @@ Nightly：
 
 - 只允许在 `main` ref 手动触发 `.github/workflows/release.yml`；它没有 GitHub Release 写权限，也不接受 tag 自动触发。
 - 重新跑 `scripts/check`。
-- 在稳定 `Apple Development` 签名、预授权 TCC 的交互式 runner 重新跑 `scripts/test-e2e`，确认真实 Mac app 启动路径仍可用。
+- 在稳定 `Apple Development` 签名、预授权 TCC 的交互式 runner 重新跑 `scripts/test-e2e` 和两套腾讯拼音矩阵，确认真实 Mac app 启动、输入性能与退出 durability 仍可用。
 - 用 release 优化配置打包 `.app`，但产物只代表开发签名安装验收，不代表可公开分发。
 - 校验 DMG／zip checksum、挂载内容、严格 code signature、canonical icon、`.app` bundle、可执行文件、`Info.plist` 和 Applications shortcut。
 - 挂载 DMG 后复制 `.app` 到临时 Applications 目录，由不进入产物的独立 `NoonmarkDMGInstallHarness.app` 通过真实 WindowServer 输入打开 Settings、Quick Entry、建立任务、退出并重启；同时以 AX 可见性、截图、ledger、unified log、DiagnosticReports 与完整 SQLite joined-row 对账验证持久化。
@@ -165,8 +169,10 @@ Nightly：
 - 2026-07-06：`scripts/test-dmg-install dist/Noonmark.dmg` 通过，验证 DMG 内 `.app` 可复制安装、启动、截图和写入临时 SQLite。
 - 2026-07-16：最新 release `dist/Noonmark.dmg` 重新打包成功；checksum、挂载内容、canonical icon、optical variant、exported drag UTI 和 strict `codesign` 均通过，签名 TeamIdentifier 为 `7436PPJ79X`。最新 `scripts/test-dmg-install dist/Noonmark.dmg` exit 0：生产 App 忽略内部 E2E 参数，通过真实 WindowServer 输入打开 Settings／Quick Entry、建立任务、退出并重启；AX、截图、ledger、unified log、Diagnostic Reports 与 SQLite joined row 对账全部通过。`spctl` 因 Apple Development／未公证而拒绝是公开发行门禁的正确结果，不是安装 E2E 失败。
 - 2026-07-16：原 release workflow 会把 Apple Development 签名、未公证产物直接发布到 GitHub Release，已改为仅限 `main` 手动触发的开发签名发行验收：权限降为只读、移除 tag 与 `gh release` 路径、artifact 明确标记 `not-for-distribution`。正式发行在 Developer ID、Hardened Runtime、secure timestamp、公证、staple 和 Gatekeeper 验收齐备前保持 fail-closed。
-- 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，新用户空库只初始化并写入 1 条 preferences，不自动灌入演示任务；局部截图数据只在 `--ephemeral` 测试路径使用，交互式演示另由 2026-07-24 建立的隔离十天 fixture 提供。
-- 2026-07-24：固化 `NoonmarkDemoSupport`、`make test-demo-fixture` 与 `make run-demo-app`。真实 Demo App 探针已验证固定十天任务状态、SQLite 完整 snapshot、四份加密烛龙会话、已提交和可编辑任务产物，以及日终复盘回执。
+- 2026-07-06：Mac app 正常模式已接入 `SQLiteEngineRepository`；`--data-url` 临时 SQLite 启动探针通过，新用户空库只初始化并写入 1 条 preferences，不自动灌入演示任务；局部截图数据只在 `--ephemeral` 测试路径使用，交互式演示另由隔离 fixture 提供。
+- 2026-07-24：固化 `NoonmarkDemoSupport`、`make test-demo-fixture` 与 `make run-demo-app`，最初以十天故事建立单一可验证演示入口。
+- 2026-07-30：演示基线扩为 365 个连续自然日、十二个跨季度功能重放日、十二条重复计划和二十场加密烛龙会话；普通任务二十九项能力各至少真实使用十二次。腾讯拼音专项同时固化 53 输入面性能矩阵、24 输入面立即退出持久化探针和 CI／release 真实 WindowServer 门禁。
+- 2026-07-31：真实腾讯拼音年度性能矩阵在补齐烛龙内联单行输入的 AppKit 本地 draft 缓冲、Quick Entry 连续激活门禁和 SQLite 共享 WAL anchor 后 53／53 通过，最高 paced p95 66.468ms、最高单次回显 108.368ms，组合期间提前持久化为零；任务标题／描述 p95 为 62.838ms／58.718ms，今日总结／未完成原因／明日注意事项 p95 为 54.873ms／54.406ms／60.972ms。WAL close-race 另以 40 个独立真实 App 进程和 40 次 durable readback 放大验证，锁失败为零。立即退出矩阵 24／24 通过，并完成一次注入保存失败后的留窗重试；共 25／25 重启回读一致，六次加密 sidecar 明文缺失检查通过。
 - 2026-07-25：全局 Quick Entry 快捷键落地后，`make check` exit 0，完整 SwiftPM 系统套件执行 1116 项测试，1 项明确 opt-in 的 live iCloud 测试按设计跳过，0 失败；确定性仿真、运行证据、签名策略、DMG observer、SwiftLint 和 SwiftFormat 门禁均通过。完整 `scripts/test-e2e` exit 0，并通过真实 Settings 录制器把默认 `⌃⇧N` 改为 `⌃⇧K`，从 Finder 验证旧键失效、新键唤起、重复唤起保留草稿、回车只写入一个任务、主窗口不误开与 Finder 恢复前台。专项 E2E 另对账由真实主菜单生成、并按当前 keyboard layout 解析为物理 virtual key 的 8 个双修饰键冲突组合。最新 release DMG 已通过真实挂载、复制安装、Settings／Quick Entry 输入、SQLite 落库、重启回读、unified log 与 DiagnosticReports 检查。
 - 2026-07-06：设置页导出 / 导入已接入 `NoonmarkDataPackage` JSON 数据包；`swift test --filter NoonmarkStorageTests` 通过 5 个 Storage 测试。
 - 2026-07-20：`NoonmarkAITests` 中的 provider 测试均为 mock/contract 测试，不需要真实 API key；真实 DeepSeek 验证入口为 `scripts/test-ai-provider-live`，缺少本地配置或显式环境凭证时 fail-closed。

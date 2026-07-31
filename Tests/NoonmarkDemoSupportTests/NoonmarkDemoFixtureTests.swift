@@ -1,3 +1,4 @@
+import Foundation
 import NoonmarkCore
 @testable import NoonmarkDemoSupport
 import Testing
@@ -6,39 +7,75 @@ import Testing
 struct NoonmarkDemoFixtureTests {
     private let anchorDate = LocalDate("2026-07-24")
 
-    @Test("固定十天用户故事覆盖所有主要任务投影")
-    func coversTenDayUserStory() throws {
+    @Test("固定一年用户故事覆盖所有主要任务投影")
+    func coversAnnualUserStory() throws {
         let fixture = try NoonmarkDemoFixture.make(
             anchorDate: anchorDate
         )
 
-        #expect(fixture.storyDates.count == 10)
-        #expect(fixture.storyDates.first == LocalDate("2026-07-15"))
+        #expect(fixture.storyDates.count == 365)
+        #expect(fixture.storyDates.first == LocalDate("2025-07-25"))
         #expect(fixture.storyDates.last == anchorDate)
+        #expect(fixture.report.fixtureProfile == "annual-v1")
+        #expect(fixture.report.storyDayCount == 365)
+        #expect(fixture.report.storyDateGapCount == 0)
+        #expect(fixture.report.storyDuplicateDateCount == 0)
+        #expect(fixture.report.storyDayWithOrdinaryTraceCount == 365)
+        #expect(fixture.report.featureReplayDayCount == 12)
+        #expect(fixture.report.featureReplayCoveredQuarterCount == 4)
+        #expect(fixture.report.reviewedDayCount == 365)
+        #expect(
+            fixture.report.repeatedFeatureCounts.minimumUsageCount >= 12
+        )
+        #expect(
+            fixture.report.minimumRepeatedFeatureUsageCount >= 12
+        )
         #expect(fixture.engine.getDayTodo(date: anchorDate).traces.isEmpty == false)
         #expect(fixture.engine.taskPool().isEmpty == false)
         #expect(fixture.engine.futurePlans(today: anchorDate).isEmpty == false)
         #expect(fixture.engine.unfinishedPool().isEmpty == false)
         #expect(fixture.engine.completedPool().isEmpty == false)
+        #expect(
+            fixture.engine.taskPoolCount()
+                == fixture.engine.taskPool().count
+        )
+        #expect(
+            fixture.engine.unfinishedPoolCount()
+                == fixture.engine.unfinishedPool().count
+        )
+        #expect(
+            fixture.engine.completedTaskHierarchyCount()
+                == fixture.engine.completedTaskHierarchies().count
+        )
         let track = try #require(
-            fixture.engine.taskCycleTracks(today: anchorDate).first
+            fixture.engine.taskCycleTracks(today: anchorDate).first {
+                $0.title == "每日产品复盘"
+            }
+        )
+        #expect(
+            fixture.engine.taskCycleTrack(
+                seriesID: track.id,
+                today: anchorDate
+            ) == track
         )
         #expect(track.days.count == 13)
-        #expect(fixture.report.taskCycleSeriesCount == 4)
-        #expect(fixture.report.taskCycleOccurrenceCount == 57)
+        #expect(fixture.report.taskCycleSeriesCount == 12)
+        #expect(fixture.report.taskCycleOccurrenceCount >= 500)
         #expect(fixture.report.classifiedTaskCycleSeriesCount == 2)
         #expect(
-            fixture.report.taskCycleSeriesWithPlannedSubtasksCount == 2
+            fixture.report.taskCycleSeriesWithPlannedSubtasksCount >= 10
         )
-        #expect(fixture.report.taskCyclePlanRevisionCount == 5)
-        #expect(fixture.report.unstartedTaskCycleSeriesCount == 1)
+        #expect(fixture.report.taskCyclePlanRevisionCount >= 8)
+        #expect(fixture.report.taskCycleSkippedOccurrenceCount >= 3)
+        #expect(fixture.report.taskCycleRescheduledOccurrenceCount >= 3)
+        #expect(fixture.report.unstartedTaskCycleSeriesCount >= 3)
         #expect(
             fixture.report.taskCycleLifecycleCounts
                 == NoonmarkDemoTaskCycleLifecycleCounts(
-                    active: 1,
-                    upcoming: 1,
-                    ended: 1,
-                    stopped: 1
+                    active: 3,
+                    upcoming: 3,
+                    ended: 3,
+                    stopped: 3
                 )
         )
         #expect(
@@ -46,7 +83,7 @@ struct NoonmarkDemoFixtureTests {
         )
         #expect(fixture.report.recurringCollectionLeakCount == 0)
         #expect(
-            fixture.engine.taskCycleTracks(today: anchorDate).count == 4
+            fixture.engine.taskCycleTracks(today: anchorDate).count == 12
         )
         #expect(fixture.engine.taskPool().allSatisfy {
             fixture.engine.isRecurringTaskChain($0.chain.id) == false
@@ -74,6 +111,44 @@ struct NoonmarkDemoFixtureTests {
         )
         #expect(movedFutureTarget.date == LocalDate("2026-07-28"))
         #expect(fixture.report.isComplete)
+    }
+
+    @Test("年度历史让每项普通任务能力至少真实重放十二次")
+    func repeatsEveryOrdinaryTaskFeature() throws {
+        let fixture = try NoonmarkDemoFixture.make(
+            anchorDate: anchorDate
+        )
+        let counts = fixture.report.repeatedFeatureCounts
+
+        #expect(counts.poolTaskCreation >= 12)
+        #expect(counts.poolTaskTextEditing >= 12)
+        #expect(counts.taskTitleEditing >= 12)
+        #expect(counts.taskDescriptionEditing >= 12)
+        #expect(counts.noteLifecycle >= 12)
+        #expect(counts.plannedSubtaskEditing >= 12)
+        #expect(counts.scheduling >= 12)
+        #expect(counts.priorityReordering >= 12)
+        #expect(counts.pinLifecycle >= 12)
+        #expect(counts.manualProgressEditing >= 12)
+        #expect(counts.taskCompletion >= 12)
+        #expect(counts.taskCompletionUndo >= 12)
+        #expect(counts.unfinishedContinuation >= 12)
+        #expect(counts.deferral >= 12)
+        #expect(counts.deferralWithdrawal >= 12)
+        #expect(counts.taskChange >= 12)
+        #expect(counts.returnToPool >= 12)
+        #expect(counts.abandonment >= 12)
+        #expect(counts.reactivation >= 12)
+        #expect(counts.copying >= 12)
+        #expect(counts.futureRescheduling >= 12)
+        #expect(counts.subtaskCreation >= 12)
+        #expect(counts.subtaskTextEditing >= 12)
+        #expect(counts.subtaskDifficultyEditing >= 12)
+        #expect(counts.subtaskCompletion >= 12)
+        #expect(counts.subtaskCompletionUndo >= 12)
+        #expect(counts.subtaskAbandonment >= 12)
+        #expect(counts.subtaskDeletion >= 12)
+        #expect(counts.classification >= 12)
     }
 
     @Test("基线包含真实边界状态而非仅有页面占位数据")
@@ -131,7 +206,7 @@ struct NoonmarkDemoFixtureTests {
                     && engine.chains[
                         $0.trace.chainID
                     ]?.cycleMembership == nil
-            } == 5
+            } >= 365
         )
         #expect(
             completedItems.allSatisfy {
@@ -142,7 +217,7 @@ struct NoonmarkDemoFixtureTests {
         #expect(
             completedItems.count {
                 $0.trajectory.traces.count >= 2
-            } == 2
+            } >= 24
         )
         let ordinaryHierarchies =
             engine.completedTaskHierarchies().filter {
@@ -160,6 +235,42 @@ struct NoonmarkDemoFixtureTests {
                     && $0.completedChildren.count == 3
             }
         )
+    }
+
+    @Test("跨冬夏令时仍按纽约自然日连续生成")
+    func preservesCivilDatesAcrossDST() throws {
+        let fixture = try NoonmarkDemoFixture.make(
+            anchorDate: anchorDate
+        )
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(
+            TimeZone(identifier: "America/New_York")
+        )
+        let snapshot = fixture.engine.snapshot()
+
+        for date in [
+            LocalDate("2025-11-02"),
+            LocalDate("2026-03-08")
+        ] {
+            let trace = try #require(
+                snapshot.traces.first {
+                    $0.date == date
+                        && fixture.engine.chains[$0.chainID]?
+                        .cycleMembership == nil
+                        && calendar.component(
+                            .hour,
+                            from: $0.createdAt
+                        ) == 8
+                }
+            )
+            let components = calendar.dateComponents(
+                [.year, .month, .day],
+                from: trace.createdAt
+            )
+            #expect(components.year == date.year)
+            #expect(components.month == date.month)
+            #expect(components.day == date.day)
+        }
     }
 
     @Test("相同锚点生成相同语义覆盖清单")

@@ -1681,8 +1681,10 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 | `make build` | 清理开发数据并 Swift build |
 | `make test` | Swift tests |
 | `make check` | build、分层测试、lint、format 和证据门禁 |
-| `make run-demo-app` | 十天中段状态的交互验收 |
+| `make run-demo-app` | 一年中段状态的交互验收 |
 | `make test-demo-fixture` | demo SQLite 与加密 sidecar 回读 |
+| `make test-tencent-ime-input-matrix` | 年度负载下的真实腾讯拼音 53 输入面性能矩阵 |
+| `make test-tencent-ime-termination-persistence` | 输入后立即退出与重启持久化对账 |
 | `scripts/test-e2e` | 真实 Mac App E2E |
 | `scripts/test-ai-provider-live` | 显式凭证的 live Provider smoke |
 | `scripts/test-cloudkit-sync-live` | 签名 CloudKit live 验证 |
@@ -1730,12 +1732,14 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 
 原因是项目尚未发布，当前 schema 和当前二进制是唯一版本。保留旧测试数据库会制造假的兼容问题和错误同步记录。
 
-### 16.7 十天演示 fixture
+### 16.7 一年演示 fixture
 
 交互验收不使用空库：
 
-- 由 `NoonmarkDemoSupport` 通过真实领域接口重放十天用户故事；
+- 由 `NoonmarkDemoSupport` 通过真实领域接口重放 365 天用户故事；
+- 十二个功能重放日横跨四个季度，每项普通任务能力至少真实使用十二次；
 - 覆盖五大集合、跨日轨迹、子任务、分类、复盘和烛龙会话；
+- 十二条重复计划覆盖四种生命周期，二十场烛龙会话覆盖四个季度；
 - 写入隔离 SQLite；
 - 写入加密 sidecar；
 - 写后精确回读；

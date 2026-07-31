@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+configuration="${1:-debug}"
+probe_dir="$repo_root/artifacts/e2e-tencent-ime-input-latency"
+database_path="$probe_dir/Noonmark.sqlite"
+result_path="$probe_dir/result.txt"
+app_log="$probe_dir/app.log"
+app_path="$repo_root/dist/NoonmarkMacAppE2E.app"
+
+case "$probe_dir" in
+  "$repo_root"/artifacts/e2e-tencent-ime-input-latency) ;;
+  *)
+    echo "unsafe Tencent IME probe directory: $probe_dir" >&2
+    exit 1
+    ;;
+esac
+
+scripts/build-mac-app "$configuration" e2e >/dev/null
+rm -rf "$probe_dir"
+mkdir -p "$probe_dir"
+
+/usr/bin/open -W -n "$app_path" --args \
+  --data-url "$database_path" \
+  --page pool \
+  --e2e-tencent-ime-input-latency \
+  --e2e-tencent-ime-input-latency-result-url "$result_path" \
+  >"$app_log" 2>&1 &
+launcher_pid=$!
+
+for _ in {1..400}; do
+  if [[ -f "$result_path" ]] || ! kill -0 "$launcher_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+
+if [[ ! -f "$result_path" ]]; then
+  pkill -x NoonmarkMacAppE2E 2>/dev/null || true
+  wait "$launcher_pid" 2>/dev/null || true
+  echo "Tencent IME latency result was not created" >&2
+  sed -n '1,200p' "$app_log" >&2
+  exit 1
+fi
+
+for _ in {1..80}; do
+  if ! kill -0 "$launcher_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+if kill -0 "$launcher_pid" 2>/dev/null; then
+  pkill -x NoonmarkMacAppE2E 2>/dev/null || true
+  wait "$launcher_pid" 2>/dev/null || true
+  echo "Tencent IME latency App did not terminate" >&2
+  exit 1
+fi
+wait "$launcher_pid"
+
+if ! grep -Fxq "status=PASS" "$result_path"; then
+  echo "Tencent IME latency probe failed" >&2
+  sed -n '1,200p' "$result_path" >&2
+  sed -n '1,200p' "$app_log" >&2
+  exit 1
+fi
+
+persisted_count="$(sqlite3 -noheader "$database_path" "
+  SELECT COUNT(*)
+  FROM task_definitions
+  WHERE superseded_at IS NULL
+    AND length(title) > 0
+    AND description_text IS NOT NULL
+    AND length(description_text) > 6;
+")"
+if [[ "$persisted_count" != "1" ]]; then
+  echo "Tencent IME committed description was not persisted exactly once" >&2
+  exit 1
+fi
+
+sed -n '1,200p' "$result_path"

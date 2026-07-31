@@ -29,12 +29,12 @@ struct CompletedRecordDetail: View {
                 DetailTitleRow(store.copy.displayTaskTitle(item.definition.title))
             } description: {
                 DetailDescriptionBlock(
-                    text: Binding(
-                        get: { item.trace.descriptionText ?? "" },
-                        set: { store.updateTraceText(traceID: item.trace.id, descriptionText: $0) }
-                    ),
+                    ownerID:
+                    "trace:\(item.trace.id.description):description",
+                    text: item.trace.descriptionText ?? "",
                     placeholder: store.copy.taskDescriptionPlaceholder,
-                    editable: false
+                    editable: false,
+                    onPersist: { _ in false }
                 )
             }
 

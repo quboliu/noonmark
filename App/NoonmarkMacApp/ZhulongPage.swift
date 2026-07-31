@@ -74,6 +74,20 @@ struct ZhulongProviderSecureField: View {
     @Binding var text: String
     let placeholder: String
     let hasStoredValue: Bool
+    @State private var localText: String
+
+    init(
+        label: String,
+        text: Binding<String>,
+        placeholder: String,
+        hasStoredValue: Bool
+    ) {
+        self.label = label
+        _text = text
+        self.placeholder = placeholder
+        self.hasStoredValue = hasStoredValue
+        _localText = State(initialValue: text.wrappedValue)
+    }
 
     private var displayedPlaceholder: String {
         text.isEmpty && hasStoredValue ? "••••••••••••" : placeholder
@@ -85,12 +99,18 @@ struct ZhulongProviderSecureField: View {
                 .font(.noonmarkSystem(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.text3)
             NativeSettingsSecureField(
-                text: $text,
+                text: $localText,
                 placeholder: displayedPlaceholder,
                 identifier: "settings.zhulong.provider.api-key",
-                accessibilityLabel: label
+                accessibilityLabel: label,
+                onEndEditing: { text = $0 }
             )
             .frame(maxWidth: .infinity)
+        }
+        .onChange(of: text) { _, persistedText in
+            if localText != persistedText {
+                localText = persistedText
+            }
         }
     }
 }

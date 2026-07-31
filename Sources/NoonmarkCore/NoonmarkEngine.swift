@@ -55,6 +55,21 @@ public final class NoonmarkEngine {
         classificationState = snapshot.classifications
     }
 
+    /// Creates an isolated copy of an already-valid live engine without
+    /// repeating full snapshot integrity validation. Dictionary storage stays
+    /// copy-on-write until the candidate mutates an affected collection.
+    public convenience init(copying source: NoonmarkEngine) {
+        self.init()
+        days = source.days
+        taskCycleSeries = source.taskCycleSeries
+        chains = source.chains
+        definitions = source.definitions
+        traces = source.traces
+        subtasks = source.subtasks
+        preferences = source.preferences
+        classificationState = source.classificationState
+    }
+
     public func snapshot() -> NoonmarkSnapshot {
         let traceByID = traces
         return NoonmarkSnapshot(
@@ -100,7 +115,7 @@ public final class NoonmarkEngine {
         replacing currentSnapshot: NoonmarkSnapshot,
         now: Date = Date()
     ) throws -> SnapshotUndoOutcome {
-        let candidate = try NoonmarkEngine(snapshot: snapshot())
+        let candidate = NoonmarkEngine(copying: self)
         let outcome = try candidate.prepareSnapshotUndoInPlace(
             replacing: currentSnapshot,
             now: now
@@ -172,7 +187,7 @@ public final class NoonmarkEngine {
         decisionID: UUID,
         now: Date = Date()
     ) throws -> TaskCategoryDeletionCommitSequence {
-        let candidate = try NoonmarkEngine(snapshot: snapshot())
+        let candidate = NoonmarkEngine(copying: self)
         let sequence = try candidate.deleteTaskCategoryFromTodayInPlace(
             categoryID,
             today: today,
@@ -1074,13 +1089,35 @@ public final class NoonmarkEngine {
     }
 
     public func taskPool() -> [PoolTask] {
-        chains.values
-            .filter { isInTaskPool($0.id) }
+        let traceFactsByChain = chainTraceFactsByChain()
+        let currentDefinitionsByChain = currentDefinitionsByChain()
+
+        return chains.values
             .compactMap { chain in
-                guard let definition = try? currentDefinition(for: chain.id) else { return nil }
+                guard
+                    isInTaskPool(
+                        chain,
+                        traceFacts: traceFactsByChain[chain.id]
+                    ),
+                    let definition = currentDefinitionsByChain[chain.id]
+                else {
+                    return nil
+                }
                 return PoolTask(chain: chain, definition: definition)
             }
             .sorted { $0.definition.createdAt < $1.definition.createdAt }
+    }
+
+    public func taskPoolCount() -> Int {
+        let traceFactsByChain = chainTraceFactsByChain()
+        let currentDefinitionsByChain = currentDefinitionsByChain()
+        return chains.values.count { chain in
+            currentDefinitionsByChain[chain.id] != nil
+                && isInTaskPool(
+                    chain,
+                    traceFacts: traceFactsByChain[chain.id]
+                )
+        }
     }
 
     public func isRecurringTaskChain(_ chainID: TaskChainID) -> Bool {
@@ -1243,6 +1280,21 @@ public final class NoonmarkEngine {
         }
     }
 
+    public func unfinishedPoolCount() -> Int {
+        let traceFactsByChain = chainTraceFactsByChain()
+        let currentDefinitionsByChain = currentDefinitionsByChain()
+        return chains.values.count { chain in
+            guard let traceFacts = traceFactsByChain[chain.id] else {
+                return false
+            }
+            return chain.cycleMembership == nil
+                && (chain.state == .active || chain.state == .abandoned)
+                && currentDefinitionsByChain[chain.id] != nil
+                && traceFacts.hasUnfinishedCandidate
+                && traceFacts.hasCompletedTrace == false
+        }
+    }
+
     public func completedPool() -> [CompletedPoolItem] {
         traces.values
             .filter {
@@ -1342,6 +1394,29 @@ public final class NoonmarkEngine {
             }
             return $0.chain.id.description < $1.chain.id.description
         }
+    }
+
+    public func completedTaskHierarchyCount() -> Int {
+        var completedChainIDs: Set<TaskChainID> = []
+        for trace in traces.values
+        where trace.status == .completed
+            && chains[trace.chainID]?.cycleMembership == nil
+            && definitions[trace.definitionID] != nil
+        {
+            completedChainIDs.insert(trace.chainID)
+        }
+        for subtask in subtasks.values where subtask.status == .completed {
+            guard
+                let trace = traces[subtask.traceID],
+                trace.formsDayHistory,
+                chains[trace.chainID]?.cycleMembership == nil,
+                definitions[trace.definitionID] != nil
+            else {
+                continue
+            }
+            completedChainIDs.insert(trace.chainID)
+        }
+        return completedChainIDs.count
     }
 
     private func latestCompletedChildren(
@@ -3177,6 +3252,22 @@ private extension NoonmarkEngine {
         return definition
     }
 
+    func currentDefinitionsByChain() -> [TaskChainID: TaskDefinition] {
+        definitions.values.reduce(
+            into: [TaskChainID: TaskDefinition]()
+        ) { currentByChain, definition in
+            guard definition.supersededAt == nil else {
+                return
+            }
+            if let current = currentByChain[definition.chainID],
+               current.sequence >= definition.sequence
+            {
+                return
+            }
+            currentByChain[definition.chainID] = definition
+        }
+    }
+
     func ensureActiveChain(_ id: TaskChainID) throws {
         let chain = try chain(id)
         guard chain.state == .active else {
@@ -3209,31 +3300,95 @@ private extension NoonmarkEngine {
     }
 
     func isInTaskPool(_ chainID: TaskChainID) -> Bool {
-        guard let chain = chains[chainID],
-              chain.state == .active,
-              isRecurringTaskChain(chainID) == false
+        guard let chain = chains[chainID] else {
+            return false
+        }
+
+        var traceFacts: ChainTraceFacts?
+        for trace in traces.values where trace.chainID == chainID {
+            if traceFacts == nil {
+                traceFacts = ChainTraceFacts()
+            }
+            traceFacts?.ingest(trace)
+        }
+
+        return isInTaskPool(chain, traceFacts: traceFacts)
+    }
+
+    func isInTaskPool(
+        _ chain: TaskChain,
+        traceFacts: ChainTraceFacts?
+    ) -> Bool {
+        guard
+            chain.state == .active,
+            chain.cycleMembership == nil
         else {
             return false
         }
 
-        let chainTraces = traces.values.filter { $0.chainID == chainID }
-        guard chainTraces.isEmpty == false else {
+        guard let traceFacts else {
             return true
         }
-        guard activeTrace(for: chainID) == nil else {
+        guard traceFacts.activeTrace == nil else {
             return false
         }
-        let latest = chainTraces.max { lhs, rhs in
-            if lhs.contentUpdatedAt != rhs.contentUpdatedAt {
-                return lhs.contentUpdatedAt < rhs.contentUpdatedAt
-            }
-            if lhs.createdAt != rhs.createdAt {
-                return lhs.createdAt < rhs.createdAt
-            }
-            return lhs.id.description < rhs.id.description
+        return traceFacts.latestTrace?.status == .returnedToPool
+            || traceFacts.latestTrace?.status == .cancelledDraft
+    }
+
+    func chainTraceFactsByChain() -> [TaskChainID: ChainTraceFacts] {
+        traces.values.reduce(
+            into: [TaskChainID: ChainTraceFacts]()
+        ) { factsByChain, trace in
+            factsByChain[trace.chainID, default: ChainTraceFacts()]
+                .ingest(trace)
         }
-        return latest?.status == .returnedToPool
-            || latest?.status == .cancelledDraft
+    }
+
+    struct ChainTraceFacts {
+        var activeTrace: DayTrace?
+        var latestTrace: DayTrace?
+        var hasCompletedTrace = false
+        var hasUnfinishedCandidate = false
+
+        mutating func ingest(_ trace: DayTrace) {
+            if trace.status == .pending,
+               activeTrace == nil
+                   || trace.createdAt
+                   > (activeTrace?.createdAt ?? .distantPast)
+            {
+                activeTrace = trace
+            }
+            if latestTrace == nil
+                || Self.isLater(trace, than: latestTrace)
+            {
+                latestTrace = trace
+            }
+            if trace.status == .completed {
+                hasCompletedTrace = true
+            }
+            if trace.status == .unfinished
+                || trace.status == .abandoned
+            {
+                hasUnfinishedCandidate = true
+            }
+        }
+
+        private static func isLater(
+            _ candidate: DayTrace,
+            than current: DayTrace?
+        ) -> Bool {
+            guard let current else {
+                return true
+            }
+            if candidate.contentUpdatedAt != current.contentUpdatedAt {
+                return candidate.contentUpdatedAt > current.contentUpdatedAt
+            }
+            if candidate.createdAt != current.createdAt {
+                return candidate.createdAt > current.createdAt
+            }
+            return candidate.id.description > current.id.description
+        }
     }
 
     func reviewStats(for items: [DayTrace]) -> DailyReviewStats {

@@ -202,7 +202,12 @@ extension NoonmarkStore {
         return true
     }
 
-    func updateReview(summary: String? = nil, reason: String? = nil, tomorrow: String? = nil) {
+    @discardableResult
+    func updateReview(
+        summary: String? = nil,
+        reason: String? = nil,
+        tomorrow: String? = nil
+    ) -> Bool {
         let existing = engine.days[selectedDate]
         do {
             try commitEngineMutation(undoPolicy: .invalidate) { candidate, moment in
@@ -214,10 +219,50 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
-            reviewAutosaveMessage = copy.reviewAutoSaved
+            reviewAutosaveStatus.markSaved(copy.reviewAutoSaved)
+            resolveOperationFailure(.dailyReview)
+            return true
         } catch {
-            reviewAutosaveMessage = nil
+            reviewAutosaveStatus.clear()
             showOperationFailure(.dailyReview, error: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func autosaveReview(
+        summary: String? = nil,
+        reason: String? = nil,
+        tomorrow: String? = nil
+    ) async -> Bool {
+        let date = selectedDate
+        do {
+            try await commitEngineMutationInBackground(
+                undoPolicy: .invalidate,
+                publishesEngine: false
+            ) { candidate, moment in
+                let existing = candidate.days[date]
+                candidate.updateDailyReview(
+                    date: date,
+                    summary:
+                    summary ?? existing?.reviewSummary,
+                    unfinishedReason:
+                    reason
+                        ?? existing?
+                        .reviewUnfinishedReason,
+                    tomorrowNote:
+                    tomorrow
+                        ?? existing?.reviewTomorrowNote,
+                    now: moment.instant
+                )
+            }
+            reviewAutosaveStatus.markSaved(copy.reviewAutoSaved)
+            resolveOperationFailure(.dailyReview)
+            return true
+        } catch {
+            reviewAutosaveStatus.clear()
+            showOperationFailure(.dailyReview, error: error)
+            return false
         }
     }
 

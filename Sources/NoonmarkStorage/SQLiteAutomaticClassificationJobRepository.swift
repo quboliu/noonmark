@@ -7,15 +7,17 @@ public final class SQLiteAutomaticClassificationJobRepository {
     private static let busyTimeoutMilliseconds: Int32 = 250
 
     private let databaseURL: URL
+    private let storeRuntime: SQLiteStoreRuntime
 
     public init(databaseURL: URL) {
         self.databaseURL = databaseURL
+        storeRuntime = SQLiteStoreRuntime.shared(for: databaseURL)
     }
 
     public func job(id: UUID) throws -> AutomaticClassificationJob? {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
-        try SQLiteSchema.installOrValidate(on: database)
+        try storeRuntime.prepare(database)
         return try SQLiteAutomaticClassificationJobSQL.job(id: id, in: database)
     }
 
@@ -26,7 +28,7 @@ public final class SQLiteAutomaticClassificationJobRepository {
     ) throws -> [AutomaticClassificationJob] {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
-        try SQLiteSchema.installOrValidate(on: database)
+        try storeRuntime.prepare(database)
         return try SQLiteAutomaticClassificationJobSQL.jobs(
             states: states,
             in: database
@@ -36,7 +38,7 @@ public final class SQLiteAutomaticClassificationJobRepository {
     public func providerCircuit() throws -> AutomaticClassificationProviderCircuit? {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
-        try SQLiteSchema.installOrValidate(on: database)
+        try storeRuntime.prepare(database)
         return try SQLiteAutomaticClassificationJobSQL.providerCircuit(in: database)
     }
 
@@ -73,7 +75,7 @@ public final class SQLiteAutomaticClassificationJobRepository {
     public func pendingBacklog() throws -> AutomaticClassificationBacklogSnapshot {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
-        try SQLiteSchema.installOrValidate(on: database)
+        try storeRuntime.prepare(database)
         return try SQLiteAutomaticClassificationJobSQL.pendingBacklog(in: database)
     }
 
@@ -365,7 +367,7 @@ public final class SQLiteAutomaticClassificationJobRepository {
     ) throws -> T {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
-        try SQLiteSchema.installOrValidate(on: database)
+        try storeRuntime.prepare(database)
         try SQLiteAutomaticClassificationJobSQL.execute(
             "BEGIN IMMEDIATE TRANSACTION",
             on: database

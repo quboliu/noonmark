@@ -47,6 +47,7 @@ final class NoonmarkSearchWindowController: NSWindowController {
 
     func show(onReveal: @escaping (WorkspaceSearchResult) -> Void) {
         model.onReveal = onReveal
+        model.prepare(engine: store.engine)
         model.requestFocus()
         window?.title = store.copy.searchCommand
         showWindow(nil)
@@ -62,11 +63,21 @@ final class NoonmarkSearchWindowController: NSWindowController {
 @MainActor
 final class NoonmarkSearchWindowModel: ObservableObject {
     @Published private(set) var focusRequest = 0
+    @Published private var searchIndex:
+        WorkspaceSearchIndex?
     var onReveal: ((WorkspaceSearchResult) -> Void)?
     var onClose: (() -> Void)?
 
     func requestFocus() {
         focusRequest &+= 1
+    }
+
+    func prepare(engine: NoonmarkEngine) {
+        searchIndex = WorkspaceSearchIndex(engine: engine)
+    }
+
+    func search(_ query: String) -> [WorkspaceSearchResult] {
+        searchIndex?.search(query) ?? []
     }
 
     func reveal(_ result: WorkspaceSearchResult) {
@@ -83,7 +94,7 @@ private struct NoonmarkSearchView: View {
     @FocusState private var searchIsFocused: Bool
 
     private var results: [WorkspaceSearchResult] {
-        WorkspaceSearchIndex(engine: store.engine).search(query)
+        model.search(query)
     }
 
     var body: some View {

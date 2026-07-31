@@ -144,13 +144,16 @@ public enum TrajectoryTopologyValidator {
     private static func activeTraceIssues(
         _ traces: [DayTrace]
     ) -> [TrajectoryTopologyValidationIssue] {
-        Dictionary(
+        let pendingByChain = Dictionary(
             grouping: traces.filter { $0.status == .pending },
             by: \.chainID
-        ).keys.sorted(by: chainComesBefore).compactMap { chainID in
-            traces.filter {
-                $0.chainID == chainID && $0.status == .pending
-            }.count > 1 ? .duplicateActiveTrace(chainID) : nil
+        )
+        return pendingByChain.keys
+            .sorted(by: chainComesBefore)
+            .compactMap { chainID in
+                pendingByChain[chainID, default: []].count > 1
+                    ? .duplicateActiveTrace(chainID)
+                    : nil
         }
     }
 

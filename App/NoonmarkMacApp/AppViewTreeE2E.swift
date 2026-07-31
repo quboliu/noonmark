@@ -14,8 +14,38 @@ enum AppViewTreeE2E {
         let presentationWindowNumber: Int
     }
 
+    struct ButtonInteractionTarget {
+        let coordinateView: NSView
+        let window: NSWindow
+        let windowPoint: NSPoint
+    }
+
     static func view(identifier: String) -> NSView? {
         let matches = visibleViews(identifier: identifier)
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
+    /// Resolves an attached view even when it is currently clipped by a
+    /// scroll view. E2E drivers can use this to scroll a real user surface
+    /// into view before delivering pointer or keyboard events.
+    static func attachedView(identifier: String) -> NSView? {
+        let windows = NSApp.windows.filter {
+            $0.isVisible
+                && $0.isMiniaturized == false
+                && $0.alphaValue > 0
+        }
+        let matches = windows.flatMap { window -> [NSView] in
+            guard let root = window.contentView?.superview
+                ?? window.contentView
+            else {
+                return []
+            }
+            return allViews(from: root).filter {
+                $0.identifier?.rawValue == identifier
+                    && $0.isHiddenOrHasHiddenAncestor == false
+            }
+        }
         guard matches.count == 1 else { return nil }
         return matches[0]
     }
@@ -232,6 +262,104 @@ enum AppViewTreeE2E {
         }
         guard matches.count == 1 else { return nil }
         return matches[0]
+    }
+
+    /// Resolves the pointer geometry for a button identified by a passive E2E
+    /// anchor.
+    ///
+    /// AppKit-backed buttons expose an `NSButton`, while SwiftUI's plain button
+    /// style exposes only an internal hit-testing surface. In the latter case
+    /// a candidate point is accepted only when it hits the anchor's own scroll
+    /// document. Sampling multiple points preserves a real clickable sliver
+    /// while rejecting coordinates covered by a fixed sibling overlay.
+    static func buttonInteractionTarget(
+        overlapping anchor: NSView
+    ) -> ButtonInteractionTarget? {
+        let nativeButton = button(overlapping: anchor)
+        guard nativeButton != nil || anchor is AppE2EAnchorView,
+              isVisible(anchor),
+              let window = anchor.window,
+              let root = window.contentView?.superview ?? window.contentView
+        else {
+            return nil
+        }
+        let visibleBounds = anchor.bounds.intersection(anchor.visibleRect)
+        guard visibleBounds.isNull == false,
+              visibleBounds.width >= 2,
+              visibleBounds.height >= 2
+        else {
+            return nil
+        }
+        let anchorFrame = frameInWindow(for: anchor)
+        let anchorArea = anchorFrame.width * anchorFrame.height
+        guard anchorArea > 0 else { return nil }
+        let candidateUnitPoints: [(x: CGFloat, y: CGFloat)] = [
+            (0.5, 0.5),
+            (0.5, 0.75),
+            (0.5, 0.25),
+            (0.5, 0.9),
+            (0.5, 0.1),
+            (0.75, 0.5),
+            (0.25, 0.5)
+        ]
+        for candidate in candidateUnitPoints {
+            let point = anchor.convert(
+                NSPoint(
+                    x: visibleBounds.minX
+                        + visibleBounds.width * candidate.x,
+                    y: visibleBounds.minY
+                        + visibleBounds.height * candidate.y
+                ),
+                to: nil
+            )
+            let rootPoint = root.convert(point, from: nil)
+            guard let hitView = root.hitTest(rootPoint),
+                  hitView !== anchor,
+                  hitView.isDescendant(of: anchor) == false,
+                  isVisible(hitView, in: [window])
+            else {
+                continue
+            }
+            if let nativeButton {
+                guard hitView === nativeButton
+                        || hitView.isDescendant(of: nativeButton)
+                else {
+                    continue
+                }
+                return ButtonInteractionTarget(
+                    coordinateView: nativeButton,
+                    window: window,
+                    windowPoint: point
+                )
+            }
+            if let documentView = anchor.enclosingScrollView?.documentView,
+               hitView !== documentView,
+               hitView.isDescendant(of: documentView) == false
+            {
+                continue
+            }
+            let hitFrame = frameInWindow(for: hitView)
+            let hitArea = hitFrame.width * hitFrame.height
+            let intersection = anchorFrame.intersection(hitFrame)
+            let intersectionArea =
+                intersection.width * intersection.height
+            let hitIsInsideAnchor =
+                hitArea <= anchorArea * 1.5
+                    && intersectionArea >= hitArea * 0.8
+            let anchorIsInsideHit =
+                intersectionArea >= anchorArea * 0.8
+            guard hitArea > 0,
+                  hitIsInsideAnchor || anchorIsInsideHit
+            else {
+                continue
+            }
+            return ButtonInteractionTarget(
+                coordinateView: anchor,
+                window: window,
+                windowPoint: point
+            )
+        }
+        return nil
     }
 
     static func textField(overlapping anchor: NSView) -> NSTextField? {

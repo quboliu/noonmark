@@ -33,7 +33,7 @@ struct ZhulongInlineTaskDraftState: Equatable {
         case invalidDate
     }
 
-    let sourceDraftID: ZhulongTodoDiffID
+    var sourceDraftID: ZhulongTodoDiffID
     private let originalItems: [ZhulongTodoDiffItem]
     var tasks: [Task]
 
@@ -323,13 +323,37 @@ struct ZhulongInlineTaskDraftCard: View {
                     .font(.noonmarkSystem(size: 13))
                     .foregroundStyle(Theme.accent)
 
-                TextField(
+                IMECompositionIsolatedTextField(
+                    text: task.title,
+                    placeholder:
                     copy.zhulongTaskTitlePlaceholder,
-                    text: task.title
+                    font: .noonmarkSystemFont(
+                        ofSize: 13,
+                        weight: .semibold
+                    ),
+                    textColor: .labelColor,
+                    nativeAccessibilityIdentifier:
+                    taskInputIdentifier(
+                        task.wrappedValue.id,
+                        field: "title"
+                    )
                 )
-                .textFieldStyle(.plain)
-                .font(.noonmarkSystem(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.text1)
+                .frame(height: 16)
+                .accessibilityIdentifier(
+                    taskInputIdentifier(
+                        task.wrappedValue.id,
+                        field: "title"
+                    )
+                )
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: taskInputIdentifier(
+                            task.wrappedValue.id,
+                            field: "title"
+                        ),
+                        verificationText: task.wrappedValue.title
+                    )
+                }
 
                 if state.tasks.count > 1 {
                     Button {
@@ -344,23 +368,70 @@ struct ZhulongInlineTaskDraftCard: View {
                 }
             }
 
-            TextField(
+            IMECompositionIsolatedTextField(
+                text: task.descriptionText,
+                placeholder:
                 copy.zhulongTaskDescriptionPlaceholder,
-                text: task.descriptionText
+                font: .noonmarkSystemFont(
+                    ofSize: 11.5
+                ),
+                textColor: .secondaryLabelColor,
+                nativeAccessibilityIdentifier:
+                taskInputIdentifier(
+                    task.wrappedValue.id,
+                    field: "description"
+                )
             )
-            .textFieldStyle(.plain)
-            .font(.noonmarkSystem(size: 11.5))
-            .foregroundStyle(Theme.text2)
+            .frame(height: 13)
             .padding(.leading, 22)
+            .accessibilityIdentifier(
+                taskInputIdentifier(
+                    task.wrappedValue.id,
+                    field: "description"
+                )
+            )
+            .background {
+                AppE2EViewAnchor(
+                    identifier: taskInputIdentifier(
+                        task.wrappedValue.id,
+                        field: "description"
+                    ),
+                    verificationText:
+                    task.wrappedValue.descriptionText
+                )
+            }
 
-            TextField(
+            IMECompositionIsolatedTextField(
+                text: task.note,
+                placeholder:
                 copy.zhulongTaskNotePlaceholder,
-                text: task.note
+                font: .noonmarkSystemFont(
+                    ofSize: 11.5
+                ),
+                textColor: .secondaryLabelColor,
+                nativeAccessibilityIdentifier:
+                taskInputIdentifier(
+                    task.wrappedValue.id,
+                    field: "note"
+                )
             )
-            .textFieldStyle(.plain)
-            .font(.noonmarkSystem(size: 11.5))
-            .foregroundStyle(Theme.text2)
+            .frame(height: 13)
             .padding(.leading, 22)
+            .accessibilityIdentifier(
+                taskInputIdentifier(
+                    task.wrappedValue.id,
+                    field: "note"
+                )
+            )
+            .background {
+                AppE2EViewAnchor(
+                    identifier: taskInputIdentifier(
+                        task.wrappedValue.id,
+                        field: "note"
+                    ),
+                    verificationText: task.wrappedValue.note
+                )
+            }
 
             HStack(spacing: 8) {
                 Picker(
@@ -388,12 +459,37 @@ struct ZhulongInlineTaskDraftCard: View {
                 .frame(width: 230)
 
                 if task.wrappedValue.destination == .future {
-                    TextField(
-                        "YYYY-MM-DD",
-                        text: task.targetDateText
+                    IMECompositionIsolatedTextField(
+                        text: task.targetDateText,
+                        placeholder: "YYYY-MM-DD",
+                        font: .noonmarkSystemFont(
+                            ofSize: 13
+                        ),
+                        textColor: .labelColor,
+                        nativeAccessibilityIdentifier:
+                        taskInputIdentifier(
+                            task.wrappedValue.id,
+                            field: "target-date"
+                        ),
+                        surface: .rounded
                     )
-                    .textFieldStyle(.roundedBorder)
                     .frame(width: 118)
+                    .accessibilityIdentifier(
+                        taskInputIdentifier(
+                            task.wrappedValue.id,
+                            field: "target-date"
+                        )
+                    )
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: taskInputIdentifier(
+                                task.wrappedValue.id,
+                                field: "target-date"
+                            ),
+                            verificationText:
+                            task.wrappedValue.targetDateText
+                        )
+                    }
                 }
                 Spacer()
             }
@@ -401,10 +497,22 @@ struct ZhulongInlineTaskDraftCard: View {
 
             if task.wrappedValue.subtasks.isEmpty == false {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(task.subtasks) { subtask in
+                    ForEach(
+                        Array(
+                            task.wrappedValue.subtasks.indices
+                        ),
+                        id: \.self
+                    ) { index in
                         subtaskEditor(
-                            subtask: subtask,
-                            task: task
+                            subtask: task.subtasks[index],
+                            task: task,
+                            accessibilityIdentifier:
+                            "zhulong-inline-subtask."
+                                + taskIdentifierSuffix(
+                                    task.wrappedValue.id
+                                )
+                                + "."
+                                + "\(index).title"
                         )
                     }
                 }
@@ -432,21 +540,49 @@ struct ZhulongInlineTaskDraftCard: View {
         }
     }
 
+    private func taskInputIdentifier(
+        _ id: ZhulongTodoDiffItemID,
+        field: String
+    ) -> String {
+        "zhulong-inline-task."
+            + taskIdentifierSuffix(id)
+            + ".\(field)"
+    }
+
+    private func taskIdentifierSuffix(
+        _ id: ZhulongTodoDiffItemID
+    ) -> String {
+        id.rawValue.uuidString.lowercased()
+    }
+
     private func subtaskEditor(
         subtask: Binding<ZhulongInlineTaskDraftState.Subtask>,
-        task: Binding<ZhulongInlineTaskDraftState.Task>
+        task: Binding<ZhulongInlineTaskDraftState.Task>,
+        accessibilityIdentifier: String
     ) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "arrow.turn.down.right")
                 .font(.noonmarkSystem(size: 9))
                 .foregroundStyle(Theme.text3)
-            TextField(
+            IMECompositionIsolatedTextField(
+                text: subtask.title,
+                placeholder:
                 copy.zhulongSubtaskPlaceholder,
-                text: subtask.title
+                font: .noonmarkSystemFont(
+                    ofSize: 11.5
+                ),
+                textColor: .secondaryLabelColor,
+                nativeAccessibilityIdentifier:
+                accessibilityIdentifier
             )
-            .textFieldStyle(.plain)
-            .font(.noonmarkSystem(size: 11.5))
-            .foregroundStyle(Theme.text2)
+            .frame(height: 13)
+            .accessibilityIdentifier(accessibilityIdentifier)
+            .background {
+                AppE2EViewAnchor(
+                    identifier: accessibilityIdentifier,
+                    verificationText: subtask.wrappedValue.title
+                )
+            }
             Picker("", selection: subtask.difficulty) {
                 Text(copy.zhulongSimpleDifficultyAbbreviation)
                     .tag(SubtaskDifficulty.simple)

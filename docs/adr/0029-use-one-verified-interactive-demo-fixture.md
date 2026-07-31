@@ -1,7 +1,9 @@
 # ADR 0029：以单一可验证 fixture 驱动交互式演示
 
-- 状态：已接受
+- 状态：已接受；数据规模由 ADR 0040 扩展
 - 日期：2026-07-24
+
+本 ADR 建立的单一 fixture 原则继续有效；2026-07-30 起，十天规模与会话数量由 [ADR 0040](0040-expand-interactive-demo-to-an-annual-replay.md) 扩展，末段十天故事保留为年度 fixture 的前景体验层。
 
 ## 背景
 

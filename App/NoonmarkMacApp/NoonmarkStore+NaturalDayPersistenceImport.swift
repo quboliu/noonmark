@@ -16,8 +16,40 @@ struct StoreMutationMoment {
     var state: NaturalDayState { naturalDay.state }
 }
 
+private struct EngineMutationBackgroundContext {
+    let databaseURL: URL?
+    let syncDeviceID: SyncDeviceID?
+    let automaticClassificationEnabled: Bool
+    let automaticClassificationProviderIsReady: Bool
+    let automaticClassificationTransitionAt: Date
+    let injectPersistenceFailure: Bool
+}
+
+private struct EngineMutationBackgroundResult<Result: Sendable>:
+    @unchecked Sendable
+{
+    let result: Result
+    let moment: StoreMutationMoment
+    let automaticClassificationPolicy:
+        NoonmarkStore.EngineMutationAutomaticClassificationPolicy
+    let automaticClassificationPlan:
+        AutomaticClassificationJobMutationPlan
+    let mutationMilliseconds: Double
+    let automaticClassificationMilliseconds: Double
+    let persistenceMilliseconds: Double
+}
+
 extension NoonmarkStore {
-    func prepareForTermination() {
+    func flushInputDraftsForTermination() async -> Bool {
+        guard await inputDraftFlushCoordinator.flushAll() else {
+            return false
+        }
+        await publishDeferredEngineMutations()
+        return true
+    }
+
+    func prepareForTermination() throws {
+        engineMutationLane?.drain()
         toastScheduler.cancel()
         localFirstSyncAutomationTask?.cancel()
         automaticClassificationWorkerRestartRequested = false
@@ -28,6 +60,7 @@ extension NoonmarkStore {
         zhulongProviderTask?.cancel()
         naturalDayObservation?.cancel()
         accessibilityDisplayObservation?.cancel()
+        try repository?.finalizeForTermination()
     }
 
     func refreshNaturalDay() {
@@ -494,6 +527,7 @@ extension NoonmarkStore {
             return
         }
         do {
+            synchronizeEngineMutationHead()
             let naturalDay = try dayContext.moment()
             try save(
                 engine,
@@ -501,6 +535,11 @@ extension NoonmarkStore {
                     reference: naturalDay.instant
                 )
             )
+            // Explicit persistence is the boundary used after a domain fixture
+            // or another direct engine replacement. Advance the ordered lane
+            // to that same durable engine so the next background autosave
+            // cannot start from an older in-memory head.
+            replaceEngineMutationHead(with: engine)
         } catch {
             if error is StoreMutationGateError {
                 showOperationFailure(.persistence, error: error)
@@ -513,7 +552,8 @@ extension NoonmarkStore {
 
     func save(
         _ candidate: NoonmarkEngine,
-        mutationAt mutationInstant: Date
+        mutationAt mutationInstant: Date,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil
     ) throws {
         try assertEngineWriteAllowed()
         guard let repository else { return }
@@ -521,21 +561,29 @@ extension NoonmarkStore {
             persistenceFailuresRemainingForE2E -= 1
             throw PersistenceFailureE2EError.injectedSaveFailure
         }
+        let snapshot = candidate.snapshot()
         if let syncDeviceIdentity {
             try repository.save(
-                candidate.snapshot(),
+                snapshot,
+                changedFrom: sourceSnapshot,
                 recordingChangesFor: syncDeviceIdentity.deviceID,
                 changedAt: mutationInstant
             )
+        } else if let sourceSnapshot {
+            try repository.save(
+                snapshot,
+                changedFrom: sourceSnapshot
+            )
         } else {
-            try repository.save(candidate)
+            try repository.save(snapshot)
         }
     }
 
     func save(
         _ candidate: NoonmarkEngine,
         classificationCommitBoundaries: [NoonmarkSnapshot],
-        mutationAt mutationInstant: Date
+        mutationAt mutationInstant: Date,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil
     ) throws {
         try assertEngineWriteAllowed()
         guard let repository else { return }
@@ -546,13 +594,19 @@ extension NoonmarkStore {
         if let syncDeviceIdentity {
             try repository.save(
                 candidate.snapshot(),
+                changedFrom: sourceSnapshot,
                 classificationCommitBoundaries:
                 classificationCommitBoundaries,
                 recordingChangesFor: syncDeviceIdentity.deviceID,
                 changedAt: mutationInstant
             )
+        } else if let sourceSnapshot {
+            try repository.save(
+                candidate.snapshot(),
+                changedFrom: sourceSnapshot
+            )
         } else {
-            try repository.save(candidate)
+            try repository.save(candidate.snapshot())
         }
     }
 
@@ -561,10 +615,15 @@ extension NoonmarkStore {
         mutationAt mutationInstant: Date,
         enqueuingAutomaticClassificationJobs jobs: [
             AutomaticClassificationJobEnqueue
-        ]
+        ],
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil
     ) throws {
         guard jobs.isEmpty == false else {
-            try save(candidate, mutationAt: mutationInstant)
+            try save(
+                candidate,
+                mutationAt: mutationInstant,
+                changedFrom: sourceSnapshot
+            )
             return
         }
         try assertEngineWriteAllowed()
@@ -577,6 +636,7 @@ extension NoonmarkStore {
         }
         try repository.save(
             candidate.snapshot(),
+            changedFrom: sourceSnapshot,
             recordingChangesFor: syncDeviceIdentity.deviceID,
             changedAt: mutationInstant,
             enqueuingAutomaticClassificationJobs: jobs
@@ -586,10 +646,15 @@ extension NoonmarkStore {
     func save(
         _ candidate: NoonmarkEngine,
         mutationAt mutationInstant: Date,
-        applyingAutomaticClassificationPlan plan: AutomaticClassificationJobMutationPlan
+        applyingAutomaticClassificationPlan plan: AutomaticClassificationJobMutationPlan,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil
     ) throws {
         guard plan.isEmpty == false else {
-            try save(candidate, mutationAt: mutationInstant)
+            try save(
+                candidate,
+                mutationAt: mutationInstant,
+                changedFrom: sourceSnapshot
+            )
             return
         }
         try assertEngineWriteAllowed()
@@ -602,6 +667,7 @@ extension NoonmarkStore {
         }
         try repository.save(
             candidate.snapshot(),
+            changedFrom: sourceSnapshot,
             recordingChangesFor: syncDeviceIdentity.deviceID,
             changedAt: mutationInstant,
             enqueuingAutomaticClassificationJobs: plan.enqueues,
@@ -617,14 +683,16 @@ extension NoonmarkStore {
         classificationCommitBoundaries: [NoonmarkSnapshot],
         mutationAt mutationInstant: Date,
         applyingAutomaticClassificationPlan plan:
-        AutomaticClassificationJobMutationPlan
+        AutomaticClassificationJobMutationPlan,
+        changedFrom sourceSnapshot: NoonmarkSnapshot? = nil
     ) throws {
         guard plan.isEmpty == false else {
             try save(
                 candidate,
                 classificationCommitBoundaries:
                 classificationCommitBoundaries,
-                mutationAt: mutationInstant
+                mutationAt: mutationInstant,
+                changedFrom: sourceSnapshot
             )
             return
         }
@@ -638,6 +706,7 @@ extension NoonmarkStore {
         }
         try repository.save(
             candidate.snapshot(),
+            changedFrom: sourceSnapshot,
             classificationCommitBoundaries:
             classificationCommitBoundaries,
             recordingChangesFor: syncDeviceIdentity.deviceID,
@@ -844,20 +913,33 @@ extension NoonmarkStore {
         ((Result) -> [NoonmarkSnapshot]?)? = nil,
         _ mutation: (NoonmarkEngine, StoreMutationMoment) throws -> Result
     ) throws -> Result {
+        let performanceStartedAt =
+            ProcessInfo.processInfo.systemUptime
+        synchronizeEngineMutationHead()
         let moment = try prepareStoreMutation()
+        let preparedAt =
+            ProcessInfo.processInfo.systemUptime
         let originalSnapshot = engine.snapshot()
+        let snapshotAt =
+            ProcessInfo.processInfo.systemUptime
         let undoEntry = makeUndoEntry(
             for: undoPolicy,
             originalSnapshot: originalSnapshot,
             moment: moment
         )
-        let candidate = try NoonmarkEngine(snapshot: originalSnapshot)
+        let candidate = NoonmarkEngine(copying: engine)
+        let clonedAt =
+            ProcessInfo.processInfo.systemUptime
         let result = try mutation(candidate, moment)
+        let mutatedAt =
+            ProcessInfo.processInfo.systemUptime
         let automaticClassificationPlan = try automaticClassificationMutationPlan(
             for: automaticClassificationPolicy,
             candidate: candidate,
             originalSnapshot: originalSnapshot
         )
+        let classifiedAt =
+            ProcessInfo.processInfo.systemUptime
         do {
             let boundaries = classificationCommitBoundaries?(result)
             switch automaticClassificationPolicy {
@@ -866,10 +948,15 @@ extension NoonmarkStore {
                     try save(
                         candidate,
                         classificationCommitBoundaries: boundaries,
-                        mutationAt: moment.instant
+                        mutationAt: moment.instant,
+                        changedFrom: originalSnapshot
                     )
                 } else {
-                    try save(candidate, mutationAt: moment.instant)
+                    try save(
+                        candidate,
+                        mutationAt: moment.instant,
+                        changedFrom: originalSnapshot
+                    )
                 }
             case .taskDefinitionChanged, .classificationCatalogChanged,
                  .newlyCreatedTaskChains,
@@ -882,28 +969,27 @@ extension NoonmarkStore {
                         classificationCommitBoundaries: boundaries,
                         mutationAt: moment.instant,
                         applyingAutomaticClassificationPlan:
-                        automaticClassificationPlan
+                        automaticClassificationPlan,
+                        changedFrom: originalSnapshot
                     )
                 } else {
                     try save(
                         candidate,
                         mutationAt: moment.instant,
                         applyingAutomaticClassificationPlan:
-                        automaticClassificationPlan
+                        automaticClassificationPlan,
+                        changedFrom: originalSnapshot
                     )
                 }
             }
         } catch let gateError as StoreMutationGateError {
             throw gateError
         } catch {
-            if error is PersistenceFailureE2EError {
-                NSLog("Noonmark E2E injected persistence save failure")
-            } else {
-                NSLog("Noonmark persistence save failed: %@", String(describing: error))
-            }
-            throw EnginePersistenceCommitError(underlying: error)
+            throw wrappedPersistenceCommitError(error)
         }
-        engine = candidate
+        let persistedAt =
+            ProcessInfo.processInfo.systemUptime
+        replaceEngineMutationHead(with: candidate)
         redoStack.removeAll()
         applyCommittedUndoPolicy(undoPolicy, undoEntry: undoEntry)
         switch automaticClassificationPolicy {
@@ -918,7 +1004,505 @@ extension NoonmarkStore {
                 automaticClassificationJobsDidChange()
             }
         }
+        let publishedAt =
+            ProcessInfo.processInfo.systemUptime
+        if AppLaunchArguments.contains(
+            "--e2e-tencent-ime-input-realistic-workload"
+        ) {
+            e2eLastEngineMutationPerformanceSample =
+                EngineMutationPerformanceSample(
+                    prepareMilliseconds:
+                    (preparedAt - performanceStartedAt) * 1000,
+                    snapshotMilliseconds:
+                    (snapshotAt - preparedAt) * 1000,
+                    cloneMilliseconds:
+                    (clonedAt - snapshotAt) * 1000,
+                    mutationMilliseconds:
+                    (mutatedAt - clonedAt) * 1000,
+                    automaticClassificationMilliseconds:
+                    (classifiedAt - mutatedAt) * 1000,
+                    persistenceMilliseconds:
+                    (persistedAt - classifiedAt) * 1000,
+                    publishMilliseconds:
+                    (publishedAt - persistedAt) * 1000,
+                    totalMilliseconds:
+                    (publishedAt - performanceStartedAt) * 1000,
+                    mainActorBlockingMilliseconds:
+                    (publishedAt - performanceStartedAt) * 1000
+                )
+        }
         return result
+    }
+
+    @discardableResult
+    func commitEngineMutationInBackground<Result: Sendable>(
+        undoPolicy: EngineMutationUndoPolicy = .preserve,
+        publishesEngine: Bool = true,
+        automaticClassificationPolicy:
+        @escaping @Sendable (NoonmarkEngine)
+            -> EngineMutationAutomaticClassificationPolicy = {
+                _ in .none
+            },
+        classificationCommitBoundaries:
+        (@Sendable (Result) -> [NoonmarkSnapshot]?)? = nil,
+        _ mutation: @escaping @Sendable (
+            NoonmarkEngine,
+            StoreMutationMoment
+        ) throws -> Result
+    ) async throws -> Result {
+        let performanceStartedAt =
+            ProcessInfo.processInfo.systemUptime
+        let naturalDay = try prepareNaturalDayForMutation()
+        let preparedAt =
+            ProcessInfo.processInfo.systemUptime
+        let backgroundContext =
+            makeEngineMutationBackgroundContext()
+        let lane = orderedEngineMutationLane()
+        let commit: OrderedEngineMutationLane.Commit<
+            EngineMutationBackgroundResult<Result>
+        >
+        do {
+            commit = try await lane.commit {
+                candidate,
+                originalSnapshot in
+                try Self.executeEngineMutation(
+                    candidate: candidate,
+                    originalSnapshot: originalSnapshot,
+                    naturalDay: naturalDay,
+                    automaticClassificationPolicy:
+                    automaticClassificationPolicy,
+                    classificationCommitBoundaries:
+                    classificationCommitBoundaries,
+                    backgroundContext: backgroundContext,
+                    mutation: mutation
+                )
+            }
+        } catch let gateError as StoreMutationGateError {
+            throw gateError
+        } catch {
+            throw wrappedPersistenceCommitError(error)
+        }
+        let background = commit.result
+        let undoEntry = makeUndoEntry(
+            for: undoPolicy,
+            originalSnapshot: commit.sourceSnapshot,
+            moment: background.moment
+        )
+        let publishStartedAt =
+            ProcessInfo.processInfo.systemUptime
+        publishEngineMutationCommit(
+            commit,
+            publishesEngine: publishesEngine
+        )
+        redoStack.removeAll()
+        applyCommittedUndoPolicy(
+            undoPolicy,
+            undoEntry: undoEntry
+        )
+        if background.automaticClassificationPlan.isEmpty
+            == false
+        {
+            recordAutomaticClassificationMutationDiagnostics(
+                background.automaticClassificationPlan
+            )
+            if publishesEngine {
+                automaticClassificationJobsDidChange()
+            } else {
+                hasDeferredAutomaticClassificationMutation =
+                    true
+            }
+        }
+        let publishedAt =
+            ProcessInfo.processInfo.systemUptime
+        if AppLaunchArguments.contains(
+            "--e2e-tencent-ime-input-realistic-workload"
+        ) {
+            let prepareMilliseconds =
+                (preparedAt - performanceStartedAt) * 1000
+            let publishMilliseconds =
+                (publishedAt - publishStartedAt) * 1000
+            e2eLastEngineMutationPerformanceSample =
+                EngineMutationPerformanceSample(
+                    prepareMilliseconds:
+                    prepareMilliseconds,
+                    snapshotMilliseconds:
+                    commit.sourceSnapshotMilliseconds,
+                    cloneMilliseconds:
+                    commit.cloneMilliseconds,
+                    mutationMilliseconds:
+                    background.mutationMilliseconds,
+                    automaticClassificationMilliseconds:
+                    background
+                        .automaticClassificationMilliseconds,
+                    persistenceMilliseconds:
+                    background.persistenceMilliseconds,
+                    publishMilliseconds:
+                    publishMilliseconds,
+                    totalMilliseconds:
+                    (publishedAt - performanceStartedAt)
+                        * 1000,
+                    mainActorBlockingMilliseconds:
+                    prepareMilliseconds + publishMilliseconds
+                )
+        }
+        return background.result
+    }
+
+    private func orderedEngineMutationLane()
+        -> OrderedEngineMutationLane
+    {
+        if let engineMutationLane {
+            return engineMutationLane
+        }
+        let lane = OrderedEngineMutationLane(engine: engine)
+        engineMutationLane = lane
+        return lane
+    }
+
+    private func synchronizeEngineMutationHead() {
+        guard let engineMutationLane else {
+            return
+        }
+        let head = engineMutationLane.headAndWait()
+        guard head.sequence
+            > publishedEngineMutationSequence
+        else {
+            return
+        }
+        publishedEngineMutationSequence = head.sequence
+        installEngineMutationLaneHead(head.engine)
+    }
+
+    private func makeEngineMutationBackgroundContext()
+        -> EngineMutationBackgroundContext
+    {
+        let shouldInjectFailure =
+            repository != nil
+                && persistenceFailuresRemainingForE2E > 0
+        if shouldInjectFailure {
+            persistenceFailuresRemainingForE2E -= 1
+        }
+        let providerIsReady = if case .configured =
+            automaticClassificationProviderExecution
+        {
+            true
+        } else {
+            false
+        }
+        return EngineMutationBackgroundContext(
+            databaseURL: databaseURL,
+            syncDeviceID: syncDeviceIdentity?.deviceID,
+            automaticClassificationEnabled:
+            isAutomaticClassificationEnabled,
+            automaticClassificationProviderIsReady:
+            providerIsReady,
+            automaticClassificationTransitionAt:
+            automaticClassificationOperationalClock.now(),
+            injectPersistenceFailure:
+            shouldInjectFailure
+        )
+    }
+
+    private func publishEngineMutationCommit(
+        _ commit: OrderedEngineMutationLane.Commit<some Any>,
+        publishesEngine: Bool = true
+    ) {
+        guard commit.sequence
+            > publishedEngineMutationSequence
+        else {
+            return
+        }
+        publishedEngineMutationSequence = commit.sequence
+        installEngineMutationLaneHead(
+            commit.engine,
+            publishesEngine: publishesEngine
+        )
+        if publishesEngine {
+            notifiedEngineMutationSequence = commit.sequence
+        }
+    }
+
+    @discardableResult
+    func replaceEngineMutationHead(
+        with replacement: NoonmarkEngine
+    ) -> UInt64 {
+        let sequence = orderedEngineMutationLane()
+            .replaceAndWait(with: replacement)
+        publishedEngineMutationSequence = sequence
+        installEngineMutationLaneHead(
+            replacement,
+            publishesEngine: true
+        )
+        notifiedEngineMutationSequence = sequence
+        return sequence
+    }
+
+    private func installEngineMutationLaneHead(
+        _ committedEngine: NoonmarkEngine,
+        publishesEngine: Bool = false
+    ) {
+        isInstallingEngineMutationLaneHead = true
+        suppressesEngineObjectWillChange =
+            publishesEngine == false
+        engine = committedEngine
+        suppressesEngineObjectWillChange = false
+        isInstallingEngineMutationLaneHead = false
+    }
+
+    func publishDeferredEngineMutations() async {
+        guard let engineMutationLane else {
+            return
+        }
+        let head = await engineMutationLane.head()
+        if head.sequence > publishedEngineMutationSequence {
+            publishedEngineMutationSequence = head.sequence
+            installEngineMutationLaneHead(
+                head.engine,
+                publishesEngine: false
+            )
+        }
+        guard publishedEngineMutationSequence
+            > notifiedEngineMutationSequence
+        else {
+            return
+        }
+        objectWillChange.send()
+        notifiedEngineMutationSequence =
+            publishedEngineMutationSequence
+        if hasDeferredAutomaticClassificationMutation {
+            hasDeferredAutomaticClassificationMutation = false
+            automaticClassificationJobsDidChange()
+        }
+    }
+
+    private func wrappedPersistenceCommitError(
+        _ error: Error
+    ) -> Error {
+        if error is PersistenceFailureE2EError {
+            NSLog("Noonmark E2E injected persistence save failure")
+        } else {
+            NSLog(
+                "Noonmark persistence save failed: %@",
+                String(describing: error)
+            )
+        }
+        return EnginePersistenceCommitError(
+            underlying: error
+        )
+    }
+
+    private nonisolated static func executeEngineMutation<
+        Result: Sendable
+    >(
+        candidate: NoonmarkEngine,
+        originalSnapshot: NoonmarkSnapshot,
+        naturalDay: NaturalDayMoment,
+        automaticClassificationPolicy:
+        @Sendable (NoonmarkEngine)
+            -> EngineMutationAutomaticClassificationPolicy,
+        classificationCommitBoundaries:
+        (@Sendable (Result) -> [NoonmarkSnapshot]?)?,
+        backgroundContext:
+        EngineMutationBackgroundContext,
+        mutation: @Sendable (
+            NoonmarkEngine,
+            StoreMutationMoment
+        ) throws -> Result
+    ) throws -> EngineMutationBackgroundResult<Result> {
+        let mutationStartedAt =
+            ProcessInfo.processInfo.systemUptime
+        let moment = StoreMutationMoment(
+            instant: try candidate.nextMutationDate(
+                reference: naturalDay.instant
+            ),
+            naturalDay: naturalDay
+        )
+        let policy = automaticClassificationPolicy(
+            candidate
+        )
+        let result = try mutation(candidate, moment)
+        let mutatedAt =
+            ProcessInfo.processInfo.systemUptime
+        let plan = try backgroundAutomaticClassificationPlan(
+            for: policy,
+            candidate: candidate,
+            originalSnapshot: originalSnapshot,
+            context: backgroundContext
+        )
+        let classifiedAt =
+            ProcessInfo.processInfo.systemUptime
+        try persistEngineMutation(
+            candidate: candidate,
+            originalSnapshot: originalSnapshot,
+            classificationCommitBoundaries:
+            classificationCommitBoundaries?(result),
+            automaticClassificationPlan: plan,
+            moment: moment,
+            context: backgroundContext
+        )
+        let persistedAt =
+            ProcessInfo.processInfo.systemUptime
+        return EngineMutationBackgroundResult(
+            result: result,
+            moment: moment,
+            automaticClassificationPolicy: policy,
+            automaticClassificationPlan: plan,
+            mutationMilliseconds:
+            (mutatedAt - mutationStartedAt) * 1000,
+            automaticClassificationMilliseconds:
+            (classifiedAt - mutatedAt) * 1000,
+            persistenceMilliseconds:
+            (persistedAt - classifiedAt) * 1000
+        )
+    }
+
+    private nonisolated static func
+        backgroundAutomaticClassificationPlan(
+            for policy:
+            EngineMutationAutomaticClassificationPolicy,
+            candidate: NoonmarkEngine,
+            originalSnapshot: NoonmarkSnapshot,
+            context: EngineMutationBackgroundContext
+        ) throws -> AutomaticClassificationJobMutationPlan
+    {
+        guard case .none = policy else {
+            guard let databaseURL = context.databaseURL,
+                  context.syncDeviceID != nil
+            else {
+                return AutomaticClassificationJobMutationPlan(
+                    enqueues: [],
+                    mutations: []
+                )
+            }
+            let storagePolicy:
+                AutomaticClassificationJobMutationPolicy =
+                switch policy {
+                case .none:
+                    .reconcileExisting
+                case let .taskDefinitionChanged(chainID):
+                    .taskDefinitionChanged(chainID)
+                case .classificationCatalogChanged:
+                    .classificationCatalogChanged
+                case .newlyCreatedTaskChains:
+                    .newlyCreatedTaskChains
+                case let .taskBecameIneligible(chainID):
+                    .taskBecameIneligible(chainID)
+                case let .taskBecameEligible(chainID):
+                    .taskBecameEligible(chainID)
+                case let .userClassificationWins(chainID):
+                    .userClassificationWins(chainID)
+                }
+            let plan =
+                try AutomaticClassificationJobMutationPlanner()
+                    .plan(
+                        policy: storagePolicy,
+                        candidate: candidate,
+                        originalSnapshot: originalSnapshot,
+                        existingJobs:
+                        try SQLiteAutomaticClassificationJobRepository(
+                            databaseURL: databaseURL
+                        ).jobs(),
+                        providerIsReady:
+                        context
+                            .automaticClassificationProviderIsReady,
+                        operationalNow:
+                        context
+                            .automaticClassificationTransitionAt
+                    )
+            guard context.automaticClassificationEnabled
+            else {
+                return AutomaticClassificationJobMutationPlan(
+                    enqueues: [],
+                    mutations: plan.mutations
+                )
+            }
+            return plan
+        }
+        return AutomaticClassificationJobMutationPlan(
+            enqueues: [],
+            mutations: []
+        )
+    }
+
+    private nonisolated static func persistEngineMutation(
+        candidate: NoonmarkEngine,
+        originalSnapshot: NoonmarkSnapshot,
+        classificationCommitBoundaries:
+        [NoonmarkSnapshot]?,
+        automaticClassificationPlan:
+        AutomaticClassificationJobMutationPlan,
+        moment: StoreMutationMoment,
+        context: EngineMutationBackgroundContext
+    ) throws {
+        guard let databaseURL = context.databaseURL else {
+            return
+        }
+        if context.injectPersistenceFailure {
+            throw PersistenceFailureE2EError
+                .injectedSaveFailure
+        }
+        let repository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        let snapshot = candidate.snapshot()
+        guard let deviceID = context.syncDeviceID else {
+            try repository.save(
+                snapshot,
+                changedFrom: originalSnapshot
+            )
+            return
+        }
+        if automaticClassificationPlan.isEmpty {
+            if let classificationCommitBoundaries {
+                try repository.save(
+                    snapshot,
+                    changedFrom: originalSnapshot,
+                    classificationCommitBoundaries:
+                    classificationCommitBoundaries,
+                    recordingChangesFor: deviceID,
+                    changedAt: moment.instant
+                )
+            } else {
+                try repository.save(
+                    snapshot,
+                    changedFrom: originalSnapshot,
+                    recordingChangesFor: deviceID,
+                    changedAt: moment.instant
+                )
+            }
+            return
+        }
+        if let classificationCommitBoundaries {
+            try repository.save(
+                snapshot,
+                changedFrom: originalSnapshot,
+                classificationCommitBoundaries:
+                classificationCommitBoundaries,
+                recordingChangesFor: deviceID,
+                changedAt: moment.instant,
+                enqueuingAutomaticClassificationJobs:
+                automaticClassificationPlan.enqueues,
+                applyingAutomaticClassificationJobMutations:
+                automaticClassificationPlan.mutations,
+                automaticClassificationTransitionAt:
+                context
+                    .automaticClassificationTransitionAt
+            )
+        } else {
+            try repository.save(
+                snapshot,
+                changedFrom: originalSnapshot,
+                recordingChangesFor: deviceID,
+                changedAt: moment.instant,
+                enqueuingAutomaticClassificationJobs:
+                automaticClassificationPlan.enqueues,
+                applyingAutomaticClassificationJobMutations:
+                automaticClassificationPlan.mutations,
+                automaticClassificationTransitionAt:
+                context
+                    .automaticClassificationTransitionAt
+            )
+        }
     }
 
     private func makeUndoEntry(

@@ -79,6 +79,8 @@ run_surface() {
   local cleanup_result="$surface_dir/input-cleanup-result.txt"
   local exercise_log="$surface_dir/exercise.log"
   local verify_log="$surface_dir/verify.log"
+  local rejection_count_before=0
+  local rejection_count_after=0
   mkdir -p "$surface_dir"
 
   /usr/bin/open -W -n "$app_path" --args \
@@ -103,6 +105,10 @@ run_surface() {
       ;;
   esac
   if [[ "$inject_failure" == "true" ]]; then
+    rejection_count_before="$(
+      runtime_evidence_count_persistence_mutation_rejections \
+        "$surface_dir/Diagnostics"
+    )"
     extra_flags+=(
       --e2e-persistence-failure-automation
       --e2e-tencent-ime-termination-inject-once
@@ -138,6 +144,17 @@ run_surface() {
     return 1
   fi
   wait "$launcher_pid"
+
+  if [[ "$inject_failure" == "true" ]]; then
+    rejection_count_after="$(
+      runtime_evidence_count_persistence_mutation_rejections \
+        "$surface_dir/Diagnostics"
+    )"
+    if (( rejection_count_after - rejection_count_before != 1 )); then
+      echo "$case_name: expected one structured persistence rejection: before=$rejection_count_before after=$rejection_count_after" >&2
+      return 1
+    fi
+  fi
 
   if [[ ! -f "$exercise_result" ]] \
       || ! grep -Fq "status=ARMED" "$exercise_result" \
@@ -221,19 +238,6 @@ if [[ "${NOONMARK_TENCENT_IME_SKIP_FAILURE_RETRY:-0}" != "1" ]]; then
 fi
 
 runtime_evidence_stop_console_capture
-
-if [[ "${NOONMARK_TENCENT_IME_SKIP_FAILURE_RETRY:-0}" != "1" ]]; then
-  injected_failure_count="$(
-    grep -cF \
-      "Noonmark E2E injected persistence save failure" \
-      "$console_log" \
-      || true
-  )"
-  if [[ "$injected_failure_count" -ne 1 ]]; then
-    echo "expected one injected retryable save failure, found $injected_failure_count" >&2
-    exit 1
-  fi
-fi
 
 expected_rows="$surface_total"
 if [[ "${NOONMARK_TENCENT_IME_SKIP_FAILURE_RETRY:-0}" != "1" ]]; then

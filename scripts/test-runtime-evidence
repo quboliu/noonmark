@@ -13,6 +13,7 @@ mkdir -p "$diagnostic_dir"
 
 clean_log="${work_dir}/clean.log"
 structured_diagnostic_log="${work_dir}/structured-diagnostic.log"
+structured_event_dir="${work_dir}/Diagnostics"
 failure_log="${work_dir}/failure.log"
 sqlite_lock_log="${work_dir}/sqlite-lock.log"
 console_log="${work_dir}/console.log"
@@ -26,6 +27,32 @@ printf '%s\n' \
 runtime_evidence_assert_clean_logs \
   "structured diagnostic fixture" \
   "$structured_diagnostic_log"
+
+if [[ "$(runtime_evidence_count_persistence_mutation_rejections \
+  "$structured_event_dir")" != "0" ]]; then
+  echo "runtime evidence did not treat an absent structured log as empty" >&2
+  exit 1
+fi
+mkdir -p "$structured_event_dir"
+printf '%s\n' \
+  '{"event":{"code":"mutationRejected","mutationContext":"note","mutationRejectionReason":"persistenceFailure"}}' \
+  '{"event":{"code":"mutationRejected","mutationContext":"task","mutationRejectionReason":"persistenceFailure"}}' \
+  '{"event":{"code":"mutationRejected","mutationContext":"note","mutationRejectionReason":"domainValidation"}}' \
+  >"${structured_event_dir}/events-00.ndjson"
+if [[ "$(runtime_evidence_count_persistence_mutation_rejections \
+  "$structured_event_dir")" != "2" ]] ||
+  [[ "$(runtime_evidence_count_persistence_mutation_rejections \
+    "$structured_event_dir" note)" != "1" ]]; then
+  echo "runtime evidence miscounted structured persistence rejections" >&2
+  exit 1
+fi
+printf '{invalid-json}\n' >"${structured_event_dir}/events-01.ndjson"
+if runtime_evidence_count_persistence_mutation_rejections \
+  "$structured_event_dir" >/dev/null 2>&1; then
+  echo "runtime evidence accepted a malformed structured event log" >&2
+  exit 1
+fi
+rm -f "${structured_event_dir}/events-01.ndjson"
 
 runtime_evidence_start_console_capture \
   "NoonmarkRuntimeEvidenceFixture" \

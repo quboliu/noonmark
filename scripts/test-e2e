@@ -3063,12 +3063,19 @@ run_task_note_mutation_atomicity_probe() {
   local exercise_log="${atomicity_dir}/exercise.log"
   local ui_log="${atomicity_dir}/ui.log"
   local restart_log="${atomicity_dir}/restart.log"
-  local exercise_marker_count
-  local ui_marker_count
+  local exercise_rejection_count_before
+  local exercise_rejection_count_after
+  local ui_rejection_count_before
+  local ui_rejection_count_after
   local sql_probe
 
   rm -rf "$atomicity_dir"
   mkdir -p "$atomicity_dir"
+
+  exercise_rejection_count_before="$(
+    runtime_evidence_count_persistence_mutation_rejections \
+      "${atomicity_dir}/Diagnostics" note
+  )"
 
   run_terminating_ui_probe \
     "task-note mutation atomicity exercise" \
@@ -3082,12 +3089,16 @@ run_task_note_mutation_atomicity_probe() {
     --e2e-task-note-atomicity-result-url "$PWD/$exercise_result" \
     --e2e-quit-after-automation
 
-  exercise_marker_count="$(grep -cF 'Noonmark E2E injected persistence save failure' "$exercise_log" || true)"
-  if [[ "$exercise_marker_count" -ne 6 ]]; then
-    echo "task-note atomicity exercise did not inject exactly six save failures: $exercise_marker_count" >&2
-    cat "$exercise_log" >&2
+  exercise_rejection_count_after="$(
+    runtime_evidence_count_persistence_mutation_rejections \
+      "${atomicity_dir}/Diagnostics" note
+  )"
+  if (( exercise_rejection_count_after - exercise_rejection_count_before != 6 )); then
+    echo "task-note atomicity exercise did not record exactly six structured persistence rejections: before=$exercise_rejection_count_before after=$exercise_rejection_count_after" >&2
     exit 1
   fi
+
+  ui_rejection_count_before="$exercise_rejection_count_after"
 
   run_terminating_ui_probe \
     "task-note mutation atomicity UI" \
@@ -3100,10 +3111,12 @@ run_task_note_mutation_atomicity_probe() {
     --e2e-task-note-atomicity-state-url "$PWD/$atomicity_state" \
     --e2e-task-note-atomicity-result-url "$PWD/$ui_result"
 
-  ui_marker_count="$(grep -cF 'Noonmark E2E injected persistence save failure' "$ui_log" || true)"
-  if [[ "$ui_marker_count" -ne 1 ]]; then
-    echo "task-note atomicity UI did not inject exactly one save failure: $ui_marker_count" >&2
-    cat "$ui_log" >&2
+  ui_rejection_count_after="$(
+    runtime_evidence_count_persistence_mutation_rejections \
+      "${atomicity_dir}/Diagnostics" note
+  )"
+  if (( ui_rejection_count_after - ui_rejection_count_before != 1 )); then
+    echo "task-note atomicity UI did not record exactly one structured persistence rejection: before=$ui_rejection_count_before after=$ui_rejection_count_after" >&2
     exit 1
   fi
 
@@ -3152,11 +3165,17 @@ run_reactivation_atomicity_probe() {
   local restart_result="${reactivation_dir}/restart-result.txt"
   local exercise_log="${reactivation_dir}/exercise.log"
   local restart_log="${reactivation_dir}/restart.log"
-  local marker_count
+  local rejection_count_before
+  local rejection_count_after
   local sql_probe
 
   rm -rf "$reactivation_dir"
   mkdir -p "$reactivation_dir"
+
+  rejection_count_before="$(
+    runtime_evidence_count_persistence_mutation_rejections \
+      "${reactivation_dir}/Diagnostics"
+  )"
 
   run_terminating_ui_probe \
     "reactivation atomicity exercise" \
@@ -3172,10 +3191,12 @@ run_reactivation_atomicity_probe() {
     --e2e-reactivation-atomicity-result-url "$PWD/$exercise_result" \
     --e2e-quit-after-automation
 
-  marker_count="$(grep -cF 'Noonmark E2E injected persistence save failure' "$exercise_log" || true)"
-  if [[ "$marker_count" -ne 1 ]]; then
-    echo "reactivation atomicity did not inject exactly one save failure: $marker_count" >&2
-    cat "$exercise_log" >&2
+  rejection_count_after="$(
+    runtime_evidence_count_persistence_mutation_rejections \
+      "${reactivation_dir}/Diagnostics"
+  )"
+  if (( rejection_count_after - rejection_count_before != 1 )); then
+    echo "reactivation atomicity did not record exactly one structured persistence rejection: before=$rejection_count_before after=$rejection_count_after" >&2
     exit 1
   fi
 
@@ -3337,9 +3358,16 @@ run_task_cycle_mutation_probe() {
   local cycle_log="${cycle_dir}/mutation.log"
   local cycle_restart_log="${cycle_dir}/restart.log"
   local cycle_sql_probe
+  local cycle_rejection_count_before
+  local cycle_rejection_count_after
 
   rm -rf "$cycle_dir"
   mkdir -p "$cycle_dir"
+
+  cycle_rejection_count_before="$(
+    runtime_evidence_count_persistence_mutation_rejections \
+      "${cycle_dir}/Diagnostics"
+  )"
 
   run_terminating_ui_probe \
     "task cycle real UI mutation" \
@@ -3353,13 +3381,12 @@ run_task_cycle_mutation_probe() {
     --e2e-persistence-failure-automation \
     --e2e-task-cycle-mutation-result-url "$PWD/$cycle_result"
 
-  local cycle_failure_marker_count
-  cycle_failure_marker_count="$(
-    grep -cF 'Noonmark E2E injected persistence save failure' \
-      "$cycle_log" || true
+  cycle_rejection_count_after="$(
+    runtime_evidence_count_persistence_mutation_rejections \
+      "${cycle_dir}/Diagnostics"
   )"
-  if [[ "$cycle_failure_marker_count" != "1" ]]; then
-    echo "task cycle conversion did not inject exactly one save failure: $cycle_failure_marker_count" >&2
+  if (( cycle_rejection_count_after - cycle_rejection_count_before != 1 )); then
+    echo "task cycle conversion did not record exactly one structured persistence rejection: before=$cycle_rejection_count_before after=$cycle_rejection_count_after" >&2
     exit 1
   fi
 

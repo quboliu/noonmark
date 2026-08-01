@@ -43,8 +43,11 @@ SCRIPT
 cat >"$fixture_root/bin/xcrun" <<SCRIPT
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "\$1" == "--find" && "\$2" == "dwarfdump" ]]
-printf '%s\n' "$fixture_root/bin/dwarfdump"
+if [[ "\$1" == "--find" && "\$2" == "dwarfdump" ]]; then
+  printf '%s\n' "$fixture_root/bin/dwarfdump"
+  exit 0
+fi
+exec /usr/bin/xcrun "\$@"
 SCRIPT
 cat >"$fixture_root/bin/codesign" <<'SCRIPT'
 #!/usr/bin/env bash

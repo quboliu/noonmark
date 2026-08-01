@@ -6,6 +6,7 @@ source "$repo_root/scripts/evidence-common"
 source "$repo_root/scripts/runtime-evidence"
 
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-evidence-common.XXXXXX")"
+fixture="$(cd "$fixture" && pwd -P)"
 trap 'rm -rf "$fixture"' EXIT
 
 fail() {
@@ -82,14 +83,362 @@ fi
 [[ ! -e "$symlink_target/created" ]] ||
   fail "symlinked evidence path created an outside parent before rejection"
 
+assert_prepare_interposition_rejected() {
+  local replacement_kind="$1"
+  local case_root="$git_fixture/artifacts/prepare-$replacement_kind"
+  local target="$case_root/fresh"
+  local outside="$fixture/prepare-$replacement_kind-outside"
+  local ready_fifo="$fixture/prepare-$replacement_kind-ready"
+  local release_fifo="$fixture/prepare-$replacement_kind-release"
+  local output="$fixture/prepare-$replacement_kind-output.log"
+  local prepare_pid
+  local prepare_status
+  local ready_marker=""
+
+  mkdir -p "$target" "$outside"
+  printf 'stale\n' >"$target/stale.txt"
+  printf 'outside-canary\n' >"$outside/canary.txt"
+  mkfifo "$ready_fifo" "$release_fifo"
+  exec 8<>"$ready_fifo"
+  exec 9<>"$release_fifo"
+
+  NOONMARK_EVIDENCE_TEST_READY_FD=8 \
+    NOONMARK_EVIDENCE_TEST_RELEASE_FD=9 \
+    evidence_prepare_fresh_directory \
+      "$git_fixture" \
+      "$target" >"$output" 2>&1 &
+  prepare_pid=$!
+
+  if ! IFS= read -r -n 1 -t 10 ready_marker <&8 ||
+    [[ "$ready_marker" != "R" ]]; then
+    kill "$prepare_pid" >/dev/null 2>&1 || true
+    wait "$prepare_pid" >/dev/null 2>&1 || true
+    exec 8>&-
+    exec 9>&-
+    fail "fresh evidence did not expose the descriptor-bound test seam"
+  fi
+
+  case "$replacement_kind" in
+    parent)
+      mv "$case_root" "${case_root}-bound"
+      ln -s "$outside" "$case_root"
+      ;;
+    leaf)
+      mv "$target" "${target}-bound"
+      ln -s "$outside" "$target"
+      ;;
+    *) fail "unknown prepare interposition kind: $replacement_kind" ;;
+  esac
+
+  printf 'G' >&9
+  set +e
+  wait "$prepare_pid"
+  prepare_status=$?
+  set -e
+  exec 8>&-
+  exec 9>&-
+
+  [[ "$prepare_status" -ne 0 ]] ||
+    fail "fresh evidence accepted a post-bind $replacement_kind replacement"
+  [[ "$(<"$outside/canary.txt")" == "outside-canary" ]] ||
+    fail "fresh evidence changed the outside $replacement_kind canary"
+  [[ ! -e "$outside/stale.txt" ]] ||
+    fail "fresh evidence crossed the post-bind $replacement_kind symlink"
+}
+
+assert_prepare_interposition_rejected parent
+assert_prepare_interposition_rejected leaf
+
+assert_inventory_interposition_rejected() {
+  local replacement_kind="$1"
+  local case_root="$git_fixture/artifacts/inventory-$replacement_kind"
+  local candidate="$case_root/candidate"
+  local output="$case_root/inventory.tsv"
+  local outside="$fixture/inventory-$replacement_kind-outside"
+  local ready_fifo="$fixture/inventory-$replacement_kind-ready"
+  local release_fifo="$fixture/inventory-$replacement_kind-release"
+  local command_output="$fixture/inventory-$replacement_kind-output.log"
+  local inventory_pid
+  local inventory_status
+  local ready_marker=""
+
+  mkdir -p "$case_root" "$outside"
+  printf 'outside-canary\n' >"$outside/canary.txt"
+  if [[ "$replacement_kind" == "inode" ]]; then
+    printf 'bound-inventory-file\n' >"$candidate"
+  else
+    mkdir -p "$candidate"
+    printf 'bound-inventory-file\n' >"$candidate/result.txt"
+  fi
+  mkfifo "$ready_fifo" "$release_fifo"
+  exec 8<>"$ready_fifo"
+  exec 9<>"$release_fifo"
+
+  NOONMARK_EVIDENCE_TEST_READY_FD=8 \
+    NOONMARK_EVIDENCE_TEST_RELEASE_FD=9 \
+    evidence_inventory \
+      "$git_fixture" \
+      "$output" \
+      "$candidate" >"$command_output" 2>&1 &
+  inventory_pid=$!
+
+  if ! IFS= read -r -n 1 -t 10 ready_marker <&8 ||
+    [[ "$ready_marker" != "R" ]]; then
+    kill "$inventory_pid" >/dev/null 2>&1 || true
+    wait "$inventory_pid" >/dev/null 2>&1 || true
+    exec 8>&-
+    exec 9>&-
+    fail "artifact inventory did not expose the descriptor-bound test seam"
+  fi
+
+  case "$replacement_kind" in
+    parent)
+      mv "$case_root" "${case_root}-bound"
+      ln -s "$outside" "$case_root"
+      ;;
+    leaf)
+      mv "$candidate" "${candidate}-bound"
+      ln -s "$outside" "$candidate"
+      ;;
+    inode)
+      mv "$candidate" "${candidate}-bound"
+      printf 'replacement-inventory-file\n' >"$candidate"
+      ;;
+    *) fail "unknown inventory interposition kind: $replacement_kind" ;;
+  esac
+
+  printf 'G' >&9
+  set +e
+  wait "$inventory_pid"
+  inventory_status=$?
+  set -e
+  exec 8>&-
+  exec 9>&-
+
+  [[ "$inventory_status" -ne 0 ]] ||
+    fail "artifact inventory accepted a post-bind $replacement_kind replacement"
+  [[ "$(<"$outside/canary.txt")" == "outside-canary" ]] ||
+    fail "artifact inventory changed the outside $replacement_kind canary"
+  [[ ! -e "$outside/inventory.tsv" ]] ||
+    fail "artifact inventory crossed the post-bind $replacement_kind symlink"
+}
+
+assert_inventory_interposition_rejected parent
+assert_inventory_interposition_rejected leaf
+assert_inventory_interposition_rejected inode
+
+assert_bootstrap_cleanup_interposition_rejected() {
+  local bootstrap_parent="$fixture/bootstrap-cleanup-parent"
+  local moved_root="$fixture/bootstrap-cleanup-bound"
+  local outside="$fixture/bootstrap-cleanup-outside"
+  local ready_fifo="$fixture/bootstrap-cleanup-ready"
+  local release_fifo="$fixture/bootstrap-cleanup-release"
+  local output="$fixture/bootstrap-cleanup-output.log"
+  local bootstrap_root
+  local helper_pid
+  local helper_status
+  local ready_marker=""
+
+  mkdir -p "$bootstrap_parent" "$outside"
+  printf 'outside-canary\n' >"$outside/canary.txt"
+  mkfifo "$ready_fifo" "$release_fifo"
+  exec 8<>"$ready_fifo"
+  exec 9<>"$release_fifo"
+
+  TMPDIR="$bootstrap_parent" \
+    NOONMARK_EVIDENCE_TEST_READY_FD=8 \
+    NOONMARK_EVIDENCE_TEST_RELEASE_FD=9 \
+    "$repo_root/scripts/run-evidence-path-helper" \
+      bootstrap-cleanup-contract >"$output" 2>&1 &
+  helper_pid=$!
+  if ! IFS= read -r -n 1 -t 10 ready_marker <&8 ||
+    [[ "$ready_marker" != "R" ]]; then
+    kill "$helper_pid" >/dev/null 2>&1 || true
+    wait "$helper_pid" >/dev/null 2>&1 || true
+    exec 8>&-
+    exec 9>&-
+    fail "bootstrap cleanup did not expose the inherited-FD test seam"
+  fi
+
+  bootstrap_root="$(
+    find "$bootstrap_parent" \
+      -mindepth 1 \
+      -maxdepth 1 \
+      -type d \
+      -name 'noonmark-evidence-path-helper.*' \
+      -print
+  )"
+  [[ -n "$bootstrap_root" && "$bootstrap_root" != *$'\n'* ]] ||
+    fail "bootstrap cleanup test could not identify one bound root"
+  mv "$bootstrap_root" "$moved_root"
+  ln -s "$outside" "$bootstrap_root"
+
+  printf 'G' >&9
+  set +e
+  wait "$helper_pid"
+  helper_status=$?
+  set -e
+  exec 8>&-
+  exec 9>&-
+
+  [[ "$helper_status" -ne 0 ]] ||
+    fail "bootstrap cleanup accepted a replaced root binding"
+  [[ "$(<"$outside/canary.txt")" == "outside-canary" ]] ||
+    fail "bootstrap cleanup changed the replacement target"
+  [[ -L "$bootstrap_root" ]] ||
+    fail "bootstrap cleanup removed the replacement path"
+  [[ -d "$moved_root" ]] ||
+    fail "bootstrap cleanup lost its descriptor-bound root"
+  [[ -z "$(find "$moved_root" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+    fail "bootstrap cleanup retained its descriptor-bound helper binary"
+}
+
+assert_bootstrap_release_timeout_rejected() {
+  local bootstrap_parent="$fixture/bootstrap-timeout-parent"
+  local ready_fifo="$fixture/bootstrap-timeout-ready"
+  local release_fifo="$fixture/bootstrap-timeout-release"
+  local output="$fixture/bootstrap-timeout-output.log"
+  local helper_pid
+  local helper_status
+  local ready_marker=""
+
+  mkdir -p "$bootstrap_parent"
+  mkfifo "$ready_fifo" "$release_fifo"
+  exec 8<>"$ready_fifo"
+  exec 9<>"$release_fifo"
+  TMPDIR="$bootstrap_parent" \
+    NOONMARK_EVIDENCE_TEST_READY_FD=8 \
+    NOONMARK_EVIDENCE_TEST_RELEASE_FD=9 \
+    "$repo_root/scripts/run-evidence-path-helper" \
+      bootstrap-cleanup-contract >"$output" 2>&1 &
+  helper_pid=$!
+  if ! IFS= read -r -n 1 -t 10 ready_marker <&8 ||
+    [[ "$ready_marker" != "R" ]]; then
+    kill "$helper_pid" >/dev/null 2>&1 || true
+    wait "$helper_pid" >/dev/null 2>&1 || true
+    exec 8>&-
+    exec 9>&-
+    fail "bootstrap timeout test did not reach the inherited-FD seam"
+  fi
+
+  set +e
+  wait "$helper_pid"
+  helper_status=$?
+  set -e
+  exec 8>&-
+  exec 9>&-
+  [[ "$helper_status" -ne 0 ]] ||
+    fail "bootstrap cleanup accepted a missing release byte"
+  [[ -z "$(
+    find "$bootstrap_parent" \
+      -mindepth 1 \
+      -maxdepth 1 \
+      -name 'noonmark-evidence-path-helper.*' \
+      -print \
+      -quit
+  )" ]] ||
+    fail "bootstrap timeout retained a compiled helper"
+}
+
+assert_bootstrap_cleanup_interposition_rejected
+assert_bootstrap_release_timeout_rejected
+
+assert_manifest_mutation_interposition_rejected() {
+  local operation="$1"
+  local replacement_kind="$2"
+  local case_root="$git_fixture/artifacts/$operation-$replacement_kind"
+  local destination_parent="$case_root/destination"
+  local destination="$destination_parent/manifest.txt"
+  local bound_parent="$case_root/destination-bound"
+  local bound_destination="$destination_parent/manifest-bound.txt"
+  local addition="$case_root/addition.txt"
+  local outside="$fixture/$operation-$replacement_kind-outside"
+  local ready_fifo="$fixture/$operation-$replacement_kind-ready"
+  local release_fifo="$fixture/$operation-$replacement_kind-release"
+  local output="$fixture/$operation-$replacement_kind-output.log"
+  local mutation_pid
+  local mutation_status
+  local ready_marker=""
+
+  mkdir -p "$destination_parent" "$outside"
+  printf 'first=value\n' >"$destination"
+  printf 'second=value\n' >"$addition"
+  printf 'outside-canary\n' >"$outside/manifest.txt"
+  mkfifo "$ready_fifo" "$release_fifo"
+  exec 8<>"$ready_fifo"
+  exec 9<>"$release_fifo"
+
+  if [[ "$operation" == "fragment-replace" ]]; then
+    NOONMARK_EVIDENCE_TEST_READY_FD=8 \
+      NOONMARK_EVIDENCE_TEST_RELEASE_FD=9 \
+      evidence_write_fragment_atomically \
+        "$destination" \
+        "$addition" >"$output" 2>&1 &
+  elif [[ "$operation" == "manifest-append" ]]; then
+    NOONMARK_EVIDENCE_TEST_READY_FD=8 \
+      NOONMARK_EVIDENCE_TEST_RELEASE_FD=9 \
+      evidence_atomic_append_file \
+        "$destination" \
+        "$addition" >"$output" 2>&1 &
+  else
+    fail "unknown manifest mutation operation: $operation"
+  fi
+  mutation_pid=$!
+
+  if ! IFS= read -r -n 1 -t 10 ready_marker <&8 ||
+    [[ "$ready_marker" != "R" ]]; then
+    kill "$mutation_pid" >/dev/null 2>&1 || true
+    wait "$mutation_pid" >/dev/null 2>&1 || true
+    exec 8>&-
+    exec 9>&-
+    fail "$operation did not expose the descriptor-bound test seam"
+  fi
+
+  case "$replacement_kind" in
+    parent)
+      mv "$destination_parent" "$bound_parent"
+      ln -s "$outside" "$destination_parent"
+      ;;
+    leaf)
+      mv "$destination" "$bound_destination"
+      printf 'replacement=value\n' >"$destination"
+      ;;
+    *) fail "unknown manifest replacement kind: $replacement_kind" ;;
+  esac
+
+  printf 'G' >&9
+  set +e
+  wait "$mutation_pid"
+  mutation_status=$?
+  set -e
+  exec 8>&-
+  exec 9>&-
+
+  [[ "$mutation_status" -ne 0 ]] ||
+    fail "$operation accepted a post-bind $replacement_kind replacement"
+  [[ "$(<"$outside/manifest.txt")" == "outside-canary" ]] ||
+    fail "$operation changed the outside $replacement_kind canary"
+  if [[ "$replacement_kind" == "leaf" ]]; then
+    [[ "$(<"$destination")" == "replacement=value" ]] ||
+      fail "$operation changed the replacement leaf"
+  fi
+}
+
+assert_manifest_mutation_interposition_rejected fragment-replace parent
+assert_manifest_mutation_interposition_rejected fragment-replace leaf
+assert_manifest_mutation_interposition_rejected manifest-append parent
+assert_manifest_mutation_interposition_rejected manifest-append leaf
+
 mkdir -p "$fresh_root/current"
 printf 'current\n' >"$fresh_root/current/result.txt"
-ln -s result.txt "$fresh_root/current/result-link"
+printf 'second\n' >"$fresh_root/current/second.txt"
 printf 'stale\n' >"$fresh_root/stale.txt"
 inventory="$fresh_root/inventory.tsv"
 evidence_inventory "$git_fixture" "$inventory" "$fresh_root/current"
 grep -Fq 'artifacts/fresh/current/result.txt' "$inventory" ||
   fail "inventory omitted a current artifact"
+grep -Fq 'artifacts/fresh/current/second.txt' "$inventory" ||
+  fail "inventory omitted a second current artifact"
 if grep -Fq 'stale.txt' "$inventory"; then
   fail "inventory included an unrequested stale artifact"
 fi
@@ -100,6 +449,72 @@ if evidence_inventory "$git_fixture" "$fresh_root/unsafe.tsv" \
   fail "inventory accepted a filename with a newline"
 fi
 rm -f "$newline_path"
+
+unsafe_inventory_root="$git_fixture/artifacts/inventory-special-files"
+mkdir -p "$unsafe_inventory_root/nested"
+printf 'safe\n' >"$unsafe_inventory_root/safe.txt"
+ln -s ../safe.txt "$unsafe_inventory_root/nested/link.txt"
+if evidence_inventory \
+  "$git_fixture" \
+  "$fresh_root/symlink-input.tsv" \
+  "$unsafe_inventory_root" >/dev/null 2>&1; then
+  fail "inventory accepted a symbolic-link input"
+fi
+[[ ! -e "$fresh_root/symlink-input.tsv" ]] ||
+  fail "rejected symbolic-link input published an inventory"
+
+printf 'hard-link\n' >"$unsafe_inventory_root/hard-source.txt"
+ln "$unsafe_inventory_root/hard-source.txt" \
+  "$unsafe_inventory_root/hard-input.txt"
+if evidence_inventory \
+  "$git_fixture" \
+  "$fresh_root/hard-link-input.tsv" \
+  "$unsafe_inventory_root/hard-input.txt" >/dev/null 2>&1; then
+  fail "inventory accepted a multiply-linked input"
+fi
+[[ ! -e "$fresh_root/hard-link-input.tsv" ]] ||
+  fail "rejected hard-link input published an inventory"
+
+mkfifo "$unsafe_inventory_root/fifo-input"
+if evidence_inventory \
+  "$git_fixture" \
+  "$fresh_root/fifo-input.tsv" \
+  "$unsafe_inventory_root/fifo-input" >/dev/null 2>&1; then
+  fail "inventory accepted a FIFO input"
+fi
+[[ ! -e "$fresh_root/fifo-input.tsv" ]] ||
+  fail "rejected FIFO input published an inventory"
+
+output_canary="$fixture/inventory-output-canary.txt"
+printf 'output-canary\n' >"$output_canary"
+ln -s "$output_canary" "$fresh_root/symlink-output.tsv"
+if evidence_inventory \
+  "$git_fixture" \
+  "$fresh_root/symlink-output.tsv" \
+  "$fresh_root/current/result.txt" >/dev/null 2>&1; then
+  fail "inventory accepted a symbolic-link output"
+fi
+[[ "$(<"$output_canary")" == "output-canary" ]] ||
+  fail "rejected symbolic-link output changed its target"
+
+printf 'existing-output\n' >"$fresh_root/output-source.tsv"
+ln "$fresh_root/output-source.tsv" "$fresh_root/hard-link-output.tsv"
+if evidence_inventory \
+  "$git_fixture" \
+  "$fresh_root/hard-link-output.tsv" \
+  "$fresh_root/current/result.txt" >/dev/null 2>&1; then
+  fail "inventory accepted a multiply-linked output"
+fi
+[[ "$(<"$fresh_root/output-source.tsv")" == "existing-output" ]] ||
+  fail "rejected hard-link output changed its peer"
+
+mkfifo "$fresh_root/fifo-output.tsv"
+if evidence_inventory \
+  "$git_fixture" \
+  "$fresh_root/fifo-output.tsv" \
+  "$fresh_root/current/result.txt" >/dev/null 2>&1; then
+  fail "inventory accepted a FIFO output"
+fi
 
 expect_inventory_verification_failure() {
   local description="$1"
@@ -139,14 +554,6 @@ expect_inventory_verification_failure \
 rm "$fresh_root/current/result.txt"
 expect_inventory_verification_failure "a deleted artifact" "$inventory"
 printf 'current\n' >"$fresh_root/current/result.txt"
-
-rm "$fresh_root/current/result-link"
-ln -s replacement.txt "$fresh_root/current/result-link"
-expect_inventory_verification_failure \
-  "a changed symbolic-link target" \
-  "$inventory"
-rm "$fresh_root/current/result-link"
-ln -s result.txt "$fresh_root/current/result-link"
 
 duplicate_inventory="$fresh_root/duplicate-inventory.tsv"
 {
@@ -203,12 +610,12 @@ result_relative='artifacts/fresh/current/result.txt'
 current_absolute="$(cd "$fresh_root/current" && pwd -P)"
 fresh_absolute="$(cd "$fresh_root" && pwd -P)"
 result_absolute="$current_absolute/result.txt"
-link_absolute="$current_absolute/result-link"
+second_absolute="$current_absolute/second.txt"
 evidence_require_inventory_paths \
   "$git_fixture" \
   "$inventory" \
   "$result_relative" \
-  "$link_absolute"
+  "$second_absolute"
 
 expect_required_inventory_paths_failure \
   "an empty required-path declaration" \

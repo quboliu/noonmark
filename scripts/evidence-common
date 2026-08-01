@@ -5,6 +5,285 @@ if [[ "${NOONMARK_EVIDENCE_COMMON_LOADED:-0}" == "1" ]]; then
 fi
 NOONMARK_EVIDENCE_COMMON_LOADED=1
 
+NOONMARK_EVIDENCE_HELPER_SESSION_ACTIVE="${NOONMARK_EVIDENCE_HELPER_SESSION_ACTIVE:-0}"
+NOONMARK_EVIDENCE_HELPER_SESSION_PID="${NOONMARK_EVIDENCE_HELPER_SESSION_PID:-}"
+NOONMARK_EVIDENCE_HELPER_SESSION_ROOT="${NOONMARK_EVIDENCE_HELPER_SESSION_ROOT:-}"
+NOONMARK_EVIDENCE_MODULE_ROOT="$(
+  cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P
+)"
+
+evidence_path_helper_file_argument() {
+  local path="$1"
+
+  if [[ "$path" == /* ]]; then
+    printf '%s\n' "$path"
+  else
+    # Repository scripts have always interpreted relative evidence file paths
+    # from the repository root. Resolve that contract at the module boundary so
+    # inherited helper sessions never depend on a child shell's current folder.
+    printf '%s/%s\n' "$NOONMARK_EVIDENCE_MODULE_ROOT" "$path"
+  fi
+}
+
+evidence_path_helper_runner() {
+  local runner
+
+  runner="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/run-evidence-path-helper"
+  if [[ ! -x "$runner" || -L "$runner" ]]; then
+    echo "evidence path helper launcher is missing" >&2
+    return 1
+  fi
+  printf '%s\n' "$runner"
+}
+
+evidence_cleanup_partial_transport() {
+  local transport_root="$1"
+  local evidence_script_dir
+  local custodian_source
+
+  evidence_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" ||
+    return 1
+  custodian_source="$evidence_script_dir/../Tools/NoonmarkEvidenceBootstrapCustodian/main.swift"
+  if [[ ! -f "$custodian_source" || -L "$custodian_source" ]]; then
+    return 1
+  fi
+  /usr/bin/xcrun swift \
+    "$custodian_source" \
+    --recover-session \
+    "$transport_root" >/dev/null 2>&1
+}
+
+evidence_path_helper_process_is_live() {
+  local process_pid="$1"
+  local process_state
+
+  [[ "$process_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  process_state="$(
+    /bin/ps -o stat= -p "$process_pid" 2>/dev/null |
+      /usr/bin/tr -d '[:space:]'
+  )" || return 1
+  [[ -n "$process_state" && "$process_state" != Z* ]]
+}
+
+evidence_path_helper_read_session_response() {
+  local server_pid="$1"
+
+  NOONMARK_EVIDENCE_HELPER_RESPONSE=""
+  while true; do
+    if IFS= read -r -t 1 NOONMARK_EVIDENCE_HELPER_RESPONSE <&21; then
+      return 0
+    fi
+    evidence_path_helper_process_is_live "$server_pid" || break
+  done
+  # The server may have written its terminal response immediately before
+  # exiting. Consume that already-buffered line once before reporting loss.
+  IFS= read -r -t 1 NOONMARK_EVIDENCE_HELPER_RESPONSE <&21
+}
+
+evidence_path_helper_session_start() {
+  if [[ "$NOONMARK_EVIDENCE_HELPER_SESSION_ACTIVE" == "1" ]]; then
+    local inherited_name="${NOONMARK_EVIDENCE_HELPER_SESSION_ROOT##*/}"
+    if [[ "$NOONMARK_EVIDENCE_HELPER_SESSION_PID" =~ ^[1-9][0-9]*$ ]] &&
+      [[ "$inherited_name" =~ ^noonmark-evidence-helper-session\.[A-Za-z0-9]+$ ]] &&
+      [[ -d "$NOONMARK_EVIDENCE_HELPER_SESSION_ROOT" ]] &&
+      [[ ! -L "$NOONMARK_EVIDENCE_HELPER_SESSION_ROOT" ]] &&
+      [[ "$(stat -f '%u:%Lp:%HT' \
+        "$NOONMARK_EVIDENCE_HELPER_SESSION_ROOT")" == \
+        "$(id -u):700:Directory" ]] &&
+      evidence_path_helper_process_is_live \
+        "$NOONMARK_EVIDENCE_HELPER_SESSION_PID" &&
+      { : >&20; : <&21; : >&23; } 2>/dev/null; then
+      return 0
+    fi
+    echo "inherited evidence helper session is unsafe or unavailable" >&2
+    return 1
+  fi
+
+  local runner
+  local temp_base
+  local transport_root
+  local request_fifo
+  local response_fifo
+  local lock_fifo
+  local transport_identity
+  local phase=""
+  local status=""
+  local server_pid
+  local caller_pid
+
+  # Bash leaves explicitly opened descriptors available to executed children.
+  # A child that does not inherit the session identity must not retain stale
+  # access to its parent's protocol channels: besides keeping FIFOs alive, the
+  # fixed descriptor numbers would otherwise be inherited by the fresh runner
+  # before this shell replaces them with its own transport.
+  exec 20>&-
+  exec 21<&-
+  exec 23>&-
+
+  runner="$(evidence_path_helper_runner)" || return 1
+  temp_base="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || return 1
+  # Resolve Bash 3.2's real current process before creating any transport. Its
+  # $$ and PPID values remain tied to the outer shell inside a subshell.
+  if ! IFS= read -r caller_pid < <(
+    /bin/sh -c '/bin/ps -o ppid= -p "$PPID"' | /usr/bin/tr -d ' '
+  ) || [[ ! "$caller_pid" =~ ^[1-9][0-9]*$ ]] ||
+    ! /bin/ps -p "$caller_pid" >/dev/null 2>&1; then
+    echo "could not resolve the evidence session caller PID" >&2
+    return 1
+  fi
+  transport_root="$(
+    mktemp -d "$temp_base/noonmark-evidence-helper-session.XXXXXX"
+  )" || return 1
+  if ! chmod 0700 "$transport_root"; then
+    evidence_cleanup_partial_transport "$transport_root" || true
+    return 1
+  fi
+  if ! transport_identity="$(stat -f '%u:%Lp:%l:%HT' "$transport_root")"; then
+    evidence_cleanup_partial_transport "$transport_root" || true
+    return 1
+  fi
+  if [[ "$transport_identity" != "$(id -u):700:2:Directory" ]]; then
+    echo "evidence helper session transport is unsafe" >&2
+    evidence_cleanup_partial_transport "$transport_root" || true
+    return 1
+  fi
+  request_fifo="$transport_root/request.fifo"
+  response_fifo="$transport_root/response.fifo"
+  lock_fifo="$transport_root/lock.fifo"
+  if ! mkfifo "$request_fifo" "$response_fifo" "$lock_fifo"; then
+    evidence_cleanup_partial_transport "$transport_root" || true
+    return 1
+  fi
+  if ! chmod 0600 "$request_fifo" "$response_fifo" "$lock_fifo"; then
+    evidence_cleanup_partial_transport "$transport_root" || true
+    return 1
+  fi
+
+  "$runner" serve "$transport_root" "$caller_pid" \
+    <"$request_fifo" >"$response_fifo" &
+  server_pid=$!
+  exec 20<>"$request_fifo"
+  exec 21<>"$response_fifo"
+  exec 23<>"$lock_fifo"
+  printf 'T' >&23
+
+  if printf 'NM1\tping\t0\t0\n' >&20; then
+    for _ in $(seq 1 30); do
+      if IFS= read -r -t 1 phase <&21; then
+        break
+      fi
+      if ! evidence_path_helper_process_is_live "$server_pid"; then
+        break
+      fi
+    done
+  fi
+  if [[ "$phase" != "P" ]] || ! printf 'G\n' >&20; then
+    status=""
+  else
+    for _ in $(seq 1 30); do
+      if IFS= read -r -t 1 status <&21; then
+        break
+      fi
+      if ! evidence_path_helper_process_is_live "$server_pid"; then
+        break
+      fi
+    done
+  fi
+  if [[ "$phase" != "P" || "$status" != "0" ]]; then
+    echo "evidence helper session failed its startup handshake" >&2
+    exec 20>&-
+    exec 21<&-
+    exec 23>&-
+    kill "$server_pid" >/dev/null 2>&1 || true
+    wait "$server_pid" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  NOONMARK_EVIDENCE_HELPER_SESSION_ACTIVE=1
+  NOONMARK_EVIDENCE_HELPER_SESSION_PID="$server_pid"
+  NOONMARK_EVIDENCE_HELPER_SESSION_ROOT="$transport_root"
+}
+
+evidence_path_helper_request() {
+  local command="$1"
+  shift
+  local runner
+  local argument
+  local argument_count="$#"
+  local lock_token=""
+  local phase=""
+  local status=""
+  local request_status=0
+
+  runner="$(evidence_path_helper_runner)" || return 1
+  if [[ -n "${NOONMARK_EVIDENCE_TEST_READY_FD:-}" ||
+    -n "${NOONMARK_EVIDENCE_TEST_RELEASE_FD:-}" ]]; then
+    "$runner" "$command" "$@"
+    return $?
+  fi
+
+  evidence_path_helper_session_start || return 1
+  if ! IFS= read -r -n 1 -t 10 lock_token <&23 ||
+    [[ "$lock_token" != "T" ]]; then
+    echo "evidence helper session request lock timed out" >&2
+    return 1
+  fi
+
+  if [[ -z "$command" || "$command" == *$'\n'* ||
+    "$command" == *$'\r'* || "$command" == *$'\t'* ]]; then
+    request_status=1
+  fi
+  for argument in "$@"; do
+    if [[ -z "$argument" || "$argument" == *$'\n'* ||
+      "$argument" == *$'\r'* || "$argument" == *$'\t'* ]]; then
+      request_status=1
+    fi
+  done
+
+  if [[ "$request_status" -eq 0 ]]; then
+    if ! {
+      printf 'NM1\t%s\t%s\t0\n' "$command" "$argument_count"
+      for argument in "$@"; do
+        printf '%s\n' "$argument"
+      done
+    } >&20; then
+      request_status=1
+    fi
+  fi
+
+  if [[ "$request_status" -eq 0 ]]; then
+    if evidence_path_helper_read_session_response \
+      "$NOONMARK_EVIDENCE_HELPER_SESSION_PID"; then
+      phase="$NOONMARK_EVIDENCE_HELPER_RESPONSE"
+    else
+      request_status=1
+    fi
+    if [[ "$phase" != "P" ]]; then
+      request_status=1
+    fi
+  fi
+
+  if [[ "$phase" == "P" ]]; then
+    if ! printf 'G\n' >&20; then
+      request_status=1
+    elif evidence_path_helper_read_session_response \
+      "$NOONMARK_EVIDENCE_HELPER_SESSION_PID"; then
+      status="$NOONMARK_EVIDENCE_HELPER_RESPONSE"
+    else
+      request_status=1
+    fi
+    if [[ "$status" != "0" ]]; then
+      request_status=1
+    fi
+  fi
+  printf 'T' >&23
+
+  if [[ "$request_status" -ne 0 ]]; then
+    echo "evidence helper session request failed: $command" >&2
+    return 1
+  fi
+}
+
 evidence_validate_key() {
   [[ "$1" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]]
 }
@@ -172,16 +451,14 @@ evidence_guard_repo_path() {
 evidence_prepare_fresh_directory() {
   local repo_root="$1"
   local directory="$2"
-  local directory_absolute
+  local repo_absolute
 
-  directory_absolute="$(evidence_guard_repo_path "$repo_root" "$directory")" ||
-    return 1
-  if ! rm -rf -- "$directory_absolute"; then
-    echo "could not remove stale evidence: $directory" >&2
-    return 1
-  fi
-  if ! mkdir -p "$directory_absolute"; then
-    echo "could not create fresh evidence directory: $directory" >&2
+  repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  if ! evidence_path_helper_request \
+    prepare \
+    "$repo_absolute" \
+    "$directory"; then
+    echo "could not prepare fresh evidence directory: $directory" >&2
     return 1
   fi
 }
@@ -189,15 +466,20 @@ evidence_prepare_fresh_directory() {
 evidence_write_fragment_atomically() {
   local output="$1"
   local content_file="$2"
-  local output_directory
-  local staged
+  local output_absolute
+  local content_file_absolute
 
-  output_directory="$(dirname "$output")"
-  mkdir -p "$output_directory" || return 1
-  staged="$(mktemp "${output_directory}/.$(basename "$output").XXXXXX")" ||
+  output_absolute="$(evidence_path_helper_file_argument "$output")" ||
     return 1
-  if ! cp "$content_file" "$staged" || ! mv -f "$staged" "$output"; then
-    rm -f "$staged"
+  content_file_absolute="$(
+    evidence_path_helper_file_argument "$content_file"
+  )" || return 1
+
+  if ! evidence_path_helper_request \
+    replace-path \
+    "$output_absolute" \
+    "$content_file_absolute"; then
+    echo "could not publish evidence fragment: $output" >&2
     return 1
   fi
 }
@@ -1004,14 +1286,20 @@ evidence_verify_release_symbols() {
 evidence_atomic_append_file() {
   local destination="$1"
   local addition="$2"
-  local staged
+  local destination_absolute
+  local addition_absolute
 
-  [[ -f "$destination" && -r "$destination" ]] || return 1
-  staged="$(mktemp "$(dirname "$destination")/.$(basename "$destination").XXXXXX")" ||
+  destination_absolute="$(
+    evidence_path_helper_file_argument "$destination"
+  )" || return 1
+  addition_absolute="$(evidence_path_helper_file_argument "$addition")" ||
     return 1
-  if ! cp "$destination" "$staged" || ! cat "$addition" >>"$staged" ||
-    ! mv -f "$staged" "$destination"; then
-    rm -f "$staged"
+
+  if ! evidence_path_helper_request \
+    append-manifest-path \
+    "$destination_absolute" \
+    "$addition_absolute"; then
+    echo "could not append the evidence manifest" >&2
     return 1
   fi
 }
@@ -1250,111 +1538,21 @@ evidence_finish_manifest() {
   rm -f "$addition"
 }
 
-evidence_inventory_entry() {
-  local repo_absolute="$1"
-  local path="$2"
-  local output="$3"
-  local relative
-  local digest
-  local size
-  local target
-
-  relative="${path#"$repo_absolute"/}"
-  if [[ "$relative" == "$path" || -z "$relative" ||
-    "$relative" == *$'\n'* || "$relative" == *$'\r'* ||
-    "$relative" == *$'\t'* ]]; then
-    echo "artifact path cannot be represented safely: $path" >&2
-    return 1
-  fi
-  if [[ -L "$path" ]]; then
-    target="$(readlink "$path")" || return 1
-    if [[ "$target" == *$'\n'* || "$target" == *$'\r'* ]]; then
-      return 1
-    fi
-    digest="$(printf '%s' "$target" | shasum -a 256 | awk '{print $1}')"
-    size="${#target}"
-  elif [[ -f "$path" ]]; then
-    digest="$(shasum -a 256 "$path" | awk '{print $1}')" || return 1
-    size="$(stat -f '%z' "$path")" || return 1
-  else
-    return 0
-  fi
-  printf '%s\t%s\t%s\n' "$digest" "$size" "$relative" >>"$output"
-}
-
 evidence_inventory() {
   local repo_root="$1"
   local output="$2"
   shift 2
   local repo_absolute
-  local candidate
-  local candidate_absolute
-  local parent_absolute
-  local unsorted
-  local staged
 
   repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
-  unsorted="$(mktemp "${TMPDIR:-/tmp}/noonmark-evidence-inventory.XXXXXX")" ||
-    return 1
-  for candidate in "$@"; do
-    if [[ -z "$candidate" || "$candidate" == *$'\n'* ||
-      "$candidate" == *$'\r'* ]]; then
-      rm -f "$unsorted"
-      return 1
-    fi
-    if [[ "$candidate" == /* ]]; then
-      candidate_absolute="$candidate"
-    else
-      candidate_absolute="$repo_absolute/$candidate"
-    fi
-    if [[ ! -e "$candidate_absolute" && ! -L "$candidate_absolute" ]]; then
-      echo "artifact input is missing: $candidate" >&2
-      rm -f "$unsorted"
-      return 1
-    fi
-    parent_absolute="$(cd "$(dirname "$candidate_absolute")" && pwd -P)" || {
-      rm -f "$unsorted"
-      return 1
-    }
-    candidate_absolute="$parent_absolute/$(basename "$candidate_absolute")"
-    if [[ "$candidate_absolute" != "$repo_absolute/"* ]]; then
-      echo "artifact input escapes the repository: $candidate" >&2
-      rm -f "$unsorted"
-      return 1
-    fi
-    if [[ -d "$candidate_absolute" && ! -L "$candidate_absolute" ]]; then
-      while IFS= read -r -d '' path; do
-        if ! evidence_inventory_entry "$repo_absolute" "$path" "$unsorted"; then
-          rm -f "$unsorted"
-          return 1
-        fi
-      done < <(find "$candidate_absolute" -mindepth 1 \
-        \( -type f -o -type l \) -print0)
-    elif ! evidence_inventory_entry \
-      "$repo_absolute" "$candidate_absolute" "$unsorted"; then
-      rm -f "$unsorted"
-      return 1
-    fi
-  done
-  if [[ ! -s "$unsorted" ]]; then
-    echo "artifact inventory has no files" >&2
-    rm -f "$unsorted"
+  if ! evidence_path_helper_request \
+    inventory \
+    "$repo_absolute" \
+    "$output" \
+    "$@"; then
+    echo "could not capture artifact inventory" >&2
     return 1
   fi
-  mkdir -p "$(dirname "$output")" || {
-    rm -f "$unsorted"
-    return 1
-  }
-  staged="$(mktemp "$(dirname "$output")/.$(basename "$output").XXXXXX")" || {
-    rm -f "$unsorted"
-    return 1
-  }
-  if ! LC_ALL=C sort -t $'\t' -k3,3 "$unsorted" >"$staged" ||
-    ! mv -f "$staged" "$output"; then
-    rm -f "$unsorted" "$staged"
-    return 1
-  fi
-  rm -f "$unsorted"
 }
 
 evidence_verify_inventory() {

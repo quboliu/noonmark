@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+repo_root="$(cd "$script_dir/.." && pwd -P)"
+source_file="$repo_root/Tools/NoonmarkEvidencePathHelper/main.swift"
+custodian_source="$repo_root/Tools/NoonmarkEvidenceBootstrapCustodian/main.swift"
+
+require_safe_source() {
+  local path="$1"
+  local label="$2"
+  if [[ ! -f "$path" || -L "$path" ||
+    "$(stat -f '%u:%l:%HT' "$path")" != "$(id -u):1:Regular File" ]]; then
+    echo "Noonmark evidence $label source is unsafe or missing" >&2
+    exit 1
+  fi
+}
+
+require_safe_source "$custodian_source" "bootstrap custodian"
+
+swift_path="$(/usr/bin/xcrun --find swift)"
+temp_base="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+system_temp_base="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)"
+system_temp_base="$(cd "$system_temp_base" && pwd -P)"
+custodian_sha256_before="$(shasum -a 256 "$custodian_source" | awk '{print $1}')"
+bootstrap_name="noonmark-evidence-path-helper.$(
+  uuidgen | tr '[:upper:]' '[:lower:]' | tr -d '-'
+)"
+bootstrap_root="$temp_base/$bootstrap_name"
+helper="$bootstrap_root/NoonmarkEvidencePathHelper"
+custodian_ready="$bootstrap_root/custodian-ready"
+custodian_pid=""
+custodian_control_open=0
+custodian_shutdown=0
+custodian_cleanup_status=0
+
+establish_custodian_control_for_shutdown() {
+  if [[ "$custodian_control_open" -eq 1 || -z "$custodian_pid" ]]; then
+    return 0
+  fi
+  for _ in $(seq 1 600); do
+    if [[ -f "$custodian_ready" && ! -L "$custodian_ready" &&
+      -p "$bootstrap_root/custodian-control.fifo" &&
+      ! -L "$bootstrap_root/custodian-control.fifo" ]]; then
+      exec 24>"$bootstrap_root/custodian-control.fifo"
+      custodian_control_open=1
+      return 0
+    fi
+    if ! kill -0 "$custodian_pid" 2>/dev/null; then
+      wait "$custodian_pid" >/dev/null 2>&1 || true
+      custodian_pid=""
+      return 0
+    fi
+    sleep 0.05
+  done
+  echo "Noonmark evidence bootstrap custodian startup did not settle" >&2
+  return 1
+}
+
+shutdown_custodian() {
+  if [[ "$custodian_shutdown" -eq 1 ]]; then
+    return "$custodian_cleanup_status"
+  fi
+  custodian_shutdown=1
+
+  if ! establish_custodian_control_for_shutdown; then
+    custodian_cleanup_status=1
+  fi
+  if [[ "$custodian_control_open" -eq 1 ]]; then
+    if ! printf 'Q' >&24; then
+      custodian_cleanup_status=1
+    fi
+    exec 24>&-
+    custodian_control_open=0
+    if ! wait "$custodian_pid"; then
+      custodian_cleanup_status=1
+    fi
+  fi
+  exec 19<&- 2>/dev/null || true
+  exec 18<&- 2>/dev/null || true
+
+  if [[ "$custodian_control_open" -eq 0 &&
+    "$custodian_cleanup_status" -eq 0 &&
+    (-e "$bootstrap_root" || -L "$bootstrap_root") ]]; then
+    echo "Noonmark evidence path helper bootstrap was not removed" >&2
+    custodian_cleanup_status=1
+  fi
+  return "$custodian_cleanup_status"
+}
+
+exit_cleanup() {
+  local status=$?
+  trap - EXIT
+  if ! shutdown_custodian; then
+    status=1
+  fi
+  exit "$status"
+}
+
+handle_signal() {
+  local status="$1"
+  trap - HUP INT TERM
+  shutdown_custodian || true
+  exit "$status"
+}
+
+trap exit_cleanup EXIT
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
+
+if [[ -e "$bootstrap_root" || -L "$bootstrap_root" ]]; then
+  echo "Noonmark evidence path helper bootstrap name already exists" >&2
+  exit 1
+fi
+
+custodian_arguments=(
+  "$custodian_source"
+  "$temp_base"
+  "$bootstrap_name"
+  "$$"
+)
+if [[ "${1:-}" == "serve" && "$#" -eq 3 ]]; then
+  custodian_arguments+=(--session-transport "$2")
+fi
+TMPDIR="$system_temp_base" \
+  "$swift_path" "${custodian_arguments[@]}" &
+custodian_pid=$!
+
+for _ in $(seq 1 600); do
+  if [[ -f "$custodian_ready" && ! -L "$custodian_ready" ]]; then
+    break
+  fi
+  if ! kill -0 "$custodian_pid" 2>/dev/null; then
+    wait "$custodian_pid" || true
+    echo "Noonmark evidence bootstrap custodian exited before readiness" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+if [[ ! -f "$custodian_ready" || -L "$custodian_ready" ||
+  "$(<"$custodian_ready")" != "R" ]]; then
+  echo "Noonmark evidence bootstrap custodian readiness timed out" >&2
+  exit 1
+fi
+
+exec 18<"$temp_base"
+exec 19<"$bootstrap_root"
+if [[ ! -d "$bootstrap_root" || -L "$bootstrap_root" ||
+  "$(stat -f '%u:%Lp:%HT' "$bootstrap_root")" != \
+  "$(id -u):700:Directory" ||
+  "$(stat -f '%u:%Lp:%l:%HT' "$custodian_ready")" != \
+  "$(id -u):600:1:Regular File" ||
+  ! -p "$bootstrap_root/custodian-control.fifo" ||
+  -L "$bootstrap_root/custodian-control.fifo" ||
+  "$(stat -f '%u:%Lp:%l' "$bootstrap_root/custodian-control.fifo")" != \
+  "$(id -u):600:1" ]]; then
+  echo "Noonmark evidence bootstrap custodian published unsafe entries" >&2
+  exit 1
+fi
+exec 24>"$bootstrap_root/custodian-control.fifo"
+custodian_control_open=1
+
+custodian_sha256_after="$(shasum -a 256 "$custodian_source" | awk '{print $1}')"
+if [[ "$custodian_sha256_before" != "$custodian_sha256_after" ]]; then
+  echo "Noonmark evidence bootstrap custodian source changed during startup" >&2
+  exit 1
+fi
+
+require_safe_source "$source_file" "path helper"
+source_sha256_before="$(shasum -a 256 "$source_file" | awk '{print $1}')"
+swiftc_path="$(xcrun --find swiftc)"
+sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+if ! TMPDIR="$system_temp_base" \
+  "$swiftc_path" -sdk "$sdk_path" -O "$source_file" -o "$helper"; then
+  echo "Noonmark evidence path helper compilation failed" >&2
+  exit 1
+fi
+source_sha256_after="$(shasum -a 256 "$source_file" | awk '{print $1}')"
+if [[ "$source_sha256_before" != "$source_sha256_after" ]]; then
+  echo "Noonmark evidence path helper source changed during compilation" >&2
+  exit 1
+fi
+chmod 0700 "$helper"
+if [[ -L "$helper" ||
+  "$(stat -f '%u:%Lp:%l:%HT' "$helper")" != \
+  "$(id -u):700:1:Regular File" ]]; then
+  echo "Noonmark evidence path helper bootstrap binary is unsafe" >&2
+  exit 1
+fi
+
+set +e
+"$helper" \
+  --bootstrap-parent-fd 18 \
+  --bootstrap-root-fd 19 \
+  --bootstrap-name "$bootstrap_name" \
+  "$@"
+helper_status=$?
+set -e
+
+if ! shutdown_custodian; then
+  exit 1
+fi
+exit "$helper_status"

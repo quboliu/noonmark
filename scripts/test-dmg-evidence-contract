@@ -22,7 +22,12 @@ if [[ ! -x "$real_harness_binary" ]]; then
   exit 1
 fi
 
-mkdir -p "$fixture_root/scripts" "$fixture_root/bin" "$fixture_root/dist/Noonmark.app"
+mkdir -p \
+  "$fixture_root/scripts" \
+  "$fixture_root/bin" \
+  "$fixture_root/dist/Noonmark.app" \
+  "$fixture_root/Tools/NoonmarkEvidencePathHelper" \
+  "$fixture_root/Tools/NoonmarkEvidenceBootstrapCustodian"
 cp "$repo_root/scripts/package-dmg" "$fixture_root/scripts/package-dmg"
 cp "$repo_root/scripts/verify-dmg" "$fixture_root/scripts/verify-dmg"
 cp \
@@ -188,6 +193,26 @@ chmod +x "$fixture_root/scripts/build-mac-app"
 
 cp "$repo_root/scripts/evidence-common" "$fixture_root/scripts/evidence-common"
 cp \
+  "$repo_root/scripts/run-evidence-path-helper" \
+  "$fixture_root/scripts/run-evidence-path-helper"
+cp \
+  "$repo_root/Tools/NoonmarkEvidencePathHelper/main.swift" \
+  "$fixture_root/Tools/NoonmarkEvidencePathHelper/main.swift"
+cp \
+  "$repo_root/Tools/NoonmarkEvidenceBootstrapCustodian/main.swift" \
+  "$fixture_root/Tools/NoonmarkEvidenceBootstrapCustodian/main.swift"
+chmod +x "$fixture_root/scripts/run-evidence-path-helper"
+for copied_tool in \
+  scripts/evidence-common \
+  scripts/run-evidence-path-helper \
+  Tools/NoonmarkEvidencePathHelper/main.swift \
+  Tools/NoonmarkEvidenceBootstrapCustodian/main.swift; do
+  if ! cmp -s "$repo_root/$copied_tool" "$fixture_root/$copied_tool"; then
+    echo "DMG fixture changed copied evidence tool bytes: $copied_tool" >&2
+    exit 1
+  fi
+done
+cp \
   "$repo_root/scripts/verify-development-validation-evidence" \
   "$fixture_root/scripts/verify-development-validation-evidence"
 cp \
@@ -307,8 +332,11 @@ chmod +x "$fixture_root/bin/dwarfdump"
 cat >"$fixture_root/bin/xcrun" <<SCRIPT
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "\$1" == "--find" && "\$2" == "dwarfdump" ]]
-printf '%s\n' "$fixture_root/bin/dwarfdump"
+if [[ "\$1" == "--find" && "\$2" == "dwarfdump" ]]; then
+  printf '%s\n' "$fixture_root/bin/dwarfdump"
+  exit 0
+fi
+exec /usr/bin/xcrun "\$@"
 SCRIPT
 chmod +x "$fixture_root/bin/xcrun"
 
@@ -336,6 +364,15 @@ EOF
   git add .
   git commit -qm "fixture"
 )
+
+# All validators in this fixture belong to one top-level run. Keep one
+# descriptor-bound helper session across their child shells so the large
+# negative matrix compiles the helper exactly once.
+source "$fixture_root/scripts/evidence-common"
+evidence_path_helper_session_start
+export NOONMARK_EVIDENCE_HELPER_SESSION_ACTIVE
+export NOONMARK_EVIDENCE_HELPER_SESSION_PID
+export NOONMARK_EVIDENCE_HELPER_SESSION_ROOT
 
 set +e
 (

@@ -1,0 +1,627 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-evidence-helper-lifecycle.XXXXXX")"
+fixture="$(cd "$fixture" && pwd -P)"
+active_pids=""
+mounted_path=""
+cleanup() {
+  local active_pid
+  local job_pid
+  local is_active_job
+  for active_pid in $active_pids; do
+    is_active_job=0
+    while IFS= read -r job_pid; do
+      if [[ "$job_pid" == "$active_pid" ]]; then
+        is_active_job=1
+        break
+      fi
+    done < <(jobs -pr)
+    if [[ "$is_active_job" -eq 1 ]]; then
+      kill -KILL "$active_pid" >/dev/null 2>&1 || true
+      wait "$active_pid" >/dev/null 2>&1 || true
+    fi
+  done
+  if [[ -n "$mounted_path" ]]; then
+    hdiutil detach -quiet "$mounted_path" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$fixture"
+}
+trap cleanup EXIT
+
+forget_active_pid() {
+  local completed_pid="$1"
+  local active_pid
+  local remaining=""
+
+  for active_pid in $active_pids; do
+    if [[ "$active_pid" != "$completed_pid" ]]; then
+      remaining="$remaining $active_pid"
+    fi
+  done
+  active_pids="$remaining"
+}
+
+fail() {
+  echo "$1" >&2
+  exit 1
+}
+
+wait_for_helper_roots_to_clear() {
+  local temporary_root="$1"
+  local label="$2"
+  local remaining=""
+
+  for _ in $(seq 1 400); do
+    remaining="$(
+      find "$temporary_root" \
+        -mindepth 1 \
+        -maxdepth 1 \
+        -type d \
+        \( \
+          -name 'noonmark-evidence-path-helper.*' \
+          -o -name 'noonmark-evidence-helper-session.*' \
+        \) \
+        -print
+    )"
+    [[ -z "$remaining" ]] && return 0
+    sleep 0.05
+  done
+  printf '%s\n' "$remaining" >&2
+  fail "$label retained an evidence helper root"
+}
+
+current_shell_pid=""
+IFS= read -r current_shell_pid < <(
+  /bin/sh -c '/bin/ps -o ppid= -p "$PPID"' | /usr/bin/tr -d ' '
+)
+[[ "$current_shell_pid" == "$$" ]] ||
+  fail "Bash 3.2 top-level caller PID resolution is incorrect"
+(
+  subshell_pid=""
+  IFS= read -r subshell_pid < <(
+    /bin/sh -c '/bin/ps -o ppid= -p "$PPID"' | /usr/bin/tr -d ' '
+  )
+  [[ "$subshell_pid" =~ ^[1-9][0-9]*$ ]] ||
+    fail "Bash 3.2 subshell caller PID is malformed"
+  [[ "$subshell_pid" != "$$" && "$subshell_pid" != "$current_shell_pid" ]] ||
+    fail "Bash 3.2 subshell caller PID resolved to the outer shell"
+  [[ "$(/bin/ps -o pid= -p "$subshell_pid" | tr -d ' ')" == \
+    "$subshell_pid" ]] ||
+    fail "Bash 3.2 subshell caller PID is not live"
+)
+
+normal_root="$fixture/normal"
+normal_temp="$normal_root/temp"
+normal_tools="$normal_root/tools"
+normal_data="$normal_root/data"
+mkdir -p "$normal_temp" "$normal_tools" "$normal_data"
+real_swiftc="$(/usr/bin/xcrun --find swiftc)"
+: >"$normal_root/swiftc-count.log"
+cat >"$normal_tools/swiftc-wrapper" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'swiftc\n' >>"${NOONMARK_TEST_SWIFTC_COUNT:?}"
+exec "${NOONMARK_TEST_REAL_SWIFTC:?}" "$@"
+SCRIPT
+cat >"$normal_tools/xcrun" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "--find" && "$2" == "swiftc" ]]; then
+  printf '%s\n' "${NOONMARK_TEST_SWIFTC_WRAPPER:?}"
+  exit 0
+fi
+exec /usr/bin/xcrun "$@"
+SCRIPT
+chmod 0700 "$normal_tools/swiftc-wrapper" "$normal_tools/xcrun"
+
+printf 'first=value\n' >"$normal_data/first.fragment"
+printf 'second=value\n' >"$normal_data/second.fragment"
+printf 'third=value\n\n' >"$normal_data/blank.fragment"
+printf 'third=value\r\n' >"$normal_data/carriage-return.fragment"
+printf 'third=one\nthird=two\n' >"$normal_data/duplicate.fragment"
+ln -s first.fragment "$normal_data/symlink.fragment"
+printf 'hard=value\n' >"$normal_data/hard-source.fragment"
+ln "$normal_data/hard-source.fragment" "$normal_data/hard-link.fragment"
+mkfifo "$normal_data/fifo.fragment"
+printf 'output-canary\n' >"$normal_data/output-canary.fragment"
+ln -s output-canary.fragment "$normal_data/symlink-output.fragment"
+printf 'hard-output-canary\n' >"$normal_data/hard-output-peer.fragment"
+ln "$normal_data/hard-output-peer.fragment" "$normal_data/hard-output.fragment"
+mkfifo "$normal_data/fifo-output.fragment"
+/usr/sbin/mkfile -n 64m "$normal_data/limit.fragment"
+/usr/sbin/mkfile -n 67108865b "$normal_data/oversize.fragment"
+
+PATH="$normal_tools:$PATH" \
+NOONMARK_TEST_REAL_SWIFTC="$real_swiftc" \
+NOONMARK_TEST_SWIFTC_WRAPPER="$normal_tools/swiftc-wrapper" \
+NOONMARK_TEST_SWIFTC_COUNT="$normal_root/swiftc-count.log" \
+NORMAL_ROOT="$normal_root" \
+REPO_ROOT="$repo_root" \
+  /bin/bash -c '
+    set -euo pipefail
+    export TMPDIR="$NORMAL_ROOT/temp"
+    command -v xcrun >"$NORMAL_ROOT/xcrun-path.txt"
+    xcrun --find swiftc >"$NORMAL_ROOT/swiftc-path.txt"
+    source "$REPO_ROOT/scripts/evidence-common"
+    evidence_write_fragment_atomically \
+      "$NORMAL_ROOT/data/manifest.txt" \
+      "$NORMAL_ROOT/data/first.fragment"
+    if evidence_path_helper_request unknown-command >/dev/null 2>&1; then
+      exit 70
+    fi
+    evidence_atomic_append_file \
+      "$NORMAL_ROOT/data/manifest.txt" \
+      "$NORMAL_ROOT/data/second.fragment"
+    manifest_sha="$(
+      shasum -a 256 "$NORMAL_ROOT/data/manifest.txt" | awk "{print \$1}"
+    )"
+    for rejected in \
+      blank.fragment \
+      carriage-return.fragment \
+      duplicate.fragment; do
+      if evidence_atomic_append_file \
+        "$NORMAL_ROOT/data/manifest.txt" \
+        "$NORMAL_ROOT/data/$rejected" >/dev/null 2>&1; then
+        exit 71
+      fi
+      [[ "$(shasum -a 256 "$NORMAL_ROOT/data/manifest.txt" | awk "{print \$1}")" == \
+        "$manifest_sha" ]]
+    done
+    for rejected in symlink.fragment hard-link.fragment fifo.fragment; do
+      if evidence_write_fragment_atomically \
+        "$NORMAL_ROOT/data/rejected-input.txt" \
+        "$NORMAL_ROOT/data/$rejected" >/dev/null 2>&1; then
+        exit 72
+      fi
+      [[ ! -e "$NORMAL_ROOT/data/rejected-input.txt" ]]
+    done
+    for rejected in \
+      symlink-output.fragment \
+      hard-output.fragment \
+      fifo-output.fragment; do
+      if evidence_write_fragment_atomically \
+        "$NORMAL_ROOT/data/$rejected" \
+        "$NORMAL_ROOT/data/first.fragment" >/dev/null 2>&1; then
+        exit 73
+      fi
+    done
+    [[ "$(<"$NORMAL_ROOT/data/output-canary.fragment")" == output-canary ]]
+    [[ "$(<"$NORMAL_ROOT/data/hard-output-peer.fragment")" == \
+      hard-output-canary ]]
+    if evidence_write_fragment_atomically \
+      "$NORMAL_ROOT/data/oversize-output.fragment" \
+      "$NORMAL_ROOT/data/oversize.fragment" >/dev/null 2>&1; then
+      exit 74
+    fi
+    [[ ! -e "$NORMAL_ROOT/data/oversize-output.fragment" ]]
+    evidence_write_fragment_atomically \
+      "$NORMAL_ROOT/data/limit-output.fragment" \
+      "$NORMAL_ROOT/data/limit.fragment"
+    [[ "$(stat -f %z "$NORMAL_ROOT/data/limit-output.fragment")" == \
+      67108864 ]]
+    printf "%s\n" "$NOONMARK_EVIDENCE_HELPER_SESSION_ROOT" \
+      >"$NORMAL_ROOT/session-root.txt"
+  '
+
+normal_compile_count="$(
+  wc -l <"$normal_root/swiftc-count.log" | tr -d ' '
+)"
+[[ "$normal_compile_count" == "1" ]] ||
+  fail "one evidence session compiled its helper $normal_compile_count times: xcrun=$(<"$normal_root/xcrun-path.txt") swiftc=$(<"$normal_root/swiftc-path.txt") session=$(<"$normal_root/session-root.txt")"
+[[ "$(<"$normal_data/manifest.txt")" == $'first=value\nsecond=value' ]] ||
+  fail "the compile-once session produced the wrong manifest"
+wait_for_helper_roots_to_clear "$normal_temp" "normal session"
+
+compile_failure_root="$fixture/compile-failure"
+mkdir -p \
+  "$compile_failure_root/temp" \
+  "$compile_failure_root/tools" \
+  "$compile_failure_root/data"
+printf 'value=one\n' >"$compile_failure_root/data/source.fragment"
+cat >"$compile_failure_root/tools/xcrun" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "--find" && "$2" == "swiftc" ]]; then
+  printf '/usr/bin/false\n'
+  exit 0
+fi
+exec /usr/bin/xcrun "$@"
+SCRIPT
+chmod 0700 "$compile_failure_root/tools/xcrun"
+if TMPDIR="$compile_failure_root/temp" \
+  PATH="$compile_failure_root/tools:$PATH" \
+  COMPILE_FAILURE_ROOT="$compile_failure_root" \
+  REPO_ROOT="$repo_root" \
+  /bin/bash -c '
+    source "$REPO_ROOT/scripts/evidence-common"
+    evidence_write_fragment_atomically \
+      "$COMPILE_FAILURE_ROOT/data/output.fragment" \
+      "$COMPILE_FAILURE_ROOT/data/source.fragment"
+  ' >/dev/null 2>&1; then
+  fail "evidence session accepted a helper compilation failure"
+fi
+[[ ! -e "$compile_failure_root/data/output.fragment" ]] ||
+  fail "helper compilation failure published output"
+wait_for_helper_roots_to_clear \
+  "$compile_failure_root/temp" \
+  "helper compilation failure"
+
+partial_root="$fixture/partial-transport"
+mkdir -p "$partial_root/temp" "$partial_root/data"
+printf 'partial=value\n' >"$partial_root/data/source.fragment"
+if PARTIAL_ROOT="$partial_root" REPO_ROOT="$repo_root" /bin/bash -c '
+  export TMPDIR="$PARTIAL_ROOT/temp"
+  source "$REPO_ROOT/scripts/evidence-common"
+  mkfifo() { return 72; }
+  evidence_write_fragment_atomically \
+    "$PARTIAL_ROOT/data/output.fragment" \
+    "$PARTIAL_ROOT/data/source.fragment"
+' >/dev/null 2>&1; then
+  fail "partial transport setup failure was accepted"
+fi
+wait_for_helper_roots_to_clear \
+  "$partial_root/temp" \
+  "partial transport setup failure"
+
+server_exit_root="$fixture/server-exit"
+mkdir -p \
+  "$server_exit_root/temp" \
+  "$server_exit_root/repository/target"
+printf 'stale\n' >"$server_exit_root/repository/target/stale.txt"
+mkfifo "$server_exit_root/ready.fifo" "$server_exit_root/release.fifo"
+exec 8<>"$server_exit_root/ready.fifo"
+exec 9<>"$server_exit_root/release.fifo"
+source "$repo_root/scripts/evidence-common"
+NOONMARK_EVIDENCE_TEST_READY_FD=8
+NOONMARK_EVIDENCE_TEST_RELEASE_FD=9
+export NOONMARK_EVIDENCE_TEST_READY_FD
+export NOONMARK_EVIDENCE_TEST_RELEASE_FD
+TMPDIR="$server_exit_root/temp"
+export TMPDIR
+evidence_path_helper_session_start
+server_exit_runner_pid="$NOONMARK_EVIDENCE_HELPER_SESSION_PID"
+active_pids="$active_pids $server_exit_runner_pid"
+server_exit_helper_pid=""
+for _ in $(seq 1 200); do
+  while IFS= read -r child_pid; do
+    child_command="$(/bin/ps -o command= -p "$child_pid" 2>/dev/null || true)"
+    if [[ "$child_command" == \
+      *'/NoonmarkEvidencePathHelper --bootstrap-parent-fd '* ]]; then
+      server_exit_helper_pid="$child_pid"
+      break
+    fi
+  done < <(pgrep -P "$server_exit_runner_pid" 2>/dev/null || true)
+  [[ -n "$server_exit_helper_pid" ]] && break
+  sleep 0.05
+done
+[[ -n "$server_exit_helper_pid" ]] ||
+  fail "server-exit case could not identify the live helper"
+unset NOONMARK_EVIDENCE_TEST_READY_FD
+unset NOONMARK_EVIDENCE_TEST_RELEASE_FD
+(
+  set +e
+  evidence_prepare_fresh_directory \
+    "$server_exit_root/repository" \
+    "$server_exit_root/repository/target" \
+    >"$server_exit_root/request.log" 2>&1
+  request_status=$?
+  set -e
+  printf '%s\n' "$request_status" >"$server_exit_root/request-status.txt"
+) &
+server_exit_request_pid=$!
+active_pids="$active_pids $server_exit_request_pid"
+server_exit_ready=""
+if ! IFS= read -r -n 1 -t 10 server_exit_ready <&8 ||
+  [[ "$server_exit_ready" != "R" ]]; then
+  fail "server-exit request did not reach the bound-operation failpoint"
+fi
+kill -KILL "$server_exit_helper_pid"
+for _ in $(seq 1 200); do
+  [[ -f "$server_exit_root/request-status.txt" ]] && break
+  sleep 0.05
+done
+[[ -f "$server_exit_root/request-status.txt" ]] ||
+  fail "server exit left an evidence request blocked"
+[[ "$(<"$server_exit_root/request-status.txt")" != "0" ]] ||
+  fail "server-exit request unexpectedly succeeded"
+[[ "$(<"$server_exit_root/repository/target/stale.txt")" == "stale" ]] ||
+  fail "server-exit request mutated the bound target"
+wait "$server_exit_request_pid"
+forget_active_pid "$server_exit_request_pid"
+set +e
+wait "$server_exit_runner_pid"
+set -e
+forget_active_pid "$server_exit_runner_pid"
+exec 8>&-
+exec 9>&-
+exec 20>&-
+exec 21>&-
+exec 23>&-
+NOONMARK_EVIDENCE_HELPER_SESSION_ACTIVE=0
+NOONMARK_EVIDENCE_HELPER_SESSION_PID=""
+NOONMARK_EVIDENCE_HELPER_SESSION_ROOT=""
+wait_for_helper_roots_to_clear "$server_exit_root/temp" "server exit"
+
+rollback_root="$fixture/custodian-rollback"
+mkdir -p "$rollback_root/temp"
+mkfifo "$rollback_root/ready.fifo" "$rollback_root/release.fifo"
+exec 8<>"$rollback_root/ready.fifo"
+exec 9<>"$rollback_root/release.fifo"
+TMPDIR="$rollback_root/temp" \
+NOONMARK_EVIDENCE_CUSTODIAN_TEST_READY_FD=8 \
+NOONMARK_EVIDENCE_CUSTODIAN_TEST_RELEASE_FD=9 \
+  "$repo_root/scripts/run-evidence-path-helper" \
+    bootstrap-cleanup-contract >"$rollback_root/output.log" 2>&1 &
+rollback_launcher_pid=$!
+active_pids="$active_pids $rollback_launcher_pid"
+rollback_ready=""
+if ! IFS= read -r -n 1 -t 15 rollback_ready <&8 ||
+  [[ "$rollback_ready" != "R" ]]; then
+  fail "custodian startup rollback did not reach its failpoint"
+fi
+[[ "$(
+  find "$rollback_root/temp" \
+    -maxdepth 1 \
+    -type d \
+    -name 'noonmark-evidence-path-helper.*' | wc -l | tr -d ' '
+)" == "1" ]] || fail "custodian failpoint did not create one bound root"
+kill -KILL "$rollback_launcher_pid"
+printf 'G' >&9
+set +e
+wait "$rollback_launcher_pid"
+rollback_status=$?
+set -e
+forget_active_pid "$rollback_launcher_pid"
+exec 8>&-
+exec 9>&-
+[[ "$rollback_status" == "137" ]] ||
+  fail "custodian startup SIGKILL did not report status 137"
+wait_for_helper_roots_to_clear \
+  "$rollback_root/temp" \
+  "custodian startup SIGKILL rollback"
+
+assert_signal_cleanup() {
+  local signal="$1"
+  local expected_status="$2"
+  local scope="$3"
+  local case_root="$fixture/signal-$signal-$scope"
+  local caller_pid
+  local caller_pgid
+  local caller_status
+
+  mkdir -p "$case_root/temp" "$case_root/data"
+  printf 'signal=value\n' >"$case_root/data/source.fragment"
+  set -m
+  CASE_ROOT="$case_root" REPO_ROOT="$repo_root" /bin/bash -c '
+    set -euo pipefail
+    export TMPDIR="$CASE_ROOT/temp"
+    source "$REPO_ROOT/scripts/evidence-common"
+    evidence_write_fragment_atomically \
+      "$CASE_ROOT/data/manifest.txt" \
+      "$CASE_ROOT/data/source.fragment"
+    printf "%s\n" "$NOONMARK_EVIDENCE_HELPER_SESSION_ROOT" \
+      >"$CASE_ROOT/session-root.txt"
+    printf "R\n" >"$CASE_ROOT/ready.txt"
+    while :; do sleep 1; done
+  ' >"$case_root/output.log" 2>&1 &
+  caller_pid=$!
+  active_pids="$active_pids $caller_pid"
+  set +m
+  for _ in $(seq 1 400); do
+    [[ -f "$case_root/ready.txt" ]] && break
+    kill -0 "$caller_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  [[ -f "$case_root/ready.txt" && "$(<"$case_root/ready.txt")" == "R" ]] ||
+    fail "$signal cleanup caller did not become ready"
+  caller_pgid="$(/bin/ps -o pgid= -p "$caller_pid" | tr -d ' ')"
+  [[ "$caller_pgid" == "$caller_pid" ]] ||
+    fail "$signal cleanup caller lacks an isolated process group"
+  if [[ "$scope" == "group" ]]; then
+    /bin/kill -"$signal" -"$caller_pgid"
+  else
+    /bin/kill -"$signal" "$caller_pid"
+  fi
+  set +e
+  wait "$caller_pid"
+  caller_status=$?
+  set -e
+  forget_active_pid "$caller_pid"
+  [[ "$caller_status" == "$expected_status" ]] ||
+    fail "$signal cleanup observed status $caller_status"
+  wait_for_helper_roots_to_clear "$case_root/temp" "$signal $scope cleanup"
+}
+
+assert_signal_cleanup TERM 143 group
+assert_signal_cleanup HUP 129 group
+assert_signal_cleanup KILL 137 caller
+
+truncated_root="$fixture/truncated-frame"
+truncated_transport="$truncated_root/noonmark-evidence-helper-session.truncated"
+mkdir -p "$truncated_root/temp" "$truncated_transport"
+chmod 0700 "$truncated_transport"
+mkfifo \
+  "$truncated_transport/request.fifo" \
+  "$truncated_transport/response.fifo" \
+  "$truncated_transport/lock.fifo"
+chmod 0600 "$truncated_transport/"*.fifo
+set -m
+TRUNCATED_ROOT="$truncated_root" \
+TRUNCATED_TRANSPORT="$truncated_transport" \
+REPO_ROOT="$repo_root" /bin/bash -c '
+  set -euo pipefail
+  export TMPDIR="$TRUNCATED_ROOT/temp"
+  caller_pid=""
+  IFS= read -r caller_pid < <(
+    /bin/sh -c '\''/bin/ps -o ppid= -p "$PPID"'\'' | /usr/bin/tr -d " "
+  )
+  "$REPO_ROOT/scripts/run-evidence-path-helper" \
+    serve "$TRUNCATED_TRANSPORT" "$caller_pid" \
+    <"$TRUNCATED_TRANSPORT/request.fifo" \
+    >"$TRUNCATED_TRANSPORT/response.fifo" &
+  exec 20<>"$TRUNCATED_TRANSPORT/request.fifo"
+  exec 21<>"$TRUNCATED_TRANSPORT/response.fifo"
+  printf "NM1\\tping\\t0\\t4\\nxx" >&20
+  printf "R\\n" >"$TRUNCATED_ROOT/ready.txt"
+  while :; do sleep 1; done
+' >"$truncated_root/output.log" 2>&1 &
+truncated_caller_pid=$!
+active_pids="$active_pids $truncated_caller_pid"
+set +m
+for _ in $(seq 1 400); do
+  helper_binary="$(
+    find "$truncated_root/temp" \
+      -mindepth 2 \
+      -maxdepth 2 \
+      -type f \
+      -name NoonmarkEvidencePathHelper \
+      -print \
+      -quit
+  )"
+  [[ -f "$truncated_root/ready.txt" && -n "$helper_binary" ]] && break
+  kill -0 "$truncated_caller_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -f "$truncated_root/ready.txt" && -n "$helper_binary" ]] ||
+  fail "truncated-frame caller did not reach the live helper"
+kill -KILL "$truncated_caller_pid"
+set +e
+wait "$truncated_caller_pid"
+truncated_status=$?
+set -e
+forget_active_pid "$truncated_caller_pid"
+[[ "$truncated_status" == "137" ]] ||
+  fail "truncated-frame caller did not report SIGKILL"
+for _ in $(seq 1 400); do
+  [[ ! -e "$truncated_transport" ]] && break
+  sleep 0.05
+done
+[[ ! -e "$truncated_transport" ]] ||
+  fail "truncated-frame session retained its transport"
+wait_for_helper_roots_to_clear \
+  "$truncated_root/temp" \
+  "truncated-frame session"
+
+parallel_root="$fixture/parallel"
+mkdir -p "$parallel_root/one/temp" "$parallel_root/one/data"
+mkdir -p "$parallel_root/two/temp" "$parallel_root/two/data"
+for label in one two; do
+  printf '%s=value\n' "$label" >"$parallel_root/$label/data/source.fragment"
+  LABEL="$label" PARALLEL_ROOT="$parallel_root" REPO_ROOT="$repo_root" \
+    /bin/bash -c '
+      set -euo pipefail
+      case_root="$PARALLEL_ROOT/$LABEL"
+      export TMPDIR="$case_root/temp"
+      source "$REPO_ROOT/scripts/evidence-common"
+      evidence_write_fragment_atomically \
+        "$case_root/data/output.fragment" \
+        "$case_root/data/source.fragment"
+      printf "%s\n" "$NOONMARK_EVIDENCE_HELPER_SESSION_ROOT" \
+        >"$case_root/session-root.txt"
+      printf "R\n" >"$case_root/ready.txt"
+      while [[ ! -f "$case_root/release.txt" ]]; do sleep 0.05; done
+    ' >"$parallel_root/$label/output.log" 2>&1 &
+  if [[ "$label" == "one" ]]; then
+    parallel_one_pid=$!
+    active_pids="$active_pids $parallel_one_pid"
+  else
+    parallel_two_pid=$!
+    active_pids="$active_pids $parallel_two_pid"
+  fi
+done
+for _ in $(seq 1 600); do
+  [[ -f "$parallel_root/one/ready.txt" &&
+    -f "$parallel_root/two/ready.txt" ]] && break
+  sleep 0.05
+done
+[[ -f "$parallel_root/one/ready.txt" &&
+  -f "$parallel_root/two/ready.txt" ]] ||
+  fail "parallel evidence sessions did not both become ready"
+[[ "$(<"$parallel_root/one/session-root.txt")" != \
+  "$(<"$parallel_root/two/session-root.txt")" ]] ||
+  fail "parallel evidence sessions shared one transport"
+: >"$parallel_root/one/release.txt"
+: >"$parallel_root/two/release.txt"
+wait "$parallel_one_pid"
+forget_active_pid "$parallel_one_pid"
+wait "$parallel_two_pid"
+forget_active_pid "$parallel_two_pid"
+wait_for_helper_roots_to_clear \
+  "$parallel_root/one/temp" \
+  "first parallel session"
+wait_for_helper_roots_to_clear \
+  "$parallel_root/two/temp" \
+  "second parallel session"
+
+unset_tmp_root="$fixture/unset-tmpdir"
+mkdir -p "$unset_tmp_root/data"
+printf 'unset=value\n' >"$unset_tmp_root/data/source.fragment"
+env -u TMPDIR UNSET_TMP_ROOT="$unset_tmp_root" REPO_ROOT="$repo_root" \
+  /bin/bash -c '
+    set -euo pipefail
+    source "$REPO_ROOT/scripts/evidence-common"
+    evidence_write_fragment_atomically \
+      "$UNSET_TMP_ROOT/data/output.fragment" \
+      "$UNSET_TMP_ROOT/data/source.fragment"
+    printf "%s\n" "$NOONMARK_EVIDENCE_HELPER_SESSION_ROOT" \
+      >"$UNSET_TMP_ROOT/session-root.txt"
+  '
+unset_session_root="$(<"$unset_tmp_root/session-root.txt")"
+[[ "$unset_session_root" == /private/tmp/noonmark-evidence-helper-session.* ||
+  "$unset_session_root" == /tmp/noonmark-evidence-helper-session.* ]] ||
+  fail "unset TMPDIR did not select /tmp"
+for _ in $(seq 1 400); do
+  [[ ! -e "$unset_session_root" ]] && break
+  sleep 0.05
+done
+[[ ! -e "$unset_session_root" ]] ||
+  fail "unset TMPDIR session retained its transport"
+
+mount_root="$fixture/mount-boundary"
+mkdir -p \
+  "$mount_root/temp" \
+  "$mount_root/repository" \
+  "$mount_root/repository/mounted"
+hdiutil create \
+  -quiet \
+  -size 32m \
+  -fs APFS \
+  -volname NoonmarkEvidenceBoundary \
+  "$mount_root/boundary.dmg"
+mounted_path="$mount_root/repository/mounted"
+hdiutil attach \
+  -quiet \
+  -nobrowse \
+  -owners on \
+  -mountpoint "$mounted_path" \
+  "$mount_root/boundary.dmg"
+TMPDIR="$mount_root/temp" \
+MOUNT_ROOT="$mount_root" \
+REPO_ROOT="$repo_root" \
+  /bin/bash -c '
+    set -euo pipefail
+    source "$REPO_ROOT/scripts/evidence-common"
+    prepare_status=0
+    inventory_status=0
+    evidence_prepare_fresh_directory \
+      "$MOUNT_ROOT/repository" \
+      "$MOUNT_ROOT/repository/mounted/fresh" >/dev/null 2>&1 ||
+      prepare_status=$?
+    printf "mounted\n" >"$MOUNT_ROOT/repository/mounted/input.txt"
+    evidence_inventory \
+      "$MOUNT_ROOT/repository" \
+      "$MOUNT_ROOT/repository/inventory.tsv" \
+      "$MOUNT_ROOT/repository/mounted/input.txt" >/dev/null 2>&1 ||
+      inventory_status=$?
+    printf "%s:%s\n" "$prepare_status" "$inventory_status" \
+      >"$MOUNT_ROOT/status.txt"
+  '
+hdiutil detach -quiet "$mounted_path"
+mounted_path=""
+[[ "$(<"$mount_root/status.txt")" == "1:1" ]] ||
+  fail "prepare or inventory crossed a mounted filesystem boundary"
+wait_for_helper_roots_to_clear "$mount_root/temp" "mount boundary"
+
+echo "Evidence helper lifecycle contract passed"

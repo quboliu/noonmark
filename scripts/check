@@ -77,6 +77,9 @@ run_check_suite() {
   echo "==> Validation evidence provenance"
   scripts/test-evidence-common
 
+  echo "==> Evidence helper lifecycle"
+  scripts/test-evidence-helper-lifecycle
+
   echo "==> E2E and writer-lease evidence contract"
   scripts/test-e2e-evidence-contract
 

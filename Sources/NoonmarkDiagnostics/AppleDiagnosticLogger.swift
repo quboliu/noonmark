@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-struct AppleDiagnosticLogger: Sendable {
+struct AppleDiagnosticLogger {
     private let lifecycle: Logger
     private let mutation: Logger
     private let persistence: Logger
@@ -68,12 +68,32 @@ enum DiagnosticUnifiedLogMessage {
             event.mutationRejectionReason?.rawValue,
             to: &fields
         )
+        append(
+            "persistence_component",
+            event.persistenceComponent?.rawValue,
+            to: &fields
+        )
+        append(
+            "persistence_operation",
+            event.persistenceOperation?.rawValue,
+            to: &fields
+        )
+        append(
+            "persistence_phase",
+            event.persistencePhase?.rawValue,
+            to: &fields
+        )
+        append(
+            "persistence_resolution",
+            event.persistenceResolution?.rawValue,
+            to: &fields
+        )
         return fields.joined(separator: " ")
     }
 
-    private static func append<T>(
+    private static func append(
         _ key: String,
-        _ value: T?,
+        _ value: (some Any)?,
         to fields: inout [String]
     ) {
         guard let value else { return }

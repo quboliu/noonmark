@@ -161,7 +161,8 @@ final class ZhulongWorkspaceStore: ObservableObject {
         )
         applicationJournal = EncryptedFileZhulongApplicationJournal(
             directoryURL: directoryURL,
-            keySource: keySource
+            keySource: keySource,
+            diagnostics: diagnostics
         )
         memoryRepository = EncryptedFileZhulongMemoryRepository(
             directoryURL: directoryURL,

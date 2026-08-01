@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import NoonmarkCore
+import NoonmarkDiagnostics
 
 public enum ZhulongPendingApplicationKind: Codable, Equatable, Sendable {
     case todoDiff(ZhulongTodoDiffID)
@@ -75,12 +76,17 @@ public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
     public init(
         directoryURL: URL,
         keySource: any ZhulongSidecarKeySource,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        diagnostics: (any DiagnosticRecording)? = nil
     ) {
         self.directoryURL = directoryURL
         self.keySource = keySource
         self.fileManager = fileManager
-        fileCommitter = ZhulongApplicationJournalFileCommitter()
+        fileCommitter = ZhulongApplicationJournalFileCommitter(
+            monitor: { event in
+                diagnostics?.record(event.diagnosticEvidence)
+            }
+        )
     }
 
     init(
@@ -333,6 +339,73 @@ public struct EncryptedFileZhulongApplicationJournal: @unchecked Sendable {
             return Date(timeIntervalSinceReferenceDate: seconds)
         }
         return decoder
+    }
+}
+
+private extension ZhulongApplicationJournalMonitoringEvent {
+    var diagnosticEvidence: EvidenceEvent {
+        .persistenceCheckpoint(
+            component: .zhulongApplicationJournal,
+            operation: diagnosticOperation,
+            phase: diagnosticPhase,
+            resolution: diagnosticResolution,
+            failure: diagnosticFailure
+        )
+    }
+
+    private var diagnosticOperation: DiagnosticPersistenceOperation {
+        switch operation {
+        case .prepare: .prepare
+        case .clear: .clear
+        }
+    }
+
+    private var diagnosticPhase: DiagnosticPersistencePhase {
+        switch phase {
+        case .temporaryOpen: .temporaryOpen
+        case .temporaryPermissions: .temporaryPermissions
+        case .temporaryWrite: .temporaryWrite
+        case .temporaryFullSync: .temporaryFullSync
+        case .temporaryFileSync: .temporaryFileSync
+        case .temporaryClose: .temporaryClose
+        case .replacement: .replacement
+        case .removal: .removal
+        case .directoryOpen: .directoryOpen
+        case .directorySync: .directorySync
+        case .directoryClose: .directoryClose
+        case .observation: .observation
+        case .authentication: .authentication
+        case .temporaryCleanup: .temporaryCleanup
+        case .complete: .complete
+        }
+    }
+
+    private var diagnosticResolution: DiagnosticPersistenceResolution {
+        switch resolution {
+        case .committed: .committed
+        case .recoveredCommitted: .recoveredCommitted
+        case .notCommitted: .notCommitted
+        case .unresolved: .unresolved
+        case .fileSyncFallback: .fileSyncFallback
+        case .cleanupFailure: .cleanupFailure
+        case .temporaryCleanupCommitted: .temporaryCleanupCommitted
+        case .fenceResolved: .fenceResolved
+        }
+    }
+
+    private var diagnosticFailure: DiagnosticFailure? {
+        switch errorKind {
+        case .none:
+            nil
+        case .posix:
+            DiagnosticFailure(domain: .posix, code: errorCode ?? 0)
+        case .cocoa:
+            DiagnosticFailure(domain: .cocoa, code: errorCode ?? 0)
+        case .internalFailure:
+            DiagnosticFailure(domain: .domainValidation, code: 0)
+        case .other:
+            DiagnosticFailure(domain: .unknown, code: 0)
+        }
     }
 }
 

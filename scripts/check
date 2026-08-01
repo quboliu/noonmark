@@ -86,6 +86,10 @@ run_check_suite() {
   echo "==> DMG observer lifecycle"
   scripts/test-dmg-install-observer
 
+  echo "==> Diagnostic logging boundary"
+  scripts/test-diagnostic-logging-guard
+  scripts/check-diagnostic-logging
+
   echo "==> SwiftLint"
   swiftlint lint --quiet
 

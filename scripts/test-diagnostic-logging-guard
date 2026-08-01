@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+guard="$repo_root/scripts/check-diagnostic-logging"
+fixture_root="$(mktemp -d -t noonmark-diagnostic-logging-test.XXXXXX)"
+trap 'rm -rf "$fixture_root"' EXIT
+
+expect_pass() {
+  local fixture_name="$1"
+  if ! "$guard" "$fixture_root/$fixture_name" >/dev/null; then
+    echo "expected diagnostic logging fixture to pass: $fixture_name" >&2
+    exit 1
+  fi
+}
+
+expect_fail() {
+  local fixture_name="$1"
+  if "$guard" "$fixture_root/$fixture_name" >/dev/null 2>&1; then
+    echo "expected diagnostic logging fixture to fail: $fixture_name" >&2
+    exit 1
+  fi
+}
+
+mkdir -p \
+  "$fixture_root/typed" \
+  "$fixture_root/nslog" \
+  "$fixture_root/print" \
+  "$fixture_root/logger" \
+  "$fixture_root/e2e"
+
+printf '%s\n' \
+  'func record(_ recorder: DiagnosticRecording, event: EvidenceEvent) {' \
+  '    recorder.record(event)' \
+  '}' >"$fixture_root/typed/Production.swift"
+printf '%s\n' \
+  'func leak() {' \
+  '    NSLog("raw production state")' \
+  '}' >"$fixture_root/nslog/Production.swift"
+printf '%s\n' \
+  'func leak() {' \
+  '    print("raw production state")' \
+  '}' >"$fixture_root/print/Production.swift"
+printf '%s\n' \
+  'import OSLog' \
+  'let logger = Logger(subsystem: "example", category: "bypass")' \
+  >"$fixture_root/logger/Production.swift"
+printf '%s\n' \
+  'func reportFixtureFailure() {' \
+  '    NSLog("isolated E2E evidence")' \
+  '}' >"$fixture_root/e2e/FixtureE2EAutomation.swift"
+
+expect_pass typed
+expect_fail nslog
+expect_fail print
+expect_fail logger
+expect_pass e2e
+
+echo "diagnostic logging guard fixtures: passed"

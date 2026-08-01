@@ -240,6 +240,10 @@ protocol LaunchAutomationRunnable {
     func run(on store: NoonmarkStore)
 }
 
+func recordE2EApplicationWillTerminate() {
+    NSLog("Noonmark E2E applicationWillTerminate reached")
+}
+
 @MainActor
 enum E2EApplicationTermination {
     static func schedule(after delay: TimeInterval = 0.2) {

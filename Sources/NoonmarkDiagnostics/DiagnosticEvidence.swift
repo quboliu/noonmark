@@ -56,6 +56,7 @@ public enum DiagnosticEventCode: String, Codable, CaseIterable, Sendable {
     case operationFailed
     case mutationRejected
     case persistenceFailed
+    case persistenceCheckpoint
     case persistedSyncFailureLoaded
     case recordsDropped
     case corruptRecordExcluded
@@ -137,6 +138,44 @@ public enum DiagnosticMutationRejectionReason: String, Codable, CaseIterable, Se
     case unknown
 }
 
+public enum DiagnosticPersistenceComponent: String, Codable, CaseIterable, Sendable {
+    case zhulongApplicationJournal
+}
+
+public enum DiagnosticPersistenceOperation: String, Codable, CaseIterable, Sendable {
+    case prepare
+    case clear
+}
+
+public enum DiagnosticPersistencePhase: String, Codable, CaseIterable, Sendable {
+    case temporaryOpen
+    case temporaryPermissions
+    case temporaryWrite
+    case temporaryFullSync
+    case temporaryFileSync
+    case temporaryClose
+    case replacement
+    case removal
+    case directoryOpen
+    case directorySync
+    case directoryClose
+    case observation
+    case authentication
+    case temporaryCleanup
+    case complete
+}
+
+public enum DiagnosticPersistenceResolution: String, Codable, CaseIterable, Sendable {
+    case committed
+    case recoveredCommitted
+    case notCommitted
+    case unresolved
+    case fileSyncFallback
+    case cleanupFailure
+    case temporaryCleanupCommitted
+    case fenceResolved
+}
+
 public struct DiagnosticFailure: Codable, Equatable, Sendable {
     public let domain: DiagnosticErrorDomain
     public let code: Int
@@ -189,6 +228,10 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
     public let durationMilliseconds: Int64?
     public let mutationContext: DiagnosticMutationContext?
     public let mutationRejectionReason: DiagnosticMutationRejectionReason?
+    public let persistenceComponent: DiagnosticPersistenceComponent?
+    public let persistenceOperation: DiagnosticPersistenceOperation?
+    public let persistencePhase: DiagnosticPersistencePhase?
+    public let persistenceResolution: DiagnosticPersistenceResolution?
 
     private init(
         code: DiagnosticEventCode,
@@ -203,7 +246,11 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
         failure: DiagnosticFailure? = nil,
         durationMilliseconds: Int64? = nil,
         mutationContext: DiagnosticMutationContext? = nil,
-        mutationRejectionReason: DiagnosticMutationRejectionReason? = nil
+        mutationRejectionReason: DiagnosticMutationRejectionReason? = nil,
+        persistenceComponent: DiagnosticPersistenceComponent? = nil,
+        persistenceOperation: DiagnosticPersistenceOperation? = nil,
+        persistencePhase: DiagnosticPersistencePhase? = nil,
+        persistenceResolution: DiagnosticPersistenceResolution? = nil
     ) {
         self.code = code
         self.category = category
@@ -218,6 +265,10 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
         self.durationMilliseconds = durationMilliseconds
         self.mutationContext = mutationContext
         self.mutationRejectionReason = mutationRejectionReason
+        self.persistenceComponent = persistenceComponent
+        self.persistenceOperation = persistenceOperation
+        self.persistencePhase = persistencePhase
+        self.persistenceResolution = persistenceResolution
     }
 
     public static func sessionStarted() -> Self {
@@ -378,6 +429,34 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
             severity: .error,
             incidentID: incidentID,
             failure: failure
+        )
+    }
+
+    public static func persistenceCheckpoint(
+        component: DiagnosticPersistenceComponent,
+        operation: DiagnosticPersistenceOperation,
+        phase: DiagnosticPersistencePhase,
+        resolution: DiagnosticPersistenceResolution,
+        failure: DiagnosticFailure?
+    ) -> Self {
+        let severity: DiagnosticSeverity = switch resolution {
+        case .notCommitted, .unresolved, .cleanupFailure:
+            .error
+        case .recoveredCommitted, .fileSyncFallback,
+             .temporaryCleanupCommitted, .fenceResolved:
+            .notice
+        case .committed:
+            .information
+        }
+        return Self(
+            code: .persistenceCheckpoint,
+            category: .persistence,
+            severity: severity,
+            failure: failure,
+            persistenceComponent: component,
+            persistenceOperation: operation,
+            persistencePhase: phase,
+            persistenceResolution: resolution
         )
     }
 

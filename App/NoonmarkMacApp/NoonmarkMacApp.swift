@@ -268,7 +268,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     func applicationWillTerminate(_ notification: Notification) {
         if Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e" {
-            NSLog("Noonmark E2E applicationWillTerminate reached")
+            recordE2EApplicationWillTerminate()
         }
         do {
             try prepareForTerminationIfNeeded()

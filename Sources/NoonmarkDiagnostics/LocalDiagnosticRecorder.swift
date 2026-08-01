@@ -291,6 +291,8 @@ private extension EvidenceEvent {
         switch code {
         case .operationStage, .operationHeartbeat:
             false
+        case .persistenceCheckpoint:
+            severity != .information
         case .sessionStarted, .cleanShutdown,
              .previousSessionInterrupted, .operationStarted,
              .operationSucceeded, .operationFailed, .mutationRejected,

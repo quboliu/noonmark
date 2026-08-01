@@ -428,7 +428,7 @@ struct ZhulongApplicationJournalFileCommitter: @unchecked Sendable {
 
     init(
         operations: ZhulongJournalDarwinOperations = .live,
-        monitor: @escaping ZhulongApplicationJournalMonitor = Self.liveMonitor
+        monitor: @escaping ZhulongApplicationJournalMonitor = { _ in }
     ) {
         self.operations = operations
         self.monitor = monitor
@@ -1767,17 +1767,6 @@ struct ZhulongApplicationJournalFileCommitter: @unchecked Sendable {
         _ error: any Error
     ) -> Bool {
         isPOSIXError(error, code: EINTR)
-    }
-
-    private static let liveMonitor: ZhulongApplicationJournalMonitor = { event in
-        NSLog(
-            "NoonmarkZhulongApplicationJournal operation=%@ phase=%@ resolution=%@ error_kind=%@ error_code=%@",
-            event.operation.rawValue,
-            event.phase.rawValue,
-            event.resolution.rawValue,
-            event.errorKind.rawValue,
-            event.errorCode.map(String.init) ?? "none"
-        )
     }
 }
 

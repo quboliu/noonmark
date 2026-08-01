@@ -165,7 +165,7 @@ public struct DiagnosticOperation: Sendable {
 
     private func elapsedMilliseconds(at timestamp: Date) -> Int64 {
         let seconds = max(0, timestamp.timeIntervalSince(startedAt))
-        let milliseconds = seconds * 1_000
+        let milliseconds = seconds * 1000
         guard milliseconds < Double(Int64.max) else { return Int64.max }
         return Int64(milliseconds.rounded())
     }

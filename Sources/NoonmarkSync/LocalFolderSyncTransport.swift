@@ -536,7 +536,7 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     ) -> Int64 {
         let duration = max(
             0,
-            (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            (ProcessInfo.processInfo.systemUptime - startedAt) * 1000
         )
         guard duration < Double(Int64.max) else { return Int64.max }
         return Int64(duration.rounded())

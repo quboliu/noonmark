@@ -50,41 +50,6 @@ enum AutomaticClassificationAppError: Error {
     case staleContext
 }
 
-@MainActor
-enum AutomaticClassificationContentionE2EEvidence {
-    enum Step: String {
-        case providerReconciliation = "provider-reconciliation"
-        case proposalCheckpoint = "proposal-checkpoint"
-        case workerStorage = "worker-storage"
-    }
-
-    static func record(_ step: Step) {
-        guard Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e",
-              AppLaunchArguments.contains(
-                  "--e2e-automatic-classification-contention"
-              ),
-              let path = AppLaunchArguments.value(
-                  after: "--e2e-automatic-classification-contention-marker-url"
-              ),
-              path.isEmpty == false
-        else { return }
-        let url = URL(fileURLWithPath: path)
-        do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try step.rawValue.write(
-                to: url,
-                atomically: true,
-                encoding: .utf8
-            )
-        } catch {
-            NSLog("Noonmark automatic classification E2E marker write failed")
-        }
-    }
-}
-
 private struct AutomaticClassificationProposalCheckpoint: Codable {
     static let currentVersion = 1
 
@@ -1477,13 +1442,6 @@ extension NoonmarkStore {
                 "event=job-mutation \(detail)"
             )
         }
-    }
-
-    func recordAutomaticClassificationDiagnostic(_ fields: String) {
-        guard Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e" else {
-            return
-        }
-        NSLog("NoonmarkAutomaticClassificationDiagnostic %@", fields)
     }
 
     private func recordAutomaticClassificationDiagnosticSnapshot(

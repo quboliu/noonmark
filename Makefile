@@ -73,6 +73,8 @@ test-all:
 	scripts/test-all
 
 lint:
+	scripts/test-diagnostic-logging-guard
+	scripts/check-diagnostic-logging
 	swiftlint lint --quiet
 
 format:

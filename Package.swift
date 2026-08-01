@@ -75,7 +75,7 @@ let package = Package(
         ),
         .target(
             name: "NoonmarkZhulong",
-            dependencies: ["NoonmarkCore"],
+            dependencies: ["NoonmarkCore", "NoonmarkDiagnostics"],
             linkerSettings: [
                 .linkedFramework("Security")
             ]
@@ -128,7 +128,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NoonmarkZhulongTests",
-            dependencies: ["NoonmarkZhulong"]
+            dependencies: ["NoonmarkDiagnostics", "NoonmarkZhulong"]
         ),
         .testTarget(
             name: "NoonmarkZhulongAITests",

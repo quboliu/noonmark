@@ -1,10 +1,41 @@
 import CryptoKit
 import Foundation
 import NoonmarkCore
+import NoonmarkDiagnostics
 @testable import NoonmarkZhulong
 import XCTest
 
 final class ZhulongApplicationJournalTests: XCTestCase {
+    func testSuccessfulPrepareEmitsTypedDiagnosticCheckpoint() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = InMemoryDiagnosticRecorder()
+        let repository = EncryptedFileZhulongApplicationJournal(
+            directoryURL: directory,
+            keySource: FixedJournalKeySource(byte: 0x20),
+            diagnostics: recorder
+        )
+
+        try save(
+            makeApplication(),
+            to: repository,
+            keyByte: 0x20
+        )
+
+        let checkpoint = try XCTUnwrap(
+            recorder.snapshot().last?.event
+        )
+        XCTAssertEqual(checkpoint.code, .persistenceCheckpoint)
+        XCTAssertEqual(
+            checkpoint.persistenceComponent,
+            .zhulongApplicationJournal
+        )
+        XCTAssertEqual(checkpoint.persistenceOperation, .prepare)
+        XCTAssertEqual(checkpoint.persistencePhase, .complete)
+        XCTAssertEqual(checkpoint.persistenceResolution, .committed)
+        XCTAssertNil(checkpoint.failure)
+    }
+
     func testPrepareDoesNotReportFailureWhenExactJournalWasInstalledBeforeChmodError() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

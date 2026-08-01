@@ -21,7 +21,7 @@ final class DiagnosticOperationLifecycleTests: XCTestCase {
             .transportFetch,
             progress: DiagnosticProgress(
                 recordCount: 8,
-                byteCount: 1_024
+                byteCount: 1024
             ),
             at: startedAt.addingTimeInterval(1)
         )
@@ -39,11 +39,11 @@ final class DiagnosticOperationLifecycleTests: XCTestCase {
         XCTAssertEqual(Set(records.compactMap(\.event.operationID)).count, 1)
         XCTAssertEqual(records[1].event.stage, .transportFetch)
         XCTAssertEqual(records[1].event.progress?.recordCount, 8)
-        XCTAssertEqual(records[1].event.progress?.byteCount, 1_024)
+        XCTAssertEqual(records[1].event.progress?.byteCount, 1024)
         XCTAssertEqual(records[2].event.incidentID, incidentID)
         XCTAssertEqual(records[2].event.failure?.domain, .posix)
         XCTAssertEqual(records[2].event.failure?.code, 60)
-        XCTAssertEqual(records[2].event.durationMilliseconds, 2_000)
+        XCTAssertEqual(records[2].event.durationMilliseconds, 2000)
     }
 
     func testOperationPublishesOnlyOneTerminalEvent() {

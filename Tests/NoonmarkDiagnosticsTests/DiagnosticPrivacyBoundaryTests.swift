@@ -23,6 +23,24 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
         XCTAssertEqual(event?.failure, DiagnosticFailure(domain: .sqlite, code: 13))
     }
 
+    func testPersistenceCheckpointKeepsOnlyTypedJournalEvidence() {
+        let event = EvidenceEvent.persistenceCheckpoint(
+            component: .zhulongApplicationJournal,
+            operation: .prepare,
+            phase: .temporaryFullSync,
+            resolution: .fileSyncFallback,
+            failure: DiagnosticFailure(domain: .posix, code: 45)
+        )
+
+        XCTAssertEqual(event.code, .persistenceCheckpoint)
+        XCTAssertEqual(event.persistenceComponent, .zhulongApplicationJournal)
+        XCTAssertEqual(event.persistenceOperation, .prepare)
+        XCTAssertEqual(event.persistencePhase, .temporaryFullSync)
+        XCTAssertEqual(event.persistenceResolution, .fileSyncFallback)
+        XCTAssertEqual(event.failure, DiagnosticFailure(domain: .posix, code: 45))
+        XCTAssertEqual(event.severity, .notice)
+    }
+
     private var temporaryURLs: [URL] = []
 
     override func tearDownWithError() throws {

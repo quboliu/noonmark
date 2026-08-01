@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+scan_roots=("$@")
+if [[ "${#scan_roots[@]}" -eq 0 ]]; then
+  scan_roots=(App Sources)
+fi
+
+if ! command -v rg >/dev/null 2>&1; then
+  echo "missing required tool: rg" >&2
+  exit 1
+fi
+
+violation_file="$(mktemp -t noonmark-diagnostic-logging.XXXXXX)"
+trap 'rm -f "$violation_file"' EXIT
+
+pattern='(^|[^[:alnum:]_])((Swift\.)?(NSLog|print|debugPrint|dump)|os_log(_[[:alnum:]_]+)?)\s*\(|FileHandle\.standard(Error|Output)|(^|[^[:alnum:]_])Logger\s*\('
+
+while IFS= read -r source_file; do
+  case "$source_file" in
+    Sources/NoonmarkDiagnostics/* | */Sources/NoonmarkDiagnostics/*)
+      continue
+      ;;
+  esac
+
+  source_name="$(basename "$source_file")"
+  case "$source_name" in
+    *E2E*.swift | *Driver.swift | LegacyDataSyncAutomations.swift | \
+      LegacyLaunchAutomations.swift | LegacyPoolUIEntryAutomations.swift)
+      continue
+      ;;
+  esac
+
+  if matches="$(rg -n --pcre2 "$pattern" "$source_file" 2>/dev/null)"; then
+    while IFS= read -r match; do
+      printf '%s:%s\n' "$source_file" "$match" >>"$violation_file"
+    done <<<"$matches"
+  fi
+done < <(rg --files "${scan_roots[@]}" -g '*.swift')
+
+if [[ -s "$violation_file" ]]; then
+  echo "production Swift code must record typed evidence through NoonmarkDiagnostics:" >&2
+  cat "$violation_file" >&2
+  exit 1
+fi
+
+echo "diagnostic logging boundary: passed"

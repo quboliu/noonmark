@@ -55,6 +55,22 @@ restart_helper_log="${work_dir}/restart-helper.log"
 restart_console_log="${work_dir}/restart-console.log"
 restart_screenshot_path="${work_dir}/installed-restart.png"
 restart_window_metadata_path="${work_dir}/installed-restart-window.txt"
+diagnostic_export_ledger="${work_dir}/diagnostic-export-ledger.tsv"
+diagnostic_export_launch_log="${work_dir}/diagnostic-export-launch.log"
+diagnostic_export_helper_log="${work_dir}/diagnostic-export-helper.log"
+diagnostic_export_helper_stderr_log="${work_dir}/diagnostic-export-helper-stderr.log"
+diagnostic_export_helper_launch_log="${work_dir}/diagnostic-export-helper-launch.log"
+diagnostic_export_helper_observer_log="${work_dir}/diagnostic-export-helper-exit-observer.log"
+diagnostic_export_helper_observer_gate="${work_dir}/diagnostic-export-helper-exit-observer-gate.txt"
+diagnostic_export_helper_exit_status="${work_dir}/diagnostic-export-helper-exit-status.txt"
+diagnostic_export_console_log="${work_dir}/diagnostic-export-console.log"
+diagnostic_export_screenshot_path="${work_dir}/installed-diagnostic-export.png"
+diagnostic_export_window_metadata_path="${work_dir}/installed-diagnostic-export-window.txt"
+diagnostic_export_path="${work_dir}/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
+diagnostic_export_sentinels_path="${work_dir}/diagnostic-export-sentinels.txt"
+diagnostic_export_package_report="${work_dir}/diagnostic-export-package.txt"
+diagnostic_repository_root=""
+diagnostic_repository_lock=""
 task_identity_path="${work_dir}/task-identity.tsv"
 task_snapshot_before_path="${work_dir}/task-row-before-restart.txt"
 task_snapshot_after_path="${work_dir}/task-row-after-restart.txt"
@@ -132,6 +148,8 @@ required_tools=(
   ditto
   grep
   hdiutil
+  id
+  jq
   log
   open
   pgrep
@@ -139,8 +157,11 @@ required_tools=(
   screencapture
   sips
   sqlite3
+  stat
+  sw_vers
   swift
   tail
+  uname
   uuidgen
 )
 for tool in "${required_tools[@]}"; do
@@ -222,7 +243,7 @@ process_has_helper_command_identity() {
   local executable_status
 
   if [[ "$mode" != "preflight" && "$mode" != "exercise" &&
-    "$mode" != "restart" ]] ||
+    "$mode" != "restart" && "$mode" != "diagnostic-export" ]] ||
     [[ ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
     return 2
   fi
@@ -593,6 +614,10 @@ cleanup() {
   local exact_pids=""
   local remaining_pids=""
   local verified_pid
+  local diagnostic_inventory_count=""
+  local diagnostic_inventory_digest=""
+  local diagnostic_inventory_size=""
+  local diagnostic_inventory_relative=""
 
   trap - EXIT
   set +e
@@ -865,6 +890,20 @@ cleanup() {
         "$restart_console_log" \
         "$restart_screenshot_path" \
         "$restart_window_metadata_path" \
+        "$diagnostic_export_ledger" \
+        "$diagnostic_export_launch_log" \
+        "$diagnostic_export_helper_log" \
+        "$diagnostic_export_helper_stderr_log" \
+        "$diagnostic_export_helper_launch_log" \
+        "$diagnostic_export_helper_observer_log" \
+        "$diagnostic_export_helper_observer_gate" \
+        "$diagnostic_export_helper_exit_status" \
+        "$diagnostic_export_console_log" \
+        "$diagnostic_export_screenshot_path" \
+        "$diagnostic_export_window_metadata_path" \
+        "$diagnostic_export_path" \
+        "$diagnostic_export_sentinels_path" \
+        "$diagnostic_export_package_report" \
         "$task_identity_path" \
         "$task_snapshot_before_path" \
         "$task_snapshot_after_path" \
@@ -874,10 +913,37 @@ cleanup() {
         "$helper_diagnostic_baseline" \
         "$helper_diagnostic_final" \
         "$helper_diagnostic_diff"; then
-        evidence_append \
-          "$runtime_manifest_path" \
-          "artifact_inventory_sha256" \
-          "$(shasum -a 256 "$artifact_inventory_path" | awk '{print $1}')"
+        diagnostic_inventory_relative="$(
+          evidence_read "$runtime_manifest_path" diagnostic_export_path
+        )"
+        IFS=$'\t' read -r \
+          diagnostic_inventory_count \
+          diagnostic_inventory_digest \
+          diagnostic_inventory_size < <(
+            awk -F $'\t' -v expected="$diagnostic_inventory_relative" '
+              $3 == expected {
+                count += 1
+                digest = $1
+                size = $2
+              }
+              END { printf "%d\t%s\t%s\n", count, digest, size }
+            ' "$artifact_inventory_path"
+          )
+        if [[ "$diagnostic_inventory_count" -ne 1 ||
+          "$diagnostic_inventory_digest" != "$(
+            evidence_read "$runtime_manifest_path" diagnostic_export_sha256
+          )" ||
+          "$diagnostic_inventory_size" != "$(
+            evidence_read "$runtime_manifest_path" diagnostic_export_bytes
+          )" ]]; then
+          echo "diagnostic export changed before its final artifact inventory binding" >&2
+          final_status=1
+        else
+          evidence_append \
+            "$runtime_manifest_path" \
+            "artifact_inventory_sha256" \
+            "$(shasum -a 256 "$artifact_inventory_path" | awk '{print $1}')"
+        fi
       else
         final_status=1
       fi
@@ -929,6 +995,31 @@ cleanup() {
       "validation_signed_binary_uuid_set" \
       "validation_derivation_fragment_sha256" \
       "validation_app_executed" \
+      "diagnostic_export_ui_completed" \
+      "diagnostic_export_lock_overlap" \
+      "diagnostic_export_schema_version" \
+      "diagnostic_export_identity_match" \
+      "diagnostic_export_runtime_identity_match" \
+      "diagnostic_export_size_within_limit" \
+      "diagnostic_export_sentinels_absent" \
+      "diagnostic_export_owner_only" \
+      "diagnostic_export_path" \
+      "diagnostic_export_bytes" \
+      "diagnostic_export_sha256" \
+      "diagnostic_export_runtime_architecture" \
+      "diagnostic_export_operating_system_version" \
+      "diagnostic_export_darwin_version" \
+      "diagnostic_export_ledger_sha256" \
+      "diagnostic_export_app_launch_sha256" \
+      "diagnostic_export_helper_stdout_sha256" \
+      "diagnostic_export_helper_stderr_sha256" \
+      "diagnostic_export_helper_launch_sha256" \
+      "diagnostic_export_helper_observer_sha256" \
+      "diagnostic_export_helper_observer_gate_sha256" \
+      "diagnostic_export_helper_exit_status_sha256" \
+      "diagnostic_export_window_metadata_sha256" \
+      "diagnostic_export_console_sha256" \
+      "diagnostic_export_package_report_sha256" \
       "release_symbols_unchanged" \
       "release_identity_provenance_unchanged" \
       "artifact_inventory_sha256" \
@@ -1335,6 +1426,23 @@ assert_helper_completed() {
         complete
       )
       ;;
+    diagnostic-export)
+      required_steps=(
+        arguments
+        process
+        exit-observer
+        permissions
+        target
+        diagnostic-locks-before-export
+        diagnostic-window
+        diagnostic-menu
+        diagnostic-preview
+        diagnostic-export-ui
+        diagnostic-locks-after-export
+        diagnostic-package
+        complete
+      )
+      ;;
     *)
       echo "unknown DMG install harness mode: $mode" >&2
       return 1
@@ -1365,6 +1473,32 @@ assert_helper_completed() {
       END { exit !(process_count == 1 && observer_count == 1) }
     ' "$ledger_path"; then
     echo "DMG install harness process or exit-observer identity detail was invalid" >&2
+    return 1
+  fi
+
+  if [[ "$mode" == "diagnostic-export" ]] &&
+    ! awk -F $'\t' '
+      $2 == "PASS" &&
+        $3 == "diagnostic-locks-before-export" &&
+        $4 == "sqlite_writer=busy repository_flock=would-block held=true" {
+        before += 1
+      }
+      $2 == "PASS" &&
+        $3 == "diagnostic-locks-after-export" &&
+        $4 == "sqlite_writer=busy repository_flock=would-block held=true" {
+        after += 1
+      }
+      $2 == "PASS" && $3 == "diagnostic-export-ui" &&
+        $4 == "menu=physical preview=physical save_panel=physical path=selected toast=visible source=cghidEventTap" {
+        ui += 1
+      }
+      $2 == "PASS" && $3 == "diagnostic-package" &&
+        $4 ~ /^schema=1 bytes=[1-9][0-9]* sha256=[0-9a-f]{64} records=[0-9]+ active=[0-9]+ capsules=[0-9]+ metrics=[0-9]+ sentinels=absent owner_only=true$/ {
+        package += 1
+      }
+      END { exit !(before == 1 && after == 1 && ui == 1 && package == 1) }
+    ' "$ledger_path"; then
+    echo "diagnostic export helper omitted exact lock, UI, or package evidence" >&2
     return 1
   fi
 
@@ -1405,13 +1539,40 @@ run_helper() {
     --launch-token "$token"
     --start-gate "$observer_gate_path"
   )
-  if [[ "$mode" != "preflight" ]]; then
-    helper_args+=(
-      --pid "$pid"
-      --app-path "$installed_app"
-      --task-title "$task_title"
-    )
-  fi
+  case "$mode" in
+    preflight) ;;
+    exercise | restart)
+      helper_args+=(
+        --pid "$pid"
+        --app-path "$installed_app"
+        --task-title "$task_title"
+      )
+      ;;
+    diagnostic-export)
+      if [[ -z "$CAPTURED_WINDOW_ID" || -z "$CAPTURED_WINDOW_TITLE" ||
+        -z "$database_path" || -z "$diagnostic_repository_lock" ||
+        -z "$diagnostic_export_path" ||
+        -z "$diagnostic_export_sentinels_path" ]]; then
+        echo "diagnostic export helper inputs are incomplete" >&2
+        return 1
+      fi
+      helper_args+=(
+        --pid "$pid"
+        --app-path "$installed_app"
+        --window-number "$CAPTURED_WINDOW_ID"
+        --window-title "$CAPTURED_WINDOW_TITLE"
+        --target-profile "dmg-validation"
+        --database "$database_path"
+        --repository-lock "$diagnostic_repository_lock"
+        --export-path "$diagnostic_export_path"
+        --sentinels "$diagnostic_export_sentinels_path"
+      )
+      ;;
+    *)
+      echo "unsupported DMG install harness mode: $mode" >&2
+      return 1
+      ;;
+  esac
 
   rm -f \
     "$ledger_path" \
@@ -1845,6 +2006,347 @@ run_validation_helper_phase() {
     "$last_helper_launch_log" \
     "$last_helper_observer_log" \
     "$console_log_path"
+}
+
+prepare_diagnostic_export_contract() {
+  local validation_data_root="${database_path%/Noonmark.sqlite}"
+
+  if [[ "$validation_data_root" == "$database_path" ||
+    "$validation_data_root" != \
+      */Library/Application\ Support/noonmark-dmg-validation ||
+    ! -d "$validation_data_root" || -L "$validation_data_root" ]]; then
+    echo "refusing to prepare diagnostics outside the real dmg-validation data root: $validation_data_root" >&2
+    return 1
+  fi
+
+  diagnostic_repository_root="${validation_data_root}/sync-repository"
+  diagnostic_repository_lock="${diagnostic_repository_root}/.repository.lock"
+  if [[ -e "$diagnostic_repository_root" ]]; then
+    if [[ ! -d "$diagnostic_repository_root" ||
+      -L "$diagnostic_repository_root" ]]; then
+      echo "dmg-validation sync repository is not a real directory" >&2
+      return 1
+    fi
+  else
+    mkdir -m 700 "$diagnostic_repository_root"
+  fi
+  chmod 700 "$diagnostic_repository_root"
+  if [[ -e "$diagnostic_repository_lock" &&
+    (! -f "$diagnostic_repository_lock" ||
+      -L "$diagnostic_repository_lock") ]]; then
+    echo "dmg-validation repository lock is not a regular file" >&2
+    return 1
+  fi
+
+  case "$diagnostic_export_path" in
+    "$work_dir"/*.noonmarkdiagnostics) ;;
+    *)
+      echo "diagnostic export destination escaped its fixed artifact root" >&2
+      return 1
+      ;;
+  esac
+  rm -f \
+    "$diagnostic_export_path" \
+    "$diagnostic_export_sentinels_path" \
+    "$diagnostic_export_package_report"
+  (
+    umask 077
+    printf '%s\n' \
+      "$task_title" \
+      "$database_path" \
+      "$diagnostic_repository_lock" \
+      "private-user-9f3a7c42@example.invalid" \
+      "https://sync-secret.example.invalid/noonmark/private-tenant-82f6" \
+      "sk-noonmark-private-provider-17e4caa987fa" \
+      >"$diagnostic_export_sentinels_path"
+  )
+  if [[ ! -f "$diagnostic_export_sentinels_path" ||
+    -L "$diagnostic_export_sentinels_path" ]] ||
+    [[ "$(stat -f '%Lp' "$diagnostic_export_sentinels_path")" != "600" ]]; then
+    echo "diagnostic privacy sentinel fixture is not an owner-only regular file" >&2
+    return 1
+  fi
+}
+
+validate_diagnostic_export_package() {
+  local bytes mode_decimal mode_text sha256 owner_uid link_count
+  local record_count active_count capsule_count metric_count
+  local expected_version expected_build expected_commit expected_build_date
+  local expected_runtime expected_minimum_os expected_build_architecture
+  local expected_binary_uuid expected_binary_sha256 expected_binary_scope
+  local expected_ledger_detail relative_export_path sentinel
+  local runtime_architecture operating_system_version darwin_version
+  local os_major os_minor os_patch os_extra
+
+  if [[ ! -f "$diagnostic_export_path" || -L "$diagnostic_export_path" ]]; then
+    echo "diagnostic export is missing or is not a regular file" >&2
+    return 1
+  fi
+  bytes="$(stat -f '%z' "$diagnostic_export_path")"
+  mode_text="$(stat -f '%Lp' "$diagnostic_export_path")"
+  owner_uid="$(stat -f '%u' "$diagnostic_export_path")"
+  link_count="$(stat -f '%l' "$diagnostic_export_path")"
+  if [[ ! "$bytes" =~ ^[1-9][0-9]*$ || "$bytes" -gt 8388608 ||
+    ! "$mode_text" =~ ^[0-7]{3,4}$ || "$owner_uid" != "$(id -u)" ||
+    "$link_count" != "1" ]]; then
+    echo "diagnostic export has an invalid size, owner, link count, or permission mode" >&2
+    return 1
+  fi
+  mode_decimal=$((8#$mode_text))
+  if (( (mode_decimal & 0077) != 0 || (mode_decimal & 0600) != 0600 )); then
+    echo "diagnostic export is not owner-readable/writable and group/other closed" >&2
+    return 1
+  fi
+  sha256="$(shasum -a 256 "$diagnostic_export_path" | awk '{print $1}')"
+  if [[ ! "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "diagnostic export SHA-256 is invalid" >&2
+    return 1
+  fi
+
+  expected_version="$(evidence_read "$package_manifest_path" release_identity_version)"
+  expected_build="$(evidence_read "$package_manifest_path" release_identity_build)"
+  expected_commit="$(evidence_read "$package_manifest_path" release_identity_git_commit)"
+  expected_build_date="$(evidence_read "$package_manifest_path" release_identity_build_date)"
+  expected_runtime="$(evidence_read "$package_manifest_path" release_identity_runtime)"
+  expected_minimum_os="$(evidence_read "$package_manifest_path" release_identity_minimum_os_version)"
+  expected_build_architecture="$(evidence_read "$package_manifest_path" release_identity_architecture)"
+  expected_binary_uuid="$(evidence_read "$package_manifest_path" release_identity_binary_uuid_set)"
+  expected_binary_sha256="$(evidence_read "$package_manifest_path" release_identity_binary_sha256)"
+  expected_binary_scope="$(evidence_read "$package_manifest_path" release_identity_binary_sha256_scope)"
+  runtime_architecture="$(uname -m)"
+  operating_system_version="$(sw_vers -productVersion)"
+  darwin_version="$(uname -r)"
+  IFS=. read -r os_major os_minor os_patch os_extra \
+    <<<"$operating_system_version"
+  os_patch="${os_patch:-0}"
+  if [[ ! "$runtime_architecture" =~ ^(arm64|x86_64)$ ||
+    ! "$operating_system_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ||
+    ! "$darwin_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
+    ! "$os_major" =~ ^[0-9]+$ || ! "$os_minor" =~ ^[0-9]+$ ||
+    ! "$os_patch" =~ ^[0-9]+$ || -n "${os_extra:-}" ]]; then
+    echo "host runtime identity could not be normalized" >&2
+    return 1
+  fi
+
+  if ! jq -e \
+    --arg version "$expected_version" \
+    --arg build "$expected_build" \
+    --arg commit "$expected_commit" \
+    --arg build_date "$expected_build_date" \
+    --arg runtime "$expected_runtime" \
+    --arg minimum_os "$expected_minimum_os" \
+    --arg build_architecture "$expected_build_architecture" \
+    --arg binary_uuid "$expected_binary_uuid" \
+    --arg binary_sha256 "$expected_binary_sha256" \
+    --arg binary_scope "$expected_binary_scope" \
+    --arg runtime_architecture "$runtime_architecture" \
+    --arg darwin_version "$darwin_version" \
+    --argjson os_major "$os_major" \
+    --argjson os_minor "$os_minor" \
+    --argjson os_patch "$os_patch" '
+      type == "object" and
+      ((keys | sort) == [
+        "activeOperations",
+        "manifest",
+        "metricAttachments",
+        "operationCapsules",
+        "records"
+      ]) and
+      (.manifest.schemaVersion == 1) and
+      (.manifest.redactionVersion == 1) and
+      (.records | type == "array") and
+      (.activeOperations | type == "array") and
+      (.operationCapsules | type == "array") and
+      (.metricAttachments | type == "array") and
+      (.manifest.recordCount == (.records | length)) and
+      (.manifest.activeOperationCount == (.activeOperations | length)) and
+      (.manifest.operationCapsuleCount == (.operationCapsules | length)) and
+      (.manifest.metricPayloadCount == (.metricAttachments | length)) and
+      (.manifest.appIdentity.version == $version) and
+      (.manifest.appIdentity.build == $build) and
+      (.manifest.appIdentity.commitSHA == $commit) and
+      (.manifest.appIdentity.buildDate == $build_date) and
+      (.manifest.appIdentity.runtime == $runtime) and
+      (.manifest.appIdentity.minimumOSVersion == $minimum_os) and
+      (.manifest.appIdentity.buildArchitecture == $build_architecture) and
+      (.manifest.appIdentity.binaryUUID == $binary_uuid) and
+      (.manifest.appIdentity.binarySHA256 == $binary_sha256) and
+      (.manifest.appIdentity.binarySHA256Scope == $binary_scope) and
+      (.manifest.appIdentity.architecture == $runtime_architecture) and
+      (.manifest.appIdentity.operatingSystemMajorVersion == $os_major) and
+      (.manifest.appIdentity.operatingSystemMinorVersion == $os_minor) and
+      (.manifest.appIdentity.operatingSystemPatchVersion == $os_patch) and
+      (.manifest.appIdentity.darwinVersion == $darwin_version)
+    ' "$diagnostic_export_path" >/dev/null; then
+    echo "diagnostic export schema, counts, or release identity disagreed" >&2
+    return 1
+  fi
+
+  while IFS= read -r sentinel || [[ -n "$sentinel" ]]; do
+    if [[ -z "$sentinel" ]]; then
+      echo "diagnostic privacy sentinel fixture contains an empty value" >&2
+      return 1
+    fi
+    if LC_ALL=C grep -F -- "$sentinel" "$diagnostic_export_path" >/dev/null; then
+      echo "diagnostic export leaked a privacy sentinel" >&2
+      return 1
+    fi
+  done <"$diagnostic_export_sentinels_path"
+
+  record_count="$(jq -r '.records | length' "$diagnostic_export_path")"
+  active_count="$(jq -r '.activeOperations | length' "$diagnostic_export_path")"
+  capsule_count="$(jq -r '.operationCapsules | length' "$diagnostic_export_path")"
+  metric_count="$(jq -r '.metricAttachments | length' "$diagnostic_export_path")"
+  expected_ledger_detail="schema=1 bytes=$bytes sha256=$sha256 records=$record_count active=$active_count capsules=$capsule_count metrics=$metric_count sentinels=absent owner_only=true"
+  if ! awk -F $'\t' -v expected="$expected_ledger_detail" '
+    $2 == "PASS" && $3 == "diagnostic-package" && $4 == expected {
+      count += 1
+    }
+    END { exit !(count == 1) }
+  ' "$diagnostic_export_ledger"; then
+    echo "diagnostic export package disagreed with its helper ledger" >&2
+    return 1
+  fi
+
+  relative_export_path="${diagnostic_export_path#${repo_root}/}"
+  if [[ "$relative_export_path" == "$diagnostic_export_path" ]]; then
+    echo "diagnostic export path is not repository-relative" >&2
+    return 1
+  fi
+  {
+    printf 'schema_version=1\n'
+    printf 'path=%s\n' "$relative_export_path"
+    printf 'bytes=%s\n' "$bytes"
+    printf 'sha256=%s\n' "$sha256"
+    printf 'mode=%s\n' "$mode_text"
+    printf 'record_count=%s\n' "$record_count"
+    printf 'active_operation_count=%s\n' "$active_count"
+    printf 'operation_capsule_count=%s\n' "$capsule_count"
+    printf 'metric_payload_count=%s\n' "$metric_count"
+    printf 'identity_match=true\n'
+    printf 'runtime_identity_match=true\n'
+    printf 'runtime_architecture=%s\n' "$runtime_architecture"
+    printf 'operating_system_version=%s\n' "$operating_system_version"
+    printf 'darwin_version=%s\n' "$darwin_version"
+    printf 'sentinels_absent=true\n'
+    printf 'lock_overlap=sqlite-writer+sync-repository\n'
+  } >"$diagnostic_export_package_report"
+
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_ui_completed" "true"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_lock_overlap" "sqlite-writer+sync-repository"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_schema_version" "1"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_identity_match" "true"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_runtime_identity_match" "true"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_size_within_limit" "true"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_sentinels_absent" "true"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_owner_only" "true"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_path" "$relative_export_path"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_bytes" "$bytes"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_sha256" "$sha256"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_runtime_architecture" "$runtime_architecture"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_operating_system_version" "$operating_system_version"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_darwin_version" "$darwin_version"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_ledger_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_ledger" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_app_launch_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_launch_log" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_helper_stdout_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_helper_log" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_helper_stderr_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_helper_stderr_log" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_helper_launch_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_helper_launch_log" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_helper_observer_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_helper_observer_log" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_helper_observer_gate_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_helper_observer_gate" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_helper_exit_status_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_helper_exit_status" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_window_metadata_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_window_metadata_path" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_console_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_console_log" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_export_package_report_sha256" \
+    "$(shasum -a 256 "$diagnostic_export_package_report" | awk '{print $1}')"
+}
+
+run_validation_diagnostic_export_phase() {
+  local pid
+
+  prepare_diagnostic_export_contract
+  rm -f \
+    "$diagnostic_export_ledger" \
+    "$diagnostic_export_launch_log" \
+    "$diagnostic_export_helper_log" \
+    "$diagnostic_export_console_log" \
+    "$diagnostic_export_screenshot_path" \
+    "$diagnostic_export_window_metadata_path"
+  start_runtime_capture "$diagnostic_export_console_log"
+  : >"$diagnostic_export_launch_log"
+  /usr/bin/open -n "$installed_app" >"$diagnostic_export_launch_log" 2>&1
+  pid="$(wait_for_installed_pid)"
+  verify_installed_process_identity "$pid"
+  active_app_pid="$pid"
+  capture_window_evidence \
+    "$pid" \
+    "$diagnostic_export_screenshot_path" \
+    "$diagnostic_export_window_metadata_path" \
+    "dmg-validation diagnostic export"
+  run_helper \
+    "diagnostic-export" \
+    "$pid" \
+    "$diagnostic_export_ledger" \
+    "$diagnostic_export_helper_log"
+  if [[ "$last_helper_stderr_log" != \
+      "$diagnostic_export_helper_stderr_log" ||
+    "$last_helper_launch_log" != \
+      "$diagnostic_export_helper_launch_log" ||
+    "$last_helper_observer_log" != \
+      "$diagnostic_export_helper_observer_log" ||
+    "$last_helper_exit_result" != \
+      "$diagnostic_export_helper_exit_status" ||
+    ! -f "$diagnostic_export_helper_observer_gate" ||
+    -L "$diagnostic_export_helper_observer_gate" ]]; then
+    echo "diagnostic helper evidence paths did not match their fixed contract" >&2
+    return 1
+  fi
+  request_verified_app_termination "$pid"
+  active_app_pid=""
+  runtime_evidence_stop_console_capture
+  runtime_evidence_assert_clean_logs \
+    "installed dmg-validation diagnostic export" \
+    "$diagnostic_export_launch_log" \
+    "$diagnostic_export_helper_log" \
+    "$last_helper_stderr_log" \
+    "$last_helper_launch_log" \
+    "$last_helper_observer_log" \
+    "$diagnostic_export_console_log"
+  validate_diagnostic_export_package
 }
 
 assert_database_integrity() {
@@ -2488,6 +2990,8 @@ if ! cmp -s "$task_snapshot_before_path" "$task_snapshot_after_path"; then
   exit 1
 fi
 
+run_validation_diagnostic_export_phase
+
 echo "Production DMG static evidence verified without execution: $source_app"
 echo "Derived DMG validation App: $installed_app"
 echo "Validation dynamic main window: $expected_window_title (natural_day=$initial_day)"
@@ -2496,5 +3000,7 @@ echo "Validation Settings and Quick Entry used real WindowServer input: $exercis
 echo "Validation task persisted as pending/active/current: $task_identity_path"
 echo "Validation restart exposed the same task through AX: $restart_ledger"
 echo "Validation joined-row identity remained byte-for-byte stable: $task_snapshot_after_path"
-echo "Validation App and helper unified logs are clean: $exercise_console_log, $restart_console_log"
+echo "Validation diagnostics exported through real UI while both persistence locks were held: $diagnostic_export_ledger"
+echo "Validation diagnostic package is bounded, private, and release-bound: $diagnostic_export_package_report"
+echo "Validation App and helper unified logs are clean: $exercise_console_log, $restart_console_log, $diagnostic_export_console_log"
 echo "Validation runtime diagnostics are guarded: $runtime_manifest_path"

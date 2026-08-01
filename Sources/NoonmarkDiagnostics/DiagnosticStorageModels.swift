@@ -184,7 +184,8 @@ public struct DiagnosticExportManifest: Codable, Equatable, Sendable {
 
 public struct DiagnosticMetricAttachment: Codable, Equatable, Sendable {
     public let receivedAt: Date
-    public let payload: Data
+    public let summary: MetricKitPayloadSummary
+    public let rawJSON: Data?
 }
 
 public struct DiagnosticExportPackage: Codable, Equatable, Sendable {

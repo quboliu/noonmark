@@ -91,13 +91,15 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         await flush()
     }
 
-    public func storeMetricPayload(
-        _ payload: Data,
+    func cacheMetricKitPayload(
+        _ summary: MetricKitPayloadSummary,
+        rawJSON: Data,
         receivedAt: Date = Date()
     ) {
         ioQueue.async { [self] in
-            diskStore.storeMetricPayload(
-                payload,
+            diskStore.storeMetricKitPayload(
+                summary,
+                rawJSON: rawJSON,
                 receivedAt: receivedAt,
                 sessionID: sessionID
             )
@@ -271,7 +273,8 @@ private final class DiagnosticDiskStore {
 
     private struct StoredMetricPayload: Codable {
         let receivedAt: Date
-        let payload: Data
+        let summary: MetricKitPayloadSummary
+        let rawJSON: Data?
     }
 
     private let rootURL: URL
@@ -411,24 +414,24 @@ private final class DiagnosticDiskStore {
         }
     }
 
-    func storeMetricPayload(
-        _ payload: Data,
+    func storeMetricKitPayload(
+        _ summary: MetricKitPayloadSummary,
+        rawJSON: Data,
         receivedAt: Date,
         sessionID: DiagnosticSessionID
     ) {
         do {
-            guard payload.count <= configuration.maximumMetricPayloadBytes
-            else {
+            let rawJSONWasDropped = rawJSON.count
+                > configuration.maximumMetricPayloadBytes
+            if rawJSONWasDropped {
                 state.oversizedMetricPayloadCount += 1
                 try persistOne(
                     .oversizedMetricPayloadDropped(
-                        byteCount: Int64(payload.count)
+                        byteCount: Int64(rawJSON.count)
                     ),
                     timestamp: receivedAt,
                     sessionID: sessionID
                 )
-                try saveMetadata()
-                return
             }
             let metricsURL = rootURL.appendingPathComponent(
                 "metrics",
@@ -439,10 +442,21 @@ private final class DiagnosticDiskStore {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            try pruneMetricPayloads(reserving: Int64(payload.count))
+            try pruneMetricPayloads(reserving: Int64(rawJSON.count))
+            let normalizedSummary = MetricKitPayloadSummary(
+                kind: summary.kind,
+                intervalStart: summary.intervalStart,
+                intervalEnd: summary.intervalEnd,
+                crashCount: summary.crashCount,
+                hangCount: summary.hangCount,
+                cpuExceptionCount: summary.cpuExceptionCount,
+                diskWriteExceptionCount: summary.diskWriteExceptionCount,
+                rawJSONByteCount: rawJSON.count
+            )
             let stored = StoredMetricPayload(
                 receivedAt: receivedAt,
-                payload: payload
+                summary: normalizedSummary,
+                rawJSON: rawJSONWasDropped ? nil : rawJSON
             )
             let data = try Self.encoder.encode(stored)
             let url = metricsURL.appendingPathComponent(
@@ -498,7 +512,8 @@ private final class DiagnosticDiskStore {
             }
             return DiagnosticMetricAttachment(
                 receivedAt: stored.receivedAt,
-                payload: stored.payload
+                summary: stored.summary,
+                rawJSON: stored.rawJSON
             )
             }
         let records = snapshot.records.sorted {

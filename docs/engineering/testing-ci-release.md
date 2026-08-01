@@ -63,6 +63,8 @@ CI／开发签名发行验收 runner 继续通过受保护的 GitHub variable �
 - `NoonmarkBinaryUUID`：`architecture:UUID` 的 canonical、排序后集合；目前单架构形如 `arm64:AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE`。
 - `NoonmarkBinarySHA256`：bundle 签名前最终链接 executable 的 SHA-256；`NoonmarkBinarySHA256Scope` 固定为 `linked-before-bundle-signing`。
 
+正式 `release app` 构建与 DMG package 只接受与 `HEAD` tree 完全相同的干净 worktree；tracked 或 untracked source 只要未提交就 fail-closed。这样 About 与诊断包中的 `Commit` 才能确切指向产生该 binary 的源码，不能把含本地修改的产物错误归因给 `HEAD`。
+
 最终签名会改变 executable bytes，因此签名后 executable SHA 无法无循环地自嵌入同一个签名 bundle。`dist/Noonmark.app.release-build-identity` 在签名前原子记录内嵌字段的同源值；package 必须逐字段对账，并以 `release_identity_provenance_path`／`release_identity_provenance_sha256` 将该 sidecar 纳入外部证据。外部 `dist/Noonmark.dmg.manifest` 的 `release_symbols_binary_sha256` 才是最终签名 executable SHA，不能用内嵌 linked SHA 冒充；`release_identity_*` 字段绑定 App 内嵌 Version／Build／Commit／Date／Runtime／minimum OS／architecture／UUID／linked SHA 与 scope，同一 manifest 还绑定 dSYM DWARF SHA／UUID 集、dSYM 路径、精确目录树 inventory 及 inventory SHA。该 dSYM inventory 同时记录普通文件和目录，因此增加空目录也会阻断，符号 bundle 内的 symlink 或特殊文件同样被拒绝。`dist/Noonmark.dmg.inventory.sha256` 再把 App binary、release identity sidecar、dSYM DWARF 与 dSYM inventory 纳入 package artifact 集。验证入口必须在 Bash 中执行：
 
 ```bash

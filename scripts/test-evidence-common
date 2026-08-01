@@ -35,6 +35,7 @@ dirty_fragment="$fixture/dirty.fragment"
 evidence_capture_source "$git_fixture" source "$clean_fragment"
 [[ "$(evidence_read "$clean_fragment" source_tree_dirty)" == "0" ]] ||
   fail "clean source snapshot was marked dirty"
+evidence_require_clean_source "$git_fixture"
 index_before="$(shasum -a 256 "$git_fixture/.git/index" | awk '{print $1}')"
 printf 'changed\n' >>"$git_fixture/tracked.txt"
 printf 'untracked\n' >"$git_fixture/untracked.txt"
@@ -44,6 +45,9 @@ evidence_capture_source "$git_fixture" source "$dirty_fragment"
 [[ "$(evidence_read "$dirty_fragment" source_worktree_tree_oid)" != \
   "$(evidence_read "$clean_fragment" source_worktree_tree_oid)" ]] ||
   fail "worktree tree ignored tracked or untracked changes"
+if evidence_require_clean_source "$git_fixture" >/dev/null 2>&1; then
+  fail "clean-source release guard accepted a dirty worktree"
+fi
 index_after="$(shasum -a 256 "$git_fixture/.git/index" | awk '{print $1}')"
 [[ "$index_before" == "$index_after" ]] ||
   fail "source capture modified the real Git index"
@@ -372,6 +376,59 @@ if PATH="$release_tool_dir:$PATH" \
   fail "release UUID evidence hid a canonical-sort failure"
 fi
 rm -f "$release_tool_dir/sort"
+
+cat >"$release_tool_dir/tr" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 79
+SCRIPT
+chmod +x "$release_tool_dir/tr"
+if PATH="$release_tool_dir:$PATH" \
+  evidence_release_uuid_set "$release_binary" >/dev/null 2>&1; then
+  fail "release UUID evidence hid a normalization failure"
+fi
+rm -f "$release_tool_dir/tr"
+
+uuid_write_fixture="$fixture/uuid-write-failure"
+mkdir -p "$uuid_write_fixture"
+if (
+  export TMPDIR="$uuid_write_fixture"
+  mktemp() {
+    case "$1" in
+      */noonmark-dwarfdump-rows.XXXXXX)
+        command mktemp -d "$1"
+        ;;
+      *)
+        command mktemp "$@"
+        ;;
+    esac
+  }
+  PATH="$release_tool_dir:$PATH" \
+    evidence_release_uuid_set "$release_binary" >/dev/null 2>&1
+); then
+  fail "release UUID evidence hid a row-write failure"
+fi
+
+inventory_write_fixture="$fixture/inventory-write-failure"
+mkdir -p "$inventory_write_fixture"
+if (
+  export TMPDIR="$inventory_write_fixture"
+  mktemp() {
+    case "$1" in
+      */noonmark-dsym-inventory.XXXXXX)
+        command mktemp -d "$1"
+        ;;
+      *)
+        command mktemp "$@"
+        ;;
+    esac
+  }
+  evidence_capture_release_dsym_inventory \
+    "$git_fixture" \
+    "$release_dsym" \
+    "$fresh_root/rejected-dsym-inventory" >/dev/null 2>&1
+); then
+  fail "release dSYM evidence hid an inventory row-write failure"
+fi
 
 cat >"$release_tool_dir/find" <<'SCRIPT'
 #!/usr/bin/env bash

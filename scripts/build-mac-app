@@ -50,6 +50,9 @@ case "$profile" in
     exit 1
     ;;
 esac
+if [[ "$configuration" == "release" && "$profile" == "app" ]]; then
+  evidence_require_clean_source "$(git rev-parse --show-toplevel)"
+fi
 bundle_dir="dist/${bundle_name}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"

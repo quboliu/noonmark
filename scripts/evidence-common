@@ -187,6 +187,28 @@ evidence_capture_source() {
   rm -f "$content"
 }
 
+evidence_require_clean_source() {
+  local repo_root="$1"
+  local snapshot
+  local dirty
+
+  snapshot="$(mktemp "${TMPDIR:-/tmp}/noonmark-clean-source.XXXXXX")" ||
+    return 1
+  if ! evidence_capture_source "$repo_root" clean_source "$snapshot"; then
+    rm -f "$snapshot"
+    return 1
+  fi
+  dirty="$(evidence_read "$snapshot" clean_source_tree_dirty)" || {
+    rm -f "$snapshot"
+    return 1
+  }
+  rm -f "$snapshot"
+  if [[ "$dirty" != "0" ]]; then
+    echo "release build requires a clean, committed source tree" >&2
+    return 1
+  fi
+}
+
 evidence_capture_bundle() {
   local bundle_path="$1"
   local stable_required="$2"
@@ -353,6 +375,7 @@ evidence_release_uuid_set() {
   local arch
   local uuid
   local line_count=0
+  local written_line_count=0
   local uuid_line_regex='^UUID: ([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}) \(([A-Za-z0-9_.-]+)\) .+$'
 
   if [[ ! -f "$artifact_path" || -L "$artifact_path" ]]; then
@@ -387,10 +410,27 @@ evidence_release_uuid_set() {
       echo "dwarfdump emitted an unrecognized UUID row" >&2
       return 1
     fi
-    uuid="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:lower:]' '[:upper:]')"
+    if ! uuid="$(
+      printf '%s' "${BASH_REMATCH[1]}" |
+        tr '[:lower:]' '[:upper:]'
+    )"; then
+      rm -f "$output" "$rows" "$sorted_rows"
+      echo "release UUID could not be normalized" >&2
+      return 1
+    fi
     arch="${BASH_REMATCH[2]}"
-    printf '%s:%s\n' "$arch" "$uuid" >>"$rows"
+    if ! printf '%s:%s\n' "$arch" "$uuid" >>"$rows"; then
+      rm -f "$output" "$rows" "$sorted_rows"
+      echo "release UUID row could not be recorded" >&2
+      return 1
+    fi
+    written_line_count=$((written_line_count + 1))
   done <"$output"
+  if [[ "$written_line_count" -ne "$line_count" ]]; then
+    rm -f "$output" "$rows" "$sorted_rows"
+    echo "release UUID row count is incomplete" >&2
+    return 1
+  fi
   rm -f "$output"
   if [[ "$line_count" -eq 0 ]] || ! awk -F: '
     NF != 2 || seen_arch[$1]++ || seen_uuid[$2]++ { exit 1 }
@@ -624,6 +664,8 @@ evidence_capture_release_dsym_inventory() {
   local digest
   local size
   local kind
+  local candidate_count=0
+  local inventory_count=0
 
   repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
   dsym_relative="$(
@@ -643,6 +685,14 @@ evidence_capture_release_dsym_inventory() {
   if ! find "$dsym_absolute" -print0 >"$candidates"; then
     rm -f "$candidates" "$unsorted" "$sorted"
     echo "release dSYM tree could not be scanned" >&2
+    return 1
+  fi
+  while IFS= read -r -d '' path; do
+    candidate_count=$((candidate_count + 1))
+  done <"$candidates"
+  if [[ "$candidate_count" -eq 0 ]]; then
+    rm -f "$candidates" "$unsorted" "$sorted"
+    echo "release dSYM tree is empty" >&2
     return 1
   fi
   while IFS= read -r -d '' path; do
@@ -673,11 +723,16 @@ evidence_capture_release_dsym_inventory() {
       echo "release dSYM contains an unsupported filesystem entry" >&2
       return 1
     fi
-    printf '%s\t%s\t%s\t%s\n' \
-      "$kind" "$digest" "$size" "$relative" >>"$unsorted"
+    if ! printf '%s\t%s\t%s\t%s\n' \
+      "$kind" "$digest" "$size" "$relative" >>"$unsorted"; then
+      rm -f "$candidates" "$unsorted" "$sorted"
+      echo "release dSYM inventory row could not be recorded" >&2
+      return 1
+    fi
+    inventory_count=$((inventory_count + 1))
   done <"$candidates"
   rm -f "$candidates"
-  if [[ ! -s "$unsorted" ]] ||
+  if [[ "$inventory_count" -ne "$candidate_count" || ! -s "$unsorted" ]] ||
     ! LC_ALL=C sort -t $'\t' -k4,4 "$unsorted" >"$sorted"; then
     rm -f "$unsorted" "$sorted"
     echo "release dSYM inventory could not be sorted" >&2

@@ -53,13 +53,46 @@ printf 'fixture-production-binary\n' >dist/Noonmark.app/Contents/MacOS/NoonmarkM
 chmod +x dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp
 printf 'fixture-production-dwarf\n' \
   >dist/Noonmark.app.dSYM/Contents/Resources/DWARF/NoonmarkMacApp
-printf '<plist/>\n' >dist/Noonmark.app/Contents/Info.plist
 release_build_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 release_git_commit="$(git rev-parse --verify HEAD)"
 release_linked_sha256="$(
   shasum -a 256 dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp |
     awk '{print $1}'
 )"
+cat >dist/Noonmark.app/Contents/Info.plist <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>NoonmarkMacApp</string>
+  <key>CFBundleIdentifier</key>
+  <string>app.noonmark.mac</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NoonmarkGitCommit</key>
+  <string>$release_git_commit</string>
+  <key>NoonmarkBuildDate</key>
+  <string>$release_build_date</string>
+  <key>NoonmarkRuntime</key>
+  <string>Swift-native</string>
+  <key>NoonmarkMinimumOSVersion</key>
+  <string>14.0</string>
+  <key>NoonmarkBuildArchitecture</key>
+  <string>arm64</string>
+  <key>NoonmarkBinaryUUID</key>
+  <string>arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE</string>
+  <key>NoonmarkBinarySHA256</key>
+  <string>$release_linked_sha256</string>
+  <key>NoonmarkBinarySHA256Scope</key>
+  <string>linked-before-bundle-signing</string>
+</dict>
+</plist>
+PLIST
 cat >dist/Noonmark.app.release-build-identity <<IDENTITY
 release_build_identity_schema_version=1
 release_build_identity_version=0.1.0
@@ -73,6 +106,8 @@ release_build_identity_binary_uuid_set=arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEE
 release_build_identity_binary_sha256=$release_linked_sha256
 release_build_identity_binary_sha256_scope=linked-before-bundle-signing
 IDENTITY
+printf 'fixture-code-signature\n' \
+  >>dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp
 SCRIPT
 chmod +x "$fixture_root/scripts/build-mac-app"
 
@@ -175,57 +210,7 @@ chmod +x "$fixture_root/bin/codesign"
 cat >"$fixture_root/bin/plutil" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == "-extract" ]]; then
-  case "$2" in
-    CFBundleExecutable)
-      case "${@: -1}" in
-        *NoonmarkMacAppE2E.app/*) echo "NoonmarkMacAppE2E" ;;
-        *NoonmarkDMGInstallHarness.app/*) echo "NoonmarkDMGInstallHarness" ;;
-        *) echo "NoonmarkMacApp" ;;
-      esac
-      ;;
-    CFBundleShortVersionString)
-      echo "0.1.0"
-      ;;
-    CFBundleVersion)
-      echo "1"
-      ;;
-    LSMinimumSystemVersion | NoonmarkMinimumOSVersion)
-      echo "14.0"
-      ;;
-    NoonmarkGitCommit)
-      awk -F= '$1 == "release_build_identity_git_commit" { print $2 }' \
-        dist/Noonmark.app.release-build-identity
-      ;;
-    NoonmarkBuildDate)
-      awk -F= '$1 == "release_build_identity_build_date" { print $2 }' \
-        dist/Noonmark.app.release-build-identity
-      ;;
-    NoonmarkRuntime)
-      echo "Swift-native"
-      ;;
-    NoonmarkBuildArchitecture)
-      echo "arm64"
-      ;;
-    NoonmarkBinaryUUID)
-      echo "arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
-      ;;
-    NoonmarkBinarySHA256)
-      awk -F= '$1 == "release_build_identity_binary_sha256" { print $2 }' \
-        dist/Noonmark.app.release-build-identity
-      ;;
-    NoonmarkBinarySHA256Scope)
-      echo "linked-before-bundle-signing"
-      ;;
-    *)
-      echo "unexpected fixture plutil key: $2" >&2
-      exit 95
-      ;;
-  esac
-  exit 0
-fi
-echo "unexpected fixture plutil invocation: $*" >&2
-exit 95
+exec /usr/bin/plutil "$@"
 SCRIPT
 chmod +x "$fixture_root/bin/plutil"
 
@@ -333,6 +318,20 @@ fi
 if ! grep -Eq '^release_identity_provenance_sha256=[0-9a-f]{64}$' \
   "$fixture_root/dist/Noonmark.dmg.manifest"; then
   echo "package manifest lacks exact release identity provenance" >&2
+  exit 1
+fi
+linked_binary_sha256="$(
+  awk -F= \
+    '$1 == "release_build_identity_binary_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.app.release-build-identity"
+)"
+signed_binary_sha256="$(
+  awk -F= '$1 == "release_symbols_binary_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+if [[ -z "$linked_binary_sha256" || -z "$signed_binary_sha256" ||
+  "$linked_binary_sha256" == "$signed_binary_sha256" ]]; then
+  echo "package fixture did not distinguish linked and signed binary SHA" >&2
   exit 1
 fi
 
@@ -468,8 +467,13 @@ for diagnostic in \
 done
 printf 'fixture-e2e-binary\n' \
   >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
-printf '<plist/>\n' \
-  >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/Info.plist"
+cat >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>NoonmarkMacAppE2E</string>
+</dict></plist>
+PLIST
 chmod +x \
   "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
 cp -R \
@@ -477,8 +481,13 @@ cp -R \
   "$fixture_root/artifacts/e2e-data-root-process-lease/app-snapshot/NoonmarkMacAppE2E.app"
 printf 'fixture-helper-binary\n' \
   >"$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
-printf '<plist/>\n' \
-  >"$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/Info.plist"
+cat >"$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>NoonmarkDMGInstallHarness</string>
+</dict></plist>
+PLIST
 chmod +x \
   "$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
 cp -R \
@@ -1964,9 +1973,13 @@ require_literal "$repo_root/scripts/build-mac-app" '<key>NoonmarkBinarySHA256</k
 require_literal "$repo_root/scripts/build-mac-app" '<key>NoonmarkBinarySHA256Scope</key>'
 require_literal "$repo_root/scripts/build-mac-app" \
   'release_build_identity_schema_version=1'
+require_literal "$repo_root/scripts/build-mac-app" \
+  'evidence_require_clean_source'
 require_literal "$repo_root/scripts/package-dmg" 'evidence_capture_release_symbols'
 require_literal "$repo_root/scripts/package-dmg" \
   'evidence_validate_artifact_basename "$app_bundle_name"'
+require_literal "$repo_root/scripts/package-dmg" \
+  'release package requires a clean, committed source tree'
 require_literal "$repo_root/scripts/verify-dmg" 'evidence_verify_release_symbols'
 require_literal "$repo_root/scripts/test-dmg-install" 'release_symbols_unchanged'
 require_literal "$repo_root/.github/workflows/release.yml" 'dist/Noonmark.app.dSYM'

@@ -95,6 +95,10 @@ evidence_begin_manifest \
   "$configuration" \
   "full"
 evidence_append_snapshot "$package_manifest_path" "$source_fragment"
+if [[ "$(evidence_read "$source_fragment" source_tree_dirty)" != "0" ]]; then
+  echo "release package requires a clean, committed source tree" >&2
+  exit 1
+fi
 
 scripts/build-mac-app "$configuration" >/dev/null
 mkdir -p "$dmg_root"
